@@ -329,6 +329,7 @@ internal sealed class StatelessSdkPeer : IAsyncDisposable
                         new CallToolResult
                         {
                             StructuredContent = JsonDocument.Parse(json).RootElement.Clone(),
+                            IsError = kind == "error" ? true : null,
                         }
                     );
                 }

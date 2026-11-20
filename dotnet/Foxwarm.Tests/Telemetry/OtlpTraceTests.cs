@@ -44,6 +44,7 @@ public sealed class OtlpTraceTests
             }
         );
         await collector.StartAsync();
+        await using var mcp = await StatelessSdkPeer.StartAsync();
         await using var provider = await StreamingModelPeer.StartAsync(
             false,
             (context, attempt) =>
@@ -55,7 +56,17 @@ public sealed class OtlpTraceTests
                                 1 =>
                                     """{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"provider failed"}}}""",
                                 2 =>
-                                    """{"type":"response.completed","response":{"output":[{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"filePath\":\"example.txt\"}"},{"type":"function_call","id":"fc_bad","call_id":"call_bad","name":"read","arguments":"{"}]}}""",
+                                    """{"type":"response.completed","response":{"output":[{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"filePath\":\"example.txt\"}"},{"type":"function_call","id":"fc_bad","call_id":"call_bad","name":"read","arguments":"{"},{"type":"function_call","id":"fc_mcp","call_id":"call_mcp","name":"ctl","arguments":"MCP_ARGS"}]}}""".Replace(
+                                        "\"MCP_ARGS\"",
+                                        JsonValue
+                                            .Create(
+                                                OutboundMcpFixture.Call(
+                                                    "value",
+                                                    new JsonObject { ["kind"] = "error" }
+                                                )["args"]!.ToJsonString()
+                                            )
+                                            .ToJsonString()
+                                    ),
                                 _ =>
                                     """{"type":"response.completed","response":{"usage":{"input_tokens":17,"output_tokens":6,"input_tokens_details":{"cached_tokens":3}},"output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"synthetic reasoning"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"synthetic answer"}]}]}}""",
                             }
@@ -106,6 +117,20 @@ public sealed class OtlpTraceTests
                         ["providerType"] = "openai-responses",
                         ["baseUrl"] = provider.Uri.AbsoluteUri.TrimEnd('/'),
                         ["models"] = new JsonArray(JsonValue.Create("wire")),
+                    },
+                },
+            }.ToJsonString()
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(state, "mcp.json"),
+            new JsonObject
+            {
+                ["servers"] = new JsonObject
+                {
+                    ["peer"] = new JsonObject
+                    {
+                        ["url"] = mcp.Url,
+                        ["transport"] = "streamable-http",
                     },
                 },
             }.ToJsonString()
@@ -190,6 +215,14 @@ public sealed class OtlpTraceTests
         Assert.Equal("master", read.Attributes["foxwarm.tool.node"]);
         var skipped = Assert.Single(tools, span => span.Attributes["foxwarm.outcome"] == "skipped");
         Assert.Equal("False", skipped.Attributes["foxwarm.tool.started"]);
+        var mcpFailure = Assert.Single(
+            spans,
+            span => span.Attributes.GetValueOrDefault("gen_ai.tool.call.id") == "call_mcp"
+        );
+        Assert.Equal("mcp", mcpFailure.Attributes.GetValueOrDefault("foxwarm.tool.source"));
+        Assert.Equal("True", mcpFailure.Attributes["foxwarm.tool.started"]);
+        Assert.Equal("failed", mcpFailure.Attributes["foxwarm.outcome"]);
+        Assert.Equal("mcp_tool_error", mcpFailure.Attributes["error.type"]);
         if (capture)
         {
             Assert.Contains("gen_ai.system_instructions", final.Attributes);
