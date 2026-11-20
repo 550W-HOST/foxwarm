@@ -365,11 +365,11 @@ test('terminal targets normalize cwd and never reuse a different node at the sam
 test('session-header terminal orchestration keeps the session node and replaces a mismatched lower-pane target', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
   assert.match(app, /onOpenTerminal=\{isMobile(?: && [^\n]+)? \? \(\) => openTerminalTab\(\{ nodeId: sessionRecord\?\.currentNode \|\| 'master', path: sessionRecord\?\.cwd \|\| '\/', sourcePaneId \}\) : undefined\}/)
-  const openTerminalStart = app.indexOf('const openTerminalTab')
+  const openTerminalStart = app.indexOf('const placeTerminalTab')
   const openTerminalEnd = app.indexOf('const closeWorkbenchTab', openTerminalStart)
   const block = app.slice(openTerminalStart, openTerminalEnd)
   assert.match(block, /getTerminalTabInPane\(paneBelow\.id, \{ nodeId, path \}\)/)
-  assert.match(block, /upsertTab\(draftTab, \{ paneId: paneBelow\.id, activate: true \}\)/)
+  assert.match(block, /upsertTab\(tab, \{ paneId: paneBelow\.id, activate: true \}\)/)
 })
 
 test('session header Code target preserves valid remote nodes, falls back safely, and honors forced-new-tab', async () => {

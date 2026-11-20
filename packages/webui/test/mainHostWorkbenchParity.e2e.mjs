@@ -123,7 +123,7 @@ try {
   assert((Object.values((await savedLayout()).tabsById).find(tab => tab.type === 'search')).title.includes('submitted query'))
   assert.equal(await page.$eval('[data-history-search-view] [role="alert"]', node => node.textContent), submittedError)
 
-  // Desktop dock/reload/collapse retains the actual PTY; explicit pane Close deletes it.
+  // Desktop dock/reload/collapse and pane Close retain the actual PTY; only Kill ends it.
   await chat(); await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
   const terminal = await until(async () => (await host.api('GET', '/api/terminals')).body.terminals[0], 'real docked terminal')
   assert.equal(terminal.cwd, host.work)
@@ -134,12 +134,21 @@ try {
   assert(terminalPane && terminalPane.tabIds.length === 1)
   await click('[aria-label="Toggle terminal panel"]'); assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
   await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
+  // A focused terminal asks before the page unloads.
+  await page.evaluate(() => document.activeElement?.blur())
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('[data-terminal-header]', { visible: true })
   assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
   layout = await savedLayout(); terminalTab = Object.values(layout.tabsById).find(tab => tab.type === 'terminal'); terminalPane = panes(layout.root).find(pane => pane.tabIds.includes(terminalTab.id))
   assert.equal(terminalPane.tabIds.length, 1)
   await click(`[data-workbench-content-pane="${terminalPane.id}"] button[aria-label="Close pane"]`)
-  await until(async () => (await host.api('GET', '/api/terminals/' + terminal.id)).status === 404, 'explicit terminal pane Close')
+  await page.waitForFunction(() => !document.querySelector('[data-terminal-header]'))
+  assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid, 'pane Close detaches')
+  await click('[aria-label="Toggle terminal panel"]'); await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+  assert.deepEqual((await host.api('GET', '/api/terminals')).body.terminals.map(row => row.id), [terminal.id], 'the panel shows the detached PTY again')
+  page.once('dialog', dialog => { void dialog.accept() })
+  await click('[data-terminal-kill]')
+  await until(async () => (await host.api('GET', '/api/terminals/' + terminal.id)).status === 404, 'explicit terminal Kill')
+  await page.waitForFunction(() => !document.querySelector('[data-terminal-header]'))
 
   // Original official Code-OSS and browser FS/SCM/terminal extensions.
   await chat(); await click('.foxwarm-chat-root button[title="Code"]')

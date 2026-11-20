@@ -2301,6 +2301,11 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 .foxwarm-workbench-tab-toolbar button { width: 28px; height: 28px; border-color: transparent; background: transparent; border-radius: 6px; }
 .foxwarm-workbench-tab-toolbar button:hover { background: var(--foxwarm-color-hover); }
 @media (pointer: coarse) { .foxwarm-workbench-tab-close { opacity: 1; } }
+@media (pointer: coarse) {
+  .foxwarm-terminal-kill { width: 28px; height: 28px; }
+  .foxwarm-terminal-list-open { min-height: 44px; }
+  .foxwarm-terminal-list-kill { width: 44px; height: 44px; }
+}
 
 /* Full width only removes the Timeline cap, not the shared outer gutters. */
 .foxwarm-chat-messages-content[data-full-width="true"] {

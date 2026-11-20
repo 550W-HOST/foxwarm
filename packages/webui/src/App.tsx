@@ -31,6 +31,8 @@ import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference,
 import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
+import type { TerminalListOptions } from './components/TerminalList'
+import { parseTerminalRegistry, requestTerminalKill, terminalKillConfirmation, type TerminalRegistryRecord } from './terminalRegistry'
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 import { FoxPaneLoader } from './components/FoxLoaders'
@@ -39,15 +41,6 @@ type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
 // systemSection carries a section route (#nodes, #timers, #webhooks, #usage, #activity) into the System tab's section.
 type RouteState = { view: 'tab'; tabId: string | null; systemSection?: SystemSection }
-
-type TerminalRegistryRecord = {
-  id: string
-  cwd: string
-  nodeId: string
-  shell: string
-  pid: number
-  createdAt: number
-}
 
 type WebUiSettings = {
   instanceName: string
@@ -554,11 +547,11 @@ function App() {
   const pendingRouteTabIdRef = useRef<string | null>(null)
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
   const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
-  const movedOutTerminalIdsRef = useRef<Set<string>>(new Set())
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const allTabs = useMemo(() => Object.values(tabsById), [tabsById])
+  const openTerminalIds = useMemo(() => new Set(allTabs.flatMap((tab) => tab.type === 'terminal' && tab.terminalId ? [tab.terminalId] : [])), [allTabs])
   const paneNodes = useMemo(() => getPaneNodes(root), [root])
   const paneIds = useMemo(() => getPaneIds(root), [root])
   const flattenedTabIds = useMemo(() => getFlattenedTabIds(root), [root])
@@ -761,10 +754,10 @@ function App() {
       if (!res.ok) {
         throw new Error(data.error || 'Failed to fetch terminals')
       }
-      setActiveTerminals(Array.isArray(data.terminals) ? data.terminals : [])
+      setActiveTerminals(parseTerminalRegistry(data))
     } catch (error) {
       console.error('Failed to fetch terminals:', error)
-      setActiveTerminals([])
+      setActiveTerminals(current => current ?? [])
     }
   }
 
@@ -807,61 +800,23 @@ function App() {
     })
   }, [allTabs, sessions])
 
+  // Tabs are views of terminals: the registry refreshes their titles, but neither adds a tab
+  // for every running terminal nor removes a tab whose terminal ended (the view shows that).
   useEffect(() => {
     if (!activeTerminals) return
-
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
-    const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
-    const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
-
-    terminalTabs.forEach((tab) => {
-      if (!tab.terminalId) return
+    allTabs.forEach((tab) => {
+      if (tab.type !== 'terminal' || !tab.terminalId) return
       const terminal = activeTerminalMap.get(tab.terminalId)
-      if (!terminal) {
-        if (tab.createMode === 'new') {
-          return
-        }
-        removeTab(tab.id)
-        return
-      }
-
+      if (!terminal) return
       const nextTitle = formatTerminalTabTitle(terminal.cwd, terminal.nodeId)
-      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId || tab.createMode) {
+      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId) {
         updateTab(tab.id, (current) => current.type === 'terminal'
-          ? {
-              ...current,
-              title: nextTitle,
-              cwd: terminal.cwd,
-              nodeId: terminal.nodeId,
-              terminalId: terminal.id,
-              createMode: undefined,
-            }
+          ? { ...current, title: nextTitle, cwd: terminal.cwd, nodeId: terminal.nodeId }
           : current)
       }
     })
-
-    activeTerminals.forEach((terminal) => {
-      if (movedOutTerminalIdsRef.current.has(terminal.id)) {
-        return
-      }
-      const existing = terminalTabs.find((tab) => tab.terminalId === terminal.id)
-      if (existing) {
-        return
-      }
-
-      const matchingDraft = terminalDraftTabs.find((tab) => (
-        (tab.nodeId || 'master') === terminal.nodeId
-        && (tab.cwd || '/') === terminal.cwd
-      ))
-
-      if (matchingDraft) {
-        return
-      }
-
-      upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
-    })
-
-  }, [activeTerminals, allTabs, removeTab, upsertTab, updateTab])
+  }, [activeTerminals, allTabs, updateTab])
 
   useEffect(() => {
     const trimmedInstanceName = webUiSettings.instanceName.trim()
@@ -1171,15 +1126,42 @@ function App() {
     return paneTabs[0]
   }
 
-  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
-    if (options?.terminalId) {
-      const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
-      const terminal = activeTerminals?.find((item) => item.id === options.terminalId)
-      const tab = existing || (terminal ? makeTerminalTabFromRecord(terminal) : null)
-      if (tab) {
-        upsertTab(tab, { activate: true })
+  /** Places a new terminal tab: in the pane below the source, as a bottom panel of a tall source pane, or in the source pane. */
+  const placeTerminalTab = (tab: WorkbenchTab, sourcePaneId: string | null, preferPanel?: boolean) => {
+    if (!isMobile && sourcePaneId) {
+      const paneBelow = findPaneBelow(root, sourcePaneId)
+      if (paneBelow) {
+        upsertTab(tab, { paneId: paneBelow.id, activate: true })
         navigateToTab(tab.id)
+        return
       }
+
+      if (preferPanel || getPaneHeight(sourcePaneId) > 700) {
+        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(sourcePaneId)) * 100))
+        const createdPaneId = splitPaneWithNewTab(sourcePaneId, tab, 'bottom', preferPanel ? [100 - panelShare, panelShare] : undefined)
+        if (createdPaneId) {
+          navigateToTab(tab.id)
+          return
+        }
+      }
+    }
+
+    upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
+    navigateToTab(tab.id)
+  }
+
+  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
+    const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
+
+    if (options?.terminalId) {
+      // One terminal has at most one tab: opening it again focuses that tab.
+      const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
+      if (existing) {
+        navigateToTab(existing.id)
+        return
+      }
+      const terminal = activeTerminals?.find((item) => item.id === options.terminalId)
+      if (terminal) placeTerminalTab(makeTerminalTabFromRecord(terminal), sourcePaneId, options.preferPanel)
       return
     }
 
@@ -1187,36 +1169,44 @@ function App() {
     const nodeId = target.nodeId
     const path = target.cwd
 
-    const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
-
     if (!isMobile && sourcePaneId) {
       const paneBelow = findPaneBelow(root, sourcePaneId)
-      if (paneBelow) {
-        const existingBottomTerminal = getTerminalTabInPane(paneBelow.id, { nodeId, path })
-        if (existingBottomTerminal) {
-          navigateToTab(existingBottomTerminal.id)
-          return
-        }
-        const draftTab = makeTerminalDraftTab(nodeId, path)
-        upsertTab(draftTab, { paneId: paneBelow.id, activate: true })
-        navigateToTab(draftTab.id)
+      const existingBottomTerminal = paneBelow ? getTerminalTabInPane(paneBelow.id, { nodeId, path }) : null
+      if (existingBottomTerminal) {
+        navigateToTab(existingBottomTerminal.id)
         return
-      }
-
-      if (options?.preferPanel || getPaneHeight(sourcePaneId) > 700) {
-        const draftTab = makeTerminalDraftTab(nodeId, path)
-        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(sourcePaneId)) * 100))
-        const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom', options?.preferPanel ? [100 - panelShare, panelShare] : undefined)
-        if (createdPaneId) {
-          navigateToTab(draftTab.id)
-          return
-        }
       }
     }
 
-    const tab = makeTerminalDraftTab(nodeId, path)
-    upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
-    navigateToTab(tab.id)
+    placeTerminalTab(makeTerminalDraftTab(nodeId, path), sourcePaneId, options?.preferPanel)
+  }
+
+  /** Kills a terminal's process after confirmation and closes the tab that showed it. */
+  const killTerminal = async (terminal: { id: string; cwd?: string; nodeId?: string }) => {
+    if (!window.confirm(terminalKillConfirmation(terminal))) return
+    try {
+      await requestTerminalKill(terminal.id)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+      return
+    }
+    closeTerminalTabsFor(terminal.id)
+    void fetchActiveTerminals()
+  }
+
+  const terminalListOptions: TerminalListOptions = {
+    terminals: activeTerminals,
+    openTerminalIds,
+    onOpen: (terminal) => openTerminalTab({ terminalId: terminal.id }),
+    onKill: (terminal) => { void killTerminal(terminal) },
+    onRefresh: () => { void fetchActiveTerminals() },
+  }
+
+  const closeTerminalTabsFor = (terminalId: string) => {
+    const current = useWorkbenchStore.getState().tabsById
+    Object.values(current).forEach((tab) => {
+      if (tab.type === 'terminal' && tab.terminalId === terminalId) void closeWorkbenchTab(tab.id)
+    })
   }
 
   const statusTerminalTarget = normalizeTerminalTarget(focusedActiveTab?.type === 'terminal'
@@ -1254,7 +1244,12 @@ function App() {
       }
       return
     }
-    openTerminalTab({ nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd, sourcePaneId: focusedPaneId || undefined, preferPanel: true })
+    // The panel shows a detached terminal of the same target again before starting another.
+    const detached = activeTerminals?.find((terminal) => (
+      !allTabs.some((tab) => tab.type === 'terminal' && tab.terminalId === terminal.id)
+      && findTerminalForTarget([terminal], statusTerminalTarget)
+    ))
+    openTerminalTab({ terminalId: detached?.id, nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd, sourcePaneId: focusedPaneId || undefined, preferPanel: true })
   }
 
   const closeWorkbenchTab = async (tabId: string, options?: { deferRoute?: boolean }) => {
@@ -1267,15 +1262,6 @@ function App() {
     const paneBeforeClose = findPaneContainingTab(stateBeforeClose.root, tabId)
     const wasFocusedActiveTab = paneBeforeClose?.activeTabId === tabId
       && stateBeforeClose.focusedPaneId === paneBeforeClose.id
-
-    if (targetTab?.type === 'terminal' && targetTab.terminalId) {
-      try {
-        await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(targetTab.terminalId)}`, { method: 'DELETE' })
-      } catch (error) {
-        console.error('Failed to close terminal:', error)
-      }
-      await fetchActiveTerminals()
-    }
 
     if (targetTab?.type === 'vscode') {
       closeCodeFrame(targetTab.nodeId)
@@ -1358,9 +1344,6 @@ function App() {
     if (targetTab.type === 'vscode') {
       closeCodeFrame(targetTab.nodeId)
     }
-    if (targetTab.type === 'terminal' && targetTab.terminalId) {
-      movedOutTerminalIdsRef.current.add(targetTab.terminalId)
-    }
     if (currentRouteTabIdRef.current === tabId) {
       closingRouteTabIdsRef.current.add(tabId)
     }
@@ -1442,11 +1425,10 @@ function App() {
   }
 
   const handleTerminalReady = (draftTabId: string, terminal: { id: string; cwd: string; nodeId?: string }) => {
-    // Keep createMode='new' until activeTerminals reconciliation sees this terminal id,
-    // so the missing-terminal cleanup path does not immediately remove the just-opened tab.
     updateTab(draftTabId, (current) => current.type === 'terminal'
       ? {
           ...current,
+          createMode: undefined,
           terminalId: terminal.id,
           nodeId: terminal.nodeId || 'master',
           cwd: terminal.cwd,
@@ -1476,11 +1458,10 @@ function App() {
     window.addEventListener('mouseup', handleMouseUp)
   }
 
-  const handleTerminalClosed = (terminalId: string) => {
-    const target = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === terminalId)
-    if (target) {
-      void closeWorkbenchTab(target.id)
-    }
+  // A shell that exits normally (`exit`, Ctrl+D) closes its tab; any other ending stays
+  // visible in the tab with its exit code.
+  const handleTerminalClosed = (terminalId: string, exitCode: number | null) => {
+    if (exitCode === 0) closeTerminalTabsFor(terminalId)
     void fetchActiveTerminals()
   }
 
@@ -1794,6 +1775,7 @@ function App() {
           onSessionsChanged={() => { void fetchActiveTerminals() }}
           onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
           onTerminalClosed={handleTerminalClosed}
+          onTerminalKilled={(terminalId) => { closeTerminalTabsFor(terminalId); void fetchActiveTerminals() }}
         />
       </Suspense>
     )
@@ -2198,6 +2180,7 @@ function App() {
           onCodePathChange={updateCodePath}
           onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
           onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
+          terminalList={terminalListOptions}
           onCreateAgent={handleCreateAgent}
           onCreateSession={handleCreateSession}
           idleNotificationModes={idleNotificationModes}
@@ -2246,6 +2229,7 @@ function App() {
             onCodePathChange={updateCodePath}
             onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
             onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
+            terminalList={terminalListOptions}
             onCreateAgent={handleCreateAgent}
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}

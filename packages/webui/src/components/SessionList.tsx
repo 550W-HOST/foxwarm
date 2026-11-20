@@ -10,6 +10,7 @@ import CodeLaunchButton from './CodeLaunchButton'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
+import type { TerminalListOptions } from './TerminalList'
 
 type HomeTab = 'sessions' | 'tasks' | 'search' | 'setup'
 interface SessionListProps {
@@ -38,6 +39,7 @@ interface SessionListProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
+  terminalList?: TerminalListOptions
   onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
@@ -68,6 +70,7 @@ export default function SessionList({
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  terminalList,
   onCreateAgent,
   onCreateSession,
   idleNotificationModes,
@@ -161,7 +164,8 @@ export default function SessionList({
             onOpen={(node, path) => {setUtility(null); onOpenCode(node, path)}} onNodeChange={onCodeNodeChange} onPathChange={onCodePathChange}
             onOpenInNewWindowChange={onCodeOpenInNewWindowChange} onRefreshNodeTargets={onRefreshNodeTargets} />
             : <CreateTabButton inlineOptions onCancel={() => setUtility(null)} defaultNodeId={defaultNodeId} defaultPath={defaultPath}
-              onCreate={options => {setUtility(null); onCreateTerminalTab(options)}} nodeTargets={nodeTargets} nodeTargetsError={nodeTargetsError} onRefreshNodeTargets={onRefreshNodeTargets} />}
+              onCreate={options => {setUtility(null); onCreateTerminalTab(options)}} nodeTargets={nodeTargets} nodeTargetsError={nodeTargetsError} onRefreshNodeTargets={onRefreshNodeTargets}
+              terminalList={terminalList && { ...terminalList, onOpen: terminal => {setUtility(null); terminalList.onOpen(terminal)} }} />}
         </dialog>, document.body)}
     </div>
   )

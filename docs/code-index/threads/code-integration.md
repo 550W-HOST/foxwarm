@@ -37,7 +37,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 - Master file/Git operations execute locally; remote operations require matching advertised `vscode-fs`/`vscode-git` versions.
 - Optional `vscode-pty` owns remote PTY process state and emits fixed service events through the authenticated node connection.
-- Terminal browser WebSockets attach to backend PTYs. After authenticated attachment, the server sends a WebSocket protocol ping every 30 seconds as transport keepalive; browser clients answer protocol pong automatically. Page reload or transport close detaches; explicit user close deletes.
+- Terminal browser WebSockets attach to backend PTYs. After authenticated attachment, the server sends a WebSocket protocol ping every 30 seconds as transport keepalive; browser clients answer protocol pong automatically. Page reload, transport close and closing a WebUI terminal tab detach; an explicit user kill deletes.
 - Terminal `code` helper uses a process-local random capability/socket and one Code-control terminal attachment; it has no browser/master credential.
 
 ## SCM and commit markers
@@ -106,9 +106,11 @@ Code commands for the Foxwarm app and data folders obtain `BASE_DIR` and the res
 
 ### D-code-terminal-lifecycle
 
-**Directly selected resource-lifetime constraint.** Reconnection should reattach rather than kill backend work; explicit Close owns termination. It serves [surface/resource separation](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent). Keepalive pings are a transport mechanism, not an idle-kill or backend liveness policy.
+**Directly selected resource-lifetime constraint.** Reconnection and closing a view should reattach or detach rather than kill backend work; an explicit kill owns termination. It serves [surface/resource separation](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent). Keepalive pings are a transport mechanism, not an idle-kill or backend liveness policy.
 
-Page/extension reload and terminal WebSocket close detach backend terminals; only explicit user close kills them. Matching terminals reattach after reload. An authenticated, successfully attached terminal stream receives a server-originated WebSocket protocol ping every 30 seconds so idle browser connections remain active through intermediaries. This ping is transport keepalive only: it is not a PTY idle timeout, liveness ledger, or backend lifecycle signal.
+Page/extension reload, terminal WebSocket close and closing a WebUI terminal tab or pane detach backend terminals; only an explicit user kill ends them. In the WebUI that is the confirmed Kill action of the sidebar terminal list or the terminal header; in Code it is the workbench's own terminal close, which Code defines as kill. Matching terminals reattach after reload.
+
+[2026-11-21, user] WebUI terminal tabs are views decoupled from running terminals. The sidebar Terminal list shows every running terminal across Nodes and opens or focuses its one tab; a running terminal no longer gets a tab automatically, and a tab whose terminal ended stays visible in a closed state. Browser behavior: [Workbench and Chat](../behaviors/workbench-and-chat.md#code-and-terminal-do-not-inherit-arbitrary-chat-authority); implementation: [browser Terminal](../units/webui-terminal.md). An authenticated, successfully attached terminal stream receives a server-originated WebSocket protocol ping every 30 seconds so idle browser connections remain active through intermediaries. This ping is transport keepalive only: it is not a PTY idle timeout, liveness ledger, or backend lifecycle signal.
 
 ### D-code-read-only-scm
 

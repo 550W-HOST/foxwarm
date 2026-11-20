@@ -1,6 +1,6 @@
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, SquareTerminal } from 'lucide-react'
+import { ArrowLeft, SquareTerminal, Trash2 } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -16,6 +16,8 @@ import {
   TERMINAL_DEFAULT_FONT_SIZE,
 } from '../terminalPinchZoom'
 import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from './TerminalVirtualKeyboard'
+import { attachTerminalUnloadGuard, copyTerminalText, isApplePlatform, terminalShortcutAction } from '../terminalShortcuts'
+import { requestTerminalKill, terminalKillConfirmation } from '../terminalRegistry'
 import { terminalThemeFromSnapshot } from '../theme/integrations'
 import { getThemeSnapshot, THEME_CHANGED_EVENT } from '../theme/runtime'
 
@@ -40,10 +42,13 @@ interface TerminalViewProps {
   onBack?: () => void
   onSessionsChanged?: () => void
   onTerminalReady?: (terminal: TerminalInfo) => void
-  onTerminalClosed?: (terminalId: string) => void
+  /** The attached terminal's process exited while this view watched it. */
+  onTerminalClosed?: (terminalId: string, exitCode: number | null) => void
+  /** The user killed this view's terminal from its header. */
+  onTerminalKilled?: (terminalId: string) => void
 }
 
-export default function TerminalView({ initialCwd, initialNodeId, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
+export default function TerminalView({ initialCwd, initialNodeId, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed, onTerminalKilled }: TerminalViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
@@ -58,7 +63,11 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
   const suppressInputForwardRef = useRef(false)
 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
+  const statusRef = useRef<TerminalStatus>(status)
+  statusRef.current = status
   const [connectionAttempt, setConnectionAttempt] = useState(0)
+  // Reconnect shows the Disconnected label while it runs; starting a new terminal does not.
+  const [reconnecting, setReconnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
@@ -144,11 +153,27 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       return true
     }
 
+    const apple = isApplePlatform()
     term.attachCustomKeyEventHandler((event) => {
       const delta = terminalFontSizeShortcutDelta(event)
-      if (delta === null) return true
+      if (delta !== null) {
+        event.preventDefault()
+        applyFontSize((term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE) + delta, true)
+        return false
+      }
+      const action = terminalShortcutAction(event, { apple, hasSelection: term.hasSelection() })
+      if (action === null) return true
+      // The browser's own paste then reaches xterm's paste listener, without a clipboard permission.
+      if (action === 'native-paste') return false
       event.preventDefault()
-      applyFontSize((term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE) + delta, true)
+      if (action === 'copy') {
+        copyTerminalText(term.getSelection())
+        term.clearSelection()
+      } else if (action === 'word-erase') {
+        term.input('\x17', true)
+      } else {
+        applyFontSize(TERMINAL_DEFAULT_FONT_SIZE, true)
+      }
       return false
     })
 
@@ -163,9 +188,11 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       })
     }
 
+    let disposeUnloadGuard: (() => void) | null = null
     if (hostRef.current) {
       term.open(hostRef.current)
       setTerminalInstance(term)
+      if (term.textarea) disposeUnloadGuard = attachTerminalUnloadGuard(term.textarea, () => statusRef.current === 'ready')
       disposePinchZoom = attachTerminalPinchZoom({
         target: hostRef.current,
         getFontSize: () => term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE,
@@ -199,6 +226,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       scheduledFitHandles.forEach((handle) => window.clearTimeout(handle))
       disposePinchZoom?.()
       disposePinchZoom = null
+      disposeUnloadGuard?.()
       fitAndNotifyResizeRef.current = null
       window.removeEventListener('resize', fitAndNotifyResize)
       window.removeEventListener(THEME_CHANGED_EVENT, syncTheme)
@@ -237,10 +265,17 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
         if (terminalId) {
           const lookupRes = await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(terminalId)}`)
           const lookupData = await lookupRes.json().catch(() => ({}))
-          if (lookupRes.ok && lookupData.terminal) {
-            // keep existing terminal
-          } else {
-            terminalId = null
+          if (disposed) return
+          if (lookupRes.status === 404) {
+            // A view shows a terminal; it never replaces one that ended without being asked.
+            exited = true
+            setStatus('closed')
+            term.writeln('[terminal is no longer running]')
+            onSessionsChangedRef.current?.()
+            return
+          }
+          if (!lookupRes.ok || !lookupData.terminal) {
+            throw new Error(lookupData.error || 'Failed to look up terminal')
           }
         }
 
@@ -317,6 +352,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
               setKeyboardResetVersion(version => version + 1)
               setTerminalInfo(payload.terminal)
               setStatus('ready')
+              setReconnecting(false)
               onTerminalReadyRef.current?.(payload.terminal)
               suppressInputForwardRef.current = true
               const finishReadyReplay = () => {
@@ -344,7 +380,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
               term.writeln('')
               term.writeln(`[terminal exited: code=${payload.exitCode ?? 'unknown'}]`)
               if (terminalIdRef.current) {
-                onTerminalClosedRef.current?.(terminalIdRef.current)
+                onTerminalClosedRef.current?.(terminalIdRef.current, typeof payload.exitCode === 'number' ? payload.exitCode : null)
               }
               onSessionsChangedRef.current?.()
               return
@@ -394,7 +430,40 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
     }
   }, [connectionAttempt])
 
-  const showReconnect = status === 'disconnected' || status === 'error' || (status === 'connecting' && connectionAttempt > 0)
+  const showReconnect = status === 'disconnected' || status === 'error' || (status === 'connecting' && reconnecting)
+
+  const reconnect = () => {
+    setReconnecting(true)
+    setConnectionAttempt(attempt => attempt + 1)
+  }
+
+  // Starts a fresh PTY for the same Node and directory in this view.
+  const startNewTerminal = () => {
+    terminalIdRef.current = null
+    initialTerminalIdRef.current = undefined
+    createModeRef.current = 'new'
+    if (terminalInfo) requestedTargetRef.current = normalizeTerminalTarget({ nodeId: terminalInfo.nodeId, cwd: terminalInfo.cwd })
+    xtermRef.current?.reset()
+    setTerminalInfo(null)
+    setReconnecting(false)
+    setConnectionAttempt(attempt => attempt + 1)
+  }
+
+  const killTerminal = async () => {
+    const terminalId = terminalIdRef.current
+    if (!terminalId) return
+    if (!window.confirm(terminalKillConfirmation(terminalInfo ?? requestedTarget))) return
+    try {
+      await requestTerminalKill(terminalId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      return
+    }
+    onTerminalKilled?.(terminalId)
+    onSessionsChangedRef.current?.()
+  }
+
+  const canKill = !!terminalInfo && status !== 'closed'
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
@@ -436,12 +505,22 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
                   <button
                     type="button"
                     disabled={status === 'connecting'}
-                    onClick={() => setConnectionAttempt(attempt => attempt + 1)}
+                    onClick={reconnect}
                     className="rounded border border-fw-border px-1.5 py-0.5 text-[11px] leading-none text-fw-text hover:bg-fw-hover disabled:opacity-50"
                   >
                     {status === 'connecting' ? 'Reconnecting…' : 'Reconnect'}
                   </button>
                 </span>
+              )}
+              {status === 'closed' && (
+                <button
+                  type="button"
+                  onClick={startNewTerminal}
+                  data-terminal-new
+                  className="rounded border border-fw-border px-1.5 py-0.5 text-[11px] leading-none text-fw-text hover:bg-fw-hover"
+                >
+                  New terminal
+                </button>
               )}
             </div>
             {error && (
@@ -450,7 +529,21 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
               </div>
             )}
           </div>
-          <WorkbenchPaneControls />
+          <div className="flex shrink-0 items-center gap-1">
+            {canKill && (
+              <button
+                type="button"
+                onClick={() => { void killTerminal() }}
+                title="Kill terminal"
+                aria-label="Kill terminal"
+                data-terminal-kill
+                className="foxwarm-terminal-kill inline-flex h-5 w-5 items-center justify-center rounded text-fw-text-muted hover:bg-fw-hover hover:text-fw-danger"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <WorkbenchPaneControls />
+          </div>
         </div>
       </WorkbenchHeaderDragArea>
 

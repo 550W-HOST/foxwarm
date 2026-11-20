@@ -1836,7 +1836,7 @@ test('single Chat icon owns drag and its existing menu; cancel and Close pointer
   } finally { await page.close() }
 })
 
-test('Terminal single-tab chrome preserves status-row height and closes its backend resource', async () => {
+test('Terminal single-tab chrome preserves status-row height and Close detaches its backend resource', async () => {
   const terminal = { id: 'term-header', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
   const tab = { id: 'terminal:term-header', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
   for (const viewportWidth of [1400, 390]) {
@@ -1867,7 +1867,7 @@ test('Terminal single-tab chrome preserves status-row height and closes its back
       await single.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['terminal:term-header'] && !location.hash).catch(async error => {
         throw new Error(`${error.message}: ${JSON.stringify(await single.evaluate(() => ({ state: JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state, hash: location.hash, deletes: window.__terminalDeletes, header: document.querySelector('[data-terminal-header]')?.textContent, body: document.body.textContent.slice(0, 300) })))}`)
       })
-      assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-header'])
+      assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), [], 'Close detaches; only kill ends the PTY')
       assert.equal((await state(single)).hash, '')
       if (viewportWidth === 1400) {
         await single.click('button[title="Create terminal tab"]')
@@ -1878,7 +1878,7 @@ test('Terminal single-tab chrome preserves status-row height and closes its back
         assert.notEqual(fresh.id, tab.id)
         assert.equal(reopened.hash, `#tab/${fresh.id}`)
         assert.ok(await single.evaluate(() => window.__terminalCreates.length > 0), 'explicit reopen sends a terminal create request')
-        assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-header'])
+        assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), [])
       }
     } finally { await single.close(); if (!multi.isClosed()) await multi.close() }
   }
@@ -1900,7 +1900,7 @@ test('ordinary Terminal close selects another still-open tab rather than restori
     assert.deepEqual((await state(page)).root.tabIds, ['system:agents'])
     // The remaining tab mounts lazily; wait for its content before checking the route result.
     await page.waitForSelector('h1::-p-text(System)')
-    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-fallback'])
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), [], 'Close detaches the PTY')
   } finally { await page.close() }
 })
 
@@ -2509,14 +2509,14 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 1)
     await page.click(`:is([data-pane-id="${terminalPane.id}"], [data-workbench-content-pane="${terminalPane.id}"]) button[aria-label="Close pane"]`)
     await page.waitForFunction(id => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[id], {}, terminalTab.id)
-    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-panel'])
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), [], 'closing the panel detaches its PTY')
     assert.equal((await state(page)).root.kind, 'pane', 'closing the terminal panel leaves only the editor')
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 0, 'close never moves Terminal into the editor')
-    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'Close does not recreate the just-deleted PTY')
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'Close does not start another PTY')
     await page.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/chat:e2e-a')
     await clickReadyControl(page, control)
-    await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal' && tab.terminalId === 'term-reopened'))
-    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 1, 'a closed PTY is recreated only by explicit reopen')
+    await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal' && tab.terminalId === 'term-panel'))
+    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 0, 'the panel shows its detached PTY again rather than starting another')
     await clickReadyControl(page, control)
     await page.setViewport({ width: 390, height: 844 })
     await page.waitForSelector('[data-workbench-status-bar]', { hidden: true })
