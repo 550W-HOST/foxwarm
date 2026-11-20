@@ -263,6 +263,87 @@ public sealed class OtlpTraceTests
             Assert.DoesNotContain(spans.SelectMany(span => span.Attributes.Keys), IsContent);
     }
 
+    [Fact]
+    public void Bad_content_keeps_model_and_tool_metadata_and_outcomes()
+    {
+        using var temp = new TempDirectory();
+        var state = Path.Combine(temp.Path, "state");
+        Directory.CreateDirectory(state);
+        File.WriteAllText(
+            Path.Combine(state, "config.yaml"),
+            "otlp: {endpoint: 'http://127.0.0.1:1/v1/traces'}"
+        );
+        var configuration = new ModelConfiguration(temp.Path);
+        using var secrets = configuration.Secrets;
+        using var traces = Assert.IsType<Foxwarm.Telemetry.FoxwarmTraces>(
+            Foxwarm.Telemetry.FoxwarmTraces.Open(configuration)
+        );
+        var catalog = HostModels.ForTest(
+            new ResponsesClientOptions(
+                new Uri("http://127.0.0.1:1"),
+                "wire",
+                "test/wire",
+                "",
+                "",
+                50
+            )
+        );
+        var model = catalog.Resolve(catalog.DefaultKey);
+        var invalid = new JsonObject { ["number"] = JsonValue.Create(double.NaN) };
+        using var attempt = traces.StartModel(
+            "s",
+            model,
+            model.ProviderType,
+            model.Key,
+            "canonical",
+            1,
+            new JsonObject
+            {
+                ["tools"] = new JsonArray(
+                    new JsonObject { ["name"] = "fixture", ["parameters"] = invalid.DeepClone() }
+                ),
+            }
+        );
+        Assert.NotNull(attempt);
+        Assert.Equal(true, attempt.GetTagItem("foxwarm.content.capture_failed"));
+        Assert.Null(attempt.GetTagItem("gen_ai.tool.definitions"));
+        Assert.Equal("wire", attempt.GetTagItem("gen_ai.request.model"));
+        attempt.SetTag("foxwarm.content.capture_failed", null);
+        traces.CompleteModel(
+            attempt,
+            new ChatResult(
+                new JsonObject
+                {
+                    ["parts"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["functionCall"] = new JsonObject
+                            {
+                                ["name"] = "fixture",
+                                ["args"] = invalid.DeepClone(),
+                            },
+                        }
+                    ),
+                }
+            )
+        );
+        Assert.Equal(true, attempt.GetTagItem("foxwarm.content.capture_failed"));
+        Assert.Null(attempt.GetTagItem("gen_ai.output.messages"));
+
+        using var tool = traces.StartTool(
+            "s",
+            new JsonObject { ["name"] = "fixture", ["args"] = invalid.DeepClone() }
+        );
+        Assert.NotNull(tool);
+        Assert.Equal(true, tool.GetTagItem("foxwarm.content.capture_failed"));
+        Assert.Null(tool.GetTagItem("gen_ai.tool.call.arguments"));
+        tool.SetTag("foxwarm.content.capture_failed", null);
+        traces.CompleteTool(tool, new Foxwarm.Tools.TurnToolExecution(invalid), started: true);
+        Assert.Equal(true, tool.GetTagItem("foxwarm.content.capture_failed"));
+        Assert.Equal("completed", tool.GetTagItem("foxwarm.outcome"));
+        Assert.Null(tool.GetTagItem("gen_ai.tool.call.result"));
+    }
+
     private static bool IsContent(string key) =>
         key
             is "gen_ai.system_instructions"

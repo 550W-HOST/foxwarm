@@ -47,7 +47,7 @@ internal sealed partial class FoxwarmTraces
         if (operation == "generate_content")
             span.SetTag("gen_ai.output.type", "image");
         if (body is not null)
-            CaptureRequest(span, body);
+            CaptureContent(span, () => CaptureRequest(span, body));
         return span;
     }
 
@@ -71,7 +71,10 @@ internal sealed partial class FoxwarmTraces
         if (result.TruncatedStopReason is { } reason)
             span.SetTag("gen_ai.response.finish_reasons", new[] { reason });
         if (content.OutputMessages)
-            SetList(span, "gen_ai.output.messages", OutputMessages(result));
+            CaptureContent(
+                span,
+                () => SetList(span, "gen_ai.output.messages", OutputMessages(result))
+            );
 
         void Count(string name, double? count)
         {
@@ -92,10 +95,14 @@ internal sealed partial class FoxwarmTraces
         span.SetTag("gen_ai.tool.call.id", Text(call, "id"));
         span.SetTag("foxwarm.tool.started", false);
         if (content.ToolArguments)
-            SetValue(
+            CaptureContent(
                 span,
-                "gen_ai.tool.call.arguments",
-                call["args"] ?? ParseArguments(call["rawArgsText"])
+                () =>
+                    SetValue(
+                        span,
+                        "gen_ai.tool.call.arguments",
+                        call["args"] ?? ParseArguments(call["rawArgsText"])
+                    )
             );
         return span;
     }
@@ -137,7 +144,21 @@ internal sealed partial class FoxwarmTraces
         else
             End(span, "completed");
         if (started && content.ToolResults)
-            SetValue(span, "gen_ai.tool.call.result", value);
+            CaptureContent(span, () => SetValue(span, "gen_ai.tool.call.result", value));
+    }
+
+    // Content is optional telemetry. A projection or serialization failure must not
+    // change the provider attempt or tool result that supplied the value.
+    private static void CaptureContent(Activity span, Action project)
+    {
+        try
+        {
+            project();
+        }
+        catch (Exception)
+        {
+            span.SetTag("foxwarm.content.capture_failed", true);
+        }
     }
 
     private void CaptureRequest(Activity span, JsonObject body)
