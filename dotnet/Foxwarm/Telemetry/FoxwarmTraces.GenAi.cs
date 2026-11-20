@@ -310,8 +310,11 @@ internal sealed partial class FoxwarmTraces
         if (parts.Count > 0)
         {
             var message = Message("assistant", parts);
-            message["finish_reason"] =
-                result.TruncatedStopReason ?? (hasToolCall ? "tool_calls" : "stop");
+            message["finish_reason"] = result.TruncatedStopReason switch
+            {
+                "max_tokens" or "model_context_window_exceeded" => "length",
+                _ => hasToolCall ? "tool_call" : "stop",
+            };
             yield return message;
         }
     }

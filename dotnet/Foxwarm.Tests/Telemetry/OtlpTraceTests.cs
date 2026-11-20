@@ -231,6 +231,22 @@ public sealed class OtlpTraceTests
             Assert.Contains("synthetic input", failed.Attributes["gen_ai.input.messages"]);
             Assert.Contains("synthetic reasoning", final.Attributes["gen_ai.output.messages"]);
             Assert.Contains("synthetic answer", final.Attributes["gen_ai.output.messages"]);
+            Assert.Equal(
+                "stop",
+                JsonNode.Parse(final.Attributes["gen_ai.output.messages"])![0]![
+                    "finish_reason"
+                ]!.GetValue<string>()
+            );
+            var toolRequest = Assert.Single(
+                models,
+                span => span.Attributes["foxwarm.model.attempt"] == "2"
+            );
+            Assert.Equal(
+                "tool_call",
+                JsonNode.Parse(toolRequest.Attributes["gen_ai.output.messages"])![0]![
+                    "finish_reason"
+                ]!.GetValue<string>()
+            );
             Assert.Contains("example.txt", read.Attributes["gen_ai.tool.call.arguments"]);
             Assert.Contains("synthetic tool output", read.Attributes["gen_ai.tool.call.result"]);
             foreach (
