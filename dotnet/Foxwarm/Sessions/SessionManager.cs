@@ -32,6 +32,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly CommittedArchiveIdentity archiveIdentities;
     private readonly HttpClient http = ProviderHttpRequest.CreateClient();
     private readonly Foxwarm.McpClient mcp;
+    private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
+    internal Foxwarm.Secrets.InstanceSecrets? Secrets => secrets;
     internal Foxwarm.McpClient OutboundMcp => mcp;
     internal SessionRuntimeCredentialStore RuntimeCredentials { get; } = new();
     internal Uri? RuntimeMcpEndpoint { get; set; }
@@ -42,11 +44,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly ModelRouting modelRouting = new();
     private readonly ModelInteractionDiagnostics diagnostics;
     internal LlmRequestJournalStore Journal { get; }
+
+    /// <summary>Installation-wide usage read from the journal's derived ledger.</summary>
+    internal UsageOverview Usage { get; }
+
+    /// <summary>Installation activity: the derived index of tool effects and its records.</summary>
+    internal ActivityIndex Activity { get; }
     internal Foxwarm.Vector.VectorService Vector { get; }
     private readonly Foxwarm.Persistence.SqliteWriterOwners.Lease archiveWriter;
     internal TaskService Tasks { get; }
     private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
+    internal ToolRegistry ToolRegistry => tools;
     internal Foxwarm.ToolScript.MainToolScript ToolScript { get; }
     private readonly SessionWaitTimeouts waitTimeouts;
     private readonly WaitLiveness waitLiveness;
@@ -81,6 +90,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (Directory.Exists(runtimeFiles))
             Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
+        RecallTargets = new(this.root);
         Nodes = new(this.root);
         Nodes.Registry.ConfigureLimits(() =>
             (
@@ -174,14 +184,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                         "Exec completion owner is unavailable; retry after recovery."
                     );
                 var current = await RequiredAsync(sessionId);
-                var detail = message.StartsWith(
-                    "Background Process Finished\n",
-                    StringComparison.Ordinal
-                )
-                    ? message["Background Process Finished\n".Length..]
-                    : message;
-                var eventPart =
-                    $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{detail}\n</foxwarm-system>";
+                var eventPart = CompletionEvent(message);
                 try
                 {
                     if (
@@ -215,6 +218,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 ?? throw new InvalidDataException("Exec Session membership is missing.")
         );
         executor.ResolveProviderBackend = NodeProviders.ResolveExecBackend;
+        executor.ResolveProviderStop = NodeProviders.ExecStopBackendAsync;
+        executor.Untracked = session => Find(session)?.PublishStateChanged();
         executor.RemoteIdentityReserved = (session, id) =>
             Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
         Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
@@ -239,8 +244,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in ArchiveControlTools.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
-        definitions.Add(ToolAuthorizationToolDefinition.ExplainDefinition());
+        definitions.Add((JsonNode?)ToolAuthorizationToolDefinition.ExplainDefinition());
+        foreach (var definition in SecretToolDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in FileDeliveryDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
+        foreach (var definition in ExecControlDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in MainLocalToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
@@ -277,20 +286,63 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Nodes,
             NodeProviders
         );
+        secrets = models.ConfigurationOwner?.Secrets;
+        if (secrets is { } owned)
+        {
+            mcp.Configuration.SecretLookup = owned.Lookup;
+            owned.AddSource("mcp", () => McpSecretLiterals(mcp));
+            tools.Redaction = (result, sessionId) => owned.Redact(result, "tool-output", sessionId);
+            tools.KnownSecretLabel = label => owned.Redactor.HasLabel(label);
+            executor.InheritedSecret = value => owned.Redactor.IsKnownValue(value);
+            executor.SecretEnvironment = ResolveSecretEnvironment;
+            Nodes.SecretEnvironment = ResolveSecretEnvironment;
+            owned.AddSource(
+                "nodes",
+                () =>
+                    Nodes.Registry.PairingToken is { Length: > 0 } pairing
+                        ? [new Foxwarm.Secrets.KnownSecret("node-pairing-token", pairing)]
+                        : []
+            );
+        }
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
         timers = Foxwarm.Timers.MainTimers.Reporting(this.root, DeliverTimerAsync);
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
         Journal = new LlmRequestJournalStore(this.root);
+        Usage = new UsageOverview(this, Journal);
         archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
+        Activity = new ActivityIndex(this);
         Vector = new(
             this.root,
             Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration),
             admissionStop.Token
         );
+        if (secrets is { } embeddingSecrets)
+            Vector.EmbeddingRedaction = text => embeddingSecrets.Redact(text, "embedding");
         Vector.Diagnostic = (code, id) =>
             Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));
+    }
+
+    private static IEnumerable<Foxwarm.Secrets.KnownSecret> McpSecretLiterals(
+        Foxwarm.McpClient client
+    )
+    {
+        var values = new List<Foxwarm.Secrets.KnownSecret>();
+        foreach (var (name, server) in client.Configuration.Snapshot())
+            values.AddRange(
+                Foxwarm.Secrets.InstanceSecrets.Literals(
+                    Foxwarm.Secrets.SecretSinks.McpServer,
+                    server,
+                    path => "mcp." + name + "." + path
+                )
+            );
+        values.AddRange(
+            client
+                .OAuth.Credentials()
+                .Select(value => new Foxwarm.Secrets.KnownSecret("mcp-oauth", value))
+        );
+        return values;
     }
 
     internal string? ResolveTaskSessionId(string requested)
@@ -400,6 +452,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 Console.WriteLine($"Vector startup: mode={Vector.Mode}, ready={Vector.Ready}.");
         }
         catch (Exception error)
+            when (Vector.Stopping
+                && error is OperationCanceledException or Foxwarm.Vector.VectorUnavailableException
+            )
+        {
+            // Main stopped while the Vector owner was still starting; nothing failed.
+            Console.WriteLine("Vector startup stopped because Main is shutting down.");
+        }
+        catch (Exception error)
         {
             Console.Error.WriteLine(
                 "Vector initialization failed; Main will continue without semantic search: "
@@ -413,6 +473,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private async Task LoadOwnersAsync(bool startMainServices)
     {
         await EnsureIdentityStartupAsync();
+        // Legacy isolation is no longer enforced: every isolated Agent gets its generated
+        // layer before any Session can run a tool.
+        await MigrateLegacyIsolationCatalogAsync();
         _ = StartVectorAsync(startMainServices);
         await timers.LoadAsync();
         var catalogRows = Catalog.List();
@@ -426,8 +489,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 );
         }
         await executor.RegisterRecordsAsync(id => Catalog.Get(id) is not null);
+        if (startMainServices)
+        {
+            Usage.StartBackfill(admissionStop.Token);
+            Activity.StartBackfill(admissionStop.Token);
+        }
         var ids = Catalog
             .RestartIds()
+            .Concat(Catalog.PendingApprovalIds())
             .Concat(executor.OwnerIds)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -442,6 +511,19 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         var mandatory = ids.Select(RecoverOwnerAsync).ToList();
         await Task.WhenAll(mandatory);
+        // Before any Session starts processing or a timer fires.
+        await MaterializeMigratedPlacementAsync();
+        foreach (var row in catalogRows)
+        {
+            var id = SessionCatalog.Text(row["id"])!;
+            if (
+                SessionWait
+                    .Strings(CatalogMetadata(id)?.Wait?["waitExecIds"])
+                    .Any(SessionSaveLane.LostAfterRestart)
+                && await GetExistingAsync(id) is { } owner
+            )
+                await owner.Entry.SaveLane.ClearLostBackgroundWaitsAsync();
+        }
         if (startMainServices)
             Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
         servicesReady = true;
@@ -547,6 +629,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     }
 
     public string DataRoot => root;
+
+    internal RecallTargetLog RecallTargets { get; }
     public bool Accepting => accepting;
     public HostModels Models => models;
 
@@ -575,8 +659,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             ResolveAncestry = CatalogMetadata,
             MainMetadata = OverlayMainMetadata,
-            ResolveBoundNode = BoundNode,
         };
+        hosted.RunningExecCount = () => RunningExecs(hosted).Length;
         hosted.Archive = store.Archive;
         hosted.AuthorityStore = store;
         hosted.Executor = executor;
@@ -587,7 +671,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
             websockets: websockets,
             images: Images,
             journal: Journal,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            retryIntervals: models.GetRetryIntervals,
+            secrets: secrets
         );
         var chat = new SessionChatService(
             requests,
@@ -618,6 +704,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
             migrateGoal: MigrateGoalSnapshotAsync,
             parentSessionResolver: _ => hosted.Metadata().ParentSessionId
         );
+        if (secrets is { } owner)
+            // Canonical append runs under the Session state gate: use the last built
+            // matcher there. Queue admission (outside the gate) refreshes it.
+            registry.HistoryRedaction = (sessionId, message, source) =>
+                owner.RedactMessage(owner.Redactor, message, source, sessionId);
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(
             hosted,
@@ -705,6 +796,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             )
         );
         await timers.DisposeAsync();
+        // Webhook handlers are ToolScript runs too; settle them before ToolScript closes.
+        await Webhooks.DrainAsync();
         await DrainPublicationsAsync();
         lock (lifecycle)
             current = sessions.Values.ToArray();
@@ -717,10 +810,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
             )
         );
         await Task.WhenAll(current.Select(session => session.DrainForegroundAsync()));
+        await DrainCopyTransfersAsync();
         await waitTimeouts.DrainAsync();
         await waitLiveness.DrainAsync();
         // Planners are independently owned. Release foreground waits first, then
         // cancel/drain planning without reclassifying interruption as user Stop.
+        await Task.WhenAll(current.Select(session => session.Compactor.DrainIdleAsync()));
         await Task.WhenAll(current.Select(session => session.Compactor.StopAsync()));
         await Task.WhenAll(current.Select(session => session.DrainAsync()));
         ToolScript.BeginShutdown();
@@ -743,11 +838,16 @@ internal sealed partial class SessionManager : IAsyncDisposable
         RuntimeCredentials.Close();
         mcp.StopNotificationProducer();
         timers.StopFuture();
+        // Detached runs do not survive the process; end them before draining their owners.
+        ToolScript.CancelDetached();
         lock (lifecycle)
         {
             accepting = false;
             foreach (var session in sessions.Values)
+            {
                 session.Registry.Runner.CloseAdmission();
+                session.Compactor.StopIdleScheduling();
+            }
         }
         admissionStop.Cancel();
         waitTimeouts.Stop();
@@ -767,8 +867,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.DisposeAsync();
         await Browser.DisposeAsync();
         await mcp.DisposeAsync();
+        await NodeProviders.DisposeAsync();
         Nodes.Dispose();
         await websockets.DisposeAsync();
+        await Usage.DisposeAsync();
+        await Activity.DisposeAsync();
         await Journal.DisposeAsync();
         await archiveWriter.DisposeAsync();
         Tasks.Dispose();

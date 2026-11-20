@@ -33,6 +33,16 @@ Definition discovery is not authorization. Invalid/ambiguous rules fail closed; 
 - Main native and Provider exec build it from their own start records. A Node reports `__foxwarmExecPlacement` only when Main sets `execPlacement` in the exec frame after the Node advertises `features.execPlacement`, so an older Main never exposes the field to a model. Main parses its bounded shape and strips it from every result; it is never cwd, path or control authority.
 - Without a valid report (older or TypeScript CLI, Shell HTTP) the record is `cwdSource:"unknown"` with the Node and forwarded Session cwd. Only the [.NET CLI](../units/dotnet-cli-node.md#persistent-session-exec) reports; the TypeScript CLI is unchanged by explicit scope.
 
+### D-tool-effect-record
+
+**User-approved (2026-11-09).** Every resolved call records what it resolved to, where, and which rules decided it, so an audit view can answer who ran what on which Node with which effect. Like the exec record, this is audit/display evidence, never routing, cwd or policy authority; older rows stay unknown and are not backfilled from guesses.
+
+- A model `functionResponse` carries `__meta.target`, and a ToolScript subcall carries `target`: `source`, `name`, `node` (the resolved execution Node), and when present `server` and `invocationName`. It is present on denials and other failures whenever the call resolved; an unresolved call has none.
+- `target.rules` lists the deciding rule of each generic policy layer as `{layer, id, effect}`: `layer` is `global` or `agent:<name>`, `id` is the rule ID or `defaultAction`, and `effect` is `allow`, `ask` or `deny`. It is taken from the assessment of the call's own dispatch gate, the same one approval records name.
+- The [activity index](../units/activity-index.md) derives System › Activity from these records; unattended ToolScript and inbound MCP calls, which have no Session tool row, are recorded there directly.
+- WebUI input (messages and dock answers) records its sender on the committed user row as `__meta.sender`: `{kind:"administrator"}` or `{kind:"identity", id}`, the shape approval decisions use. It is administrator-only: scoped history, continuous history, WebSocket and compatibility SSE payloads remove it through `InputSender.Without`, which clones rather than altering shared payloads. Model requests never carry message `__meta`; because recall, `view_session`, ToolScript results and compaction input can copy stored rows into tool output, those projections also strip `__meta.sender` and `__meta.initiator` (`InputSender.Strip`).
+- Each tool response records the turn's initiator as `__meta.initiator` and its `target` carries the `action` argument and a masked argument summary; see the [activity index](../units/activity-index.md).
+
 ## Outbound MCP values and trusted control
 
 The [outbound MCP client](../units/mcp.md) receives an actual trusted Session owner from unified discovery/execution, including nested ToolScript. Its SDK bindings are transient connection authority, not Session history or a model-supplied caller identity. Real configuration changes, identity moves, deletion, and host shutdown invalidate their corresponding lifetimes.
@@ -41,11 +51,15 @@ The [outbound MCP client](../units/mcp.md) receives an actual trusted Session ow
 
 `TurnToolReceipt` remains a separately typed trusted executor result. Untrusted MCP result fields do not create send/task/wait receipts, mutate caller identity, supply local resolved paths, or trigger a control operation. Provider output formatting is a history projection; it does not replace the source value or perform MCP normalization.
 
+## Known secret values
+
+Before the output guard, `ToolRegistry.ExecuteAsync` masks known secret values in every dispatched result, and writer tools reject markers of masked values. Master `exec` drops inherited variables equal to a known value. [Secret references and redaction](./secret-references-and-redaction.md) owns these rules.
+
 ## Structured output guard
 
 The governing [two-stage output policy](../modules/tools-and-permissions.md#d-tools-structured-output-guard) preserves structured siblings when an oversized `output` field can be shortened on its own. `ToolRegistry.ExecuteAsync` bypasses model projection for native programmatic consumers and sends ordinary results through `ToolOutputGuard.GuardAsync`. Stage A measures the structured value of top-level `output`, saves that complete value when it exceeds 40,000 characters, and replaces only that field plus guard locator metadata. Stage B measures the resulting complete presentation; if it still exceeds 40,000 characters, it saves the original unshortened formatted response and returns a summary with the established small-metadata projection. Recognized image carriers remain outside both text stages and saved text. Outer ToolScript uses its trusted literal-section presentation; native nested values retain their source data.
 
-`SessionToolExecutor.SaveToolOutputAsync` supplies Session-aware storage through the existing Main or Node file paths. Remote results prefer their resolved execution Node when it advertises both file read and write. An online execution Node without those capabilities uses Main spooling only after Main read authorization succeeds; policy denial, unavailable policy, offline state and storage errors do not trigger a general destination fallback. Main-produced results stay on Main when its saved path is readable; an ordinary read denial selects only the current/bound Session Node, whose read/write policy is checked before storage. Unavailable policy does not select another destination. If guard storage observes exhausted policy-read attempts, the executor retains its existing fatal-current-turn signal separately from the completed tool result; later batch slots remain skipped and settlement ends the turn even if policy recovers. Provider guard saves reuse the ordinary target file operations with the Session cwd captured at save time for that exact selected Node. Their relative locators identify that cwd, or the Node default when unset; they do not require isolated callers to select a Node. Existing resident transfers retain their absolute-path receipts. A save failure reports a separate guard diagnostic, preserves the original tool success/error classification, and supplies no successful full-output locator.
+`SessionToolExecutor.SaveToolOutputAsync` supplies Session-aware storage through the existing Main or Node file paths. Remote results prefer their resolved execution Node when it advertises both file read and write. An online execution Node without those capabilities uses Main spooling only after Main read authorization succeeds; policy denial, unavailable policy, offline state and storage errors do not trigger a general destination fallback. Main-produced results stay on Main when its saved path is readable; an ordinary read denial selects only the current/bound Session Node, whose read/write policy is checked before storage. Unavailable policy does not select another destination. If guard storage observes exhausted policy-read attempts, the executor retains its existing fatal-current-turn signal separately from the completed tool result; later batch slots remain skipped and settlement ends the turn even if policy recovers. Provider guard saves reuse the ordinary target file operations with the Session cwd captured at save time for that exact selected Node. Their relative locators identify that cwd, or the Node default when unset; they do not require the caller to select a Node. Existing resident transfers retain their absolute-path receipts. A save failure reports a separate guard diagnostic, preserves the original tool success/error classification, and supplies no successful full-output locator.
 
 ## Ordinary external MCP entry
 
@@ -55,7 +69,7 @@ The governing [two-stage output policy](../modules/tools-and-permissions.md#d-to
 
 - [Unified tools](../units/tools-registry.md)
 - [Authorization](../units/tool-authorization.md)
-- [Main browser and shared evaluation](../units/dotnet-main-browser.md)
+- [Managed browser host](../units/browser-host.md)
 - [Local I/O](../units/tools-local-io.md)
 - [MCP](../units/mcp.md)
 - [Remote Node compatibility](./remote-node-compatibility.md)

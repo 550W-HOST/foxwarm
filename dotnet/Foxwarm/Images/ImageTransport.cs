@@ -100,7 +100,7 @@ internal static class ImageTransport
             {
                 try
                 {
-                    result[key] = Project(JsonNode.Parse(raw))?.ToJsonString();
+                    result[key] = Project(JsonNode.Parse(raw))?.ToJsonText();
                 }
                 catch (JsonException)
                 {
@@ -141,7 +141,7 @@ internal static class ImageTransport
         }
         try
         {
-            return Scrub(JsonNode.Parse(text))?.ToJsonString() ?? "";
+            return Scrub(JsonNode.Parse(text))?.ToJsonText() ?? "";
         }
         catch (JsonException)
         {
@@ -175,6 +175,6 @@ internal sealed class ImageTransportConverterFactory : JsonConverterFactory
         ) => JsonNode.Parse(ref reader) as T;
 
         public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) =>
-            writer.WriteRawValue(ImageTransport.Project(value)?.ToJsonString() ?? "null");
+            writer.WriteRawValue(ImageTransport.Project(value)?.ToJsonText() ?? "null");
     }
 }

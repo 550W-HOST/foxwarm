@@ -18,7 +18,7 @@ internal sealed partial class SessionManager
     {
         if (!Accepting)
             throw new InvalidOperationException("Host is shutting down.");
-        parent = string.IsNullOrWhiteSpace(parent) ? null : parent.Trim();
+        parent = AgentCatalog.InheritName(parent);
         await agents.SetInheritAsync(name, parent);
         TopologyChanged?.Invoke();
         var affected = new List<string>();
@@ -42,7 +42,11 @@ internal sealed partial class SessionManager
                 affected.Add(owner.Id);
             }
         }
-        return new { affectedSessions = affected.ToArray(), inheritanceChain = AgentChain(name) };
+        return new JsonObject
+        {
+            ["affectedSessions"] = JsonData.Node(affected.ToArray()),
+            ["inheritanceChain"] = JsonData.Node(AgentChain(name)),
+        };
     }
 
     private static bool Stale(SessionOwner owner, long now) =>
@@ -76,29 +80,26 @@ internal sealed partial class SessionManager
     internal async Task<JsonObject> SkillAsync(SessionOwner source, JsonObject args)
     {
         Keys(args, ["action", "skillName", "agentName"], ["action"]);
-        var agent = OptionalString(args, "agentName");
-        agent = string.IsNullOrWhiteSpace(agent) ? source.Agent : agent.Trim();
+        var agent = Skills.RequestedAgent(OptionalString(args, "agentName"), source.Agent);
         var action = RequiredString(args, "action").Trim().ToLowerInvariant();
         if (action == "list")
         {
             var list = await skills.ListAsync(agent);
-            if (list.Count == 0)
-                return Output($"No skills found for agent \"{agent}\".");
-            return Output(
-                $"Found {list.Count} skill(s) for agent \"{agent}\":\n\n"
-                    + string.Join(
-                        '\n',
-                        list.Select(info =>
-                            $"- **{info.Name}** [{info.SourceLabel}]"
-                            + (
-                                string.IsNullOrEmpty(info.Description)
-                                    ? ""
-                                    : $" - {info.Description}"
-                            )
-                            + " (1 document)"
-                        )
-                    )
-            );
+            return new JsonObject
+            {
+                ["agent"] = agent,
+                ["skills"] = new JsonArray(
+                    list.Select(info =>
+                        {
+                            var skill = new JsonObject { ["name"] = info.Name };
+                            if (!string.IsNullOrEmpty(info.Description))
+                                skill["description"] = info.Description;
+                            skill["source"] = info.SourceLabel;
+                            return (JsonNode?)skill;
+                        })
+                        .ToArray()
+                ),
+            };
         }
         if (action != "load")
             throw new InvalidDataException("skill.action must be \"list\" or \"load\".");

@@ -74,7 +74,7 @@ try {
         await post('/api/sessions/' + encodeURIComponent(created.sessionId) + '/message', { text: 'Capture ordinary default tool definitions.' }, source ? 200 : 202)
         await until(() => results.ordinaryRequestTools.length, 'ordinary provider request')
         assert.deepEqual(hidden.filter(name => results.ordinaryRequestTools.includes(name)), [])
-        assert(results.ordinaryRequestTools.includes('read')); assert(results.ordinaryRequestTools.includes('search_tools'))
+        assert(results.ordinaryRequestTools.includes('read')); assert(results.ordinaryRequestTools.includes('ctl'))
       })
       await f.stop()
     } finally { await f.cleanup() }

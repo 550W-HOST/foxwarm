@@ -13,10 +13,10 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
-    <ProjectReference Include="../Foxwarm.BrowserSupport/Foxwarm.BrowserSupport.csproj" />
     <EmbeddedResource Include="Code/workbench.html" />
+    <EmbeddedResource Include="Code/workbenchFrame.js" />
     <EmbeddedResource Include="McpInboundTools.json" />
-    <EmbeddedResource Include="Channels/CommandCatalog.json" />
+    <EmbeddedResource Include="Tools/Ctl/CtlCommands.json" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
     <PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="all" />
@@ -44,7 +44,10 @@
       GeneratePathProperty="true"
       Condition="'$(RuntimeIdentifier)' == 'win-x64' or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT')"
     />
-    <PackageReference Include="LanceDB" Version="[2.5.0]" />
+    <!-- The original package supplies the RID-native libraries unless FoxwarmNativeLibraries
+         replaces them (see UseNativeLibraries). -->
+    <PackageReference Include="LanceDB" Version="[2.5.0]" ExcludeAssets="compile;runtime" />
+    <ProjectReference Include="../Foxwarm.LanceDb/Foxwarm.LanceDb.csproj" />
     <PackageReference Include="Apache.Arrow" Version="[22.1.0]" />
     <Content
       Include="Vector/Licenses/*.txt"
@@ -66,28 +69,47 @@
     <MontyTargetRid Condition="'$(MontyTargetRid)' == ''"
       >$(NETCoreSdkPortableRuntimeIdentifier)</MontyTargetRid>
     <MontyExecutable Condition="'$(MontyTargetRid)' == 'win-x64'">monty.exe</MontyExecutable>
-    <MontyExecutable Condition="'$(MontyTargetRid)' == 'linux-x64' or '$(MontyTargetRid)' == 'osx-x64' or '$(MontyTargetRid)' == 'osx-arm64'">monty</MontyExecutable>
-    <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-0.0.19/$(MontyTargetRid)</MontyNativePrefix>
+    <MontyExecutable
+      Condition="'$(MontyTargetRid)' == 'linux-x64' or '$(MontyTargetRid)' == 'osx-x64' or '$(MontyTargetRid)' == 'osx-arm64'"
+      >monty</MontyExecutable>
+    <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-1.6.0/$(MontyTargetRid)</MontyNativePrefix>
     <MontyPython Condition="'$(OS)' != 'Windows_NT'">python3</MontyPython>
     <MontyPython Condition="'$(OS)' == 'Windows_NT'">python</MontyPython>
+    <MontyExecutablePath>$(MontyNativePrefix)/bin/$(MontyExecutable)</MontyExecutablePath>
+    <MontyExecutablePath Condition="'$(FoxwarmNativeLibraries)' != ''">$(FoxwarmNativeLibraries)/$(MontyExecutable)</MontyExecutablePath>
   </PropertyGroup>
+  <!-- Ordinary builds use the official prebuilt worker and the LanceDB package's libraries. Release
+       builds pass FoxwarmNativeLibraries, a directory with the libraries built from pinned, patched
+       source (scripts/release/build-lancedb.sh and build-monty.sh), for the target RID. -->
   <Target
     Name="PrepareMontyWorker"
     BeforeTargets="AssignTargetPaths"
     Condition="'$(MontyExecutable)' != ''"
   >
+    <Error
+      Condition="'$(FoxwarmNativeLibraries)' != '' and !Exists('$(MontyExecutablePath)')"
+      Text="FoxwarmNativeLibraries has no $(MontyExecutable): $(MontyExecutablePath)"
+    />
     <Exec
-      Condition="!Exists('$(MontyNativePrefix)/bin/$(MontyExecutable)')"
+      Condition="'$(FoxwarmNativeLibraries)' == '' and !Exists('$(MontyExecutablePath)')"
       Command="$(MontyPython) &quot;$(MSBuildProjectDirectory)/../scripts/acquire-monty-native.py&quot; &quot;$(MontyNativePrefix)&quot; --rid $(MontyTargetRid)"
     />
     <ItemGroup>
       <Content
-        Include="$(MontyNativePrefix)/bin/$(MontyExecutable)"
+        Include="$(MontyExecutablePath)"
         Link="ToolScript/native/$(MontyExecutable)"
         CopyToOutputDirectory="PreserveNewest"
         CopyToPublishDirectory="PreserveNewest"
       />
     </ItemGroup>
   </Target>
+  <ItemGroup Condition="'$(FoxwarmNativeLibraries)' != ''">
+    <Content
+      Include="$(FoxwarmNativeLibraries)/LanceDB-native-crates.txt;$(FoxwarmNativeLibraries)/Monty-native-crates.txt"
+      Link="%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+  </ItemGroup>
   <Import Project="Delivery.targets" />
 </Project>

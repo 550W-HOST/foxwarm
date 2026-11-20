@@ -44,7 +44,9 @@ internal sealed partial class ContextPreviewRenderer
 
     private static string Response(JsonObject response)
     {
-        response = (JsonObject)Foxwarm.Images.ImageTransport.Project(response)!;
+        response = Foxwarm.Sessions.InputSender.Without(
+            (JsonObject)Foxwarm.Images.ImageTransport.Project(response)!
+        )!;
         if (response["response"] is not JsonObject value)
             return Unknown(response["response"]);
         if (value["error"] is not null)
@@ -159,18 +161,11 @@ internal sealed partial class ContextPreviewRenderer
                 var name = Text(call["name"]);
                 var args = Args(call);
                 var line = $"[call:{name}] {args}";
-                var target = ToolActivity.Target(
+                var shown = ToolActivity.Preview(
                     name,
                     call["args"] as JsonObject ?? new JsonObject()
                 );
-                events.Add(
-                    new(
-                        target.Name,
-                        SessionWait.Text(call["id"]),
-                        false,
-                        ToolActivity.Summary(target.Name, target.Args)
-                    )
-                );
+                events.Add(new(shown.Name, SessionWait.Text(call["id"]), false, shown.Summary));
                 tool.Add(name + "\n" + args);
                 search.Add(name + "\n" + args);
                 if (detail != "names")
@@ -262,8 +257,8 @@ internal sealed partial class ContextPreviewRenderer
                 );
 
     internal static string ArchiveDrill(string sessionId, string target) =>
-        "recall("
-        + EcmaJson.Stringify(
+        CtlCommandText.For(
+            "recall",
             new JsonObject
             {
                 ["sessionId"] = sessionId,
@@ -271,8 +266,7 @@ internal sealed partial class ContextPreviewRenderer
                 ["toolDetail"] = "full",
                 ["previewLength"] = 20000,
             }
-        )
-        + ")";
+        );
 
     private static string JoinBody(string text, string summary) =>
         text.Length == 0 ? summary : text + "\n" + summary;

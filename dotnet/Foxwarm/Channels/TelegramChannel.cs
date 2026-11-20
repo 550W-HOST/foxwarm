@@ -30,7 +30,9 @@ internal sealed class TelegramChannel : IManagedChannel
     private readonly Uri api;
     private readonly Uri files;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
-    private readonly Action<Exception> log;
+    private readonly ChannelHealth health;
+    private const string PollingPath = "Telegram polling";
+    private const string SendingPath = "Telegram sending";
     private readonly CancellationTokenSource stopping = new();
     private Task? polling;
     private string username = "";
@@ -42,13 +44,13 @@ internal sealed class TelegramChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        Action<Exception> log
+        ChannelHealth health
     )
     {
         this.id = id;
         this.sessions = sessions;
         this.router = router;
-        this.log = log;
+        this.health = health;
         var token = SessionWait.Text(config["botToken"])?.Trim();
         if (string.IsNullOrEmpty(token))
             throw new InvalidDataException("Telegram botToken is missing for channel " + id);
@@ -70,26 +72,27 @@ internal sealed class TelegramChannel : IManagedChannel
             "telegram",
             (conversation, text, _, token) => SendAsync(conversation, text, token),
             SendFileAsync,
-            TypingAsync
+            TypingAsync,
+            Conversation: (conversation, _) => Chat(conversation).ToJsonText()
         );
 
     public async Task StartAsync()
     {
-        var stage = "command registration";
+        var stage = "Telegram command registration";
         try
         {
             await ApiAsync(
                 "setMyCommands",
-                new JsonObject { ["commands"] = ExternalCommands.TelegramCommands() },
+                new JsonObject { ["commands"] = UserCommands.TelegramCommands() },
                 stopping.Token
             );
-            stage = "identity lookup";
+            stage = "Telegram identity lookup";
             username =
                 SessionWait.Text(
                     (await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]
                 ) ?? "";
             // Launch completion is transport initialization, not a completed first poll.
-            stage = "webhook removal";
+            stage = "Telegram webhook removal";
             await ApiAsync("deleteWebhook", new JsonObject(), stopping.Token);
             polling = PollAsync();
         }
@@ -149,7 +152,7 @@ internal sealed class TelegramChannel : IManagedChannel
                         || error is TelegramApiException { Code: 429 or >= 500 }
                     )
                 {
-                    log(error);
+                    health.Fail(PollingPath, error);
                     await delay(
                         TimeSpan.FromSeconds((error as TelegramApiException)?.RetryAfter ?? 5),
                         stopping.Token
@@ -161,6 +164,7 @@ internal sealed class TelegramChannel : IManagedChannel
                     skipSync = true;
                     throw;
                 }
+                health.Recover(PollingPath);
                 if (
                     updates.LastOrDefault() is JsonObject last
                     && SessionWait.Number(last["update_id"]) is { } updateId
@@ -172,7 +176,8 @@ internal sealed class TelegramChannel : IManagedChannel
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception error)
         {
-            log(error);
+            // The loop has ended: polling stays failed until the channel restarts.
+            health.Fail(PollingPath, error);
         }
         finally
         {
@@ -201,7 +206,8 @@ internal sealed class TelegramChannel : IManagedChannel
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception error)
         {
-            log(error);
+            // One update that could not be handled is not a channel failure.
+            health.Log(error);
         }
     }
 
@@ -235,22 +241,18 @@ internal sealed class TelegramChannel : IManagedChannel
                 return;
             if (text.StartsWith('/'))
             {
-                var commandToken = text.Split(' ')[0];
+                var commandText = text;
+                var commandToken = Regex.Match(text, @"^\S+").Value;
                 var at = commandToken.IndexOf('@');
                 if (
                     at >= 0
                     && username.Length > 0
                     && commandToken[(at + 1)..].Equals(username, StringComparison.OrdinalIgnoreCase)
                 )
-                    text = commandToken[..at] + text[commandToken.Length..];
-                var command = Regex.Match(text, @"^(\S+)(?:\s+([\s\S]*))?$");
+                    commandText = commandToken[..at] + text[commandToken.Length..];
                 if (
-                    command.Success
-                    && await router.HandleExternalCommandAsync(
-                        context,
-                        command.Groups[1].Value,
-                        command.Groups[2].Success ? command.Groups[2].Value : null
-                    )
+                    MessageRouter.TryReadCommand(commandText, out var command, out var rawArgs)
+                    && await router.HandleExternalCommandAsync(context, command, rawArgs)
                 )
                     return;
             }
@@ -308,12 +310,12 @@ internal sealed class TelegramChannel : IManagedChannel
         }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
         }
     }
 
     private static string Identity(JsonValue value) =>
-        SessionWait.Text(value) ?? value.ToJsonString();
+        SessionWait.Text(value) ?? value.ToJsonText();
 
     internal async Task SendAsync(string conversation, string text, CancellationToken token)
     {
@@ -334,6 +336,8 @@ internal sealed class TelegramChannel : IManagedChannel
         }
     }
 
+    // The chat a conversation delivers to: its leading integer. Every send path and the
+    // transport's canonical conversation use it.
     private static JsonNode Chat(string conversation)
     {
         var match = Regex.Match(conversation.TrimStart(), @"^[+-]?\d+");
@@ -356,7 +360,7 @@ internal sealed class TelegramChannel : IManagedChannel
                 async () =>
                 {
                     using var body = new MultipartFormDataContent();
-                    body.Add(new StringContent(Chat(conversation).ToJsonString()), "chat_id");
+                    body.Add(new StringContent(Chat(conversation).ToJsonText()), "chat_id");
                     if (caption is not null)
                         body.Add(new StringContent(caption), "caption");
                     if (parseMode is not null)
@@ -398,7 +402,9 @@ internal sealed class TelegramChannel : IManagedChannel
         {
             try
             {
-                return await send();
+                var result = await send();
+                health.Recover(SendingPath);
+                return result;
             }
             catch (Exception error)
                 when (error is not OperationCanceledException
@@ -406,8 +412,12 @@ internal sealed class TelegramChannel : IManagedChannel
                 )
             {
                 if (attempt >= 3)
+                {
+                    if (ChannelFailure.ChannelLevel(error, token))
+                        health.Fail(SendingPath, error);
                     throw;
-                log(error);
+                }
+                health.Log(error);
                 await delay(TimeSpan.FromSeconds(attempt == 0 ? 5 : 10), token);
             }
         }
@@ -416,7 +426,7 @@ internal sealed class TelegramChannel : IManagedChannel
     private async Task<JsonNode?> ApiAsync(string method, JsonObject body, CancellationToken token)
     {
         using var content = new StringContent(
-            body.ToJsonString(),
+            body.ToJsonText(),
             Encoding.UTF8,
             "application/json"
         );

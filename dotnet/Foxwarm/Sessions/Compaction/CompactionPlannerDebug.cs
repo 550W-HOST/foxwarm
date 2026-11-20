@@ -6,7 +6,8 @@ internal sealed record CompactionPlannerDebug(
     int Steps,
     IReadOnlyList<string> ToolCalls,
     JsonObject? Usage,
-    JsonArray Messages
+    JsonArray Messages,
+    JsonArray? OverBudget = null
 )
 {
     internal JsonObject ToJson()
@@ -21,6 +22,8 @@ internal sealed record CompactionPlannerDebug(
         };
         if (Usage is not null)
             result["usage"] = Usage.DeepClone();
+        if (OverBudget is not null)
+            result["overBudget"] = OverBudget.DeepClone();
         return result;
     }
 

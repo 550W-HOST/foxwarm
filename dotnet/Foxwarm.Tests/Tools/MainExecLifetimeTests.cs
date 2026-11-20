@@ -48,7 +48,7 @@ public sealed class MainExecLifetimeTests
                 },
                 default
             );
-            Assert.Contains("Switched to background", result["output"]!.GetValue<string>());
+            ExecReceipt.Header(result["output"]!.GetValue<string>());
             var original = Assert.Single(owner.Executor.Tracked);
             Assert.Equal("original", original["sessionId"]!.GetValue<string>());
             var log = original["logPath"]!.GetValue<string>();

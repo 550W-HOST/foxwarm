@@ -164,7 +164,7 @@ public sealed class SessionIdentityRecoveryTests
         raw["id"] = "new";
         raw["agent"] = "main";
         raw["aliases"] = new JsonArray("old");
-        new LinuxAtomicJsonFile(data, "state/sessions/new.json").WritePayload(raw);
+        new AtomicJsonFile(data, "state/sessions/new.json").WritePayload(raw);
         using (var catalog = new SessionCatalog(data))
             catalog.RewriteIdentity("old", "new", "main", ["old"]);
         if (phase == "finishing")

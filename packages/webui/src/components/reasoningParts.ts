@@ -27,6 +27,7 @@ const hasOtherContent = (part: MessagePart): boolean => (
   || !!part.functionCall || !!part.functionResponse
   || !!part.inlineData || !!part.inlineDataRef || !!part.inlineDataUnavailable
   || !!part.providerMeta?.openaiResponses?.outputItem
+  || !!part.providerMeta?.anthropic?.contentBlocks?.length
 )
 
 /** Runs follow original part adjacency; even an invisible non-reasoning part is a barrier. */

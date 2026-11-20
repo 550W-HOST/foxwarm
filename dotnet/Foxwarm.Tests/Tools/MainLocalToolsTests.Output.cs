@@ -21,12 +21,12 @@ public sealed partial class MainLocalToolsTests
         {
             var result = unified
                 ? await f.Call(
-                    "call_tool",
-                    new JsonObject
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject
                     {
                         ["toolId"] = "builtin:large_result",
                         ["args"] = new JsonObject(),
-                    }
+                    })
                 )
                 : await f.Call("large_result", new JsonObject());
             Assert.Null(result["error"]);
@@ -36,8 +36,8 @@ public sealed partial class MainLocalToolsTests
             var path = result["outputFullPath"]!.GetValue<string>();
             Assert.Equal(output, await File.ReadAllTextAsync(path));
             var read = await f.Call(
-                "call_tool",
-                new JsonObject
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject
                 {
                     ["toolId"] = "node:master/read",
                     ["args"] = new JsonObject
@@ -46,7 +46,7 @@ public sealed partial class MainLocalToolsTests
                         ["startLine"] = 5000,
                         ["endLine"] = 5000,
                     },
-                }
+                })
             );
             Assert.Null(read["error"]);
             Assert.Contains("entry-05000", read["output"]!.GetValue<string>());

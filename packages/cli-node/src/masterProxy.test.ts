@@ -77,6 +77,7 @@ test('master websocket options select an agent only when a proxy applies', () =>
   withProxyEnv({ HTTPS_PROXY: 'http://proxy.example:8443' }, () => {
     const options = createMasterWebSocketOptions('wss://master.example/node_ws');
     assert.ok(options.agent instanceof HttpsProxyAgent);
+    assert.ok(createMasterWebSocketOptions('https://master.example/node/transfer/id').agent instanceof HttpsProxyAgent);
   });
 });
 

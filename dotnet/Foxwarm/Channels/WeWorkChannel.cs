@@ -14,7 +14,9 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
-    private readonly Action<Exception> log;
+    private readonly ChannelHealth health;
+    private const string SocketPath = "WeWork WebSocket";
+    private const string SendingPath = "WeWork sending";
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
     private readonly Func<DateTimeOffset> now;
     private readonly IPAddress callbackAddress;
@@ -39,14 +41,14 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        Action<Exception> log
+        ChannelHealth health
     )
     {
         this.id = id;
         this.config = (JsonObject)config.DeepClone();
         this.sessions = sessions;
         this.router = router;
-        this.log = log;
+        this.health = health;
         http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
         delay = dependencies?.Delay ?? Task.Delay;
         now = dependencies?.Now ?? (() => DateTimeOffset.UtcNow);
@@ -85,8 +87,34 @@ internal sealed partial class WeWorkChannel : IManagedChannel
                 LifecycleAsync(conversation, "", options, null, token),
             IsLifecycleActive: conversation => streams.Get(conversation) is { Finish: false },
             Progress: (conversation, progress, token) =>
-                LifecycleAsync(conversation, "", new(), progress, token)
+                LifecycleAsync(conversation, "", new(), progress, token),
+            Conversation: CanonicalConversation
         );
+
+    // The conversation part that names the configured default webhook destination. WeWork user
+    // and chat IDs never contain `/`, and rule patterns accept it.
+    internal const string DefaultWebhookConversation = "/default-webhook";
+
+    // The conversation a tool send or file delivery reaches, decided as delivery decides it:
+    // - over the WebSocket, the conversation itself (a proactive send to it, or its own stream);
+    // - over the webhook, a `wok`/`wrk` chat itself (EffectiveChat); any other conversation
+    //   reaches the default webhook destination, except a text send while streaming is enabled,
+    //   which joins that conversation's stream when one is open, so it can't be known in advance.
+    // Surrounding whitespace is left to the WeWork server, so a padded ID is unknown too.
+    private string? CanonicalConversation(string conversation, bool file)
+    {
+        if (
+            conversation.Length == 0
+            || conversation != conversation.Trim()
+            || conversation == DefaultWebhookConversation && WebSocketEnabled
+        )
+            return null;
+        if (WebSocketEnabled)
+            return conversation;
+        if (EffectiveChat(conversation, new()) is { } chat)
+            return chat;
+        return file || !streamEnabled ? DefaultWebhookConversation : null;
+    }
 
     public async Task StartAsync()
     {
@@ -136,7 +164,7 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         catch (OperationCanceledException) when (stopped) { }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
         }
     }
 
@@ -208,12 +236,14 @@ internal sealed partial class WeWorkChannel : IManagedChannel
                 if (response is not null)
                 {
                     await SendResponseAsync(response, text, token);
+                    health.Recover(SendingPath);
                     return;
                 }
             }
             if (explicitWebhook is null && WebSocketEnabled)
             {
                 await SendProactiveAsync(conversation, Markdown(text), options, token);
+                health.Recover(SendingPath);
                 return;
             }
             var url = explicitWebhook ?? webhook;
@@ -246,12 +276,21 @@ internal sealed partial class WeWorkChannel : IManagedChannel
             if (EffectiveChat(conversation, options) is { } chat)
                 payload["chatid"] = chat;
             await PostWebhookAsync(url, payload, token);
+            health.Recover(SendingPath);
         }
         catch (Exception error)
         {
+            if (NetworkFailure(error, token))
+                health.Fail(SendingPath, error);
             throw new IOException("Failed to send WeWork message: " + error.Message, error);
         }
     }
+
+    // WeWork send errors also report per-message rejections and local file problems; only
+    // network-level failures say the channel is not delivering.
+    private static bool NetworkFailure(Exception error, CancellationToken token) =>
+        error is HttpRequestException or OperationCanceledException
+        && ChannelFailure.ChannelLevel(error, token);
 
     private static string? EffectiveChat(string conversation, ChannelSendOptions options) =>
         Nonempty(options.ChatId) ? options.ChatId
@@ -285,7 +324,12 @@ internal sealed partial class WeWorkChannel : IManagedChannel
 
     private async Task SendResponseAsync(string url, string text, CancellationToken token)
     {
-        var result = await PostAsync(url, JsonContent.Create(Markdown(text)), 10000, token);
+        var result = await PostAsync(
+            url,
+            JsonContent.Create(Markdown(text), MainJsonContext.Text.JsonObject),
+            10000,
+            token
+        );
         if (result.ContainsKey("errcode") && !Zero(result["errcode"]))
             throw new IOException(
                 $"WeWork aibot response failed: {Text(result["errmsg"])} (code: {result["errcode"]})"
@@ -300,7 +344,12 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         {
             try
             {
-                var result = await PostAsync(url, JsonContent.Create(payload), 10000, token);
+                var result = await PostAsync(
+                    url,
+                    JsonContent.Create(payload, MainJsonContext.Text.JsonObject),
+                    10000,
+                    token
+                );
                 if (!Zero(result["errcode"]))
                     throw new IOException(
                         $"WeWork API error: {Text(result["errmsg"])} (code: {result["errcode"]})"

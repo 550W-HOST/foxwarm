@@ -115,8 +115,9 @@ async function addFoxwarmFolder(request: FoxwarmOpenRequest, name?: string): Pro
   return { status: covering ? 'existing' : 'added', uri: uri.toString(true) };
 }
 
+// Code's reveal opens Explorer and focuses the revealed item itself. Opening the
+// view first would add a focus transfer and a round trip before that final focus.
 async function revealWorkspaceRoot(uri: vscode.Uri): Promise<void> {
-  await vscode.commands.executeCommand('workbench.view.explorer');
   await vscode.commands.executeCommand('revealInExplorer', uri);
 }
 
@@ -203,6 +204,8 @@ async function openFoxwarmFile(
       );
     }
   }
+  // A remembered custom editor opening in this group can cancel the pending text input.
+  await vscode.commands.executeCommand('foxwarm-webui.waitForEditorRestore');
   await vscode.window.showTextDocument(document, { preview: true, selection });
   await revealWorkspaceRoot(uri);
   if (existing?.isDirty) {

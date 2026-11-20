@@ -1,10 +1,9 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import RuntimeFox from './RuntimeFox'
 import FoxThinkingText from './FoxThinkingText'
-import type { TimelineView } from '../chatPreferences'
 import { isRuntimeStateInactiveName, type SessionRuntimeState } from '../sessionRuntimeState'
-import { getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
+import { getRuntimeActivityText, getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
 
 import type { SessionControlAction, SessionControlFeedback } from '../../../shared/src/sessionControlFeedback'
 
@@ -14,20 +13,23 @@ interface ProcessingStatusProps {
   sessionQueueLength: number
   turnIncomplete: boolean
   loading: boolean
+  /** A sent input is shown but its canonical history row has not arrived yet. */
+  pendingSend?: boolean
   isMobile: boolean
-  timelineView?: TimelineView
   pendingControl?: SessionControlAction | null
   controlFeedback?: SessionControlFeedback | null
   failure?: { title: string; details?: string } | null
   onContinue?: () => void
   onCancelCompaction?: () => void
+  /** Background-command control shown in the same row, also while idle. */
+  backgroundControl?: ReactNode
 }
 
 const controlButtonClass = 'inline-flex shrink-0 items-center rounded-md px-2 text-fw-text-muted transition-colors hover:bg-fw-hover hover:text-fw-text-strong focus-visible:underline disabled:cursor-not-allowed'
 const toneClasses = { accent: 'text-fw-accent', special: 'text-fw-special', warning: 'text-fw-warning', danger: 'text-fw-danger', muted: 'text-fw-text-muted' }
 const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
-const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, isMobile, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
+const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction, backgroundControl }: ProcessingStatusProps) {
   const [now, setNow] = useState(Date.now)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<{ left: number; bottom?: number; top?: number; width: number; maxHeight: number } | null>(null)
@@ -43,10 +45,16 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   let view: RuntimeStatusView | null = getRuntimeStatusView(runtimeState, sessionBusy, now)
   const state = runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')
-  const continuable = isRuntimeStateInactiveName(state) && !runtimeState?.processing && turnIncomplete && !loading
+  const continuable = isRuntimeStateInactiveName(state) && !runtimeState?.processing && turnIncomplete && !loading && !pendingSend
   const interrupted = state === 'idle' && continuable
   if (interrupted) view = { kind: failure ? 'error' : 'interrupted', tone: failure ? 'danger' : 'warning', label: failure?.title || 'Interrupted', details: failure?.details ? [['Error', failure.details]] : [] }
-  if (loading && !view) view = { kind: 'request', tone: 'accent', label: 'Sending…', details: [] }
+  // One send phase owns the window until the runtime reports real work: the pending input row is
+  // visible, so the prior inactive state, a busy-but-unknown phase and the canonical handoff all read as sending.
+  const sendHandoff = useRef(false)
+  const sending = (pendingSend && (isRuntimeStateInactiveName(state) || state === 'waiting' || !view || view.kind === 'unknown'))
+    || (sendHandoff.current && view?.kind === 'unknown')
+  useBrowserLayoutEffect(() => { sendHandoff.current = sending })
+  if (sending || loading && !view) view = { kind: 'request', tone: 'accent', label: 'Sending…', details: [] }
   if (pendingControl && !(pendingControl === 'continue' && runtimeState && !isRuntimeStateInactiveName(runtimeState.state))) view = {
     kind: pendingControl === 'stop' || pendingControl === 'cancel-compaction' ? 'stopping' : pendingControl === 'compact' ? 'compact' : 'request',
     tone: pendingControl === 'stop' || pendingControl === 'cancel-compaction' ? 'warning' : 'accent',
@@ -86,18 +94,21 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   useEffect(() => { if (open && position) panel.current?.focus({ preventScroll: true }) }, [open, position !== null])
 
+  // The owner's live activity: the later reasoning heading or tool summary, in every timeline view.
+  const liveCaption = getRuntimeActivityText(runtimeState, view)
   const caption = view && <>
     <RuntimeFox kind={view.kind} />
-    {view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}
+    {liveCaption ? <span className="min-w-0 truncate" title={liveCaption}>{liveCaption}</span> : view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}
   </>
   return <div data-processing-status-slot className={sessionQueueLength > 0 ? 'flex min-h-14 items-end pt-4' : 'flex min-h-14 items-end'}>
-    {(view || controlFeedback && controlFeedback.status !== 'accepted') && <div className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 ${isMobile ? 'w-full' : 'w-full max-w-[80%]'}`}>
+    {(view || backgroundControl || controlFeedback && controlFeedback.status !== 'accepted') && <div className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 ${isMobile ? 'w-full' : 'w-full max-w-[80%]'}`}>
       {view && <div role="status" aria-label={view.label} aria-atomic="true" className="fw-processing-main flex min-w-0 max-w-full items-center gap-3" data-processing-runtime-state={interrupted ? 'interrupted' : runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')} data-runtime-presentation={view.kind}>
         {hasDetails ? <button data-runtime-caption ref={trigger} type="button" aria-label={`Runtime details: ${view.label}`} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(previous => !previous)} className={`inline-flex min-h-8 min-w-0 max-w-full items-center gap-2.5 text-left ${view.secondary ? 'text-sm' : 'text-lg'} leading-7 ${toneClasses[view.tone]} hover:opacity-80 focus-visible:underline`}>
           {caption}
         </button> : <div data-runtime-caption className={`inline-flex min-h-8 min-w-0 max-w-full items-center gap-2.5 ${view.secondary ? 'text-sm' : 'text-lg'} leading-7 ${toneClasses[view.tone]}`}>{caption}</div>}
         {continuable && onContinue && <button type="button" disabled={!!pendingControl} onClick={onContinue} className={`${controlButtonClass} h-8 text-sm`}>Continue</button>}
       </div>}
+      {backgroundControl}
       {controlFeedback && controlFeedback.status !== 'accepted' && <div role={controlFeedback.status === 'error' ? 'alert' : 'status'} data-control-feedback className={`w-full text-xs ${controlFeedback.status === 'error' ? 'text-fw-danger' : 'text-fw-text-muted'}`}>{controlFeedback.message}{controlFeedback.details && <details className="mt-1 text-fw-text-muted"><summary className="w-fit cursor-pointer">Details</summary><p className="mt-1 whitespace-pre-wrap break-words">{controlFeedback.details}</p></details>}</div>}
     </div>}
     {open && view && createPortal(<div ref={panel} role="dialog" aria-label="Runtime details" tabIndex={-1} data-runtime-details className="fixed z-[100] max-h-[min(28rem,calc(100dvh-2rem))] overflow-y-auto rounded-lg border border-fw-border bg-fw-surface p-4 text-sm text-fw-text shadow-xl" style={{ ...position, visibility: position ? 'visible' : 'hidden' }}>

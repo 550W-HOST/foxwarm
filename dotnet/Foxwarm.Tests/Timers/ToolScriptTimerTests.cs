@@ -508,10 +508,16 @@ public sealed class ToolScriptTimerTests
         Assert.False(File.Exists(output));
         var tools = Dispatcher(f);
         var runs = await Call(tools, "list_toolscript_runs", new());
-        var paused = runs["runs"]!
+        var waiting = runs["runs"]!
             .AsArray()
             .Single(row => SessionWait.Text(row?["status"]) == "waiting")!
             .AsObject();
+        // The list row is a summary; the continuation ID is in the run's full record.
+        var paused = await Call(
+            tools,
+            "get_toolscript_run",
+            new() { ["runId"] = waiting["runId"]!.DeepClone() }
+        );
         Assert.Equal(
             "completed",
             SessionWait.Text((await Call(tools, "continue_script", Continue(paused)))["status"])
@@ -604,8 +610,17 @@ public sealed class ToolScriptTimerTests
         Assert.Empty(f.Owner.Entry.Snapshot().Queue);
         var tools = Dispatcher(f);
         var runs = await Call(tools, "list_toolscript_runs", new());
-        var paused = Assert.Single(runs["runs"]!.AsArray())!.AsObject();
-        Assert.Equal("waiting", SessionWait.Text(paused["status"]));
+        var listed = Assert.Single(runs["runs"]!.AsArray())!.AsObject();
+        Assert.Equal("waiting", SessionWait.Text(listed["status"]));
+        Assert.Equal(
+            ["runId", "status", "mode", "scriptPath", "createdAt"],
+            listed.Select(pair => pair.Key).ToArray()
+        );
+        var paused = await Call(
+            tools,
+            "get_toolscript_run",
+            new() { ["runId"] = listed["runId"]!.DeepClone() }
+        );
         await File.WriteAllTextAsync(file, "raise ValueError('must not reread')");
         await File.WriteAllTextAsync(effect, "not replayed");
         var done = await Call(tools, "continue_script", Continue(paused));

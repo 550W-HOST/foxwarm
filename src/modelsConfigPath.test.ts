@@ -108,6 +108,8 @@ test('runtime, Setup diagnostics, OOBE, and writes share the data-directory mode
     const webui = require('./lib/channels/webuiSetup.js');
     const before = webui.getModelsSetupDiagnostics();
     const fallback = config.getModelsConfigReadPath();
+    const fallbackModels = config.loadModelsConfig();
+    const fallbackModel = config.resolveModelConfig(fallbackModels.default);
     const yaml = 'default: local\\nproviders:\\n  local:\\n    providerType: openai-completions\\n    models: [model-a]\\n';
     setup.writeRawModelsConfig(yaml);
     const after = webui.getModelsSetupDiagnostics();
@@ -115,6 +117,7 @@ test('runtime, Setup diagnostics, OOBE, and writes share the data-directory mode
     process.stdout.write('__FOXWARM_RESULT__' + JSON.stringify({
       active: config.getActiveModelsConfigPath(),
       fallback,
+      fallbackModelId: fallbackModel.modelEntry.model,
       beforePath: before.path,
       beforeOobe: before.oobe,
       afterPath: after.path,
@@ -144,6 +147,8 @@ test('runtime, Setup diagnostics, OOBE, and writes share the data-directory mode
     assert.equal(result.afterPath, expectedPath);
     assert.equal(result.afterOobe, false);
     assert.match(result.fallback, /templates[/\\]models\.example\.yaml$/);
+    assert.equal(typeof result.fallbackModelId, 'string');
+    assert.ok(result.fallbackModelId.length > 0);
     assert.match(result.written, /^default: local/);
     assert.equal(result.defaultModel, 'local');
     assert.equal(result.removedOverrideExists, false);

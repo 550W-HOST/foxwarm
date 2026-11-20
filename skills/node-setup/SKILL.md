@@ -1,6 +1,6 @@
 ---
 name: node-setup
-description: "Set up and troubleshoot Foxwarm Nodes, configure optional Providers, or assign development work to an existing Node with Task and Git delivery examples."
+description: "Set up and troubleshoot Foxwarm Nodes, configure optional Providers including disposable containers, or run delegated development work on a Node with Task and Git delivery examples."
 ---
 
 # node-setup
@@ -9,9 +9,10 @@ Use this skill to explain, bootstrap, troubleshoot, or coordinate development wo
 
 ## Choose a workflow
 
-- **Existing-Node development:** read [the portable workflow](references/development-workflow.md) and its runnable [ToolScript example](examples/development_workflow.py) for source/material transfer, Task assignment, committed or evidence-only delivery, review and deliberate cleanup.
-- **Optional SSH Provider:** read [the Linux SSH adapter guide](examples/linux-ssh/README.md). It includes opt-in registration for existing hosts; it is neither a default backend nor an OS/network sandbox. Python 3 and OpenSSH are administrator prerequisites.
-- **Pairing, bootstrap and legacy isolated-Agent binding:** use the sections below. Policy syntax belongs to `access-control`; Agent lifecycle belongs to `agent-management`.
+- **Delegated development work:** read [the development workflow](references/development-workflow.md) and its runnable [ToolScript example](examples/development_workflow.py): provisioning a fresh Node, source/material transfer, Task assignment, committed or evidence-only delivery, review and explicit release.
+- **Disposable environments:** read [the container Provider guide](examples/container/README.md). It creates one Docker or Podman container per Node from administrator-defined profiles, without network access. Registration is administrator opt-in.
+- **Existing Linux machines:** read [the Linux SSH adapter guide](examples/linux-ssh/README.md). It includes opt-in registration for existing hosts; it is neither a default backend nor an OS/network sandbox. Python 3 and OpenSSH are administrator prerequisites.
+- **Pairing and bootstrap:** use the sections below. Policy syntax belongs to `access-control`; Agent lifecycle, local rules and restricted-worker templates belong to `agent-management`.
 
 ## First: tools vs commands
 
@@ -21,13 +22,15 @@ This distinction matters here too.
 
 Examples in this area include:
 
-- `node_bootstrap_info`
-- `node_pair_list`
-- `node_pair_approve`
-- `node_create_auth_token`
-- `node_remove`
-- `node({ action: "list" })`
-- general inspection tools such as `search_tools`, `skill({ action: "load", ... })`, file tools, etc.
+- `ctl node bootstrap-info` (`node_bootstrap_info`)
+- `ctl node pending` (`node_pair_list`)
+- `ctl node approve` (`node_pair_approve`)
+- `ctl node token` (`node_create_auth_token`)
+- `ctl node remove` (`node_remove`)
+- `ctl node list`
+- general inspection such as `ctl help`, `ctl tool search`, `ctl skill load`, file tools, etc.
+
+These `ctl` commands are the agent's tool front end; policy rules name the builtin in parentheses.
 
 Use tools when you need agent-side reasoning help or machine-readable/bootstrap-ready information.
 
@@ -37,11 +40,9 @@ Examples in this area include:
 
 - `/node`
 - `/node approve ...`
-- `/node create <node-id>`
+- `/node token <node-id>`
 - `/node reject ...`
-- `/node pair-help`
-- `/agent create ... --isolated ...`
-- `/agent isolated ...`
+- `/node bootstrap-info`
 
 Do **not** assume you should execute those user commands yourself as an agent.
 
@@ -56,17 +57,21 @@ This is the main skill for:
 - what a node is
 - how pairing / approval works
 - how to start a node on Linux / Docker / Windows
-- how isolated agents bind to nodes
-- how sandbox/test nodes relate to ordinary nodes
+- where delegated and risky work should run
 
 There is also a structured builtin tool for agent workflows:
 
 - `node_bootstrap_info`
 
 Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
-The pairing and agent-management helpers are not all injected into the default
-tool schema. Discover them with `search_tools`, then invoke them with
-`call_tool`.
+It requires `filePath`: an absolute path on master for a new owner-only file that receives
+the pairing token. The returned commands contain the placeholder `PAIRING_TOKEN` (for example
+`--pairing='PAIRING_TOKEN'`) instead of the token. The token isn't returned to you:
+the user, or a command run where that file is readable, substitutes the file's contents when
+running the command on the new Node. Choose a new path each time; an existing file is not
+replaced.
+The pairing and agent-management helpers are `ctl node` commands; `ctl node --help`
+lists them.
 
 When this skill shows `/node ...` examples below, read them as **commands for the user to run on the master side** unless the surrounding text explicitly says otherwise.
 
@@ -80,58 +85,27 @@ This skill matches the current bootstrap surfaces exposed by a running master:
 - `/node/docker-compose.yaml`
 - `/node/source.tar.gz`
 
-It does **not** use the removed unauthenticated direct-registration flow. `/node create` is a separate pre-approved, per-node-credential flow.
+It does **not** use the removed unauthenticated direct-registration flow. `/node token` is a separate pre-approved, per-node-credential flow.
 
 ## Mental model
 
-A **node** is a remote Foxwarm execution worker.
+A **Node** is an execution environment that tools can target: `master` (where the Main server runs), a paired CLI Node, an exec-only Shell Node, or a Node supplied by a configured **Provider**. Providers either list existing machines (such as the SSH adapter) or create Nodes on request (such as the container adapter, through `node` `create`/`ensure`/`destroy`).
 
-After pairing/approval, a node can:
+After pairing and approval, a CLI or Shell Node receives tool calls from the Main server, keeps its own credentials and reconnects with them.
 
-- receive tool calls from the master
-- persist its own credentials/state locally
-- reconnect automatically with stored per-node credentials
+Keep three controls apart:
 
-A **sandbox node** is still just a node.
+- **Placement** chooses where tools run: a Session's current Node, set at creation with `create_child_session({node})` or `ctl session create --node`, by `ctl node select`, or by an Agent's `defaultNode`. It grants nothing.
+- **Authorization** decides which tools a Session may use on which Nodes: the global tool policy plus Agent-local rule layers (`access-control`, `agent-management`).
+- **Containment** comes from the environment itself: a container, VM or separate machine and its account, network and resource limits. Foxwarm does not turn a Node into a sandbox by selecting it or by restricting an Agent.
 
-The difference is usually deployment context / intended use:
+## Where risky work should run
 
-- runs in a sandbox or Docker test environment
-- often used for isolated agents
-- may need test-environment-specific data-root settings
+Run untrusted or risky work, such as code from an unreviewed repository or an Agent answering a public chat, in an environment whose damage stays contained, not on `master`:
 
-So the relationship is:
-
-- **normal node** = general remote worker
-- **sandbox node** = a node deployed in a sandbox/test environment
-- **isolated agent** = an agent bound to a non-master node so its sessions inherit restricted execution
-
-Do not confuse these three controls:
-
-- `create_child_session({ suffix: "worker", node: "node-id", handoffRecall: "<briefly consider what to say and which existing rules apply>", handoffConfirmation: "<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed." })` changes a session's `currentNode` for
-  ordinary remote execution; it does **not** isolate that session. Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
-- `isolatedNode` is agent-level metadata; every session in that agent inherits
-  the same isolation boundary and bound node
-- a separate VM/container is an operator-provided environment boundary; Foxwarm
-  does not create that compute resource merely by binding an agent
-
-## What isolated agents are mainly for
-
-Use an isolated agent when you want to put work onto a separate node to reduce risk to `master`.
-
-In ordinary language, this is mainly for cases like:
-
-- potentially risky tasks you do not want running directly on `master`
-- agents attached to external group chats / channels that may contain untrusted content
-- situations where prompt injection or other hostile content is a realistic concern
-
-The idea is not that an isolated agent becomes magically safe.
-The idea is that you give it a narrower execution boundary:
-
-- full runtime/tool use on its bound isolated node
-- only limited file/memory operations on `master`
-
-So isolated agents are a practical containment tool for higher-risk workflows.
+- for delegated tasks, a fresh Node per assignment from a Provider that creates environments, such as the [container Provider](examples/container/README.md), released after review;
+- for a long-lived assistant, one reserved Node (an `ensure`d container, VM or dedicated machine) set as its Agent's `defaultNode`;
+- in both cases, an Agent-local allowlist that keeps the Agent's tools on its current Node. `agent-management` has restricted-worker and channel-assistant templates.
 
 ## Base URL principle
 
@@ -141,7 +115,7 @@ Foxwarm cannot infer one globally correct external base URL for every node boots
 url: https://foxwarm.example.invalid/foxwarm
 ```
 
-The configured URL supplies `/node pair-help` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, each example contains a replaceable `YOUR_MASTER` address and can be copied independently.
+The configured URL supplies `/node bootstrap-info` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, each example contains a replaceable `YOUR_MASTER` address and can be copied independently.
 
 Depending on where the node runs, the reachable master URL might be:
 
@@ -161,6 +135,7 @@ Tool note:
 
 - the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
 - it returns complete configured addresses when available; otherwise replace `YOUR_MASTER` in the command you copy
+- it writes the pairing token to its `filePath` and shows `PAIRING_TOKEN` in the commands; substitute the file's contents
 - commands are independently copyable; check that the address is reachable from the new Node
 - a configured public URL is not a guarantee that every node can reach it
 
@@ -170,21 +145,21 @@ So the rule is:
 - if the public URL has a path prefix, pass `--host=YOUR_REACHABLE_URL` (or Windows `-HostUrl`) to preserve it; request headers cannot recover that path
 - if you fetched the script through a different address, pass `--host=...` explicitly
 
-Copy a setup command from `/node pair-help` and replace its example address if necessary.
+Copy a setup command from `/node bootstrap-info` and replace its example address if necessary.
 
 ## Pairing / approval flow
 
 Two supported paths are available. For a Node created before the remote client runs, the master-side user command is:
 
 ```text
-/node create my-node
+/node token my-node
 ```
 
-It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use the discoverable `node_remove` tool below.
+It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use `ctl node remove` below.
 
-For an agent-managed setup, discover `builtin:node_create_auth_token` with
-`search_tools` and call it through `call_tool`. This is separate from
-`node({ action: "create" })`: the latter runs a configured provider lifecycle,
+For an agent-managed setup, run `ctl node token <node-id> --file-path <path>`
+(`node_create_auth_token`). This is separate from `ctl node create`: the
+latter runs a configured provider lifecycle,
 while this tool reserves a new approved Node ID and writes its credential to a
 new owner-only file on master. It returns only `{ nodeId, filePath }`; it never
 returns the token. The Node ID and destination file must both be new, and this
@@ -196,10 +171,7 @@ pattern is:
 
 ```python
 def main(args):
-    created = call_tool(
-        toolId="builtin:node_create_auth_token",
-        args={"nodeId": "my-node", "filePath": "/secure/new-node.token"},
-    )
+    created = ctl("node token my-node --file-path /secure/new-node.token")
     # Run this on master, using the existing exec/SSH facilities. The command
     # reads the protected file as needed; do not print its contents or return
     # the nested exec result.
@@ -225,11 +197,10 @@ The Node startup log includes the exact `/node approve <pending-id>` command; th
 
 ### Agent-facing approval
 
-A non-isolated coordinator can discover and use the pairing tools:
+A coordinator allowed to use the pairing tools can discover and call them:
 
-1. `search_tools({ query: "pair node", sources: ["builtin"] })`
-2. `call_tool({ toolId: "builtin:node_pair_list", args: {} })`
-3. after checking the pending id, `call_tool({ toolId: "builtin:node_pair_approve", args: { pendingId, nodeId } })`
+1. `ctl node pending`
+2. after checking the pending id, `ctl node approve <pending-id> --node-id <node-id>`
 
 Approval establishes trust in a new execution host. Even though the tool path
 can automate it, keep a human confirmation step when the operator's policy
@@ -238,12 +209,10 @@ appears in the list.
 
 ### Remove an approved Node
 
-For agent-managed credential revocation, discover the hidden builtin and pass the
-approved Node ID explicitly:
+For agent-managed credential revocation, pass the approved Node ID explicitly:
 
-```javascript
-search_tools({ query: "node_remove", sources: ["builtin"], limit: 1 })
-call_tool({ toolId: "builtin:node_remove", args: { nodeId: "my-node" } })
+```text
+node remove my-node
 ```
 
 It returns `{ nodeId, disconnected }`. Main removes the approved credential and
@@ -255,7 +224,7 @@ current Node.
 
 This does not stop the client process, delete files or containers, remove Agents
 or Sessions, or change their Node bindings. Provider resource destruction is a
-separate `node({ action: "destroy", ... })` operation. Review affected bindings
+separate `ctl node destroy` operation. Review affected bindings
 before revocation and handle any authorized deployment cleanup separately.
 Use this tool rather than injecting `/node remove` through a WebUI/API command
 entry point. The `/node remove <node-id>` command remains available for users.
@@ -266,7 +235,7 @@ If approval should remain on the user command surface, tell the user to run:
 
 ```text
 /node
-/node approve <pending-id> my-node
+/node approve <pending-id> --node-id my-node
 ```
 
 Useful follow-up checks:
@@ -281,7 +250,7 @@ After approval:
 - future restarts use stored node credentials
 - the pairing token is mainly for first-time pairing / re-pairing
 
-`node({ action: "list" })` is the agent-facing online-node check. A node that is approved but
+`ctl node list` is the agent-facing online-node check. A node that is approved but
 offline will not be usable for worker execution and may not appear there.
 
 ## Fastest startup: Linux bare-metal bootstrap
@@ -396,7 +365,7 @@ curl -fsSL 'http://YOUR_MASTER:3001/node/run-docker.sh' | bash -s -- \
 
 For a device that needs only command execution without Node.js, use the independent POSIX-shell client. It requires `sh`, `curl`, and `mktemp`, `mkfifo`, `dd`, `wc`, `head`, `tail`, `cat`, `mv`, `rm`, `mkdir`, `chmod`, `sleep`, `date`, `sed`, and `tr`. Its startup checks are authoritative: BusyBox builds can omit applets, and this workflow does not promise compatibility with every router or install packages.
 
-First run `/node create my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
+First run `/node token my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
 
 ```sh
 curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' | NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh -s -- --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
@@ -412,11 +381,11 @@ For Windows, choose **Windows Shell** in the administrator onboarding modal, or 
 
 Both Shell methods require a pre-created per-node credential. Windows commands run in separate PowerShell processes with literal Windows cwd handling, private bounded command files, continuously drained pipes and fixed-size output samples. The Windows client has the same exec-only transport and completion ownership as the POSIX client; it installs no service.
 
-Use the normal Node selector or `/node my-shell`; ordinary `exec` then targets this Node. Only `exec` is advertised. Omitted and relative cwd use its startup directory; `cd` does not carry over between calls. File tools, Code/Git/PTY/backend services and external-owner execution are unavailable.
+Use the normal Node selector or `/node select my-shell`; ordinary `exec` then targets this Node. Only `exec` is advertised. Omitted and relative cwd use its startup directory; `cd` does not carry over between calls. File tools, Code/Git/PTY/backend services and external-owner execution are unavailable.
 
 The foreground wait defaults to 15 seconds, clamps above 60, and rounds fractions upward to a whole second. Timeout returns an exec ID without killing the command. Normal `wait` can use that ID; completion goes to the originating Session and includes bounded first/last 4096-byte samples, total output bytes and exit code. The initial background response contains the continuation notice, not a running-output snapshot. Full logs and a read-exec API do not exist. The FIFO collector continuously drains output without growing a full log or closing the command pipe during truncation.
 
-Each command's wrapper owns its foreground budget, background transition and report retries independently; the main loop keeps polling while jobs run. There is no additional client concurrency cap; Main bounds unfinished dispatches and output stays bounded per command. Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. For agent-managed revocation when finished, use `call_tool({ toolId: "builtin:node_remove", args: { nodeId: "my-shell" } })`; users can still run `/node remove my-shell`. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
+Each command's wrapper owns its foreground budget, background transition and report retries independently; the main loop keeps polling while jobs run. There is no additional client concurrency cap; Main bounds unfinished dispatches and output stays bounded per command. Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. For agent-managed revocation when finished, run `ctl node remove my-shell`; users can still run `/node remove my-shell`. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
 
 ## Manual docker-compose template flow
 
@@ -476,102 +445,18 @@ Inside `<dir>/data/`, the most important persisted files are:
 - `<dir>/data/agents/` — node-side agent workspace/data
 - `<dir>/data/logs/` — node-side logs/artifacts
 
-## Bind isolated agents to a node
+## Legacy isolated Agents
 
-These `/agent ...` examples below are **user-facing commands**.
-If you have a suitable tool surface, the corresponding agent-facing operations are usually:
-
-- `create_agent` with `isolatedNode`
-- `set_agent_isolated`
-
-### Create a new isolated agent bound to a node
-
-```text
-/agent create <agent-name> --isolated <node-id>
-```
-
-Example:
-
-```text
-/agent create sandbox-agent --isolated sandbox-docker
-```
-
-### Change an existing agent to isolated mode
-
-```text
-/agent isolated <agent-name> <node-id>
-```
-
-### Disable isolation again
-
-```text
-/agent isolated <agent-name> off
-```
-
-Important behavior:
-
-- isolated agents must bind to a **non-master** node
-- isolation is agent-level, not session-level
-- isolated sessions inherit isolation automatically from the agent
-- isolated agents may still use `master` for limited in-agent host-side operations
-- on `master`, the practical writable/readable boundary is their own agent area:
-  - their own `memory/` via memory tools
-  - files inside their own agent directory (`agents/<agent>/...`) via the allowed file tools
-- they do **not** get ordinary freedom to roam across other agents' files on `master`
-- they do **not** get ordinary freedom to switch to or operate unrelated nodes
-
-### Node/permission boundary
-
-For an isolated agent, the boundary is:
-
-- **allowed:** the bound isolated node and its tool surface
-- **allowed:** limited host-side operations on `master`, but only for the isolated agent's own memory and agent-directory files
-- **not allowed:** switching to another node
-- **not allowed:** using unrelated nodes
-- **not allowed:** reading/writing other agents' directories on `master`
-
-An isolated agent cannot switch itself to another node.
-If a workflow really needs another node, the user should change the agent's isolation binding deliberately instead of the isolated agent using other nodes directly.
-
-Binding does not reserve a node. Multiple sessions or agents can target the same
-node unless the operator provides distinct nodes and maintains that assignment.
-
-For the repeatable “one temporary isolated agent/session” workflow, load
-**`isolated-worker`**. Its bundled ToolScript can bind an already-online Node or
-compose one configured provider `ensure` plus read-only inspect for an exact
-existing worktree before `create_agent`, `create_session`, and
-`send_to_session`. It does not create Git worktrees, add leases, or automatically
-tear down Nodes/containers.
-
-## Sandbox/test-environment note
-
-A sandbox node is often used for isolated agents in testing.
-
-The most important testing pitfall is the data root.
-
-For the main Foxwarm testing environment, the sandbox node must use:
-
-```text
-FOXWARM_DATA_DIR=/app/test
-```
-
-Why this matters:
-
-- the testing runtime stores data under `/app/test/state` and `/app/test/agents`
-- if the sandbox node uses `/app` instead, it will read/write the wrong state tree
-- then `/node`, node online state, file behavior, and test results become misleading
-
-So when sandbox behavior looks wrong, check the data root before debugging pairing/permissions.
+Agents that were bound to a Node with legacy isolation are migrated at startup to a local rule layer with that Node as `defaultNode`. See [agent-management: Legacy isolated Agents](../agent-management/references/OPERATIONS.md#legacy-isolated-agents).
 
 ## Verification checklist
 
 After startup and approval:
 
-1. use `node({ action: "list" })` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
+1. use `ctl node list` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
 2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
-3. if using isolated agents, confirm the agent is actually bound to that node
-4. confirm tool execution is happening on the expected node, not accidentally on `master`
-5. confirm restricted cross-agent/cross-node behavior when isolation is expected
+3. confirm tool execution happens on the expected Node, not accidentally on `master`
+4. for restricted Agents, check representative allowed and denied calls with `explain_tool_authorization`
 
 ## Common troubleshooting
 
@@ -598,21 +483,13 @@ rm -f /opt/foxwarm-node/data/state/node_credentials.json
 
 Then restart and re-approve.
 
-### Sandbox node acts like it sees the wrong files/state
+### The Main server in a container shows unexpected Agents or state
 
-First suspect `FOXWARM_DATA_DIR` mismatch.
-For testing, it must point at `/app/test`, not `/app`.
+Check the `FOXWARM_DATA_DIR` its compose file sets; a different data directory is a different installation state.
 
-## Related skill
+## Related skills
 
-Use **`agent-management`** when the task is mainly about:
-
-- why agent rename/delete behave the way they do
-- safe agent migration / cleanup
-- snapshot refresh after editing another agent's memory
-
-Use **`isolated-worker`** when a coordinator should create a temporary isolated
-agent/session on an already-online Node.
+Use **`agent-management`** for Agent creation, local rules, the restricted-worker and channel-assistant templates, migration, cleanup and snapshot refresh. Use **`access-control`** for policy syntax and identities.
 
 ## WebUI onboarding
 

@@ -24,8 +24,28 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
             throw new InvalidDataException(
                 "The Windows background entry requires its data-root control pipe."
             );
-        first = CreatePipe();
+        first = CreateFirstPipe();
         server = ServeAsync();
+    }
+
+    // The name is derived from the data directory, so any local process can predict it. Claim it
+    // exclusively: if another process already owns it, this Main must not serve beside it.
+    private NamedPipeServerStream CreateFirstPipe()
+    {
+        try
+        {
+            return new(
+                pipeName,
+                PipeDirection.InOut,
+                2,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance
+            );
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+        {
+            throw new ControlPipeUnavailableException(pipeName, error);
+        }
     }
 
     private NamedPipeServerStream CreatePipe() =>
@@ -71,19 +91,30 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
                     var logs = Path.Combine(dataRoot, "state", "logs");
                     object response = command switch
                     {
-                        "status" => new
+                        "status" => new System.Text.Json.Nodes.JsonObject
                         {
-                            ok = true,
-                            pid = Environment.ProcessId,
-                            stopping = lifetime.ApplicationStopping.IsCancellationRequested,
-                            logDir = logs,
-                            stdoutLog = Path.Combine(logs, "foxwarm.stdout.log"),
-                            stderrLog = Path.Combine(logs, "foxwarm.stderr.log"),
+                            ["ok"] = true,
+                            ["pid"] = Environment.ProcessId,
+                            ["stopping"] = lifetime.ApplicationStopping.IsCancellationRequested,
+                            // True once the host has started serving, so a control client does
+                            // not treat a Main that is still binding (or failed to) as running.
+                            ["ready"] = lifetime.ApplicationStarted.IsCancellationRequested,
+                            ["logDir"] = logs,
+                            ["stdoutLog"] = Path.Combine(logs, "foxwarm.stdout.log"),
+                            ["stderrLog"] = Path.Combine(logs, "foxwarm.stderr.log"),
                         },
-                        "stop" => new { ok = true, pid = Environment.ProcessId },
-                        _ => new { ok = false, error = "unknown command" },
+                        "stop" => new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["ok"] = true,
+                            ["pid"] = Environment.ProcessId,
+                        },
+                        _ => new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["ok"] = false,
+                            ["error"] = "unknown command",
+                        },
                     };
-                    var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+                    var bytes = Encoding.UTF8.GetBytes(JsonData.Serialize(response));
                     await pipe.WriteAsync(bytes, stopping.Token);
                     await pipe.FlushAsync(stopping.Token);
                     // Source socket.end completes with EOF. DisconnectNamedPipe instead
@@ -112,4 +143,15 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
         await server;
         stopping.Dispose();
     }
+}
+
+// The message names only the pipe, so startup diagnostics may print it.
+internal sealed class ControlPipeUnavailableException : IOException
+{
+    internal ControlPipeUnavailableException(string pipeName, Exception cause)
+        : base(
+            $"The control pipe '{pipeName}' is already in use by another process. "
+                + "Stop the Foxwarm instance that uses this data directory, or end the program holding the pipe.",
+            cause
+        ) { }
 }

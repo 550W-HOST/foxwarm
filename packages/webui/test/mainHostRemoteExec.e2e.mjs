@@ -7,18 +7,22 @@ import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { receiptExecId } from './execReceipt.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('remote-exec', { env: {} })
 const plans = new Map(), rounds = new Map(), failures = [], wire = [], clients = [], connections = new Set()
 const exists = file => access(file).then(() => true, () => false)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'EXEC-DONE-' + key }] }]
 const callsFor = id => wire.filter(entry => entry.direction === 'request' && entry.value.type === 'tool_call' && entry.value.sessionId === id)
 const eventsFor = id => wire.filter(entry => entry.direction === 'reply' && entry.value.type === 'session_event' && entry.value.sessionId === id)
-const execId = result => result.execId || /execId: ([\w-]+)/.exec(result.output)?.[1]
+// The official CLI is the TypeScript Node, which keeps its own receipt layout (an `execId:` footer
+// line); Main-run commands and the C# Node start with `[execId]`.
+const execId = result => result.execId || receiptExecId(result.output) || /^execId: ([\w-]+)$/m.exec(result.output)?.[1]
 
 const peer = createServer(async (request, response) => {
   try {
@@ -173,15 +177,17 @@ try {
   await turn(actor, 'install-exec-policy', [call('exec-policy', 'set_config', { target: 'tool-rules', filePath: 'deny-exec.yaml' })])
   const authorizedCalls = callsFor(actor).length
   state = await turn(actor, 'denied-exec', [call('denied-direct', 'exec', { command: 'printf forbidden > denied-direct' }), call('denied-call', 'call_tool', { toolId: 'node:official-cli/exec', args: { command: 'printf forbidden > denied-call' } }), call('denied-native', 'run_script', { code: "return call_tool('node:official-cli/exec', {'command':'printf forbidden > denied-native'})" })])
-  assert.equal(pair(state, 'denied-direct').error.type, 'tool_authorization_denied'); assert.equal(pair(state, 'denied-call').error.type, 'tool_authorization_denied')
+  assert.equal(pair(state, 'denied-direct').code, 'tool_authorization_denied'); assert.equal(pair(state, 'denied-call').code, 'tool_authorization_denied')
   assert.equal(pair(state, 'denied-native').status, 'failed'); assert.equal(callsFor(actor).length, authorizedCalls)
   await writeFile(join(fixture.work, 'restore-exec.yaml'), 'version: 1\n')
   await turn(actor, 'restore-exec-policy', [call('restore-exec-policy', 'set_config', { target: 'tool-rules', filePath: 'restore-exec.yaml' })])
-  // Session creation, child and fork retain the source Node without inheriting its filesystem cwd.
+  // Standalone creation uses defaults; child and fork follow their parent without inheriting its filesystem cwd.
   state = await turn(actor, 'create-placement', [call('create-placement', 'call_tool', { toolId: 'builtin:create_session', args: { agentName: 'main', sessionName: 'created-remote' } }), call('child-placement', 'call_tool', { toolId: 'builtin:create_child_session', args: { suffix: 'remote-child' } })])
   assert(!pair(state, 'create-placement').error); assert(!pair(state, 'child-placement').error)
   const child = /Child session created: `([^`]+)`/.exec(pair(state, 'child-placement').output)?.[1]; assert(child)
   const forkResult = await fixture.api('POST', route(actor) + '/fork', { suffix: 'remote-fork' }); assert.equal(forkResult.status, 200)
+  const standalone = await saved('created-remote'); assert.equal(standalone.currentNode, 'master'); assert.equal(standalone.cwd, undefined)
+  await select('created-remote')
   for (const id of ['created-remote', child, forkResult.body.newSessionId]) {
     const createdState = await saved(id); assert.equal(createdState.currentNode, 'official-cli'); assert.equal(createdState.cwd, undefined)
     const key = 'placement-' + id.replaceAll('/', '-')
@@ -235,6 +241,8 @@ try {
   assert.equal(await readFile(join(remote, 'rename-count'), 'utf8'), 'once')
   const deleted = await create('delete-running'); await select(deleted)
   const deleteRequest = await waitBackground(deleted, 'delete-running', 'printf once >> delete-count; sleep 4')
+  await until(async () => !(await fixture.api('GET', route(deleted) + '/history')).body.session.busy, 'waiting owner releases before deletion')
+  assert.equal(eventsFor(deleted).length, 0, 'remote command remains active before deletion')
   assert.equal((await fixture.api('DELETE', route(deleted))).status, 200)
   await until(() => eventsFor(deleted).length && wire.some(entry => entry.value.type === 'error' && entry.value.requestId === eventsFor(deleted).at(-1).value.requestId), 'late official completion rejected after deletion')
   assert(!await exists(join(fixture.data, 'state/sessions', deleted + '.json')))
@@ -324,7 +332,7 @@ try {
   for (const row of state.history) assert.deepEqual(archived.get(row.__meta.seq), row, 'Archive mirrors canonical committed message ' + row.__meta.seq)
   assertPairs(state)
   const duplicateArchive = fixture.sql('SELECT message_json FROM archive_messages WHERE session_id = ?', [duplicate]).map(([json]) => JSON.parse(json))
-  assert.equal(duplicateArchive.flatMap(row => row.parts || []).filter(part => part.system?.includes('Background Process Finished') && part.system.includes(duplicateRequest.backgroundExecId)).length, 1)
+  assert.equal(duplicateArchive.flatMap(row => row.parts || []).filter(part => part.system?.includes('background-process-finished') && part.system.includes(duplicateRequest.backgroundExecId)).length, 1)
   assert.equal(rounds.get('dropped-ack'), 3, 'one wake/provider follow-up despite ACK retry')
   const proof = { hostStarts: fixture.hostPids.length, officialClientStarts: clients.length, externalExecRequests: wire.filter(entry => entry.direction === 'request' && entry.value.type === 'tool_call' && entry.value.tool === 'exec').length, cancellationHandshakes: wire.filter(entry => entry.value.type === 'tool_call_cancel').length, completionAttempts: wire.filter(entry => entry.value.type === 'session_event' && entry.value.eventId).length, completionAcknowledgements: wire.filter(entry => entry.value.type === 'session_event_accepted').length, archivedActorMessages: archived.size, duplicateCompletionArchiveRows: 1, droppedAckOwnerProviderRounds: rounds.get('dropped-ack'), failures: failures.length }
   await writeFile(join(fixture.root, 'remote-exec-proof.json'), JSON.stringify(proof, null, 2))

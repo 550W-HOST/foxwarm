@@ -71,9 +71,12 @@ internal static class SetupProviderRequests
         JsonObject provider,
         JsonObject app,
         string providerKey,
-        string modelId
+        string modelId,
+        Foxwarm.Secrets.InstanceSecrets? secrets = null
     )
     {
+        if (secrets is not null)
+            (provider, app) = ResolveTransientSecrets(provider, app, secrets);
         var providerType = HostModels.Text(provider, "providerType") ?? "openai-completions";
         if (!IsSupportedProviderType(providerType))
             throw new SetupProviderRequestException(
@@ -92,6 +95,56 @@ internal static class SetupProviderRequests
                 ? providerKey + "/" + modelId
                 : providerKey;
         return catalog.Resolve(key);
+    }
+
+    // Setup drafts may use ${secret:NAME} in the same fields as the saved configuration.
+    private static (JsonObject Provider, JsonObject App) ResolveTransientSecrets(
+        JsonObject provider,
+        JsonObject app,
+        Foxwarm.Secrets.InstanceSecrets secrets
+    )
+    {
+        var missing = new List<string>();
+        try
+        {
+            var wrapped = secrets.Resolve(
+                new JsonObject
+                {
+                    ["providers"] = new JsonObject { ["setup"] = provider.DeepClone() },
+                },
+                Foxwarm.Secrets.SecretSinks.Models,
+                "Model settings",
+                missing
+            );
+            var resolvedApp = app;
+            if (HostModels.Text(provider, "apiKey") is null && app["llm"] is JsonObject llm)
+            {
+                resolvedApp = (JsonObject)app.DeepClone();
+                resolvedApp["llm"] = secrets.Resolve(
+                    new JsonObject { ["llm"] = llm.DeepClone() },
+                    Foxwarm.Secrets.SecretSinks.App,
+                    "App configuration",
+                    missing
+                )["llm"]!.DeepClone();
+            }
+            if (missing.Count == 0)
+                return ((JsonObject)wrapped["providers"]!["setup"]!.DeepClone(), resolvedApp);
+        }
+        catch (Foxwarm.Secrets.SecretStoreLockedException)
+        {
+            missing.AddRange(Foxwarm.Secrets.SecretReferences.ReferencedNames(provider));
+        }
+        catch (InvalidDataException error)
+        {
+            throw Invalid(error.Message);
+        }
+        throw new SetupProviderRequestException(
+            "secret-unavailable",
+            Foxwarm
+                .Secrets.SecretUnavailableException.For("This provider", missing.Distinct())
+                .Message,
+            400
+        );
     }
 
     internal static Uri ResolveListEndpoint(ConcreteHostModel model)
@@ -360,7 +413,7 @@ internal static class SetupProviderRequests
                     && !scalar.TryGetValue<double>(out _)
             )
                 throw Invalid("extraHeaders values must be scalar.");
-            var valueText = SessionWait.Text(raw) ?? raw!.ToJsonString().Trim('"');
+            var valueText = SessionWait.Text(raw) ?? raw!.ToJsonText().Trim('"');
             if (valueText.Length > MaxHeaderValueLength)
                 throw Invalid("extraHeaders contains a value that is too long.");
             result[name] = valueText;

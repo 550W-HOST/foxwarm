@@ -84,7 +84,7 @@ public sealed class WeixinLifecycleTests
                     {
                         ["ret"] = 0,
                         ["msgs"] = new JsonArray(
-                            ExternalProtocolPeer.WeixinText("alice", "/channel weixin wait " + key)
+                            ExternalProtocolPeer.WeixinText("alice", "/channel weixin-wait " + key)
                         ),
                     }
                 );

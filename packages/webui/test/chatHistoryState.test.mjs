@@ -27,6 +27,7 @@ const {
   buildOptimisticUserMessage,
   decideHistoryReconciliation,
   mergeHistorySnapshot,
+  projectPendingSendQueue,
   reconcileHistoryMessage,
 } = await import(pathToFileURL(bundledPath).href)
 
@@ -146,4 +147,44 @@ test('browser-local command responses survive refresh in their existing slot but
     pendingClientMessageIds: new Set(),
   })
   assert.deepEqual(remounted.map(message => message.parts[0].text), ['before', 'after'])
+})
+
+test('pending sends own their queue preview items by client identity only', () => {
+  const pending = buildOptimisticUserMessage({ clientMessageId: 'own', parts: [{ text: 'mine' }], timestamp: 5 })
+  const preview = (text, clientMessageId) => ({ role: 'user', parts: [{ text }], __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-' + text, ...(clientMessageId ? { clientMessageId } : {}) } })
+  const committed = [{ role: 'user', parts: [{ text: 'old' }], __meta: { seq: 1, timestamp: 1 } }]
+
+  // The own item is already shown by the pending row; unidentified and foreign items still show and count.
+  const owned = projectPendingSendQueue({ messages: [...committed, pending], serverQueue: [preview('mine', 'own'), preview('timer'), preview('other', 'other')], localQueue: [], queueLength: 3 })
+  assert.deepEqual(owned.queuedMessages.map(message => message.parts[0].text), ['timer', 'other'])
+  assert.equal(owned.footerCount, 2)
+  assert.deepEqual([...owned.pendingSendIds], ['own'])
+
+  // A queue length announced before any preview identifies ownership is not attributed to anyone.
+  assert.equal(projectPendingSendQueue({ messages: [...committed, pending], serverQueue: [], localQueue: [], queueLength: 1 }).footerCount, 0)
+
+  // An older server without preview identity keeps the previous presentation.
+  const legacy = projectPendingSendQueue({ messages: [...committed, pending], serverQueue: [preview('mine')], localQueue: [], queueLength: 1 })
+  assert.deepEqual(legacy.queuedMessages.map(message => message.parts[0].text), ['mine'])
+  assert.equal(legacy.footerCount, 1)
+
+  // Without a pending committed-lane row the server count is authoritative.
+  const idle = projectPendingSendQueue({ messages: committed, serverQueue: [preview('timer')], localQueue: [], queueLength: 4 })
+  assert.equal(idle.footerCount, 4)
+  assert.equal(idle.pendingSendIds.size, 0)
+})
+
+test('a busy send row stays in the queue lane until the server preview or history carries its identity', () => {
+  const local = buildOptimisticUserMessage({ clientMessageId: 'busy', parts: [{ text: 'queued while busy' }], timestamp: 5, queued: true })
+  assert.equal(local.__meta.queuedPreview, true)
+  const committed = [{ role: 'user', parts: [{ text: 'old' }], __meta: { seq: 1, timestamp: 1 } }]
+  const before = projectPendingSendQueue({ messages: committed, serverQueue: [], localQueue: [local], queueLength: 0 })
+  assert.deepEqual(before.queuedMessages, [local])
+  assert.equal(before.pendingSendIds.size, 0, 'a queued row is not a pending committed-lane send')
+
+  const serverRow = { role: 'user', parts: [{ text: 'queued while busy' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-0-user', clientMessageId: 'busy' } }
+  assert.deepEqual(projectPendingSendQueue({ messages: committed, serverQueue: [serverRow], localQueue: [local], queueLength: 1 }).queuedMessages, [serverRow])
+
+  const canonical = { role: 'user', parts: [{ text: 'queued while busy' }], __meta: { seq: 2, timestamp: 9, clientMessageId: 'busy' } }
+  assert.deepEqual(projectPendingSendQueue({ messages: [...committed, canonical], serverQueue: [], localQueue: [local], queueLength: 0 }).queuedMessages, [])
 })

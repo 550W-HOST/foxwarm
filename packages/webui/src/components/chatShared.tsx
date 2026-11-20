@@ -1,4 +1,6 @@
 import * as Diff from 'diff'
+import { isAppWindow, linkOpenConfirmation } from '../appWindow'
+import type { ToolApprovalMeta } from '../sessionApprovals'
 import {
   Brain,
   BookOpen,
@@ -6,6 +8,7 @@ import {
   BellRing,
   Bot,
   Camera,
+  ClipboardList,
   GitFork,
   Info,
   Inbox,
@@ -26,6 +29,8 @@ import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
+import { isTaskReminderMessage } from '../../../shared/src/sessionContinuation'
+import { ctlCommandName, ctlConcrete } from '../ctlCall'
 export {
   renderAssistantMarkdownSegments,
   renderAssistantMarkdownSegmentsWithSanitizer,
@@ -103,6 +108,14 @@ const normalizeToolLabelValue = (value: unknown): string | null => {
 }
 
 export const formatToolLabel = (name: string, args?: any): string => {
+  if (name === 'ctl') {
+    // Commands show their command path (`memory edit`); `tool call` of an MCP or Node tool
+    // shows that tool like a direct call; help, discovery and malformed commands stay ctl.
+    const command = ctlCommandName(args)
+    if (command) return command
+    const concrete = ctlConcrete({ name, args })
+    return formatToolLabel(concrete.name, concrete.args)
+  }
   if (name === 'call_tool') {
     const toolId = normalizeToolLabelValue(args?.toolId)
     if (toolId) {
@@ -128,7 +141,7 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
-  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }> }
+  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>; approval?: ToolApprovalMeta }
   name: string
   response: any
 }
@@ -159,6 +172,10 @@ export interface OpenAIResponsesAnnotation {
 }
 
 export interface MessagePartProviderMeta {
+  anthropic?: {
+    sourceModelId?: string
+    contentBlocks?: Record<string, any>[]
+  }
   thinkingSummaries?: string[]
   encryptedThinking?: string
   encryptedThinkingLength?: number
@@ -166,6 +183,7 @@ export interface MessagePartProviderMeta {
   redactedThinkingLength?: number
   openaiResponses?: {
     annotations?: OpenAIResponsesAnnotation[]
+    imageGenerationFailure?: Record<string, unknown>
     outputItem?: Record<string, unknown>
     sourceModelId?: string
   }
@@ -341,7 +359,7 @@ export const handleMarkdownLinkClick = (e: MouseEvent<HTMLDivElement>) => {
   e.preventDefault()
   e.stopPropagation()
 
-  if (window.confirm(`Open this link in a new tab?\n\n${href}`)) {
+  if (window.confirm(linkOpenConfirmation(href, isAppWindow(), window.location.href))) {
     window.open(href, '_blank', 'noopener,noreferrer')
   }
 }
@@ -453,6 +471,7 @@ const isInternalSystemPart = (part: MessagePart): boolean => {
 
 export const isInternalTimelineMessage = (message: Message): boolean => {
   if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true
+  if (isTaskReminderMessage(message)) return true
   if (message.role !== 'user' || message.parts.length === 0) return false
   let internal = false
   for (const part of message.parts) {
@@ -558,6 +577,17 @@ export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessa
     }
   }
 
+  // Its body follows the opening tag on the same line, so the line-based scan below cannot classify it.
+  if (isTaskReminderMessage(message)) {
+    const system = message.parts[0].system!
+    return {
+      kind: 'task-reminder',
+      source: 'foxwarm-system',
+      previewPrefix: '',
+      bodyText: system.slice(system.indexOf('>') + 1, -'</foxwarm-system>'.length),
+    }
+  }
+
   let messageType: { kind: string; attrs: Record<string, string> } | null = null
 
   for (const part of message.parts) {
@@ -573,7 +603,9 @@ export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessa
             ? getSystemMessagePreviewAttribute(tag.attrs.event)
             : kind === 'event'
               ? getSystemMessagePreviewAttribute(tag.attrs.type)
-              : ''
+              : kind === 'external-input' && getSystemMessagePreviewAttribute(tag.attrs.webhook)
+                ? [tag.attrs.webhook, tag.attrs.event].map(getSystemMessagePreviewAttribute).filter(Boolean).join(' · ')
+                : ''
           return { kind, source: 'foxwarm-system', previewPrefix: previewValue ? `${previewValue}: ` : '' }
         }
       }
@@ -853,6 +885,7 @@ const toolIcons: Record<string, LucideIcon> = {
   'system-snapshot': Camera,
   'system-session-boundary': SeparatorHorizontal,
   'system-goal-reminder': Target,
+  'system-task-reminder': ClipboardList,
   'system-child-reminder': BellRing,
   'system-system-prompt': ScrollText,
   'system-managed-session': Workflow,

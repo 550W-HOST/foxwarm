@@ -9,13 +9,15 @@ import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { receiptExecId } from './execReceipt.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('deletion-app'), route = id => '/api/sessions/' + encodeURIComponent(id)
 const records = [], errors = [], held = new Map(), frames = [], counts = new Map(), shells = []
 let socket, page
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
@@ -160,8 +162,8 @@ try {
   const execRecords = async () => JSON.parse(await readFile(join(state, 'running-exec.json'), 'utf8')).execs
   async function launch(id) {
     await send(id, id); const current = await saved(id)
-    const result = current.history.flatMap(row => row.parts || []).map(part => part.functionResponse?.response?.output || '').find(value => value.includes('execId:'))
-    const execId = result?.match(/execId: ([a-z-]+)/)?.[1]
+    const result = current.history.flatMap(row => row.parts || []).map(part => part.functionResponse?.response?.output || '').find(value => receiptExecId(value))
+    const execId = receiptExecId(result)
     assert(execId)
     const record = (await execRecords()).find(record => record.id === execId && record.sessionId === id)
     assert(record); shells.push(record.pid); return record

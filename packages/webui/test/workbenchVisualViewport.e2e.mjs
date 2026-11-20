@@ -136,7 +136,7 @@ async function captureViewport(page, phase, state) {
 
 function assertAligned(state) {
   for (const key of ['left', 'top', 'width', 'height']) assert.ok(Math.abs(state.host[key] - state.slot[key]) < 1, `host ${key} must match slot: ${JSON.stringify(state)}`)
-  assert.ok(state.sameChat && state.sameEditor && state.focused)
+  assert.ok(state.sameChat && state.sameEditor && state.focused, JSON.stringify(state))
   assert.equal(state.reads, 1)
   assert.equal(state.archiveReads, 1)
 }
@@ -245,82 +245,159 @@ test('independent mobile Chat leaves retain their own header safe-area spacing',
   } finally { await page.close() }
 })
 
-test('iOS standalone home reserves only the bottom safe area overlapping its real viewport', async () => {
-  const page = await openMobileApp({ home: true, width: 440, height: 894, colorMode: 'dark', standalone: true, recordedPwa: true })
-  try {
-    await page.evaluate(() => {
-      document.documentElement.style.setProperty('--foxwarm-safe-area-top', '62px')
-      document.documentElement.style.setProperty('--foxwarm-safe-area-bottom', '34px')
-      window.__homeNav = document.querySelector('.mobile-primary-nav')
-    })
-    for (const tab of ['sessions', 'tasks', 'search', 'setup', 'sessions']) {
-      const point = await page.$eval(`#mobile-tab-${tab}`, element => {
-        const r = element.getBoundingClientRect()
-        return { x: r.left + r.width / 2, y: r.bottom - 2 }
-      })
-      // A real click near each control's lower edge must still activate it.
-      await page.mouse.click(point.x, point.y)
-      await page.waitForFunction(tab => document.getElementById(`mobile-tab-${tab}`)?.getAttribute('aria-selected') === 'true' && document.getElementById(`mobile-panel-${tab}`)?.getBoundingClientRect().height > 0, {}, tab)
-      const state = await page.evaluate(() => {
-        const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom } }
-        const nav = document.querySelector('.mobile-primary-nav')
-        const bounds = nav.getBoundingClientRect()
-        return {
-          viewportBottom: innerHeight,
-          shell: rect(document.querySelector('[data-mobile-session-home]')),
-          nav: rect(nav), sameNav: nav === window.__homeNav,
-          bottomHit: nav.contains(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.bottom - 3)),
-          newSession: rect(document.querySelector('button[aria-label="New session"]')),
-          controlsHit: [...nav.querySelectorAll('button')].every(button => {
-            const r = button.getBoundingClientRect()
-            return [[r.left + r.width / 2, r.top + 2], [r.left + r.width / 2, r.bottom - 2],
-              [r.left + 2, r.top + r.height / 2], [r.right - 2, r.top + r.height / 2]].every(([x, y]) => {
-              const hit = document.elementFromPoint(x, y)
-              return hit === button || button.contains(hit)
-            })
-          }),
-        }
-      })
-      await captureViewport(page, `home-${tab}`, state)
-      assert.equal(state.viewportBottom, 894)
-      assert.equal(state.shell.bottom, 894)
-      assert.equal(state.nav.bottom, state.viewportBottom - 12, JSON.stringify(state))
-      assert.ok(state.nav.bottom <= state.viewportBottom, 'the whole navigation stays inside the real hit-test boundary')
-      assert.ok(state.sameNav && state.controlsHit && state.bottomHit)
-      assert.ok(state.nav.left >= 12 && state.nav.left + state.nav.width <= 440 - 12)
-      if (tab === 'sessions') assert.equal(state.newSession.bottom, state.viewportBottom - 88)
+// iOS 26 installed web apps get a viewport short by the top inset while the page is shorter
+// than the screen (WebKit bug 301108); a screen-tall document gets the full viewport. Chromium
+// reproduces neither the shortening nor the growth, so both states are modeled separately:
+// short = a 440x894 browser viewport whose compiled CSS receives the recorded 956px/894px
+// large/dynamic units; full = a real 440x956 viewport. Native iOS rendering, the growth itself,
+// touch and keyboard behavior are not validated here.
+const SCREEN = { width: 440, height: 956, shortHeight: 894, safeTop: 62, safeBottom: 34 }
+
+async function applyPwaSafeArea(page) {
+  await page.evaluate(({ safeTop, safeBottom }) => {
+    document.documentElement.style.setProperty('--foxwarm-safe-area-top', `${safeTop}px`)
+    document.documentElement.style.setProperty('--foxwarm-safe-area-bottom', `${safeBottom}px`)
+    // Insets that move the shell without resizing its slot need a viewport event, as rotation gives.
+    window.__setViewport({})
+  }, SCREEN)
+}
+
+async function measureDocument(page) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  return page.evaluate(() => {
+    const html = getComputedStyle(document.documentElement)
+    const body = getComputedStyle(document.body)
+    return {
+      innerHeight, scrollY, scrollHeight: document.scrollingElement.scrollHeight,
+      htmlPosition: html.position, htmlHeight: document.documentElement.getBoundingClientRect().height, htmlOverflow: html.overflowY,
+      bodyPosition: body.position, bodyBottom: document.body.getBoundingClientRect().bottom,
     }
-    await page.click('[data-session-id="e2e-a"]')
-    await page.waitForSelector('[data-mobile-chat-header]')
-    const chat = await page.evaluate(() => ({
-      backTop: document.querySelector('.mobile-header-back').getBoundingClientRect().top,
-      composerBottom: document.querySelector('.foxwarm-chat-composer-form').getBoundingClientRect().bottom,
-    }))
-    assert.equal(chat.backTop, 62 + 1 + 8)
-    assert.equal(chat.composerBottom, 894 - 1 - 16, 'Chat composer spacing is deliberately unchanged')
-    await page.click('.mobile-header-back')
-    assert.ok(await page.$eval('.mobile-primary-nav', element => element === window.__homeNav))
+  })
+}
+
+async function measureHome(page) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  return page.evaluate(() => {
+    const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom } }
+    const nav = document.querySelector('.mobile-primary-nav')
+    const bounds = nav.getBoundingClientRect()
+    return {
+      shell: rect(document.querySelector('[data-mobile-session-home]')),
+      nav: rect(nav), sameNav: nav === window.__homeNav,
+      bottomHit: nav.contains(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.bottom - 3)),
+      newSession: rect(document.querySelector('button[aria-label="New session"]')),
+      controlsHit: [...nav.querySelectorAll('button')].every(button => {
+        const r = button.getBoundingClientRect()
+        return [[r.left + r.width / 2, r.top + 2], [r.left + r.width / 2, r.bottom - 2],
+          [r.left + 2, r.top + r.height / 2], [r.right - 2, r.top + r.height / 2]].every(([x, y]) => {
+          const hit = document.elementFromPoint(x, y)
+          return hit === button || button.contains(hit)
+        })
+      }),
+    }
+  })
+}
+
+// Chat at rest, a keyboard pin/restore cycle, then every primary home page and back.
+async function checkInstalledGeometry(page, { height, band, label }) {
+  const chat = await measure(page)
+  await captureViewport(page, `${label}-chat`, chat)
+  assertAligned(chat)
+  assertVisibleViewport(chat, { height, top: SCREEN.safeTop, width: SCREEN.width })
+  assert.equal(chat.back.top, SCREEN.safeTop + 1 + 8)
+  assert.equal(chat.form.bottom, height - 1 - Math.max(16, band), JSON.stringify(chat))
+
+  // A pinned (keyboard) shell has no safe band below it: the composer rests 16px above it.
+  await page.evaluate(() => window.__setViewport({ height: 500, offsetTop: 220 }))
+  const keyboard = await measure(page)
+  await captureViewport(page, `${label}-keyboard`, keyboard)
+  assertAligned(keyboard)
+  assertVisibleViewport(keyboard, { height: 500, top: SCREEN.safeTop, width: SCREEN.width })
+  assert.equal(keyboard.form.bottom, 500 - 1 - 16, JSON.stringify(keyboard))
+  await page.evaluate(height => window.__setViewport({ height, offsetTop: 0 }), height)
+  const restored = await measure(page)
+  assertAligned(restored)
+  assertVisibleViewport(restored, { height, top: SCREEN.safeTop, width: SCREEN.width })
+  assert.equal(restored.form.bottom, chat.form.bottom, 'closing the keyboard restores the composer position')
+
+  await page.click('.mobile-header-back')
+  await page.waitForSelector('.mobile-primary-nav', { visible: true })
+  await page.evaluate(() => { window.__homeNav = document.querySelector('.mobile-primary-nav') })
+  for (const tab of ['sessions', 'tasks', 'search', 'setup', 'sessions']) {
+    const point = await page.$eval(`#mobile-tab-${tab}`, element => {
+      const r = element.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.bottom - 2 }
+    })
+    // A real click near each control's lower edge must activate it.
+    await page.mouse.click(point.x, point.y)
+    await page.waitForFunction(tab => document.getElementById(`mobile-tab-${tab}`)?.getAttribute('aria-selected') === 'true' && document.getElementById(`mobile-panel-${tab}`)?.getBoundingClientRect().height > 0, {}, tab)
+    const state = await measureHome(page)
+    await captureViewport(page, `${label}-home-${tab}`, state)
+    assert.equal(state.shell.top, 0)
+    assert.equal(state.shell.bottom, height, JSON.stringify(state))
+    assert.equal(state.nav.bottom, height - band - 12, JSON.stringify(state))
+    assert.ok(state.sameNav && state.controlsHit && state.bottomHit, JSON.stringify(state))
+    assert.ok(state.nav.left >= 12 && state.nav.left + state.nav.width <= SCREEN.width - 12)
+    if (tab === 'sessions') assert.equal(state.newSession.bottom, height - band - 88, JSON.stringify(state))
+  }
+  await page.click('[data-session-id="e2e-a"]')
+  await page.waitForSelector('[data-mobile-chat-header]')
+  assert.equal(await page.$eval('.foxwarm-chat-composer-form', element => element.getBoundingClientRect().bottom), chat.form.bottom, 'a home round trip keeps the composer position')
+  await page.click('.mobile-header-back')
+  assert.ok(await page.$eval('.mobile-primary-nav', element => element === window.__homeNav))
+}
+
+test('installed iOS app asks for a screen-tall document and keeps short-viewport spacing until it gets one', async () => {
+  const page = await openMobileApp({ width: SCREEN.width, height: SCREEN.shortHeight, colorMode: 'dark', standalone: true, recordedPwa: true })
+  try {
+    await applyPwaSafeArea(page)
+    const document = await measureDocument(page)
+    // The in-flow html is one top inset taller than the short viewport; the fixed body stays the app container.
+    assert.deepEqual(document, {
+      innerHeight: SCREEN.shortHeight, scrollY: 0, scrollHeight: SCREEN.height,
+      htmlPosition: 'static', htmlHeight: SCREEN.height, htmlOverflow: 'hidden',
+      bodyPosition: 'fixed', bodyBottom: SCREEN.shortHeight,
+    })
+    // safe-area-bottom + 100dvh - 100lvh is negative here, so the band falls back to zero.
+    await checkInstalledGeometry(page, { height: SCREEN.shortHeight, band: 0, label: 'standalone-short' })
+    assert.equal((await measureDocument(page)).scrollY, 0)
   } finally { await page.close() }
 })
 
-test('ordinary browsers and full-height standalone home retain their original safe-area offsets', async () => {
-  for (const { standalone, recordedPwa, height } of [
-    { standalone: false, recordedPwa: true, height: 894 },
-    { standalone: true, recordedPwa: false, height: 956 },
-  ]) {
-    const page = await openMobileApp({ home: true, width: 440, height, standalone, recordedPwa })
+test('a full-height installed iOS viewport keeps one bottom safe band above the screen bottom', async () => {
+  const page = await openMobileApp({ width: SCREEN.width, height: SCREEN.height, colorMode: 'dark', standalone: true })
+  try {
+    await applyPwaSafeArea(page)
+    const document = await measureDocument(page)
+    // min(100lvh, 100% + top inset) equals the viewport once it is full height: nothing can scroll.
+    assert.deepEqual(document, {
+      innerHeight: SCREEN.height, scrollY: 0, scrollHeight: SCREEN.height,
+      htmlPosition: 'static', htmlHeight: SCREEN.height, htmlOverflow: 'hidden',
+      bodyPosition: 'fixed', bodyBottom: SCREEN.height,
+    })
+    await checkInstalledGeometry(page, { height: SCREEN.height, band: SCREEN.safeBottom, label: 'standalone-full' })
+  } finally { await page.close() }
+})
+
+test('ordinary browsers keep the fixed document and their bottom geometry', async () => {
+  for (const { recordedPwa, height } of [{ recordedPwa: true, height: SCREEN.shortHeight }, { recordedPwa: false, height: SCREEN.height }]) {
+    const page = await openMobileApp({ width: SCREEN.width, height, recordedPwa })
     try {
-      await page.evaluate(() => document.documentElement.style.setProperty('--foxwarm-safe-area-bottom', '34px'))
-      const bottoms = await page.evaluate(() => ({
-        nav: document.querySelector('.mobile-primary-nav').getBoundingClientRect().bottom,
-        newSession: document.querySelector('button[aria-label="New session"]').getBoundingClientRect().bottom,
-      }))
-      assert.equal(bottoms.nav, height - 34 - 12)
-      assert.equal(bottoms.newSession, height - 34 - 88)
+      await applyPwaSafeArea(page)
+      const document = await measureDocument(page)
+      assert.equal(document.htmlPosition, 'fixed')
+      assert.equal(document.htmlHeight, height)
+      const chat = await measure(page)
+      assert.equal(chat.form.bottom, height - 1 - 16, 'the composer keeps its 1rem spacing')
+      await page.click('.mobile-header-back')
+      await page.waitForSelector('.mobile-primary-nav', { visible: true })
+      const home = await measureHome(page)
+      assert.equal(home.shell.bottom, height)
+      assert.equal(home.nav.bottom, height - SCREEN.safeBottom - 12)
+      assert.equal(home.newSession.bottom, height - SCREEN.safeBottom - 88)
     } finally { await page.close() }
   }
 })
-
 
 test('native Chromium page scale retains the mobile slot and focused content boundary', async () => {
   const page = await openMobileApp({ simulateViewport: false })

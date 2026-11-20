@@ -52,7 +52,7 @@ code, pre, time { font-family: var(--font-mono); }
 
 /* Header */
 .site-header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-.header-inner { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+.header-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 56px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; font-weight: 600; font-size: 1.05rem; text-decoration: none; letter-spacing: -.01em; }
 .primary-nav { display: flex; align-items: center; gap: 22px; font-size: .92rem; }
 .primary-nav a { color: var(--muted); text-decoration: none; }
@@ -63,6 +63,24 @@ code, pre, time { font-family: var(--font-mono); }
 .theme-icon-dark { display: none; }
 [data-theme='dark'] .theme-icon-light { display: none; }
 [data-theme='dark'] .theme-icon-dark { display: block; }
+/* Language menu: the translate icon and caret of the docs' language picker, opening a list of links. */
+.language-menu { position: relative; display: flex; }
+.language-button { display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 2px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.language-button:hover, .language-button[aria-expanded='true'] { color: var(--ink); }
+.language-icon { width: 16px; height: 16px; }
+.language-caret { width: 18px; height: 18px; }
+.language-list { position: absolute; top: calc(100% + 10px); right: 0; z-index: 30; min-width: 136px; margin: 0; padding: 4px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 10px 30px -12px rgba(15, 18, 22, .35); list-style: none; }
+.language-list[hidden] { display: none; }
+[data-theme='dark'] .language-list { box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .7); }
+.primary-nav .language-list a { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 10px; border-radius: 4px; color: var(--ink-soft); }
+.primary-nav .language-list a:hover, .primary-nav .language-list a:focus-visible { background: var(--bg-alt); color: var(--ink); }
+.primary-nav .language-list a[aria-current] { color: var(--ink); font-weight: 500; }
+.language-list .icon { width: 15px; height: 15px; color: var(--accent-strong); }
+.language-fallback { display: none; }
+@media (scripting: none) {
+  .language-menu > button { display: none; }
+  .language-fallback { display: inline-flex; }
+}
 
 /* Hero */
 .hero { padding: 72px 0 0; }
@@ -71,20 +89,40 @@ code, pre, time { font-family: var(--font-mono); }
 :lang(zh) .hero h1 { letter-spacing: -.01em; line-height: 1.2; }
 .lede { margin-top: 22px; max-width: 34em; color: var(--ink-soft); font-size: 1.12rem; line-height: 1.6; }
 
-.install { margin-top: 36px; }
-.install-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
-.install-tabs button { margin-bottom: -1px; padding: 7px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 .86rem var(--font-sans); cursor: pointer; }
-.install-tabs button:hover { color: var(--ink); }
-.install-tabs button[aria-selected='true'] { border-bottom-color: var(--accent); color: var(--ink); }
-.command { position: relative; margin-top: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--code-bg); }
-.command pre { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; font-size: .84rem; line-height: 1.7; }
-.command-line { display: block; white-space: pre; }
-.prompt { margin-right: 10px; color: var(--muted); user-select: none; }
-.copy-button { position: absolute; top: 9px; right: 9px; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--ink-soft); font: 500 .78rem var(--font-sans); cursor: pointer; }
-.copy-button:hover { border-color: var(--muted); }
+/* Hero next steps: the server install command, then the demo and the other downloads. */
+.hero-start { margin-top: 36px; }
+.hero-command { max-width: 560px; }
+.hero-command pre { font-size: .9rem; }
+.hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; margin-top: 20px; }
+.hero-demo { display: inline-flex; align-items: center; padding: 8px 16px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-weight: 500; font-size: .94rem; text-decoration: none; }
+.hero-demo:hover { border-color: var(--accent); color: var(--accent-strong); }
+.hero-more { color: var(--accent-strong); font-weight: 500; font-size: .94rem; text-decoration: none; }
+.hero-more:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* Shell commands. A card holds one command, or platform tabs above one command per tab. */
+.command-card { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--code-bg); }
+.command-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px 0 8px; border-bottom: 1px solid var(--line); }
+.command-tabs { display: flex; gap: 4px; }
+.command-title { color: var(--muted); font: .8rem var(--font-sans); white-space: nowrap; }
+.command-tabs button { margin-bottom: -1px; padding: 9px 8px 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 .84rem var(--font-sans); cursor: pointer; }
+.command-tabs button:hover { color: var(--ink); }
+.command-tabs button[aria-selected='true'] { border-bottom-color: var(--accent); color: var(--ink); }
+/* The copy button has its own column, so it never covers command text. */
+.command { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.command pre { margin: 0; padding: 14px 8px 14px 16px; overflow-x: auto; font-size: .84rem; line-height: 1.7; }
+/* The prompt has its own column, so continued and wrapped lines align with the command. */
+.command code { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; }
+.command-line { display: contents; }
+.command-text { white-space: pre; }
+.command-wrap .command-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt { color: var(--muted); user-select: none; }
+.copy-button { display: grid; place-items: center; width: 30px; height: 30px; margin: 9px 9px 0 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--muted); cursor: pointer; }
+.copy-button:hover { border-color: var(--muted); color: var(--ink); }
+.copy-button .icon { width: 16px; height: 16px; }
+.copy-button .copy-done, .copy-button.copied .copy-idle { display: none; }
+.copy-button.copied .copy-done { display: block; }
 .copy-button.copied { border-color: var(--accent); color: var(--accent-strong); }
-.install-note { margin-top: 10px; color: var(--muted); font-size: .86rem; }
-.install-note a { color: var(--ink-soft); text-underline-offset: 3px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* A day with one task */
 .day { margin: 6px 0 0; padding: 0; }
@@ -109,7 +147,12 @@ code, pre, time { font-family: var(--font-mono); }
 .day-footer a:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 .hero-shot { margin-top: 72px; margin-bottom: 0; }
-.hero-shot > figcaption { margin-top: 12px; color: var(--muted); font: .78rem var(--font-mono); }
+.hero-shot > figcaption { display: grid; gap: 14px; margin-top: 12px; }
+.shot-caption { color: var(--muted); font: .78rem var(--font-mono); }
+.demo-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.demo-link { flex: none; padding: 7px 14px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-weight: 500; font-size: .92rem; text-decoration: none; }
+.demo-link:hover { border-color: var(--accent); color: var(--accent-strong); }
+.demo-note { color: var(--muted); font-size: .88rem; }
 
 /* Screenshots */
 .shot { margin: 0; }
@@ -140,6 +183,8 @@ code, pre, time { font-family: var(--font-mono); }
 .points li::before { content: '–'; position: absolute; left: 0; color: var(--muted); }
 .text-link { display: inline-block; margin-top: 18px; color: var(--accent-strong); font-weight: 500; font-size: .95rem; text-decoration: none; }
 .text-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.feature-links { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 18px; }
+.feature-links .text-link { margin-top: 0; }
 .feature-visual { margin-top: 40px; }
 
 .hands-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 40px 56px; align-items: center; }
@@ -185,6 +230,59 @@ code, pre, time { font-family: var(--font-mono); }
 .extra-list dd { margin: 0; color: var(--muted); font-size: .93rem; }
 
 /* Get started */
+/* Downloads: one row per way to run Foxwarm, with its options beside it. */
+/* A margin, not padding, so the header and hero links land on the heading below the sticky header. */
+.downloads { margin-top: 112px; scroll-margin-top: 80px; }
+.downloads h2 { padding-top: 28px; border-top: 1px solid var(--ink); font-size: clamp(1.5rem, 2.6vw, 2rem); }
+.download-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 48px; margin-top: 32px; padding-top: 28px; border-top: 1px solid var(--line); }
+.download-row:first-of-type { border-top: 0; padding-top: 0; }
+.download-kind h3 { font-size: 1.1rem; }
+/* Schematics: orange is where Foxwarm runs, gray the devices around it. */
+.schematic { display: block; width: 100%; max-width: 240px; height: auto; margin-bottom: 20px; }
+.sch-device { fill: var(--surface); stroke: var(--muted); stroke-width: 1.6; stroke-linejoin: round; }
+.sch-screen { fill: var(--bg-alt); stroke: none; }
+.sch-tile { fill: var(--line-strong); }
+.sch-detail { fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.sch-foxwarm { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+.sch-foxwarm-line { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; }
+.sch-dot { fill: var(--accent); }
+.sch-wire { fill: none; stroke: var(--line-strong); stroke-width: 1.6; }
+.sch-wire-end { fill: var(--line-strong); }
+.sch-faint { fill: none; stroke: var(--line-strong); stroke-width: 1.6; stroke-dasharray: 3 4; stroke-linecap: round; }
+.sch-stop { fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; }
+.sch-tap-ring { fill: none; stroke: var(--accent); stroke-width: 1.4; opacity: .55; }
+.download-kind p { margin-top: 8px; color: var(--ink-soft); font-size: .95rem; }
+.download-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-content: start; }
+/* Server options carry whole commands, so each gets the full width. */
+.download-options-wide { grid-template-columns: minmax(0, 1fr); }
+.download-option { display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.download-option.current { border-color: var(--accent); }
+.download-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 600; }
+.platform-mark { flex: none; width: 20px; height: 20px; color: var(--ink-soft); }
+.platform-marks { display: inline-flex; gap: 6px; margin-right: 2px; }
+.download-option.current .platform-mark { color: var(--accent-strong); }
+.download-name span { color: var(--muted); font-weight: 400; font-size: .9rem; }
+.download-name .download-current { margin-left: auto; color: var(--accent-strong); font: 500 .76rem var(--font-mono); text-transform: uppercase; letter-spacing: .02em; }
+.download-current[hidden] { display: none; }
+.download-action { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.download-action code { overflow-wrap: anywhere; color: var(--muted); font: .78rem var(--font-mono); }
+.download-button { display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px 6px 11px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-weight: 500; font-size: .92rem; text-decoration: none; }
+.download-button .icon { width: 17px; height: 17px; }
+.download-button:hover { border-color: var(--accent); color: var(--accent-strong); }
+.download-option.current .download-button { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.download-option.current .download-button:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+.download-alternative { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: -4px; font-size: .86rem; }
+.download-alternative a { color: var(--accent-strong); font-weight: 500; text-decoration: none; }
+.download-alternative a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.download-alternative code { overflow-wrap: anywhere; color: var(--muted); font: .74rem var(--font-mono); }
+.download-note { color: var(--muted); font-size: .88rem; }
+.download-note a, .download-more a { color: var(--accent-strong); font-weight: 500; text-decoration: none; white-space: nowrap; }
+.download-note a:hover, .download-more a:hover, .download-foot a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.download-more { grid-column: 1 / -1; font-size: .9rem; }
+.download-foot { display: grid; gap: 10px; margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--line); font-size: .9rem; }
+.download-foot a { color: var(--ink-soft); text-decoration: none; }
+.download-attribution { max-width: 56em; color: var(--muted); font-size: .76rem; }
+
 .start { padding: 112px 0 104px; }
 .start h2 { padding-top: 28px; border-top: 1px solid var(--ink); font-size: clamp(1.5rem, 2.6vw, 2rem); }
 .steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; margin: 32px 0 0; padding: 0; list-style: none; counter-reset: step; }
@@ -199,11 +297,13 @@ code, pre, time { font-family: var(--font-mono); }
 .site-footer { border-top: 1px solid var(--line); }
 .footer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; padding: 28px 0; color: var(--muted); font-size: .88rem; }
 .footer-inner .brand { color: var(--ink); font-size: .95rem; }
-.footer-inner nav { display: flex; gap: 20px; margin-left: auto; }
+.footer-inner nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-left: auto; }
 .footer-inner nav a { color: var(--muted); text-decoration: none; }
 .footer-inner nav a:hover { color: var(--ink); }
 
 @media (max-width: 1000px) {
+  .download-row { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .schematic { max-width: 200px; margin-bottom: 14px; }
   .hero-grid, .feature-head, .extras-inner, .hands-grid { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .hero { padding-top: 48px; }
   .hero-shot { margin-top: 56px; }
@@ -212,13 +312,27 @@ code, pre, time { font-family: var(--font-mono); }
 @media (max-width: 720px) {
   .container { width: min(var(--container), 100% - 32px); }
   .primary-nav { gap: 14px; }
-  .primary-nav a[href*='github'] { display: none; }
+  .primary-nav a[href*='github'], .primary-nav .nav-download { display: none; }
+  .footer-inner nav { margin-left: 0; }
   .steps { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .download-options { grid-template-columns: minmax(0, 1fr); }
+  .download-option { padding: 16px 14px; }
   .extra-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .shot-stack { padding-bottom: 0; }
   .shot-inset { position: static; width: auto; margin-top: 16px; box-shadow: none; }
   .day-rows::before { left: 59px; }
   .day-row { grid-template-columns: 44px 32px minmax(0, 1fr); }
+}
+/* The hero's tabs need the whole width on phones. */
+@media (max-width: 420px) {
+  .command-title { display: none; }
+}
+/* Docs, Demo, Blog, the language menu and theme fit beside the logo alone on the narrowest phones. */
+@media (max-width: 374px) {
+  .site-header .brand span { display: none; }
+}
+@media (max-width: 360px) {
+  .primary-nav { gap: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

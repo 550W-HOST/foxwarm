@@ -23,9 +23,9 @@ public sealed partial class LocalSessionTurnHost
             if (selectionFailed)
             {
                 results[cursor++] = new(
-                    UnsupportedTurnToolExecutor.ToolError(
-                        "tool_call_skipped",
-                        "Tool call was not started because Node selection failed."
+                    ToolFailure.Result(
+                        "Tool call was not started because Node selection failed.",
+                        "tool_call_skipped"
                     )
                 );
                 continue;
@@ -75,6 +75,8 @@ public sealed partial class LocalSessionTurnHost
                         .PrepareDirectExecAsync(value.Call, token)
                         .ConfigureAwait(false);
                 }
+            if (tools is SessionToolExecutor settling)
+                await settling.SettleApprovalsAsync(preparation, token).ConfigureAwait(false);
             async Task WorkAsync()
             {
                 while (true)
@@ -125,10 +127,22 @@ public sealed partial class LocalSessionTurnHost
                 && result.ResolvedPaths is { Count: > 0 } paths
             )
                 response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
+            if (result.Target is { } target)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                meta["target"] = target.DeepClone();
+                response["__meta"] = meta;
+            }
             if (result.ExecPlacement is { } placement)
             {
                 var meta = response["__meta"] as JsonObject ?? new JsonObject();
                 meta["exec"] = placement.DeepClone();
+                response["__meta"] = meta;
+            }
+            if (result.Approval is { } approval)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                meta["approval"] = approval.DeepClone();
                 response["__meta"] = meta;
             }
             if (result.SessionMessages is { Count: > 0 } deliveries)
@@ -156,8 +170,7 @@ public sealed partial class LocalSessionTurnHost
                 }
                 catch (Foxwarm.Images.ImageInputException error)
                 {
-                    response["response"] = UnsupportedTurnToolExecutor.ToolError(
-                        "image_materialization_failed",
+                    response["response"] = ToolFailure.Result(
                         error.Message + " The tool call completed; its effects were not reversed."
                     );
                     response.Remove("__meta");
@@ -181,29 +194,7 @@ public sealed partial class LocalSessionTurnHost
                     .Text(args?["action"])
                     ?.Trim()
                     .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
-        if (name != "call_tool" || args is null)
-            return false;
-        if (
-            SessionWait.Text(args["toolId"]) != "builtin:node"
-            && !(
-                SessionWait.Text(args["source"]) == "builtin"
-                && SessionWait.Text(args["name"]) == "node"
-            )
-        )
-            return false;
-        try
-        {
-            var target = ToolRegistry.ObjectArg(args, "args", "argsJson");
-            return SessionWait
-                    .Text(target?["action"])
-                    ?.Trim()
-                    .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
-        }
-        catch (Exception error)
-            when (error is InvalidDataException or System.Text.Json.JsonException)
-        {
-            return false;
-        }
+        return name == "ctl" && args is not null && CtlParser.SelectsNode(args);
     }
 
     private static bool SelectionSucceeded(JsonNode? result) =>
@@ -221,26 +212,32 @@ public sealed partial class LocalSessionTurnHost
     )
     {
         var call = planned.Call;
+        // A prepared approval of a call skipped before it starts ends with the call.
+        Task<TurnToolExecution> Skipped(TurnToolExecution value) =>
+            tools is SessionToolExecutor approving
+                ? approving.SkippedPrepared(value, prepared, token)
+                : Task.FromResult(value);
         if (token.IsCancellationRequested || Closing)
-            return new(
-                new JsonObject
-                {
-                    ["canceled"] = true,
-                    ["error"] = new JsonObject
+            return await Skipped(
+                new(
+                    new JsonObject
                     {
-                        ["type"] = "tool_call_cancelled",
-                        ["message"] =
+                        ["canceled"] = true,
+                        ["error"] =
                             $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
-                    },
-                }
+                        ["code"] = "tool_call_cancelled",
+                    }
+                )
             );
         if (planned.Preset is JsonObject preset)
             return new((JsonObject)preset.DeepClone());
         if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable)
-            return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_skipped",
-                    "Tool call was not started because tool authorization policy was unavailable."
+            return await Skipped(
+                new(
+                    ToolFailure.Result(
+                        "Tool call was not started because tool authorization policy was unavailable.",
+                        "tool_call_skipped"
+                    )
                 )
             );
         if (
@@ -261,9 +258,9 @@ public sealed partial class LocalSessionTurnHost
                     index,
                     total
                 );
-            return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
+            return new(ToolFailure.Result(error));
         }
-        if (prepared is not null && tools is SessionToolExecutor executor)
+        if (prepared?.Response is not null && tools is SessionToolExecutor executor)
             return executor.PreparedFailure(prepared);
         entry.ToolProgress?.Invoke(call, true);
         try
@@ -271,23 +268,23 @@ public sealed partial class LocalSessionTurnHost
             var owned = (JsonObject)call.DeepClone();
             return tools is SessionToolExecutor current
                 ? await current
-                    .ExecuteAttributedAsync(owned, token, index, total)
+                    .ExecuteAttributedAsync(owned, token, index, total, approved: prepared)
                     .ConfigureAwait(false)
                 : new(await tools.ExecuteAsync(owned, token).ConfigureAwait(false));
         }
         catch (OperationCanceledException)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_cancelled",
-                    $"Tool request canceled by {entry.ToolCancellationSource} after dispatch. Started effects may have occurred and were not reversed."
+                ToolFailure.Result(
+                    $"Tool request canceled by {entry.ToolCancellationSource} after dispatch. Started effects may have occurred and were not reversed.",
+                    "tool_call_cancelled"
                 )
             );
         }
         catch (Exception exception)
             when (exception is InvalidOperationException or IOException or ArgumentException)
         {
-            return new(UnsupportedTurnToolExecutor.ToolError("tool_error", exception.Message));
+            return new(ToolFailure.Result(exception.Message));
         }
         finally
         {

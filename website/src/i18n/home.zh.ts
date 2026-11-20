@@ -10,7 +10,7 @@ export const zh: HomeStrings = {
     description: 'Foxwarm 是开源、自托管的 AI Agent 工作台：Agent loop、模型和记忆集中在一台服务器上，轻量的节点负责在任意机器上执行工具。委派出去的任务都是能打开查看的会话，任何会话都能拉进群聊。',
     ogTitle: 'Foxwarm — 在你自己的机器上持续工作的 AI Agent'
   },
-  nav: { features: '功能', install: '安装', docs: '文档', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', skip: '跳到正文' },
+  nav: { features: '功能', install: '安装', docs: '文档', demo: '演示', blog: '博客', download: '下载', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', languageMenu: '选择语言', skip: '跳到正文' },
   hero: {
     title: '合上电脑，它还在干活。',
     lede: 'Foxwarm 把 AI Agent 跑在你自己的服务器上。一个任务可以连续跑好几天，分派到你的多台机器上，并在你所在的地方汇报：浏览器、手机，或者团队群聊。',
@@ -26,19 +26,70 @@ export const zh: HomeStrings = {
       footer: '每一步都是一个会话，随时可以打开、查看、插话。',
       link: 'Foxwarm 如何工作'
     },
+    actions: { demo: '浏览演示', more: '桌面版、Docker 和 Android' },
     shotCaption: '同一个任务在 Foxwarm WebUI 里的样子。真实截图，演示项目。',
-    screenshotAlt: 'Foxwarm WebUI 的 Conversation 视图：用户请 Agent 修复失败的测试，Agent 汇报了原因、修复方式和提交记录。侧边栏列出了其他会话，其中一些带有子会话。'
+    screenshotAlt: 'Foxwarm WebUI 的 Conversation 视图：用户请 Agent 修复失败的测试，Agent 汇报了原因、修复方式和提交记录。侧边栏列出了其他会话，其中一些带有子会话。',
+    demo: {
+      link: '打开可交互演示',
+      note: '录制好的只读工作区：可以浏览会话、展开工具调用，但不能在线运行。'
+    }
   },
+  featureDemo: '在演示中打开',
   install: {
-    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
+    title: '安装服务器',
+    tabs: { linux: 'Linux / macOS', windows: 'Windows' },
     copy: '复制',
-    copied: '已复制',
-    notes: {
-      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用；系统没有兼容运行时则使用自带 .NET 的版本。',
-      windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行；另有 Windows 桌面版。',
-      docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
+    copied: '已复制'
+  },
+  downloads: {
+    title: '下载 Foxwarm',
+    download: '下载',
+    current: '本机',
+    desktop: {
+      title: '桌面版',
+      body: '在 Windows 电脑或 Mac 上以应用窗口运行 Foxwarm：上手最快，但只有这台电脑能连接它。',
+      windows: {
+        name: 'Windows',
+        detail: 'x64',
+        note: '为当前 Windows 账户安装，不需要管理员权限；便携版 ZIP 解压即用。两者都需要 WebView2 运行时，Windows 10 和 11 通常已自带。',
+        alternative: '便携版 ZIP',
+        guide: { label: 'Windows 桌面版说明', href: docs('installing/#windows-桌面版') }
+      },
+      mac: {
+        name: 'macOS',
+        detail: 'Apple Silicon',
+        note: '需要 macOS 15 或更新版本。应用未经公证，打开前需要先移除下载文件的隔离标记。',
+        guide: { label: 'macOS 桌面版说明', href: docs('installing/#macos-桌面版') }
+      }
     },
-    requirementsLink: '安装包和环境要求'
+    server: {
+      title: '服务器',
+      body: '在一台常开的机器上后台运行 Foxwarm：合上笔记本后任务照常进行，手机、其他电脑和节点也都能连接它。',
+      installers: {
+        name: 'Linux、macOS、Windows',
+        note: '下载对应平台的安装包并在后台启动 Foxwarm，支持 Linux x64 和 WSL、Apple Silicon 上的 macOS 15 或更新版本，以及 Windows x64（在 PowerShell 中运行）。',
+        guide: { label: '安装包和环境要求', href: docs('installing/') }
+      },
+      docker: {
+        name: 'Docker',
+        detail: 'Linux x64',
+        note: '运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。',
+        guide: { label: 'Docker 说明', href: docs('installing/#docker') }
+      },
+      packages: { label: '各平台的服务器安装包', href: docs('installing/#安装包') }
+    },
+    android: {
+      title: 'Android Node 应用',
+      body: '把 Android 手机作为节点接入你的服务器，让 Agent 能读取屏幕、点按、输入和打开应用；它需要一台服务器，本身不运行 Foxwarm。',
+      app: {
+        name: 'Android',
+        detail: '11 或更新版本',
+        note: '打开下载的 APK 完成安装，再到服务器 WebUI 的 System → Nodes 中配对。',
+        guide: { label: 'Android Node 说明', href: docs('installing/#android-node') }
+      }
+    },
+    release: '最新 Release 的全部文件和校验和',
+    attribution: 'Android 是 Google LLC 的商标。Android 机器人图案复制或修改自 Google 创作并分享的作品，依据知识共享署名 3.0 许可协议使用。'
   },
   strip: {
     label: '兼容',
@@ -76,8 +127,8 @@ export const zh: HomeStrings = {
       id: 'room',
       eyebrow: '渠道',
       title: '在这里聊清楚，再拉进群里讲。',
-      body: '任何聊天都可以绑定到任何会话。先在 WebUI 里把问题理清楚，再把 bot 拉进团队群，执行 /attach：它带着前面完整的上下文回答，群里任何人都可以接着追问。支持 Telegram、Matrix、QQ、微信和企业微信。',
-      points: ['用 /attach 把聊天接到已有会话', 'Agent 知道是谁在问，上下文完整保留', '发送者白名单；可以对某个群放开追问，命令仍只限授权用户'],
+      body: '任何聊天都可以绑定到任何会话。先在 WebUI 里把问题理清楚，再把 bot 拉进团队群，执行 /channel attach：它带着前面完整的上下文回答，群里任何人都可以接着追问。支持 Telegram、Matrix、QQ、微信和企业微信。',
+      points: ['用 /channel attach 把聊天接到已有会话', 'Agent 知道是谁在问，上下文完整保留', '发送者白名单；可以对某个群放开追问，命令仍只限授权用户'],
       link: { label: '接入渠道', href: docs('channels/') },
       image: { alt: '示意图：团队群聊中，开发者把 bot 绑定到已有会话，请它解释一项改动，同事接着追问。' }
     }
@@ -116,7 +167,7 @@ export const zh: HomeStrings = {
     title: 'tidepool 开发群',
     status: '4 位成员',
     messages: [
-      { from: 'me', text: '/attach tidepool/proration', time: '16:02' },
+      { from: 'me', text: '/channel attach tidepool/proration', time: '16:02' },
       { from: 'system', text: '已绑定到“Ship the proration fix”。' },
       { from: 'me', text: '@foxwarm 用两句话给大家讲讲 proration 这次改了什么', time: '16:03' },
       { from: 'bot', name: 'Foxwarm', text: '原来 prorate() 把剩余时间取整到天，中午换套餐会多退半天的钱。现在按精确时间计算，build-box 上 6 个测试全部通过。', time: '16:03' },
@@ -147,5 +198,5 @@ export const zh: HomeStrings = {
     ],
     guide: '完整安装指南'
   },
-  footer: { tagline: '自托管的 AI Agent，MIT 协议开源。', docs: '文档', github: 'GitHub', license: '许可证' }
+  footer: { tagline: '自托管的 AI Agent，MIT 协议开源。', docs: '文档', download: '下载', blog: '博客', github: 'GitHub', license: '许可证' }
 };

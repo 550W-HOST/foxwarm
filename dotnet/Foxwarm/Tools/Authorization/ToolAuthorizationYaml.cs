@@ -14,6 +14,13 @@ internal static class ToolAuthorizationYaml
         Root,
         Rules,
         Rule,
+        OperationRule,
+        OperationPath,
+        OperationSession,
+        OperationAgent,
+        OperationTask,
+        OperationMcp,
+        With,
         Match,
         Args,
         Tool,
@@ -24,7 +31,9 @@ internal static class ToolAuthorizationYaml
         Agent,
         Task,
         Node,
+        Secrets,
         Scalar,
+        Approval,
         ScalarList,
         ScalarOrList,
     }
@@ -103,6 +112,9 @@ internal static class ToolAuthorizationYaml
             )
                 throw new InvalidDataException("Invalid tool policy value.");
             var keys = map.Select(pair => (pair.Key, pair.Value)).ToArray();
+            // A rule with `op` is an operation rule, with its own selector shapes.
+            if (shape == Shape.Rule && keys.Any(pair => pair.Key == "op"))
+                shape = Shape.OperationRule;
             var allowed = shape switch
             {
                 Shape.Root => new[] { "version", "defaultAction", "rules" },
@@ -113,14 +125,32 @@ internal static class ToolAuthorizationYaml
                     "match",
                     "action",
                     "reason",
+                    "approval",
                     "agent",
                     "session",
                     "externalId",
                     "tool",
                     "node",
+                    "secrets",
                     "args",
                     "path",
                 ],
+                Shape.OperationRule =>
+                [
+                    "id",
+                    "enabled",
+                    "action",
+                    "reason",
+                    "approval",
+                    .. OperationRules.Selectors,
+                ],
+                Shape.OperationPath => ["within", "notWithin"],
+                Shape.OperationSession => ["session", "id"],
+                Shape.OperationAgent => ["self", "descendant", "id"],
+                Shape.OperationTask => ["owned", "created"],
+                Shape.OperationMcp => ["server", "tool"],
+                Shape.With => null,
+                Shape.Approval => ["timeoutSeconds", "approvers"],
                 Shape.Match =>
                 [
                     "agent",
@@ -137,6 +167,7 @@ internal static class ToolAuthorizationYaml
                 Shape.Agent => ["sameAgent"],
                 Shape.Task => ["owned"],
                 Shape.Node => ["current", "provider", "exact"],
+                Shape.Secrets => ["anyOf", "owned"],
                 Shape.Argument when keys.Any(pair => pair.Key == "agent") => ["agent"],
                 Shape.Argument when keys.Any(pair => pair.Key == "task") => ["task"],
                 Shape.Argument when keys.Any(pair => pair.Key == "session") => ["session"],
@@ -156,11 +187,36 @@ internal static class ToolAuthorizationYaml
                 var child = shape switch
                 {
                     Shape.Root when pair.Key == "rules" => Shape.Rules,
+                    Shape.OperationRule => pair.Key switch
+                    {
+                        "op" or "session" or "channel" or "nodeTool" or "model" =>
+                            Shape.ScalarOrList,
+                        "agent" or "externalId" => Shape.Matcher,
+                        "node" => Shape.Node,
+                        "path" => Shape.OperationPath,
+                        "targetSession" or "parent" => Shape.OperationSession,
+                        "targetAgent" => Shape.OperationAgent,
+                        "task" => Shape.OperationTask,
+                        "secret" => Shape.Secrets,
+                        "mcp" => Shape.OperationMcp,
+                        "with" => Shape.With,
+                        "approval" => Shape.Approval,
+                        _ => Shape.Scalar,
+                    },
+                    Shape.OperationSession when pair.Key == "session" => Shape.Session,
+                    Shape.OperationSession or Shape.OperationAgent when pair.Key == "id" =>
+                        Shape.ScalarOrList,
+                    Shape.OperationMcp => Shape.ScalarOrList,
+                    Shape.With => Shape.Matcher,
                     Shape.Rule when pair.Key == "match" => Shape.Match,
                     Shape.Rule when pair.Key == "args" => Shape.Args,
                     Shape.Rule when pair.Key == "tool" => Shape.Tool,
                     Shape.Rule when pair.Key == "path" => Shape.Path,
                     Shape.Rule when pair.Key == "node" => Shape.Node,
+                    Shape.Rule when pair.Key == "secrets" => Shape.Secrets,
+                    Shape.Secrets when pair.Key == "anyOf" => Shape.ScalarOrList,
+                    Shape.Rule when pair.Key == "approval" => Shape.Approval,
+                    Shape.Approval when pair.Key == "approvers" => Shape.ScalarList,
                     Shape.Rule when pair.Key == "session" => Shape.ScalarOrList,
                     Shape.Rule when pair.Key is "agent" or "externalId" => Shape.Matcher,
                     Shape.Node when pair.Key is "provider" or "exact" => Shape.ScalarOrList,

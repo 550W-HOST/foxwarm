@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Server } from 'lucide-react'
+import { Check, Server, ServerOff } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import { describeExecutionNodeProblem } from '../nodeTargets'
+import { useNodeDirectory } from '../useNodeDirectory'
 
-type NodeOption = { id: string; label: string; selectable: boolean; reason: string | null }
+type NodeOption = { id: string; label: string; selectable: boolean; reason: string | null; hint?: string | null }
 
 export default function NodePicker({ sessionId, currentNode = 'master', disabled, onChangeNode }: {
   sessionId: string
@@ -16,7 +18,6 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [lockedReason, setLockedReason] = useState<string | null>(null)
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({ position: 'fixed' })
   const buttonRef = useRef<HTMLButtonElement>(null)
   const popupRef = useRef<HTMLDivElement>(null)
@@ -25,6 +26,13 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   const pendingRef = useRef<AbortController | null>(null)
   const wasOpenRef = useRef(false)
   const remote = currentNode !== 'master'
+  // Master is the Main server itself; only remote placements need live status.
+  const directory = useNodeDirectory({ enabled: remote })
+  const problem = remote && directory.loaded && !directory.error
+    ? describeExecutionNodeProblem(directory.nodes, currentNode)
+    : null
+  const triggerLabel = problem ? `Execution node: ${currentNode} · ${problem}` : `Execution node: ${currentNode}`
+  const TriggerIcon = problem ? ServerOff : Server
 
   const positionPopup = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
@@ -73,7 +81,6 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
         if (!response.ok) throw new Error(data.error || 'Could not load nodes.')
         if (controller.signal.aborted) return
         setNodes(data.nodes)
-        setLockedReason(data.lockedReason)
       } catch (error) {
         if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'Could not load nodes.')
       } finally {
@@ -142,8 +149,9 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
         type="button"
         className={`foxwarm-node-picker-trigger inline-flex h-8 min-w-0 items-center rounded-lg text-[13px] text-fw-text-muted transition hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring disabled:opacity-50 dark:hover:bg-fw-hover ${remote ? 'gap-1.5 px-2.5' : 'w-8 justify-center'}`}
         disabled={disabled || saving}
-        aria-label={`Execution node: ${currentNode}`}
-        title={`Execution node: ${currentNode}`}
+        aria-label={triggerLabel}
+        title={triggerLabel}
+        data-node-status={problem ? 'problem' : undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => {
@@ -151,13 +159,13 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
             setNodes([])
             setLoading(true)
             setError(null)
-            setLockedReason(null)
             positionPopup()
+            if (remote) void directory.reload()
           }
           setOpen(value => !value)
         }}
       >
-        <Server size={14} strokeWidth={2} className={`shrink-0 ${remote ? 'text-fw-accent' : ''}`} aria-hidden="true" />
+        <TriggerIcon size={14} strokeWidth={2} className={`shrink-0 ${problem ? 'text-fw-warning' : remote ? 'text-fw-accent' : ''}`} aria-hidden="true" />
         {remote && <span className="truncate">{currentNode}</span>}
       </button>
       {open && createPortal(
@@ -172,7 +180,6 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
         >
           <div className="shrink-0 border-b border-fw-border px-3 py-2 font-medium">Execution node</div>
           {loading && <div className="px-3 py-2 text-fw-text-muted">Loading nodes...</div>}
-          {lockedReason && <div className="px-3 py-2 text-fw-text-muted">{lockedReason}</div>}
           {error && <div role="alert" className="px-3 py-2 text-fw-danger">{error}</div>}
           <div ref={listRef} className="min-h-0 overflow-y-auto">
             {options.map(node => (
@@ -182,14 +189,14 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
                 data-node-option={node.id}
                 aria-pressed={node.id === currentNode}
                 disabled={disabled || saving || !node.selectable}
-                title={node.reason || node.label}
+                title={node.reason || node.hint || node.label}
                 onClick={() => void selectNode(node.id)}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fw-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Check size={14} className={`shrink-0 text-fw-accent ${node.id === currentNode ? '' : 'invisible'}`} aria-hidden="true" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{node.id}</span>
-                  {(node.reason || node.label !== node.id) && <span className="block truncate text-xs text-fw-text-muted">{node.reason || node.label}</span>}
+                  {(node.reason || node.hint || node.label !== node.id) && <span className="block truncate text-xs text-fw-text-muted">{node.reason || node.hint || node.label}</span>}
                 </span>
               </button>
             ))}

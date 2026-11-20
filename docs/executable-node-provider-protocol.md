@@ -23,7 +23,7 @@ Commands and fixed arguments are administrator configuration. Core uses `shell:f
 
 The single current protocol identifier is `foxwarm-node-provider`. There is no protocol-version field, negotiation, legacy exec adapter or fallback.
 
-Each request launches a new process. Core writes one JSON request to stdin and closes stdin. The provider writes exactly one JSON response to stdout and exits. Diagnostics belong on stderr. Echo these four identity fields exactly:
+Each model-tool, exec, lifecycle and discovery request launches a new process. Core writes one JSON request to stdin and closes stdin. The provider writes exactly one JSON response to stdout and exits. Diagnostics belong on stderr. Code and Terminal services use the separate, optional [service channel](#optional-service-channel) below. Echo these four identity fields exactly:
 
 ```json
 {
@@ -36,7 +36,7 @@ Each request launches a new process. Core writes one JSON request to stdin and c
 
 Operations with inputs add `request`. Success adds `"ok": true, "result": ...`; failure adds `"ok": false, "error": { "code": "SafeCode", "message": "Safe message", "retryable": false }`. Result and error are mutually exclusive. Error text must be safe for the caller: do not include credentials, private launcher arguments or raw transport diagnostics.
 
-Operations are `describe`, `list`, `filesystem`, `exec-start`, `exec-poll`, and declared `create`, `ensure`, `inspect`, `destroy` lifecycle actions. A response identity mismatch or malformed response fails the call; Core does not try another protocol or replay effects.
+Operations are `describe`, `list`, `filesystem`, `exec-start`, `exec-poll`, optional `exec-stop`, declared `create`, `ensure`, `inspect`, `destroy` lifecycle actions, and `connect`, which opens the optional service channel instead of answering one request. A response identity mismatch or malformed response fails the call; Core does not try another protocol or replay effects.
 
 ## Describe
 
@@ -77,11 +77,14 @@ Agents use `node({action:"inspect",providerId:"provider-id"})` to discover the d
   "availability": "ready",
   "defaultCwd": "provider-defined://root",
   "filesystem": "read-write",
-  "exec": true
+  "exec": true,
+  "execEnv": true,
+  "execStop": true,
+  "services": { "vscode-fs": 1, "vscode-git": 2, "vscode-pty": 1 }
 }
 ```
 
-`label`, `kind`, `defaultCwd` and `exec` are optional. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
+`label`, `kind`, `defaultCwd`, `exec`, `execEnv`, `execStop` and `services` are optional. `execEnv:true` requires `exec:true` and declares that `exec-start` accepts [`env`](#start). `execStop:true` requires `exec:true` and declares that the Node implements [`exec-stop`](#stop). `services` declares the fixed Code/Terminal services the Node can serve over the [service channel](#optional-service-channel), with the same names and versions as a resident Node's capabilities. A Provider that omits it keeps today's behavior; no version or negotiation field is added. Names Core does not know are ignored; a malformed shape or a version that is not a positive integer rejects the inventory. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
 
 `filesystem:"read"` derives canonical `read`. `filesystem:"read-write"` also derives `write`, `edit` and `apply_patch`. `exec:true` derives canonical `exec`. Every executable-provider Node exposes at least a read filesystem: exec logs must be readable in the same Node namespace. Providers do not supply model tool schemas, tool formatting or patch semantics. Unsupported capabilities never fall back to Main.
 
@@ -116,7 +119,7 @@ The `filesystem` request is one byte-oriented primitive:
 
 Size, offsets and counts are bytes. Read fills the requested range up to EOF and returns canonical base64 for at most `count` bytes. An incomplete log snapshot is reported unavailable rather than presented as complete retained content. Write uses binary bytes: `w` replaces the entire content, `wx` creates exclusively and fails when the destination exists, and `a` appends the supplied bytes (creating a missing file). `mkdir` creates parents recursively. Errors use filesystem codes such as `ENOENT`, `EACCES`, `ENOTDIR` and `EEXIST`; only `ENOENT` means missing. Do not translate permission or transport failures into missing files.
 
-Core also composes `copy_between_nodes` and file-delivery preparation from these primitives. Transfer reads and writes use at most 1 MiB of file bytes per primitive request, so a complete transfer can exceed the executable request-envelope budget without a new upload protocol. The first write uses `w` or `wx`; subsequent writes use `a`. Empty files still create one empty initial write. A later failure leaves the written prefix, with no automatic replay, rollback or successful receipt. Main retains the existing full transfer payload/cache and SHA256 receipts; this is not a resumable or streaming-memory transfer platform. Relative primitive-transfer paths use the environment default directory, not a Session cwd. Main and authenticated CLI transfer roots and native publication semantics are unchanged.
+Core also composes `copy_between_nodes` and file-delivery preparation from these primitives. Transfer reads and writes use at most 1 MiB of file bytes per primitive request; Main streams the content with bounded memory and can copy files larger than a single request envelope. The first write uses `w` or `wx`; subsequent writes use `a`. Empty files still create one empty initial write. A later failure or cancellation leaves the written prefix, with no automatic replay, rollback or successful receipt. Relative primitive-transfer paths use the environment default directory, not a Session cwd. Main and authenticated CLI Nodes publish completed files using their native temporary-file semantics.
 
 Core composes bounded reads, directory and image presentation, parent diagnostics, exact replacement and add/update/delete patch sequencing. Existing partial-effect semantics are unchanged. Target home expansion, path separators, URI interpretation, symlinks and restrictions belong to the adapter. Core does not resolve target paths through Main's filesystem. Reserved native Agent path variables are rejected when no actual target Agent directory mapping exists.
 
@@ -132,7 +135,17 @@ Tool authorization applies to the original model call and exact target Node, not
 { "nodeId": "example-node", "command": "printf hello", "cwd": "provider-defined://cwd" }
 ```
 
-`cwd` is optional. Pass the command unchanged to the target's command interpreter. Return after submitting the execution, not after waiting for the command:
+`cwd` is optional. Pass the command unchanged to the target's command interpreter.
+
+A Node that declares `execEnv:true` may also receive `env`, an object mapping environment variable names to text values:
+
+```json
+{ "nodeId": "example-node", "command": "deploy", "env": { "API_TOKEN": "value" } }
+```
+
+These are stored secrets a caller passed to this command. Set them only in the command's process environment, over any inherited value of the same name. Do not write them to the command script, execution records, logs or any other file, and do not put them in a process argument. Core sends `env` only to Nodes that declare `execEnv`, so an adapter without it never receives the field.
+
+Return after submitting the execution, not after waiting for the command:
 
 ```json
 {
@@ -166,11 +179,21 @@ The command must survive the adapter request's process exit. Do not retain inher
 
 Running cwd is optional. Finished `exitCode` is required and is a real integer or `null` when unknown; finish timestamp, duration, cwd and safe `error` are optional. Missing records must not mean exit code zero. A transient query failure is an error response, not finished or lost.
 
+### Stop
+
+`exec-stop` is optional. Core sends it only to a Node whose current descriptor declares `execStop:true`, when the Session that owns a tracked background command asks to stop it; other Nodes are reported as unable to stop commands. It receives `{ "nodeId": "example-node", "ref": "...", "graceMs": 5000 }`. Ask the command to terminate (on POSIX targets, send `SIGTERM` to the command's process group), wait up to `graceMs`, then end it forcibly (`SIGKILL` to the group) if it is still running. Return one of:
+
+```json
+{ "state": "stopped" }
+```
+
+`stopped` means it ended within the grace period, `killed` that it had to be ended forcibly, `finished` that it had already finished before anything was signalled, and `lost` that the execution records no longer exist. Keep supervising the command as usual: its real status, typically `143` or `137`, is reported through `exec-poll`, and Core delivers its completion once, stating that a stop was requested. The reference identifies the execution, so never signal a process that merely reuses a recorded PID. An error response or an unusable answer is reported to the caller as an unknown outcome; Core never repeats a stop request.
+
 ### Core-owned behavior
 
 Core uses the existing `PersistentExecManager`, same registry and existing 24-hour background-notification tracking lifetime. Native records without a provider reference remain native; authenticated CLI protocols and persisted native jobs are unchanged. Core allocates public exec IDs, waits within the requested foreground budget, reads bounded log samples, retains at most 1 MiB of programmatic raw content, delivers completion to the original exact owner and removes tracking only after acknowledged delivery or expiration.
 
-Stop releases foreground waiting without killing the command. Stop during start waits for the bounded start receipt or hard deadline; it does not abort the launcher as a substitute for cancelling a remote command. An uncertain start is reported as unknown and must never be automatically repeated. There is no process-kill primitive.
+Stop releases foreground waiting without killing the command. Stop during start waits for the bounded start receipt or hard deadline; it does not abort the launcher as a substitute for cancelling a remote command. An uncertain start is reported as unknown and must never be automatically repeated. Ending a command is a separate, explicit [stop](#stop) request.
 
 Foreground output observation is also bounded and read-only. Completed commands use the remaining requested foreground budget; after normal background timeout, one shared 500 ms snapshot window preserves fast partial capture. Stop or hard cancellation ends these reads promptly, and display/programmatic formatting does not restart them after cancellation. Unavailable output is reported explicitly; the foreground signal is never retained in job state or restart resolution.
 
@@ -201,12 +224,77 @@ CreatedBy-bearing internal callers must give an explicit `ensure.nodeId`; Core t
 
 Core checks global identity, retains Main-owned mutation ordering, requires exact destroy confirmation, and does not infer deletion, erasure, isolation or lease guarantees. Create/ensure do not select the Node, create an Agent or assign work. Destroy does not acquire a new busy-exec restriction or implicitly kill commands: subsequent polls report the provider's actual finished/lost behavior.
 
+## Optional service channel
+
+Code (file browser, editor, source control) and Terminal use three fixed administrator services: `vscode-fs` (version 1), `vscode-git` (version 1; immutable commit details need 2) and `vscode-pty` (version 1). They are not model tools: they do not pass model-tool approval and are available only to the administrator web interface for Nodes admitted to the authorization tree. A Node that declares `services` in `list` can serve them over one long-lived pipe to the same `command`/`args`. A one-shot request per file or Git call is not used: Code issues many small concurrent requests, the one-shot admission limit of eight would reject them, and every call would re-enter the target environment.
+
+### Connecting
+
+Core starts the channel the first time a service is used, not at discovery. It launches the executable like any request, then writes one standard envelope line to stdin and **keeps stdin and stdout open**:
+
+```json
+{"protocol":"foxwarm-node-provider","providerId":"provider-id","requestId":"generated-request-id","operation":"connect","request":{"nodeId":"example-node"}}
+```
+
+`nodeId` is the local ID, as in every other request. The provider connects to that environment and writes one confirmation line using the usual response envelope. It must echo `protocol`, `providerId`, `requestId` and `operation` exactly:
+
+```json
+{"protocol":"foxwarm-node-provider","providerId":"provider-id","requestId":"generated-request-id","operation":"connect","ok":true,"result":{"nodeId":"example-node","services":{"vscode-fs":1,"vscode-git":2,"vscode-pty":1}}}
+```
+
+`result.nodeId` must repeat the requested local ID, and `result.services` lists the services and versions this process actually serves; those versions are the ones in force for the channel. Core starts a channel only when the `list` declaration already satisfies the requested service version, so the confirmation should not report less than the declaration (a lower confirmed version makes later requests for the higher version fail with `UnsupportedService`). A failure uses the normal `ok:false` error envelope, whose safe message is shown to the administrator. An identity mismatch, a different `nodeId`, a malformed confirmation, an early exit, or no confirmation within `timeoutSeconds` fails the start, terminates the process and is not retried. Unsolicited frames before the confirmation are invalid.
+
+### Frames
+
+After confirmation both directions exchange newline-delimited JSON objects (one UTF-8 JSON text per line, LF terminated, no embedded newlines) using the same `node_service_*` frames as resident Nodes:
+
+| Direction | Frame | Fields |
+|---|---|---|
+| Core → provider | `node_service_request` | `requestId`, `service`, `operation`, `args` |
+| Core → provider | `node_service_command` | `service`, `operation`, `args` (one-way; no reply) |
+| Provider → Core | `node_service_response` | `requestId`, `result` (object) |
+| Provider → Core | `node_service_error` | `requestId`, `error`: `{ "code", "message", "statusCode" }` (HTTP 400–599) |
+| Provider → Core | `node_service_event` | `service`, `event` (object) |
+
+The operations, arguments, results and event shapes of the three services are exactly those of resident Nodes, so a provider implementation maps one-to-one onto them: `vscode-fs` `stat`, `read-directory`, `read-file`, `write-file`, `create-directory`, `delete`, `rename`; `vscode-git` `status`, `commit` (2), `content`. Requests can be outstanding concurrently and replies can arrive in any order; correlate by `requestId`. A reply for an unknown or finished request is ignored. Any other frame type, malformed JSON, or an event for a service the channel did not confirm ends the channel. Service request deadlines are 30 seconds; Core does not retry or replay a request whose outcome is uncertain, and has no request cancellation frame.
+
+`vscode-fs` requires absolute paths in the target's POSIX-style namespace and rejects relative ones with `InvalidPath`. Code can open a Provider workspace only with a usable absolute root, so a Node that declares services should also give an absolute `defaultCwd`. Content crosses as canonical base64; a file of up to 50 MiB is read or written in a single frame.
+
+### Terminals
+
+`vscode-pty` is the only service with a continuing Node-to-Main stream. Its operations are `create` (`cwd`, `cols`, `rows` → `{ "terminal": descriptor }`), `list` (`{ "terminals": [...] }`), `get` (`terminalId` → `{ "terminal": descriptor | null }`), `attach` (`terminalId` → `{ "terminal", "backlog" }`), `close` (`terminalId`) as requests, and `detach`, `input` (`data`), `resize` (`cols`, `rows`) and `code-result` as one-way commands. A descriptor has `id`, `shell`, `cwd`, `cols`, `rows`, `createdAt` (ms) and `pid`.
+
+- Output and exit are events: `{ "type": "output", "terminalId", "data" }` and `{ "type": "exit", "terminalId", "exitCode", "signal", "cwd"? }`. Output is sent only while the terminal is attached. The `attach` response carries the recent output backlog, and the provider must write it before any later output event for that attachment; Core publishes the response to the browser before processing the next frame. A failing command (which has no reply) is reported as `{ "type": "error", "operation", "terminalId", "error": { "code", "message", "statusCode" } }`.
+- Terminal IDs need be unique only within the Node. Core never shows them to the browser unchanged for a Provider Node: it derives the browser identity from the qualified Node ID and the terminal ID, and sends only the Node's own ID back. Two Nodes of one or different Providers may therefore return the same ID.
+- Losing the channel is not a terminal exit. Core reports a transport error to attached browsers and keeps the terminal record. Core lists terminals only for Nodes whose channel is already live and never starts a channel just to list, so an idle Node is not contacted by the web interface's terminal list; creating or attaching a terminal, or opening Code, starts it. After the next generation connects, Core lists or gets the terminal again; if the provider returns it, it is usable, and `get` returning `null` removes the record. Because the channel is a child of Main, whether terminals survive it is the provider's choice. A provider whose terminals end with its process should say so (for example in `dataRetention`); one that keeps them should return them from `list` after reconnect.
+- A shell `code` helper that opens a file or folder in Code is optional: the provider sends `{ "type": "code-request", "terminalId", "requestId", "request": { "kind": "openFile"|"addFolder", "path", "startLine"?, "startColumn"? } }` and Core answers with a `code-result` command (`requestId`, `ok`, `message`/`error`). Without it the terminal still works.
+
+### Using a CLI Node as the target
+
+A provider need not implement the services itself. The CLI Node binary can serve exactly this channel on a pipe the caller owns: `foxwarm-node --stdio` (no other options). A provider's `connect` can therefore reduce to starting that command inside the target environment, for example `docker exec -i CONTAINER foxwarm-node --stdio` or `ssh HOST foxwarm-node --stdio`, and relaying bytes in both directions.
+
+- The process first writes one line `{"type":"node_stdio_ready","services":{"vscode-fs":1,"vscode-git":2,"vscode-pty":1}}` (`vscode-pty` only on supported platforms). The provider turns it into the `connect` confirmation above (`nodeId` from Core's request, `services` from the line). The provider declares the same services in `list`.
+- After that stdin accepts only `node_service_request` and `node_service_command` frames for the three services, and stdout carries only `node_service_response`, `node_service_error` and `node_service_event`. Any other frame (a model tool call, exec, an unknown type or service) ends the process with exit code 2 without running anything: this mode has no model-tool or exec surface. There is no pairing, token, credential file or outbound connection; whoever holds the pipe is the administrator's own channel.
+- Stdin EOF ends the process. Its terminals end with it (terminals do not survive the channel in this mode), so the provider should close the relayed pipe's stdin on EOF and make sure the remote process ends (the CLI does so itself on EOF; a relay such as `ssh` or `docker exec` must also propagate it). Frames use the same 72 MiB limit. Diagnostics go to stderr; stdout carries frames only.
+- The optional `code` shell helper works unchanged: the CLI emits the `code-request` terminal event and Core answers with `code-result`.
+
+### Limits
+
+Each frame in either direction is limited to 72 MiB (a 50 MiB file is about 67 MiB as base64 plus its envelope). An oversize or unterminated frame ends the channel. Core drains the provider's stderr continuously and discards it; the one-shot stderr limit does not apply to a channel, and diagnostics are never returned to callers. The eight active one-shot requests per provider do not count channel requests.
+
+### Lifecycle
+
+There is one channel per Node, started lazily and shared by all callers. The channel is a **transport generation**. The generation ends when the provider process exits, stdout closes, a frame is invalid, a write fails, discovery no longer reports the Node ready with services, or Main shuts down or restarts. Core detects disconnection by pipe EOF and process exit only; there is no heartbeat. To end a channel Core closes stdin and gives the process a short time to exit before terminating it, so a provider must exit when stdin reaches EOF and release its environment connection (for example the `ssh` or `docker exec` child). When a generation ends, outstanding requests fail with `NodeUnavailable` and their effects are not retried, and attached terminals receive a transport error rather than a process exit. The next use starts a new generation with a new `connect`; earlier requests are never replayed, and a stale endpoint is never moved to the new generation.
+
+Because the channel is a child of the Main server, it always closes when Main restarts. Whether state behind it survives (for example, running terminals) is the provider's choice. A provider that keeps terminals across channels should list them again after reconnect and describe that retention in `describe.description` or `dataRetention`, as exec retention is described.
+
 ## Bounds and failure handling
 
 - Request JSON: 4 MiB; list and process metadata stdout: 256 KiB.
 - Filesystem stdout: 8 MiB; description/lifecycle stdout: 512 KiB; lifecycle details: 64 KiB.
 - Parameter schemas: 16 KiB each; stderr: 64 KiB; Nodes per provider: 100.
 - Active requests per provider: 8; configured deadline: 1–300 seconds, default 90; poll deadline capped at 5 seconds.
+- Service channel: one per Node; `connect` confirmation line 64 KiB within the configured deadline; 72 MiB per frame; service requests 30 seconds.
 
 Malformed, multiple or oversized responses, identity mismatches, abnormal exits, cancellation and deadline failures terminate that RPC without fallback or automatic replay. The transport bounds graceful-first termination and direct-child exit confirmation; raw stderr and launcher paths are not returned. An `exec-start` transport failure may still have caused a remote effect.
 

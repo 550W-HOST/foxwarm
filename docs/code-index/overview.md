@@ -101,6 +101,7 @@ Optional remote and compatibility components:
 - **Model attempt provenance:** concrete model selection, retries, streaming completion, images, and journal records remain attributable to an attempt and its request scope.
 - **Tool boundary:** all tool paths resolve through the unified tool registry and authorization evaluation; local capabilities and optional remote Node capabilities are not interchangeable claims.
 - **Durable asynchronous state:** waits, timers, compaction, task service state, request journals, and relevant notifications are represented by persisted records or explicit lifecycle APIs where the current implementation supports them.
+- **Request-prefix stability:** consecutive model requests of a Session extend one byte-identical prefix; nothing generated per request is placed before, between or after persisted history. Governing goal: [D-request-prefix-stability](#d-request-prefix-stability).
 - **Compatibility is explicit:** TypeScript packages and old persisted readers remain mapped only where they still define a real boundary or migration input.
 
 ## .NET modules
@@ -145,6 +146,7 @@ Optional remote and compatibility components:
 | [Images and attachments](./threads/images-and-attachments.md) | Ingress, canonical blobs, provider forms, transport conversion, and delivery. |
 | [Tasks, timers, and waits](./threads/tasks-timers-and-waits.md) | Task service, timer scheduler, Session waits, and UI/API exposure. |
 | [Session sequence view](./threads/session-sequence-view.md) | `deliverySeq` delivery correlation, the on-demand sequence projection and the System Sessions Timeline surface. |
+| [Secret references and redaction](./threads/secret-references-and-redaction.md) | Stored secrets, Main-side resolution, masking points, failure rules and model-facing restrictions. |
 | [Remote Node compatibility](./threads/remote-node-compatibility.md) | Remaining TypeScript Node protocols and the current .NET integration boundary. |
 
 ## Current gaps and open questions
@@ -153,6 +155,15 @@ Optional remote and compatibility components:
 - **Qualification boundary:** .NET implements the shared runtime/control, typed-notice and communication producers through its existing exact owners. [The WebUI boundary](./threads/dotnet-webui-boundary.md#runtime-controls-notices-and-communications) maps the concrete consumer paths; a shared frontend build or merge alone does not establish complete feature parity.
 - **Intentional exclusions:** the platforms listed in [delivery scope](#d-dotnet-delivery-scope) are not remaining milestones. Ordinary external Nodes, remote exec/completion, file transfer/delivery, fixed Code/PTY services and exec-only Shell HTTP remain supported.
 - **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.
+
+## D-request-prefix-stability
+
+**Governing goal; directly and repeatedly required by the user.** Consecutive model requests of one Session share the longest possible byte-identical prefix, so provider prompt caches grow with the conversation. Instructions, tool declarations and already-sent history stay unchanged; each request only appends after them.
+
+- Content generated per request is not placed before, between or after persisted history rows. A trailing per-request block becomes the cache breakpoint: the stored entry includes it, and the next request, which has moved that block further on, cannot reuse the entry. Provider lookback from a new breakpoint is limited, so tool-heavy turns then fall back to a much older entry. [2026-11-10] With one asynchronous question open, the per-request open-question reminder held cache reads flat for several hours; they recovered as soon as the question closed.
+- State the model must see enters persisted history once, when it changes, rather than being re-sent with every request.
+- Every design that adds request-time content (reminders, status, environment or policy summaries, per-request instructions) is checked against this goal before approval. An exception needs an explicit user decision recorded at its owner.
+- Derived designs: [memory snapshots, leading instructions and shared declarations](./threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability), [Node-independent default tool declarations](./units/tools-registry.md#d-tools-node-independent-default-declarations), [persisted Task reminders](./units/src-session-task-context.md#d-tasks-reminder-history), [unbudgeted per-call hosted-search evidence](./threads/web-search-citations.md#d-hosted-search-evidence-prefix-stability), compaction requests, which keep the older history prefix and append their planning instruction, and BTW requests, which append after unchanged history. Prefix alignment permits reuse; it does not guarantee a provider cache hit.
 
 ## D-dotnet-delivery-scope
 

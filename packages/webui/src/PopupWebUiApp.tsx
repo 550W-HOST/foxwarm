@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import Chat from './components/Chat'
 import TerminalView from './components/TerminalView'
 import HistorySearchView from './components/HistorySearchView'
@@ -8,6 +8,8 @@ import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 import { useChatPreferences } from './chatPreferences'
 import { useTheme } from './theme/useTheme'
 import { makeVscodeWebUrl, type CodeCommitTarget } from './vscodeWeb'
+import { subscribeWindowFrame, windowFrameActive } from './windowFrame'
+import { FoxwarmMark } from './components/FoxwarmMark'
 
 const SystemView = lazy(() => import('./components/SystemView'))
 const LogsView = lazy(() => import('./components/LogsView'))
@@ -37,9 +39,12 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
     window.location.assign(makeFoxwarmPopupUrl(window.location.href, next).toString())
   }, [])
 
+  const framed = useSyncExternalStore(subscribeWindowFrame, windowFrameActive, () => false)
+  const title = 'title' in target && target.title ? target.title : target.kind === 'agents' || target.kind === 'nodes' ? 'System' : target.kind === 'tasks' ? 'Tasks' : target.kind === 'logs' ? 'Logs' : target.kind === 'search' ? 'History' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'
+
   useEffect(() => {
-    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' || target.kind === 'nodes' ? 'System' : target.kind === 'tasks' ? 'Tasks' : target.kind === 'logs' ? 'Logs' : target.kind === 'search' ? 'History' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
-  }, [target])
+    document.title = `${title} · Foxwarm`
+  }, [title])
 
   useEffect(() => {
     if (target.kind !== 'chat') return
@@ -135,6 +140,18 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
         />
       </Suspense>
     )
+  }
+
+  // Under a window frame (Desktop, PWA overlay) the window's title row is the popup's own:
+  // the title on the chrome, as tall as the window controls, and the content as one card.
+  if (framed) {
+    return <div data-foxwarm-popup-root={target.kind} data-foxwarm-popup-framed="" className="foxwarm-fixed-viewport-shell flex h-full min-h-0 flex-col overflow-hidden">
+      <header className="foxwarm-popup-title-row" data-frame-row="column" data-frame-drag>
+        <FoxwarmMark className="h-4 w-4 shrink-0" />
+        <span className="foxwarm-popup-title">{title}</span>
+      </header>
+      <div className="foxwarm-popup-card min-h-0 flex-1 overflow-hidden bg-fw-canvas">{content}</div>
+    </div>
   }
 
   return <div data-foxwarm-popup-root={target.kind} className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">{content}</div>

@@ -267,7 +267,7 @@ public sealed class MatrixSendContractsTests
             null!,
             null!,
             new(CreateHttp: () => http, Delay: delay),
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
 
     private static HttpResponseMessage Response(int status, JsonObject body) =>

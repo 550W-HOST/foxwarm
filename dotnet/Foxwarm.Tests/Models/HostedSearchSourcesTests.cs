@@ -144,21 +144,55 @@ public sealed class HostedSearchSourcesTests
         Assert.Empty(Evidence(HostedSearchSources.Project([Message(Search(url: url))])));
     }
 
+    private static JsonArray Sources(int count, Func<int, JsonObject> record) =>
+        new(Enumerable.Range(0, count).Select(index => (JsonNode)record(index)).ToArray());
+
+    // Evidence already sent with message `index` in a shorter history.
+    private static string?[] EvidenceByMessage(IReadOnlyList<JsonObject> messages) =>
+        messages
+            .Select(message =>
+                Evidence([message]) is { Length: > 0 } texts ? Assert.Single(texts) : null
+            )
+            .ToArray();
+
     [Fact]
-    public void Recent_calls_get_bounded_complete_json_without_a_cross_request_id_registry()
+    public void Each_call_projects_identically_regardless_of_later_calls()
     {
         var history = Enumerable
             .Range(0, 12)
-            .Select(index => Message(Search(url: $"https://example.com/{index}"), "r" + index))
+            .Select(index =>
+            {
+                var search = Search($"search{index}", $"https://example.com/{index}");
+                if (index % 3 == 2)
+                    search["action"]!["sources"] = Sources(
+                        70,
+                        source => new JsonObject
+                        {
+                            ["type"] = "url",
+                            ["url"] = $"https://example.com/{index}/{source}",
+                        }
+                    );
+                return Message(search, "r" + index);
+            })
             .ToArray();
-        var projected = HostedSearchSources.Project(history);
-        var evidence = Evidence(projected);
-        Assert.Equal(8, evidence.Length);
-        Assert.True(
-            evidence.Sum(Encoding.UTF8.GetByteCount) <= HostedSearchSources.MaxEvidenceBytes
+        var full = EvidenceByMessage(HostedSearchSources.Project(history));
+        // No request-wide call, source or byte budget: every call keeps its evidence.
+        Assert.All(full, Assert.NotNull);
+        Assert.Equal(
+            HostedSearchSources.MaxSourcesPerCall,
+            Payload(full[2]!)["calls"]![0]!["search_sources"]!.AsArray().Count
         );
-        Assert.Equal("r4", Payload(evidence[0])["calls"]![0]!["request_id"]!.GetValue<string>());
-        Assert.Equal("r11", Payload(evidence[^1])["calls"]![0]!["request_id"]!.GetValue<string>());
+        for (var length = 1; length < history.Length; length++)
+            Assert.Equal(
+                full[..length],
+                EvidenceByMessage(HostedSearchSources.Project(history[..length]))
+            );
+    }
+
+    [Fact]
+    public void Deduplication_keeps_the_first_occurrence_so_older_messages_never_change()
+    {
+        // Distinct request identities, or missing legacy identities, never deduplicate.
         Assert.Equal(
             2,
             Evidence(
@@ -171,60 +205,49 @@ public sealed class HostedSearchSourcesTests
                 HostedSearchSources.Project([Message(Search(), null), Message(Search(), null)])
             ).Length
         );
-        Assert.Single(
-            Evidence(HostedSearchSources.Project([Message(Search()), Message(Search())]))
+        // The same request's call repeated later stays on the earlier message only.
+        var older = Message(Search());
+        var alone = Assert.Single(Evidence(HostedSearchSources.Project([older])));
+        var projected = EvidenceByMessage(HostedSearchSources.Project([older, Message(Search())]));
+        Assert.Equal([alone, null], projected);
+        // A later call repeating an older URL leaves the older evidence unchanged.
+        projected = EvidenceByMessage(
+            HostedSearchSources.Project([older, Message(Search("again"), "later")])
         );
-        var large = Search();
-        large["action"]!["sources"] = new JsonArray(
-            Enumerable
-                .Range(0, 90)
-                .Select(index =>
-                    (JsonNode)
-                        new JsonObject
-                        {
-                            ["type"] = "url",
-                            ["url"] = "https://example.com/" + index + new string('x', 1700),
-                            ["title"] = new string('界', 300),
-                        }
-                )
-                .ToArray()
-        );
-        evidence = Evidence(HostedSearchSources.Project([Message(large)]));
-        var data = Payload(Assert.Single(evidence));
-        Assert.True(
-            evidence.Sum(Encoding.UTF8.GetByteCount) <= HostedSearchSources.MaxEvidenceBytes
-        );
-        Assert.InRange(data["calls"]![0]!["search_sources"]!.AsArray().Count, 1, 64);
-        Assert.Equal(
-            240,
-            data["calls"]![0]!["search_sources"]![0]!["title"]!.GetValue<string>().Length
-        );
+        Assert.Equal(alone, projected[0]);
+        Assert.Contains("https://example.com/source", projected[1]);
     }
 
     [Fact]
-    public void Source_budget_is_shared_across_recent_calls()
+    public void A_pathological_single_call_has_fixed_per_call_bounds()
     {
-        var newest = Search("newest");
-        newest["action"]!["sources"] = new JsonArray(
-            Enumerable
-                .Range(0, 70)
-                .Select(index =>
-                    (JsonNode)
-                        new JsonObject
-                        {
-                            ["type"] = "url",
-                            ["url"] = $"https://example.com/{index}",
-                        }
-                )
-                .ToArray()
+        var large = Search();
+        large["action"]!["sources"] = Sources(
+            90,
+            index => new JsonObject
+            {
+                ["type"] = "url",
+                ["url"] = "https://example.com/" + index + new string('x', 1700),
+                ["title"] = new string('界', 300),
+            }
         );
-        var evidence = Assert.Single(
-            Evidence(HostedSearchSources.Project([Message(Search("older")), Message(newest)]))
+        var evidence = Assert.Single(Evidence(HostedSearchSources.Project([Message(large)])));
+        var call = Payload(evidence)["calls"]![0]!;
+        Assert.True(
+            Encoding.UTF8.GetByteCount(call.ToJsonString())
+                <= HostedSearchSources.MaxCallEvidenceBytes
         );
-        var calls = Payload(evidence)["calls"]!.AsArray();
-        Assert.Single(calls);
-        Assert.Equal("newest", calls[0]!["call_id"]!.GetValue<string>());
-        Assert.Equal(64, calls[0]!["search_sources"]!.AsArray().Count);
+        Assert.InRange(
+            call["search_sources"]!.AsArray().Count,
+            1,
+            HostedSearchSources.MaxSourcesPerCall - 1
+        );
+        Assert.Equal(240, call["search_sources"]![0]!["title"]!.GetValue<string>().Length);
+        // The bound is the call's own: a small earlier call is unaffected.
+        var small = Message(Search("small"), "small");
+        var projected = EvidenceByMessage(HostedSearchSources.Project([small, Message(large)]));
+        Assert.Equal(Assert.Single(Evidence(HostedSearchSources.Project([small]))), projected[0]);
+        Assert.Equal(evidence, projected[1]);
     }
 
     [Fact]

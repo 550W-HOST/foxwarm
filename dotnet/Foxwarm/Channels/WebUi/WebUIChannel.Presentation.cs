@@ -10,7 +10,10 @@ internal sealed partial class WebUIChannel
 
     private void RegisterPresentationRoutes(WebApplication app)
     {
-        app.MapGet("/api/webui/settings", () => Results.Ok(new { settings = ReadSettings() }));
+        app.MapGet(
+            "/api/webui/settings",
+            () => Results.Ok(new JsonObject { ["settings"] = JsonData.WebNode(ReadSettings()) })
+        );
         app.MapPost(
             "/api/webui/settings",
             async (HttpRequest request) =>
@@ -55,17 +58,22 @@ internal sealed partial class WebUIChannel
                             throw new InvalidDataException($"{key} is too long.");
                         settings[key] = normalized;
                     }
-                    var file = Path.Combine(sessions.DataRoot, "state", "webui.json");
-                    Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                    var temp = file + ".tmp-" + Guid.NewGuid().ToString("N");
-                    await File.WriteAllTextAsync(temp, settings.ToJsonString());
-                    File.Move(temp, file, overwrite: true);
-                    return Results.Ok(new { success = true, settings });
+                    new AtomicJsonFile(
+                        sessions.DataRoot,
+                        Path.Combine("state", "webui.json")
+                    ).WritePayload(settings);
+                    return Results.Ok(
+                        new JsonObject
+                        {
+                            ["success"] = true,
+                            ["settings"] = JsonData.WebNode(settings),
+                        }
+                    );
                 }
                 catch (Exception error)
                     when (error is InvalidDataException or System.Text.Json.JsonException)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
                 finally
                 {
@@ -79,7 +87,7 @@ internal sealed partial class WebUIChannel
             {
                 var canonical = CatalogRoute(request);
                 if (canonical is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 try
                 {
                     var body =
@@ -95,18 +103,18 @@ internal sealed partial class WebUIChannel
                             : null;
                     await runtime.UpdateDisplayNameAsync(canonical, name);
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            success = true,
-                            sessionId = canonical,
-                            displayName = name,
+                            ["success"] = true,
+                            ["sessionId"] = canonical,
+                            ["displayName"] = name,
                         }
                     );
                 }
                 catch (Exception error)
                     when (error is InvalidDataException or System.Text.Json.JsonException)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );

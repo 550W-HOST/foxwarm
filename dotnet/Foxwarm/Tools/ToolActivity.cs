@@ -7,8 +7,21 @@ namespace Foxwarm.Tools;
 // Display-only projection. Original arguments remain the execution and search authority.
 internal static class ToolActivity
 {
+    // The name channel progress shows for a call, like the WebUI timeline tag: a ctl command's
+    // path (`memory edit`), or for `tool call` and call_tool the tool it names; help, search
+    // and unparsable ctl calls stay `ctl`.
+    internal static string ProgressName(string? name, JsonNode? args) =>
+        string.IsNullOrEmpty(name) ? "tool"
+        : name == "ctl" ? args is JsonObject command ? CtlParser.DisplayName(command) : name
+        : args is JsonObject values ? Target(name, values).Name
+        : name;
+
     internal static (string Name, JsonObject Args) Target(string name, JsonObject args)
     {
+        if (name == "ctl")
+            return CtlParser.Describe(args) is { } described
+                ? (described.Name, described.Args)
+                : (name, args);
         if (name != "call_tool")
             return (name, args);
         var id = SessionWait.Text(args["toolId"]);
@@ -36,8 +49,61 @@ internal static class ToolActivity
         return (target, inner ?? new JsonObject());
     }
 
+    // The live activity summary of a call: the explicit summary of Node `exec` or builtin
+    // `run_script`, also when a ctl or call_tool call routes to one. MCP tools of the same name,
+    // calls without a summary and other tools have none.
+    internal static string? CaptionSummary(string? name, JsonObject args)
+    {
+        string? source;
+        string? target;
+        JsonObject? targetArgs;
+        if (name == "exec")
+        {
+            (source, target, targetArgs) = ("node", name, args);
+        }
+        else if (name == "run_script")
+        {
+            (source, target, targetArgs) = ("builtin", name, args);
+        }
+        else if (name is "ctl" or "call_tool")
+        {
+            var described = name == "ctl" ? CtlParser.Describe(args) : CtlParser.DescribeCall(args);
+            if (described is null)
+                return null;
+            (source, target, targetArgs) = (described.Source, described.Name, described.Args);
+        }
+        else
+        {
+            return null;
+        }
+        if (!(source == "node" && target == "exec" || source == "builtin" && target == "run_script"))
+            return null;
+        var summary = SessionWait.Text(targetArgs["summary"]);
+        return string.IsNullOrWhiteSpace(summary) ? null : SingleLine(summary);
+    }
+
     internal static string SingleLine(string text, int limit = 200) =>
         ContextPreviewRenderer.Clip(Regex.Replace(text, @"\s+", " ").Trim(), limit);
+
+    // The name and summary an activity preview shows for a call, named like the WebUI timeline
+    // tag (ProgressName). The fixed arguments a ctl command path already states, such as
+    // `action: list` of `session list`, are left out of the summary.
+    internal static (string Name, string Summary) Preview(string name, JsonObject args)
+    {
+        var (target, targetArgs) = Target(name, args);
+        var label = ProgressName(name, args);
+        if (
+            name == "ctl"
+            && label != target
+            && CtlParser.CommandFor(target, targetArgs)?.Fixed is { Count: > 0 } fixedArgs
+        )
+        {
+            targetArgs = (JsonObject)targetArgs.DeepClone();
+            foreach (var key in fixedArgs.Select(pair => pair.Key))
+                targetArgs.Remove(key);
+        }
+        return (label, Summary(target, targetArgs));
+    }
 
     internal static string Summary(string name, JsonObject args)
     {

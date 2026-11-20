@@ -7,8 +7,9 @@ const github = 'https://github.com/550W-HOST/foxwarm';
 export default defineConfig({
   site: 'https://foxwarm.net',
   output: 'static',
+  redirects: { '/android': `${github}/releases/latest/download/foxwarm-android-node.apk` },
   integrations: [
-    sitemap({ filter: (page) => page !== 'https://foxwarm.net/404/' }),
+    sitemap({ filter: (page) => page !== 'https://foxwarm.net/404/' && !page.startsWith('https://foxwarm.net/demo/') }),
     starlight({
       title: 'Foxwarm',
       description: 'Self-hosted AI agents with persistent sessions, tools, and optional nodes and channels.',
@@ -47,6 +48,7 @@ export default defineConfig({
           { label: 'Channels and group chats', translations: { 'zh-CN': '渠道与群聊' }, slug: 'docs/channels' },
           { label: 'Tools, Skills, and MCP', translations: { 'zh-CN': '工具、Skill 和 MCP' }, slug: 'docs/tools-skills-mcp' },
           { label: 'Timers', translations: { 'zh-CN': '定时任务' }, slug: 'docs/timers' },
+          { label: 'Webhooks', translations: { 'zh-CN': 'Webhook' }, slug: 'docs/webhooks' },
           { label: 'Using the WebUI', translations: { 'zh-CN': '使用 WebUI' }, slug: 'docs/webui' }
         ] },
         { label: 'Control and security', translations: { 'zh-CN': '权限与安全' }, items: [

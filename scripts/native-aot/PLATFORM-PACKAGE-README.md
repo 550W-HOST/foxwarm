@@ -2,16 +2,17 @@
 
 Extract the package for your operating system into a stable owned directory.
 `Foxwarm.CliNode.exe` (Windows) or `Foxwarm.CliNode` (macOS) includes the reachable
-.NET application code. No .NET runtime or Node.js is needed. This package is the
+.NET application code. No .NET runtime is needed. This package is the
 CLI Node, not Main or a service installer.
 
 Windows uses the system Windows PowerShell and ConPTY. macOS uses Bash, ordinary
 shell utilities and the adjacent `libfoxwarm-pty.dylib` and `foxwarm-pty-helper`;
 keep these files together. TLS uses the operating system's trusted certificates.
-Writable owned state and temporary directories are required. Git and Chromium
-are optional external installations, not bundled dependencies. Set
-`PUPPETEER_EXECUTABLE_PATH` or `CHROME_PATH` for browser tools; the CLI never
-downloads a browser.
+Writable owned state and temporary directories are required. Git is an optional
+external installation. Browser tools need an installed Node.js and Chromium or
+Chrome (set `PUPPETEER_EXECUTABLE_PATH` to choose one); the package carries only
+the `browser-host.bundle.cjs` they run, and the CLI never downloads a browser.
+Without them the browser tools are simply not offered.
 
 Run from the desired working directory:
 

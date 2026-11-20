@@ -29,30 +29,33 @@ internal sealed partial class SessionManager
         WorkspaceTools files,
         JsonObject args,
         CancellationToken token,
-        string? selectedNode = null
+        string? selectedNode = null,
+        string? selectedCwd = null
     )
     {
         ToolRegistry.Keys(
             args,
-            ["channelTargetId", "sessionId", "filePath", "node", "caption", "text"]
+            ["channelTargetId", "sessionId", "filePath", "node", "caption"]
         );
         var node = ToolRegistry.TargetNode(
             ToolRegistry.Text(args, "node"),
             selectedNode ?? CurrentNode(owner)
         );
-        RequireFileNodeBoundary(owner, node);
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
             throw new InvalidDataException("send_file requires filePath.");
+        var currentNode = selectedNode ?? CurrentNode(owner);
+        var sessionCwd =
+            node != currentNode ? null
+            : selectedNode is null ? ExecutionPlacement(owner).Cwd
+            : selectedCwd;
         var requested = SessionGoal.Trim(ToolRegistry.Text(args, "sessionId") ?? "");
-        var direct = SessionGoal.Trim(ToolRegistry.Text(args, "channelTargetId") ?? "");
+        var direct = Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(args);
         if (requested.Length > 0 && direct.Length > 0)
             throw new InvalidDataException(
                 "At most one of sessionId or channelTargetId may be specified."
             );
         var caption = SessionGoal.Trim(ToolRegistry.Text(args, "caption") ?? "");
-        if (caption.Length == 0)
-            caption = SessionGoal.Trim(ToolRegistry.Text(args, "text") ?? "");
         token.ThrowIfCancellationRequested();
         using var admission = BeginOwnerMutation(owner);
         var bindings = deletionChannels.ReadForDelivery()["channels"]!.AsObject();
@@ -65,7 +68,6 @@ internal sealed partial class SessionManager
                     .Where(pair => SessionCatalog.Text(pair.Value?["sessionId"]) == target)
                     .Select(pair => pair.Key)
                     .ToArray();
-        CheckFileDestinations(owner, target, direct, bindings);
         if (destinations.Length == 0)
             throw new InvalidDataException($"Session `{target}` has no attached channels.");
         string path;
@@ -80,15 +82,14 @@ internal sealed partial class SessionManager
         }
         else
         {
-            var file = await ReadNodeFileAsync(owner, node, raw, files, token);
-            await WaitForIdentityMutationAsync(owner.Id, token);
-            await AuthorizeToolAsync(
+            await using var file = await OpenNodeReadAsync(
                 owner,
-                new("send_file", "builtin", "send_file", args, ExecutionNode: node),
-                IdentityWorkspace(owner),
-                token
+                node,
+                raw,
+                files,
+                token,
+                sessionCwd
             );
-            CheckFileDestinations(owner, target, direct, bindings);
             mimeType = file.MimeType;
             name = Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(file.Name);
             if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
@@ -101,7 +102,37 @@ internal sealed partial class SessionManager
             );
             Directory.CreateDirectory(directory);
             path = Path.Combine(directory, name);
-            await File.WriteAllBytesAsync(path, file.Bytes, token);
+            try
+            {
+                await using (
+                    var staging = new FileStream(
+                        path,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        65536,
+                        FileOptions.Asynchronous
+                    )
+                )
+                    await Foxwarm.Nodes.TransferStream.CopyAsync(
+                        file.Stream,
+                        staging,
+                        file.Length,
+                        token
+                    );
+                await WaitForIdentityMutationAsync(owner.Id, token);
+                await AuthorizeToolAsync(
+                    owner,
+                    new("send_file", "builtin", "send_file", args, ExecutionNode: node),
+                    IdentityWorkspace(owner),
+                    token
+                );
+            }
+            catch
+            {
+                Directory.Delete(directory, recursive: true);
+                throw;
+            }
         }
         var artifact = FileDeliveryArtifact.Create(
             target is null ? "channel" : "session",
@@ -113,8 +144,8 @@ internal sealed partial class SessionManager
             mimeType
         );
         var delivered = new List<string>();
-        var skipped = new List<string>();
-        var failed = new List<string>();
+        var skipped = new JsonArray();
+        var failed = new JsonArray();
         foreach (var destination in destinations)
         {
             token.ThrowIfCancellationRequested();
@@ -128,7 +159,7 @@ internal sealed partial class SessionManager
                 && SessionCatalog.Text(bindings[destination]?["mode"]) == "send-only"
             )
             {
-                skipped.Add($"`{destination}` (send-only)");
+                skipped.Add(DeliveryOutcome(destination, "send-only"));
                 continue;
             }
             try
@@ -163,7 +194,7 @@ internal sealed partial class SessionManager
                             throw new InvalidOperationException(
                                 "Channel does not support file delivery."
                             );
-                        skipped.Add($"`{destination}` (no file support)");
+                        skipped.Add(DeliveryOutcome(destination, "no file support"));
                         continue;
                     }
                     var mime = SessionWait.Text(artifact["mimeType"]);
@@ -186,53 +217,51 @@ internal sealed partial class SessionManager
             {
                 if (direct.Length > 0)
                     throw;
-                failed.Add($"`{destination}` ({error.Message})");
+                failed.Add(DeliveryOutcome(destination, error.Message));
             }
         }
-        var lines = new List<string>
-        {
-            $"File `{name}` is ready for session `{target ?? direct}`.",
-            "Delivered: " + delivered.Count,
-        };
-        if (delivered.Count > 0)
-            lines.Add("Channels: " + string.Join(", ", delivered.Select(id => "`" + id + "`")));
-        if (skipped.Count > 0)
-            lines.Add("Skipped: " + string.Join(", ", skipped));
-        if (failed.Count > 0)
-            lines.Add("Failed: " + string.Join(", ", failed));
-        var output = string.Join("\n", lines);
         if (delivered.Count == 0)
-            throw new InvalidOperationException(output);
-        return new JsonObject
         {
-            ["output"] = output,
+            var lines = new List<string>
+            {
+                $"File `{name}` is ready for session `{target ?? direct}`.",
+                "Delivered: 0",
+            };
+            if (skipped.Count > 0)
+                lines.Add("Skipped: " + DeliveryOutcomeText(skipped));
+            if (failed.Count > 0)
+                lines.Add("Failed: " + DeliveryOutcomeText(failed));
+            throw new InvalidOperationException(string.Join("\n", lines));
+        }
+        var result = new JsonObject
+        {
             ["fullPath"] = path,
             ["fileDelivery"] = artifact,
+            ["delivered"] = new JsonArray(
+                delivered.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+            ),
         };
+        if (skipped.Count > 0)
+            result["skipped"] = skipped;
+        if (failed.Count > 0)
+            result["failed"] = failed;
+        return result;
     }
+
+    private static JsonObject DeliveryOutcome(string channelTargetId, string reason) =>
+        new() { ["channelTargetId"] = channelTargetId, ["reason"] = reason };
+
+    private static string DeliveryOutcomeText(JsonArray outcomes) =>
+        string.Join(
+            ", ",
+            outcomes
+                .OfType<JsonObject>()
+                .Select(item => $"`{SessionWait.Text(item["channelTargetId"])}` ({SessionWait.Text(item["reason"])})")
+        );
 
     private string FileSession(string requested) =>
         SessionCatalog.Text(Catalog.Resolve(requested)["sessionId"])
         ?? throw new InvalidDataException("Session is not available: " + requested);
-
-    private void CheckFileDestinations(
-        SessionOwner owner,
-        string? target,
-        string direct,
-        JsonObject bindings
-    )
-    {
-        if (!Isolation(owner.Agent).Isolated)
-            return;
-        if (target is not null && target != owner.Id)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Session can only send files via its own current Session attachments."
-            );
-        if (direct.Length > 0 && SessionCatalog.Text(bindings[direct]?["sessionId"]) != owner.Id)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Session can only send files to its own attached destination."
-            );
-    }
 
     internal Func<string, string, Task>? BeforeFileStage { get; set; }
 
@@ -247,15 +276,17 @@ internal sealed partial class SessionManager
         WorkspaceTools files,
         JsonObject args,
         CancellationToken token,
-        string? selectedNode = null
+        string? selectedNode = null,
+        string? selectedCwd = null
     )
     {
         ToolRegistry.Keys(args, ["id", "filePath", "overwrite", "node"]);
-        var node = ToolRegistry.TargetNode(
-            ToolRegistry.Text(args, "node"),
-            selectedNode ?? CurrentNode(owner)
-        );
-        RequireFileNodeBoundary(owner, node);
+        var currentNode = selectedNode ?? CurrentNode(owner);
+        var node = ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), currentNode);
+        var sessionCwd =
+            node != currentNode ? null
+            : selectedNode is null ? ExecutionPlacement(owner).Cwd
+            : selectedCwd;
         var id = ToolRegistry.Text(args, "id");
         var raw = ToolRegistry.Text(args, "filePath");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(raw))
@@ -300,7 +331,16 @@ internal sealed partial class SessionManager
             if (identity == owner.Id)
                 break;
         }
-        var path = await WriteNodeFileAsync(owner, node, raw, bytes, overwrite, files, token);
+        var path = await WriteNodeFileAsync(
+            owner,
+            node,
+            raw,
+            bytes,
+            overwrite,
+            files,
+            token,
+            sessionCwd
+        );
         try
         {
             await FileStageAsync(owner, "after-write");
@@ -313,8 +353,7 @@ internal sealed partial class SessionManager
                         or TimeoutException
             )
         {
-            var partial = UnsupportedTurnToolExecutor.ToolError(
-                "image_export_partial",
+            var partial = ToolFailure.Result(
                 "Image was written; a later step failed. The file was not removed or retried. "
                     + error.Message
             );
@@ -324,9 +363,9 @@ internal sealed partial class SessionManager
         }
         return new JsonObject
         {
-            ["output"] =
-                $"Image `{id}` written to `{raw}` on node `{node}`.\nYou can make it available with send_file.",
             ["fullPath"] = path,
+            ["note"] =
+                $"Image `{id}` written on node `{node}`. You can deliver it with `{CtlCommandText.For("send_file", new JsonObject { ["filePath"] = raw, ["node"] = node })}`.",
         };
     }
 
@@ -499,6 +538,25 @@ internal sealed partial class SessionManager
             source.Dispose();
             throw;
         }
+    }
+
+    // Whether a stored image blob is referenced in the Session's own history (live context or
+    // archive), as image tools find a Session's images.
+    internal static bool HistoryReferencesImage(SessionOwner owner, string blobId)
+    {
+        static bool Any(IEnumerable<JsonObject> messages, string blob) =>
+            messages.Any(message =>
+                (message["parts"] as JsonArray ?? [])
+                    .OfType<JsonObject>()
+                    .Any(part => SessionWait.Text(part["inlineDataRef"]?["blobId"]) == blob)
+            );
+        return Any(owner.History(), blobId)
+            || Any(
+                owner
+                    .Archive.ReadEffectiveMessagesRange(1, 9007199254740991L)
+                    .Select(row => row.Message),
+                blobId
+            );
     }
 
     private static JsonObject? FindOwnedImage(IEnumerable<JsonObject> messages, string id)

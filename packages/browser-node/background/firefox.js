@@ -2,12 +2,7 @@
 import { readPage, elementAction, pageCondition } from './pageFunctions.js';
 import { buildBrowserScreenshotResult } from './toolResults.js';
 const pages = new Map();
-export const supportsEditingKeys = false;
-export const descriptionOverrides = {
-  click: 'Activate an element in a shared Firefox tab using a snapshot reference, a unique CSS selector, or viewport coordinates from a screenshot. Uses DOM activation and synthetic events, not trusted native mouse input.',
-  fill: "Replace text in a shared Firefox tab's text, search, email, URL, telephone, password, or number input, textarea, or contenteditable element. Use a snapshot reference or a unique CSS selector. Updates the DOM and dispatches synthetic input events.",
-  execute_js: "Evaluate JavaScript in a shared Firefox tab's page context and return a bounded result. Promises are awaited, and the tab's Ask or Auto sharing mode applies. Requires the extension's optional user-script permission.",
-};
+export const profile = { variant: 'firefox', windowed: true, keys: false, fullPage: false };
 export function setDetachHandler() {} // No debugger attachment to lose in Firefox.
 export async function detach(tabId) { pages.delete(tabId); }
 export async function detachAll() { pages.clear(); }
@@ -78,7 +73,7 @@ function coordinateClick(x, y) {
   }));
   return { clicked: true };
 }
-async function navigate(tabId, expected, url, signal, beginNavigation) {
+async function navigate(tabId, expected, args, signal, beginNavigation) {
   await assertPage(tabId, expected, signal);
   let complete, fail;
   const committed = new Promise((resolve, reject) => { complete = resolve; fail = reject; });
@@ -86,12 +81,23 @@ async function navigate(tabId, expected, url, signal, beginNavigation) {
     if (event.tabId === tabId && event.frameId === 0) complete();
   };
   const abort = () => fail(signal.reason || new Error('Browser call canceled.'));
-  const events = [chrome.webNavigation.onCommitted, chrome.webNavigation.onReferenceFragmentUpdated];
+  const events = [
+    chrome.webNavigation.onCommitted,
+    chrome.webNavigation.onReferenceFragmentUpdated,
+    chrome.webNavigation.onHistoryStateUpdated,
+  ];
   for (const event of events) event.addListener(observed);
   signal.addEventListener('abort', abort, { once: true });
   try {
     beginNavigation();
-    await abortable(chrome.tabs.update(tabId, { url }), signal);
+    if (args.url) await abortable(chrome.tabs.update(tabId, { url: args.url }), signal);
+    else if (args.history === 'reload') await abortable(chrome.tabs.reload(tabId), signal);
+    else {
+      const move = args.history === 'back' ? chrome.tabs.goBack : chrome.tabs.goForward;
+      await abortable(move(tabId), signal).catch(() => {
+        throw new Error(`There is no ${args.history} entry in this tab's history.`);
+      });
+    }
     await committed;
     return { navigated: true };
   } finally {
@@ -102,10 +108,11 @@ async function navigate(tabId, expected, url, signal, beginNavigation) {
   }
 }
 export async function action(tabId, expected, tool, args, signal, beginNavigation = () => {}) {
-  if (tool === 'press_key') throw new Error('Editing-key input is not supported by Firefox Browser Node.');
-  if (tool === 'execute_js') {
+  if (tool === 'browser_type' || tool === 'browser_press')
+    throw new Error('Key input is not supported by Firefox Browser Node.');
+  if (tool === 'browser_evaluate') {
     if (!(await chrome.permissions.contains({ permissions: ['userScripts'] })))
-      throw new Error('Allow page JavaScript in the Browser Node extension to enable execute_js.');
+      throw new Error('Allow page JavaScript in the Browser Node extension to enable browser_evaluate.');
     await assertPage(tabId, expected, signal);
     // The browser compiles this source directly in MAIN; no eval/Function or CSP change.
     const results = await abortable(chrome.userScripts.execute({
@@ -124,8 +131,8 @@ export async function action(tabId, expected, tool, args, signal, beginNavigatio
         : { result: value, truncated: false };
     } catch { return { result: '[Unserializable result]', truncated: false }; }
   }
-  if (tool === 'navigate') return navigate(tabId, expected, args.url, signal, beginNavigation);
-  if (tool === 'click') {
+  if (tool === 'browser_navigate') return navigate(tabId, expected, args, signal, beginNavigation);
+  if (tool === 'browser_click') {
     if (!args.ref && !args.selector && args.pageId !== expected.pageId)
       throw new Error('Screenshot page identity is stale.');
     await assertPage(tabId, expected, signal);
@@ -134,9 +141,9 @@ export async function action(tabId, expected, tool, args, signal, beginNavigatio
       ? invoke(tabId, expected, elementAction, [args, 'click'], signal)
       : invoke(tabId, expected, coordinateClick, [args.x, args.y], signal);
   }
-  if (tool === 'fill') return invoke(tabId, expected, elementAction, [args, 'replace'], signal);
-  if (tool === 'select_option' || tool === 'scroll')
-    return invoke(tabId, expected, elementAction, [args, tool === 'scroll' ? 'scroll' : 'select'], signal);
-  if (tool === 'wait_for') return invoke(tabId, expected, pageCondition, [args], signal);
+  if (tool === 'browser_fill') return invoke(tabId, expected, elementAction, [args, 'replace'], signal);
+  if (tool === 'browser_select' || tool === 'browser_scroll')
+    return invoke(tabId, expected, elementAction, [args, tool === 'browser_scroll' ? 'scroll' : 'select'], signal);
+  if (tool === 'browser_wait') return invoke(tabId, expected, pageCondition, [args], signal);
   throw new Error('Unknown page operation.');
 }

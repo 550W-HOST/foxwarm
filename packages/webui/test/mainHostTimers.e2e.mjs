@@ -6,11 +6,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const options = { env: {} }, fixture = await createHostFixture('timers', options), requests = [], failures = [], rounds = new Map()
 const home = join(fixture.root, 'home'); await mkdir(home); options.env.HOME = home; options.cwd = fixture.root
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')), store = async () => JSON.parse(await readFile(join(fixture.data, 'state/timers.json'), 'utf8')).timers
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) }), text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
+const call = functionCall, text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
 const timerCall = (id, name, args) => call(id, 'call_tool', { toolId: 'builtin:' + name, args })
 async function timerId(message, body) { const row = (await store()).find(row => row.message === message); assert(row, message); assert(JSON.stringify(body.input).includes(row.id), 'The model receives the real timer ID from the earlier tool result'); return row.id }
 async function plan(body, task, n) {

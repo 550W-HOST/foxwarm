@@ -17,7 +17,8 @@ public sealed partial class SessionCreationParityTests
         await using var f = await ExternalChannelFixture.CreateAsync();
         RegisterAgentTools(f);
         f.Manager.Nodes.Registry.Create("prompt-bound");
-        await f.Manager.CreateAgentAsync("restricted", false, isolatedNode: "prompt-bound");
+        await f.Manager.CreateAgentAsync("restricted", false);
+        await LegacyIsolationFixture.RestrictAsync(f.Manager, "restricted", "prompt-bound");
         var directory = f.Manager.AgentDirectory("restricted");
         var outside = Path.Combine(f.Data, "outside.md");
         await File.WriteAllTextAsync(outside, "outside selected prompt");
@@ -37,16 +38,17 @@ public sealed partial class SessionCreationParityTests
             };
             return unified
                 ? await f.ToolAsync(
-                    "call_tool",
-                    new JsonObject { ["toolId"] = "builtin:create_session", ["args"] = args },
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:create_session", ["args"] = args }),
                     creator
                 )
                 : await f.ToolAsync("create_session", args, creator);
         }
-        // A full-access creator may select outside files for an isolated, remotely bound target.
+        // A full-access creator may select outside files for a restricted target; its explicit
+        // Node choice wins over the target's default Node.
         Successful(await Create("outside-allowed", outside));
         var admitted = await f.Manager.RequiredAsync("restricted/outside-allowed");
-        Assert.Equal("prompt-bound", f.Manager.CurrentNode(admitted));
+        Assert.Equal("master", f.Manager.CurrentNode(admitted));
         Assert.Contains(
             "outside selected prompt",
             admitted.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]!.ToString()
@@ -85,7 +87,7 @@ public sealed partial class SessionCreationParityTests
             var denied = await Create("denied", path, creator);
             Assert.Contains(
                 "Tool authorization rule denies node capability `read`",
-                denied!["error"]!["message"]!.GetValue<string>()
+                denied!.FailureMessage()!
             );
             Assert.Equal(
                 initial,
@@ -96,9 +98,12 @@ public sealed partial class SessionCreationParityTests
                 File.Exists(Path.Combine(f.Data, "state", "sessions", "restricted", "denied.json"))
             );
         }
-        // Selection does not bypass the independent structural prohibition on isolated creators.
-        var isolatedDenied = await Create("isolated-denied", "selected.md", admitted);
-        Assert.Equal("tool_authorization_denied", isolatedDenied!["error"]!["type"]!.ToString());
+        // A restricted creator's own rules decide its selected files.
+        var isolatedDenied = await Create("isolated-denied", outside, admitted);
+        Assert.Contains(
+            "Tool authorization rule denies node capability `read`",
+            isolatedDenied!.FailureMessage()!
+        );
         Assert.Null(f.Manager.Catalog.Get("restricted/isolated-denied"));
 
         // Admission is not a target's ongoing read permission: ordinary refresh keeps the selection.
@@ -122,7 +127,8 @@ public sealed partial class SessionCreationParityTests
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
         f.Manager.Nodes.Registry.Create("prompt-bound");
-        await f.Manager.CreateAgentAsync("restricted", false, isolatedNode: "prompt-bound");
+        await f.Manager.CreateAgentAsync("restricted", false);
+        await LegacyIsolationFixture.RestrictAsync(f.Manager, "restricted", "prompt-bound");
         var attached = await f.Manager.CreateNamedAsync("restricted", "main", null, null);
         var outside = Path.Combine(f.Data, "outside.md");
         await File.WriteAllTextAsync(outside, "command outside prompt");
@@ -145,7 +151,7 @@ public sealed partial class SessionCreationParityTests
             new([
                 new JsonObject
                 {
-                    ["text"] = $"/session create restricted allowed --system-prompt-file {outside}",
+                    ["text"] = $"/session create restricted allowed --system-prompt-files {outside}",
                 },
             ])
         );
@@ -168,7 +174,7 @@ public sealed partial class SessionCreationParityTests
             new([
                 new JsonObject
                 {
-                    ["text"] = "/session create restricted missing --system-prompt-file missing.md",
+                    ["text"] = "/session create restricted missing --system-prompt-files missing.md",
                 },
             ])
         );

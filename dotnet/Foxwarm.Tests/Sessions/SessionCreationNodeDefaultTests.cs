@@ -68,20 +68,6 @@ public sealed class SessionCreationNodeDefaultTests
             "master",
             manager.CurrentNode(await manager.CreateNamedAsync("main", "excluded", null, null))
         );
-        manager.Nodes.Registry.Create("bound");
-        await manager.CreateAgentAsync("isolated", false, isolatedNode: "bound");
-        Assert.Equal(
-            "bound",
-            manager.CurrentNode(
-                await manager.CreateNamedAsync(
-                    "isolated",
-                    "selected",
-                    null,
-                    null,
-                    initialNode: "master"
-                )
-            )
-        );
         await manager.MoveIdentityAsync(main, new JsonObject { ["newSessionId"] = "renamed-main" });
         Assert.Equal("alias", manager.Catalog.Resolve("named/main")["kind"]!.GetValue<string>());
         Assert.Equal(

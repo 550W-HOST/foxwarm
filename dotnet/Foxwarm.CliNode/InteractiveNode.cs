@@ -393,7 +393,7 @@ internal sealed class InteractiveNode : IDisposable
                 lines.Add(
                     pending.Call.Tool
                         + " "
-                        + ConsoleNode.Text(pending.Call.Args?.ToJsonString() ?? "null", 260)
+                        + ConsoleNode.Text(pending.Call.Args?.ToJsonText() ?? "null", 260)
                 );
                 lines.Add("Y/Enter approve, N/Esc reject, A toggle future auto-approval");
             }

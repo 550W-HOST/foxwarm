@@ -13,7 +13,7 @@ internal static class DeferredQueueInput
             if (
                 item.Type != QueueItemType.CompactCommit
                 && (item.Message is null || SessionWait.Text(item.Message["role"]) == "user")
-                && item.Message?["modelVisible"]?.ToJsonString() != "false"
+                && item.Message?["modelVisible"]?.ToJsonText() != "false"
             )
                 item.QueuedInput = true;
     }
@@ -23,7 +23,7 @@ internal static class DeferredQueueInput
         if (
             !item.QueuedInput
             || SessionWait.Text(message["role"]) != "user"
-            || message["modelVisible"]?.ToJsonString() == "false"
+            || message["modelVisible"]?.ToJsonText() == "false"
             || message["parts"] is not JsonArray parts
         )
             return message;

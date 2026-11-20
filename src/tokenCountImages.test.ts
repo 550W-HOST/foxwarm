@@ -35,7 +35,7 @@ test('image inline data and image tool payloads do not inflate token estimates',
         {
           functionResponse: {
             tool_use_id: 'tool1',
-            name: 'browse_get',
+            name: 'browser_screenshot',
             response: {
               output: 'screenshot captured',
               inlineData: { mimeType: 'image/png', data: bigImage },

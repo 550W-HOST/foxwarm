@@ -18,11 +18,18 @@ internal sealed partial class LocalExecManager
         string command,
         string? cwd,
         ProviderExecBackend backend,
+        IReadOnlyDictionary<string, string>? environment,
         Action beforeLaunch,
         CancellationToken hardCancellation
     )
     {
-        var receipt = await backend.StartAsync(command, cwd, beforeLaunch, hardCancellation);
+        var receipt = await backend.StartAsync(
+            command,
+            cwd,
+            environment,
+            beforeLaunch,
+            hardCancellation
+        );
         return new ExecRecord(
             session,
             id,
@@ -69,6 +76,30 @@ internal sealed partial class LocalExecManager
             // An unavailable observation is neither an exit nor permission to replay the command.
             return null;
         }
+    }
+
+    // Provider log reads for a completion's output tail are bounded so a slow target cannot
+    // hold back delivery; an unavailable read is reported as unavailable output.
+    private static readonly TimeSpan CompletionOutputBudget = TimeSpan.FromSeconds(5);
+
+    private async Task<string> CompletionMessageAsync(ExecRecord record, JsonObject status)
+    {
+        if (record.ProviderId is null)
+            return await ExecOutput.Completion(record.ToJson(), status);
+        using var budget = new CancellationTokenSource(CompletionOutputBudget);
+        ExecOutput.Files files;
+        try
+        {
+            files = ProviderOutput(record, record.Cwd, budget.Token);
+        }
+        catch (InvalidOperationException)
+        {
+            files = new(
+                _ => throw new IOException("Execution provider is unavailable."),
+                (_, _, _) => throw new IOException("Execution provider is unavailable.")
+            );
+        }
+        return await ExecOutput.Completion(record.ToJson(), status, files);
     }
 
     private ExecOutput.Files ProviderOutput(ExecRecord record, string? cwd, CancellationToken token)

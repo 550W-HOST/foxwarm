@@ -19,7 +19,19 @@ restore set containing at least:
 - image/blob data;
 - `state/db/` LanceDB/vector data;
 - configuration, agent memory, and other user-owned files needed by the
-  installation.
+  installation, including the encrypted secret store `state/secrets.json`.
+
+The secret store is useless without its instance key, `keys/secrets.key` in the
+data root. Keep that key out of Git-backed or shared backups of `state/` and
+carry it separately through a channel suitable for credentials. Restore both
+files together: when `state/secrets.json` exists but the key file is missing,
+Foxwarm keeps the store locked instead of creating a new key, and settings that
+use `${secret:NAME}` stay unavailable until the original key is restored.
+
+`state/text-redaction.sqlite` is an optional, encrypted cache of model text
+redaction results under the same key. Backing it up keeps redacted model
+requests prefix-stable after a restore; omitting or deleting it only costs one
+uncached model request per redacting Session.
 
 Do not treat separately created SQLite snapshots as one cross-store
 transaction. They are individually consistent, but they may describe different

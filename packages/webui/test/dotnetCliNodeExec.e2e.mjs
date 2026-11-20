@@ -54,7 +54,7 @@ async function stop(handle) {
 }
 async function command(handle, command, args = {}, metadata = {}, cancel = false) {
   const callId = 'owned-' + ++serial
-  const request = { type: 'tool_call', callId, tool: 'exec', sessionId: 'main/owned', agentName: 'main', backgroundExecId: 'quiet-' + String(serial).split('').map(c => String.fromCharCode(97 + Number(c))).join(''), completionCapability: 'synthetic-capability-' + serial, args: { command, timeout: 2, ...args }, ...metadata }
+  const request = { type: 'tool_call', callId, tool: 'exec', sessionId: 'main/owned', agentName: 'main', sessionCwd: handle.cwd, backgroundExecId: 'quiet-' + String(serial).split('').map(c => String.fromCharCode(97 + Number(c))).join(''), completionCapability: 'synthetic-capability-' + serial, args: { command, timeout: 2, ...args }, ...metadata }
   handle.socket.send(JSON.stringify(request))
   if (cancel) handle.socket.send(JSON.stringify({ type: 'tool_call_cancel', callId }))
   const reply = await until(() => frames.find(row => row.socket === handle.socket && row.value.callId === callId && ['tool_call_response', 'tool_call_error'].includes(row.value.type))?.value, 'exec reply ' + callId, 65000)
@@ -119,7 +119,12 @@ try {
   assert.equal(inherited.content, `inherited|${cli.cwd}/agents/main|${cli.cwd}/agents/main/tmp|posix-uppercase-kept`)
   const project = join(cli.cwd, 'project'), child = join(project, 'child'); await mkdir(child, { recursive: true })
   assert.equal(good(await command(cli, 'pwd', { cwd: 'child' }, { sessionCwd: project, programmatic: true })).content, child + '\n')
-  assert.equal(good(await command(cli, 'pwd', {}, { programmatic: true })).content, cli.cwd + '\n')
+  assert.equal(good(await command(source, 'pwd', {}, { sessionCwd: undefined, programmatic: true })).content, source.cwd + '\n')
+  const defaultCwd = good(await command(cli, 'pwd', {}, { sessionCwd: undefined, programmatic: true, execPlacement: true }))
+  assert.equal(defaultCwd.content, cli.cwd + '/agents/main\n')
+  assert.equal(defaultCwd.__foxwarmExecPlacement.cwd, cli.cwd + '/agents/main')
+  assert.equal(defaultCwd.__foxwarmExecPlacement.cwdSource, 'default')
+  assert.equal(defaultCwd.__foxwarmExecPlacement.execId, defaultCwd.execId)
   assert.equal(good(await command(cli, 'pwd', { cwd: '$fw_tmp' }, { programmatic: true })).content, cli.cwd + '/agents/main/tmp\n')
   const invalid = await command(cli, 'printf must-not-run > invalid-effect', { cwd: '/owned-missing-directory' })
   assert.equal(invalid.reply.execStarted, false); assert.match(invalid.reply.error.message, /Source: explicit/)
@@ -196,13 +201,13 @@ try {
   mode.set('restart', 'drop')
   let restart = await launch('restart')
   restart.socket.send(JSON.stringify({ type: 'tool_call', callId: 'restart-foreground', tool: 'exec', sessionId: 'main/owned', agentName: 'main', backgroundExecId: 'native-restart', completionCapability: 'owned-restart-grant', args: { command: 'printf start >> restart-count; sleep 3; printf done >> restart-count', timeout: 30 } }))
-  await until(() => exists(join(restart.cwd, 'restart-count')), 'new native wrapper launched before shutdown')
+  await until(() => exists(join(restart.cwd, 'agents/main/restart-count')), 'new native wrapper launched before shutdown')
   await stop(restart)
   // No reply can cross the old connection. The command itself remains independently alive.
   const record = (await tracked(restart)).execs[0]; assert(record)
   mode.set('restart', 'accept'); restart = await launch('restart')
   await until(async () => (await tracked(restart)).execs.length === 0, 'new wrapper recovery acknowledged')
-  assert.equal(await readFile(join(restart.cwd, 'restart-count'), 'utf8'), 'startdone')
+  assert.equal(await readFile(join(restart.cwd, 'agents/main/restart-count'), 'utf8'), 'startdone')
   const event = events(restart).find(event => event.execId === record.id); assert(event)
   await stop(restart)
 

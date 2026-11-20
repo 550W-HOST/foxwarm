@@ -14,6 +14,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 {
     internal static bool IsSupported => ExecNative.Supported;
     private readonly string registryPath;
+    private readonly AtomicJsonFile registryFile;
     private readonly Func<string, string> workspaceForSession;
     private readonly Func<string, string> agentForSession;
     private readonly Func<string, string> resolveLifetime;
@@ -34,6 +35,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     internal Func<long> Now { get; init; } = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     internal Func<string, string, bool>? RemoteIdentityReserved { get; set; }
     internal Func<string, string, ProviderExecBackend>? ResolveProviderBackend { get; set; }
+
+    // Resolves exec.secretEnv values just before launch; set by the host when a store exists.
+    internal Func<JsonObject, IReadOnlyDictionary<string, string>?>? SecretEnvironment { get; set; }
     internal JsonObject[] Tracked => pending.Values.Select(record => record.ToJson()).ToArray();
 
     private sealed record ExecRecord(
@@ -55,7 +59,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         string? ProcessStartTicks = null,
         string? ProviderId = null,
         string? Reference = null,
-        string? CompletionCapability = null
+        string? CompletionCapability = null,
+        long? StopRequestedAt = null
     )
     {
         internal ExecObservation Observation { get; init; } = new();
@@ -98,6 +103,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 value["resolvedCwd"] = cwd;
             if (CompletionCapability is not null)
                 value["completionCapability"] = CompletionCapability;
+            if (StopRequestedAt is not null)
+                value["stopRequestedAt"] = StopRequestedAt;
             return value;
         }
     }
@@ -117,6 +124,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     )
     {
         registryPath = Path.Combine(Path.GetFullPath(dataRoot), "state", "running-exec.json");
+        registryFile = new(dataRoot, Path.Combine("state", "running-exec.json"));
         this.workspaceForSession = workspaceForSession;
         this.notify = notify;
         this.resolveLifetime = resolveLifetime ?? (id => id);
@@ -245,21 +253,23 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 Text(raw, "processStartTicks"),
                 provider,
                 reference,
-                Text(raw, "completionCapability")
+                Text(raw, "completionCapability"),
+                SessionWait.Number(raw["stopRequestedAt"]) is double stopped
+                && double.IsFinite(stopped)
+                    ? (long)stopped
+                    : null
             );
             record.Observation.Cwd = Text(raw, "resolvedCwd");
             pending[id] = record;
             changed |= raw["notifyOnCompletion"]?.GetValue<bool>() != true;
         }
         if (changed)
-            await SaveAsync();
+            Save();
     }
 
-    private async Task SaveAsync()
+    private void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(registryPath)!);
-        await AtomicWriteAsync(
-            registryPath,
+        registryFile.WriteTextPayload(
             new JsonObject
             {
                 ["execs"] = new JsonArray(
@@ -268,9 +278,16 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 ["recentExecIds"] = new JsonArray(
                     recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
                 ),
-            }.ToJsonString(new() { WriteIndented = true }) + "\n"
+            }.ToJsonText(indented: true) + "\n",
+            default
         );
     }
+
+    // Set while an applied change has not reached the registry file. A save can fail after the
+    // in-memory change, for example on Windows while another process has the registry open, which
+    // blocks replacing it. Reconciliation writes it again, so the file does not keep a completed
+    // entry (and repeat its completion after a restart) until some unrelated later change.
+    private bool savePending;
 
     private async Task MutateAsync(Action action)
     {
@@ -278,7 +295,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         try
         {
             action();
-            await SaveAsync();
+            savePending = true;
+            Save();
+            savePending = false;
         }
         finally
         {
@@ -295,12 +314,25 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             recent.RemoveRange(0, recent.Count - 1024);
     }
 
-    private Task FinalizeForegroundAsync(ExecRecord record) => MutateAsync(() => Remove(record));
+    // Once its command has started, an exec's in-memory record is its tracking authority. A save
+    // that still fails (on Windows, a reader that does not allow deletion holds the registry)
+    // stays pending for reconciliation. It must not turn the started command's receipt into a
+    // tool error, or leave the record outside foreground finalization and completion delivery.
+    private async Task TrackAsync(Action action)
+    {
+        try
+        {
+            await MutateAsync(action);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
+
+    private Task FinalizeForegroundAsync(ExecRecord record) => TrackAsync(() => Remove(record));
 
     private async Task<ExecRecord> BackgroundAsync(ExecRecord record)
     {
         var updated = record with { Notify = true };
-        await MutateAsync(() => pending[record.Id] = updated);
+        await TrackAsync(() => pending[record.Id] = updated);
         return updated;
     }
 
@@ -382,20 +414,22 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     {
         if (!IsSupported)
             return Error(
-                "exec_unavailable",
                 "Local shell execution is not supported on this platform. Select a supported Node."
             );
         if (closing)
-            return Error("exec_unavailable", "Host is shutting down.");
+            return Error("Host is shutting down.");
         if (
             args is null
-            || args.Count - (args.ContainsKey("summary") ? 1 : 0) is < 1 or > 3
+            || args.Count
+                - (args.ContainsKey("summary") ? 1 : 0)
+                - (args.ContainsKey("secretEnv") ? 1 : 0)
+                is < 1
+                    or > 3
             || Text(args, "command") is not string command
             || (args.ContainsKey("cwd") && Text(args, "cwd") is null)
         )
             return Error(
-                "invalid_tool_arguments",
-                "exec requires command, optional cwd and optional timeout."
+                "exec requires command, optional cwd, optional timeout and optional secretEnv."
             );
         double seconds;
         string? warning;
@@ -405,12 +439,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
         catch (InvalidDataException error)
         {
-            return Error("invalid_tool_arguments", error.Message);
+            return Error(error.Message);
         }
         ct.ThrowIfCancellationRequested();
         paths ??= MainNativePaths.Default(workspaceForSession(sessionId));
         if (backend is not null && string.IsNullOrWhiteSpace(command))
-            return Error("invalid_tool_arguments", "exec requires command.");
+            return Error("exec requires command.");
         string? cwd = Text(args, "cwd") ?? providerCwd;
         if (backend is null)
         {
@@ -422,11 +456,25 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
             catch (ArgumentException error)
             {
-                return Error("invalid_path", error.Message);
+                return Error(error.Message);
             }
         }
         else if (cwd is { Length: 0 })
-            return Error("invalid_tool_arguments", "Exec cwd must be a non-empty string.");
+            return Error("Exec cwd must be a non-empty string.");
+        IReadOnlyDictionary<string, string>? environment = null;
+        if (args.ContainsKey("secretEnv"))
+            try
+            {
+                environment =
+                    SecretEnvironment?.Invoke(args)
+                    ?? throw new InvalidDataException(
+                        "The secret store is unavailable on this host."
+                    );
+            }
+            catch (InvalidDataException error)
+            {
+                return Error(error.Message);
+            }
         // A supported identity move may commit while reservation or start is awaiting a receipt.
         var agent = agentForSession(sessionId);
         var id = await ReserveAsync(sessionId);
@@ -443,7 +491,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     paths,
                     Text(args, "cwd"),
                     ct,
-                    beforeLaunch
+                    beforeLaunch,
+                    environment
                 )
                 : await StartProviderAsync(
                     sessionId,
@@ -452,6 +501,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     command,
                     cwd,
                     backend,
+                    environment,
                     () =>
                     {
                         ct.ThrowIfCancellationRequested();
@@ -460,7 +510,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     },
                     hardCancellation
                 );
-            await MutateAsync(() => pending[record.Id] = record);
+            await TrackAsync(() => pending[record.Id] = record);
         }
         finally
         {

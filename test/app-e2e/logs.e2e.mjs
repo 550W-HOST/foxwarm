@@ -76,7 +76,7 @@ after(async () => {
 test('Logs menu, bounded history/live, approximate time jump, restoration, popup and mobile themed entry use the production app', async () => {
   await openMenu()
   const labels = await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.map(item => item.textContent.trim()))
-  assert.ok(labels.includes('Open setup'))
+  assert.ok(!labels.includes('Open setup'))
   assert.ok(labels.includes('Reload WebUI'))
   assert.ok(labels.includes('Open logs'))
   await button('Open logs')

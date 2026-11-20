@@ -66,7 +66,7 @@ test('sharing derives window membership and browser-session origin grants; Ask e
     assert.equal((await chrome.storage.local.get('sharing')).sharing, undefined);
     const signal = new AbortController();
     const expired = permissions.requestConfirmation(
-      { toolName: 'fill', args: { text: '[hidden]' }, tabId: 1 },
+      { toolName: 'browser_fill', args: { text: '[hidden]' }, tabId: 1 },
       async () => {},
       signal.signal,
       10,
@@ -74,7 +74,7 @@ test('sharing derives window membership and browser-session origin grants; Ask e
     assert.equal(await expired, false);
     assert.equal(permissions.getPendingConfirmations().length, 0);
     const stale = permissions.requestConfirmation(
-      { toolName: 'click', tabId: 1 },
+      { toolName: 'browser_click', tabId: 1 },
       async () => {
         throw new Error('Page changed');
       },
@@ -85,7 +85,7 @@ test('sharing derives window membership and browser-session origin grants; Ask e
     assert.equal(await permissions.respondToConfirmation(id, true), false);
     assert.equal(await stale, false);
     const canceled = permissions.requestConfirmation(
-      { toolName: 'click', tabId: 1 },
+      { toolName: 'browser_click', tabId: 1 },
       async () => {},
       signal.signal,
       1000,

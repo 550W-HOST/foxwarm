@@ -17,7 +17,7 @@ TypeScript protocol and execution packages that remain real boundaries while the
 - [CLI Node TUI](../units/cli-node-tui.md)
 - [CLI Node native runtime](../units/shared-and-nodes-cli-runtime.md)
 - [Browser extension Node transport, permissions, tabs, and popup](../units/browser-node-extension.md)
-- [Android-compatible Python Node server and authentication helpers](../units/shared-and-nodes-android-node.md)
+- [On-phone Android Node app](../units/android-node-app.md)
 - [VS Code Web extension assets and dedicated web integration build boundary](../units/vscode-web-extensions.md)
 
 ## Cross-module contract

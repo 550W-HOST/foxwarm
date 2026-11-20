@@ -12,12 +12,12 @@ const tones = {
 }
 
 /** Operational history, visually separate from both assistant prose and tool threads. */
-export default function SystemEventCard({ notice, reveal = false }: { notice: SessionNotice; reveal?: boolean }) {
+export default function SystemEventCard({ notice, reveal = false, searchSurface = 'system', searchPartIndex }: { notice: SessionNotice; reveal?: boolean; searchSurface?: 'system' | 'model'; searchPartIndex?: number }) {
   const tone = tones[notice.severity]
   const openModelSettings = useContext(OpenModelSettingsContext)
   return <section aria-label={notice.title} data-system-event data-event-source={notice.source} data-event-severity={notice.severity} className={`my-2 flex w-full max-w-[52rem] gap-3 rounded-md border border-fw-border-muted border-l-2 ${tone.border} bg-fw-surface-sunken/40 p-3 text-fw-text`}>
     <span className={`shrink-0 pt-0.5 ${tone.ink}`}><RuntimeFox kind={notice.severity === 'error' ? 'error' : notice.source === 'compaction' ? 'compact' : 'unknown'} size={20} animated={false} /></span>
-    <div data-search-surface="system" className="min-w-0 flex-1">
+    <div data-search-surface={searchSurface} data-search-part-index={searchPartIndex} className="min-w-0 flex-1">
       <h3 className="whitespace-pre-wrap break-words text-sm font-normal leading-6 text-fw-text-muted">
         <span className="font-semibold text-fw-text-strong">{notice.title}:</span>{' '}{notice.summary}
       </h3>

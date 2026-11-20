@@ -39,7 +39,7 @@ const peer = createServer(async (request, response) => {
       ? followup ? [message('SCOPED-ORDINARY'), message('SCOPED-FINAL', 'final_answer')]
         : [message('SCOPED-COMMENTARY', 'commentary'), {
         type: 'function_call', call_id: 'scoped-send', name: 'send_to_session',
-        arguments: JSON.stringify({ sessionId: 'target', message: 'SCOPED-DELIVERY', afterSend: 'continue' }),
+        arguments: JSON.stringify({ sessionId: 'target', message: 'SCOPED-DELIVERY', currentSessionTurnAction: 'continue' }),
       }]
       : [message('TARGET-REPLY')]
     response.writeHead(200, { 'content-type': 'text/event-stream' })

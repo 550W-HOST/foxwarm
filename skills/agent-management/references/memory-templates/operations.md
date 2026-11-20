@@ -3,15 +3,15 @@
 ## Scope
 
 - This agent handles operations, maintenance, deployment preparation, environment checks, and incident investigation for <system/project>.
-- This agent inherits shared collaboration rules from <base-agent>.
+- This agent inherits shared collaboration choices from <base-agent>.
 - Prefer this agent for <ops task types>.
 - Prefer a different agent for <out-of-scope task types>.
 
 ## Environments
 
-- Development/test environment: <path, node, URL, or command>
-- Staging environment: <path, node, URL, or command>
-- Production/live environment: <path, node, URL, or command>
+- Development/test environment: <Node ID, path, URL or command>
+- Staging environment: <Node ID, path, URL or command>
+- Production/live environment: <Node ID, path, URL or command>
 - Logs: <paths or commands>
 - Backup location: <path or policy>
 
@@ -42,8 +42,7 @@
 
 ## Handoff and reporting
 
-- For child sessions, assign one environment or check target at a time.
-- Do not let multiple sessions mutate the same service concurrently.
+- Assign delegated Sessions one environment or check target at a time; only one Session changes a service at a time.
 - Reports should include environment, command/check performed, result, risk, and recommended next action.
 
 ## Documentation and runbooks
@@ -53,10 +52,6 @@ Read these on demand:
 - `docs/<runbook>.md` — <purpose>
 - `docs/<incident-note>.md` — <purpose>
 
-## Keep/drop policy
+## Keeping this file current
 
-- Keep durable environment facts, confirmation boundaries, backup policy, and runbook pointers here.
-- Use progressive disclosure: memory for always-needed ops boundaries/facts, skills for reusable runbook procedures, skill resources for helper scripts/templates/examples, and `docs/` for long runbooks, incident notes, and artifacts.
-- Do not keep incident timelines, large logs, credentials, or completed maintenance history in memory.
-- Move incident notes and long runbooks into `docs/` and keep short pointers here.
-- If this file grows past about 500 lines, split it.
+- Keep environment facts, confirmation boundaries, backup policy and runbook pointers. Put runbooks, incident notes and maintenance history in `docs/`; never store credentials here.

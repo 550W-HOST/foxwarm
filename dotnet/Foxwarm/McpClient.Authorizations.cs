@@ -18,6 +18,25 @@ internal sealed partial class McpClient
         return config;
     }
 
+    // The server with its secret references resolved, as connections use it. OAuth compares
+    // and uses resolved settings throughout; persisted grants keep only the configured URL.
+    internal JsonObject ResolvedAuthorizationServer(string name)
+    {
+        _ = AuthorizationServer(name);
+        try
+        {
+            return configuration.Get(name);
+        }
+        catch (Exception error)
+            when (error
+                    is Foxwarm.Secrets.SecretUnavailableException
+                        or Foxwarm.Secrets.SecretStoreLockedException
+            )
+        {
+            throw new McpOAuthException("configuration", error.Message);
+        }
+    }
+
     internal JsonObject Authorizations()
     {
         var payload = new JsonObject();
@@ -99,7 +118,25 @@ internal sealed partial class McpClient
         return UpdateConfigurationAsync(name, patch, false);
     }
 
-    private async Task UpdateConfigurationAsync(string name, JsonObject patch, bool enabledOnly)
+    // Replaces literal fields of a server with references to a stored secret. The server must
+    // still be exactly as the patch was computed from.
+    internal Task ReplaceLiteralAsync(string name, JsonObject patch, JsonObject expected) =>
+        UpdateConfigurationAsync(
+            name,
+            patch,
+            false,
+            (before, _) =>
+                JsonNode.DeepEquals(before[name], expected)
+                    ? Task.CompletedTask
+                    : throw new InvalidOperationException("The server changed in the meantime.")
+        );
+
+    private async Task UpdateConfigurationAsync(
+        string name,
+        JsonObject patch,
+        bool enabledOnly,
+        Func<JsonObject, JsonObject, Task>? admit = null
+    )
     {
         void Published(JsonObject? previous, JsonObject next)
         {
@@ -122,6 +159,6 @@ internal sealed partial class McpClient
                 InvalidateServer(name);
             }
         }
-        await configuration.UpdateAsync(name, patch, enabledOnly, Published);
+        await configuration.UpdateAsync(name, patch, enabledOnly, Published, admit);
     }
 }

@@ -227,6 +227,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
                 var id = record["nodeId"]!.GetValue<string>();
                 nodes.TryGetValue(id, out var connection);
                 record["id"] = id;
+                record["credentialManaged"] = true;
                 record["type"] = connection?.Type ?? record["nodeType"]?.GetValue<string>();
                 record["connected"] = connection is { Retired: false } && connection.Open;
                 record["executable"] =
@@ -353,6 +354,28 @@ internal sealed partial class NodeConnectionHub : IDisposable
         return disconnected;
     }
 
+    internal JsonObject Reissue(string id)
+    {
+        using var mutation = Registry.BeginMutation();
+        JsonObject result;
+        lock (gate)
+        {
+            try
+            {
+                result = Registry.Reissue(id, mutation);
+            }
+            catch (AuthorityCommittedException)
+            {
+                Disconnect(id, "Node credentials replaced");
+                throw;
+            }
+            result["disconnected"] = nodes.ContainsKey(id);
+            Disconnect(id, "Node credentials replaced");
+        }
+        Changed?.Invoke();
+        return result;
+    }
+
     internal void Rename(string oldId, string newId)
     {
         using var mutation = Registry.BeginMutation();
@@ -456,7 +479,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
         {
             beforeSend?.Invoke();
             await connection.Socket.SendAsync(
-                Encoding.UTF8.GetBytes(value.ToJsonString()),
+                Encoding.UTF8.GetBytes(value.ToJsonText()),
                 WebSocketMessageType.Text,
                 true,
                 token
@@ -669,6 +692,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
                     if (type == "node_service_event")
                     {
                         HandleServiceEvent(connection, message);
+                        continue;
+                    }
+                    if (type == "exec_control_response")
+                    {
+                        HandleExecControlReply(connection, message);
                         continue;
                     }
                     if (type is "tool_call_response" or "tool_call_error")

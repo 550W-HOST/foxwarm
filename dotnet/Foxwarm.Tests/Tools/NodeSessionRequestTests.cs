@@ -50,7 +50,7 @@ public sealed class NodeSessionRequestTests
             }
         }
 
-        internal async Task Start(bool bound = false)
+        internal async Task Start()
         {
             var data = Path.Combine(temp.Path, "data");
             var work = Path.Combine(temp.Path, "work");
@@ -58,17 +58,10 @@ public sealed class NodeSessionRequestTests
             Directory.CreateDirectory(Path.Combine(data, "state"));
             using (var catalog = new SessionCatalog(data))
                 catalog.Initialize();
-            if (bound)
-                await File.WriteAllTextAsync(
-                    Path.Combine(data, "state", "agents.json"),
-                    "{\"version\":2,\"agents\":[],\"metadata\":{\"main\":{\"isolated\":true,\"isolatedNode\":\"one\"}}}"
-                );
             await SessionCatalogMigrationTests.Authority(data, "cold");
             var path = Path.Combine(data, "state", "sessions", "cold.json");
             var authority = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-            authority.Remove("currentNode");
-            if (!bound)
-                authority["currentNode"] = "one";
+            authority["currentNode"] = "one";
             authority["history"] = new JsonArray(
                 Enumerable
                     .Range(0, 105)
@@ -101,8 +94,7 @@ public sealed class NodeSessionRequestTests
             {
                 catalog.Initialize();
                 var row = SessionCatalogTests.Row("cold", 105, aliases: ["old-cold"]);
-                if (!bound)
-                    row["currentNode"] = "one";
+                row["currentNode"] = "one";
                 row["meta"]!["messageCount"] = 105;
                 catalog.Upsert([row]);
             }
@@ -228,13 +220,11 @@ public sealed class NodeSessionRequestTests
         }
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Real_cli_API_uses_catalog_alias_history_and_ordinary_owner_ingress(bool bound)
+    [Fact]
+    public async Task Real_cli_API_uses_catalog_alias_history_and_ordinary_owner_ingress()
     {
         await using var f = new Fixture();
-        await f.Start(bound);
+        await f.Start();
         var client = await f.Cli();
         Assert.Equal("cold", (await client.ListBoundSessions())[0]!["id"]!.ToString());
         Assert.Empty(f.Manager.Owners());
@@ -254,11 +244,8 @@ public sealed class NodeSessionRequestTests
                 await Assert.ThrowsAsync<IOException>(() => client.GetSessionHistory("missing"))
             ).Message
         );
-        // Selection/binding belongs to Main, not the client or the local HTTP caller.
-        if (bound)
-            await f.Manager.SetAgentNodeAsync("main", null);
-        else
-            await f.Manager.SelectNodeAsync(owner, "master");
+        // Selection belongs to Main, not the client or the local HTTP caller.
+        await f.Manager.SelectNodeAsync(owner, "master");
         Assert.Empty(await client.ListBoundSessions());
         await Assert.ThrowsAsync<IOException>(() => client.SendSessionMessage("cold", "denied"));
     }
@@ -310,47 +297,6 @@ public sealed class NodeSessionRequestTests
             "Invalid session_send_message: missing sessionId or message",
             malformed["error"]!.ToString()
         );
-    }
-
-    [Theory]
-    [InlineData("session_history_request")]
-    [InlineData("session_send_message")]
-    public async Task Assignment_is_rechecked_after_real_cold_owner_admission(string type)
-    {
-        await using var f = new Fixture();
-        await f.Start(bound: true);
-        var socket = await f.Connect();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        f.Manager.BeforeAdmissionRead = async (_, token) =>
-        {
-            entered.SetResult();
-            await release.Task.WaitAsync(token);
-        };
-        await Fixture.Send(
-            socket,
-            new()
-            {
-                ["type"] = type,
-                ["requestId"] = "held",
-                ["sessionId"] = "old-cold",
-                ["message"] = "must-not-enter",
-            }
-        );
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await f.Manager.SetAgentNodeAsync("main", null);
-        release.SetResult();
-        var response = (await Fixture.Read(socket))!;
-        Assert.False(response["ok"]!.GetValue<bool>());
-        Assert.Equal(
-            type == "session_history_request"
-                ? "Node \"one\" cannot read history for session \"old-cold\" because the session assignment changed."
-                : "Node \"one\" cannot send messages to session \"old-cold\" because the session is not assigned to that node or its isolated agent.",
-            response["error"]!.ToString()
-        );
-        var owner = await f.Manager.RequiredAsync("cold");
-        Assert.Empty(owner.Entry.Snapshot().Queue);
-        Assert.Equal(105, owner.Entry.Snapshot().History.Count);
     }
 
     [Fact]

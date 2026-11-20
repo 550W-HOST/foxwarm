@@ -6,13 +6,14 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('remote-receipt', { env: {} })
 const plans = new Map(), rounds = new Map(), failures = []
 let client, clientOutput = '', requests = 0
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const result = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const peer = createServer(async (request, response) => {
   try {
@@ -53,7 +54,7 @@ try {
   for (const stream of [client.stdout, client.stderr]) stream.on('data', chunk => { clientOutput = (clientOutput + chunk).slice(-20000) })
   await until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.some(node => node.id === 'two' && node.online && node.executable), 'official CLI online', 30000)
   const actor = await create('receipt-owner'), target = await create('receipt-target')
-  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session clear-parent' })).status, 200)
   const targetBefore = (await saved(target)).history
   const directState = await turn(actor, 'direct', [call('direct', 'send_file', { filePath: 'config.yaml', node: 'two', sessionId: target })])
   const direct = result(directState, 'direct'); assert(direct && !direct.error, JSON.stringify(direct))

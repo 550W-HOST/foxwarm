@@ -159,8 +159,10 @@ internal sealed partial class SessionManager
         var meta = owner.Metadata();
         var context = ExecutionPlacement(owner);
         var runtime = owner.RuntimeSnapshot(meta);
+        var runningExecs = RunningExecs(owner).Length;
         var active =
-            runtime["processing"]?.GetValue<bool>() == true
+            runningExecs > 0
+            || runtime["processing"]?.GetValue<bool>() == true
             || meta.Busy
             || meta.Stopping
             || meta.QueueLength > 0
@@ -215,6 +217,9 @@ internal sealed partial class SessionManager
             .AlsoRuntimeFlags(owner.ToolActive, owner.Compacting);
         if (active)
             projected["_runtimeState"] = runtime;
+        // Volatile only: a Session keeps its local projection while background commands run.
+        if (runningExecs > 0)
+            projected["_runningExecs"] = runningExecs;
         var persisted = Catalog.Get(owner.Id);
         if (persisted is not null)
             SessionCatalog.OverlayMain(projected, persisted);
@@ -315,8 +320,11 @@ internal sealed partial class SessionManager
         }
         var scopes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         var childCounts = new Dictionary<string, long>(StringComparer.Ordinal);
+        var subtreeTimes = new Dictionary<string, double>(StringComparer.Ordinal);
         foreach (var chunk in all.Keys.Chunk(200))
         {
+            foreach (var pair in Catalog.SubtreeTimes(chunk))
+                subtreeTimes[pair.Key] = pair.Value;
             foreach (var pair in Catalog.Scopes(chunk))
                 scopes[pair.Key] = pair.Value;
             foreach (var pair in Catalog.ChildCounts(chunk))
@@ -337,6 +345,8 @@ internal sealed partial class SessionManager
                 );
                 if (row["_runtimeState"] is JsonObject runtime)
                     dto["runtimeState"] = runtime.DeepClone();
+                if (row["_runningExecs"] is JsonNode runningExecs)
+                    dto["runningExecs"] = runningExecs.DeepClone();
                 dto["aliases"] = row["aliases"]?.DeepClone() ?? new JsonArray();
                 dto["currentNode"] = row["currentNode"]?.DeepClone();
                 dto["cwd"] = row["cwd"]?.DeepClone();
@@ -347,7 +357,15 @@ internal sealed partial class SessionManager
                     dto["agent"] = scope["agent"]?.DeepClone();
                 }
                 dto["childTotal"] = childCounts.GetValueOrDefault(id);
-                dto["sequenceMessageCount"] = sequences.GetValueOrDefault(id);
+                // Newest message among the row and its real descendants; Sidebar tree ordering
+                // only. A running local row can be newer than its persisted catalog value.
+                dto["subtreeActivityTime"] = Math.Max(
+                    subtreeTimes.GetValueOrDefault(id),
+                    SessionCatalog.Number(row["meta"]?["lastMessageTime"]) ?? 0
+                );
+                var sequence = sequences.GetValueOrDefault(id);
+                dto["sequenceMessageCount"] = sequence.Count;
+                dto["latestMessageSeq"] = sequence.Latest;
                 return dto;
             })
             .ToArray();
@@ -496,9 +514,11 @@ internal sealed partial class SessionManager
         return true;
     }
 
-    private Dictionary<string, long> ArchiveSequenceCounts(string[] ids)
+    // Count is the Session's own messages (a fork's after its fork point); Latest is the seq of
+    // its newest message, inherited history included.
+    private Dictionary<string, (long Count, long Latest)> ArchiveSequenceCounts(string[] ids)
     {
-        var result = new Dictionary<string, long>(StringComparer.Ordinal);
+        var result = new Dictionary<string, (long Count, long Latest)>(StringComparer.Ordinal);
         var file = Path.Combine(root, "state", "archive-store.sqlite");
         if (!File.Exists(file))
             return result;
@@ -532,8 +552,11 @@ FROM requested LEFT JOIN local_max ON local_max.session_id=requested.session_id 
             using var reader = command.ExecuteReader();
             while (reader.Read())
                 result[reader.GetString(0)] = reader.IsDBNull(2)
-                    ? reader.GetInt64(1)
-                    : Math.Max(0, reader.GetInt64(1) - reader.GetInt64(3));
+                    ? (reader.GetInt64(1), reader.GetInt64(1))
+                    : (
+                        Math.Max(0, reader.GetInt64(1) - reader.GetInt64(3)),
+                        Math.Max(reader.GetInt64(1), reader.GetInt64(3))
+                    );
         }
         return result;
     }

@@ -15,7 +15,7 @@ For developers and Agents changing delegation, shared Tasks, or inter-session co
 | Send to another Session | A source-labelled input admitted to that target's ordinary queue. | Task completion, parent reassignment, immediate model consumption, or a synchronous answer. |
 | Ordinary assistant reply | Output to the current conversation and its eligible Channel delivery path. | An inter-session report or a Task mutation. |
 
-A child with no initial message or Task is created but not started merely by the creation acknowledgement. A non-fork child still receives its creation/identity context; “fresh” does not mean it has no prompt or lifecycle notice. With a non-task initial message and default `afterSend`, delivery is asynchronous after creation; creation success is not a receipt that the child has consumed its assignment. Terminal handoff modes await initial delivery. A model-created fork instead reads its message from the copied creating call and starts without a separate delivery; each side's result for that call says whether it is the parent or the child ([fork dual return](../threads/session-lifecycle.md#d-lifecycle-fork-dual-return)). See [child tools](../units/src-tools-session-agent.md) and [Session lifecycle](../threads/session-lifecycle.md#child-and-fork-lifecycle).
+A child with no initial message or Task is created but not started merely by the creation acknowledgement. A non-fork child still receives its creation/identity context; “fresh” does not mean it has no prompt or lifecycle notice. With a non-task initial message and default `currentSessionTurnAction`, delivery is asynchronous after creation; creation success is not a receipt that the child has consumed its assignment. Terminal handoff modes await initial delivery. A model-created fork instead reads its message from the copied creating call and starts without a separate delivery; each side's result for that call says whether it is the parent or the child ([fork dual return](../threads/session-lifecycle.md#d-lifecycle-fork-dual-return)). See [child tools](../units/src-tools-session-agent.md) and [Session lifecycle](../threads/session-lifecycle.md#child-and-fork-lifecycle).
 
 ### Parent, Agent, and Task relations are independent
 
@@ -25,7 +25,7 @@ The Session's actual `parentSessionId` owns its direct reporting/topology relati
 
 Reparenting changes the relation, not Agent membership, inherited memory, historical text, or Task creator/owner. A Task's immutable `parentTaskId` is another relation: it groups records, does not make Session parents, join child results, cascade completion, or schedule dependent work. [Session relations](../units/src-session-misc.md) and [Tasks](../units/src-tasks.md) locate these owners.
 
-Tool authorization still applies to each action. When either Session is isolated, communication is limited to self/direct parent/child relations; sibling, unrelated, or same-Agent status is not enough. A direct relation does not grant filesystem, Node, or tool permissions. The canonical exception is [isolated Session relations](../modules/session-core.md#d-session-core-isolated-relations).
+Tool authorization still applies to each action. A migrated legacy isolated Agent's generated layer lets its Sessions send only to themselves and their direct parent/child; sibling, unrelated, or same-Agent status is not enough. Whether others may contact those Sessions is their own policy's decision. A direct relation does not grant filesystem, Node, or tool permissions. The canonical exception is [isolated Session relations](../modules/session-core.md#d-session-core-isolated-relations).
 
 ## Who is acting on a Task?
 
@@ -59,7 +59,7 @@ A committed Task record and a successful notification are separate outcomes:
 | Model create-with-owner or assign/transfer/release | `notifySession:true` opts in. A different new owner receives the full assignment normally; a different previous owner receives a brief passive transfer/release notice. Omission/false saves silently. |
 | Model update with a note | Only explicit `notifySession:true` notifies a different current owner. Self-authored notes and unowned Tasks have no recipient. |
 | Title/description-only update | Never notifies, even with `notifySession:true`. Add an opted-in note when the owner needs to act on a metadata change. |
-| Completion | Attempts one normal Task notification to a different Session creator, including the full accepted result. Self completion or a user-created Task has no Session recipient and is skipped. |
+| Completion | Attempts one normal Task notification to a different Session creator, including the full accepted result and, when the owner made successful requests for it, a [usage line](#what-does-the-completion-usage-line-count). Self completion or a user-created Task has no Session recipient and is skipped. |
 | User create/assign | Uses the same delivery rules; the user mutation service defaults notification on when omitted. User comments notify only when explicitly opted in; the WebUI sends its checkbox value. |
 | Claim, ordinary status-only update, or cancellation | No automatic assignment/completion notification is generated by these actions. |
 
@@ -69,21 +69,27 @@ All notification attempts occur after the Task mutation commits. [Persistence an
 
 The accepted completion result delivered to the creator is not the bounded list/child-summary preview. [Task storage and output](../units/src-tasks.md#storage-and-output) owns accepted sizes and those projections. Mutation tool receipts are deliberately short: Task ID, status, owner, successful notification count, and any real warning. `sentNotifications` counts successful awaited deliveries in this operation, not notification intent or lifetime totals. `get` is the full-detail path for description/result and bounded notes/children. Task records/notes are not conversation history; delivered notices are ordinary Session input. Request-only task reminders do not copy the Task store into history or establish completion; their owner is [task context](../units/src-session-task-context.md).
 
+## What does the completion usage line count?
+
+**Directly selected (2026-11-08).** The completion notice for a Session creator ends with `Task owner usage: <model IDs, comma-separated>; estimated cost $X.XX USD.`, so a delegating Session sees what the delegated work actually used. The models are the distinct concrete model IDs, in first-seen order, of the completing owner's successful requests from the Task's assignment to that Session until completion; the cost is the sum of their saved per-request estimates. A commentary prefix committed while its request was still streaming is part of that request, not a separate unpriced one. When any counted request has no saved cost the line says `estimated cost unavailable.` instead; with no successful requests the line is omitted. Plain `send_to_session` messages are unchanged.
+
+The figures come from recorded attribution (each assistant message's concrete model and saved usage cost), never from the owner's current selection or current prices, and they are read from the Session Archive, so compaction or clearing does not change them. Only the owner's own normal assistant requests count: its child Sessions' usage and side requests that leave no archived assistant message (such as compaction summaries) are excluded. The window starts at the persisted time of the current owner's assignment (`ownerAssignedAt`, set on create-with-owner, claim of an unowned Task and assignment to a different owner; see [Task storage](../units/tasks-timers.md)). A Task owned before that field existed, or never owned, has no start and omits the line. A failure to compute usage never blocks the completion notice.
+
 ## How does linking a new child to a Task change the handoff?
 
 `create_child_session(taskId:...)` uses the existing Task and assigns/transfers it to the actual newly created child. It rejects missing, terminal, or unauthorized Tasks before creating the Session. It does not require the caller to create an unowned duplicate Task, create the child, and separately claim it.
 
 The child receives the full stored description plus any additional message as **one Task assignment**, not a duplicate inter-agent directive. Completion through the Task tool sends the result to the Task's Session creator automatically. A separate routine parent report is not needed. Actual parent and Task creator can differ; completion of the recorded attached Task resolves the child's routine-handoff reminder without pretending it sent a message to its parent. `task complete` does not itself stop the caller's turn; it returns through the ordinary tool loop. Actionable errors or further coordination remain separate messages when needed.
 
-Child creation/assignment can succeed while notification delivery fails. The receipt reports that distinction and does not roll back the child or Task ownership. A failed assignment delivery does not apply a requested terminal `afterSend` action. Do not respond by blindly creating another child; inspect the existing child/Task and delivery warning. The source owner is [Task child attachment](../units/src-tasks.md#child-attachment-and-webui).
+Child creation/assignment can succeed while notification delivery fails. The receipt reports that distinction and does not roll back the child or Task ownership. A failed assignment delivery does not apply a requested terminal `currentSessionTurnAction`. Do not respond by blindly creating another child; inspect the existing child/Task and delivery warning. The source owner is [Task child attachment](../units/src-tasks.md#child-attachment-and-webui).
 
 ## Is sending a report the same as ending the current turn?
 
 No. `send_to_session` and child creation distinguish delivery from the caller's next action:
 
-- Default `afterSend:"continue"` delivers and lets the caller keep working.
-- `afterSend:"finish"` ends the current turn idle after success, without a wait. It does not finish the target Session or complete a Task.
-- `afterSend:"wait"` ends the current turn and arms an ordinary activity wait for later input from the resolved target set. It is not a blocking RPC that returns the answer inside the send result, and unrelated ordinary input can still wake it.
+- Default `currentSessionTurnAction:"continue"` delivers and lets the caller keep working.
+- `currentSessionTurnAction:"end_turn"` ends the current turn idle after success, without a wait. It does not finish the target Session or complete a Task.
+- `currentSessionTurnAction:"wait"` ends the current turn and arms an ordinary activity wait for later input from the resolved target set. It is not a blocking RPC that returns the answer inside the send result, and unrelated ordinary input can still wake it.
 
 The canonical post-batch ordering, fast-reply races, sibling errors, and explicit-wait interaction stay in [handoff/wait mechanics](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait) and [execution and waiting](./execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn). The maintained runtime suppresses terminal handoff controls when the complete batch has a tool error, under the linked execution contract. Failed sends do not establish a successful handoff.
 

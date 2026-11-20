@@ -30,7 +30,11 @@ internal sealed partial class WebUIChannel
                     limit.MaxRequestBodySize = null;
                 if (context.Request.ContentLength > UploadLimit)
                     return Results.Json(
-                        new { error = "Upload too large", maxBytes = UploadLimit },
+                        new JsonObject
+                        {
+                            ["error"] = "Upload too large",
+                            ["maxBytes"] = UploadLimit,
+                        },
                         statusCode: 413
                     );
                 var scoped = WebUiAccess.Request(context);
@@ -42,12 +46,17 @@ internal sealed partial class WebUIChannel
                 {
                     if (uploadSession.Length == 0)
                         return Results.BadRequest(
-                            new { error = "WebUI identity upload requires a bound sessionId." }
+                            new JsonObject
+                            {
+                                ["error"] = "WebUI identity upload requires a bound sessionId.",
+                            }
                         );
                     scoped.Bind(uploadSession);
                 }
                 if (!context.Request.HasFormContentType)
-                    return Results.BadRequest(new { error = "A multipart file is required." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "A multipart file is required." }
+                    );
                 try
                 {
                     var form = await context.Request.ReadFormAsync(
@@ -59,12 +68,14 @@ internal sealed partial class WebUIChannel
                         context.RequestAborted
                     );
                     if (form.Files.Count != 1 || form.Files[0].Name != "file")
-                        return Results.BadRequest(new { error = "One file is required." });
+                        return Results.BadRequest(
+                            new JsonObject { ["error"] = "One file is required." }
+                        );
                     var file = form.Files[0];
                     var mimeType = AttachmentMime(file.ContentType, file.FileName);
                     if (file.Length > UploadLimit)
                         return Results.Json(
-                            new { error = "File exceeds the 1 GiB upload limit." },
+                            new JsonObject { ["error"] = "File exceeds the 1 GiB upload limit." },
                             statusCode: 413
                         );
                     Directory.CreateDirectory(UploadRoot);
@@ -99,12 +110,12 @@ internal sealed partial class WebUIChannel
                         throw;
                     }
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            path,
-                            filename = original,
-                            mimeType,
-                            size = file.Length,
+                            ["path"] = path,
+                            ["filename"] = original,
+                            ["mimeType"] = mimeType,
+                            ["size"] = file.Length,
                         }
                     );
                 }
@@ -119,13 +130,14 @@ internal sealed partial class WebUIChannel
                         )
                     )
                         return Results.Json(
-                            new { error = "File exceeds the 1 GiB upload limit." },
+                            new JsonObject { ["error"] = "File exceeds the 1 GiB upload limit." },
                             statusCode: 413
                         );
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = "File upload failed: " + ImageTransport.SafeText(error.Message),
+                            ["error"] =
+                                "File upload failed: " + ImageTransport.SafeText(error.Message),
                         }
                     );
                 }
@@ -139,21 +151,25 @@ internal sealed partial class WebUIChannel
                 {
                     var path = sessions.Images.ResolveBlob(blobId);
                     if (!File.Exists(path))
-                        return Results.NotFound(new { error = "Image is unavailable." });
+                        return Results.NotFound(
+                            new JsonObject { ["error"] = "Image is unavailable." }
+                        );
                     var input = await request.ReadFromJsonAsync<JsonObject>() ?? new JsonObject();
                     var grant = downloads.Issue("blob", blobId, input);
                     request.HttpContext.Response.Headers.CacheControl = "no-store";
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            url = Uri.EscapeDataString(blobId) + grant.Query,
-                            expiresAt = grant.ExpiresAt,
+                            ["url"] = Uri.EscapeDataString(blobId) + grant.Query,
+                            ["expiresAt"] = grant.ExpiresAt,
                         }
                     );
                 }
                 catch (ImageInputException)
                 {
-                    return Results.BadRequest(new { error = "Image is unavailable or invalid." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Image is unavailable or invalid." }
+                    );
                 }
             }
         );
@@ -174,7 +190,7 @@ internal sealed partial class WebUIChannel
         {
             var path = sessions.Images.ResolveBlob(blobId);
             if (!File.Exists(path))
-                return Results.NotFound(new { error = "Image is unavailable." });
+                return Results.NotFound(new JsonObject { ["error"] = "Image is unavailable." });
             var reference = new JsonObject { ["blobId"] = blobId, ["sha256"] = blobId[..64] };
             var bytes = await sessions.Images.ReadAsync(reference, context.RequestAborted);
             if (!downloads.Authorizes(context))
@@ -203,7 +219,9 @@ internal sealed partial class WebUIChannel
         }
         catch (ImageInputException)
         {
-            return Results.BadRequest(new { error = "Image is unavailable or invalid." });
+            return Results.BadRequest(
+                new JsonObject { ["error"] = "Image is unavailable or invalid." }
+            );
         }
     }
 }

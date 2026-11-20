@@ -1,3 +1,4 @@
+import { syncBrowserChrome } from './browserChrome'
 import { DEFAULT_THEME_ID } from './builtins'
 import { themeVariantCssVariables, type ResolvedThemeMode, type ThemeColorMode, type ThemeManifest } from './manifest'
 import {
@@ -184,7 +185,7 @@ function applySnapshot(next: ThemeRuntimeSnapshot): void {
   }
   for (const [name, value] of Object.entries(consoleVariables)) root.style.setProperty(name, value)
 
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', variant.colors.canvas)
+  syncBrowserChrome(variant.colors.canvas)
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, {
     detail: { themeId: next.activeTheme.id, mode: next.effectiveMode },
   }))

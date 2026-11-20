@@ -103,7 +103,12 @@ public sealed partial class AgentDeletionTests
         Assert.NotNull(f.Manager.Catalog.Get(target.Id));
         f.Manager.AttachChannel("telegram:agent-delete", target);
         f.Manager.AttachChannel("webui:selected", target);
-        var reply = (await Command(f, "/agent delete target ignored --confirm")).Single();
+        Assert.Contains(
+            "Unexpected argument",
+            (await Command(f, "/agent delete target ignored --confirm")).Single()
+        );
+        Assert.NotNull(f.Manager.Catalog.Get(target.Id));
+        var reply = (await Command(f, "/agent delete target --confirm")).Single();
         Assert.Contains("Deleted 1 session(s)", reply);
         Assert.Null(f.Manager.Catalog.Get(target.Id));
         Assert.Null(f.Manager.ChannelBinding("telegram:agent-delete"));

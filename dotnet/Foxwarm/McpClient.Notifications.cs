@@ -18,7 +18,9 @@ internal sealed partial class McpClient
     internal static Dictionary<string, object> NotificationCapability() =>
         new()
         {
-            [NotificationCapabilityName] = JsonSerializer.SerializeToElement(new { version = 1 }),
+            [NotificationCapabilityName] = JsonData.SerializeToElement(
+                new JsonObject { ["version"] = 1 }
+            ),
         };
 
     internal static bool SupportsNotifications(IDictionary<string, object>? capabilities) =>

@@ -46,7 +46,6 @@ internal sealed partial class SessionManager
             return new(
                 new JsonObject
                 {
-                    ["output"] = $"Closed question {target}.",
                     ["questionId"] = target,
                     ["status"] = "closed",
                 },
@@ -56,6 +55,9 @@ internal sealed partial class SessionManager
         if (args.ContainsKey("closeNote"))
             throw new InvalidDataException("closeNote applies only with close.");
         var questions = SessionQuestions.ParseQuestions(args["questions"]);
+        RequireNewSecretNames(
+            questions.OfType<JsonObject>().Select(SessionQuestions.SecretName).OfType<string>()
+        );
         var external = ClaudeRuntimeState.IsExternal(owner.Entry.Snapshot().AuthorityEnvelope);
         var after = OptionalString(args, "afterAsk") ?? (external ? "continue" : "wait");
         if (after is not ("wait" or "continue"))
@@ -81,12 +83,12 @@ internal sealed partial class SessionManager
         return new(
             new JsonObject
             {
-                ["output"] =
-                    after == "wait"
-                        ? $"Asked question {id}. The Session waits for the user's answer after this tool batch."
-                        : $"Asked question {id}. The answer will arrive later as a user message.",
                 ["questionId"] = id,
                 ["status"] = "open",
+                ["note"] =
+                    after == "wait"
+                        ? "The Session waits for the user's answer after this tool batch."
+                        : "The answer will arrive later as a user message.",
             },
             after == "wait" ? id : null
         );
@@ -107,6 +109,12 @@ internal sealed partial class SessionManager
                     waited.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
                 ),
                 ["questions"] = new JsonArray(items),
+                ["approvals"] = new JsonArray(
+                    SessionApprovals
+                        .Records(state.Meta)
+                        .Select(record => (JsonNode?)record.DeepClone())
+                        .ToArray()
+                ),
             };
         });
 
@@ -114,7 +122,12 @@ internal sealed partial class SessionManager
     /// Admits a structured WebUI answer as user input. The question must still be open when the
     /// owner admits it; a concurrent earlier answer wins and this one fails.
     /// </summary>
-    internal async Task AnswerQuestionAsync(SessionOwner owner, string questionId, JsonObject body)
+    internal async Task AnswerQuestionAsync(
+        SessionOwner owner,
+        string questionId,
+        JsonObject body,
+        JsonObject? sender = null
+    )
     {
         var record = owner.Entry.WithState(state =>
             SessionQuestions.Find(state.Meta, questionId)?.DeepClone() as JsonObject
@@ -127,7 +140,8 @@ internal sealed partial class SessionManager
             throw new QuestionNotOpenException(
                 $"Question {questionId} is no longer open; it was {SessionQuestions.Status(record)}."
             );
-        var answer = SessionQuestions.ParseAnswer(record, body);
+        var entered = new List<SecretAnswer>();
+        var answer = SessionQuestions.ParseAnswer(record, body, entered);
         var text = SessionQuestions.RenderAnswer(questionId, record, answer);
         var stored = (JsonObject)answer.DeepClone();
         stored["questionId"] = questionId;
@@ -144,16 +158,31 @@ internal sealed partial class SessionManager
         var item = new QueueItem(
             QueueItemType.User,
             SessionBoundary.ChannelInput([new JsonObject { ["text"] = text }], "webui"),
-            OpenFields: new JsonObject { ["userInput"] = true, ["questionAnswer"] = stored }
+            OpenFields: InputSender.With(
+                new JsonObject { ["userInput"] = true, ["questionAnswer"] = stored },
+                sender
+            )
         );
-        await new SessionRuntime(this).SubmitExternalAsync(
-            owner,
-            item,
-            () =>
-            {
-                if (!Accepting)
-                    throw new InvalidOperationException("Host is shutting down.");
-            }
-        );
+        // Entered secrets are stored before the answer is admitted, and removed again if it is
+        // not, so the model never learns of a secret that was not kept.
+        var storedSecrets = StoreSecretAnswers(owner, entered, sender);
+        try
+        {
+            await new SessionRuntime(this).SubmitExternalAsync(
+                owner,
+                item,
+                () =>
+                {
+                    if (!Accepting)
+                        throw new InvalidOperationException("Host is shutting down.");
+                }
+            );
+        }
+        catch
+        {
+            RemoveSecretAnswers(storedSecrets);
+            throw;
+        }
+        await RestartSecretConsumersAsync(storedSecrets);
     }
 }

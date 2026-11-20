@@ -52,7 +52,7 @@ public sealed class WindowsLocalToolsTests
             default,
             paths
         );
-        Assert.Contains("Switched to background", second["output"]!.GetValue<string>());
+        ExecReceipt.Header(second["output"]!.GetValue<string>());
         await manager.DisposeAsync();
         // A fresh manager observes the same owned command. It never relaunches it.
         await using var reopened = new LocalExecManager(
@@ -61,13 +61,7 @@ public sealed class WindowsLocalToolsTests
             (_, _, _) => Task.CompletedTask
         );
         await reopened.InitializeAsync(id => id == "windows");
-        var execId = System
-            .Text.RegularExpressions.Regex.Match(
-                second["output"]!.GetValue<string>(),
-                "execId: ([a-z]+-[a-z]+)"
-            )
-            .Groups[1]
-            .Value;
+        var execId = ExecReceipt.Id(second["output"]!.GetValue<string>());
         Assert.NotEmpty(execId);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         while (!File.Exists(marker))

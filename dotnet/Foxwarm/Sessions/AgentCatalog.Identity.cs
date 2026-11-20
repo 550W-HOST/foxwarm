@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
@@ -56,7 +57,7 @@ internal sealed partial class AgentCatalog
             file.Write(System.Text.Encoding.UTF8.GetBytes(proof));
             file.Flush(flushToDisk: true);
         }
-        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+        DirectorySync.Sync(directory);
     }
 
     private string[] IdentityCleanupDirectories(string name, string? preparationName)
@@ -122,7 +123,7 @@ internal sealed partial class AgentCatalog
                     AtomicIndexWrite(
                         indexPath,
                         Payload(List().Where(id => id is not "main" && id != name), next)
-                            .ToJsonString()
+                            .ToJsonText()
                     );
                 }
                 catch (AuthorityCommittedException)
@@ -163,7 +164,7 @@ internal sealed partial class AgentCatalog
             if (!IdentityProofMatches(directory, preparationName))
                 throw new AgentIdentityCleanupException([marker]);
             File.Delete(marker);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+            DirectorySync.Sync(directory);
         }
         finally
         {
@@ -171,13 +172,17 @@ internal sealed partial class AgentCatalog
         }
     }
 
+    // The memory directory an Agent copy reads from or writes to, canonical through the same
+    // resolution ordinary file reads and writes use (a symlinked root is its physical target).
+    // The copy and its authorization facts (the read and write legs) both use it. The Agent
+    // need not exist yet.
+    internal string MemoryCopyRoot(string agent) =>
+        AuthorizationPaths.CanonicalPotential(Path.Combine(SourceDirectory(agent), "memory"));
+
     internal void CopyIdentityMemory(string sourceAgent, string targetAgent)
     {
-        var source = Path.Combine(SourceDirectory(sourceAgent), "memory");
-        // Main's memory owner is independent of its tool workspace.
-        if (sourceAgent == "main")
-            source = MemoryDirectory(sourceAgent);
-        var target = MemoryDirectory(targetAgent);
+        var source = MemoryCopyRoot(sourceAgent);
+        var target = MemoryCopyRoot(targetAgent);
         if (!Directory.Exists(source))
             return;
         static void Copy(DirectoryInfo source, string target)

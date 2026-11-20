@@ -116,11 +116,16 @@ internal sealed partial class QQBotChannel
         }
         try
         {
-            await EnqueueReplyAsync(messageId, expected, Send);
+            await EnqueueReplyAsync(
+                messageId,
+                expected,
+                () => health.TrackAsync(SendingPath, Send, token)
+            );
         }
         catch (Exception error) when (messageId is not null && options.TurnFinal)
         {
-            log(error);
+            // Tracking has already reported a channel-level failure.
+            health.Log(error);
         }
     }
 
@@ -230,32 +235,37 @@ internal sealed partial class QQBotChannel
         await EnqueueReplyAsync(
             messageId,
             expected,
-            async () =>
-            {
-                RequireCurrent(expected);
-                var sequence = AllocateSequence();
-                var fileInfo = await QQBotUpload.UploadAsync(
-                    target.Kind,
-                    target.Id,
-                    file,
-                    config["media"] as JsonObject,
-                    (path, body) => ApiAsync(path, body, token, 4 * 1024 * 1024, expected),
-                    http,
-                    () => RequireCurrent(expected),
-                    token,
-                    partTimeout
-                );
-                RequireCurrent(expected);
-                var body = new JsonObject
-                {
-                    ["msg_type"] = 7,
-                    ["media"] = new JsonObject { ["file_info"] = fileInfo },
-                    ["msg_seq"] = sequence,
-                };
-                if (caption?.Trim() is { Length: > 0 } content)
-                    body["content"] = content[..Math.Min(2000, content.Length)];
-                await SendFinalAsync(MessagePath(target), body, messageId, expected, token);
-            }
+            () =>
+                health.TrackAsync(
+                    SendingPath,
+                    async () =>
+                    {
+                        RequireCurrent(expected);
+                        var sequence = AllocateSequence();
+                        var fileInfo = await QQBotUpload.UploadAsync(
+                            target.Kind,
+                            target.Id,
+                            file,
+                            config["media"] as JsonObject,
+                            (path, body) => ApiAsync(path, body, token, 4 * 1024 * 1024, expected),
+                            http,
+                            () => RequireCurrent(expected),
+                            token,
+                            partTimeout
+                        );
+                        RequireCurrent(expected);
+                        var body = new JsonObject
+                        {
+                            ["msg_type"] = 7,
+                            ["media"] = new JsonObject { ["file_info"] = fileInfo },
+                            ["msg_seq"] = sequence,
+                        };
+                        if (caption?.Trim() is { Length: > 0 } content)
+                            body["content"] = content[..Math.Min(2000, content.Length)];
+                        await SendFinalAsync(MessagePath(target), body, messageId, expected, token);
+                    },
+                    token
+                )
         );
     }
 }

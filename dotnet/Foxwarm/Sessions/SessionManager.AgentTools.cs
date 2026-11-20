@@ -48,18 +48,13 @@ internal sealed partial class SessionManager
         {
             if (args is null)
                 throw new InvalidDataException("Tool arguments must be an object.");
-            if (name == "delete_session" && AgentIsolated(source.Agent))
-                throw new SessionDeletionException(
-                    "Isolated session cannot use delete_session tool.",
-                    "SESSION_DELETE_ISOLATED",
-                    403
-                );
             await AuthorizeToolAsync(
                 source,
                 new(name, "builtin", name, args),
                 null,
                 semanticCaller.Value ?? CancellationToken.None
             );
+            HandoffConfirmation.RejectRenamedTurnAction(name, args);
             HandoffConfirmation.Validate(name, args, HandoffConfirmationEnabled);
             switch (name)
             {
@@ -82,23 +77,10 @@ internal sealed partial class SessionManager
                             "SESSION_DELETE_SOURCE_NOT_FOUND",
                             404
                         );
-                    if (
-                        agents.MetadataSnapshot()[source.Agent] is JsonObject metadata
-                        && SessionCatalog.Flag(metadata["isolated"])
-                    )
-                        throw new SessionDeletionException(
-                            "Isolated session cannot use delete_session tool.",
-                            "SESSION_DELETE_ISOLATED",
-                            403
-                        );
-                    var result = await DeleteAsync(
-                        RequiredString(args, "sessionId"),
-                        source: source
-                    );
-                    return (
-                        Output(DeleteToolText(RequiredString(args, "sessionId"), result)),
-                        false
-                    );
+                    // A Session reference is trimmed as its authorization target is.
+                    var requested = SessionGoal.Trim(RequiredString(args, "sessionId"));
+                    var result = await DeleteAsync(requested, source: source);
+                    return (Output(DeleteToolText(requested, result)), false);
                 }
                 case "set_agent_rules":
                 {
@@ -112,33 +94,6 @@ internal sealed partial class SessionManager
                     );
                     return (Output("Agent rules replaced."), false);
                 }
-                case "set_agent_isolated":
-                {
-                    Keys(args, ["agentName", "nodeId", "toolRules"], ["agentName"]);
-                    var agent = RequiredString(args, "agentName");
-                    var node = OptionalString(args, "nodeId")?.Trim();
-                    if (node == "")
-                        node = null;
-                    if (args.ContainsKey("toolRules") && args["toolRules"] is not JsonArray)
-                        throw new InvalidDataException("toolRules must be an array.");
-                    await SetAgentIsolationAsync(
-                        agent,
-                        node,
-                        args.ContainsKey("nodeId"),
-                        args["toolRules"] as JsonArray
-                    );
-                    var isolation = agents.MetadataSnapshot()[agent] as JsonObject;
-                    return (
-                        new JsonObject
-                        {
-                            ["success"] = true,
-                            ["isolated"] = AgentIsolated(agent),
-                            ["node"] = RecordedIsolationNode(agent),
-                            ["toolRuleCount"] = (isolation?["toolRules"] as JsonArray)?.Count ?? 0,
-                        },
-                        false
-                    );
-                }
                 case "create_agent":
                 {
                     Keys(
@@ -150,8 +105,6 @@ internal sealed partial class SessionManager
                             "inheritMemory",
                             "sourceSessionId",
                             "convertSession",
-                            "isolatedNode",
-                            "toolRules",
                             "rules",
                             "defaultNode",
                             "defaultCwd",
@@ -175,17 +128,12 @@ internal sealed partial class SessionManager
                             "convertSession requires createMainSession=true."
                         );
                     var copyMemory = OptionalBool(args, "inheritMemory") ?? false;
-                    var sourceId = OptionalString(args, "sourceSessionId");
-                    sourceId = string.IsNullOrEmpty(sourceId) ? null : sourceId;
-                    JsonArray? rules = null;
-                    if (args.ContainsKey("toolRules"))
-                        rules = IsolatedToolCompatibility
-                            .Metadata(
-                                new JsonObject { ["toolRules"] = args["toolRules"]?.DeepClone() }
-                            )
-                            .Rules;
-                    var inherit = OptionalString(args, "inherit");
-                    inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
+                    var sourceSelection = SessionCreationDefaults.CreationSource(
+                        OptionalString(args, "sourceSessionId"),
+                        source.Id
+                    );
+                    var sourceId = sourceSelection.Caller ? null : sourceSelection.Id;
+                    var inherit = AgentCatalog.InheritName(OptionalString(args, "inherit"));
                     if (inherit is not null && !agents.Exists(inherit))
                         throw new InvalidDataException(
                             $"Inherited Agent '{inherit}' does not exist."
@@ -201,8 +149,8 @@ internal sealed partial class SessionManager
                         var selectedSource = sourceId is null
                             ? source
                             : await ResolveAgentCreationSourceAsync(sourceId, source);
-                        // Agent conversion is authorized for a nonisolated caller above. Source
-                        // enters identity rename directly, not ordinary move_session isolation policy.
+                        // Agent conversion is authorized above. Source enters identity rename
+                        // directly, not ordinary move_session policy.
                         await RenameIdentityAsync(
                             source,
                             new JsonObject
@@ -239,21 +187,9 @@ internal sealed partial class SessionManager
                         );
                         mainId = created.MainSessionId;
                     }
-                    var isolatedNode = OptionalString(args, "isolatedNode");
-                    isolatedNode = string.IsNullOrWhiteSpace(isolatedNode)
-                        ? null
-                        : isolatedNode.Trim();
-                    if (isolatedNode is not null || rules is not null)
-                        await SetAgentIsolationAsync(
-                            nameValue,
-                            isolatedNode,
-                            isolatedNode is not null,
-                            rules
-                        );
-
                     if (inherit is not null)
                         await SetAgentInheritAsync(nameValue, inherit);
-                    if (mainId is not null && (inherit is not null || isolatedNode is not null))
+                    if (mainId is not null && inherit is not null)
                         await RefreshSnapshotAsync(await RequiredAsync(mainId));
                     return (
                         Output(
@@ -264,6 +200,8 @@ internal sealed partial class SessionManager
                         false
                     );
                 }
+                case "set_session_model":
+                    return (await SessionModelAsync(source, args), false);
                 case "set_session_child_model":
                 case "set_session_compact_threshold":
                     return (await SessionSettingsAsync(source, name, args), false);
@@ -287,7 +225,7 @@ internal sealed partial class SessionManager
                         OptionalString(args, "inheritAgentName"),
                         OptionalBool(args, "refreshSnapshots") ?? false
                     );
-                    return (Output(System.Text.Json.JsonSerializer.Serialize(result)), false);
+                    return ((JsonObject)result, false);
                 }
                 case "create_session":
                 {
@@ -301,11 +239,13 @@ internal sealed partial class SessionManager
                             "node",
                             "runtime",
                             "forceModel",
+                            "model",
                             "systemPromptFiles",
                         ],
                         ["agentName", "sessionName"]
                     );
-                    var forceModel = OptionalForceModel(args);
+                    var forceModel = OptionalModelRequest(args, "forceModel");
+                    var suggestedModel = OptionalModelRequest(args, "model");
                     if (
                         args.ContainsKey("systemPromptFiles")
                         && args["systemPromptFiles"] is not JsonArray
@@ -325,29 +265,31 @@ internal sealed partial class SessionManager
                         );
                     RequireCreationParent(source.Agent, OptionalString(args, "parentSessionId"));
                     var settings = source.Entry.Snapshot().AuthorityEnvelope;
+                    var runtime = ClaudeRuntimeState.ValidateSelection(
+                        args["runtime"],
+                        args.ContainsKey("runtime")
+                    );
+                    var modelPlan = PlanCreationModel(
+                        settings,
+                        forceModel,
+                        suggestedModel,
+                        ignoreSuggested: runtime == ClaudeRuntimeState.Kind
+                    );
                     var created = await CreateNamedAsync(
                         agentName,
                         RequiredString(args, "sessionName"),
                         OptionalString(args, "displayName"),
-                        forceModel,
+                        modelPlan.Force,
                         initialNode: CreationNode(args),
-                        inherited: (
-                            SessionWait.Text(settings["childModelDefault"])
-                                ?? SessionWait.Text(settings["model"]),
-                            SessionWait.Text(settings["childEffortDefault"])
-                                ?? SessionWait.Text(settings["effort"])
-                        ),
+                        inherited: modelPlan.Inherited,
                         selectedFiles: selection,
                         parentSessionId: OptionalString(args, "parentSessionId"),
-                        runtime: ClaudeRuntimeState.ValidateSelection(
-                            args["runtime"],
-                            args.ContainsKey("runtime")
-                        )
+                        runtime: runtime
                     );
-                    return (
-                        Output($"Created Session {created.Id} under Agent {created.Agent}."),
-                        false
-                    );
+                    var createdText = $"Created Session {created.Id} under Agent {created.Agent}.";
+                    if (DescribeCreationModel(modelPlan, created) is { } modelText)
+                        createdText += " " + modelText;
+                    return (Output(createdText), false);
                 }
                 case "create_child_session":
                 {
@@ -359,9 +301,10 @@ internal sealed partial class SessionManager
                             "displayName",
                             "handoffRecall",
                             "message",
-                            "afterSend",
+                            "currentSessionTurnAction",
                             "runtime",
                             "forceModel",
+                            "model",
                             "node",
                             "fork",
                             "taskId",
@@ -369,8 +312,10 @@ internal sealed partial class SessionManager
                         ],
                         ["suffix"]
                     );
-                    var forceModel = OptionalForceModel(args);
-                    var after = AfterSend(args);
+                    var forceModel = OptionalModelRequest(args, "forceModel");
+                    var suggestedModel = OptionalModelRequest(args, "model");
+                    CreationModelPlan? modelPlan = null;
+                    var after = CurrentSessionTurnAction(args);
                     var taskId = OptionalString(args, "taskId");
                     if (
                         after == "wait"
@@ -378,7 +323,7 @@ internal sealed partial class SessionManager
                         && string.IsNullOrWhiteSpace(OptionalString(args, "message"))
                     )
                         throw new InvalidDataException(
-                            "create_child_session with afterSend=wait requires a nonempty initial message."
+                            "create_child_session with currentSessionTurnAction=wait requires a nonempty initial message."
                         );
                     var initialMessage = OptionalString(args, "message");
                     var initialNode = CreationNode(args);
@@ -403,11 +348,13 @@ internal sealed partial class SessionManager
                                 args["runtime"],
                                 args.ContainsKey("runtime")
                             ),
-                            creatorCallId: modelCallId
+                            creatorCallId: modelCallId,
+                            model: suggestedModel
                         );
                     if (taskId is null)
                     {
                         var created = await CreateAsync();
+                        modelPlan = created.ModelPlan;
                         child = created.Child;
                         delivered = created.Delivered;
                         callVisible = created.CallVisible;
@@ -421,6 +368,7 @@ internal sealed partial class SessionManager
                             async () =>
                             {
                                 var created = await CreateAsync();
+                                modelPlan = created.ModelPlan;
                                 callVisible = created.CallVisible;
                                 return created.Child;
                             },
@@ -444,6 +392,15 @@ internal sealed partial class SessionManager
                         childOutput += ". Initial message sent.";
                     else if (fork)
                         childOutput += ". It stays idle until it receives a message.";
+                    if (
+                        modelPlan is not null
+                        && DescribeCreationModel(modelPlan, child) is { } childModelText
+                    )
+                    {
+                        if (!childOutput.EndsWith('.'))
+                            childOutput += ".";
+                        childOutput += " " + childModelText;
+                    }
                     var childResult = Output(
                         childOutput,
                         delivered && after == "wait" ? child.Id : null
@@ -451,7 +408,7 @@ internal sealed partial class SessionManager
                     childResult["sentNotifications"] = sentNotifications;
                     return (
                         childResult,
-                        taskId is null ? after == "finish" : delivered && after == "finish"
+                        taskId is null ? after == "end_turn" : delivered && after == "end_turn"
                     );
                 }
                 case "send_to_session":
@@ -462,12 +419,12 @@ internal sealed partial class SessionManager
                             "sessionId",
                             "handoffRecall",
                             "message",
-                            "afterSend",
+                            "currentSessionTurnAction",
                             "handoffConfirmation",
                         ],
                         ["sessionId", "message"]
                     );
-                    var after = AfterSend(args);
+                    var after = CurrentSessionTurnAction(args);
                     var requested = RequiredString(args, "sessionId");
                     var target = await SendAsync(
                         source,
@@ -490,7 +447,7 @@ internal sealed partial class SessionManager
                                 : $"Message sent to session `{target}` (requested `{requested}`)",
                             after == "wait" ? target : null
                         ),
-                        after == "finish"
+                        after == "end_turn"
                     );
                 }
                 case "refresh_session_snapshot":
@@ -521,20 +478,19 @@ internal sealed partial class SessionManager
         }
         catch (SessionDeletionException error)
         {
-            var response = UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
-            response["error"]!["details"] = error.Details.DeepClone();
+            var response = ToolFailure.Result(error.Message, error.Code);
+            response["details"] = error.Details.DeepClone();
             return (response, false);
         }
         catch (CommittedSessionCreationException error)
         {
-            var response = UnsupportedTurnToolExecutor.ToolError("partial_create", error.Message);
-            var detail = response["error"] as JsonObject;
+            var response = ToolFailure.Result(error.Message);
             if (error.SessionId is not null)
-                detail!["sessionId"] = error.SessionId;
+                response["sessionId"] = error.SessionId;
             if (error.InitialDeliveryCommitted is not null)
-                detail!["initialDeliveryCommitted"] = error.InitialDeliveryCommitted;
+                response["initialDeliveryCommitted"] = error.InitialDeliveryCommitted;
             if (error.ParentNoticeCommitted is not null)
-                detail!["parentNoticeCommitted"] = error.ParentNoticeCommitted;
+                response["parentNoticeCommitted"] = error.ParentNoticeCommitted;
             return (response, false);
         }
         catch (Exception error)
@@ -549,7 +505,7 @@ internal sealed partial class SessionManager
             )
         {
             return (
-                UnsupportedTurnToolExecutor.ToolError("agent_tool_error", error.Message),
+                ToolFailure.Result(error.Message),
                 false
             );
         }
@@ -598,23 +554,25 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 "node must be a bounded non-empty string when provided."
             );
-        return node;
+        return SessionCreationDefaults.ExplicitNode(node);
     }
 
-    private static string AfterSend(JsonObject args)
+    private static string CurrentSessionTurnAction(JsonObject args)
     {
-        var value = OptionalString(args, "afterSend") ?? "continue";
-        if (value is not ("continue" or "finish" or "wait"))
-            throw new InvalidDataException("afterSend must be continue, finish, or wait.");
+        var value = OptionalString(args, "currentSessionTurnAction") ?? "continue";
+        if (value is not ("continue" or "end_turn" or "wait"))
+            throw new InvalidDataException(
+                "currentSessionTurnAction must be continue, end_turn, or wait."
+            );
         return value;
     }
 
-    private static JsonObject? OptionalForceModel(JsonObject args)
+    private static JsonObject? OptionalModelRequest(JsonObject args, string name)
     {
-        if (!args.ContainsKey("forceModel"))
+        if (!args.ContainsKey(name))
             return null;
-        if (args["forceModel"] is not JsonObject force)
-            throw new InvalidDataException("forceModel must be an object.");
+        if (args[name] is not JsonObject force)
+            throw new InvalidDataException($"{name} must be an object.");
         Keys(force, ["modelId", "effort"], []);
         if (force.ContainsKey("modelId"))
             _ = RequiredString(force, "modelId");

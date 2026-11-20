@@ -67,7 +67,7 @@ internal static class ExecNative
                     ["logPath"] = args[2],
                     ["statusPath"] = args[3],
                     ["cwdPath"] = args[4],
-                }.ToJsonString() + "\n"
+                }.ToJsonText() + "\n"
             );
             return 0;
         }

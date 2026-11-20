@@ -6,6 +6,7 @@ const sourcePath = new URL('../src/streamingAssistantDraft.ts', import.meta.url)
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
 const { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
+
 test('synthetic assistant messages retain the canonical request identity for render reconciliation', () => {
   const message = buildStreamingAssistantMessage({
     streamId: 'stream-1',
@@ -310,3 +311,31 @@ test('ordered empty reasoning items survive without inventing a loading-only rea
   assert.deepEqual(message.parts,[{thinking:''},{thinking:''},{text:'Final answer'}])
   assert.equal(message.__meta.usage,undefined)
 })
+
+
+for (const [status, label] of [
+  ['in_progress', 'Generating image…'],
+  ['generating', 'Generating image…'],
+  ['completed', 'Image ready'],
+  ['failed', 'Image generation failed'],
+  ['incomplete', 'Image generation incomplete'],
+]) {
+  test(`hosted image ${status} has an explicit live and reconnect status`, () => {
+    let draft = applyModelStreamEvent(null, { type: 'model-stream-reset', streamId: 'image-status', iteration: 0 })
+    draft = applyModelStreamEvent(draft, {
+      type: 'model-stream-update', streamVersion: 2, streamId: 'image-status', sequence: 1,
+      partDeltas: [{ outputIndex: 0, kind: 'image-generation', added: true, status: 'in_progress' }],
+    })
+    draft = applyModelStreamEvent(draft, {
+      type: 'model-stream-update', streamVersion: 2, streamId: 'image-status', sequence: 2,
+      partDeltas: [{ outputIndex: 0, kind: 'image-generation', status }],
+    })
+    assert.equal(buildStreamingAssistantMessage(draft).parts[0].system, label)
+    const reconnected = applyModelStreamSnapshot({ ...draft })
+    assert.equal(buildStreamingAssistantMessage(reconnected).parts[0].system, label)
+    if (status === 'failed' || status === 'incomplete') {
+      assert.equal(buildStreamingAssistantMessage(reconnected).parts[0].providerMeta.openaiResponses.imageGenerationFailure.status, status)
+      assert.doesNotMatch(JSON.stringify(buildStreamingAssistantMessage(reconnected)), /Generating image|Image ready/)
+    }
+  })
+}

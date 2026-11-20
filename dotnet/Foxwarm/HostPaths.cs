@@ -24,8 +24,8 @@ internal sealed record HostPaths(
     )
     {
         var env = environment ?? Environment.GetEnvironmentVariable;
-        var resources = Path.GetFullPath(resourceRoot ?? AppContext.BaseDirectory);
-        var app = Path.GetFullPath(applicationRoot ?? resources);
+        var resources = NormalizedRoot(resourceRoot ?? AppContext.BaseDirectory);
+        var app = NormalizedRoot(applicationRoot ?? resources);
         var selected = Nonblank(env("FOXWARM_DATA_DIR"));
         var pointer = Path.Combine(app, "data_dir");
         selected ??= File.Exists(pointer) ? Nonblank(File.ReadAllText(pointer)) : null;
@@ -41,8 +41,8 @@ internal sealed record HostPaths(
     )
     {
         var env = environment ?? Environment.GetEnvironmentVariable;
-        var resources = Path.GetFullPath(resourceRoot ?? AppContext.BaseDirectory);
-        var app = Path.GetFullPath(applicationRoot ?? resources);
+        var resources = NormalizedRoot(resourceRoot ?? AppContext.BaseDirectory);
+        var app = NormalizedRoot(applicationRoot ?? resources);
         var data = Resolve(dataRoot, app, (env("HOME") ?? ""));
         return new(
             app,
@@ -83,8 +83,13 @@ internal sealed record HostPaths(
             else if (value.StartsWith("~/", StringComparison.Ordinal))
                 value = Path.Combine(home, value[2..]);
         }
-        return Path.GetFullPath(value, applicationRoot);
+        return NormalizedRoot(Path.GetFullPath(value, applicationRoot));
     }
+
+    // Roots are compared and extended as exact paths below, so they carry no trailing separator.
+    // AppContext.BaseDirectory and a saved data_dir pointer may end with one.
+    private static string NormalizedRoot(string path) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
     private static string? Nonblank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

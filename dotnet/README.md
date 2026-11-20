@@ -8,7 +8,7 @@ The .NET 10 solution contains managed Main, a standalone CLI Node, shared native
 | --- | --- |
 | `Foxwarm/` | Main host, HTTP/channels, Sessions, models, tools and delivery resources |
 | `Foxwarm.CliNode/` | Standalone managed CLI Node |
-| `Foxwarm.NodePrimitives/`, `Foxwarm.BrowserSupport/` | Shared native and browser support |
+| `Foxwarm.NodePrimitives/` | Shared native support and the managed browser host launcher |
 | `Foxwarm.Desktop/` | Optional Windows WinForms/WebView2 host |
 | `Foxwarm.DevTools/` | `conditional-memory`, `responses-request`, `responses-stream` and `session-restart` probes |
 | `Foxwarm.Tests/` | xUnit tests, source fixtures/corpora and qualification scripts |

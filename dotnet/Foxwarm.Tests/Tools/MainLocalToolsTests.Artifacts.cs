@@ -28,8 +28,8 @@ public sealed partial class MainLocalToolsTests
         var id = SessionWait.Text(prepared["preparedArtifact"]?["artifactId"])!;
         Assert.Contains(id, SessionWait.Text(prepared["marker"])!);
         var publish = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "builtin:artifact",
                 ["args"] = new JsonObject
@@ -39,7 +39,7 @@ public sealed partial class MainLocalToolsTests
                     ["artifactId"] = id,
                     ["expectedRevision"] = 1,
                 },
-            }
+            })
         );
         Assert.Null(publish["error"]);
         Assert.True(ArtifactStore.ValidReceipt(publish["artifact"]));
@@ -65,10 +65,8 @@ public sealed partial class MainLocalToolsTests
         );
         Assert.Null(get["error"]);
         Assert.Null(get["artifact"]);
-        Assert.Equal(
-            1,
-            SessionWait.Number(JsonNode.Parse(SessionWait.Text(get["output"])!)!["revision"])
-        );
+        Assert.Null(get["output"]);
+        Assert.Equal(1, SessionWait.Number(get["metadata"]!["revision"]));
         // Generic file policy and independent concrete read policy are both required.
         var policy = Path.Combine(f.Temp.Path, "data", "state", "tool-authorization.yaml");
         await File.WriteAllTextAsync(
@@ -165,8 +163,8 @@ public sealed partial class MainLocalToolsTests
             "explicit/source",
             registry
                 .Resolve(
-                    "call_tool",
-                    new JsonObject
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject
                     {
                         ["toolId"] = "builtin:artifact",
                         ["args"] = new JsonObject
@@ -174,7 +172,7 @@ public sealed partial class MainLocalToolsTests
                             ["action"] = "publish",
                             ["node"] = "explicit/source",
                         },
-                    },
+                    }),
                     "selected"
                 )
                 .ExecutionNode

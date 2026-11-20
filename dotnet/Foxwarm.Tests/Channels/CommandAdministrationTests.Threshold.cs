@@ -57,7 +57,7 @@ public sealed partial class CommandAdministrationTests
         {
             await f.Router.HandleExternalMessageAsync(
                 source,
-                Message("/session compact-threshold 8000 ignored")
+                Message("/session compact-threshold 8000")
             );
             Assert.Equal(8000, f.Owner.Metadata().CompactThreshold);
             await f.Router.HandleExternalMessageAsync(
@@ -96,13 +96,13 @@ public sealed partial class CommandAdministrationTests
         async Task Set(JsonObject args)
         {
             var result = await f.ToolAsync(
-                "call_tool",
-                new JsonObject
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject
                 {
                     ["source"] = "builtin",
                     ["name"] = "set_session_compact_threshold",
                     ["args"] = args,
-                }
+                })
             );
             Assert.Null(result?["error"]);
         }

@@ -9,12 +9,15 @@ internal sealed partial class SessionManager
     private WorkspaceTools AgentFileWorkspace(SessionOwner owner) =>
         new(AgentDirectory(owner.Agent));
 
+    // Master endpoints resolve like the invocation's own file tools: the Session working directory
+    // when master is the current Node, otherwise the Agent directory.
     private IReadOnlyList<AuthorizationPath> CopyAuthorizationPaths(
         SessionOwner owner,
-        JsonObject args
+        JsonObject args,
+        WorkspaceTools? invocationFiles
     )
     {
-        var files = AgentFileWorkspace(owner);
+        var files = invocationFiles ?? AgentFileWorkspace(owner);
         var paths = new List<AuthorizationPath>();
         foreach (var endpoint in new[] { "source", "target" })
         {
@@ -33,19 +36,6 @@ internal sealed partial class SessionManager
             );
         }
         return paths;
-    }
-
-    private void RequireFileNodeBoundary(SessionOwner owner, string node)
-    {
-        if (
-            AgentIsolated(owner.Agent)
-            && node != "master"
-            && node != CurrentNode(owner)
-            && node != BoundNode(owner.Agent)
-        )
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Agent can only transfer files between master and its bound/current Node."
-            );
     }
 
     internal Task AuthorizeNodeFileAsync(
@@ -68,6 +58,92 @@ internal sealed partial class SessionManager
             files,
             token
         );
+
+    internal async Task<TransferSource> OpenNodeReadAsync(
+        SessionOwner owner,
+        string node,
+        string raw,
+        WorkspaceTools files,
+        CancellationToken token,
+        string? sessionCwd = null
+    )
+    {
+        if (node != "master")
+            return await NodeProviders.OpenReadAsync(node, raw, owner, false, token, sessionCwd);
+        var path = files.Paths.FilePath(raw);
+        if (!WorkspaceTools.RegularFile(path))
+            throw new InvalidDataException("Not a regular file: " + raw);
+        var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            65536,
+            FileOptions.Asynchronous | FileOptions.SequentialScan
+        );
+        if (!WorkspaceTools.RegularFileHandle(stream, path))
+        {
+            await stream.DisposeAsync();
+            throw new InvalidDataException("Not a regular file: " + raw);
+        }
+        return new(stream, stream.Length, path, Path.GetFileName(path));
+    }
+
+    internal async Task<(string Path, string Sha256)> WriteNodeStreamAsync(
+        SessionOwner owner,
+        string node,
+        string raw,
+        Stream input,
+        long length,
+        bool overwrite,
+        WorkspaceTools files,
+        CancellationToken token,
+        Action<long>? progress = null,
+        string? sessionCwd = null
+    )
+    {
+        if (node != "master")
+            return await NodeProviders.WriteStreamAsync(
+                node,
+                raw,
+                input,
+                length,
+                overwrite,
+                owner,
+                false,
+                token,
+                progress,
+                sessionCwd
+            );
+        var path = files.Paths.FilePath(raw);
+        if (
+            Directory.Exists(path)
+            || !overwrite && (File.Exists(path) || new FileInfo(path).LinkTarget is not null)
+        )
+            throw new IOException(
+                "File already exists: " + raw + ". Use overwrite=true to overwrite."
+            );
+        if (File.Exists(path) && !WorkspaceTools.RegularFile(path))
+            throw new IOException("File target must be a regular file.");
+        token.ThrowIfCancellationRequested();
+        owner.Entry.RequireIdentityAuthority();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string? sha = null;
+        if (
+            !await FileToolWrite.WriteStreamAtomic(
+                path,
+                overwrite,
+                () => _ = files.Paths.FilePath(raw),
+                async output =>
+                    sha = await TransferStream.CopyAsync(input, output, length, token, progress),
+                token
+            )
+        )
+            throw new IOException(
+                "File already exists: " + raw + ". Use overwrite=true to overwrite."
+            );
+        return (path, sha!);
+    }
 
     internal async Task<NodeConnectionHub.TransferFile> ReadNodeFileAsync(
         SessionOwner owner,
@@ -118,7 +194,8 @@ internal sealed partial class SessionManager
         byte[] bytes,
         bool overwrite,
         WorkspaceTools files,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         if (node != "master")
@@ -130,7 +207,8 @@ internal sealed partial class SessionManager
                 overwrite,
                 owner,
                 false,
-                token
+                token,
+                sessionCwd
             );
             return SessionWait.Text(result["absolutePath"])
                 ?? SessionWait.Text(result["filePath"])
@@ -162,61 +240,5 @@ internal sealed partial class SessionManager
                 "File already exists: " + raw + ". Use overwrite=true to overwrite."
             );
         return path;
-    }
-
-    internal async Task<JsonObject> CopyBetweenNodesAsync(
-        SessionOwner owner,
-        JsonObject args,
-        CancellationToken token
-    )
-    {
-        ToolRegistry.Keys(
-            args,
-            ["sourceNode", "sourcePath", "targetNode", "targetPath", "overwrite"]
-        );
-        string Required(string key) =>
-            ToolRegistry.Text(args, key) is { } value && !string.IsNullOrWhiteSpace(value)
-                ? value
-                : throw new InvalidDataException("copy_between_nodes requires " + key + ".");
-        var source = Required("sourceNode").Trim();
-        var target = Required("targetNode").Trim();
-        var sourcePath = Required("sourcePath");
-        var targetPath = Required("targetPath");
-        var overwrite = OptionalBool(args, "overwrite") ?? false;
-        using var admission = BeginOwnerMutation(owner);
-        var files = AgentFileWorkspace(owner);
-        // The compound builtin owns both endpoint facts; ordinary Node tool grants are not transfer grants.
-        await AuthorizeToolAsync(
-            owner,
-            new("copy_between_nodes", "builtin", "copy_between_nodes", args),
-            files,
-            token
-        );
-        var file = await ReadNodeFileAsync(owner, source, sourcePath, files, token);
-        await WaitForIdentityMutationAsync(owner.Id, token);
-        files = AgentFileWorkspace(owner);
-        await AuthorizeToolAsync(
-            owner,
-            new("copy_between_nodes", "builtin", "copy_between_nodes", args),
-            files,
-            token
-        );
-        var path = await WriteNodeFileAsync(
-            owner,
-            target,
-            targetPath,
-            file.Bytes,
-            overwrite,
-            files,
-            token
-        );
-        return new JsonObject
-        {
-            ["output"] =
-                $"Copied `{sourcePath}` on `{source}` to `{targetPath}` on `{target}` ({file.Bytes.Length} bytes).",
-            ["targetNode"] = target,
-            ["fullPath"] = path,
-            ["sizeBytes"] = file.Bytes.Length,
-        };
     }
 }

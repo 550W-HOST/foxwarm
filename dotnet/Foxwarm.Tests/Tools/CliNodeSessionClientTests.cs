@@ -20,11 +20,13 @@ public sealed class CliNodeSessionClientTests
         private WebSocket socket = null!;
         private Task running = null!;
         internal NodeClient Client = null!;
+        internal Task<JsonArray>? ConnectingList;
 
         internal string Root => temp.Path;
 
         internal async Task Start(
-            Func<NodeToolCall, CancellationToken, Task<ToolApproval>>? intercept = null
+            Func<NodeToolCall, CancellationToken, Task<ToolApproval>>? intercept = null,
+            bool listWhileConnecting = false
         )
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
@@ -82,8 +84,24 @@ public sealed class CliNodeSessionClientTests
                 new NodePaths(temp.Path)
             );
             running = Client.Run(stop.Token);
+            if (listWhileConnecting)
+                ConnectingList = await FirstAdmittedList();
             Assert.Equal("node_register", (await Next())["type"]!.ToString());
             await Send(new JsonObject { ["type"] = "registered", ["nodeId"] = "one" });
+        }
+
+        // Issues a list request at the first moment the client accepts one for sending.
+        private async Task<Task<JsonArray>> FirstAdmittedList()
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (true)
+            {
+                var list = Client.ListBoundSessions();
+                if (!list.IsFaulted)
+                    return list;
+                await Task.Yield();
+                deadline.Token.ThrowIfCancellationRequested();
+            }
         }
 
         internal async Task<JsonObject> Next() =>
@@ -173,7 +191,7 @@ public sealed class CliNodeSessionClientTests
         var rejected = await peer.Next();
         Assert.Equal("tool_call_error", rejected["type"]!.ToString());
         Assert.False(rejected["execStarted"]!.GetValue<bool>());
-        Assert.Contains("not executed", rejected["error"]!["message"]!.ToString());
+        Assert.Contains("not executed", rejected.FailureMessage()!);
         lateApproval.SetResult(ToolApproval.Approved);
         var admitted = Path.Combine(peer.Root, "admitted");
         await peer.Send(
@@ -274,6 +292,21 @@ public sealed class CliNodeSessionClientTests
         Assert.False(ordinary.IsCompleted);
         await peer.Reply(frame);
         await ordinary;
+    }
+
+    [Fact]
+    public async Task Session_request_admitted_while_connecting_follows_registration()
+    {
+        await using var peer = new Peer();
+        // Start asserts that node_register is the first frame Main receives.
+        await peer.Start(listWhileConnecting: true);
+        var listFrame = await peer.Next();
+        Assert.Equal("session_list_request", listFrame["type"]!.ToString());
+        await peer.Reply(
+            listFrame,
+            new JsonObject { ["sessions"] = new JsonArray(new JsonObject { ["id"] = "one" }) }
+        );
+        Assert.Equal("one", (await peer.ConnectingList!)[0]!["id"]!.ToString());
     }
 
     [Fact]

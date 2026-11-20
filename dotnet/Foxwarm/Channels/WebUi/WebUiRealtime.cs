@@ -11,13 +11,79 @@ namespace Foxwarm.Channels.WebUi;
 internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs = null)
 {
     // Match JsonNode.ToJsonString's writer depth, not the serializer's 64-level default.
-    private static readonly JsonSerializerOptions SendJson = new() { MaxDepth = 1000 };
+    private static readonly JsonSerializerOptions SendJson = new()
+    {
+        MaxDepth = 1000,
+        Encoder = JsonText.Encoder,
+        TypeInfoResolver = MainJsonContext.Default,
+    };
 
     // Optional scheduling seam for the focused transport test; normal hosts leave it unset.
     internal Func<JsonObject, CancellationToken, Task>? BeforeQueuedSend { get; init; }
     private const int MaxPendingEvents = 1000; // webuiRealtime.ts initialization limit.
     private const int MaxSubscriptions = 5000; // webuiRealtime.ts union limit.
     private const int MaxMessageBytes = 32 * 1024 * 1024; // Two bounded UTF-8 ID arrays, including JSON escaping.
+    private const int MaxUnavailableFrames = 16;
+    private const string GenericUnavailableReason = "Session state could not be loaded.";
+    private const string MissingDataReason = "This Session's data file is missing.";
+    private const string UnreadableDataReason = "This Session's data file can't be read.";
+    private const string DamagedDataReason = "This Session's data file is damaged.";
+    private const string DeletingReason = "This Session is being deleted.";
+
+    // The frame carries one of these product strings; the precise diagnostic goes to Main's log.
+    internal static string UnavailableReason(Exception error) =>
+        error switch
+        {
+            SessionAuthorityIdentityException => DamagedDataReason,
+            SessionDeletionException { Code: "SESSION_DELETE_IN_PROGRESS" } => DeletingReason,
+            SessionDeletionException { Message: SessionDeletionException.RetiredMessage } =>
+                DeletingReason,
+            SessionAuthorityUnavailableException unavailable => DataFileReason(unavailable),
+            _ when SessionAuthorityErrors.Detail(error) is not null => DamagedDataReason,
+            _ => GenericUnavailableReason,
+        };
+
+    private static string DataFileReason(SessionAuthorityUnavailableException error) =>
+        error.InnerException switch
+        {
+            FileNotFoundException or DirectoryNotFoundException => MissingDataReason,
+            null when error.Diagnostic.Reason == SessionAuthorityErrors.CatalogedMissingReason =>
+                MissingDataReason,
+            UnauthorizedAccessException => UnreadableDataReason,
+            { } inner when SessionAuthorityErrors.Detail(inner) is not null => DamagedDataReason,
+            UnsupportedSessionAuthorityException or SessionAuthorityIdentityException =>
+                DamagedDataReason,
+            IOException => UnreadableDataReason,
+            _ => DamagedDataReason,
+        };
+
+    private static void LogUnavailable(Exception error, string? requestedSessionId = null) =>
+        MainLog.Diagnostic(
+            "WebUI realtime: Session state unavailable"
+                + (requestedSessionId is null ? "" : $" for {JsonData.Serialize(requestedSessionId)}")
+                + ": "
+                + MainLog.SafeFailure(error)
+                + (error is SessionDeletionException deletion ? $" ({deletion.Message})" : ""),
+            failure: true
+        );
+
+    private static JsonObject UnavailableFrame(
+        Exception error,
+        long revision,
+        string? requestedSessionId = null
+    )
+    {
+        var frame = new JsonObject
+        {
+            ["type"] = "error",
+            ["code"] = "SESSION_STATE_UNAVAILABLE",
+            ["message"] = UnavailableReason(error),
+            ["revision"] = revision,
+        };
+        if (requestedSessionId is not null)
+            frame["sessionId"] = requestedSessionId;
+        return frame;
+    }
 
     public async Task RunAsync(
         WebSocket socket,
@@ -34,6 +100,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         var listIds = new HashSet<string>(StringComparer.Ordinal);
         var listActive = false;
         var initializing = false;
+        var closing = false;
         var pending = new List<(JsonObject Data, SessionOwner? Owner)>();
         long queuedBytes = 0;
         string? logsId = null;
@@ -47,7 +114,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         )>();
         void Queue(long? expected, JsonObject data, string? topic = null)
         {
-            var bytes = Encoding.UTF8.GetByteCount(data.ToJsonString());
+            var bytes = Encoding.UTF8.GetByteCount(data.ToJsonText());
             Interlocked.Add(ref queuedBytes, bytes);
             if (!output.Writer.TryWrite((expected, data, bytes, topic)))
                 Interlocked.Add(ref queuedBytes, -bytes);
@@ -150,9 +217,18 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         // Administrator list subscribers refresh System › Timers on timer changes and
         // recorded firings. Scoped clients cannot subscribe to the list.
         void TimersChanged() => Deliver(new JsonObject { ["type"] = "timers-changed" });
+        // System › Webhooks refreshes on deliveries, handler progress and webhook config saves.
+        void WebhooksChanged() => Deliver(new JsonObject { ["type"] = "webhooks-changed" });
+        // Installation usage totals (System › Usage, status bar) follow the same list scope.
+        void UsageChanged() => Deliver(new JsonObject { ["type"] = "usage-changed" });
+        // System › Activity refreshes when recorded activity changes.
+        void ActivityChanged() => Deliver(new JsonObject { ["type"] = "activity-changed" });
         runtime.Changed += Changed;
         runtime.TopologyChanged += Invalidated;
         runtime.Manager.Timers.Changed += TimersChanged;
+        runtime.Manager.Webhooks.Changed += WebhooksChanged;
+        runtime.Manager.Usage.Changed += UsageChanged;
+        runtime.Manager.Activity.Changed += ActivityChanged;
         async Task Pump()
         {
             await foreach (var item in output.Reader.ReadAllAsync(lifetime.Token))
@@ -210,7 +286,10 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         try
         {
             await Send(new JsonObject { ["type"] = "connected" });
-            while (socket.State == WebSocketState.Open && !stopped.IsCancellationRequested)
+            while (
+                socket.State is WebSocketState.Open or WebSocketState.CloseSent
+                && !stopped.IsCancellationRequested
+            )
             {
                 JsonObject? input;
                 try
@@ -220,11 +299,17 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 catch (Exception error)
                     when (error is FormatException or System.Text.Json.JsonException)
                 {
+                    lock (gate)
+                        if (closing)
+                            continue;
                     await ProtocolError("Invalid subscription frame.");
                     break;
                 }
                 if (input is null)
                     break;
+                lock (gate)
+                    if (closing)
+                        continue;
                 if (
                     input["type"]?.GetValue<string>() != "set-subscriptions"
                     || input["revision"] is not JsonValue revisionValue
@@ -304,6 +389,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     .ToArray();
                 lock (gate)
                 {
+                    if (closing)
+                        continue;
                     if (logsId != logRequest?.Id)
                     {
                         stopLogs?.Invoke();
@@ -374,6 +461,9 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             runtime.Changed -= Changed;
             runtime.TopologyChanged -= Invalidated;
             runtime.Manager.Timers.Changed -= TimersChanged;
+            runtime.Manager.Webhooks.Changed -= WebhooksChanged;
+            runtime.Manager.Usage.Changed -= UsageChanged;
+            runtime.Manager.Activity.Changed -= ActivityChanged;
             lifetime.Cancel();
             lock (gate)
             {
@@ -437,31 +527,58 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         "Session changed while loading. Try again."
                     );
                 }
+                var failures = new List<(string Requested, Exception Error)>();
                 try
                 {
                     var admitted = await Task.WhenAll(
                         requestedSessions.Select(async id =>
-                            (
-                                Requested: id,
-                                Owner: await runtime.GetOwnerAsync(
-                                    SessionCatalog.Text(
-                                        resolvedSemantic.GetValueOrDefault(id)?["sessionId"]
-                                    ) ?? id,
-                                    attempt.Token
+                        {
+                            try
+                            {
+                                return (
+                                    Requested: id,
+                                    Owner: await runtime.GetOwnerAsync(
+                                        SessionCatalog.Text(
+                                            resolvedSemantic.GetValueOrDefault(id)?["sessionId"]
+                                        ) ?? id,
+                                        attempt.Token
+                                    ),
+                                    Error: (Exception?)null
+                                );
+                            }
+                            catch (Exception error)
+                                when (error is not OperationCanceledException
+                                    || !attempt.IsCancellationRequested
                                 )
-                            )
-                        )
+                            {
+                                return (Requested: id, Owner: (SessionOwner?)null, Error: error);
+                            }
+                        })
                     );
-                    admittedOwners = admitted.ToDictionary(
-                        pair => pair.Requested,
-                        pair => pair.Owner,
-                        StringComparer.Ordinal
-                    );
-                    semantic = admitted.ToDictionary(
-                        pair => pair.Requested,
-                        pair => CurrentId(pair.Owner),
-                        StringComparer.Ordinal
-                    );
+                    admittedOwners = admitted
+                        .Where(pair => pair.Error is null)
+                        .ToDictionary(
+                            pair => pair.Requested,
+                            pair => pair.Owner,
+                            StringComparer.Ordinal
+                        );
+                    semantic = new Dictionary<string, string?>(StringComparer.Ordinal);
+                    foreach (var pair in admitted)
+                    {
+                        if (pair.Error is not null)
+                        {
+                            failures.Add((pair.Requested, pair.Error));
+                            continue;
+                        }
+                        try
+                        {
+                            semantic[pair.Requested] = CurrentId(pair.Owner);
+                        }
+                        catch (InvalidOperationException error)
+                        {
+                            failures.Add((pair.Requested, error));
+                        }
+                    }
                 }
                 catch (OperationCanceledException) when (attempt.IsCancellationRequested)
                 {
@@ -469,20 +586,19 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 }
                 catch (Exception error)
                 {
-                    await Send(
-                        new JsonObject
-                        {
-                            ["type"] = "error",
-                            ["code"] = "SESSION_STATE_UNAVAILABLE",
-                            ["message"] = error.Message,
-                            ["revision"] = requested,
-                        },
-                        requested
-                    );
-                    lock (gate)
-                        if (revision != requested)
-                            return;
-                    lifetime.Cancel();
+                    LogUnavailable(error);
+                    await Send(UnavailableFrame(error, requested), requested);
+                    await CloseFailedInitialization(requested);
+                    return;
+                }
+                if (failures.Count > 0)
+                {
+                    foreach (var (id, error) in failures)
+                        LogUnavailable(error, id);
+                    // The whole union closes, so name each failing Session (bounded) before the close.
+                    foreach (var (id, error) in failures.Take(MaxUnavailableFrames))
+                        await Send(UnavailableFrame(error, requested, id), requested);
+                    await CloseFailedInitialization(requested);
                     return;
                 }
                 var existing = semantic
@@ -617,20 +733,9 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             }
             catch (Exception error)
             {
-                await Send(
-                    new JsonObject
-                    {
-                        ["type"] = "error",
-                        ["code"] = "SESSION_STATE_UNAVAILABLE",
-                        ["message"] = error.Message,
-                        ["revision"] = requested,
-                    },
-                    requested
-                );
-                lock (gate)
-                    if (revision != requested)
-                        return;
-                lifetime.Cancel();
+                LogUnavailable(error);
+                await Send(UnavailableFrame(error, requested), requested);
+                await CloseFailedInitialization(requested);
             }
             finally
             {
@@ -656,7 +761,9 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 if (data["session"] is JsonObject session)
                     data["session"] = scoped.Session(session);
             }
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            if (scoped is not null)
+                data = InputSender.Without(data)!;
+            var bytes = JsonData.SerializeToUtf8Bytes(
                 Foxwarm.Images.ImageTransport.Project(data),
                 SendJson
             );
@@ -670,7 +777,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     // Recheck at the same barrier that orders snapshots and actual writes.
                     lock (gate)
                         if (
-                            (expectedRevision is long expected && expected != revision)
+                            closing
+                            || (expectedRevision is long expected && expected != revision)
                             || (expectedLogsId is not null && expectedLogsId != logsId)
                         )
                             return;
@@ -692,6 +800,31 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             {
                 if (!queued)
                     Interlocked.Add(ref queuedBytes, -bytes.Length);
+            }
+        }
+        async Task CloseFailedInitialization(long requested)
+        {
+            await sendGate.WaitAsync(lifetime.Token);
+            try
+            {
+                lock (gate)
+                {
+                    if (revision != requested || closing)
+                        return;
+                    closing = true;
+                }
+                // Do not cancel the pending receive: cancellation aborts the socket and can
+                // discard the error frame. Let the receive loop complete the close handshake.
+                if (socket.State == WebSocketState.Open)
+                    await socket.CloseOutputAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        "Subscription closed",
+                        lifetime.Token
+                    );
+            }
+            finally
+            {
+                sendGate.Release();
             }
         }
         async Task ProtocolError(string message)

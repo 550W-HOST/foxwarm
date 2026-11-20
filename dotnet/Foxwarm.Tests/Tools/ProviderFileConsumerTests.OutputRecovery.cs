@@ -20,12 +20,12 @@ public sealed partial class ProviderFileConsumerTests
         await f.Seed("input.txt", Encoding.UTF8.GetBytes(content));
         var result = unified
             ? await f.Call(
-                "call_tool",
-                new JsonObject
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject
                 {
                     ["toolId"] = "node:fixture/readonly/read",
                     ["args"] = Args("input.txt"),
-                }
+                })
             )
             : await f.Call("read", Args("input.txt"));
         Success(result);
@@ -38,8 +38,8 @@ public sealed partial class ProviderFileConsumerTests
         var path = result["outputFullPath"]!.GetValue<string>();
         Assert.StartsWith(content, await File.ReadAllTextAsync(path));
         var retrieved = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "node:master/read",
                 ["args"] = new JsonObject
@@ -48,7 +48,7 @@ public sealed partial class ProviderFileConsumerTests
                     ["startLine"] = 5000,
                     ["endLine"] = 5000,
                 },
-            }
+            })
         );
         Success(retrieved);
         Assert.Contains("entry-05000", retrieved["output"]!.GetValue<string>());
@@ -111,7 +111,7 @@ public sealed partial class ProviderFileConsumerTests
         var result = await f.Call("read", Args("missing"));
         Assert.Equal(
             ToolAuthorizationUnavailableException.Code,
-            result["error"]!["type"]!.GetValue<string>()
+            result.FailureCode()!
         );
         Assert.True(f.Tools.PolicyUnavailable);
     }
@@ -262,7 +262,7 @@ public sealed partial class ProviderFileConsumerTests
             );
             Assert.Equal(
                 "tool_call_skipped",
-                parts[1]!["functionResponse"]!["response"]!["error"]!["type"]!.GetValue<string>()
+                parts[1]!["functionResponse"]!["response"]!.FailureCode()!
             );
             f.Tools.BeginTurn();
             Assert.False(f.Tools.PolicyUnavailable);

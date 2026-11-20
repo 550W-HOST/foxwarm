@@ -32,6 +32,11 @@ internal sealed class VectorService : IAsyncDisposable
     private CancellationTokenSource? restart;
     private readonly VectorLexicalRuntime preinitLexical;
     private bool started;
+
+    // Known-secret masking for embedding input in the in-process runtime. A Vector child
+    // process indexes text that was already masked when it entered Session history.
+    internal Func<string, string>? EmbeddingRedaction { get; set; }
+
     internal int? ChildPid
     {
         get
@@ -41,6 +46,7 @@ internal sealed class VectorService : IAsyncDisposable
         }
     }
     internal bool Ready => ready;
+    internal bool Stopping => stopping;
     internal bool Initializing
     {
         get
@@ -102,6 +108,7 @@ internal sealed class VectorService : IAsyncDisposable
                 var runtime = new VectorRuntime(root, Configuration)
                 {
                     Diagnostic = (code, session) => Diagnostic?.Invoke(code, session),
+                    EmbeddingRedaction = EmbeddingRedaction,
                 };
                 local = runtime;
                 await runtime.StartAsync(shutdown.Token);
@@ -156,7 +163,7 @@ internal sealed class VectorService : IAsyncDisposable
 
     private async Task StartChildAsync()
     {
-        var name = "foxwarm-vector-" + Guid.NewGuid().ToString("N");
+        var name = Guid.NewGuid().ToString("N");
         var transport = new NamedPipeServerStream(
             name,
             PipeDirection.InOut,
@@ -190,7 +197,7 @@ internal sealed class VectorService : IAsyncDisposable
                     new()
                     {
                         ["root"] = root,
-                        ["configuration"] = JsonSerializer.SerializeToNode(
+                        ["configuration"] = JsonData.SerializeToNode(
                             Configuration,
                             VectorWire.Json
                         ),
@@ -457,7 +464,7 @@ internal sealed class VectorService : IAsyncDisposable
                 {
                     ["query"] = query,
                     ["limit"] = limit,
-                    ["options"] = JsonSerializer.SerializeToNode(options, VectorWire.Json),
+                    ["options"] = JsonData.SerializeToNode(options, VectorWire.Json),
                 }
             )
         )!.Deserialize<VectorSearchResult>(VectorWire.Json)!;
@@ -502,7 +509,7 @@ internal sealed class VectorService : IAsyncDisposable
             return;
         await MutateAsync(
             "facts",
-            new() { ["record"] = JsonSerializer.SerializeToNode(block, VectorWire.Json) }
+            new() { ["record"] = JsonData.SerializeToNode(block, VectorWire.Json) }
         );
     }
 

@@ -52,6 +52,47 @@
   }
 }
 
+/*
+ * Bottom safe band of the app shell: the single owner of its effective bottom inset.
+ *
+ * iOS 26 installed web apps (viewport-fit=cover + black-translucent status bar) size the
+ * viewport short by the top safe-area inset while the page is shorter than the screen
+ * (WebKit bug 301108): 100dvh, innerHeight and visualViewport.height end above the
+ * home-indicator area and nothing is painted below. A screen-tall document gets the full
+ * viewport (see the installed-iOS `html` rule below the mobile html/body rule), after which
+ * the shell's ordinary 100dvh reaches the screen bottom.
+ *
+ * The band is the part of the bottom safe area that overlaps the shell. In an installed iOS
+ * app at rest that is `safe-area-bottom + 100dvh - 100lvh`: the full inset once the viewport
+ * is screen-tall, zero if it stays short. While main.tsx pins the shell to the visual
+ * viewport (keyboard, zoom) the shell ends at the visible area and the band is zero.
+ * `data-foxwarm-ios-standalone` and `data-foxwarm-viewport-pinned` come from viewportHeight.ts.
+ *
+ * --foxwarm-app-safe-area-bottom: band above the shell's lower edge; fixed bottom controls
+ *   and in-scroller clearance use it. Other browsers keep the full bottom inset.
+ * --foxwarm-chat-composer-safe-area-bottom: band the Chat composer clears; only in the
+ *   installed iOS app, elsewhere the composer keeps its 1rem spacing.
+ */
+:root {
+  --foxwarm-app-safe-area-bottom: var(--foxwarm-safe-area-bottom);
+  --foxwarm-chat-composer-safe-area-bottom: 0px;
+}
+
+@media (max-width: 768px) {
+  html[data-foxwarm-ios-standalone] {
+    --foxwarm-app-safe-area-bottom: 0px;
+    --foxwarm-chat-composer-safe-area-bottom: var(--foxwarm-app-safe-area-bottom);
+  }
+}
+
+@supports (height: 100lvh) {
+  @media (max-width: 768px) {
+    html[data-foxwarm-ios-standalone]:not([data-foxwarm-viewport-pinned]) {
+      --foxwarm-app-safe-area-bottom: max(0px, calc(var(--foxwarm-safe-area-bottom) + 100dvh - 100lvh));
+    }
+  }
+}
+
 .foxwarm-safe-area-shell {
   box-sizing: border-box;
   padding-top: var(--foxwarm-safe-area-top);
@@ -146,6 +187,21 @@ html.dark {
 
 .foxwarm-chat-composer {
   padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-chat-scrollbar-gutter, 0px));
+  padding-bottom: max(1rem, var(--foxwarm-chat-composer-safe-area-bottom));
+}
+
+/* Hide scrolled Timeline text below the floating composer and behind its lower edge.
+   The fade starts near the form's middle so its upper part keeps the translucent look;
+   the native scrollbar gutter stays uncovered. */
+.foxwarm-chat-composer::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  bottom: 0;
+  inset-inline: 0 var(--foxwarm-chat-scrollbar-gutter, 0px);
+  height: 5rem;
+  background: linear-gradient(to bottom, transparent, var(--foxwarm-color-canvas) 1.5rem);
+  pointer-events: none;
 }
 
 .foxwarm-chat-sm-label,
@@ -551,6 +607,23 @@ html .foxwarm-markdown.foxwarm-question-user-content :is(a, a:hover) {
     height: var(--foxwarm-app-height);
     min-height: var(--foxwarm-app-height);
     overflow: hidden;
+  }
+}
+
+/*
+ * Installed iOS app: the document itself is screen-tall so WebKit hands over the full
+ * viewport (bug 301108 shortens it only while the page is shorter than the screen; a
+ * taller fixed html or shell is clipped at the short edge instead). `100%` is the current
+ * viewport, so once it is full height this equals it and nothing can scroll. The body
+ * stays the fixed app container; overflow stays hidden.
+ */
+@supports (height: 100lvh) {
+  @media (max-width: 768px) {
+    html[data-foxwarm-ios-standalone] {
+      position: static;
+      height: auto;
+      min-height: min(100lvh, calc(100% + var(--foxwarm-safe-area-top)));
+    }
   }
 }
 
@@ -1032,8 +1105,15 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-
 /* A nested card may share its ancestor's hover, but only its own controls
  * should react. Keep the card's direct control/rail ownership explicit. */
 .foxwarm-assistant-message-card:is(:hover, :focus-within) > .foxwarm-assistant-action-buttons,
-.foxwarm-tool-card:is(:hover, :focus-within) > .foxwarm-tool-action-buttons {
+.foxwarm-tool-card:is(:hover, :focus-within) > .foxwarm-tool-action-buttons,
+[data-search-row]:is(:hover, :focus-within) .foxwarm-user-action-buttons {
   opacity: 1;
+}
+
+@media (hover: none) {
+  .foxwarm-user-action-buttons {
+    opacity: 1;
+  }
 }
 
 :is(.foxwarm-tool-card, .foxwarm-context-block-card, [data-model-thread-card], .foxwarm-system-message-card):hover > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke,
@@ -2489,15 +2569,6 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   box-shadow: var(--foxwarm-panel-shadow);
 }
 .dark .mobile-glass-surface { background: color-mix(in srgb, var(--foxwarm-color-surface) 70%, transparent); }
-[data-mobile-session-home] {
-  --foxwarm-home-safe-area-bottom: var(--foxwarm-safe-area-bottom);
-}
-@supports (height: 100dvh) and (height: 100lvh) {
-  [data-mobile-session-home][data-mobile-standalone] {
-    /* Reserve only the safe-area band still inside the installed iOS viewport. */
-    --foxwarm-home-safe-area-bottom: max(0px, calc(var(--foxwarm-safe-area-bottom) + 100dvh - 100lvh));
-  }
-}
 .mobile-primary-nav {
   width: calc(100% - 24px);
   max-width: 440px;
@@ -2506,13 +2577,13 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   z-index: 30;
   left: 12px;
   right: 12px;
-  bottom: calc(var(--foxwarm-home-safe-area-bottom) + 12px);
+  bottom: calc(var(--foxwarm-app-safe-area-bottom) + 12px);
   border-radius: calc(var(--foxwarm-radius-large-px) + 12px);
 }
 .mobile-primary-nav [role="tab"] { border-radius: calc(var(--foxwarm-radius-large-px) + 6px); }
 .mobile-primary-nav [aria-selected="true"] { background: color-mix(in srgb, var(--foxwarm-color-accent) 10%, transparent); }
-.mobile-session-scroll { padding-bottom: calc(var(--foxwarm-safe-area-bottom) + 160px); }
-.mobile-primary-panel :is(.tasks-main, [data-history-search-view], [data-setup-section]) { padding-bottom: calc(var(--foxwarm-safe-area-bottom) + 100px); }
+.mobile-session-scroll { padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 160px); }
+.mobile-primary-panel :is(.tasks-main, [data-history-search-view], [data-setup-section]) { padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 100px); }
 @supports not (backdrop-filter: blur(1px)) { :is(.mobile-glass-surface, .dark .mobile-glass-surface) { background: var(--foxwarm-color-surface); } }
 @media (prefers-reduced-transparency: reduce) {
   :is(.mobile-glass-surface, .dark .mobile-glass-surface) { background: var(--foxwarm-color-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -2584,6 +2655,12 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .mobile-header-circle[data-filtered]::after { content: ""; width: 5px; height: 5px; position: absolute; top: 6px; right: 6px; border-radius: 50%; background: var(--foxwarm-color-accent); }
 
 .mobile-page-root [data-session-section="sessions"] > h3 { display: none; }
+/* The question hint floats below the overlaying mobile header, where the list's content starts. */
+.mobile-page-root .session-question-hint-layer { padding-top: calc(var(--mobile-page-header-height, 64px) + 4px); }
+@media (pointer: coarse) { .session-question-hint { height: 2.25rem; padding-inline: 1rem; font-size: 0.875rem; } }
+@media (prefers-reduced-motion: no-preference) { .session-question-hint { animation: session-question-hint-in 140ms ease-out; } }
+@keyframes session-question-hint-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (forced-colors: active) { .session-question-hint { border-color: ButtonText; } }
 @supports not ((backdrop-filter: blur(5px)) or (-webkit-backdrop-filter: blur(5px))) {
   .mobile-top-fade::before { background: linear-gradient(var(--foxwarm-color-canvas) calc(100% - 8px), transparent); -webkit-mask-image: none; mask-image: none; }
   .mobile-top-fade::after { display: none; }
@@ -2626,3 +2703,236 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .image-preview-loading { position: absolute; color: var(--foxwarm-color-text-muted); font-size: 14px; }
 .image-preview-error { flex: none; padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); color: var(--foxwarm-color-warning); font-size: 12px; }
 @media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action { border: 1px solid ButtonText; } }
+
+/* Window frame (windowFrame.ts). Inputs: html[data-foxwarm-frame] and
+ * --foxwarm-frame-left/right/top, set by a Desktop host or, in an installed PWA's
+ * window-controls overlay, derived from env(titlebar-area-*). Title-band rows move
+ * their content clear of the controls and expose drag surfaces. Nothing applies
+ * without a provider; the framed desktop layout follows below. */
+@media (display-mode: window-controls-overlay) {
+  html[data-foxwarm-frame="overlay"] {
+    --foxwarm-frame-left: env(titlebar-area-x, 0px);
+    --foxwarm-frame-right: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+    --foxwarm-frame-top: env(titlebar-area-height, 0px);
+  }
+}
+html[data-foxwarm-frame] [data-frame-row] { position: relative; }
+/* Inline rows keep their own padding and overflow: the first and last real children
+ * step aside, and the spacers (rendered first) cover the freed space. */
+html[data-foxwarm-frame] [data-frame-row="inline"] > .foxwarm-frame-edge + .foxwarm-frame-edge + * { margin-left: var(--foxwarm-frame-pad-left, 0px); }
+html[data-foxwarm-frame] [data-frame-row="inline"] > :last-child:not(.foxwarm-frame-edge) { margin-right: var(--foxwarm-frame-pad-right, 0px); }
+.foxwarm-frame-edge { display: none; }
+html[data-foxwarm-frame] .foxwarm-frame-edge { display: block; position: absolute; }
+html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="start"] { top: 0; bottom: 0; left: 0; width: var(--foxwarm-frame-pad-left, 0px); }
+html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="end"] { top: 0; bottom: 0; right: 0; width: var(--foxwarm-frame-pad-right, 0px); }
+/* An inline row too narrow for one tab beside the controls keeps its full width below a
+ * drag band as tall as the controls; the end spacer becomes that band. */
+html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm-frame-edge + .foxwarm-frame-edge + * { margin-top: var(--foxwarm-frame-pad-top, 0px); }
+html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm-frame-edge[data-frame-edge="end"] { left: 0; width: auto; bottom: auto; height: var(--foxwarm-frame-pad-top, 0px); }
+/* Fills carry title-row drag surfaces through the shell gutter and panel padding to the window edges. */
+.foxwarm-frame-fill { position: fixed; }
+/* PWA overlay: no-drag holes after the page content for controls a later drag surface covers;
+ * invisible and never hit, they only take part in app-region. */
+.foxwarm-frame-hole { position: fixed; pointer-events: none; }
+/* Narrow layouts keep their mobile shell under a plain draggable strip. */
+html[data-foxwarm-frame][data-foxwarm-frame-narrow] { --foxwarm-safe-area-top: var(--foxwarm-frame-top, 0px); }
+.foxwarm-frame-strip {
+  position: fixed; z-index: 40; top: 0; left: 0; right: 0;
+  height: var(--foxwarm-frame-top, 0px);
+  background: var(--foxwarm-color-canvas);
+}
+/* Drag surfaces for the PWA overlay; the Desktop hosts get the same surfaces as
+ * rectangles. Since Chromium 152 app-region inherits into descendants, so every
+ * interactive descendant and floating layer opts out. Chromium applies the boxes in
+ * document order, the last one deciding: fills come first, holes last. */
+html[data-foxwarm-frame] :is([data-frame-row][data-frame-in-band] [data-frame-drag], [data-frame-row][data-frame-in-band][data-frame-drag], .foxwarm-frame-fill, .foxwarm-frame-strip) {
+  app-region: drag; -webkit-app-region: drag; user-select: none; -webkit-user-select: none;
+}
+html[data-foxwarm-frame] [data-frame-drag] :is(button, a[href], input, select, textarea, summary, label, iframe, [contenteditable], [role="button"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]),
+html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag], .foxwarm-frame-hole) {
+  app-region: no-drag; -webkit-app-region: no-drag;
+}
+@media (forced-colors: active) { .foxwarm-frame-strip { background: Canvas; } }
+
+/* While a dnd-kit drag is active (tab, pane or session) the cursor stays `grabbing` over every
+ * element, including the overlay and drop targets, and the drag never selects page text. Only the
+ * cursor and user-select properties are set, so window-frame app-region surfaces are unaffected,
+ * and iframe contents keep their own cursor because the rule cannot cross the frame boundary. */
+html[data-fw-dragging], html[data-fw-dragging] * {
+  cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important;
+}
+
+/* Framed desktop layout ([D-window-frame], direction C): the window background is chrome;
+ * the title row, the sidebar and the status row sit on it, and only the panes are cards
+ * ("islands") with even gutters. One title row spans the window, as tall as the window
+ * controls (at least 36 px): the sidebar's brand row is its left end and each top pane's
+ * tab strip is its segment over that pane. Title-row buttons are borderless and centred on
+ * the controls' line; inactive tabs are plain text and the active tab joins its card. The
+ * narrow mobile shell has no .foxwarm-desktop-workbench-shell and is not affected. */
+html[data-foxwarm-frame] {
+  --foxwarm-frame-title-height: max(var(--foxwarm-frame-top, 0px), 36px);
+  --foxwarm-frame-tab-height: calc(var(--foxwarm-frame-title-height) - 8px);
+  --foxwarm-frame-strip-height: 40px;
+  --foxwarm-frame-status-height: 30px;
+  --foxwarm-frame-gutter: 8px;
+}
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell {
+  padding: 0 var(--foxwarm-frame-gutter) 0 0;
+  gap: 0;
+  background: var(--foxwarm-color-canvas-edge);
+}
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel { border: 0; border-radius: 0; background: transparent; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel > * { border-radius: 0; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-resize { right: -4px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-nav,
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail-head { border-bottom-color: transparent; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel [data-session-list-toolbar] { background: transparent; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-frame { gap: 0; padding-left: 2px; }
+
+/* Brand row: one title row tall. Controls at the top left (macOS lights): it starts after
+ * them and shows the logo only; the app name is in the menu bar. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row {
+  display: flex; align-items: center;
+  height: var(--foxwarm-frame-title-height);
+  padding: 0 6px 0 12px;
+}
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] { flex: 1; min-width: 0; height: 100%; margin: 0; padding-left: 0; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] h1 { gap: 8px; font-size: 15px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] h1 > svg { width: 20px; height: 20px; }
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row { padding-left: max(12px, var(--foxwarm-frame-left, 0px)); }
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-wordmark { display: none; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-nav { padding-top: 6px; }
+
+/* Rail: the expand toggle is the rail's title row; after the lights when they sit at the top left. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail-top { height: var(--foxwarm-frame-title-height); padding: 0; align-items: center; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail-head { padding-top: 8px; }
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail-top {
+  position: absolute; top: 0; left: 0; z-index: 60;
+  width: calc(var(--foxwarm-frame-left, 0px) + 32px);
+  padding-left: var(--foxwarm-frame-left, 0px);
+}
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail > .foxwarm-sidebar-body { margin-top: var(--foxwarm-frame-title-height); }
+
+/* Title-row buttons: borderless, hover fill only. Only the controls themselves are named: the
+ * Setup split button and its two buttons, the sidebar toggle, the strip's own buttons and the
+ * rail toggle. Never a descendant or structural match, which would also reach the menu panel
+ * and its controls that float inside the row. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell :is(.foxwarm-sidebar-brand-row :is([data-global-ui-settings-split], [data-global-ui-settings-split] > button, [data-sidebar-toggle]), .foxwarm-workbench-tab-toolbar > button, .foxwarm-sidebar-rail-toggle) {
+  border-color: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  border-radius: 6px;
+  color: var(--foxwarm-color-text-muted);
+}
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row :is([data-global-ui-settings-split] > button, [data-sidebar-toggle]) { height: 32px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-toolbar > button { width: 32px; height: 32px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell :is(.foxwarm-sidebar-brand-row :is([data-global-ui-settings-split] > button, [data-sidebar-toggle]), .foxwarm-workbench-tab-toolbar > button, .foxwarm-sidebar-rail-toggle):hover {
+  background-color: color-mix(in srgb, var(--foxwarm-color-text-strong) 9%, transparent);
+  color: var(--foxwarm-color-text-strong);
+}
+
+/* Panes: the tab strip sits on the chrome above the pane's card; a top pane's strip is a
+ * title-row segment. Lower panes of a top/bottom split keep a compact strip. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-panel { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-pane-body { border: 1px solid var(--foxwarm-color-border); border-radius: 10px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-content-slot { border-radius: 9px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-separator[aria-orientation="vertical"] { width: var(--foxwarm-frame-gutter); }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip {
+  position: relative; z-index: 2;
+  height: var(--foxwarm-frame-strip-height);
+  margin-bottom: -1px;
+  padding: 0 0 0 8px;
+  border-bottom: 0;
+  background: transparent;
+  overflow: visible;
+}
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip[data-frame-in-band]:not([data-frame-banded]) { height: var(--foxwarm-frame-title-height); }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip > [data-workbench-pane-drag-blank] { height: 100%; align-items: stretch; gap: 8px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip [data-frame-row-fill] { display: flex; align-items: flex-end; min-width: 0; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip .foxwarm-workbench-tab-drop-row { flex: 1; min-width: 0; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip .foxwarm-workbench-tab-row { gap: 1px; align-items: flex-end; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-toolbar { align-self: center; gap: 0; padding: 0 4px 0 0; }
+/* Overflowing tabs fade out before the strip's buttons. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-drop-row:has(> .foxwarm-tab-overflow) .foxwarm-workbench-tab-row {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+/* Tabs: inactive tabs are text with separators; the active tab joins its card. */
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab {
+  height: calc(var(--foxwarm-frame-strip-height) - 6px);
+  min-width: 96px; max-width: 200px;
+  margin: 0; padding: 0 8px 0 12px;
+  border: 0; border-radius: 8px 8px 0 0;
+  font-size: 12.5px;
+  background: transparent;
+  color: var(--foxwarm-color-text-muted);
+  box-shadow: none;
+}
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell [data-frame-in-band]:not([data-frame-banded]), [data-workbench-tab-overlay]) .foxwarm-workbench-tab { height: var(--foxwarm-frame-tab-height); }
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab > svg { color: var(--foxwarm-color-text-muted); }
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab:not([data-tab-active="true"]):hover {
+  background: color-mix(in srgb, var(--foxwarm-color-text-strong) 7%, transparent);
+  color: var(--foxwarm-color-text);
+}
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab:not([data-tab-active="true"]) + .foxwarm-workbench-tab:not([data-tab-active="true"])::before {
+  content: ''; position: absolute; left: -1px; top: 30%; width: 1px; height: 40%;
+  background: var(--foxwarm-color-border);
+}
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab[data-tab-active="true"] {
+  z-index: 1;
+  background: var(--foxwarm-color-workbench-header-surface);
+  color: var(--foxwarm-color-text-strong);
+  box-shadow: inset 1px 0 var(--foxwarm-color-border), inset -1px 0 var(--foxwarm-color-border), inset 0 1px var(--foxwarm-color-border);
+}
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab[data-tab-active="true"] > svg { color: var(--foxwarm-color-accent); }
+
+/* A banded row (a narrow pane under the caption buttons): the title row above the pane
+ * stays blank chrome and the strip moves into the top of the card. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip[data-frame-banded] { height: auto; margin-bottom: 0; padding: 0; }
+/* The strip's top border lines up with the other cards' top border, one pixel above the title row's bottom. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip[data-frame-banded] > .foxwarm-frame-edge + .foxwarm-frame-edge + * { margin-top: calc(var(--foxwarm-frame-pad-top, 0px) - 1px); }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip[data-frame-banded] > [data-workbench-pane-drag-blank] {
+  height: var(--foxwarm-frame-strip-height);
+  padding-left: 6px;
+  border: 1px solid var(--foxwarm-color-border);
+  border-radius: 10px 10px 0 0;
+  background: var(--foxwarm-color-tab-bar-surface);
+}
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip[data-frame-banded] + .foxwarm-workbench-pane-body { border-top: 0; border-radius: 0 0 10px 10px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-strip[data-frame-banded] + .foxwarm-workbench-pane-body .foxwarm-workbench-content-slot { border-radius: 0 0 9px 9px; }
+
+/* Status row on the chrome below the cards. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-status-bar { height: var(--foxwarm-frame-status-height); padding: 0 2px; background: transparent; }
+
+/* Popup windows (Move to new window, Tasks, Logs): the title row shows the popup's title on
+ * the chrome, clear of the window controls, and the content is one card with even gutters.
+ * Narrow popups keep this row instead of the mobile strip: the strip stays a transparent
+ * drag surface over it and the content needs no extra top inset. */
+[data-foxwarm-popup-framed] { background: var(--foxwarm-color-canvas-edge); }
+.foxwarm-popup-title-row {
+  display: flex; flex-shrink: 0; align-items: center; gap: 8px;
+  height: var(--foxwarm-frame-title-height);
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 12px) 0 max(14px, var(--foxwarm-frame-left, 0px));
+}
+.foxwarm-popup-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; font-weight: 500;
+  color: var(--foxwarm-color-text-strong);
+}
+html[data-foxwarm-window~="inactive"] .foxwarm-popup-title { color: var(--foxwarm-color-text-muted); }
+.foxwarm-popup-card {
+  margin: 0 var(--foxwarm-frame-gutter) var(--foxwarm-frame-gutter);
+  border: 1px solid var(--foxwarm-color-border);
+  border-radius: 10px;
+}
+[data-foxwarm-popup-framed] { --foxwarm-safe-area-top: 0px; }
+body:has([data-foxwarm-popup-framed]) .foxwarm-frame-strip { background: transparent; }
+@media (forced-colors: active) { .foxwarm-popup-card { border-color: CanvasText; } }
+/* A background command's receipt or completion reached through its execId link. */
+@keyframes fw-exec-link-flash {
+  0%, 35% { background-color: color-mix(in srgb, var(--foxwarm-color-accent) 32%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--foxwarm-color-accent) 32%, transparent); }
+  100% { background-color: transparent; box-shadow: 0 0 0 3px transparent; }
+}
+.fw-exec-link-flash { animation: fw-exec-link-flash 1.8s ease-out; }
+@media (prefers-reduced-motion: reduce) { .fw-exec-link-flash { animation-duration: 0.01s; outline: 2px solid var(--foxwarm-color-accent); } }

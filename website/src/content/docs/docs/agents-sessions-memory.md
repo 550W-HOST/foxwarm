@@ -59,14 +59,14 @@ Common commands:
 | --- | --- |
 | `/session list` | List Sessions |
 | `/session new` | Start a new Session in the current Agent |
-| `/session fork` | Start a new Session with the current visible context |
+| `/session fork [name]` | Start a new Session with the current visible context |
 | `/session rename <name>` | Change the display name |
-| `/session move <new-id>` | Rename the Session ID; `<agent>/<id>` moves it to another existing Agent |
-| `/session parent <parent-id>` / `/session unparent` | Change where a Session sits in the tree |
+| `/session move --new-session-id <new-id>` | Rename the Session ID; add `--new-agent-name <agent>` to move it to another Agent |
+| `/session set-parent <parent-id>` / `/session clear-parent` | Change where a Session sits in the tree |
 | `/session archive` / `/session unarchive` | Hide or restore a finished Session; data is kept |
 | `/session delete <id>` | Delete a Session |
 | `/model [name\|default]` | Show or change the Session's model |
-| `/node [list\|<node-id>]` | Show or change the Session's current Node |
+| `/node list` / `/node select <node-id>` | Show the Nodes or change the Session's current Node |
 
 Session IDs use ASCII letters, digits, `_` and `-`. Display names can be anything.
 

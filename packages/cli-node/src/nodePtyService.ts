@@ -45,6 +45,8 @@ type ManagedNodePty = NodePtyTerminalRecord & {
   outputBuffer: string;
   streaming: boolean;
   closed: boolean;
+  exited: Promise<void>;
+  closing?: Promise<void>;
   rcFilePath?: string;
   cwdPath?: string;
   codeCapability?: string;
@@ -53,6 +55,21 @@ type ManagedNodePty = NodePtyTerminalRecord & {
 const OUTPUT_BUFFER_LIMIT = 200_000;
 const MIN_COLS = 20;
 const MIN_ROWS = 5;
+// Same close escalation as the .NET CLI Node and Main's local PTYs: hangup, then terminate, then kill.
+const CLOSE_SIGNALS = ['SIGHUP', 'SIGTERM', 'SIGKILL'] as const;
+const CLOSE_SIGNAL_GRACE_MS = 1000;
+
+async function settledWithin(promise: Promise<void>, milliseconds: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), milliseconds); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function sanitizeRecord(record: ManagedNodePty): NodePtyTerminalRecord {
   return {
@@ -120,7 +137,7 @@ export class NodePtyService {
   }
 
   async dispose(): Promise<void> {
-    for (const record of [...this.terminals.values()]) await this.close(record.id);
+    await Promise.all([...this.terminals.values()].map((record) => this.close(record.id)));
     await this.codeHelper.close();
   }
 
@@ -166,6 +183,8 @@ export class NodePtyService {
       throw error;
     }
 
+    let markExited: () => void;
+    const exited = new Promise<void>((resolve) => { markExited = resolve; });
     const record: ManagedNodePty = {
       id: terminalId,
       nodeId: '',
@@ -179,6 +198,7 @@ export class NodePtyService {
       outputBuffer: '',
       streaming: false,
       closed: false,
+      exited,
       rcFilePath,
       cwdPath,
       codeCapability: codeHelper.capability,
@@ -193,6 +213,7 @@ export class NodePtyService {
       if (record.streaming) this.emitEvent({ type: 'output', terminalId: record.id, data });
     });
     ptyProcess.onExit(({ exitCode, signal }) => {
+      markExited();
       if (record.closed) return;
       record.closed = true;
       void (async () => {
@@ -244,10 +265,25 @@ export class NodePtyService {
   private async close(terminalId: string): Promise<{ success: true }> {
     const record = this.terminals.get(terminalId);
     if (!record) return { success: true };
-    record.closed = true;
-    try { record.process.kill(); } catch {}
-    await this.cleanup(record);
+    record.closing ??= this.terminate(record);
+    await record.closing;
     return { success: true };
+  }
+
+  // Explicit close succeeds only after the shell has exited. One SIGHUP is not enough: an interactive
+  // shell can trap or ignore it, and bash can drop one that arrives while it runs PROMPT_COMMAND.
+  private async terminate(record: ManagedNodePty): Promise<void> {
+    record.closed = true;
+    if (process.platform === 'win32') {
+      try { record.process.kill(); } catch {}
+    } else {
+      for (const signal of CLOSE_SIGNALS) {
+        try { record.process.kill(signal); } catch {}
+        if (signal === 'SIGKILL') await record.exited;
+        else if (await settledWithin(record.exited, CLOSE_SIGNAL_GRACE_MS)) break;
+      }
+    }
+    await this.cleanup(record);
   }
 
   private requireTerminal(terminalId: string): ManagedNodePty {

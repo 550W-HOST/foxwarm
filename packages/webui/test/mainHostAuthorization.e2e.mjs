@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { functionCall, listsBuiltin } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('authorization'), records = [], failures = [], scripts = new Map(), held = new Map()
 const policy = join(fixture.data, 'state/tool-authorization.yaml'), peerRoot = join(fixture.root, 'peer')
@@ -12,7 +13,7 @@ const route = id => '/api/sessions/' + encodeURIComponent(id)
 const exists = file => access(file).then(() => true, () => false)
 const textOf = item => (item.content || []).map(part => part.text || '').join('')
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-const tool = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const tool = functionCall
 const invoke = (id, target, args = {}) => tool(id, 'call_tool', { toolId: target, args })
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const authority = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'))
@@ -42,16 +43,19 @@ const provider = createServer(async (request, response) => {
     for (const call of body.input.filter(item => item.type === 'function_call')) assert(body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id), call.call_id + ' historical full pair')
     if (planning) {
       const ranges = [...input.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])]); assert(ranges.length)
-      assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
+      // Self-scoped: the deny rule in force no longer hides it from the shared declarations.
+      assert(body.tools.some(value => value.name === 'submit_compact_plan'))
       complete([tool('planning-result-' + sequence, 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Earlier owned dialogue preserved in exact candidate order.' }] })]); return
     }
     assert(key, 'Owned current user task'); const calls = scripts.get(key) || []
     record.followup = calls.length && calls.every(call => body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id))
     if (key === 'held-background') { held.set(key, () => complete(final('DONE-' + key))); return }
     if (key === 'visibility') {
-      assert(body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'call_tool')); assert(!body.tools.some(value => value.name === 'set_config'))
+      assert(body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'ctl')); assert(!body.tools.some(value => value.name === 'set_config'))
     }
-    if (key === 'compact-schema' || key === 'held-background') assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
+    // submit_compact_plan is self-scoped: a deny rule no longer hides it; an unavailable policy still does.
+    if (key === 'compact-schema') assert(body.tools.some(value => value.name === 'submit_compact_plan'))
+    if (key === 'held-background') assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
     complete(record.followup || !calls.length ? final('DONE-' + key) : calls)
   } catch (error) { failures.push(String(error.stack || error)); if (!response.headersSent) response.writeHead(500); response.end() }
 })
@@ -71,8 +75,9 @@ try {
     invoke('mcp-denied', 'mcp:policy-peer/hidden', { tag: 'hidden' }), invoke('mcp-allowed', 'mcp:policy-peer/probe', { tag: 'allowed' }),
     tool('write-denied', 'write', { filePath: 'forbidden/new', content: 'denied' }), tool('write-allowed', 'write', { filePath: 'allowed/new', content: 'allowed' }),
     tool('patch-denied', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: allowed/existing\n@@\n-unchanged\n+changed\n*** Update File: forbidden/second\n@@\n-unchanged\n+changed\n*** End Patch' })])
-  for (const call of ['direct-denied', 'neutral-denied', 'mcp-denied', 'write-denied', 'patch-denied']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
-  assert(!(await paired(current, 'search-node')).output.includes('node:master/exec')); assert(!(await paired(current, 'search-mcp')).output.includes('policy-peer/hidden')); assert((await paired(current, 'search-mcp')).output.includes('policy-peer/probe'))
+  for (const call of ['direct-denied', 'neutral-denied', 'mcp-denied', 'write-denied', 'patch-denied']) assert.equal((await paired(current, call)).code, 'tool_authorization_denied')
+  // Denied exec on the current Node is neither listed as the declared tool nor by its tool ID.
+  const nodeSearch = (await paired(current, 'search-node')).output; assert(!nodeSearch.includes('node:master/exec') && !nodeSearch.includes('exec (declared tool)'), nodeSearch); assert(!(await paired(current, 'search-mcp')).output.includes('policy-peer/hidden')); assert((await paired(current, 'search-mcp')).output.includes('policy-peer/probe'))
   assert(!await exists(join(own, 'forbidden-exec'))); assert(!await exists(join(own, 'forbidden/new'))); assert.equal(await readFile(join(own, 'allowed/new'), 'utf8'), 'allowed')
   assert.equal(await readFile(join(own, 'allowed/existing'), 'utf8'), 'unchanged'); assert.equal(await readFile(join(own, 'forbidden/second'), 'utf8'), 'unchanged'); assert.equal((await peerCalls()).filter(call => call.name === 'hidden').length, 0)
 
@@ -82,7 +87,7 @@ try {
     tool('after-loss', 'write', { filePath: 'allowed/after-loss', content: 'never' }), tool('preset-loss', 'write', { filePath: 'allowed/preset-loss', content: 'never', __cancelTool: true })])
   await send(current, 'midbatch-loss'); await until(() => exists(join(peerRoot, 'started-expiry')), 'real MCP effect held before cache expiry')
   await send(current, 'retained-queue'); await until(async () => (await authority(current)).queue.length === 1, 'owned retained queued input')
-  assert.equal((await paired(current, 'at-loss')).error.type, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert((await paired(current, 'after-loss')).error); assert.equal((await paired(current, 'preset-loss')).canceled, true); await idle(current)
+  assert.equal((await paired(current, 'at-loss')).code, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert((await paired(current, 'after-loss')).error); assert.equal((await paired(current, 'preset-loss')).canceled, true); await idle(current)
   assert.equal((await authority(current)).queue.length, 1); assert.equal((await authority(current)).stopping, false)
   const failedCount = records.length; await sleep(400); assert.equal(records.length, failedCount); assert(!records.some(row => row.key === 'midbatch-loss' && row.followup)); assert(!records.some(row => row.key === 'retained-queue'))
   assert(!await exists(join(own, 'allowed/at-loss'))); assert(!await exists(join(own, 'allowed/after-loss')))
@@ -91,9 +96,9 @@ try {
   await replace('version: 1\nrules: [{id: read, action: deny, match: {tool: {source: node, name: read}}}]')
   const candidate = join(own, 'candidate.yaml'), original = await readFile(policy)
   await writeFile(candidate, '# exact captured policy\r\nversion: 1\r\nrules: []\r\n')
-  await run(current, 'setter-read-denied', [tool('setter-read-denied', 'set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert.equal((await paired(current, 'setter-read-denied')).error.type, 'tool_authorization_denied'); assert.deepEqual(await readFile(policy), original)
+  await run(current, 'setter-read-denied', [tool('setter-read-denied', 'set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert.equal((await paired(current, 'setter-read-denied')).code, 'tool_authorization_denied'); assert.deepEqual(await readFile(policy), original)
   await replace('version: 1\n')
-  await run(current, 'setter', [tool('discover-setter', 'search_tools', { sources: ['builtin'], query: 'set_config', limit: 5 }), invoke('install-policy', 'builtin:set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert((await paired(current, 'discover-setter')).output.includes('builtin:set_config')); assert.deepEqual(await readFile(policy), await readFile(candidate))
+  await run(current, 'setter', [tool('discover-setter', 'search_tools', { sources: ['builtin'], query: 'set_config', limit: 5 }), invoke('install-policy', 'builtin:set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert(listsBuiltin((await paired(current, 'discover-setter')).output, 'set_config')); assert.deepEqual(await readFile(policy), await readFile(candidate))
   await writeFile(candidate, 'version: 1\nrules: null\n'); const installed = await readFile(policy)
   await run(current, 'invalid-candidate', [tool('invalid-candidate', 'set_config', { target: 'tool-rules', filePath: 'candidate.yaml' }), tool('after-invalid', 'write', { filePath: 'after-invalid', content: 'normal nonfatal' })]); assert((await paired(current, 'invalid-candidate')).error); assert.deepEqual(await readFile(policy), installed); assert.equal(await readFile(join(own, 'after-invalid'), 'utf8'), 'normal nonfatal')
 
@@ -121,29 +126,26 @@ try {
   await writeFile(join(fixture.data, 'agents/other', 'foreign'), 'foreign bytes')
   await fixture.stop(); stopped = true
   const agentPath = join(fixture.data, 'state/agents.json'), agentCatalog = JSON.parse(await readFile(agentPath, 'utf8'))
-  agentCatalog.team = { ...agentCatalog.team, isolated: true, isolatedNode: 'future-recorded-node', toolRules: [
+  // A master-only legacy isolated Agent, as an older release left it, is migrated at startup.
+  agentCatalog.team = { ...agentCatalog.team, isolated: true, toolRules: [
     { effect: 'allow', source: 'node', node: 'master', tool: 'exec' }, { effect: 'allow', source: 'node', node: 'master', tool: 'read' },
     { effect: 'allow', source: 'builtin', tool: 'session' }, { effect: 'allow', source: 'builtin', tool: 'skill' }, { effect: 'allow', source: 'builtin', tool: 'recall' }, { effect: 'allow', source: 'builtin', tool: 'create_agent' } ] }
-  await writeFile(agentPath, JSON.stringify(agentCatalog)); const agentBytes = await readFile(agentPath)
+  await writeFile(agentPath, JSON.stringify(agentCatalog))
   await fixture.start(); stopped = false; await page.reload({ waitUntil: 'domcontentloaded' })
-  const listed = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team'); assert.equal(listed.isolated, true); assert.equal(listed.isolatedNode, 'future-recorded-node')
-  assert.equal((await fixture.api('PUT', '/api/agents/team', { inheritAgent: 'main', isolatedNode: 'missing-binding' })).status, 400); assert.deepEqual(await readFile(agentPath), agentBytes)
-  assert.equal((await fixture.api('PUT', '/api/agents/team', { isolatedNode: null })).status, 200)
-  const mainIsolation = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team')
-  assert.equal(mainIsolation.isolated, false); assert.equal(mainIsolation.isolatedNode, null)
-  // A retained Main-only legacy flag is separate from active remote Node binding.
-  await fixture.stop(); stopped = true
-  const mainOnly = JSON.parse(await readFile(agentPath, 'utf8')); mainOnly.team.isolated = true
-  await writeFile(agentPath, JSON.stringify(mainOnly)); const mainIsolationBytes = await readFile(agentPath)
-  await fixture.start(); stopped = false
+  const migratedBytes = await readFile(agentPath), migrated = JSON.parse(migratedBytes).team
+  assert.equal(migrated.isolated, true); assert.equal(migrated.toolRules.length, 6); assert.equal(migrated.legacyIsolation.automatic, true); assert.equal(migrated.legacyIsolation.failClosed, undefined)
+  const listed = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team')
+  assert.equal(listed.isolated, undefined); assert.equal(listed.isolatedNode, undefined); assert.equal(listed.restricted, true); assert.equal(listed.inheritable, false)
+  // The retired setter field is an unknown field now.
+  assert.equal((await fixture.api('PUT', '/api/agents/team', { isolatedNode: null })).status, 400); assert.deepEqual(await readFile(agentPath), migratedBytes)
   await run(current, 'isolated', [tool('isolated-exec', 'exec', { summary: 'Attempt file creation from an isolated Agent', command: 'touch forbidden-isolated-exec' }), invoke('isolated-neutral-exec', 'node:master/exec', { summary: 'Attempt file creation from an isolated Agent', command: 'touch forbidden-isolated-exec' }),
     tool('isolated-management', 'create_agent', { agentName: 'forbidden-agent' }), tool('isolated-own-read', 'read', { filePath: 'after-invalid' }),
     tool('isolated-foreign-read', 'read', { filePath: join(fixture.data, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
     tool('isolated-skill', 'skill', { action: 'list', agentName: 'other' }), tool('isolated-recall', 'recall', { sessionId: 'other/main' }), tool('isolated-history', 'view_session', { sessionId: current })])
-  for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
+  for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).code, 'tool_authorization_denied')
   assert(!(await paired(current, 'isolated-own-read')).error); assert(!(await paired(current, 'isolated-status')).error)
   assert(!await exists(join(own, 'forbidden-isolated-exec'))); assert(!await exists(join(fixture.data, 'agents/forbidden-agent')))
-  assert.deepEqual(await readFile(agentPath), mainIsolationBytes); assert.deepEqual(failures, [])
+  assert.deepEqual(await readFile(agentPath), migratedBytes); assert.deepEqual(failures, [])
   await fixture.stop(); stopped = true
   console.log(JSON.stringify({ ok: true, root: fixture.root, hostPids: fixture.hostPids, peerPids: (await readFile(join(peerRoot, 'processes.ndjson'), 'utf8')).trim().split('\n').map(value => JSON.parse(value).pid), requests: records.length, planning: records.filter(row => row.planning).length, peerCalls: (await peerCalls()).length }))
 } finally {

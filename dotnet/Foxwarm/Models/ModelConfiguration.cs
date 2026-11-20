@@ -13,6 +13,11 @@ internal sealed partial class ModelConfiguration
     private readonly JsonObject app;
     private HostModels? catalog;
     private string? cachedRaw;
+    private long cachedSecretGeneration;
+
+    // Set when the cached catalog was resolved while the store was locked; restoring the
+    // key or store file then refreshes the catalog without a configuration change.
+    private bool cachedWhileLocked;
     internal HostPaths Paths { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
@@ -168,6 +173,8 @@ internal sealed partial class ModelConfiguration
         AppConfigurationRules.Validate(app);
         Paths = paths.WithConfiguration(app);
         Access = new(app);
+        Secrets = new Foxwarm.Secrets.InstanceSecrets(Paths.DataRoot);
+        RegisterSecretSources();
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(app);
         agentDefaultNode = AppConfigurationRules.AgentDefaultNode(app);
@@ -203,17 +210,34 @@ internal sealed partial class ModelConfiguration
             if (!File.Exists(read))
                 throw new InvalidDataException("Models configuration is missing.");
             var raw = File.ReadAllText(read, Encoding.UTF8);
-            if (catalog is not null && raw == cachedRaw)
+            var generation = Secrets.Store.Generation;
+            if (
+                catalog is not null
+                && raw == cachedRaw
+                && generation == cachedSecretGeneration
+                && !(cachedWhileLocked && !Secrets.Locked)
+            )
                 return catalog;
+            resolvedWhileLocked = false;
             var next = Validate(raw);
+            Secrets.SetTextRedactionKnownLabels(next.KnownLabels);
             catalog = next;
             cachedRaw = raw;
+            cachedSecretGeneration = generation;
+            cachedWhileLocked = resolvedWhileLocked;
             return next;
         }
     }
 
-    private HostModels Validate(string raw) =>
-        HostModels.Parse(ConfigurationYaml.Parse(raw, "models config"), app);
+    private HostModels Validate(string raw)
+    {
+        var (root, resolvedApp, missing) = ResolveModelSecrets(
+            ConfigurationYaml.Parse(raw, "models config")
+        );
+        var next = HostModels.Parse(root, resolvedApp);
+        next.MissingSecrets = missing;
+        return next;
+    }
 
     private static object? JsonNodeToObject(JsonNode? node)
     {
@@ -282,6 +306,37 @@ internal sealed partial class ModelConfiguration
     internal string ReadCurrentAppRaw() =>
         File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
 
+    // The installed models or app file as text, and whether it starts with a UTF-8 byte order
+    // mark, for edits that rewrite parts of it in place.
+    internal (string Text, bool Bom) ReadInstalledRaw(string target)
+    {
+        var path = target == "models" ? ActivePath : AppPath;
+        if (!File.Exists(path))
+            throw new InvalidOperationException(
+                target == "models"
+                    ? "No models configuration has been saved yet."
+                    : "No app configuration has been saved yet."
+            );
+        var bytes = File.ReadAllBytes(path);
+        var bom = bytes is [0xEF, 0xBB, 0xBF, ..];
+        try
+        {
+            return (new UTF8Encoding(false, true).GetString(bom ? bytes[3..] : bytes), bom);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new InvalidDataException("The configuration file is not UTF-8 text.");
+        }
+    }
+
+    // The models file the catalog reads: the installed file, or the template before the first
+    // save. Null when neither exists.
+    internal string? ReadCurrentModelsRaw()
+    {
+        var read = File.Exists(ActivePath) ? ActivePath : TemplatePath;
+        return File.Exists(read) ? File.ReadAllText(read, Encoding.UTF8) : null;
+    }
+
     internal JsonObject Diagnostics()
     {
         lock (gate)
@@ -310,7 +365,7 @@ internal sealed partial class ModelConfiguration
                 var virtualModel = type is "session-hash" or "failover";
                 var secret = SessionWait.Text(config["apiKey"]) ?? "";
                 if (!virtualModel && ModelApiKeys.IsPlaceholder(secret))
-                    placeholder.Add(key);
+                    placeholder.Add((System.Text.Json.Nodes.JsonNode?)(key));
                 var members =
                     config["models"] as JsonArray
                     ?? config["model"] as JsonArray

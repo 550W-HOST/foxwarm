@@ -64,7 +64,8 @@ internal sealed partial class SessionManager
             provider,
             models.ConfigurationOwner?.AppConfiguration ?? new JsonObject(),
             "provider-model-list",
-            "__provider_model_list__"
+            "__provider_model_list__",
+            secrets
         );
         return await SetupProviderRequests.ListAsync(http, model, cancellationToken);
     }
@@ -102,7 +103,8 @@ internal sealed partial class SessionManager
             provider,
             models.ConfigurationOwner?.AppConfiguration ?? new JsonObject(),
             providerKey,
-            testModel
+            testModel,
+            secrets
         );
         var options = ConfiguredModelRequests.Plan(
             model,
@@ -166,7 +168,14 @@ internal sealed partial class SessionManager
             var result = await service.ChatAsync("setup-model-test", setupHistory, timeout.Token);
             try
             {
-                await Journal.AppendChatResultAsync(requestId, 1, result, timeout.Token);
+                // Setup checks are real provider requests: record them priced like any other.
+                await Journal.AppendChatResultAsync(
+                    requestId,
+                    1,
+                    result with { Usage = ModelUsageCost.Complete(model, result) },
+                    timeout.Token,
+                    new LlmUsageAttribution(model.ProviderKey)
+                );
             }
             catch (Exception journalError)
             {

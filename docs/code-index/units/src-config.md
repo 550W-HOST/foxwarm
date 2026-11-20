@@ -78,7 +78,7 @@ These are selected runtime overrides, not an environment-to-YAML migration. Test
 | WebUI / trigger | enabled unless explicitly `false` |
 | TUI | disabled unless configured or `--tui` is present |
 | context limit | `200000` |
-| recent compact keep fraction (`compactKeepPercent`) | `0.3` |
+| recent raw tail kept by compaction, as a fraction of the compact threshold or of the raw region present, whichever is smaller (`compactKeepPercent`) | `0.3` |
 | automatic compact threshold fraction (`compactThresholdPercent`) | `0.85` |
 | block eligibility / force tokens | `3000` / `5000` |
 | block candidate / force-coverage fraction | `0.4` / `0.2` |
@@ -119,7 +119,7 @@ These are selected runtime overrides, not an environment-to-YAML migration. Test
 - Setup and `set_config` validate through the same current config readers and preserve submitted bytes with atomic replacement. See [D-config-live-install](#d-config-live-install).
 - Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including the three model-default fields, `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `buildAppConfigWithChannelsYaml` retains surrounding raw YAML text/comments for Weixin login candidates; persistence belongs to the installer. An unindented comment inside the channel mapping is not a section boundary: replacement removes every old entry, while trailing comments and spacing remain with the following document text.
-- Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
+- Template models config is a read fallback only and logs once; it is not silently copied into mutable state. Its active defaults remain readable by retained TypeScript fixture consumers. Maintained-only optional settings such as `retryIntervalsMs` are shown as commented examples; the C# host supplies the same built-in retry sequence when omitted. `modelsConfigPath.test.ts` loads and resolves the shipped fallback before installing an owned models file.
 - Code's fixed workspace-root response consumes exported `BASE_DIR`, resolved `DATA_ROOT_DIR`, `APP_CONFIG_PATH`, and `DEFAULT_MODELS_CONFIG_PATH`; it does not introduce a second path resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots) and [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).
 
 ## Compatibility

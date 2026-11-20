@@ -7,14 +7,15 @@ namespace Foxwarm.Tools;
 // Read the opened object, not a path which could already name its replacement.
 internal readonly record struct OpenFileMetadata(string Identity, long Size)
 {
-    internal static OpenFileMetadata Read(SafeFileHandle handle)
+    internal static OpenFileMetadata Read(SafeFileHandle handle, string? notRegularMessage = null)
     {
+        notRegularMessage ??= "The log destination is not a regular file.";
         if (OperatingSystem.IsLinux())
         {
             if (Statx(handle.DangerousGetHandle().ToInt32(), "", 0x1000, 0x0fff, out var info) != 0)
                 throw new IOException(new Win32Exception(Marshal.GetLastPInvokeError()).Message);
             if ((info.Mode & 0xf000) != 0x8000)
-                throw new IOException("The log destination is not a regular file.");
+                throw new IOException(notRegularMessage);
             return new(
                 $"{info.DeviceMajor}:{info.DeviceMinor}:{info.Inode}:{info.BirthSeconds}:{info.BirthNanoseconds}",
                 checked((long)info.Size)
@@ -30,7 +31,7 @@ internal readonly record struct OpenFileMetadata(string Identity, long Size)
             if (result != 0)
                 throw new IOException(new Win32Exception(Marshal.GetLastPInvokeError()).Message);
             if ((info.Mode & 0xf000) != 0x8000)
-                throw new IOException("The log destination is not a regular file.");
+                throw new IOException(notRegularMessage);
             return new(
                 $"{info.Device}:{info.Inode}:{info.BirthSeconds}:{info.BirthNanoseconds}",
                 info.Size
@@ -41,7 +42,7 @@ internal readonly record struct OpenFileMetadata(string Identity, long Size)
             if (!GetFileInformationByHandle(handle, out var info))
                 throw new IOException(new Win32Exception(Marshal.GetLastPInvokeError()).Message);
             if ((info.Attributes & 0x50) != 0 || GetFileType(handle) != 1)
-                throw new IOException("The log destination is not a regular file.");
+                throw new IOException(notRegularMessage);
             return new(
                 $"{info.Volume}:{info.IndexHigh}:{info.IndexLow}:{info.CreationHigh}:{info.CreationLow}",
                 ((long)info.SizeHigh << 32) | info.SizeLow

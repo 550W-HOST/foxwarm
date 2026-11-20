@@ -133,12 +133,12 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                     var tools = catalog.Tools(connection.Context);
                     if (
                         tools.Count > 64
-                        || Encoding.UTF8.GetByteCount(tools.ToJsonString()) > 256 * 1024
+                        || Encoding.UTF8.GetByteCount(tools.ToJsonText()) > 256 * 1024
                     )
                         throw new InvalidOperationException("Tool catalog exceeds size limit.");
                     return ValueTask.FromResult(
-                        JsonSerializer.Deserialize<ListToolsResult>(
-                            new JsonObject { ["tools"] = tools }.ToJsonString(),
+                        JsonData.Deserialize<ListToolsResult>(
+                            new JsonObject { ["tools"] = tools }.ToJsonText(),
                             McpJsonUtilities.DefaultOptions
                         )!
                     );
@@ -182,7 +182,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                             "Tool call was cancelled or timed out; a running tool may have an unknown outcome. Do not retry automatically."
                         );
                     }
-                    if (Encoding.UTF8.GetByteCount(result.ToJsonString()) > MaxResultBytes)
+                    if (Encoding.UTF8.GetByteCount(result.ToJsonText()) > MaxResultBytes)
                         result = McpInboundCatalog.Error(
                             "Tool may have completed; its result exceeded the size limit. Do not retry automatically."
                         );
@@ -331,7 +331,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
         }
         http.Response.StatusCode = status;
         http.Response.ContentType = "application/json";
-        await http.Response.WriteAsJsonAsync(new { error = text });
+        await http.Response.WriteAsJsonAsync(new JsonObject { ["error"] = text });
     }
 
     internal async Task HandleAsync(HttpContext http)
@@ -439,7 +439,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                 _ = JsonNode.Parse(messageBytes); // Syntax only before exact context ownership lookup.
                 if (id is null)
                 {
-                    message = JsonSerializer.Deserialize<JsonRpcMessage>(
+                    message = JsonData.Deserialize<JsonRpcMessage>(
                         messageBytes,
                         McpJsonUtilities.DefaultOptions
                     );
@@ -564,7 +564,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
             }
             if (message is null)
                 message =
-                    JsonSerializer.Deserialize<JsonRpcMessage>(
+                    JsonData.Deserialize<JsonRpcMessage>(
                         messageBytes!,
                         McpJsonUtilities.DefaultOptions
                     ) ?? throw new JsonException();

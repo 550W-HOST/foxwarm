@@ -32,6 +32,8 @@ export interface SequenceEvent {
   start: number
   end: number
   name?: string
+  /** Tag label when it differs from name: a ctl command's path. */
+  label?: string
   status?: 'ok' | 'error' | 'canceled'
   call?: number
   calls?: number

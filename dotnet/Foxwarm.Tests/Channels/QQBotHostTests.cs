@@ -82,10 +82,10 @@ public sealed class QQBotHostTests
         var id = (await created.Content.ReadFromJsonAsync<JsonObject>())![
             "sessionId"
         ]!.GetValue<string>();
-        peer.Push("GROUP_AT_MESSAGE_CREATE", QQBotPeer.Message("attach", "/attach " + id));
+        peer.Push("GROUP_AT_MESSAGE_CREATE", QQBotPeer.Message("attach", "/channel attach " + id));
         peer.Push(
             "GROUP_AT_MESSAGE_CREATE",
-            QQBotPeer.Message("attach-other", "/attach " + id, group: "other")
+            QQBotPeer.Message("attach-other", "/channel attach " + id, group: "other")
         );
         await TelegramChannelTests.Until(() => peer.Sent.Count() == 2);
         peer.Push(

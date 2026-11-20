@@ -196,9 +196,10 @@ internal sealed partial class SessionOwner
     internal JsonObject RuntimeSnapshot(SessionMetadata? meta = null)
     {
         meta ??= Metadata();
+        JsonObject runtime;
         lock (runtimeGate)
         {
-            var runtime = SessionRuntimeState.Build(
+            runtime = SessionRuntimeState.Build(
                 meta,
                 ToolActive,
                 Compacting,
@@ -208,8 +209,10 @@ internal sealed partial class SessionOwner
             runtime["perCallToolActivity"] = true;
             if (Processing)
                 runtime["processing"] = true;
-            return runtime;
         }
+        if (LiveActivity(meta.Busy, RunningCallId(runtime)) is { } activity)
+            runtime["activity"] = activity.ToJson();
+        return runtime;
     }
 
     internal void BeginModelAttempt()

@@ -1,7 +1,8 @@
 import { getMessageStableKey } from '../chatViewportState'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
-import { getWebSearchAction } from '../webSearchAction'
+import { getPartWebSearchAction, getPartWebSearchOutputItem } from '../webSearchAction'
 import { parseFoxwarmMetadataLine, type FunctionCall, type FunctionResponse, type Message } from './chatShared'
+import { ctlAsUnified } from '../ctlCall'
 
 const argsObject = (value: unknown): Record<string, any> | undefined => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>
@@ -10,7 +11,8 @@ const argsObject = (value: unknown): Record<string, any> | undefined => {
   }
   return undefined
 }
-const target = (call: FunctionCall) => {
+const target = (original: FunctionCall) => {
+  const call = ctlAsUnified(original)
   if (call.name !== 'call_tool') return { source: 'builtin', name: call.name, args: argsObject(call.args) }
   const descriptor = argsObject(call.args)
   const builtin = typeof descriptor?.toolId === 'string' ? descriptor.toolId.match(/^builtin:(.+)$/)?.[1] : undefined
@@ -33,8 +35,8 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
   const countedHostedObjects = new WeakSet<object>()
   const numberFact = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
   const hosted = (part: Message['parts'][number]) => {
-    const item = part.providerMeta?.openaiResponses?.outputItem
-    return getWebSearchAction(item) ? item as Record<string, any> : undefined
+    const item = getPartWebSearchOutputItem(part)
+    return item?.type !== 'web_search_tool_result' && getPartWebSearchAction(part) ? item as Record<string, any> : undefined
   }
   for (const message of history) {
     if (!isCommittedHistoryMessage(message) || message.__meta?.queuedPreview) continue
@@ -110,7 +112,7 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
           created++
           if (typeof sentNotifications === 'number') sent += numberFact(sentNotifications)
           else if (/\. Task assignment sent(?: with warning:|\.)/.test(output)
-            || ['wait', 'finish'].includes(tool.args?.afterSend) && /\. Initial message sent\.$/.test(output)) sent++
+            || (['wait', 'end_turn'].includes(tool.args?.currentSessionTurnAction) || ['wait', 'finish'].includes(tool.args?.afterSend)) && /\. Initial message sent\.$/.test(output)) sent++
         }
         if (tool.name === 'send_to_session' && /^Message sent to session `[^`]+`/.test(output)
           || tool.name === 'send_to_channel' && /^Message sent to channel target `[^`]+`/.test(output)) sent++

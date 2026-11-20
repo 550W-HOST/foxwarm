@@ -128,8 +128,14 @@ public sealed partial class InContextCompactTests
                         candidate => candidate.Start == 2
                     );
                     Assert.Equal(4, exchange.End);
-                    Assert.Equal(1, CompactCandidateBuilder.Split(rows, .25));
-                    Assert.Equal(1, CompactCandidateBuilder.Split(rows, .5));
+                    Assert.Equal(1, CompactCandidateBuilder.Split(rows, 1));
+                    Assert.Equal(
+                        1,
+                        CompactCandidateBuilder.Split(
+                            rows,
+                            CompactCandidateBuilder.RowTokens(rows[3])
+                        )
+                    );
                     var args = selection switch
                     {
                         "call-only" => Plan(2),

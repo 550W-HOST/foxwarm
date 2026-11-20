@@ -47,12 +47,12 @@ public sealed partial class InContextCompactTests
                 var call = unified
                     ? Call(
                         "plan",
-                        "call_tool",
-                        new JsonObject
+                        "ctl",
+                        CtlTestArgs.Unified(new JsonObject
                         {
                             ["toolId"] = "builtin:submit_compact_plan",
                             ["args"] = args,
-                        }
+                        })
                     )
                     : Call("plan", "submit_compact_plan", args);
                 return Task.FromResult(
@@ -209,7 +209,7 @@ public sealed partial class InContextCompactTests
                         {
                             ["sessionId"] = receiver,
                             ["message"] = "complete",
-                            ["afterSend"] = "finish",
+                            ["currentSessionTurnAction"] = "end_turn",
                         }
                     ),
                     _ => Call(

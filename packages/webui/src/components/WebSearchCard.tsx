@@ -4,7 +4,7 @@ import ModelThreadCard from './ModelThreadCard'
 import type { WebSearchAction } from '../webSearchAction'
 
 const WebSearchCard = memo(function WebSearchCard({ action }: { action: WebSearchAction }) {
-  const preview = action.type === 'search' ? action.query : `Open Page: ${action.url}`
+  const preview = action.type === 'search' ? action.query : action.type === 'open_page' ? `Open Page: ${action.url}` : action.error ? 'Search error' : 'Search results'
   const body = useMemo(() => {
     if (action.type === 'open_page') {
       return (
@@ -19,13 +19,14 @@ const WebSearchCard = memo(function WebSearchCard({ action }: { action: WebSearc
 
     return (
       <div className="foxwarm-web-search-body min-w-0 max-w-full text-[13px] leading-5">
-        {action.queries.length > 1 ? (
+        {action.type === 'search' && (action.queries.length > 1 ? (
           <ul className="list-disc space-y-1 pl-5">
             {action.queries.map(query => <li key={query} className="break-words">{query}</li>)}
           </ul>
         ) : (
           <div className="break-words">{action.query}</div>
-        )}
+        ))}
+        {action.error && <div className="mt-2 text-fw-error">Search error: {action.error}</div>}
         {!!action.sources?.length && (
           <div className="mt-2 flex min-w-0 flex-col items-start gap-1 text-xs">
             <span className="font-semibold">Search sources:</span>

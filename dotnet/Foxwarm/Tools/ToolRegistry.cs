@@ -10,13 +10,19 @@ internal sealed record ResolvedTool(
     JsonObject Args,
     string? Server = null,
     string ExecutionNode = "master"
-);
+)
+{
+    // The ctl command path (`node select`, `tool call`) when the call came through ctl. Display
+    // and denial attribution only; it is never an authorization fact.
+    internal string? Command { get; init; }
+}
 
 internal sealed record RegisteredTool(
     JsonObject Definition,
     string Source,
     bool DefaultInject,
-    Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonNode?>> Execute
+    Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonNode?>> Execute,
+    Func<bool>? Available = null
 );
 
 internal sealed class ToolRegistry(
@@ -31,6 +37,24 @@ internal sealed class ToolRegistry(
     internal Foxwarm.Nodes.NodeConnectionHub? Nodes => nodes;
     internal Foxwarm.Nodes.NodeProviderRegistry? Providers => providers;
     internal IEnumerable<RegisteredTool> Entries => entries.Values;
+
+    // Central known-secret masking for every dispatched result (builtin, MCP, Node,
+    // Provider and ToolScript-nested), before the output guard saves or returns it.
+    internal Func<JsonNode?, string, JsonNode?>? Redaction { get; set; }
+
+    // True for a marker label of a currently masked value; writers reject such markers.
+    internal Func<string, bool>? KnownSecretLabel { get; set; }
+
+    // The unknown-tool error. The 0.9.5 front ends, still present in older Session histories and
+    // persisted scripts, name their ctl replacement (user decision 2026-11-16); they are not
+    // aliases and run nothing.
+    internal static string UnknownTool(string name) =>
+        name switch
+        {
+            "search_tools" => "Unknown tool: search_tools. Use `ctl tool search <words>`.",
+            "call_tool" => "Unknown tool: call_tool. Use `ctl tool call <tool-id>` or the tool's `ctl` command.",
+            _ => "Unknown tool: " + name,
+        };
 
     internal void Register(
         JsonObject definition,
@@ -53,7 +77,9 @@ internal sealed class ToolRegistry(
         );
     }
 
-    internal void RegisterBrowser(JsonObject definition)
+    // Browser tools stay out of discovery while the machine cannot run them. A direct call still
+    // reaches the host, which reports the precise reason.
+    internal void RegisterBrowser(JsonObject definition, Func<bool> available)
     {
         var name = SessionWait.Text(definition["name"])!;
         entries.Add(
@@ -62,7 +88,8 @@ internal sealed class ToolRegistry(
                 (JsonObject)definition.DeepClone(),
                 "node",
                 false,
-                (owner, args, _) => owner.Browser.Execute(name, args)
+                (owner, args, token) => owner.Browser.Execute(name, args, token),
+                available
             )
         );
     }
@@ -75,7 +102,59 @@ internal sealed class ToolRegistry(
                 .ToArray()
         );
 
+    // ctl is a front end: a command resolves to the canonical capability it names, with the
+    // invocation recorded as ctl. Help, discovery and malformed commands stay with ctl itself.
+    // ToolScript's call_tool("ctl", ...) host call is unwrapped the same way.
+    internal static (string Invocation, JsonObject Args, bool Ctl) Unwrap(
+        string invocation,
+        JsonObject args
+    )
+    {
+        var (target, targetArgs, ctl, _) = UnwrapCommand(invocation, args);
+        return (target, targetArgs, ctl);
+    }
+
+    private static (string Invocation, JsonObject Args, bool Ctl, string? Command) UnwrapCommand(
+        string invocation,
+        JsonObject args
+    )
+    {
+        if (invocation == "call_tool" && NamesCtl(args))
+        {
+            invocation = "ctl";
+            args = ObjectArg(args, "args", "argsJson") ?? new JsonObject();
+        }
+        if (invocation != "ctl")
+            return (invocation, args, false, null);
+        return CtlParser.Parse(args) switch
+        {
+            CtlTarget target => (target.Name, target.Args, true, target.Command.Path),
+            CtlCall call => ("call_tool", call.Descriptor, true, call.Command.Path),
+            _ => ("ctl", args, true, null),
+        };
+    }
+
+    private static bool NamesCtl(JsonObject descriptor) =>
+        SessionWait.Text(descriptor["toolId"]) is { Length: > 0 } id
+            ? id.Trim() == "builtin:ctl"
+            : SessionWait.Text(descriptor["source"])?.Trim() == "builtin"
+                && SessionWait.Text(descriptor["name"]) == "ctl";
+
     internal ResolvedTool Resolve(string invocation, JsonObject args, string currentNode = "master")
+    {
+        var (target, targetArgs, ctl, command) = UnwrapCommand(invocation, args);
+        if (!ctl)
+            return ResolveConcrete(invocation, args, currentNode);
+        if (target == "ctl")
+            return new("ctl", "builtin", "ctl", (JsonObject)targetArgs.DeepClone());
+        return ResolveConcrete(target, targetArgs, currentNode) with
+        {
+            InvocationName = "ctl",
+            Command = command,
+        };
+    }
+
+    private ResolvedTool ResolveConcrete(string invocation, JsonObject args, string currentNode)
     {
         if (invocation != "call_tool")
         {
@@ -94,7 +173,7 @@ internal sealed class ToolRegistry(
                         (JsonObject)args.DeepClone(),
                         ExecutionNode: currentNode
                     );
-                throw new InvalidDataException("Unknown tool: " + invocation);
+                throw new InvalidDataException(UnknownTool(invocation));
             }
             return new(
                 invocation,
@@ -144,7 +223,7 @@ internal sealed class ToolRegistry(
         }
         if (source is not ("builtin" or "node" or "mcp") || string.IsNullOrEmpty(name))
             throw new InvalidDataException(
-                "call_tool requires either toolId or a valid source and tool name."
+                "A tool call requires either toolId or a valid source and tool name."
             );
         var targetArgs = ObjectArg(args, "args", "argsJson", required: true)!;
         if (source == "mcp")
@@ -153,9 +232,9 @@ internal sealed class ToolRegistry(
                 throw new InvalidDataException("MCP calls require an explicit server.");
             return new(invocation, source, name, targetArgs, server);
         }
-        if (name == "call_tool")
+        if (name == "ctl" && source == "builtin")
             throw new InvalidDataException(
-                "Tool `call_tool` is a dispatcher/container, not a concrete builtin capability."
+                "`ctl` is a command front end, not a concrete tool; run the command directly."
             );
         var targetNode = TargetNode(node, currentNode);
         if (source == "node" && targetNode != "master")
@@ -168,7 +247,7 @@ internal sealed class ToolRegistry(
             return new(invocation, source, name, targetArgs, ExecutionNode: targetNode);
         }
         if (!entries.TryGetValue(name, out var registration))
-            throw new InvalidDataException("Unknown tool: " + name);
+            throw new InvalidDataException(UnknownTool(name));
         if (registration.Source != source)
             throw new InvalidDataException(
                 $"Tool `{name}` is a {registration.Source} capability, not {source}."
@@ -203,6 +282,19 @@ internal sealed class ToolRegistry(
         var generation = owner.Hosted.McpGeneration;
         await owner.AuthorizeAsync(resolved, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        if (
+            KnownSecretLabel is { } known
+            && resolved
+                is { Source: "node", Name: "write" or "edit" or "apply_patch" }
+                    or {
+                        Source: "builtin",
+                        Name: "mcp_config"
+                            or "write_memory"
+                            or "edit_memory"
+                            or "apply_patch_memory"
+                    }
+        )
+            Foxwarm.Secrets.SecretMarkerGuard.Require(resolved.Args, known);
         var result =
             resolved.Source == "mcp"
                 ? await mcp.CallAsync(
@@ -238,6 +330,8 @@ internal sealed class ToolRegistry(
             && providers?.IsProviderNode(resolved.ExecutionNode) != true
         )
             owner.SettleRemoteExec(resolved);
+        if (Redaction is { } redact)
+            result = redact(result, owner.Hosted.Id);
         if (owner.Programmatic)
         {
             owner.ScriptBudget!.JsonValue(result);
@@ -301,7 +395,7 @@ internal sealed class ToolRegistry(
         id == "master"
             ? new JsonArray(
                 entries
-                    .Values.Where(entry => entry.Source == "node")
+                    .Values.Where(entry => entry.Source == "node" && (entry.Available?.Invoke() ?? true))
                     .Select(entry => (JsonNode?)entry.Definition.DeepClone())
                     .ToArray()
             )
@@ -323,6 +417,11 @@ internal sealed class ToolRegistry(
         CancellationToken token
     )
     {
+        var (expanded, expandedArgs, _) = Unwrap(invocation, args);
+        var resolvedArgs = args;
+        args = expandedArgs;
+        var resolvedInvocation = invocation;
+        invocation = expanded;
         var target = currentNode;
         var toolId = Text(args, "toolId");
         var nodeCapability =
@@ -341,9 +440,9 @@ internal sealed class ToolRegistry(
             )
                 target = id[5..id.LastIndexOf('/')];
         }
-        if (nodeCapability && target != "master")
+        if (nodeCapability && target != "master" && invocation != "ctl")
             await RefreshNodeAsync(target, token);
-        return Resolve(invocation, args, currentNode);
+        return Resolve(resolvedInvocation, resolvedArgs, currentNode);
     }
 
     private Task<JsonNode?> ExecuteNodeAsync(

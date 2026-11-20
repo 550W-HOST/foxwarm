@@ -28,7 +28,7 @@ Pass `--host=...` only when the container should connect to a different reachabl
 Options:
   --host=URL          Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN     Pairing token from the master (required unless stored credentials already exist)
-  --auth-token=TOKEN  Per-node auth token from /node create (use with --node-id)
+  --auth-token=TOKEN  Per-node auth token from /node token (use with --node-id)
   --node-id=ID        Requested node name (default: node-<hostname>)
   --state-dir=DIR     Persistent data dir on the local machine (default: ./data)
   --compose-file=FILE docker compose file path to create (default: ./docker-compose.yaml)
@@ -95,6 +95,10 @@ compose_quote() {
 }
 
 {
+  printf 'NODE_LAUNCH_DIR='; compose_quote "$(pwd -P)"; echo
+  printf 'NODE_LAUNCH_STATE_DIR='; compose_quote "$(cd "$STATE_DIR" && pwd -P)"; echo
+  printf 'NODE_LAUNCH_COMPOSE_FILE='; compose_quote "$COMPOSE_FILE"; echo
+  printf 'NODE_LAUNCH_ENV_FILE='; compose_quote "$ENV_FILE"; echo
   printf 'NODE_HOST='; compose_quote "$HOST"; echo
   printf 'NODE_SOURCE_URL='; compose_quote "$HOST/node/source.tar.gz"; echo
   printf 'NODE_PAIRING_TOKEN='; compose_quote "$PAIRING"; echo
@@ -118,7 +122,7 @@ echo "Persistent node data: $ABS_STATE_DIR"
 echo "Credentials file will be stored at: $ABS_STATE_DIR/state/node_credentials.json"
 
 echo "Starting node client with: $DOCKER_COMPOSE up -d --build"
-sh -c "$DOCKER_COMPOSE up -d --build"
+$DOCKER_COMPOSE --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 
 if [ "$DETACH" = "1" ]; then
 cat <<EOF
@@ -127,7 +131,7 @@ Docker-based node client started.
 
 If this is the first run, approve the pending pairing on the master:
   /node
-  /node approve <pending-id> $NODE_ID
+  /node approve <pending-id> --node-id $NODE_ID
 
 Useful follow-up commands:
   $DOCKER_COMPOSE logs -f
@@ -143,10 +147,10 @@ Docker-based node client started. Following logs below.
 
 If this is the first run, approve the pending pairing on the master:
   /node
-  /node approve <pending-id> $NODE_ID
+  /node approve <pending-id> --node-id $NODE_ID
 
 Press Ctrl-C to stop following logs. The container will keep running because it was started detached.
 
 EOF
 
-exec sh -c "$DOCKER_COMPOSE logs -f"
+exec $DOCKER_COMPOSE --env-file "$ENV_FILE" -f "$COMPOSE_FILE" logs -f

@@ -291,7 +291,7 @@ public sealed class WebUiUploadedFilesTests
     }
 
     [Fact]
-    public async Task Accepted_file_preparation_drains_before_retire_and_retired_owner_or_offline_isolated_binding_cannot_save_or_retarget()
+    public async Task Accepted_file_preparation_drains_before_retire_and_retired_owner_cannot_save()
     {
         await using var f = await Fixture.Create();
         var staged = await f.Stage("owned.bin", new byte[] { 1, 2 });
@@ -324,13 +324,6 @@ public sealed class WebUiUploadedFilesTests
         Assert.Single(result.SavedFiles);
         Assert.True(File.Exists(result.SavedFiles[0]["path"]!.ToString()));
         Assert.ThrowsAny<InvalidOperationException>(() => f.Manager.BeginFileIngress(f.Owner));
-        await using var remote = await Fixture.Create(
-            new JsonObject { ["isolated"] = true, ["isolatedNode"] = "future" }
-        );
-        Assert.Throws<InvalidOperationException>(() =>
-            remote.Manager.BeginFileIngress(remote.Owner)
-        );
-        Assert.False(Directory.Exists(Path.Combine(remote.Work, ".temp")));
     }
 
     [Theory]

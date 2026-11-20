@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
@@ -77,6 +78,13 @@ internal sealed partial class SessionCompactor
         var name = SessionWait.Text(call["name"]);
         if (name == "load_skill")
             return !string.IsNullOrWhiteSpace(SessionWait.Text(args["skillName"]));
+        if (name == "ctl")
+        {
+            if (Foxwarm.Tools.CtlParser.Describe(args) is not { Source: "builtin", Name: "skill" } described)
+                return false;
+            args = described.Args;
+            name = "skill";
+        }
         if (name == "call_tool")
         {
             var id = SessionWait.Text(args["toolId"]);
@@ -128,7 +136,7 @@ internal sealed partial class SessionCompactor
         var tool = function?["name"]?.GetValue<string>() ?? "unknown";
         var id = function?["tool_use_id"]?.GetValue<string>() ?? "unknown";
         var marker =
-            $"--- [foxwarm: historical tool response pruned; original: recall({{ target: \"msg#{seq}\" }}); tool={System.Text.Json.JsonSerializer.Serialize(tool)}; tool_use_id={System.Text.Json.JsonSerializer.Serialize(id)}; kept first {head.EnumerateRunes().Count()} and last {tail.EnumerateRunes().Count()} Unicode characters] ---";
+            $"--- [foxwarm: historical tool response pruned; original: {CtlCommandText.For("recall", new JsonObject { ["target"] = $"msg#{seq}" })}; tool={JsonData.Serialize(tool)}; tool_use_id={JsonData.Serialize(id)}; kept first {head.EnumerateRunes().Count()} and last {tail.EnumerateRunes().Count()} Unicode characters] ---";
         var bounded = head + "\n\n" + marker + "\n\n" + tail;
         if (bounded.EnumerateRunes().Count() >= characters.Length)
             return null;
@@ -140,9 +148,9 @@ internal sealed partial class SessionCompactor
             if (key == "output")
                 continue;
             if (
-                key is "content" or "error" && value?.ToJsonString().EnumerateRunes().Count() <= 512
+                key is "content" or "error" && value?.ToJsonText().EnumerateRunes().Count() <= 512
                 || RetainedResponseMetadata.Contains(key)
-                    && value?.ToJsonString().EnumerateRunes().Count() <= 512
+                    && value?.ToJsonText().EnumerateRunes().Count() <= 512
             )
                 pruned[key] = value?.DeepClone();
         }
@@ -176,7 +184,7 @@ internal sealed partial class SessionCompactor
             {
                 tokens += CompactCandidateBuilder.Tokens(call["name"]?.GetValue<string>() ?? "");
                 tokens += CompactCandidateBuilder.Tokens(
-                    call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonString() ?? "{}"
+                    call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonText() ?? "{}"
                 );
             }
             if (part["functionResponse"] is JsonObject response)
@@ -185,7 +193,7 @@ internal sealed partial class SessionCompactor
                     response["name"]?.GetValue<string>() ?? ""
                 );
                 tokens += CompactCandidateBuilder.Tokens(
-                    response["response"]?.ToJsonString() ?? "{}"
+                    response["response"]?.ToJsonText() ?? "{}"
                 );
             }
         }
@@ -200,7 +208,10 @@ internal sealed partial class SessionCompactor
     )
     {
         var originalRows = snapshot.History.Materialize();
-        var cutoff = CompactCandidateBuilder.Split(originalRows, keep);
+        var cutoff = CompactCandidateBuilder.Split(
+            originalRows,
+            KeepTokens(snapshot, originalRows, models, keep)
+        );
         var persistentSnapshot =
             SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
         var before = EstimateHistory(originalRows, persistentSnapshot);
@@ -299,7 +310,7 @@ internal sealed partial class SessionCompactor
         }
         token.ThrowIfCancellationRequested();
         if (automatic)
-            sessions?.Tasks.TaskContext(snapshot.Id, TaskProgress.Sequences(snapshot), false, []);
+            sessions?.Tasks.TaskContext(snapshot.Id, TaskProgress.Sequences(snapshot), false);
         try
         {
             await hosted.Entry.SaveLane.CommitCompactionAsync(
@@ -376,6 +387,11 @@ internal sealed partial class SessionCompactor
                 token
             );
         }
+        catch (AuthorityCommittedException)
+        {
+            IdleCompactionCommitted();
+            throw;
+        }
         catch (Exception error)
             when (error is PruningEstimateExceededException
                 || !automatic && error is PruningSnapshotChangedException
@@ -383,6 +399,7 @@ internal sealed partial class SessionCompactor
         {
             return result;
         }
+        IdleCompactionCommitted();
         hosted.PublishStateChanged();
         return result with
         {

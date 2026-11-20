@@ -244,7 +244,7 @@ public sealed class SessionPresentationTests
 
     [Theory]
     [InlineData("/session\u00A0archive root", true)]
-    [InlineData("/session\uFEFFparent root", true)]
+    [InlineData("/session\uFEFFset-parent root", true)]
     [InlineData("/session\u0085archive root", false)]
     [InlineData("/session clear", false)]
     [InlineData("/session archive-more", false)]
@@ -376,8 +376,8 @@ public sealed class SessionPresentationTests
             var text in new[]
             {
                 "/session archive two",
-                "/session parent two",
-                "/session unparent",
+                "/session set-parent two",
+                "/session clear-parent",
                 "/session unarchive two",
                 "/session archive missing",
             }

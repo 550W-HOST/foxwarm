@@ -30,6 +30,6 @@ internal sealed partial class NodeExecManager
         bool programmatic
     ) => ExecOutput.Result(entry, status, output, programmatic);
 
-    internal static string Completion(JsonObject entry, JsonObject status) =>
+    internal static Task<string> Completion(JsonObject entry, JsonObject status) =>
         ExecOutput.Completion(entry, status);
 }

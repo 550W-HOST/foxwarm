@@ -53,6 +53,27 @@ internal sealed partial class NodeClient
         authToken = options.AuthToken;
     }
 
+    private static JsonObject? LaunchInfo()
+    {
+        var method = Environment.GetEnvironmentVariable("FOXWARM_NODE_LAUNCH_METHOD");
+        if (string.IsNullOrEmpty(method))
+            return null;
+        var result = new JsonObject
+        {
+            ["method"] = method,
+            ["platform"] = OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "darwin" : "linux",
+        };
+        foreach (var (key, name) in new[]
+        {
+            ("installDir", "DIR"), ("stateDir", "STATE_DIR"), ("sourceDir", "SOURCE_DIR"),
+            ("composeFile", "COMPOSE_FILE"), ("envFile", "ENV_FILE"),
+            ("mode", "MODE"), ("serviceScope", "SERVICE_SCOPE"),
+        })
+            if (Environment.GetEnvironmentVariable("FOXWARM_NODE_LAUNCH_" + name) is { Length: > 0 } value)
+                result[key] = value;
+        return result;
+    }
+
     private bool Authenticated => !string.IsNullOrEmpty(nodeId) && !string.IsNullOrEmpty(authToken);
 
     internal async Task Run(CancellationToken stop)
@@ -112,21 +133,26 @@ internal sealed partial class NodeClient
                         + (proxy is null ? "" : " proxy=" + MasterProxy.Safe(proxy))
                 );
                 await connection.Socket.ConnectAsync(address, stop);
-                currentConnection = connection;
                 try
                 {
-                    await connection.Send(
+                    var registration = connection.Send(
                         new JsonObject
                         {
                             ["type"] = Authenticated ? "node_register" : "pair_request",
                             ["nodeType"] = "cli-node",
+                            ["launchInfo"] = LaunchInfo(),
                             ["capabilities"] = Capabilities(
-                                options.ToolCallInterceptor is not null
+                                options.ToolCallInterceptor is not null,
+                                browserTools.Definitions()
                             ),
                             ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
                             ["requestedName"] = Authenticated ? null : requestedName,
                         }
                     );
+                    // Session requests share this send queue; Main rejects application frames
+                    // that precede registration, so publish only after registration is queued.
+                    currentConnection = connection;
+                    await registration;
                     await Receive(connection, stop);
                 }
                 finally
@@ -307,11 +333,16 @@ internal sealed partial class NodeClient
                     case "external_exec_result_request":
                         ScheduleExternalQuery(connection, frame);
                         break;
+                    case "exec_control_request":
+                        ScheduleExecControl(connection, frame);
+                        break;
                     case "node_service_request":
                     case "node_service_command":
                     case "tool_call":
                     case "file_read_request":
                     case "file_write_request":
+                    case "file_stream_read_request":
+                    case "file_stream_write_request":
                         // Effects outlive a lost reply, but can only reply on their originating connection.
                         ScheduleDispatch(connection, frame);
                         break;
@@ -381,10 +412,11 @@ internal sealed partial class NodeClient
                             cancellation?.Token ?? CancellationToken.None,
                             () => execStarted = true
                         )
-                    : Text(frame, "tool")?.StartsWith("browse_", StringComparison.Ordinal) == true
+                    : Text(frame, "tool")?.StartsWith("browser_", StringComparison.Ordinal) == true
                         ? await browserTools.Execute(
                             Text(frame, "tool")!,
-                            frame["args"] as JsonObject
+                            frame["args"] as JsonObject,
+                            cancellation?.Token ?? CancellationToken.None
                         )
                     : await tools.Execute(
                         Text(frame, "tool") ?? "",
@@ -400,6 +432,57 @@ internal sealed partial class NodeClient
                     ["result"] = result,
                 };
             }
+            else if (type is "file_stream_read_request" or "file_stream_write_request")
+            {
+                if (nodeId is null || authToken is null)
+                    throw new InvalidOperationException("Node is not authenticated.");
+                var streaming = new NodeFileStream(paths, options.Host, nodeId, authToken);
+                var transferId = Text(frame, "transferId") ?? "";
+                var path = Text(frame, "filePath") ?? "";
+                var restrict = NodeFileTools.Flag(frame, "restrictToAgentDir");
+                if (type == "file_stream_read_request")
+                {
+                    var file = await streaming.Read(
+                        transferId,
+                        path,
+                        agent,
+                        restrict,
+                        connection.ApprovalStop.Token,
+                        Text(frame, "sessionCwd")
+                    );
+                    if (file is null)
+                        return;
+                    response = new JsonObject
+                    {
+                        ["type"] = "file_read_response",
+                        ["transferId"] = transferId,
+                        ["file"] = file,
+                    };
+                }
+                else
+                {
+                    if (
+                        frame["sizeBytes"] is not JsonValue size
+                        || !size.TryGetValue<long>(out var length)
+                    )
+                        throw new InvalidDataException("Invalid file transfer size.");
+                    response = new JsonObject
+                    {
+                        ["type"] = "file_write_response",
+                        ["transferId"] = transferId,
+                        ["result"] = await streaming.Write(
+                            transferId,
+                            path,
+                            agent,
+                            restrict,
+                            NodeFileTools.Flag(frame, "overwrite"),
+                            length,
+                            connection.ApprovalStop.Token,
+                            Text(frame, "sessionCwd")
+                        ),
+                    };
+                }
+            }
             else if (type == "file_read_request")
                 response = new JsonObject
                 {
@@ -408,7 +491,8 @@ internal sealed partial class NodeClient
                     ["file"] = await transfers.Read(
                         Text(frame, "filePath") ?? "",
                         agent,
-                        NodeFileTools.Flag(frame, "restrictToAgentDir")
+                        NodeFileTools.Flag(frame, "restrictToAgentDir"),
+                        Text(frame, "sessionCwd")
                     ),
                 };
             else
@@ -421,7 +505,8 @@ internal sealed partial class NodeClient
                         agent,
                         Text(frame, "dataBase64") ?? "",
                         NodeFileTools.Flag(frame, "overwrite"),
-                        NodeFileTools.Flag(frame, "restrictToAgentDir")
+                        NodeFileTools.Flag(frame, "restrictToAgentDir"),
+                        Text(frame, "sessionCwd")
                     ),
                 };
             await connection.Send(response);
@@ -535,7 +620,7 @@ internal sealed partial class NodeClient
         await using (var stream = new FileStream(path, fileOptions))
             await stream.WriteAsync(
                 System.Text.Encoding.UTF8.GetBytes(
-                    content.ToJsonString(new() { WriteIndented = true })
+                    content.ToJsonText(indented: true)
                 )
             );
         if (!OperatingSystem.IsWindows())
@@ -544,7 +629,7 @@ internal sealed partial class NodeClient
 
     private static string? Text(JsonObject value, string key) => NodeFileTools.Text(value[key]);
 
-    internal static JsonObject Capabilities(bool intercepted = false)
+    internal static JsonObject Capabilities(bool intercepted = false, JsonArray? browser = null)
     {
         using var stream = typeof(NodeClient).Assembly.GetManifestResourceStream(
             "Foxwarm.CliNode.Capabilities.json"
@@ -563,7 +648,12 @@ internal sealed partial class NodeClient
             capabilities["features"]!.AsObject().Remove("execWaitCancellation");
             capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
             capabilities["features"]!.AsObject().Remove(ExecPlacement.Feature);
+            capabilities["features"]!.AsObject().Remove("secretEnv");
+            capabilities["features"]!.AsObject().Remove("execControl");
         }
+        if (browser is not null)
+            foreach (var definition in browser)
+                capabilities["tools"]!.AsArray().Add(definition?.DeepClone());
         if (
             !OperatingSystem.IsLinux()
             && !OperatingSystem.IsMacOS()
@@ -740,7 +830,7 @@ internal sealed partial class NodeClient
                     throw new IOException("Remote node is not connected to master");
                 if (Socket.State == WebSocketState.Open)
                     await Socket.SendAsync(
-                        System.Text.Encoding.UTF8.GetBytes(frame.ToJsonString()).AsMemory(),
+                        System.Text.Encoding.UTF8.GetBytes(frame.ToJsonText()).AsMemory(),
                         WebSocketMessageType.Text,
                         true,
                         CancellationToken.None

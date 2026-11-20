@@ -140,6 +140,26 @@ internal sealed partial class WeWorkChannel
         CancellationToken token
     )
     {
+        try
+        {
+            await SendFileCoreAsync(conversation, file, caption, options, token);
+        }
+        catch (Exception error) when (NetworkFailure(error, token))
+        {
+            health.Fail(SendingPath, error);
+            throw;
+        }
+        health.Recover(SendingPath);
+    }
+
+    private async Task SendFileCoreAsync(
+        string conversation,
+        ChannelFile file,
+        string? caption,
+        ChannelSendOptions options,
+        CancellationToken token
+    )
+    {
         var explicitWebhook = Nonempty(options.WebhookUrl) ? options.WebhookUrl : null;
         if (explicitWebhook is null && WebSocketEnabled)
         {

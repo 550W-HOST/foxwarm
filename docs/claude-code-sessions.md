@@ -27,17 +27,17 @@ The CLI runs on master and receives the same Foxwarm tools an ordinary Session w
 
 Each rule layer is evaluated in order, and a call that matches no rule passes that layer. A rule that names only Nodes therefore restricts Node operations but leaves management tools such as `mcp_config` (which can start commands on master) and `set_config` to the global policy. To confine a worker, list what it needs and end with a catch-all deny. From an authorized ancestor or administrator, before assigning work:
 
-```javascript
-set_agent_rules({"agentName":"worker", "rules":[
-  {"tool":["read","write","edit","exec"], "node":"c1", "action":"allow"},
-  {"tool":"search_tools", "action":"allow"},
-  {"tool":{"source":"builtin","name":"send_to_session"},
-   "args":{"sessionId":{"session":{"relation":"parent"}}}, "action":"allow"},
-  {"action":"deny"}
-]})
+```text
+ctl agent set-rules worker --rules @rules
+  values: {"rules":[
+    {"tool":["read","write","edit","exec"], "node":"c1", "action":"allow"},
+    {"tool":{"source":"builtin","name":"send_to_session"},
+     "args":{"sessionId":{"session":{"relation":"parent"}}}, "action":"allow"},
+    {"action":"deny"}
+  ]}
 ```
 
-Create the worker's Claude Code Session with `agentName: "worker"` and `node: "c1"`. The worker can use files and commands in the c1 subtree, discover tools and report to its parent Session; everything else is denied, and denied tools are hidden from its tool list. Add further grants such as `task` or memory tools as needed. An Agent that creates its own sub-Agents needs grants for `create_agent`, `set_agent_rules` and `create_child_session`, and for `node_create_auth_token` with the parent Node. For selector semantics and delegation, see [Node authorization forests](code-index/behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests).
+Create the worker's Claude Code Session with `agentName: "worker"` and `node: "c1"`. The worker can use files and commands in the c1 subtree and report to its parent Session; everything else is denied, and denied tools are hidden from its tool list and from `ctl` help and discovery. Add further grants such as `task` or memory tools as needed. An Agent that creates its own sub-Agents needs grants for `create_agent`, `set_agent_rules` and `create_child_session`, and for `node_create_auth_token` with the parent Node. For selector semantics and delegation, see [Node authorization forests](code-index/behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests).
 
 ## Runtime-specific memory
 
@@ -45,7 +45,7 @@ The Session's memory snapshot is passed to Claude Code as appended system instru
 
 ```markdown
 <foxwarm-if runtime="claude-code">
-Report with send_to_session and afterSend "continue".
+Report with send_to_session and currentSessionTurnAction "continue".
 </foxwarm-if>
 <foxwarm-if runtime="foxwarm">
 Instructions that use wait or other batch controls.
@@ -56,7 +56,7 @@ In a Claude Code Session, `model-id` conditions match the model name reported by
 
 ## Limits and precautions
 
-- **Current support:** Linux, hosted on master only. Fork, Foxwarm compaction, wait/batch controls and ToolScript run/resume are unavailable. Use `afterSend: "continue"` for reports. Model/effort changes belong to Claude Code, not Foxwarm's Session controls.
+- **Current support:** Linux, hosted on master only. Fork, Foxwarm compaction, wait/batch controls and ToolScript run/resume are unavailable. Use `currentSessionTurnAction: "continue"` for reports. Model/effort changes belong to Claude Code, not Foxwarm's Session controls.
 - **Trust:** the host account, executable and user/managed configuration are trusted. Private cwd and `--setting-sources user` exclude project/local settings but do not create an OS sandbox or override unrestricted host-tool grants. Review automatic helpers/hooks before real-account use. Flags were checked against 2.1.314; the installed CLI/account still needs qualification.
 - **Recovery:** A known missing or non-executable launcher leaves input unsubmitted; repair the launcher and use Continue to submit it. Stop revokes run access and drains the CLI. Unknown input outcomes are not replayed; Continue explicitly resumes known work. Restore a missing transcript or Clear. Clear starts a fresh context and clears the Session's Foxwarm history, without deleting the CLI account's transcripts.
 

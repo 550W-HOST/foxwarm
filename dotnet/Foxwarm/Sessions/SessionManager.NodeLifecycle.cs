@@ -10,64 +10,91 @@ internal sealed partial class SessionManager
     internal async Task<JsonObject> ExecuteNodeToolAsync(
         SessionOwner owner,
         JsonObject args,
-        CancellationToken token,
-        bool programmatic = false
+        CancellationToken token
     )
     {
         owner.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Node tools require the current Session owner.");
         var action = ToolRegistry.Text(args, "action")?.Trim().ToLowerInvariant();
-        var isolated = AgentIsolated(owner.Agent);
         if (action == "list")
         {
             ToolRegistry.Keys(args, ["action"]);
-            var nodes = await ToolNodeTopologyAsync(owner, token);
-            var providers = await NodeProviders.ListProvidersAsync(isolated, token);
-            var currentNode = CurrentNode(owner);
-            var result = new JsonObject
+            // One caller snapshot decides every Node and Provider row of this list.
+            var visibility = VisibilityFor(owner);
+            var declared = await NodeProviders.ListProvidersAsync(token);
+            var destroyProviders = declared
+                .OfType<JsonObject>()
+                .Where(value =>
+                    value["lifecycle"]!.AsArray().Any(item => SessionWait.Text(item) == "destroy")
+                )
+                .Select(value => value["id"]!.GetValue<string>())
+                .ToHashSet(StringComparer.Ordinal);
+            var nodes = await ToolNodeTopologyAsync(visibility, destroyProviders, token);
+            var providers = new JsonArray();
+            foreach (var provider in declared.OfType<JsonObject>())
             {
-                ["output"] =
-                    $"Current node: `{currentNode}`.\n"
-                    + string.Join(
-                        '\n',
-                        nodes
-                            .OfType<JsonObject>()
-                            .Select(value =>
-                                $"- `{value["id"]!.GetValue<string>()}` ({value["kind"]!.GetValue<string>()}) — {value["availability"]!.GetValue<string>()}"
-                            )
-                    )
-                    + "\nProviders:\n"
-                    + string.Join(
-                        '\n',
-                        providers
-                            .OfType<JsonObject>()
-                            .Select(value =>
-                                $"- `{value["id"]!.GetValue<string>()}` ({string.Join(", ", value["lifecycle"]!.AsArray().Select(SessionWait.Text))})"
-                            )
-                    ),
-            };
-            if (programmatic)
-            {
-                result["nodes"] = nodes;
-                result["providers"] = providers;
-                result["currentNode"] = currentNode;
+                var id = provider["id"]!.GetValue<string>();
+                var actions = VisibleProviderActions(
+                    visibility,
+                    id,
+                    provider["lifecycle"]!.AsArray(),
+                    nodes
+                        .OfType<JsonObject>()
+                        .Any(node =>
+                            SessionWait
+                                .Text(node["id"])!
+                                .StartsWith(id + "/", StringComparison.Ordinal)
+                            && node["manage"]!
+                                .AsArray()
+                                .Any(item => SessionWait.Text(item) == "destroy")
+                        )
+                );
+                if (actions.Count == 0)
+                    continue;
+                var visible = (JsonObject)provider.DeepClone();
+                visible["lifecycle"] = actions;
+                providers.Add(visible);
             }
-            return result;
+            // An absent parent is left out rather than listed as null.
+            foreach (var node in nodes.OfType<JsonObject>())
+                if (node["parentNode"] is null)
+                    node.Remove("parentNode");
+            return new JsonObject
+            {
+                ["currentNode"] = visibility.CurrentNode,
+                ["nodes"] = nodes,
+                ["providers"] = providers,
+            };
+        }
+        if (action == "status")
+        {
+            ToolRegistry.Keys(args, ["action"]);
+            var current = CurrentNode(owner);
+            var status = new JsonObject
+            {
+                ["currentNode"] = current,
+                ["connected"] = NodeProviders.Connected(current),
+            };
+            // An unset Session cwd means commands start in the Node's default directory.
+            var cwd = owner.Entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["cwd"]));
+            if (!string.IsNullOrWhiteSpace(cwd))
+                status["cwd"] = cwd;
+            var defaultCwd =
+                current == "master" ? agents.AgentDirectory(owner.Agent) : NodeProviders.DefaultCwd(current);
+            if (defaultCwd is not null)
+                status["defaultCwd"] = defaultCwd;
+            return status;
         }
         if (action == "select")
         {
             ToolRegistry.Keys(args, ["action", "nodeId"]);
             var id = RequiredNodeArgument(args, "nodeId", 193).Trim();
-            if (isolated)
-                throw new ToolAuthorizationDeniedException(
-                    "Isolated sessions cannot switch Node through model tools. Use the administrator Node command."
-                );
             return await SelectNodeAsync(owner, id, token);
         }
         if (action is not ("create" or "ensure" or "inspect" or "destroy"))
             throw new InvalidDataException(
-                "node action must be list, select, create, ensure, inspect, or destroy."
+                "node action must be list, status, select, create, ensure, inspect, or destroy."
             );
         ToolRegistry.Keys(
             args,
@@ -78,10 +105,6 @@ internal sealed partial class SessionManager
         var parameters =
             ToolRegistry.ObjectArg(args, "parameters", "parametersJson") ?? new JsonObject();
         ExecutableNodeProvider.BoundedJson(parameters, 64 * 1024, 12, int.MaxValue, true);
-        if (isolated && action != "inspect")
-            throw new ToolAuthorizationDeniedException(
-                "Effectively isolated sessions cannot mutate provider Nodes without an ownership policy."
-            );
         string? providerId = null;
         string? nodeId = null;
         JsonObject resultValue;
@@ -92,9 +115,8 @@ internal sealed partial class SessionManager
             providerId = RequiredNodeArgument(args, "providerId", 64).Trim();
             var description = await NodeProviders.InspectProviderAsync(providerId, token);
             resultValue = new JsonObject { ["provider"] = description };
-            // Normalize the full result before restricting disclosed actions, as on Main's service boundary.
+            // Normalize the full result as on Main's service boundary.
             ExecutableNodeProvider.BoundedJson(resultValue, 128 * 1024, 12, int.MaxValue, true);
-            description["lifecycle"] = NodeProviderRegistry.DisclosedActions(description, isolated);
         }
         else
         {
@@ -112,7 +134,6 @@ internal sealed partial class SessionManager
             else
             {
                 nodeId = RequiredNodeArgument(args, "nodeId", 193).Trim();
-                RequireNodeBoundary(owner, nodeId);
                 if (
                     action == "destroy"
                     && ToolRegistry.Text(args, "confirmation") != "destroy node " + nodeId
@@ -168,55 +189,51 @@ internal sealed partial class SessionManager
         return text;
     }
 
-    private async Task<JsonArray> ToolNodeTopologyAsync(SessionOwner owner, CancellationToken token)
+    // Lists Nodes where the caller might do work (Node tools or file transfer), plus its current
+    // Node. Selection and management are reported per listed Node but never admit one alone.
+    private async Task<JsonArray> ToolNodeTopologyAsync(
+        ToolVisibilityContext context,
+        IReadOnlySet<string> destroyProviders,
+        CancellationToken token
+    )
     {
         var result = new JsonArray();
         var totalBytes = Encoding.UTF8.GetByteCount("{\"nodes\":[]}");
-        var current = CurrentNode(owner);
+        var current = context.CurrentNode;
         foreach (var summary in (await NodeSummariesAsync(token: token)).OfType<JsonObject>())
         {
             var id = SessionWait.Text(summary["id"])!;
             var type = SessionWait.Text(summary["type"]);
             if (id.Length > 193 || type is not { Length: > 0 and <= 64 })
                 continue;
-            if (
-                AgentIsolated(owner.Agent)
-                && id != "master"
-                && id != (RecordedIsolationNode(owner.Agent) ?? current)
-                && id != current
-            )
-                continue;
-            if (result.Count == 100)
-                break;
             var tools =
                 id == "master" ? this.tools.NodeDefinitions(id) : NodeProviders.Definitions(id);
+            var definitions = tools
+                .OfType<JsonObject>()
+                .Take(200)
+                .Where(definition =>
+                    SessionWait.Text(definition["name"]) is { Length: > 0 and <= 128 }
+                )
+                .ToArray();
+            var slash = id.IndexOf('/');
+            var facets = ProbeNode(
+                context,
+                id,
+                definitions.Select(definition => SessionWait.Text(definition["name"])!),
+                slash > 0 && destroyProviders.Contains(id[..slash])
+            );
+            if (!facets.Usable && id != current)
+                continue;
+            // The cap applies to listed Nodes, so hidden ones cannot crowd them out.
+            if (result.Count == 100)
+                break;
+            // Names only: descriptions and schemas come from Node inspection or `ctl tool search`.
             var visible = new JsonArray();
-            foreach (var definition in tools.OfType<JsonObject>().Take(200))
+            foreach (var definition in definitions)
             {
-                var name = SessionWait.Text(definition["name"]);
-                if (name is not { Length: > 0 and <= 128 })
-                    continue;
-                if (!ToolVisible(owner, "node", name, node: id))
-                    continue;
-                var tool = new JsonObject { ["name"] = name };
-                if (SessionWait.Text(definition["description"]) is string description)
-                    tool["description"] = description[..Math.Min(2000, description.Length)];
-                if (definition["parameters"] is JsonNode schema)
-                {
-                    try
-                    {
-                        ExecutableNodeProvider.BoundedJson(
-                            schema,
-                            16 * 1024,
-                            12,
-                            int.MaxValue,
-                            true
-                        );
-                        tool["parameters"] = schema.DeepClone();
-                    }
-                    catch (NodeProviderException) { }
-                }
-                visible.Add(tool);
+                var name = SessionWait.Text(definition["name"])!;
+                if (facets.Tools.Contains(name))
+                    visible.Add((JsonNode?)name);
             }
             var node = new JsonObject
             {
@@ -237,6 +254,14 @@ internal sealed partial class SessionManager
                         : "offline"
                     ),
                 ["tools"] = visible,
+                ["select"] = facets.Select,
+                ["transfer"] = facets.Transfer,
+                ["manage"] = new JsonArray(
+                    new[] { facets.Inspect ? "inspect" : null, facets.Destroy ? "destroy" : null }
+                        .OfType<string>()
+                        .Select(action => (JsonNode?)JsonValue.Create(action))
+                        .ToArray()
+                ),
             };
             if (
                 SessionWait.Number(summary["lastActivity"]) is double activity
@@ -255,7 +280,7 @@ internal sealed partial class SessionManager
             }
             if (SessionWait.Text(summary["displayName"]) is { Length: > 0 and <= 256 } label)
                 node["label"] = label;
-            var size = Encoding.UTF8.GetByteCount(node.ToJsonString());
+            var size = Encoding.UTF8.GetByteCount(node.ToJsonText());
             if (totalBytes + size > 256 * 1024)
                 break;
             totalBytes += size;

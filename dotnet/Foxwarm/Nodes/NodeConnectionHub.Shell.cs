@@ -316,6 +316,11 @@ internal sealed partial class NodeConnectionHub
                 new JsonObject
                 {
                     ["nodeType"] = "shell-node",
+                    ["launchInfo"] = new JsonObject
+                    {
+                        ["method"] = powershell ? "windowsShell" : "shell",
+                        ["platform"] = powershell ? "win32" : "posix",
+                    },
                     ["capabilities"] = connection.Capabilities.DeepClone(),
                 },
                 connection.Protocol

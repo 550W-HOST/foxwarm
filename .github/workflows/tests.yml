@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CI: 'true'
@@ -21,6 +21,68 @@ env:
 jobs:
   code-resources:
     uses: ./.github/workflows/code-resources.yml
+
+  android:
+    name: Android Node APK and protocol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.403'
+      - name: Select JDK 17
+        shell: bash
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+      - name: Cache Gradle dependencies and wrapper
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ hashFiles('packages/android-node/**/*.gradle.kts', 'packages/android-node/gradle.properties', 'packages/android-node/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            android-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-
+      - name: Build Android and run JVM tests
+        shell: bash
+        # ubuntu-24.04 provides SDK platform 35 and Build Tools 35.0.0 in ANDROID_HOME.
+        run: packages/android-node/gradlew -p packages/android-node :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      - name: Build Main for the Android protocol fixture
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+          npm run build:assets
+          dotnet build dotnet/Foxwarm/Foxwarm.csproj -c Debug -p:FoxwarmDelivery=true
+      - name: Test the Android JVM client against an owned Main
+        run: node packages/android-node/node-test/main-host.mjs
+      - name: Upload sideloadable debug APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foxwarm-android-node-debug
+          path: packages/android-node/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+      - name: Upload Android test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-node-tests
+          path: |
+            packages/android-node/core/build/test-results/test/*.xml
+            packages/android-node/app/build/test-results/testDebugUnitTest/*.xml
+            packages/android-node/app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 7
 
   native-test-resources:
     name: Prepare shared HEIF prerequisite
@@ -56,7 +118,71 @@ jobs:
     needs: native-test-resources
     name: Core, packages, and quality
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.403'
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+      - name: Build managed delivery and explicit Source reference
+        run: |
+          npm run build
+          npm run build:reference
+      - name: Restore shared HEIF prerequisite
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/heif-test/prefix
+          key: ${{ needs.native-test-resources.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - name: Check HEIF prerequisite
+        run: |
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libheif.so"
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
+      - name: Run maintained core and component tests
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
+          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
+        run: npm run test:unit:components
+      - name: Run quality checks
+        run: |
+          npm run quality:code-index
+          npm run quality:unused
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-core
+          path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7
+
+  managed:
+    needs: native-test-resources
+    name: Managed .NET tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,7 +201,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.403'
       - name: Install dependencies
         run: |
           npm ci
@@ -96,20 +222,16 @@ jobs:
           test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
       # Source is still needed by managed oracles and fixture producers; the
       # retired Main unit suite is available separately through test:reference.
-      - name: Run maintained core and component tests
+      - name: Run managed tests
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:unit
-      - name: Run quality checks
-        run: |
-          npm run quality:code-index
-          npm run quality:unused
+        run: npm run test:managed
       - name: Upload failure diagnostics
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: diagnostics-core
+          name: diagnostics-managed
           path: |
             ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
             ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
@@ -145,7 +267,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.403'
       - name: Install dependencies
         run: |
           npm ci
@@ -187,7 +309,8 @@ jobs:
       - name: Extract shared Code resources
         run: |
           mkdir -p packages/vscode-web/assets
-          tar -xzf "$RUNNER_TEMP"/code-resources/foxwarm-code-*.tar.gz -C packages/vscode-web/assets
+          node scripts/asset-pack.mjs extract "$RUNNER_TEMP"/code-resources/foxwarm-code-*.fwassets "$RUNNER_TEMP/code-assets"
+          cp -a "$RUNNER_TEMP/code-assets/packages/vscode-web/assets/." packages/vscode-web/assets/
       - name: Check shared Code resources
         run: node scripts/test/prepare-browser.mjs --check-code
       - name: Prepare owned SSH daemon prerequisite
@@ -238,7 +361,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.403'
       - name: Install dependencies
         run: |
           npm ci
@@ -273,6 +396,84 @@ jobs:
         with:
           name: diagnostics-app
           path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/screenshots/**/*
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7
+
+  native-main:
+    name: Native Main smoke (Linux x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.403'
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+      - name: Install Chrome for Testing
+        id: browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_log="$RUNNER_TEMP/chrome-for-testing-install.log"
+          sudo "$(command -v node)" node_modules/@puppeteer/browsers/lib/cjs/main-cli.js \
+            install chrome@145.0.7632.77 \
+            --path "$RUNNER_TEMP/puppeteer-browsers" \
+            --install-deps \
+            --format '{{path}}' | tee "$install_log"
+          browser_path="$(tail -n 1 "$install_log")"
+          test -x "$browser_path"
+          "$browser_path" --version
+          echo "path=$browser_path" >> "$GITHUB_OUTPUT"
+      # The full-application harness seeds its Archive with the Source writer; the
+      # Main browser fixture also connects a managed CLI Node.
+      - name: Build delivery assets, Source reference and CLI Node fixture
+        run: |
+          npm run build:assets
+          npm run build:reference
+          dotnet build dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj -c Debug
+      - name: Publish NativeAOT Main once
+        run: |
+          mkdir -p "$RUNNER_TEMP/foxwarm-test-artifacts"
+          dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release -r linux-x64 \
+            -p:PublishAot=true -o "$RUNNER_TEMP/native-main" \
+            "-flp:LogFile=$RUNNER_TEMP/foxwarm-test-artifacts/native-main-publish.log;Verbosity=minimal"
+      - name: Check first-party NativeAOT warnings
+        run: node scripts/test/native-main-warnings.mjs "$RUNNER_TEMP/foxwarm-test-artifacts/native-main-publish.log"
+      - name: Run native Main smoke
+        env:
+          FOXWARM_TEST_MAIN_EXECUTABLE: ${{ runner.temp }}/native-main/Foxwarm
+          FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
+          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
+        run: npm run test:native
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-native-main
+          path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/native-main-publish.log
             ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
             ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
             ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log

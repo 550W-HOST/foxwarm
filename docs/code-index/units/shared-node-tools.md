@@ -1,19 +1,19 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/unifiedEdit.ts, packages/shared/src/unifiedEdit.test.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/unifiedEdit.ts, packages/shared/src/unifiedEdit.test.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/toolResponseFormatting.fixtures.json, packages/shared/src/toolResponseYaml.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Purpose
 
-Provides shared file system tools, shell execution, browser automation, and utility functions used by node-side agents. These tools enable reading/writing/editing files, executing commands with background process support, browsing web pages via Puppeteer, and formatting tool responses.
+Provides shared file system tools, shell execution and utility functions used by node-side agents. These tools enable reading/writing/editing files, executing commands with background process support, and formatting tool responses.
 
 ## Key Exports
 
 - `isCoreNodeId`, `splitProviderNodeId`, `MAX_CORE_NODE_ID_LENGTH` — pure bounded native/qualified Node identity grammar shared by Core, WebUI and Code URI consumers. Native leading underscores/hyphens retain their existing contract; adapter-local identities keep their protocol-specific alphanumeric start.
 
-- `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
+- `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
 - `readFileToolPath`, `writeFileToolPath`, `applyPatchOperations`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write/patch core used by Main and Node wrappers
 - `detectRasterImageMimeType`, `RASTER_IMAGE_HEADER_BYTES`, `RasterImageMimeType` — pure raster-signature recognition shared by file reads and provider image acceptance; recognition does not decode or validate an image
@@ -23,15 +23,16 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `NodeToolContext.resolveFilePath` / async-capable `dirnameFilePath` — optional target-namespace path seam used by primitive Node providers so Core can compose canonical file tools while the provider owns its namespace parent relation
 - `NodeToolContext.externalOwner` / `externalExecManager` — disjoint authenticated CLI execution context, never an Agent fallback or fabricated Session. Its pre-reserved real ID, completion capability, cwd and foreground/background callbacks keep output in the external Node namespace.
-- `browse_open`, `browse_list`, `browse_get`, `browse_close`, `browse_interact` — browser automation tools
-- `buildBrowserScreenshotResult` — builds the current structured `inlineData` screenshot result without source-specific base64 fields
 - `CLI_NODE_CAPABILITIES` — tool schema definitions for all node tools (used for LLM tool registration)
 - `resolveNodePath`, `resolveNodeAgentDir`, `getNodeAgentDir`, `resolveNodeTransferPath` — path resolution utilities
 - `readNodeTransferFile`, `writeNodeTransferFile` — base64 file transfer helpers
 - `detectTransferMimeType` — MIME type detection for file transfers
 - `resolveExecCwd`, `validateResolvedExecCwd`, `resolveValidatedExecCwd` — exec working directory resolution and validation
 - `estimateTokenCount` — lightweight token count estimator
-- `formatStructuredValue`, `formatToolResponsePayload`, `formatCompactObjectPreview` — YAML-based response formatting for model-facing and WebUI display paths
+- `formatStructuredValue`, `formatToolResponsePayload` — the text of a tool result as models and the WebUI full-result view see it; [D-tool-result-text](#d-tool-result-text)
+- `formatToolArguments`, `formatToolArgumentValue` — display text of tool-call arguments, expanded or one-line; [D-tool-call-argument-text](#d-tool-call-argument-text)
+- `formatCompactObjectPreview` — WebUI previews of compact result values (unwraps any single-key object)
+- `dumpToolYaml`, `containsMultilineString` — the YAML emitter behind both formatters (`toolResponseYaml.ts`)
 - `formatToolScriptExecutionResponse` — literal print/return sections and block-YAML metadata at the exact outer execution presentation boundary; [canonical contract](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection)
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmAttributes`, `formatFoxwarmAttachmentTag`, `buildFoxwarmAttachmentText` — browser/server parity helpers for safe ordered Foxwarm metadata attributes, explicitly structured nested text, and attachment descriptors
 - Shared patch parsing, line-count, and per-operation summary helpers are re-exported from the package index.
@@ -70,13 +71,6 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `apply_patch(args, ctx)` | file tools | Retained CLI wire handler for older Main; executes existing patch core |
 | `exec(args, ctx)` | ~160 | Tool: executes shell commands with timeout and background support |
 | `get_default_cwd(args, ctx)` | ~230 | Tool: returns the default working directory |
-| `SharedBrowserManager` (class) | ~235 | Manages Puppeteer browser tabs with open/get/close/interact |
-| `buildBrowserScreenshotResult(tab, buffer)` | after `SharedBrowserManager` | Builds the canonical screenshot tool result used on the node wire |
-| `browse_open(args)` | ~305 | Tool: opens a browser tab |
-| `browse_list()` | ~306 | Tool: lists open browser tabs |
-| `browse_get(args)` | ~307 | Tool: gets tab content or screenshot |
-| `browse_close(args)` | ~308 | Tool: closes a browser tab |
-| `browse_interact(args)` | ~309 | Tool: interacts with a browser tab |
 | `buildNodeTransferFilePayload` / `buildNodeTransferWriteResult` | nodeFileTransfer | Shared binary metadata and established SHA256 receipt construction |
 | `readPrimitiveTransferFile` / `writePrimitiveTransferFile` | nodeFileTransfer | Bounded binary reads and create/overwrite plus append transfer composition over target-owned operations |
 | `expandHomePath(filePath)` (nodeFileTransfer) | ~20 | Expands ~ to home directory |
@@ -93,10 +87,12 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `validateResolvedExecCwd(resolved, nodeId)` | ~49 | Validates that resolved cwd exists and is accessible |
 | `resolveValidatedExecCwd(options)` | ~73 | Resolves and validates exec cwd in one call |
 | `estimateTokenCount(text)` | ~1 | Estimates token count using codepoint heuristics |
-| `formatStructuredValue(value)` | ~20 | Formats a value as YAML or string |
-| `formatToolResponsePayload(response)` | ~32 | Formats tool response, unwrapping single `output` key |
+| `formatStructuredValue(value)` | `toolResponseFormatting.ts` | String as is, number/boolean as text, mapping or sequence as readable-layout YAML |
+| `formatToolResponsePayload(response)` | `toolResponseFormatting.ts` | Unwraps a sole `output` key, then `formatStructuredValue` |
+| `dumpToolYaml(value, layout)` | `toolResponseYaml.ts` | js-yaml 4.1.1 dumper subset with the `readable`, `arguments` or `argumentsLine` layout or a js-yaml `flowLevel` |
+| `formatToolArguments(args, { singleLine })` / `formatToolArgumentValue(value, { singleLine })` | `toolResponseFormatting.ts` | Tool-call argument text: sole-argument unwrap, then the `arguments` or `argumentsLine` layout; one value as raw string or YAML flow |
 | `formatToolScriptExecutionResponse(response)` | `toolResponseFormatting.ts` | Formats cleaned outer execution results while preserving native values and guard-summary locators |
-| `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key objects |
+| `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key result objects |
 | `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus recognized Session reference fields in XML attributes and JSON/YAML-shaped text into link/text segments |
 | `shouldUseStreamingToolPlaceholder(options)` | (webuiToolRendering.ts) | Detects synthetic streaming tool calls whose args should not be parsed yet |
 
@@ -130,6 +126,30 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 ## Design Decisions
 
+### D-tool-result-text
+
+**User decisions (2026-11-19).** A tool result reaches the model and the WebUI full-result view as the same text, and no multi-line string in it appears as an escaped one-line scalar.
+
+- `formatToolResponsePayload` unwraps a sole `output` key; a string stays raw, a number or boolean is its JavaScript text, `null` is empty.
+- A mapping or sequence is YAML in the `readable` layout: one line per top-level entry. A top-level entry whose value is a non-empty array, and a top-level array, become block sequences with one item per line. An entry or item containing a multi-line string anywhere is block all the way down, with literal (`|`) scalars; every other entry or item keeps flow style (`- {name: exa, enabled: true}`). Nested arrays inside a flow item and empty arrays/objects stay flow (`[]`, `{}`).
+- Scalars follow js-yaml 4.1.1 (indent 2, unlimited width, single quoting, YAML 1.1 compatibility quoting such as `'y'`, `'12'`, `'2026-11-19'`), except that a multi-line string in a block position is always a literal block, even with tabs, carriage returns or control characters that js-yaml would escape. Single-line strings with such characters stay double-quoted with escapes. Numbers and key order follow JavaScript (`Number.prototype.toString`, array-index keys first), because the WebUI formats `JSON.parse` values.
+- `formatToolScriptExecutionResponse` keeps literal print/return sections and renders return values and metadata fully block (`flowLevel -1`) with the same emitter.
+- The C# port must equal the TypeScript text byte for byte. `toolResponseFormatting.fixtures.json` is the golden set: `toolResponseFormatting.test.ts` and `ToolResponseFormattingParityTests` run it, and the TypeScript emitter is additionally compared with js-yaml for its flow levels.
+
+Previous behavior, for comparison: js-yaml with `flowLevel: 1` wrote every value below a top-level key in flow style, so multi-line strings, including top-level `error` messages, were double-quoted one-liners (`error: "Traceback:\n..."`), arrays of rows were one long line, and a top-level array was a single flow sequence. The C# port quoted every non-identifier string as JSON, which diverged from the WebUI.
+
+Request-prefix consequence, accepted once (user decision 2026-11-19): already persisted results render with the new text after deployment, so the first request of each existing Session after the upgrade changes its history prefix. No legacy rendering branch keeps the old text. Formatting is a pure function of the persisted value, so consecutive requests after the change still extend one byte-identical prefix ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)).
+
+### D-tool-call-argument-text
+
+**User decision (2026-11-20).** Tool-call arguments have one layout on every surface that shows them as text: each top-level argument on its own line as `key: value`, with nested values in YAML flow style (`waitAnySessions: [a]`, `model: {key: opus}`, `edits: [{oldText: "a\nb"}]`). This is the js-yaml `flowLevel: 1` form the WebUI used before tool results moved to the `readable` layout; tool results keep [D-tool-result-text](#d-tool-result-text) unchanged. A collapsed card folds the lines into `waitAnySessions: [a] anotherProp: anotherValue`.
+
+- `formatToolArguments(args, { singleLine })` (C# `ToolResponseFormatting.FormatArguments`) is the one formatter. A sole argument shows only its value and an empty argument object shows nothing, as both previews did before. A value is a string as it is, otherwise YAML flow (`formatToolArgumentValue`).
+- Two variants of the layout in the shared emitter. `arguments` (expanded views) writes a top-level multi-line string as a literal block (`message: |-`). `argumentsLine` (one-line surfaces) is exactly `flowLevel 1`: such a string is a double-quoted escaped scalar, and a sole multi-line string value is escaped the same way, so line breaks in one-line text only separate arguments. The two variants are equal whenever no top-level string has a line break.
+- Scalars, quoting and key order follow the shared emitter, so the C# text equals the TypeScript text; the `arguments` cases of `toolResponseFormatting.fixtures.json` run against both, and the TypeScript test checks `argumentsLine` against js-yaml.
+- Main server previews (`SessionToolExecutor.ToolArgsPreview`, and the retained TypeScript `buildToolArgsPreview`) use the one-line variant for tools without a special case. They feed runtime status and the Inspector `Arguments` field, approval `summary`, activity summaries and the verbose channel `🛠 [tool]: ...` notice, which include one-line surfaces. Their special cases (exec/run_script/call_tool/ctl purpose or command, edit/write file path or patch text, read path and range, `add_secret` name only) and the 200-character cap are unchanged.
+- WebUI surfaces are listed with the timeline: [argument text](./webui-tool-timeline.md#d-webui-tool-call-argument-text). Approval review of the full arguments and the JSON inspector stay exact JSON.
+
 ### D-unified-edit
 
 [2026-10-31] One model-facing `edit` accepts exactly one form: `filePath` plus `oldText`/`newText` and optional `replaceAll`; `filePath` plus nonempty `edits[{oldText,newText,replaceAll?}]`; or `apply_patch` alone. Mixed forms and top-level `replaceAll` with a batch reject. There are no aliases or mode selectors. Memory tools remain separate.
@@ -149,10 +169,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 ### D-file-read-exact-lines-and-footer
 
 [2026-09-05] Canonical text-file `read` uses physical lines delimited by LF, CRLF, or bare CR. Empty files have zero lines; each terminator closes one line without creating a virtual line after EOF; remaining nonempty EOF bytes form the final nonterminated line. Every selected line includes its original recognized terminator when present, including the final selected line, and spaces/tabs count as content. Ordinary retained text keeps existing UTF-8 decoding rather than promising arbitrary invalid-byte round trips; bounded excerpts keep their existing conversion/binary safeguards. Ordinary whole/range reads always append a metadata footer containing exact total lines and `File size: N bytes.`. If selection includes the physical final nonempty line and the file has no trailing terminator, insert one tool LF before `---` and state `File has no trailing newline.`; otherwise add no separator and use the selected final line's LF, CRLF, or bare CR. Selected empty lines keep their terminators and receive an empty-content footer note. Zero-line and reversed normalized ranges use a nonempty tool-authored notice. Large no-range reads do not scan for lines; explicit large ranges report total lines only when their existing bounded scan reaches EOF. Fractional bounds are floored and `0` remains omitted for canonical read execution.
-- `SharedBrowserManager` lazily launches a headless Puppeteer instance and manages tabs by UUID
-- Shared browser screenshots write current structured inline data. Old remote-node screenshot shapes are read only under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
-- Shared Node `browse_get` returns page HTML when screenshot is absent/false, a viewport image for `true`, and a full-page image for the literal `full`; unlike the master browser wrapper, a string path is not a screenshot-save destination.
-- `CLI_NODE_CAPABILITIES` advertises unified `edit` plus the legacy `apply_patch` wire definition for older Main. Current Main projects only `edit` to models. Node-specific path copy and the browser screenshot distinction remain environment-owned. Tests cover schema/runtime behavior without pinning editorial wording.
+- `CLI_NODE_CAPABILITIES` advertises unified `edit` plus the legacy `apply_patch` wire definition for older Main. Current Main projects only `edit` to models. Node-specific path copy remains environment-owned. Tests cover schema/runtime behavior without pinning editorial wording.
 - Directory reads are paginated (50 items default) with navigation hints
 - File and directory read `startLine`/`endLine` values of `0` are treated as omitted, matching master-side read compatibility for optional numeric placeholders
 - Native CLI transfer functions enforce path traversal restrictions by default and retain unique temporary publication/cleanup. Primitive transfer composition instead uses bounded binary reads and 1 MiB writes (`w`/`wx` first, `a` later); a later failure leaves the ordinary partial prefix without replay or rollback. Metadata/digest receipt builders are shared with native Main/CLI wrappers. FileOperations supports binary append, and ordinary model file tools retain their existing create/replace semantics.
@@ -168,9 +185,11 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - `nodeTools` object is the primary interface invoked by the node runtime when dispatching tool calls
 - `execCwd` utilities are used by `exec` to resolve and validate working directories before spawning processes
 - `nodeFileTransfer` supports inter-node file transfer operations (read/write with base64 encoding and SHA-256 verification)
-- `toolResponseFormatting` is used upstream to serialize tool results into YAML for LLM consumption and by WebUI to format full tool response payloads consistently
+- `toolResponseFormatting` produces the tool-result text for the retained TypeScript providers and the WebUI full-result view; the C# Main port (`ToolResponseFormatting`/`ToolResponseYaml`) produces the same text for every C# provider serializer and the external Claude runtime ([D-tool-result-text](#d-tool-result-text))
 - `webuiToolRendering` supplies pure, testable helper logic for WebUI session-link text parsing and streaming partial tool-call guards
 - `foxwarmMarkup` supplies one attribute/nested-text escaping and attachment-tag implementation to root channel code and WebUI previews.
 - `estimateTokenCount` is shared across master and node packages for context budget management
 - Re-exported from `index.ts` as the public API surface of the `shared` package
 - Master-side `src/tools/helpers.ts` imports `fileToolCore` from `packages/shared/dist/fileToolCore`, so the root build must build `packages/shared` before compiling `src`.
+
+Browser automation is not part of this package: the `browser_*` tools are owned by the [managed browser host](./browser-host.md), and the package has no browser dependency.

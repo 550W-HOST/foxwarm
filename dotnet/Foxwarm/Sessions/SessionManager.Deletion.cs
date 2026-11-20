@@ -417,6 +417,8 @@ internal sealed partial class SessionManager
             operation.RetirementStarted.Add(id);
             mcp.InvalidateOwner(owner);
             Nodes.RetireSession(owner);
+            await RetireCopyTransfersAsync(owner);
+            await ToolScript.RetireDetachedAsync(owner.Entry);
             await owner.Compactor.StopAsync();
             await owner.DrainForegroundAsync();
             await waitTimeouts.RetireAsync(id);
@@ -486,7 +488,7 @@ internal sealed partial class SessionManager
         File.Delete(path);
         removed();
         if (Directory.Exists(Path.GetDirectoryName(path)))
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(path)!);
+            DirectorySync.Sync(Path.GetDirectoryName(path)!);
     }
 
     private void CompleteDeletedOwner(DeleteOperation operation, string id, SessionOwner owner)

@@ -1,0 +1,199 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json.Nodes;
+using Foxwarm.Models;
+
+namespace Foxwarm.Tests;
+
+public sealed class SecretSetupRouteTests
+{
+    private const string Value = "sk-synthetic-setup-value-0003";
+
+    [Fact]
+    public async Task Setup_secrets_are_write_only_and_bootstrap_pairing_tokens_go_to_an_owner_only_file()
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(
+            Path.Combine(temp.Path, "state", "config.yaml"),
+            "vector: false\nllm:\n  openaiApiKey: ${secret:fallback-key}\n"
+        );
+        var configuration = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
+        var settings = (await HttpServerSettings.CaptureAsync(configuration, temp.Path)) with
+        {
+            Port = 0,
+            BindAddress = "127.0.0.1",
+            Address = new("http://127.0.0.1", "", "/", false),
+        };
+        await using var host = await MainHost.CreateAsync([], configuration, settings);
+        await host.StartAsync();
+        Assert.True(File.Exists(Path.Combine(temp.Path, "keys", "secrets.key")));
+        using var client = new HttpClient
+        {
+            BaseAddress = new Uri(host.App.Urls.Single()),
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
+
+        var status = (await client.GetFromJsonAsync<JsonObject>("/api/setup/secrets"))!;
+        Assert.False(status["locked"]!.GetValue<bool>());
+        Assert.Empty(status["secrets"]!.AsArray());
+        var missing = Assert.Single(status["missing"]!.AsArray())!;
+        Assert.Equal("fallback-key", missing["name"]!.GetValue<string>());
+        Assert.Equal("llm.openaiApiKey", missing["usages"]![0]!["id"]!.GetValue<string>());
+
+        var saved = await client.PutAsJsonAsync(
+            "/api/setup/secrets/fallback-key",
+            new JsonObject { ["value"] = Value, ["description"] = "Synthetic fallback" }
+        );
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        var savedText = await saved.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(Value, savedText);
+        Assert.Null(JsonNode.Parse(savedText)!["warning"]);
+
+        var shortValue = await client.PutAsJsonAsync(
+            "/api/setup/secrets/pin",
+            new JsonObject { ["value"] = "short-pin" }
+        );
+        Assert.Equal(HttpStatusCode.OK, shortValue.StatusCode);
+        Assert.Contains("cannot be hidden", (await shortValue.Content.ReadAsStringAsync()));
+
+        var invalid = await client.PutAsJsonAsync(
+            "/api/setup/secrets/Not%20Valid",
+            new JsonObject { ["value"] = Value }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        var listed = await client.GetStringAsync("/api/setup/secrets");
+        Assert.DoesNotContain(Value, listed);
+        Assert.DoesNotContain("short-pin\"", listed.Replace("\"name\":\"pin\"", ""));
+        var listedJson = JsonNode.Parse(listed)!;
+        Assert.Empty(listedJson["missing"]!.AsArray());
+        var fallback = listedJson["secrets"]!
+            .AsArray()
+            .Single(item => item!["name"]!.GetValue<string>() == "fallback-key")!;
+        Assert.True(fallback["isSet"]!.GetValue<bool>());
+        Assert.Equal("Synthetic fallback", fallback["description"]!.GetValue<string>());
+        Assert.Equal("setting", fallback["usages"]![0]!["kind"]!.GetValue<string>());
+
+        var manager = host.Sessions;
+        Assert.Equal(Value, manager.Secrets!.Lookup("fallback-key"));
+
+        var deleted = await client.DeleteAsync("/api/setup/secrets/fallback-key");
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        Assert.Null(manager.Secrets.Lookup("fallback-key"));
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await client.DeleteAsync("/api/setup/secrets/absent")).StatusCode
+        );
+        Assert.Equal("[[FW_SECRET:fallback-key]]", manager.Secrets.Redactor.Redact(Value));
+
+        var tokenFile = Path.Combine(temp.Path, "pairing-token");
+        var info = await manager.NodeBootstrapInfoAsync(
+            new JsonObject { ["filePath"] = tokenFile },
+            CancellationToken.None
+        );
+        var pairing = manager.Nodes.Registry.PairingToken;
+        Assert.Null(info["output"]);
+        var output = info.ToJsonText();
+        Assert.DoesNotContain(pairing, output);
+        Assert.Contains("PAIRING_TOKEN", output);
+        Assert.Equal(tokenFile, info["pairingTokenFile"]!.GetValue<string>());
+        Assert.Equal(pairing + "\n", await File.ReadAllTextAsync(tokenFile));
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(tokenFile)
+        );
+        await Assert.ThrowsAsync<IOException>(() =>
+            manager.NodeBootstrapInfoAsync(
+                new JsonObject { ["filePath"] = tokenFile },
+                CancellationToken.None
+            )
+        );
+        Assert.Equal("[[FW_SECRET:node-pairing-token]]", manager.Secrets.Redactor.Redact(pairing));
+    }
+
+    [Theory]
+    [InlineData("sk-synthetic-literal-draft-0004", "sk-synthetic-literal-draft-0004")]
+    [InlineData("${secret:provider-key}", Value)]
+    public void Setup_provider_drafts_resolve_with_the_secret_store(string apiKey, string token)
+    {
+        using var temp = new TempDirectory();
+        using var secrets = new Foxwarm.Secrets.InstanceSecrets(temp.Path);
+        secrets.Store.Set("provider-key", Value);
+        var provider = new JsonObject
+        {
+            ["providerType"] = "openai-responses",
+            ["baseUrl"] = "http://127.0.0.1:9/v1",
+            ["apiKey"] = apiKey,
+            ["models"] = new JsonArray("draft-model"),
+        };
+        var model = SetupProviderRequests.ResolveTransientModel(
+            provider,
+            new JsonObject(),
+            "draft",
+            "draft-model",
+            secrets
+        );
+        Assert.Equal(token, model.Token);
+        Assert.Equal("draft-model", model.ModelId);
+        Assert.Equal(apiKey, provider["apiKey"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Locked_store_status_reports_only_the_locked_store_message()
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(Path.Combine(temp.Path, "state", "config.yaml"), "vector: false\n");
+        var seeded = new Foxwarm.Secrets.InstanceSecrets(temp.Path);
+        seeded.Store.Set("provider-key", Value);
+        File.Delete(seeded.KeyPath);
+
+        var configuration = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
+        var settings = (await HttpServerSettings.CaptureAsync(configuration, temp.Path)) with
+        {
+            Port = 0,
+            BindAddress = "127.0.0.1",
+            Address = new("http://127.0.0.1", "", "/", false),
+        };
+        await using var host = await MainHost.CreateAsync([], configuration, settings);
+        await host.StartAsync();
+        using var client = new HttpClient
+        {
+            BaseAddress = new Uri(host.App.Urls.Single()),
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
+
+        var status = (await client.GetFromJsonAsync<JsonObject>("/api/setup/secrets"))!;
+        Assert.True(status["locked"]!.GetValue<bool>());
+        Assert.Equal(
+            "The secret store is locked: the instance key file is missing.",
+            status["lockMessage"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "provider-key",
+            Assert.Single(status["secrets"]!.AsArray())!["name"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
+    public void Lock_errors_of_other_types_use_the_fixed_locked_store_messages()
+    {
+        using var temp = new TempDirectory();
+        var secrets = new Foxwarm.Secrets.InstanceSecrets(temp.Path);
+        secrets.Store.Set("provider-key", Value);
+
+        // A malformed key file fails inside key loading, not as a locked-store exception.
+        File.WriteAllText(secrets.KeyPath, "not a key");
+        var badKey = new Foxwarm.Secrets.InstanceSecrets(temp.Path).LockError;
+        Assert.NotNull(badKey);
+        Assert.Equal(Foxwarm.Secrets.SecretStore.KeyUnavailableMessage, badKey.Message);
+        Assert.IsType<InvalidDataException>(badKey.InnerException);
+    }
+}

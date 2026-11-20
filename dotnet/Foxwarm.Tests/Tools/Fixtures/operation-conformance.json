@@ -1,0 +1,2282 @@
+{
+ "description": "Operation derivation corpus (phase 1). Extends ctl-conformance.json with the facts an assessment establishes and the expected normalized arguments, branch, operations, obligations, subsumed work and gaps. Checked by OperationDeclarationCoverageTests.",
+ "cases": [
+  {
+   "name": "node select",
+   "command": "node select box",
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ]
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "select",
+    "operations": [
+     {
+      "op": "node.select",
+      "resources": {
+       "node": "box"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     },
+     {
+      "id": "default-cwd",
+      "kind": "subRequest",
+      "capability": "node:box/get_default_cwd",
+      "conditional": true,
+      "optional": true
+     }
+    ],
+    "normalized": {
+     "action": "select",
+     "nodeId": "box"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "default-cwd": "node:box/get_default_cwd {}"
+    }
+   },
+   "context": {
+    "defaultCwdProbe": [
+     "box"
+    ]
+   }
+  },
+  {
+   "name": "node select raw spelling",
+   "toolId": "builtin:node",
+   "args": {
+    "action": " Select ",
+    "nodeId": "box"
+   },
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ]
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "select",
+    "operations": [
+     {
+      "op": "node.select",
+      "resources": {
+       "node": "box"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "select",
+     "nodeId": "box"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   },
+   "context": {
+    "defaultCwdProbe": []
+   }
+  },
+  {
+   "name": "node list",
+   "command": "node list",
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "list",
+    "operations": [
+     {
+      "op": "node.list"
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "list"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "node destroy",
+   "command": "node destroy box --confirmation 'destroy node box'",
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ]
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "destroy",
+    "operations": [
+     {
+      "op": "node.lifecycle",
+      "resources": {
+       "node": "box"
+      },
+      "with": {
+       "action": "destroy"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     },
+     {
+      "id": "lifecycle-final",
+      "kind": "retained",
+      "capability": "builtin:node",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "action": "destroy",
+     "nodeId": "box",
+     "confirmation": "destroy node box"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "lifecycle-final": "primary"
+    }
+   }
+  },
+  {
+   "name": "node unknown action",
+   "toolId": "builtin:node",
+   "args": {
+    "action": "explode"
+   },
+   "unsupported": true,
+   "expected": {
+    "capability": "builtin:node",
+    "branch": null,
+    "operations": [],
+    "obligations": [],
+    "incomplete": [
+     "no declared branch for action `explode`"
+    ],
+    "normalized": {
+     "action": "explode"
+    },
+    "evaluated": {}
+   }
+  },
+  {
+   "name": "session default status",
+   "toolId": "builtin:session",
+   "args": {},
+   "facts": {
+    "sessionTarget": "alpha-1"
+   },
+   "expected": {
+    "capability": "builtin:session",
+    "branch": "status",
+    "operations": [
+     {
+      "op": "session.view",
+      "resources": {
+       "targetSession": "alpha-1"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:session"
+     }
+    ],
+    "normalized": {
+     "action": "status"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "session status spelling",
+   "toolId": "builtin:session",
+   "args": {
+    "action": " Status "
+   },
+   "facts": {
+    "sessionTarget": "alpha-1"
+   },
+   "expected": {
+    "capability": "builtin:session",
+    "branch": "status",
+    "operations": [
+     {
+      "op": "session.view",
+      "resources": {
+       "targetSession": "alpha-1"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:session"
+     }
+    ],
+    "normalized": {
+     "action": "status"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "session list",
+   "command": "session list",
+   "expected": {
+    "capability": "builtin:session",
+    "branch": "list",
+    "operations": [
+     {
+      "op": "session.list",
+      "with": {
+       "scope": "current-agent"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:session"
+     }
+    ],
+    "normalized": {
+     "action": "list"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "session set-parent",
+   "command": "session set-parent alpha-0",
+   "facts": {
+    "sessionTarget": "alpha-1"
+   },
+   "expected": {
+    "capability": "builtin:session",
+    "branch": "set-parent",
+    "operations": [
+     {
+      "op": "session.manage",
+      "resources": {
+       "targetSession": "alpha-1",
+       "parent": "alpha-0"
+      },
+      "with": {
+       "change": "reparent"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:session"
+     }
+    ],
+    "normalized": {
+     "action": "update-parent",
+     "parentSessionId": "alpha-0"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "node copy",
+   "command": "node copy master a.txt box b.txt",
+   "facts": {
+    "nodeTargets": [
+     "master",
+     "box"
+    ],
+    "paths": [
+     {
+      "arg": "sourcePath",
+      "raw": "a.txt",
+      "resolved": "/workspace/alpha/a.txt",
+      "node": "master"
+     },
+     {
+      "arg": "targetPath",
+      "raw": "b.txt",
+      "node": "box"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "builtin:copy_between_nodes",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "env.read",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/a.txt"
+      }
+     },
+     {
+      "op": "env.write",
+      "resources": {
+       "node": "box",
+       "path": "b.txt"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:copy_between_nodes"
+     },
+     {
+      "id": "transfer",
+      "kind": "retained",
+      "capability": "builtin:copy_between_nodes"
+     }
+    ],
+    "normalized": {
+     "sourceNode": "master",
+     "sourcePath": "a.txt",
+     "targetNode": "box",
+     "targetPath": "b.txt"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "transfer": "primary"
+    }
+   }
+  },
+  {
+   "name": "file send to Session",
+   "command": "file send report.txt",
+   "facts": {
+    "nodeTargets": [
+     "master"
+    ],
+    "sessionTarget": "alpha-1",
+    "paths": [
+     {
+      "arg": "filePath",
+      "raw": "report.txt",
+      "resolved": "/workspace/alpha/report.txt"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "builtin:send_file",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "env.read",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/report.txt"
+      }
+     },
+     {
+      "op": "session.deliver",
+      "resources": {
+       "targetSession": "alpha-1"
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:send_file"
+     }
+    ],
+    "subsumed": [
+     "staging"
+    ],
+    "normalized": {
+     "filePath": "report.txt"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "file send to channel",
+   "command": "file send report.txt --channel-target-id ch-1",
+   "facts": {
+    "nodeTargets": [
+     "master"
+    ],
+    "paths": [
+     {
+      "arg": "filePath",
+      "raw": "report.txt",
+      "resolved": "/workspace/alpha/report.txt"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "builtin:send_file",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "env.read",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/report.txt"
+      }
+     },
+     {
+      "op": "channel.send",
+      "resources": {
+       "channel": "ch-1"
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:send_file"
+     }
+    ],
+    "subsumed": [
+     "staging"
+    ],
+    "normalized": {
+     "filePath": "report.txt",
+     "channelTargetId": "ch-1"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "exec with secret",
+   "toolId": "node:master/exec",
+   "args": {
+    "command": "ls",
+    "cwd": "src",
+    "secretEnv": {
+     "TOKEN": "api-token"
+    }
+   },
+   "facts": {
+    "nodeTargets": [
+     "master"
+    ],
+    "secrets": [
+     "api-token"
+    ],
+    "paths": [
+     {
+      "arg": "cwd",
+      "raw": "src",
+      "resolved": "/workspace/alpha/src"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "node:master/exec",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "env.exec",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/src"
+      }
+     },
+     {
+      "op": "secret.use",
+      "resources": {
+       "secret": "api-token"
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "node:master/exec"
+     }
+    ],
+    "normalized": {
+     "command": "ls",
+     "cwd": "src",
+     "secretEnv": {
+      "TOKEN": "api-token"
+     }
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "read on a Node",
+   "toolId": "node:box/read",
+   "args": {
+    "filePath": "notes.txt"
+   },
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ],
+    "paths": [
+     {
+      "arg": "filePath",
+      "raw": "notes.txt",
+      "node": "box"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "node:box/read",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "env.read",
+      "resources": {
+       "node": "box",
+       "path": "notes.txt"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "node:box/read"
+     }
+    ],
+    "normalized": {
+     "filePath": "notes.txt"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "edit patch",
+   "toolId": "node:master/edit",
+   "args": {
+    "apply_patch": "*** Begin Patch\n*** Add File: a\n+x\n*** Delete File: b\n*** End Patch"
+   },
+   "facts": {
+    "nodeTargets": [
+     "master"
+    ],
+    "paths": [
+     {
+      "arg": "apply_patch",
+      "raw": "a",
+      "resolved": "/workspace/alpha/a"
+     },
+     {
+      "arg": "apply_patch",
+      "raw": "b",
+      "resolved": "/workspace/alpha/b"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "node:master/edit",
+    "branch": "patch",
+    "operations": [
+     {
+      "op": "env.write",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/a"
+      }
+     },
+     {
+      "op": "env.write",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/b"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "node:master/edit"
+     }
+    ],
+    "normalized": {
+     "apply_patch": "*** Begin Patch\n*** Add File: a\n+x\n*** Delete File: b\n*** End Patch"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "browser tool",
+   "toolId": "node:master/browser_navigate",
+   "args": {
+    "url": "https://example.com"
+   },
+   "facts": {
+    "nodeTargets": [
+     "master"
+    ]
+   },
+   "expected": {
+    "capability": "node:master/browser_navigate",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "env.browser",
+      "resources": {
+       "node": "master"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "node:master/browser_navigate"
+     }
+    ],
+    "normalized": {
+     "url": "https://example.com"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "custom Node tool",
+   "toolId": "node:box/custom_probe",
+   "args": {},
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ]
+   },
+   "expected": {
+    "capability": "node:box/custom_probe",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "env.tool",
+      "resources": {
+       "node": "box",
+       "nodeTool": "custom_probe"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "node:box/custom_probe"
+     }
+    ],
+    "normalized": {},
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "MCP tool",
+   "toolId": "mcp:srv/probe",
+   "args": {
+    "tag": "x"
+   },
+   "expected": {
+    "capability": "mcp:srv/probe",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "mcp.call",
+      "resources": {
+       "mcp": {
+        "server": "srv",
+        "tool": "probe"
+       }
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "mcp:srv/probe"
+     }
+    ],
+    "normalized": {
+     "tag": "x"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "script from file",
+   "toolId": "builtin:run_script",
+   "args": {
+    "filePath": "job.py"
+   },
+   "facts": {
+    "paths": [
+     {
+      "arg": "filePath",
+      "raw": "job.py",
+      "resolved": "/workspace/alpha/job.py"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "builtin:run_script",
+    "branch": "file",
+    "operations": [
+     {
+      "op": "env.read",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/job.py"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:run_script"
+     },
+     {
+      "id": "source-read",
+      "kind": "subRequest",
+      "capability": "node:master/read",
+      "conditional": true
+     },
+     {
+      "id": "nested",
+      "kind": "nested",
+      "capability": "*"
+     },
+     {
+      "id": "model-request",
+      "kind": "retained",
+      "capability": "builtin:run_script",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "filePath": "job.py"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "source-read": "node:master/read {\"filePath\":\"job.py\"}",
+     "nested": null,
+     "model-request": null
+    }
+   }
+  },
+  {
+   "name": "script on a Node",
+   "command": "script start --file-path job.py --node box",
+   "facts": {
+    "executionNode": "box",
+    "nodeTargets": [
+     "box"
+    ],
+    "paths": [
+     {
+      "arg": "filePath",
+      "raw": "job.py",
+      "node": "box"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "builtin:start_toolscript_run",
+    "branch": "file",
+    "operations": [
+     {
+      "op": "env.read",
+      "resources": {
+       "node": "box",
+       "path": "job.py"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:start_toolscript_run"
+     },
+     {
+      "id": "source-read",
+      "kind": "subRequest",
+      "capability": "node:box/read",
+      "conditional": true
+     },
+     {
+      "id": "nested",
+      "kind": "nested",
+      "capability": "*"
+     },
+     {
+      "id": "model-request",
+      "kind": "retained",
+      "capability": "builtin:start_toolscript_run",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "filePath": "job.py",
+     "node": "box"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "source-read": "node:box/read {\"filePath\":\"job.py\"}",
+     "nested": null,
+     "model-request": null
+    }
+   }
+  },
+  {
+   "name": "inline script",
+   "toolId": "builtin:run_script",
+   "args": {
+    "code": "print(1)"
+   },
+   "expected": {
+    "capability": "builtin:run_script",
+    "branch": "inline",
+    "self": "inline code runs in the caller's own script VM",
+    "operations": [],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:run_script"
+     },
+     {
+      "id": "nested",
+      "kind": "nested",
+      "capability": "*"
+     },
+     {
+      "id": "model-request",
+      "kind": "retained",
+      "capability": "builtin:run_script",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "code": "print(1)"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "nested": null,
+     "model-request": null
+    }
+   }
+  },
+  {
+   "name": "artifact get",
+   "command": "artifact get art-1",
+   "expected": {
+    "capability": "builtin:artifact",
+    "branch": "get",
+    "self": "reads an artifact the caller's Session created",
+    "operations": [],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:artifact"
+     }
+    ],
+    "normalized": {
+     "action": "get",
+     "artifactId": "art-1"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "artifact prepare",
+   "command": "artifact prepare chart.json",
+   "facts": {
+    "nodeTargets": [
+     "master"
+    ],
+    "paths": [
+     {
+      "arg": "filePath",
+      "raw": "chart.json",
+      "resolved": "/workspace/alpha/chart.json"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "builtin:artifact",
+    "branch": "prepare",
+    "operations": [
+     {
+      "op": "env.read",
+      "resources": {
+       "node": "master",
+       "path": "/workspace/alpha/chart.json"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:artifact"
+     },
+     {
+      "id": "source-read",
+      "kind": "subRequest",
+      "capability": "node:master/read",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "action": "prepare",
+     "filePath": "chart.json"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "source-read": "node:master/read {\"filePath\":\"chart.json\"}"
+    }
+   }
+  },
+  {
+   "name": "timer with new Session",
+   "command": "timer create --after-seconds 60 --new-session --agent-name beta hello",
+   "expected": {
+    "capability": "builtin:create_timer",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "timer.manage",
+      "resources": {
+       "targetSession": "alpha-1"
+      },
+      "with": {
+       "change": "create",
+       "kind": "message"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:create_timer"
+     },
+     {
+      "id": "creation-target",
+      "kind": "probe",
+      "capability": "builtin:create_session",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "afterSeconds": 60,
+     "message": "hello",
+     "newSession": true,
+     "agentName": "beta"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "creation-target": "creation-target beta"
+    }
+   }
+  },
+  {
+   "name": "timer update",
+   "command": "timer pause tm-1",
+   "expected": {
+    "capability": "builtin:update_timer",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "timer.manage",
+      "resources": {
+       "targetSession": "alpha-1"
+      },
+      "with": {
+       "change": "update",
+       "kind": null
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:update_timer"
+     },
+     {
+      "id": "creation-target",
+      "kind": "probe",
+      "capability": "builtin:create_session"
+     }
+    ],
+    "incomplete": [
+     "timer.manage: kind is not resolved (timer-kind)"
+    ],
+    "normalized": {
+     "paused": true,
+     "timerId": "tm-1"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "creation-target": null
+    }
+   }
+  },
+  {
+   "name": "node remove cascade",
+   "command": "node remove box --cascade",
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ]
+   },
+   "context": {
+    "subtree": {
+     "box": [
+      "box",
+      "box-child"
+     ]
+    }
+   },
+   "expected": {
+    "capability": "builtin:node_remove",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "node.trust",
+      "resources": {
+       "node": "box"
+      },
+      "with": {
+       "action": "revoke"
+      }
+     },
+     {
+      "op": "node.trust",
+      "resources": {
+       "node": "box-child"
+      },
+      "with": {
+       "action": "revoke"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node_remove"
+     },
+     {
+      "id": "member:box",
+      "kind": "retained",
+      "capability": "builtin:node_remove"
+     },
+     {
+      "id": "member:box-child",
+      "kind": "retained",
+      "capability": "builtin:node_remove"
+     }
+    ],
+    "normalized": {
+     "nodeId": "box",
+     "cascade": true
+    },
+    "evaluated": {
+     "primary": "primary",
+     "member:box": "builtin:node_remove {\"nodeId\":\"box\",\"cascade\":true}",
+     "member:box-child": "builtin:node_remove {\"nodeId\":\"box-child\",\"cascade\":true}"
+    }
+   }
+  },
+  {
+   "name": "config set",
+   "command": "config set tool-rules candidate.yaml",
+   "facts": {
+    "paths": [
+     {
+      "arg": "filePath",
+      "raw": "candidate.yaml",
+      "resolved": "/workspace/alpha/candidate.yaml"
+     }
+    ]
+   },
+   "expected": {
+    "capability": "builtin:set_config",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "config.write",
+      "with": {
+       "target": "tool-rules"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:set_config"
+     },
+     {
+      "id": "candidate-read",
+      "kind": "subRequest",
+      "capability": "node:master/read"
+     },
+     {
+      "id": "install",
+      "kind": "retained",
+      "capability": "builtin:set_config"
+     }
+    ],
+    "normalized": {
+     "target": "tool-rules",
+     "filePath": "candidate.yaml"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "candidate-read": "node:master/read {\"filePath\":\"candidate.yaml\"}",
+     "install": "primary"
+    }
+   }
+  },
+  {
+   "name": "secret add from file",
+   "command": "secret add api-token --file-path token.txt --delete-file",
+   "context": {
+    "currentNode": "box"
+   },
+   "expected": {
+    "capability": "builtin:add_secret",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "secret.manage",
+      "resources": {
+       "secret": "api-token"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:add_secret"
+     },
+     {
+      "id": "file-read",
+      "kind": "subRequest",
+      "capability": "node:box/read",
+      "conditional": true
+     },
+     {
+      "id": "delete-file",
+      "kind": "subRequest",
+      "capability": "node:box/edit",
+      "conditional": true
+     },
+     {
+      "id": "store",
+      "kind": "retained",
+      "capability": "builtin:add_secret"
+     }
+    ],
+    "normalized": {
+     "name": "api-token",
+     "filePath": "token.txt",
+     "deleteFile": true
+    },
+    "evaluated": {
+     "primary": "primary",
+     "file-read": "node:box/read {\"filePath\":\"token.txt\"}",
+     "delete-file": "node:box/edit {\"apply_patch\":\"*** Begin Patch\\n*** Delete File: token.txt\\n*** End Patch\"}",
+     "store": "primary"
+    }
+   }
+  },
+  {
+   "name": "MCP notifications start",
+   "command": "mcp notifications start srv",
+   "expected": {
+    "capability": "builtin:mcp_notifications",
+    "branch": "start",
+    "operations": [
+     {
+      "op": "mcp.subscribe",
+      "resources": {
+       "mcp": "srv"
+      },
+      "with": {
+       "action": "start"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:mcp_notifications"
+     },
+     {
+      "id": "reception",
+      "kind": "retained",
+      "capability": "builtin:mcp_notifications",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "action": "start",
+     "server": "srv"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "reception": "builtin:mcp_notifications {\"action\":\"start\",\"server\":\"srv\"}"
+    }
+   }
+  },
+  {
+   "name": "task create assigned",
+   "toolId": "builtin:task",
+   "args": {
+    "action": "create",
+    "title": "t",
+    "ownerSessionId": "alpha-2"
+   },
+   "expected": {
+    "capability": "builtin:task",
+    "branch": "create",
+    "operations": [
+     {
+      "op": "task.create",
+      "with": {
+       "assigned": true
+      }
+     },
+     {
+      "op": "task.assign",
+      "resources": {
+       "targetSession": "alpha-2"
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:task"
+     }
+    ],
+    "subsumed": [
+     "Task notifications"
+    ],
+    "normalized": {
+     "action": "create",
+     "title": "t",
+     "ownerSessionId": "alpha-2"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "task claim",
+   "toolId": "builtin:task",
+   "args": {
+    "action": "claim",
+    "taskId": "task-1"
+   },
+   "facts": {
+    "session": "alpha-1"
+   },
+   "expected": {
+    "capability": "builtin:task",
+    "branch": "claim",
+    "operations": [
+     {
+      "op": "task.assign",
+      "resources": {
+       "task": "task-1",
+       "targetSession": "alpha-1"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:task"
+     }
+    ],
+    "subsumed": [
+     "Task notifications"
+    ],
+    "normalized": {
+     "action": "claim",
+     "taskId": "task-1"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "recall Agent search",
+   "command": "history recall --vector-query deploy",
+   "facts": {
+    "agent": "alpha"
+   },
+   "expected": {
+    "capability": "builtin:recall",
+    "branch": "agent-search",
+    "operations": [
+     {
+      "op": "history.search",
+      "resources": {
+       "targetAgent": "alpha"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:recall"
+     }
+    ],
+    "normalized": {
+     "vector_query": "deploy"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "recall exact",
+   "command": "history recall msg#3 --session-id alpha-2",
+   "facts": {
+    "sessionTarget": "alpha-2"
+   },
+   "expected": {
+    "capability": "builtin:recall",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "history.read",
+      "resources": {
+       "targetSession": "alpha-2"
+      },
+      "with": {
+       "mode": "exact"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:recall"
+     }
+    ],
+    "normalized": {
+     "target": "msg#3",
+     "sessionId": "alpha-2"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "child Session with Task",
+   "toolId": "builtin:create_child_session",
+   "args": {
+    "agentName": "beta",
+    "message": "go",
+    "taskId": "task-1"
+   },
+   "expected": {
+    "capability": "builtin:create_child_session",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "session.create",
+      "resources": {
+       "targetAgent": "beta",
+       "node": "box",
+       "parent": "alpha-1",
+       "targetSession": {
+        "prospective": true,
+        "agent": "beta",
+        "child": true
+       }
+      },
+      "with": {
+       "kind": "child",
+       "placement": "inherited",
+       "runtime": "foxwarm",
+       "fork": false
+      }
+     },
+     {
+      "op": "task.assign",
+      "resources": {
+       "task": "task-1",
+       "targetSession": {
+        "prospective": true,
+        "agent": "beta",
+        "child": true
+       }
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:create_child_session"
+     }
+    ],
+    "subsumed": [
+     "initial message",
+     "fork",
+     "final child ID bound after allocation"
+    ],
+    "normalized": {
+     "agentName": "beta",
+     "message": "go",
+     "taskId": "task-1"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   },
+   "context": {
+    "agentDefaultNode": {
+     "beta": "box"
+    }
+   }
+  },
+  {
+   "name": "explain with candidate",
+   "toolId": "builtin:explain_tool_authorization",
+   "args": {
+    "probes": [
+     {
+      "sessionId": "alpha-2",
+      "command": "node list"
+     }
+    ],
+    "policyFilePath": "candidate.yaml"
+   },
+   "context": {
+    "policyPath": "/data/state/tool-authorization.yaml"
+   },
+   "expected": {
+    "capability": "builtin:explain_tool_authorization",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "config.read",
+      "with": {
+       "target": "tool-rules"
+      }
+     },
+     {
+      "op": "session.view",
+      "resources": {
+       "targetSession": "alpha-2"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:explain_tool_authorization"
+     },
+     {
+      "id": "policy-read",
+      "kind": "subRequest",
+      "capability": "node:master/read"
+     },
+     {
+      "id": "candidate-read",
+      "kind": "subRequest",
+      "capability": "node:master/read",
+      "conditional": true
+     },
+     {
+      "id": "probe-view:alpha-2",
+      "kind": "subRequest",
+      "capability": "builtin:view_session"
+     }
+    ],
+    "normalized": {
+     "probes": [
+      {
+       "sessionId": "alpha-2",
+       "command": "node list"
+      }
+     ],
+     "policyFilePath": "candidate.yaml"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "policy-read": "node:master/read {\"filePath\":\"/data/state/tool-authorization.yaml\"}",
+     "candidate-read": "node:master/read {\"filePath\":\"candidate.yaml\"}",
+     "probe-view:alpha-2": "builtin:view_session {\"sessionId\":\"alpha-2\"}"
+    }
+   }
+  },
+  {
+   "name": "agent create from missing source",
+   "command": "agent create gamma --source-session-id gamma-src",
+   "context": {
+    "sessionExists": {
+     "gamma-src": false
+    },
+    "agentDefaultNode": {
+     "main": "master"
+    }
+   },
+   "expected": {
+    "capability": "builtin:create_agent",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "agent.create",
+      "resources": {
+       "targetAgent": "gamma"
+      }
+     },
+     {
+      "op": "session.create",
+      "resources": {
+       "targetAgent": "gamma",
+       "node": "master",
+       "targetSession": {
+        "prospective": true,
+        "agent": "gamma",
+        "id": "gamma/main"
+       }
+      },
+      "with": {
+       "kind": "session",
+       "placement": "inherited",
+       "runtime": "foxwarm"
+      },
+      "conditional": true
+     },
+     {
+      "op": "session.create",
+      "resources": {
+       "targetAgent": "main",
+       "node": "master",
+       "targetSession": {
+        "prospective": true,
+        "agent": "main",
+        "id": "gamma-src"
+       }
+      },
+      "with": {
+       "kind": "source",
+       "placement": "inherited",
+       "runtime": "foxwarm"
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:create_agent"
+     }
+    ],
+    "normalized": {
+     "agentName": "gamma",
+     "sourceSessionId": "gamma-src"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "agent create source unknown",
+   "command": "agent create gamma --source-session-id gamma-src",
+   "expected": {
+    "capability": "builtin:create_agent",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "agent.create",
+      "resources": {
+       "targetAgent": "gamma"
+      }
+     },
+     {
+      "op": "session.create",
+      "resources": {
+       "targetAgent": "gamma",
+       "node": "master",
+       "targetSession": {
+        "prospective": true,
+        "agent": "gamma",
+        "id": "gamma/main"
+       }
+      },
+      "with": {
+       "kind": "session",
+       "placement": "inherited",
+       "runtime": "foxwarm"
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:create_agent"
+     }
+    ],
+    "incomplete": [
+     "session.view: condition `source-exists` is decided at run time",
+     "session.create: condition `source-missing` is decided at run time"
+    ],
+    "normalized": {
+     "agentName": "gamma",
+     "sourceSessionId": "gamma-src"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   },
+   "context": {
+    "agentDefaultNode": {
+     "main": "master"
+    }
+   }
+  },
+  {
+   "name": "compaction plan file",
+   "toolId": "builtin:submit_compact_plan",
+   "args": {
+    "argsFilePath": "plan.json"
+   },
+   "context": {
+    "currentNode": "box"
+   },
+   "expected": {
+    "capability": "builtin:submit_compact_plan",
+    "branch": "call",
+    "self": "compacts the caller's own context",
+    "operations": [],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:submit_compact_plan"
+     },
+     {
+      "id": "plan-read",
+      "kind": "subRequest",
+      "capability": "node:box/read",
+      "conditional": true
+     },
+     {
+      "id": "plan-save",
+      "kind": "subRequest",
+      "capability": "node:write",
+      "conditional": true
+     },
+     {
+      "id": "plan-repair",
+      "kind": "subRequest",
+      "capability": "node:edit",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "argsFilePath": "plan.json"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "plan-read": "node:box/read {\"filePath\":\"plan.json\"}",
+     "plan-save": null,
+     "plan-repair": null
+    }
+   }
+  },
+  {
+   "name": "skill load spelling",
+   "toolId": "builtin:skill",
+   "args": {
+    "action": " LOAD ",
+    "skillName": "x"
+   },
+   "facts": {
+    "agent": "alpha"
+   },
+   "expected": {
+    "capability": "builtin:skill",
+    "branch": "load",
+    "operations": [
+     {
+      "op": "agent.view",
+      "resources": {
+       "targetAgent": "alpha"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:skill"
+     }
+    ],
+    "normalized": {
+     "action": "load",
+     "skillName": "x"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "ask user secret",
+   "toolId": "builtin:ask_user",
+   "args": {
+    "questions": [
+     {
+      "question": "Key?",
+      "secret": {
+       "name": "api-token"
+      }
+     }
+    ]
+   },
+   "facts": {
+    "secrets": [
+     "api-token"
+    ]
+   },
+   "expected": {
+    "capability": "builtin:ask_user",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "user.ask",
+      "with": {
+       "secret": true
+      }
+     },
+     {
+      "op": "secret.manage",
+      "resources": {
+       "secret": "api-token"
+      }
+     },
+     {
+      "op": "secret.use",
+      "resources": {
+       "secret": "api-token"
+      },
+      "conditional": true
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:ask_user"
+     }
+    ],
+    "subsumed": [
+     "answer-time storage of secret answers, after the invocation and without its scope"
+    ],
+    "normalized": {
+     "questions": [
+      {
+       "question": "Key?",
+       "secret": {
+        "name": "api-token"
+       }
+      }
+     ]
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "create session prompt files",
+   "command": "session create beta helper --system-prompt-files a.md",
+   "expected": {
+    "capability": "builtin:create_session",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "session.create",
+      "resources": {
+       "targetAgent": "beta",
+       "node": "master",
+       "targetSession": {
+        "prospective": true,
+        "agent": "beta"
+       }
+      },
+      "with": {
+       "kind": "session",
+       "placement": "inherited",
+       "runtime": "foxwarm"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:create_session"
+     },
+     {
+      "id": "prompt-file-read",
+      "kind": "subRequest",
+      "capability": "node:read",
+      "conditional": true
+     }
+    ],
+    "normalized": {
+     "agentName": "beta",
+     "sessionName": "helper",
+     "systemPromptFiles": [
+      "a.md"
+     ]
+    },
+    "evaluated": {
+     "primary": "primary",
+     "prompt-file-read": null
+    }
+   },
+   "context": {
+    "agentDefaultNode": {
+     "beta": "master"
+    }
+   }
+  },
+  {
+   "name": "send to channel",
+   "command": "channel send --channel-target-id ch-1 hello",
+   "expected": {
+    "capability": "builtin:send_to_channel",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "channel.send",
+      "resources": {
+       "channel": "ch-1"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:send_to_channel"
+     }
+    ],
+    "normalized": {
+     "channelTargetId": "ch-1",
+     "message": "hello"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "wait",
+   "toolId": "builtin:wait",
+   "args": {
+    "seconds": 1
+   },
+   "expected": {
+    "capability": "builtin:wait",
+    "branch": "call",
+    "self": "waits within the caller's own turn",
+    "operations": [],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:wait"
+     }
+    ],
+    "normalized": {
+     "seconds": 1
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "malformed action",
+   "toolId": "builtin:node",
+   "args": {
+    "action": [
+     "list"
+    ]
+   },
+   "unsupported": true,
+   "expected": {
+    "capability": "builtin:node",
+    "branch": null,
+    "operations": [],
+    "obligations": [],
+    "incomplete": [
+     "action is not a string",
+     "no declared branch for this call"
+    ],
+    "normalized": {
+     "action": [
+      "list"
+     ]
+    },
+    "evaluated": {}
+   }
+  },
+  {
+   "name": "unresolved Node target",
+   "toolId": "builtin:node",
+   "args": {
+    "action": "select",
+    "nodeId": "gone"
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "select",
+    "operations": [
+     {
+      "op": "node.select",
+      "resources": {
+       "node": null
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     },
+     {
+      "id": "default-cwd",
+      "kind": "subRequest",
+      "capability": "node:get_default_cwd",
+      "conditional": true,
+      "optional": true
+     }
+    ],
+    "incomplete": [
+     "node.select: node is not resolved (node-target)"
+    ],
+    "normalized": {
+     "action": "select",
+     "nodeId": "gone"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "default-cwd": null
+    }
+   }
+  },
+  {
+   "name": "session non-string action is status",
+   "toolId": "builtin:session",
+   "args": {
+    "action": [
+     "list"
+    ]
+   },
+   "facts": {
+    "sessionTarget": "alpha-1"
+   },
+   "expected": {
+    "capability": "builtin:session",
+    "branch": "status",
+    "operations": [
+     {
+      "op": "session.view",
+      "resources": {
+       "targetSession": "alpha-1"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:session"
+     }
+    ],
+    "normalized": {
+     "action": "status"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "node select of a Provider Node",
+   "toolId": "builtin:node",
+   "args": {
+    "action": "select",
+    "nodeId": "dev/box"
+   },
+   "facts": {
+    "nodeTargets": [
+     "dev/box"
+    ]
+   },
+   "context": {
+    "defaultCwdProbe": []
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "select",
+    "operations": [
+     {
+      "op": "node.select",
+      "resources": {
+       "node": "dev/box"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "select",
+     "nodeId": "dev/box"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "external node status",
+   "toolId": "builtin:node",
+   "args": {
+    "action": "status"
+   },
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ]
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "status",
+    "operations": [
+     {
+      "op": "node.view",
+      "resources": {
+       "node": "box"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "status"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "set_config with unknown secret facts",
+   "toolId": "builtin:set_config",
+   "args": {
+    "target": "models",
+    "filePath": "candidate.yaml"
+   },
+   "facts": {},
+   "context": {
+    "secretsUnknown": true
+   },
+   "expected": {
+    "capability": "builtin:set_config",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "config.write",
+      "with": {
+       "target": "models"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:set_config"
+     },
+     {
+      "id": "candidate-read",
+      "kind": "subRequest",
+      "capability": "node:master/read"
+     },
+     {
+      "id": "install",
+      "kind": "retained",
+      "capability": "builtin:set_config"
+     }
+    ],
+    "incomplete": [
+     "secret.use: the secret facts are unknown"
+    ],
+    "normalized": {
+     "target": "models",
+     "filePath": "candidate.yaml"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "candidate-read": "node:master/read {\"filePath\":\"candidate.yaml\"}",
+     "install": "primary"
+    }
+   }
+  },
+  {
+   "name": "set_config with no secret facts",
+   "toolId": "builtin:set_config",
+   "args": {
+    "target": "models",
+    "filePath": "candidate.yaml"
+   },
+   "facts": {},
+   "expected": {
+    "capability": "builtin:set_config",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "config.write",
+      "with": {
+       "target": "models"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:set_config"
+     },
+     {
+      "id": "candidate-read",
+      "kind": "subRequest",
+      "capability": "node:master/read"
+     },
+     {
+      "id": "install",
+      "kind": "retained",
+      "capability": "builtin:set_config"
+     }
+    ],
+    "normalized": {
+     "target": "models",
+     "filePath": "candidate.yaml"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "candidate-read": "node:master/read {\"filePath\":\"candidate.yaml\"}",
+     "install": "primary"
+    }
+   }
+  }
+ ]
+}

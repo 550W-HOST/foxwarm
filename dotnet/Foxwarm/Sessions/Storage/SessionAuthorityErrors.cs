@@ -10,16 +10,18 @@ internal sealed record SessionAuthorityDiagnostic(string? Field, string Reason)
     {
         var context = sessionId is null
             ? ""
-            : $"session={JsonSerializer.Serialize(sessionId)} file={JsonSerializer.Serialize("state/sessions/" + sessionId + ".json")} ";
+            : $"session={JsonData.Serialize(sessionId)} file={JsonData.Serialize("state/sessions/" + sessionId + ".json")} ";
         return context
-            + (Field is null ? "" : $"field={JsonSerializer.Serialize(Field)} ")
+            + (Field is null ? "" : $"field={JsonData.Serialize(Field)} ")
             + "reason="
-            + JsonSerializer.Serialize(Reason);
+            + JsonData.Serialize(Reason);
     }
 }
 
 internal static class SessionAuthorityErrors
 {
+    internal const string CatalogedMissingReason = "Cataloged Session authority is missing.";
+
     private static readonly object DiagnosticKey = new();
 
     internal static InvalidDataException Invalid(string reason, string? field = null) =>
@@ -73,12 +75,9 @@ internal sealed class SessionAuthorityUnavailableException(
 }
 
 internal sealed class SessionAuthorityIdentityException(string sessionId)
-    : IOException(
-        new SessionAuthorityDiagnostic(
-            "id",
-            "Authority identity does not match its catalog ID."
-        ).Format(sessionId)
-    )
+    : IOException(new SessionAuthorityDiagnostic("id", Reason).Format(sessionId))
 {
+    internal const string Reason = "Authority identity does not match its catalog ID.";
+
     internal string SafeDetail => Message;
 }

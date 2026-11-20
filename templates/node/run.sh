@@ -31,7 +31,7 @@ Options:
                       launcher, and generated service files stay under this dir
   --host=URL          Override Foxwarm master base URL (default: request-derived)
   --pairing=TOKEN     Pairing token for first setup; optional with stored credentials
-  --auth-token=TOKEN  Per-node auth token from /node create (use with --node-id)
+  --auth-token=TOKEN  Per-node auth token from /node token (use with --node-id)
   --node-id=ID        Requested node name (default: node-<hostname>)
   -d, --detach        Start in background; prefer tmux, otherwise use nohup
   --install           Install, enable, and start a systemd service. Root installs a
@@ -208,6 +208,15 @@ shell_quote() {
 {
   echo '#!/bin/sh'
   echo 'set -eu'
+  launch_method=bareMetal
+  [ "$DETACH" = 0 ] || launch_method=bareMetalBackground
+  [ "$INSTALL_SERVICE" = 0 ] || launch_method=bareMetalInstall
+  printf 'export FOXWARM_NODE_LAUNCH_METHOD='; shell_quote "$launch_method"; echo
+  printf 'export FOXWARM_NODE_LAUNCH_DIR='; shell_quote "$ABS_INSTALL_DIR"; echo
+  if [ "$INSTALL_SERVICE" = 1 ]; then
+    if [ "$(id -u)" = 0 ]; then launch_scope=system; else launch_scope=user; fi
+    printf 'export FOXWARM_NODE_LAUNCH_SERVICE_SCOPE='; shell_quote "$launch_scope"; echo
+  fi
   printf 'cd '; shell_quote "$SOURCE_DIR"; echo
   printf 'exec '; shell_quote "$NODE_BIN"
   if [ -n "$NODE_CLIENT_ENTRYPOINT" ]; then
@@ -431,7 +440,7 @@ not create a second tmux/nohup daemon layer.
 
 If this is the first run, approve the pending pairing on the master:
   /node
-  /node approve <pending-id> $NODE_ID
+  /node approve <pending-id> --node-id $NODE_ID
 EOF
 }
 
@@ -443,7 +452,7 @@ Start in foreground:
   $Q_LAUNCHER_FILE
 Start in background by rerunning this bootstrap with the same --dir and -d.
 After first startup, approve the pending pairing with:
-  /node approve <pending-id> $NODE_ID
+  /node approve <pending-id> --node-id $NODE_ID
 EOF
   exit 0
 fi
@@ -459,7 +468,7 @@ PID file: $PID_FILE
 Mode file: $MODE_FILE
 Log file: $LOG_FILE
 Follow logs: tail -f $Q_LOG_FILE
-If this is the first run, approve it with: /node approve <pending-id> $NODE_ID
+If this is the first run, approve it with: /node approve <pending-id> --node-id $NODE_ID
 EOF
 else
   cat <<EOF
@@ -467,7 +476,7 @@ else
 Node client prepared. Starting in foreground below.
 Press Ctrl-C to stop it. Use -d for background mode or --install for systemd startup.
 If this is the first run, approve it on the master with:
-  /node approve <pending-id> $NODE_ID
+  /node approve <pending-id> --node-id $NODE_ID
 EOF
   start_foreground
 fi

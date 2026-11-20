@@ -7,30 +7,11 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal void RequireMainFileSourcePath(SessionOwner owner, string path)
-    {
-        if (!AgentIsolated(owner.Agent))
-            return;
-        var own = AuthorizationPaths.CanonicalPotential(agents.AgentDirectory(owner.Agent));
-        var actual = AuthorizationPaths.CanonicalPotential(path);
-        if (
-            !ToolAuthorizationEvaluation.Within(actual, own)
-            || owner.Agent == "main"
-                && agents.AgentDirectory("main") == toolWorkspace
-                && ToolAuthorizationEvaluation.Within(
-                    actual,
-                    AuthorizationPaths.CanonicalPotential(Path.Combine(own, "agents"))
-                )
-        )
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Agent can only read source files within its own directory."
-            );
-    }
-
     internal async Task<JsonNode?> NormalizeToolScriptResultAsync(
         JsonNode? value,
         string name,
-        ToolScriptDataBudget budget
+        ToolScriptDataBudget budget,
+        Action<string>? imageProduced = null
     )
     {
         budget.JsonValue(value);
@@ -40,6 +21,8 @@ internal sealed partial class SessionManager
             ["name"] = name,
             ["response"] = value?.DeepClone(),
         };
+        // Script results reach the model; audit evidence in nested messages does not.
+        InputSender.Strip(response["response"]);
         var message = new JsonObject
         {
             ["role"] = "tool",
@@ -54,6 +37,14 @@ internal sealed partial class SessionManager
             .OfType<JsonObject>()
             .Where(part => part.ContainsKey("inlineDataRef"))
             .ToArray();
+        // Only the parts externalized from the response are image results of the call.
+        if (imageProduced is not null)
+            foreach (var image in images)
+                if (
+                    Foxwarm.Images.ImageBlobStore.NormalizeToolReference(image) is { } reference
+                    && SessionWait.Text(reference["blobId"]) is { Length: > 0 } blob
+                )
+                    imageProduced(blob);
         if (images.Length > 0 && result is JsonObject obj)
         {
             var parts = obj["parts"] as JsonArray ?? new JsonArray();
@@ -63,6 +54,140 @@ internal sealed partial class SessionManager
         }
         envelope.Remove("response");
         return result;
+    }
+
+    /// <summary>
+    /// Reports the end of a detached background ToolScript segment to its owner Session, once,
+    /// like a background exec completion. The run ID is the wait source.
+    /// </summary>
+    internal Task DeliverToolScriptRunEventAsync(
+        SessionOwner owner,
+        JsonObject outcome,
+        string segment
+    )
+    {
+        var runId = SessionWait.Text(outcome["runId"]) ?? "";
+        return CommitBackgroundEventAsync(
+            owner,
+            runId,
+            ToolScriptRunEvent(outcome),
+            "toolscript-run:" + runId + ":" + segment
+        );
+    }
+
+    private const int ToolScriptEventValueLimit = 1000;
+
+    internal static string ToolScriptRunEvent(JsonObject outcome)
+    {
+        static string Bounded(string text) =>
+            text.Length <= ToolScriptEventValueLimit
+                ? text
+                : text[..ToolScriptEventValueLimit] + "… [truncated]";
+        static string Line(string text) => Bounded(text).Replace("\r", "").Replace("\n", "\n  ");
+        var status = SessionWait.Text(outcome["status"]) ?? "failed";
+        var waiting = status == "waiting";
+        var text = new System.Text.StringBuilder()
+            .Append("<foxwarm-system kind=\"event\" type=\"")
+            .Append(waiting ? "background-script-waiting" : "background-script-finished")
+            .Append("\">\n")
+            .Append("runId: ")
+            .Append(SessionWait.Text(outcome["runId"]))
+            .Append("\nstatus: ")
+            .Append(status);
+        if (waiting)
+        {
+            text.Append("\ncontinuationId: ").Append(SessionWait.Text(outcome["continuationId"]));
+            if (SessionWait.Text(outcome["question"]) is { } question)
+                text.Append("\nquestion: ").Append(Line(question));
+            text.Append("\nResume it with continue_script using runId, continuationId and input.");
+        }
+        else
+        {
+            if (outcome.ContainsKey("result"))
+                text.Append("\nresult: ")
+                    .Append(
+                        Line(
+                            SessionWait.Text(outcome["result"])
+                                ?? (
+                                    outcome["result"] is { } value
+                                        ? EcmaJson.Stringify(value)
+                                        : "null"
+                                )
+                        )
+                    );
+            if (SessionWait.Text(outcome["error"]) is { } error)
+                text.Append("\nerror: ").Append(Line(error));
+            text.Append("\nget_toolscript_run returns the full output and result.");
+        }
+        return text.Append("\n</foxwarm-system>").ToString();
+    }
+
+    // The catalog key a ToolScript model request resolves to: the named model, else the Session's
+    // selection when the catalog has it, else the default.
+    internal string ToolScriptModelKey(SessionOwner owner, string? model)
+    {
+        if (model is "")
+            model = null;
+        var catalog = models.Capture();
+        if (model is not null && !catalog.Contains(model))
+            throw new InvalidDataException("Unknown model: " + model);
+        var selection = catalog.Select(owner.Entry.Snapshot());
+        return model
+            ?? (
+                selection.RawModel is not null && catalog.Contains(selection.RawModel)
+                    ? selection.RawModel
+                    : catalog.DefaultKey
+            );
+    }
+
+    // A ToolScript model request is the operation model.request of the resolved model, assessed
+    // as the invocation that runs the slice (its identity and raw arguments): version-1 rules
+    // match that invocation, operation rules the operation. SliceAsk is set when every asking
+    // rule is a version-1 rule, which an approval of the slice answers once per slice.
+    internal sealed record ModelRequestCheck(
+        AuthorizationAssessment Assessment,
+        string Fingerprint,
+        string SliceFingerprint,
+        bool SliceAsk
+    );
+
+    internal async Task<ModelRequestCheck> AssessToolScriptModelAsync(
+        SessionOwner owner,
+        ResolvedTool slice,
+        WorkspaceTools? files,
+        string model,
+        CancellationToken token
+    )
+    {
+        var assessment = await AssessToolAsync(
+            owner,
+            slice,
+            files,
+            token,
+            operations:
+            [
+                new AuthorizationOperation(
+                    "model.request",
+                    new JsonObject { ["model"] = model },
+                    []
+                ),
+            ]
+        );
+        var asking = assessment.Asking.SelectMany(layer => layer.Decision.AskingRules).ToArray();
+        // The slice's own approval binds the operations the dispatch gate derived for it (none
+        // without operation rules, none for an inline script), so compare with the same.
+        var sliceRequest = assessment.Request with { Operations = null };
+        if (assessment.Layers.Any(layer => layer.Policy.HasOperationRules))
+            sliceRequest = sliceRequest with
+            {
+                Operations = AuthorizationOperations(owner, slice, sliceRequest, files),
+            };
+        return new(
+            assessment,
+            ApprovalFingerprint(owner, slice, assessment.Request),
+            ApprovalFingerprint(owner, slice, sliceRequest),
+            asking.Length > 0 && !asking.Any(OperationRules.IsOperationRule)
+        );
     }
 
     internal async Task<JsonObject> RequestToolScriptModelAsync(
@@ -100,7 +225,9 @@ internal sealed partial class SessionManager
             websockets: websockets,
             images: Images,
             journal: Journal,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            retryIntervals: models.GetRetryIntervals,
+            secrets: secrets
         );
         var captured = requests.Capture(catalog, route, selection.RawEffort);
         var cache = await owner.Entry.SaveLane.EnsurePromptCacheKeyAsync();

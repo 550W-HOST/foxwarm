@@ -1,0 +1,324 @@
+using System.Text;
+
+namespace Foxwarm.Tools;
+
+// Help and usage text. Commands the caller's policy definitely denies are left out; a command
+// whose permission depends on its arguments is kept, as in tool discovery.
+internal static class CtlHelp
+{
+    internal const int MaxLength = 16_000;
+
+    internal static string Overview(Func<CtlCommand, bool> visible, string ingress = CtlRegistry.Ingress)
+    {
+        if (ingress == "user")
+            return UserOverview(visible);
+        var builder = new StringBuilder(
+            ingress == "external"
+                ? "Foxwarm commands for this MCP connection. Write `<noun> <verb> [arguments]`; add --help to a noun or command for its usage.\n\n"
+                : "Foxwarm runtime commands. Write `<noun> <verb> [arguments]`; add --help to a noun or command for its usage.\n\n"
+        );
+        var nouns = CtlRegistry
+            .Nouns.Where(noun => Commands(noun.Name, visible, ingress).Any())
+            .ToArray();
+        var width = nouns.Length == 0 ? 0 : nouns.Max(noun => noun.Name.Length);
+        foreach (var noun in nouns)
+            builder
+                .Append("  ")
+                .Append(noun.Name.PadRight(width + 2))
+                .Append(CtlRegistry.NounSummary(noun, ingress))
+                .Append('\n');
+        builder.Append(
+            "\nOptions use --name value or --name=value; booleans also take --name and --no-name. Quote arguments containing spaces. Pass long text or JSON as @name and supply it in values; write @@ for a literal leading @. ctl runs one command and is not a shell"
+                + (ingress == "external" ? "." : "; use run_script to combine dependent calls.")
+        );
+        return Bound(builder.ToString());
+    }
+
+    // User help: shortcuts, then nouns, as chat text.
+    private static string UserOverview(Func<CtlCommand, bool> visible)
+    {
+        var builder = new StringBuilder("📖 *Commands*\n\n");
+        foreach (var shortcut in CtlRegistry.Shortcuts)
+            if (CtlRegistry.Shortcut(shortcut.Name) is { } command && visible(command))
+                builder.Append($"`/{shortcut.Name}` - {command.Summary}\n");
+        builder.Append('\n');
+        foreach (var noun in CtlRegistry.Nouns.Where(noun => Commands(noun.Name, visible, "user").Any()))
+            builder.Append($"`/{noun.Name}` - {CtlRegistry.NounSummary(noun, "user")}\n");
+        builder.Append(
+            "\nSend `/help <noun>` for a noun's commands or `/help <noun> <verb>` for one command's arguments. Quote arguments containing spaces."
+        );
+        return Bound(builder.ToString());
+    }
+
+    internal static string? Noun(string noun, Func<CtlCommand, bool> visible, string ingress = CtlRegistry.Ingress)
+    {
+        var commands = Commands(noun, visible, ingress).ToArray();
+        if (commands.Length == 0 || CtlRegistry.Noun(noun) is not { } entry)
+            return null;
+        if (ingress == "user")
+            return Bound(
+                $"📋 */{noun}* - {CtlRegistry.NounSummary(entry, ingress)}\n\n"
+                    + string.Join(
+                        "\n",
+                        commands.Select(command =>
+                            $"`{Synopsis(command, compact: true, ingress)}` - {command.Summary}"
+                        )
+                    )
+                    + $"\n\nSend `/help {noun} <verb>` for a command's arguments."
+            );
+        var builder = new StringBuilder(
+            Prefix(ingress) + noun + ": " + CtlRegistry.NounSummary(entry, ingress) + "\n\n"
+        );
+        foreach (var command in commands)
+            builder
+                .Append("  ")
+                .Append(Synopsis(command, compact: true, ingress))
+                .Append("\n      ")
+                .Append(command.Summary)
+                .Append('\n');
+        builder.Append(
+            ingress == "user"
+                ? $"\nSend `/help {noun} <verb>` for a command's arguments."
+                : $"\nRun `{noun} <verb> --help` for a command's arguments."
+        );
+        return Bound(builder.ToString());
+    }
+
+    internal static string Command(CtlCommand command, string ingress = CtlRegistry.Ingress)
+    {
+        var builder = new StringBuilder(
+            "Usage: " + Synopsis(command, compact: false, ingress) + "\n\n"
+        );
+        builder.Append(command.Summary).Append('\n');
+        if (command.Help is { } help && help != command.Summary)
+            builder.Append('\n').Append(help).Append('\n');
+        if (command.Parameters.Count > 0)
+        {
+            builder.Append("\nArguments:\n");
+            foreach (var parameter in command.Parameters)
+            {
+                builder.Append("  ").Append(Term(parameter));
+                if (parameter.Required)
+                    builder.Append(" (required)");
+                builder.Append('\n');
+                if (parameter.Help is { } text)
+                    builder.Append("      ").Append(text).Append('\n');
+            }
+        }
+        return Bound(builder.ToString().TrimEnd());
+    }
+
+    // The text returned for a parse error: the message, suggestions and the usage the caller
+    // may see. Suggestions come only from visible commands, like help.
+    internal static string Error(CtlError error, Func<CtlCommand, bool> visible, string ingress = CtlRegistry.Ingress)
+    {
+        // A command that exists but is hidden from this caller can't run here, whatever its
+        // arguments: say so instead of reporting a usage problem or an unknown command.
+        if (error.Command is { } hidden && !visible(hidden))
+            return Bound(
+                $"`{Prefix(ingress)}{hidden.Display ?? hidden.Path}` is not available to {Caller(ingress)}."
+                    + (
+                        hidden.Display is null && Noun(hidden.Noun, visible, ingress) is { } listing
+                            ? "\n\n" + listing
+                            : HelpPointer(ingress)
+                    )
+            );
+        var message = error.Message;
+        if (error.Unknown is { } typed && Suggestions(typed, visible, ingress) is { Length: > 0 } candidates)
+            message +=
+                " Did you mean "
+                + string.Join(", ", candidates.Select(path => "`" + Prefix(ingress) + path + "`"))
+                + "?";
+        var usage =
+            error.Command is { } command
+                ? visible(command)
+                    ? Command(command, ingress)
+                    : null
+            : error.Noun is { } noun ? Noun(noun, visible, ingress)
+            : null;
+        return Bound(message + (usage is not null ? "\n\n" + usage : HelpPointer(ingress)));
+    }
+
+    private static string HelpPointer(string ingress) =>
+        ingress == "user"
+            ? "\n\nSend `/help` for the available commands."
+            : "\n\nRun `help` for the available commands.";
+
+    // Who a hidden command is unavailable to.
+    private static string Caller(string ingress) =>
+        ingress switch
+        {
+            "external" => "this connection",
+            "user" => "this conversation",
+            _ => "this Session",
+        };
+
+    // The error for help on a noun or command the caller can't see: unknown when the ingress has
+    // no such noun or command, otherwise the hidden command (reported as unavailable by Error)
+    // or a noun none of whose commands are visible.
+    internal static CtlError Unknown(CtlHelpRequest request, string ingress = CtlRegistry.Ingress)
+    {
+        var typed = request.Verb is null ? request.Noun! : request.Noun + " " + request.Verb;
+        if (request.Verb is not null && CtlRegistry.Find(request.Noun!, request.Verb, ingress) is { } command)
+            return new(CtlParser.Unknown(typed), command);
+        if (request.Verb is null && CtlRegistry.ForNoun(request.Noun!, ingress).Any())
+            return new($"No `{Prefix(ingress)}{request.Noun}` commands are available to {Caller(ingress)}.");
+        return new(
+            CtlParser.Unknown(typed),
+            Noun: request.Verb is null ? null : request.Noun,
+            Unknown: typed
+        );
+    }
+
+    // Commands are typed after `/` by users and as the command text of `ctl` otherwise.
+    internal static string Prefix(string ingress) => ingress == "user" ? "/" : "";
+
+    // Up to three visible nouns or commands closest to the typed text. A verb is compared with
+    // the verbs of its noun only, so a long noun doesn't make unrelated verbs look close. Under
+    // an unknown noun, the verb is matched under the closest nouns, else the nouns are offered.
+    internal static string[] Suggestions(
+        string typed,
+        Func<CtlCommand, bool> visible,
+        string ingress = CtlRegistry.Ingress
+    )
+    {
+        var nouns = CtlRegistry
+            .Nouns.Where(noun => Commands(noun.Name, visible, ingress).Any())
+            .Select(noun => noun.Name)
+            .ToArray();
+        var space = typed.IndexOf(' ');
+        if (space < 0)
+            return Closest(typed, nouns.Select(noun => (noun, noun)));
+        var nounName = typed[..space];
+        var verb = typed[(space + 1)..];
+        if (nouns.Contains(nounName))
+            return Verbs(nounName, verb);
+        var close = Closest(nounName, nouns.Select(noun => (noun, noun)));
+        var commands = close.SelectMany(noun => Verbs(noun, verb)).Take(3).ToArray();
+        return commands.Length > 0 ? commands : close;
+
+        string[] Verbs(string noun, string word) =>
+            Closest(
+                word,
+                Commands(noun, visible, ingress)
+                    .SelectMany(command =>
+                        command.Aliases.Prepend(command.Verb).Select(alias => (alias, command.Path))
+                    )
+            );
+    }
+
+    // The distinct results whose word is within a third of the typed length (at least 2) of it.
+    private static string[] Closest(string typed, IEnumerable<(string Word, string Result)> candidates) =>
+        candidates
+            .Select(pair => (pair.Result, Distance: Distance(typed, pair.Word)))
+            .Where(pair => pair.Distance <= Math.Max(2, typed.Length / 3))
+            .OrderBy(pair => pair.Distance)
+            .ThenBy(pair => pair.Result, StringComparer.Ordinal)
+            .Select(pair => pair.Result)
+            .Distinct()
+            .Take(3)
+            .ToArray();
+
+    internal static int Distance(string left, string right)
+    {
+        var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+        for (var row = 1; row <= left.Length; row++)
+        {
+            var current = new int[right.Length + 1];
+            current[0] = row;
+            for (var column = 1; column <= right.Length; column++)
+                current[column] = Math.Min(
+                    Math.Min(current[column - 1] + 1, previous[column] + 1),
+                    previous[column - 1] + (left[row - 1] == right[column - 1] ? 0 : 1)
+                );
+            previous = current;
+        }
+        return previous[right.Length];
+    }
+
+    // Null when the requested noun or command does not exist for this caller.
+    internal static string? Render(
+        CtlHelpRequest request,
+        Func<CtlCommand, bool> visible,
+        string ingress = CtlRegistry.Ingress
+    )
+    {
+        if (request.Noun is null)
+            return Overview(visible, ingress);
+        if (request.Verb is null)
+            return Noun(request.Noun, visible, ingress);
+        return CtlRegistry.Find(request.Noun, request.Verb, ingress) is { } command
+            && visible(command)
+            ? Command(command, ingress)
+            : null;
+    }
+
+    private static IEnumerable<CtlCommand> Commands(
+        string noun,
+        Func<CtlCommand, bool> visible,
+        string ingress
+    ) => CtlRegistry.ForNoun(noun, ingress).Where(visible);
+
+    internal static string Synopsis(CtlCommand command, bool compact, string ingress = CtlRegistry.Ingress)
+    {
+        var parts = new List<string> { Prefix(ingress) + (command.Display ?? command.Path) };
+        string Positional(CtlParameter parameter)
+        {
+            var term = parameter.UsageTerm;
+            return parameter.Required ? term : "[" + term + "]";
+        }
+        parts.AddRange(
+            command.Parameters.Where(parameter => !parameter.Flag && !parameter.Rest).Select(Positional)
+        );
+        var flags = command.Parameters.Where(parameter => parameter.Flag).ToArray();
+        if (compact)
+        {
+            parts.AddRange(flags.Where(parameter => parameter.Required).Select(Term));
+            if (flags.Any(parameter => !parameter.Required))
+                parts.Add("[options]");
+        }
+        else
+            parts.AddRange(
+                flags.Select(parameter => parameter.Required ? Term(parameter) : "[" + Term(parameter) + "]")
+            );
+        // Rest text takes everything after it, so options come first.
+        parts.AddRange(command.Parameters.Where(parameter => parameter.Rest).Select(Positional));
+        return string.Join(' ', parts);
+    }
+
+    private static string Term(CtlParameter parameter)
+    {
+        if (!parameter.Flag)
+            return parameter.UsageTerm;
+        if (parameter.IsBoolean)
+            return "--[no-]" + parameter.FlagName;
+        return "--"
+            + parameter.FlagName
+            + " "
+            + Placeholder(parameter.IsArray ? parameter.Items! : parameter.Type, parameter.Values)
+            + (parameter.IsArray ? " ..." : "");
+    }
+
+    private static string Placeholder(string type, IReadOnlyList<string>? values) =>
+        string.Join(
+            "|",
+            type.Split('|')
+                .Where(part => part != "null")
+                .Select(part =>
+                    part switch
+                    {
+                        "enum" => string.Join('|', values!),
+                        "object" => "<json>",
+                        "json" => "<json>",
+                        "integer" or "number" => "<number>",
+                        "boolean" => "true|false",
+                        _ => "<text>",
+                    }
+                )
+        );
+
+    private static string Bound(string text) =>
+        text.Length <= MaxLength
+            ? text
+            : text[..(MaxLength - 60)].TrimEnd() + "\n… Help shortened; ask for a single noun or command.";
+}

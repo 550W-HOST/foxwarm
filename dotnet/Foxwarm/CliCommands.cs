@@ -95,7 +95,9 @@ internal static class CliCommands
             new ModelRouting(),
             websockets: websockets,
             journal: journal,
-            diagnostics: new ModelInteractionDiagnostics(root)
+            diagnostics: new ModelInteractionDiagnostics(root),
+            retryIntervals: configuration.Models.GetRetryIntervals,
+            secrets: configuration.Secrets
         );
         var result = await owner.RequestAsync(
             "",
@@ -136,7 +138,7 @@ internal static class CliCommands
                     ["text"] = text,
                     ["modelId"] = result.AssistantMessage?["__meta"]?["modelId"]?.DeepClone(),
                     ["usage"] = result.Usage?.DeepClone(),
-                }.ToJsonString(new JsonSerializerOptions { WriteIndented = true })
+                }.ToJsonText(indented: true)
             );
         else
         {
@@ -159,14 +161,18 @@ internal static class CliCommands
             Path.Combine(output, "llm-request-journal.jsonl")
         );
         Console.WriteLine(
-            JsonSerializer.Serialize(
-                new
+            JsonData.Serialize(
+                new JsonObject
                 {
-                    output,
-                    sessions = new { files = sessions.Files, records = sessions.Records },
-                    llm = new { records },
+                    ["output"] = output,
+                    ["sessions"] = new JsonObject
+                    {
+                        ["files"] = sessions.Files,
+                        ["records"] = sessions.Records,
+                    },
+                    ["llm"] = new JsonObject { ["records"] = records },
                 },
-                new JsonSerializerOptions { WriteIndented = true }
+                new JsonSerializerOptions(JsonData.Options) { WriteIndented = true }
             )
         );
     }

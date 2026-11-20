@@ -16,13 +16,11 @@ public static class FunctionCallArguments
             var error = new JsonObject { ["error"] = argsParseError };
             if (!string.IsNullOrEmpty(rawArgsText))
                 error["rawArgsText"] = rawArgsText;
-            return error.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+            return error.ToJsonText();
         }
         if (rawArgsText is not null)
             return rawArgsText;
-        return (args ?? new JsonObject()).ToJsonString(
-            new JsonSerializerOptions { WriteIndented = false }
-        );
+        return (args ?? new JsonObject()).ToJsonText();
     }
 
     public static ParsedArguments Parse(JsonNode? raw)
@@ -72,7 +70,7 @@ public static class FunctionCallArguments
             _ when SessionWait.Number(raw) is double number => double.IsFinite(number)
                 ? EcmaNumber.Format(number)
                 : number.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            _ => raw.ToJsonString(),
+            _ => raw.ToJsonText(),
         };
 
     private static string InputType(JsonNode raw) =>

@@ -44,7 +44,7 @@ internal static class SessionQuestions
 
     internal static string NewId() => "q-" + Guid.NewGuid().ToString("N")[..10];
 
-    private static JsonObject Container(JsonObject meta)
+    internal static JsonObject Container(JsonObject meta)
     {
         if (meta["questions"] is not JsonObject container)
             meta["questions"] = container = new JsonObject();
@@ -53,10 +53,11 @@ internal static class SessionQuestions
         return container;
     }
 
-    private static void Touch(JsonObject meta)
+    internal static void Touch(JsonObject meta)
     {
         var container = Container(meta);
         container["revision"] = Revision(meta) + 1;
+        SessionApprovals.Prune(container);
         var items = container["items"]!.AsArray();
         var resolved = items
             .OfType<JsonObject>()
@@ -80,12 +81,30 @@ internal static class SessionQuestions
             var label = $"questions[{index}]";
             if (entry is not JsonObject question)
                 throw new InvalidDataException($"{label} must be an object.");
-            if (question.Any(pair => pair.Key is not ("question" or "options" or "multiSelect")))
+            if (
+                question.Any(pair =>
+                    pair.Key is not ("question" or "options" or "multiSelect" or "secret")
+                )
+            )
                 throw new InvalidDataException(
-                    $"{label} accepts only question, options and multiSelect."
+                    $"{label} accepts only question, options, multiSelect and secret."
                 );
             var text = RequiredText(question["question"], $"{label}.question", MaxQuestionLength);
             var stored = new JsonObject { ["question"] = text };
+            if (question.ContainsKey("secret"))
+            {
+                if (question.ContainsKey("options") || question.ContainsKey("multiSelect"))
+                    throw new InvalidDataException(
+                        $"{label} asks for a secret, which takes no options or multiSelect."
+                    );
+                stored["secret"] = ParseSecret(question["secret"], $"{label}.secret");
+                if (result.Any(other => SecretName(other!.AsObject()) == SecretName(stored)))
+                    throw new InvalidDataException(
+                        $"{label} asks for the secret `{SecretName(stored)}` a second time."
+                    );
+                result.Add(stored);
+                continue;
+            }
             if (question.ContainsKey("options"))
             {
                 if (question["options"] is not JsonArray options || options.Count > MaxOptions)
@@ -153,6 +172,41 @@ internal static class SessionQuestions
         return result;
     }
 
+    // A question that asks for a secret: the answer goes to the store, never to the model.
+    private static JsonObject ParseSecret(JsonNode? node, string label)
+    {
+        if (node is not JsonObject secret)
+            throw new InvalidDataException($"{label} must be an object.");
+        if (secret.Any(pair => pair.Key is not ("name" or "description")))
+            throw new InvalidDataException($"{label} accepts only name and description.");
+        var name = SessionWait.Text(secret["name"])?.Trim() ?? "";
+        Foxwarm.Secrets.SecretStore.ValidateName(name);
+        var stored = new JsonObject { ["name"] = name };
+        if (secret.ContainsKey("description"))
+        {
+            if (
+                secret["description"] is not JsonValue value
+                || !value.TryGetValue<string>(out var text)
+            )
+                throw new InvalidDataException($"{label}.description must be a string.");
+            if (
+                Foxwarm.Secrets.SecretStore.NormalizeDescription(text) is
+                { Length: > 0 } description
+            )
+                stored["description"] = description;
+        }
+        return stored;
+    }
+
+    internal static string? SecretName(JsonObject question) =>
+        SessionWait.Text(question["secret"]?["name"]);
+
+    // Names of the secrets a question set asks for.
+    internal static string[] SecretNames(JsonObject record) =>
+        record["questions"] is JsonArray questions
+            ? questions.OfType<JsonObject>().Select(SecretName).OfType<string>().ToArray()
+            : [];
+
     internal static JsonObject Add(
         JsonObject meta,
         string id,
@@ -215,8 +269,16 @@ internal static class SessionQuestions
             return null;
         var open = Open(meta);
         var waited = SessionWait.Strings(SessionWait.Current(meta)?["waitQuestionIds"]);
-        var result = new JsonObject { ["open"] = open.Length, ["revision"] = Revision(meta) };
-        if (open.Any(record => waited.Contains(SessionWait.Text(record["id"]))))
+        // A pending tool approval is an open request the Session is waiting on.
+        var approvals = SessionApprovals.Pending(meta).Length;
+        var result = new JsonObject
+        {
+            ["open"] = open.Length + approvals,
+            ["revision"] = Revision(meta),
+        };
+        if (approvals > 0)
+            result["approvals"] = approvals;
+        if (approvals > 0 || open.Any(record => waited.Contains(SessionWait.Text(record["id"]))))
             result["waiting"] = true;
         return result;
     }
@@ -269,8 +331,12 @@ internal static class SessionQuestions
         var answered = new List<string>();
         var text = Bound(PlainText(item.Parts ?? []), MaxAnswerTextLength);
         foreach (var questionId in waited)
+            // A secret is entered only in the WebUI answer form, never as a message, so a
+            // question set that asks for one stays open.
             if (
-                Resolve(
+                Find(meta, questionId) is { } record
+                && SecretNames(record).Length == 0
+                && Resolve(
                     meta,
                     questionId,
                     "answered",
@@ -342,7 +408,11 @@ internal static class SessionQuestions
     /// Validates a WebUI answer against the question record and returns the stored answer.
     /// `answers[i]` pairs with `questions[i]`: selected option labels and/or free text.
     /// </summary>
-    internal static JsonObject ParseAnswer(JsonObject record, JsonObject body)
+    internal static JsonObject ParseAnswer(
+        JsonObject record,
+        JsonObject body,
+        List<SecretAnswer>? secrets = null
+    )
     {
         if (body.Any(pair => pair.Key is not ("answers" or "note" or "skip")))
             throw new InvalidDataException("Answer accepts only answers, note and skip.");
@@ -372,6 +442,37 @@ internal static class SessionQuestions
         {
             if (answers[index] is not JsonObject answer)
                 throw new InvalidDataException($"answers[{index}] must be an object.");
+            if (SecretName(questions[index]) is { } secretName)
+            {
+                // The value goes to the store; the stored answer only says it was stored.
+                if (answer.Any(pair => pair.Key != "value"))
+                    throw new InvalidDataException(
+                        $"answers[{index}] asks for a secret and accepts only value."
+                    );
+                var secretEntry = new JsonObject();
+                if (answer["value"] is { } node)
+                {
+                    if (node is not JsonValue raw || !raw.TryGetValue<string>(out var value))
+                        throw new InvalidDataException($"answers[{index}].value must be a string.");
+                    if (value.Length > 0)
+                    {
+                        if (secrets is null)
+                            throw new InvalidDataException("This answer cannot store a secret.");
+                        secrets.Add(
+                            new(
+                                secretName,
+                                value,
+                                SessionWait.Text(questions[index]["secret"]?["description"])
+                            )
+                        );
+                        secretEntry["secret"] = secretName;
+                        secretEntry["stored"] = true;
+                    }
+                }
+                any |= secretEntry.Count > 0;
+                stored.Add(secretEntry);
+                continue;
+            }
             if (answer.Any(pair => pair.Key is not ("selected" or "text")))
                 throw new InvalidDataException($"answers[{index}] accepts only selected and text.");
             var labels = questions[index]["options"] is JsonArray options
@@ -441,7 +542,9 @@ internal static class SessionQuestions
             var selected = SessionWait.Strings(entry?["selected"]);
             var text = SessionWait.Text(entry?["text"]);
             builder.Append("\nA: ");
-            if (selected.Length == 0 && text is null)
+            if (SessionWait.Text(entry?["secret"]) is { } secret)
+                builder.Append("(stored as secret `").Append(secret).Append("`)");
+            else if (selected.Length == 0 && text is null)
                 builder.Append("(no answer)");
             else
             {
@@ -467,6 +570,11 @@ internal static class SessionQuestions
             if (questions.Length > 1)
                 builder.Append(index + 1).Append(". ");
             builder.Append(SessionWait.Text(questions[index]["question"]));
+            if (SecretName(questions[index]) is { } secret)
+            {
+                builder.Append("\n(Secret `").Append(secret).Append("`: enter it in the WebUI.)");
+                continue;
+            }
             if (questions[index]["options"] is not JsonArray options)
                 continue;
             if (questions[index]["multiSelect"]?.GetValue<bool>() == true)
@@ -489,32 +597,12 @@ internal static class SessionQuestions
                     builder.Append(" — ").Append(description);
             }
         }
-        builder.Append("\n\nReply to answer.");
+        // A secret is never entered in a channel message, so its question set is answered in
+        // the WebUI as a whole.
+        builder.Append(
+            SecretNames(record).Length > 0 ? "\n\nAnswer in the WebUI." : "\n\nReply to answer."
+        );
         return builder.ToString();
-    }
-
-    /// <summary>Request-only reminder listing open questions; null when none are open.</summary>
-    internal static string? Reminder(JsonObject meta)
-    {
-        var open = Open(meta);
-        if (open.Length == 0)
-            return null;
-        var waited = SessionWait.Strings(SessionWait.Current(meta)?["waitQuestionIds"]);
-        var lines = open.Select(record =>
-        {
-            var id = SessionWait.Text(record["id"])!;
-            var questions = record["questions"]!.AsArray().OfType<JsonObject>().ToArray();
-            var summary = Bound(
-                Regex.Replace(SessionWait.Text(questions[0]["question"]) ?? "", @"\s+", " ").Trim(),
-                120
-            );
-            if (questions.Length > 1)
-                summary += $" (+{questions.Length - 1} more)";
-            return $"{id} — {summary} ({(waited.Contains(id) ? "waiting for the answer" : "not waited on")})";
-        });
-        return "<foxwarm-system kind=\"question-reminder\">Open questions to the user. Close any that are no longer needed or that the user already answered in conversation:\n"
-            + string.Join('\n', lines)
-            + "</foxwarm-system>";
     }
 
     // ---- Persisted validation -----------------------------------------------------------
@@ -542,6 +630,7 @@ internal static class SessionQuestions
             )
                 throw SessionAuthorityErrors.Invalid("Invalid question record.");
         }
+        SessionApprovals.Validate(container);
     }
 
     // ---- Helpers ----------------------------------------------------------------------
@@ -573,3 +662,6 @@ internal static class SessionQuestions
 }
 
 internal sealed class QuestionNotOpenException(string message) : InvalidOperationException(message);
+
+// A secret entered in a WebUI answer, before it is stored.
+internal sealed record SecretAnswer(string Name, string Value, string? Description);

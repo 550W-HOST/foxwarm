@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 using System.Text.RegularExpressions;
 
 namespace Foxwarm.Sessions;
@@ -48,15 +49,10 @@ internal static class ArchiveRecallTool
                       "scope": {
                         "type": "string",
                         "enum": [
-                          "all",
                           "current-session",
                           "current-agent"
                         ],
-                        "description": "Scope for semantic search. Searches stay within this agent; legacy isolated agents are further limited to the current session."
-                      },
-                      "agentName": {
-                        "type": "string",
-                        "description": "Agent for semantic search. Only this session's agent is supported."
+                        "description": "Scope for semantic search: this Session, or every Session of this Agent (default)."
                       },
                       "previewLength": {
                         "type": "number",
@@ -191,7 +187,15 @@ internal static class ArchiveRecallTool
             ["availableCount"] = records.Count,
             ["range"] = new JsonObject { ["startSeq"] = target.First, ["endSeq"] = target.Last },
             ["messages"] = new JsonArray(
-                records.Select(record => (JsonNode?)record.Message.DeepClone()).ToArray()
+                records
+                    .Select(record =>
+                    {
+                        // Exact reads reach the model; audit evidence stays administrator-only.
+                        var copy = record.Message.DeepClone();
+                        InputSender.Strip(copy);
+                        return (JsonNode?)copy;
+                    })
+                    .ToArray()
             ),
             ["availableRange"] = new JsonObject
             {
@@ -225,7 +229,6 @@ internal static class ArchiveRecallTool
                 "startTime",
                 "endTime",
                 "scope",
-                "agentName",
                 "preferBlocks",
                 "previewLength",
                 "contentFilter",
@@ -307,7 +310,7 @@ internal static class ArchiveRecallTool
                         }
                     )
                         binding[field] = args[field]?.DeepClone();
-                    var fingerprint = binding.ToJsonString();
+                    var fingerprint = binding.ToJsonText();
                     RecallWindowStore.RecallWindow window;
                     Foxwarm.Vector.StructuredVectorRecall selected;
                     var offset = 0;
@@ -480,11 +483,10 @@ internal static class ArchiveRecallTool
                 + string.Join(
                     "; ",
                     targets.Select(item =>
-                        "recall("
-                        + EcmaJson.Stringify(
+                        CtlCommandText.For(
+                            "recall",
                             new JsonObject { ["sessionId"] = id, ["target"] = item }
                         )
-                        + ")"
                     )
                 );
             if (target.Kind == "overview")
@@ -549,6 +551,13 @@ internal static class ArchiveRecallTool
                             renderer.Budget
                         )
                     );
+                await manager.RecallTargets.BlockAsync(
+                    source.Id,
+                    id,
+                    target.Kind == "raw-block" ? "msg:B#" : "B#",
+                    block,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                );
                 if (target.Kind == "raw-block")
                     target = new("messages", block.RawStartSeq, block.RawEndSeq);
             }
@@ -593,6 +602,14 @@ internal static class ArchiveRecallTool
                     )
                 );
             }
+            if (block is null)
+                await manager.RecallTargets.MessagesAsync(
+                    source.Id,
+                    id,
+                    target.First,
+                    target.Last,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                );
             var records = reader.Messages(target.First, target.Last);
             var available = reader.Stats();
             if (programmatic)
@@ -613,8 +630,7 @@ internal static class ArchiveRecallTool
         }
         catch (Foxwarm.Vector.VectorUnavailableException error)
         {
-            var result = UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
-            result["code"] = error.Code;
+            var result = ToolFailure.Result(error.Message, error.Code);
             if (error.Retryable)
                 result["retryable"] = true;
             return result;
@@ -627,7 +643,7 @@ internal static class ArchiveRecallTool
                         or InvalidOperationException
             )
         {
-            return UnsupportedTurnToolExecutor.ToolError("recall_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -689,7 +705,7 @@ internal static class ArchiveRecallTool
         next["sessionId"] = id;
         next["beforeSeq"] = oldest;
         var continuation = remaining
-            ? "Older literal search: recall(" + EcmaJson.Stringify(next) + ")"
+            ? "Older literal search: " + CtlCommandText.For("recall", next)
             : "No older messages remain in this Session's accessible Archive range.";
         var extent =
             scanned == 0

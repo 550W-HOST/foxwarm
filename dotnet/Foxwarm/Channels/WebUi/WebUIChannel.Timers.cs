@@ -21,7 +21,7 @@ internal sealed partial class WebUIChannel
     }
 
     private static IResult TimerError(int status, string code, string message) =>
-        Results.Json(new { code, error = message }, statusCode: status);
+        Results.Json(new JsonObject { ["code"] = code, ["error"] = message }, statusCode: status);
 
     private static IResult TimerFailure(Exception error) =>
         error switch
@@ -82,7 +82,7 @@ internal sealed partial class WebUIChannel
                 {
                     ["code"] = "TIMER_PARTIAL",
                     ["error"] =
-                        SessionWait.Text(result["error"]?["message"]) ?? "Timer change failed.",
+                        ToolFailure.Message(result) ?? "Timer change failed.",
                     ["timerCommitted"] = SessionCatalog.Flag(result["timerCommitted"]),
                 },
                 statusCode: 500

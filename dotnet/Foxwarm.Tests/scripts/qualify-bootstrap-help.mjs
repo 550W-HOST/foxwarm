@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import WebSocket from 'ws'
 import { createHostFixture, until } from '../../../packages/webui/test/mainHostFixture.mjs'
@@ -16,13 +16,15 @@ for (const configured of [false, true]) {
     let body = ''; for await (const bytes of req) body += bytes
     requests.push(JSON.parse(body))
     const output = requests.length === 1
-      ? [{ type: 'function_call', name: 'node_bootstrap_info', call_id: 'bootstrap-info', arguments: '{}' }]
+      ? [{ type: 'function_call', name: 'node_bootstrap_info', call_id: 'bootstrap-info', arguments: source ? '{}' : JSON.stringify({ filePath: tokenFile }) }]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'bootstrap complete' }] }]
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output } }) + '\n\n')
   })
   peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
   const f = await createHostFixture('bootstrap-help', { ...(source ? { runtime: 'source' } : {}) })
+  // Managed Main writes the pairing token to this new owner-only file instead of returning it.
+  const tokenFile = join(f.data, 'bootstrap-pairing-token')
   const prefix = configured && !source ? '/mount' : ''
   const expected = configured ? 'https://configured.example/mount' : `http://YOUR_MASTER:${f.port}`
   const api = async (method, path, body) => {
@@ -53,13 +55,13 @@ for (const configured of [false, true]) {
       await api('POST', route + '/message', { text })
       return until(() => events.slice(start).map(e => e.message?.parts?.map(p => p.text || '').join('') || '').find(text => text.includes(marker)), 'transient command reply')
     }
-    const help = await command('/node pair-help', 'Node Pairing')
+    const help = await command('/node bootstrap-info', 'Node Pairing')
     assert(help.includes(expected + '/node/run.sh'))
     assert(help.includes(`--host='${expected}'`))
     assert(help.includes(`-HostUrl '${expected}'`))
     assert(help.includes(`NODE_HOST='${expected}'`))
     if (!configured) assert(help.includes('Replace YOUR_MASTER'))
-    const direct = await command('/node create bootstrap-direct', 'Created node')
+    const direct = await command('/node token bootstrap-direct', 'Created node')
     assert(direct.includes(expected))
     const token = /--auth-token=([a-f0-9]+)/.exec(direct)?.[1]
     assert(token)
@@ -86,10 +88,18 @@ for (const configured of [false, true]) {
     assert(examples.bareMetal.includes(expected + '/node/run.sh'))
     assert(examples.bareMetal.includes(`--host='${expected}'`))
     assert(examples.windows.includes(`-HostUrl '${expected}'`))
-    assert(info.pairingToken)
-    assert(examples.bareMetal.includes(info.pairingToken))
-    assert(!JSON.stringify(summaries).includes(info.pairingToken))
-    assert(!f.output.includes(token)); assert(!f.output.includes(info.pairingToken))
+    const pairing = source ? info.pairingToken : (await readFile(tokenFile, 'utf8')).trim()
+    assert(pairing)
+    if (source) assert(examples.bareMetal.includes(pairing))
+    else {
+      assert.equal(info.pairingTokenFile, tokenFile)
+      assert.equal((await stat(tokenFile)).mode & 0o777, 0o600)
+      assert(examples.bareMetal.includes('PAIRING_TOKEN'))
+      assert(!JSON.stringify(history).includes(pairing))
+      assert(!JSON.stringify(requests).includes(pairing))
+    }
+    assert(!JSON.stringify(summaries).includes(pairing))
+    assert(!f.output.includes(token)); assert(!f.output.includes(pairing))
     results.push({ runtime: source ? 'source' : 'managed', configured, commandHelp: true, directCreation: true,
       browserPrecedence: true, toolRequests: requests.length, canonicalRows: history.length, credentialBoundaries: true })
     ws.close(); await f.stop()

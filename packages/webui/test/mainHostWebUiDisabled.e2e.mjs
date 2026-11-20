@@ -1,4 +1,4 @@
-// Actual Program enablement preserves bindings while authenticated Trigger ingress
+// Actual Program enablement preserves bindings while authenticated webhook ingress
 // remains active and cannot claim that an unavailable WebUI delivered a file.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -7,11 +7,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const options = { env: {}, }, owned = await createHostFixture('webui-disabled', options)
 options.cwd = owned.root; options.env.HOME = join(owned.root, 'home'); await mkdir(options.env.HOME)
 await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n'); await writeFile(join(owned.work, 'delivery.txt'), 'owned delivery\n')
 await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
-const config = enabled => 'bot:\n  httpPort: ' + owned.port + '\n  enableWebUI: ' + enabled + '\nllm:\n  maxOutput: 713\n'
+const hookToken = 'synthetic-disabled-hook'
+const config = enabled => 'bot:\n  httpPort: ' + owned.port + '\n  enableWebUI: ' + enabled + '\nllm:\n  maxOutput: 713\n' +
+  (enabled ? '' : 'access:\n  identities:\n    hook:\n      token: ' + hookToken + '\n      surfaces:\n        webhook: {session: main, verify: bearer}\n')
 await writeFile(join(owned.data, 'state/config.yaml'), config(true))
 const requests = [], failures = []
 const peer = createServer(async (request, response) => {
@@ -19,7 +22,7 @@ const peer = createServer(async (request, response) => {
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw); requests.push(body)
     const triggered = JSON.stringify(body.input).includes('DISABLED-DELIVERY'), completed = body.input.some(row => row.type === 'function_call_output' && row.call_id === 'disabled-delivery')
-    const output = triggered && !completed ? [{ type: 'function_call', call_id: 'disabled-delivery', name: 'send_file', arguments: JSON.stringify({ filePath: 'delivery.txt' }) }] : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: triggered ? 'DISABLED-DELIVERY-DONE' : 'BOUND-DONE' }] }]
+    const output = triggered && !completed ? [functionCall('disabled-delivery', 'send_file', { filePath: 'delivery.txt' })] : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: triggered ? 'DISABLED-DELIVERY-DONE' : 'BOUND-DONE' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output, usage: { input_tokens: 30, output_tokens: 3 } } }) + '\n\n')
   } catch (error) { failures.push(error.stack); response.destroy() }
 })
@@ -34,13 +37,16 @@ try {
   await writeFile(join(owned.data, 'state/config.yaml'), config(false)); await writeFile(join(owned.work, 'memory/ONBOOT.md'), 'RETIRED-ONBOOT-SENTINEL\n')
   await owned.start(); for (const path of ['/', '/api/sessions', '/vscode-web/', '/download']) assert.equal((await owned.api('GET', path)).status, 404, path)
   const nodes = await owned.api('GET', '/api/nodes'); assert.equal(nodes.status, 200); assert(nodes.body.nodes.some(node => node.id === 'master'))
-  assert.equal((await fetch(owned.origin + '/trigger', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'UNAUTHORIZED-TRIGGER' }) })).status, 401)
+  const deliver = (token, text) => fetch(owned.origin + '/webhooks/hook', { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify({ text }) })
+  assert.equal((await deliver(null, 'UNAUTHORIZED-DELIVERY')).status, 401)
+  // The administrator POST /trigger route was removed in 0.9.6.
+  assert.equal((await owned.api('POST', '/trigger', { text: 'REMOVED-TRIGGER', sessionId: 'main' })).status, 404)
   assert.equal(requests.length, 1)
-  const triggered = await owned.api('POST', '/trigger', { text: 'DISABLED-DELIVERY', sessionId: 'main' }); assert.equal(triggered.status, 200); assert.equal(triggered.body.success, true)
-  await until(async () => !(await state()).busy && (await state()).history.some(row => row.parts?.some(part => part.text === 'DISABLED-DELIVERY-DONE')), 'real disabled-host Trigger')
+  assert.equal((await deliver(hookToken, 'DISABLED-DELIVERY')).status, 202)
+  await until(async () => !(await state()).busy && (await state()).history.some(row => row.parts?.some(part => part.text === 'DISABLED-DELIVERY-DONE')), 'real disabled-host webhook delivery')
   assert(!JSON.stringify((await state()).history).includes('RETIRED-ONBOOT-SENTINEL'))
   const result = (await state()).history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'disabled-delivery').functionResponse
   assert(JSON.stringify(result).includes('WebUI file delivery is unavailable')); assert(JSON.stringify(result).includes('Delivered: 0'))
   assert.equal(await readFile(join(owned.data, 'state/channels.json'), 'utf8'), bindings); assert.equal(requests.length, 3); assert.deepEqual(failures, [])
-  await owned.stop(); console.log(JSON.stringify({ status: 'passed', requests: requests.length, preservedBindings: true, triggerActive: true, onbootFileIgnored: true, webuiReady: false }))
+  await owned.stop(); console.log(JSON.stringify({ status: 'passed', requests: requests.length, preservedBindings: true, webhookActive: true, onbootFileIgnored: true, webuiReady: false }))
 } finally { await owned.cleanup(); await new Promise(done => peer.close(done)) }

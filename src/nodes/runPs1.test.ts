@@ -46,6 +46,10 @@ test('run.ps1 anchors node cwd and agent storage outside the caller project', {
       '    cwd = (Get-Location).Path',
       '    agentsDir = $env:FOXWARM_AGENTS_DIR',
       '    agentDir = $env:FOXWARM_AGENT_DIR',
+      '    launchMethod = $env:FOXWARM_NODE_LAUNCH_METHOD',
+      '    launchDir = $env:FOXWARM_NODE_LAUNCH_DIR',
+      '    launchStateDir = $env:FOXWARM_NODE_LAUNCH_STATE_DIR',
+      '    launchSourceDir = $env:FOXWARM_NODE_LAUNCH_SOURCE_DIR',
       '    args = @($args)',
       '  } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $CapturePath',
       '  & $env:ComSpec /d /c exit 0',
@@ -76,6 +80,10 @@ test('run.ps1 anchors node cwd and agent storage outside the caller project', {
       (await fs.realpath(path.join(stateDir, 'agents'))).toLowerCase(),
     );
     assert.equal(capture.agentDir, null);
+    assert.equal(capture.launchMethod, 'windows');
+    assert.equal(capture.launchDir, scriptDir);
+    assert.equal(capture.launchStateDir, stateDir);
+    assert.equal(capture.launchSourceDir, sourceDir);
     assert.equal(await fs.pathExists(path.join(callerProject, 'agents')), false);
     assert.ok(capture.args.includes(path.join(stateDir, 'state', 'node_credentials.json')));
   } finally {

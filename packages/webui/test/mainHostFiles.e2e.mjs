@@ -10,12 +10,12 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { mainHostLaunch } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-files-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const apiToken = 'synthetic-devtools-api-secret'; const providerToken = 'synthetic-provider-secret'
 const dll = process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const seen = []; const errors = []
 const tasks = new Map(); let taskCounter = 0
@@ -64,7 +64,7 @@ try {
   await writeFile(join(dataRoot, 'state/token'), apiToken, { mode: 0o600 })
   async function startHost() {
     await writeModelFixture(dataRoot, { default: 'scripted-wire', providers: { 'scripted-wire': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['scripted-wire'] } } })
-    const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
+    const child = spawn(...mainHostLaunch(dll), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
     let output = ''; child.stdout.on('data', value => { output = (output + value).slice(-12000) })
     child.stderr.on('data', value => { output = (output + value).slice(-12000) })
     try { await until(async () => {
@@ -137,7 +137,7 @@ PY`, timeout: 5 })
   assert((await output('dirs', { startLine: 0, endLine: -1 })).includes('no items'))
   assert((await output('readlink')).includes('ORIGINAL')); assert((await invoke('read', { filePath: 'fifo' })).error)
   assert((await output(join(workRoot, 'mixed.txt'))).includes('File has 4 lines.'))
-  function ref(result) { const id = /contentRef: "(write_[a-f0-9]+)"/.exec(result.error?.message || '')?.[1]; assert(id, JSON.stringify(result)); return id }
+  function ref(result) { const id = /contentRef: "(write_[a-f0-9]+)"/.exec(result.error || '')?.[1]; assert(id, JSON.stringify(result)); return id }
   const existingRef = ref(await invoke('write', { filePath: 'existing.txt', content: 'REPLACEMENT' }))
   assert.equal(await readFile(join(workRoot, 'existing.txt'), 'utf8'), 'ORIGINAL')
   const peer = await create(); assert((await invoke('write', { filePath: 'peer.txt', contentRef: existingRef, overwrite: true }, peer)).error)
@@ -145,7 +145,7 @@ PY`, timeout: 5 })
   const agentSession = await request(hostPort, 'POST', '/api/sessions', { agentId: 'other', sessionId: 'reader' }); assert.equal(agentSession.status, 200)
   assert((await invoke('write', { filePath: 'agent-peer.txt', contentRef: existingRef, overwrite: true }, agentSession.body.sessionId)).error)
   assert((await invoke('write', { filePath: '../escape.txt', contentRef: existingRef, overwrite: true })).error)
-  assert((await invoke('write', { filePath: 'retry/deep.txt', contentRef: existingRef, overwrite: true })).error.message.includes(existingRef))
+  assert((await invoke('write', { filePath: 'retry/deep.txt', contentRef: existingRef, overwrite: true })).error.includes(existingRef))
   assert((await invoke('write', { filePath: 'retry/deep.txt', contentRef: existingRef, content: 'both', overwrite: true })).error)
   assert(!(await invoke('write', { filePath: 'retry/deep.txt', contentRef: existingRef, overwrite: true, createDirs: true })).error)
   assert.equal(await readFile(join(workRoot, 'retry/deep.txt'), 'utf8'), 'REPLACEMENT')
@@ -153,11 +153,11 @@ PY`, timeout: 5 })
   const missingRef = ref(await invoke('write', { filePath: 'missing/file.txt', content: 'CACHED-MISSING' }))
   assert(!(await invoke('write', { filePath: 'new.txt', contentRef: missingRef, overwrite: true })).error)
   assert.equal(await readFile(join(workRoot, 'new.txt'), 'utf8'), 'CACHED-MISSING')
-  const parentError = await invoke('write', { filePath: 'parent-file/child.txt', content: 'NO' }); assert(parentError.error.message.includes('not a directory') && !parentError.error.message.includes('contentRef'))
+  const parentError = await invoke('write', { filePath: 'parent-file/child.txt', content: 'NO' }); assert(parentError.error.includes('not a directory') && !parentError.error.includes('contentRef'))
   const hugeOwner = await create()
   const huge = 'W'.repeat(2 * 1024 * 1024 + 1)
   assert(!(await invoke('write', { filePath: 'huge.txt', content: huge }, hugeOwner)).error); assert.equal((await stat(join(workRoot, 'huge.txt'))).size, huge.length)
-  const uncached = await invoke('write', { filePath: 'huge.txt', content: huge }, hugeOwner); assert(uncached.error.message.includes('too large to cache') && !uncached.error.message.includes('write_'))
+  const uncached = await invoke('write', { filePath: 'huge.txt', content: huge }, hugeOwner); assert(uncached.error.includes('too large to cache') && !uncached.error.includes('write_'))
   const oldest = ref(await invoke('write', { filePath: 'existing.txt', content: 'OLDEST' }))
   for (let i = 0; i < 32; i++) ref(await invoke('write', { filePath: 'existing.txt', content: 'EVICT-' + i }))
   assert((await invoke('write', { filePath: 'evicted.txt', contentRef: oldest, overwrite: true })).error)

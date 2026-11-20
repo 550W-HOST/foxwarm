@@ -16,7 +16,11 @@ internal static class ConditionalMemoryCommand
         var corpus =
             JsonSerializer.Deserialize<List<ParityCase>>(
                 await File.ReadAllTextAsync(corpusPath),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+                new JsonSerializerOptions
+                {
+                    Encoder = JsonText.Encoder,
+                    PropertyNameCaseInsensitive = true,
+                }
             ) ?? [];
         var results = corpus.Select(item =>
             item.Op switch
@@ -59,7 +63,11 @@ internal static class ConditionalMemoryCommand
         Console.Write(
             JsonSerializer.Serialize(
                 results,
-                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
+                new JsonSerializerOptions
+                {
+                    Encoder = JsonText.Encoder,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                }
             )
         );
 
@@ -76,6 +84,7 @@ internal static class ConditionalMemoryCommand
                         FunctionCallArguments.Parse(raw),
                         new JsonSerializerOptions
                         {
+                            Encoder = JsonText.Encoder,
                             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                             DefaultIgnoreCondition = System
                                 .Text

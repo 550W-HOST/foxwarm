@@ -77,7 +77,6 @@ public sealed partial class LocalSessionTurnHost
         try
         {
             await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
-            return true;
         }
         catch (Exception error)
         {
@@ -85,6 +84,9 @@ public sealed partial class LocalSessionTurnHost
                 entry.RollbackBusy(version, previousLlmFailed);
             throw;
         }
+        // Presentation learns the durable claim now; turn start can take a while before the first append.
+        entry.InvokePostCommitNotification(entry.Snapshot());
+        return true;
     }
 
     public async Task AppendQueuedInputsAsync(IReadOnlyList<QueueItem> items)
@@ -99,6 +101,7 @@ public sealed partial class LocalSessionTurnHost
                 notifyMessages: false
             )
             .ConfigureAwait(false);
+        NoteInitiator(appended);
         entry.InvokeQueuedCommitted(entry.Snapshot(), appended);
     }
 
@@ -146,6 +149,7 @@ public sealed partial class LocalSessionTurnHost
                         .ConfigureAwait(false);
                 try
                 {
+                    entry.ProviderContinuationPending = result.ProviderContinuationPending;
                     entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
                     if (result.AssistantMessage is null)
                     {
@@ -206,6 +210,12 @@ public sealed partial class LocalSessionTurnHost
                     var calls = ExtractFunctionCalls(assistant);
                     if (calls.Count == 0)
                     {
+                        if (result.ContinueTurn)
+                        {
+                            await ContinueAfterResultAsync(result, registered.Token)
+                                .ConfigureAwait(false);
+                            continue;
+                        }
                         await FinalizeAssistantControlsAsync(assistant).ConfigureAwait(false);
                         if (
                             Closing
@@ -227,7 +237,10 @@ public sealed partial class LocalSessionTurnHost
                             calls
                                 .Select(call => new Foxwarm.Channels.ChannelTurnTool(
                                     SessionWait.Text(call["id"]) ?? "",
-                                    SessionWait.Text(call["name"]) ?? "tool"
+                                    Foxwarm.Tools.ToolActivity.ProgressName(
+                                        SessionWait.Text(call["name"]),
+                                        call["args"]
+                                    )
                                 ))
                                 .ToArray(),
                             string.Join(
@@ -279,6 +292,7 @@ public sealed partial class LocalSessionTurnHost
                             ["time"] = ArchiveBlockRecord.LocalTimestamp(completedAt),
                             ["durationMs"] = duration,
                         };
+                    StampInitiator(toolParts);
                     var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
                     var canonicalTools = await AppendHistoryMessageStrictAsync(toolMessage)
                         .ConfigureAwait(false);
@@ -291,7 +305,13 @@ public sealed partial class LocalSessionTurnHost
                                 .OfType<JsonObject>()
                                 .Select(result => new Foxwarm.Channels.ChannelTurnTool(
                                     SessionWait.Text(result["tool_use_id"]) ?? "",
-                                    SessionWait.Text(result["name"]) ?? "tool",
+                                    Foxwarm.Tools.ToolActivity.ProgressName(
+                                        SessionWait.Text(result["name"]),
+                                        calls.FirstOrDefault(call =>
+                                            SessionWait.Text(call["id"]) is { } id
+                                            && id == SessionWait.Text(result["tool_use_id"])
+                                        )?["args"]
+                                    ),
                                     result["response"] is JsonObject response
                                     && response["error"] is not null
                                         ? "error"
@@ -339,6 +359,7 @@ public sealed partial class LocalSessionTurnHost
         }
         finally
         {
+            entry.ProviderContinuationPending = false;
             if (handle is not null)
                 entry.ClearCancellation(handle);
             else
@@ -384,6 +405,8 @@ public sealed partial class LocalSessionTurnHost
                 throw new OperationCanceledException(token);
         }
         AssertCanRetry();
+        if (entry.ProviderContinuationPending)
+            return false;
         var context = entry.WithState(state => (state.HistoryVersion, state.NextMessageSeq));
         // Existing Main ingress already publishes to this owner; join its pending save lane.
         await entry.SaveLane.SaveBestEffortAsync(token).ConfigureAwait(false);
@@ -465,6 +488,9 @@ public sealed partial class LocalSessionTurnHost
     private async Task ContinueAfterResultAsync(ChatResult result, CancellationToken token)
     {
         AssertCanContinue();
+        token.ThrowIfCancellationRequested();
+        if (entry.ProviderContinuationPending)
+            return;
         if (beforeContinuation is not null)
         {
             await beforeContinuation(
@@ -484,6 +510,8 @@ public sealed partial class LocalSessionTurnHost
     )
     {
         AssertCanContinue();
+        if (entry.ProviderContinuationPending)
+            return;
         await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
         AssertCanContinue();
         if (entry.WithState(state => state.Stopping || !state.Queue.Any(SessionCompactor.Ordinary)))
@@ -566,6 +594,7 @@ public sealed partial class LocalSessionTurnHost
                 notifyMessages: false
             )
             .ConfigureAwait(false);
+        NoteInitiator(appended);
         Interlocked.Increment(ref releaseCommits);
         releaseForeground?.Invoke();
         if (entry.TurnStopped is { } stopped)
@@ -633,6 +662,13 @@ public sealed partial class LocalSessionTurnHost
                 if (message["__meta"] is not JsonObject meta)
                     message["__meta"] = meta = new JsonObject();
                 meta["questionAnswer"] = answer.DeepClone();
+            }
+            // Administrator-only evidence of who sent WebUI input; scoped projections remove it.
+            if (item.OpenFields?["sender"] is JsonObject sender)
+            {
+                if (message["__meta"] is not JsonObject meta)
+                    message["__meta"] = meta = new JsonObject();
+                meta["sender"] = sender.DeepClone();
             }
             rawMessages.Add(DeferredQueueInput.Message(item, message));
             committedAnyInput = true;
@@ -820,6 +856,49 @@ public sealed partial class LocalSessionTurnHost
         if (value.TryGetValue<decimal>(out var decimalValue))
             return decimalValue == 0;
         return false;
+    }
+
+    // Audit record of who started the turn, kept on each of its tool rows.
+    private void NoteInitiator(IReadOnlyList<JsonObject> rows)
+    {
+        foreach (var row in rows)
+            if (Initiator(row) is { } initiator)
+                entry.ActivityInitiator = initiator;
+    }
+
+    private static ToolEffectInitiator? Initiator(JsonObject row) =>
+        SessionWait.Text(row["role"]) == "user"
+        && SessionWait.Number(row["__meta"]?["seq"]) is double seq
+            ? TurnInitiator.FromInput((long)seq, row)
+            : null;
+
+    private ToolEffectInitiator? CurrentInitiator()
+    {
+        if (entry.ActivityInitiator is { } known)
+            return known;
+        // A turn resumed after a restart finds its input in active history.
+        var history = entry.WithState(state => state.History.Snapshot());
+        for (var index = history.Count - 1; index >= 0; index--)
+            if (history[index].Role == "user" && Initiator(history[index].ToJson()) is { } found)
+                return entry.ActivityInitiator = found;
+        return null;
+    }
+
+    private void StampInitiator(JsonArray parts)
+    {
+        if (CurrentInitiator() is not { } initiator)
+            return;
+        foreach (
+            var response in parts
+                .OfType<JsonObject>()
+                .Select(part => part["functionResponse"])
+                .OfType<JsonObject>()
+        )
+        {
+            var meta = response["__meta"] as JsonObject ?? new JsonObject();
+            meta[TurnInitiator.Field] = initiator.ToJson();
+            response["__meta"] = meta;
+        }
     }
 
     private static JsonObject SessionTag(SessionState state) =>

@@ -1,24 +1,50 @@
 #!/usr/bin/env node
 // Publish prebuilt release packages from built delivery assets.
 // Prerequisites: root and WebUI npm dependencies, `npm run build:assets` (or --build-assets),
-// the .NET 10 SDK and Python 3. macOS packages must be built on macOS arm64.
+// the .NET 10 SDK and Python 3. macOS packages must be built on macOS arm64; the macOS Desktop
+// also needs the .NET `macos` workload and the Xcode it supports.
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { missingImports } from './windows-imports.mjs'
+import { writePack, codeSources } from '../asset-pack.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
+const python = process.platform === 'win32' ? 'python' : 'python3'
 
+// Native targets are NativeAOT publications: self-contained, with no .NET runtime or Foxwarm.dll.
+// They can only be compiled on their own platform. A target marked `qualification` would be
+// built and smoke-tested by the release workflow but not published; none is at present.
+// A `bundle` target archives the signed macOS application bundle itself, unchanged.
 export const TARGETS = {
   'linux-x64': { kind: 'server', rid: 'linux-x64', selfContained: false, archive: 'tar.gz' },
-  'linux-x64-self-contained': { kind: 'server', rid: 'linux-x64', selfContained: true, archive: 'tar.gz' },
+  'linux-x64-native': { kind: 'server', rid: 'linux-x64', selfContained: true, native: true, archive: 'tar.gz' },
   'osx-arm64': { kind: 'server', rid: 'osx-arm64', selfContained: false, archive: 'tar.gz' },
-  'osx-arm64-self-contained': { kind: 'server', rid: 'osx-arm64', selfContained: true, archive: 'tar.gz' },
+  'osx-arm64-native': { kind: 'server', rid: 'osx-arm64', selfContained: true, native: true, archive: 'tar.gz' },
   'win-x64': { kind: 'server', rid: 'win-x64', selfContained: false, archive: 'zip' },
-  'win-x64-self-contained': { kind: 'server', rid: 'win-x64', selfContained: true, archive: 'zip' },
-  'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, archive: 'zip' },
+  'win-x64-native': { kind: 'server', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' },
+  'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' },
+  'desktop-osx-arm64': { kind: 'desktop', rid: 'osx-arm64', selfContained: true, native: true, bundle: 'Foxwarm.app', archive: 'zip' },
+}
+
+// Desktop carries the Code workbench; server packages keep it optional.
+export const includesCode = name => TARGETS[name].kind === 'desktop'
+
+// The RID of this build host, for targets that cannot be cross-compiled.
+export function hostRid(platform = process.platform, arch = process.arch) {
+  const os = { linux: 'linux', darwin: 'osx', win32: 'win' }[platform]
+  const cpu = { x64: 'x64', arm64: 'arm64' }[arch]
+  return os && cpu ? `${os}-${cpu}` : ''
+}
+
+// What a --native-libraries directory holds for each RID: LanceDB library, ToolScript worker, crate licences.
+const nativeFiles = {
+  'linux-x64': ['liblancedb_ffi.so', 'monty', 'LanceDB-native-crates.txt', 'Monty-native-crates.txt'],
+  'osx-arm64': ['liblancedb_ffi.dylib', 'monty', 'LanceDB-native-crates.txt', 'Monty-native-crates.txt'],
+  'win-x64': ['lancedb_ffi.dll', 'monty.exe', 'LanceDB-native-crates.txt', 'Monty-native-crates.txt'],
 }
 
 // Collected artifact-runtime packages that npm installs only for the build host.
@@ -32,7 +58,13 @@ export function assetName(name) {
   return `foxwarm-${name}.${TARGETS[name].archive}`
 }
 
-export const codeAssetName = `foxwarm-code-${version}.tar.gz`
+// The Windows Desktop also ships as a per-user installer of the same publication as its ZIP.
+// The name is the OutputBaseFilename of foxwarm-desktop.iss.
+export const installerTarget = 'desktop-win-x64'
+export const installerAssetName = 'foxwarm-desktop-win-x64-setup.exe'
+export const installerScript = path.join(root, 'scripts/release/foxwarm-desktop.iss')
+
+export const codeAssetName = `foxwarm-code-${version}.fwassets`
 const codeAssets = path.join(root, 'packages/vscode-web/assets')
 
 export function validateCodeAssets(source = codeAssets) {
@@ -57,26 +89,23 @@ export function validateCodeAssets(source = codeAssets) {
   }
 }
 
-export function installCodeAssets(directory, source = codeAssets) {
-  validateCodeAssets(source)
-  const destination = path.join(directory, 'packages/vscode-web/assets')
-  for (const entry of ['vscode-web', 'extensions/redhat.vscode-yaml']) {
-    fs.cpSync(path.join(source, entry), path.join(destination, entry), { recursive: true })
-  }
-}
-
-export function archiveCode(output, source = codeAssets) {
+export function packCode(output, source = codeAssets) {
   validateCodeAssets(source)
   fs.mkdirSync(output, { recursive: true })
   const file = path.join(output, codeAssetName)
-  tarArchive(source, ['extensions/redhat.vscode-yaml', 'vscode-web'], file)
+  writePack(file, codeSources(source))
   return file
 }
 
 function usage(message) {
   if (message) console.error(message)
-  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--checksums-only | --code-only]
-Targets: ${Object.keys(TARGETS).join(', ')} (default: macOS targets on macOS, Linux/Windows targets elsewhere)`)
+  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--native-libraries DIR] [--inno-setup ISCC] [--checksums-only | --code-only]
+Targets: ${Object.keys(TARGETS).join(', ')}
+(default: the published targets this host can build; native targets build only on their own platform)
+--native-libraries: directory with the LanceDB library and the ToolScript worker built for the targets' RID from pinned source
+(scripts/release/build-lancedb.sh and build-monty.sh); without it, the LanceDB package's libraries and the official worker are used (Windows packages require it: its libraries link the C runtime statically)
+--inno-setup: the Inno Setup compiler (ISCC.exe); ${installerTarget} then also produces ${installerAssetName}
+(scripts/release/install-inno-setup.ps1 installs the pinned version)`)
   process.exit(2)
 }
 
@@ -114,22 +143,56 @@ function ensureTargetNatives(rid, scratch) {
   }
 }
 
+// Managed PDB/XML files and NativeAOT symbol files (.dbg on Linux, .dSYM bundles on macOS).
 function removeDebugFiles(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true, recursive: true })) {
-    if (entry.isFile() && /\.(pdb|xml)$/i.test(entry.name)) fs.rmSync(path.join(entry.parentPath, entry.name))
+    const file = path.join(entry.parentPath, entry.name)
+    if (entry.isDirectory() && /\.dSYM$/i.test(entry.name)) fs.rmSync(file, { recursive: true, force: true })
+    else if (entry.isFile() && /\.(pdb|xml|dbg)$/i.test(entry.name)) fs.rmSync(file, { force: true })
   }
 }
 
-function publish(name, directory) {
+// Windows packages need no Visual C++ redistributable: the Rust binaries link the C runtime
+// statically and the NativeAOT executables only import Windows DLLs. A binary that imports a DLL
+// the package lacks (an official LanceDB or worker build imports the runtime) fails the build.
+function checkWindowsImports(directory) {
+  if (process.platform !== 'win32') return
+  const missing = missingImports(directory)
+  if (missing.length) throw new Error(`${path.basename(directory)} imports DLLs that are neither in it nor part of Windows: ${missing.join(', ')}`)
+}
+
+function publish(name, directory, nativeLibraries) {
   const target = TARGETS[name]
   const common = ['-c', 'Release', '-r', target.rid, '--self-contained', String(target.selfContained),
-    '-p:DebugType=None', '-p:DebugSymbols=false', '-o', directory]
+    '-p:DebugType=None', '-p:DebugSymbols=false', '-p:FoxwarmPackAssets=true', '-o', directory]
+  if (includesCode(name)) { validateCodeAssets(); common.push('-p:FoxwarmBundleCodeAssets=true') }
+  // Release builds ship the libraries built from pinned, patched source (see Foxwarm.csproj).
+  if (nativeLibraries) {
+    for (const file of nativeFiles[target.rid] ?? []) {
+      if (!fs.existsSync(path.join(nativeLibraries, file))) throw new Error(`${nativeLibraries} has no ${file} for ${target.rid}`)
+    }
+    common.push(`-p:FoxwarmNativeLibraries=${nativeLibraries.replaceAll('\\', '/')}`)
+  }
+  if (target.native) common.push('-p:PublishAot=true', '-p:StripSymbols=true')
+  if (target.bundle) {
+    // The Apple SDK builds and ad-hoc signs the bundle in the project's output directory; the
+    // publish directory stays empty. The bundle is copied whole, so its signature stays valid,
+    // and it receives no release.json or other later change.
+    const project = 'dotnet/Foxwarm.Desktop.Mac'
+    const built = path.join(root, project, 'bin/Release/net10.0-macos', target.rid, target.bundle)
+    fs.rmSync(built, { recursive: true, force: true })
+    run('dotnet', ['publish', `${project}/Foxwarm.Desktop.Mac.csproj`, ...common, '-p:FoxwarmConsoleEntry=false',
+      `-p:ArtifactTargetRid=${target.rid}`])
+    if (!fs.existsSync(path.join(built, 'Contents/Info.plist'))) throw new Error(`The Apple SDK did not produce ${built}`)
+    run('ditto', [built, directory])
+    return
+  }
   if (target.kind === 'desktop') {
     // SDK-added transitive references must use the same global properties as the
     // Desktop -> Core reference, or MSBuild compiles shared outputs twice in parallel.
     run('dotnet', ['publish', 'dotnet/Foxwarm.Desktop', ...common, '-p:FoxwarmConsoleEntry=false',
       `-p:ArtifactTargetRid=${target.rid}`, '-p:EnableWindowsTargeting=true'])
-    // Desktop references the host assembly; it does not launch the console apphost.
+    // Desktop compiles the host in; it does not launch the console apphost.
     fs.rmSync(path.join(directory, 'Foxwarm.exe'), { force: true })
     fs.rmSync(path.join(directory, 'Foxwarm.runtimeconfig.json'), { force: true })
   } else {
@@ -143,11 +206,11 @@ function publish(name, directory) {
     }
   }
   removeDebugFiles(directory)
-  if (target.kind === 'desktop') installCodeAssets(directory)
+  if (target.rid.startsWith('win-')) checkWindowsImports(directory)
   const commit = capture('git', ['rev-parse', 'HEAD'])
   fs.writeFileSync(path.join(directory, 'release.json'), JSON.stringify({
     version, target: name, kind: target.kind, rid: target.rid, selfContained: target.selfContained,
-    asset: assetName(name), commit,
+    native: target.native === true, asset: assetName(name), commit,
   }, null, 2) + '\n')
 }
 
@@ -155,8 +218,11 @@ export function archive(name, staging, output) {
   const file = path.join(output, assetName(name))
   fs.rmSync(file, { force: true })
   const top = path.basename(staging)
-  if (TARGETS[name].archive === 'zip') {
-    run('python3', ['-c', `
+  if (TARGETS[name].bundle) {
+    // ditto keeps the bundle's signature, extended attributes and modes.
+    run('ditto', ['-c', '-k', '--keepParent', staging, file])
+  } else if (TARGETS[name].archive === 'zip') {
+    run(python, ['-c', `
 import os, sys, zipfile
 base, top, out = sys.argv[1:4]
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -165,7 +231,7 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
         for name in sorted(files):
             full = os.path.join(directory, name)
             archive.write(full, os.path.relpath(full, base))
-`, path.dirname(staging), top, file])
+`, path.toNamespacedPath(path.dirname(staging)), top, path.toNamespacedPath(file)])
   } else {
     tarArchive(path.dirname(staging), [top], file)
   }
@@ -175,7 +241,7 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
 function tarArchive(base, entries, file) {
   const epoch = capture('git', ['show', '-s', '--format=%ct', 'HEAD'])
   // Normalize metadata on both GNU and BSD hosts, retaining all shipped resources.
-  run('python3', ['-c', `
+  run(python, ['-c', `
 import gzip, os, sys, tarfile
 base, out, epoch, *entries = sys.argv[1:]
 epoch = int(epoch)
@@ -193,8 +259,17 @@ with open(out, 'wb') as raw:
 `, base, file, epoch, ...entries])
 }
 
+// Compiles the installer from the staged publication before the ZIP's staging directory is removed.
+function installer(staging, output, iscc) {
+  const file = path.join(output, installerAssetName)
+  fs.rmSync(file, { force: true })
+  run(iscc, ['/Qp', `/DAppVersion=${version}`, `/DSourceDir=${staging}`, `/O${output}`, installerScript])
+  if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error(`Inno Setup did not produce ${file}`)
+  return file
+}
+
 export function writeChecksums(output) {
-  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz)$/.test(file)).sort().map(file =>
+  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz|fwassets|apk|exe)$/.test(file)).sort().map(file =>
     `${createHash('sha256').update(fs.readFileSync(path.join(output, file))).digest('hex')}  ${file}`)
   fs.writeFileSync(path.join(output, 'SHA256SUMS'), lines.join('\n') + '\n')
 }
@@ -206,6 +281,8 @@ function main(argv) {
   let directoryOnly = false
   let checksumsOnly = false
   let codeOnly = false
+  let nativeLibraries
+  let innoSetup
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--output') output = argv[++i]
@@ -214,42 +291,55 @@ function main(argv) {
     else if (arg === '--directory-only') directoryOnly = true
     else if (arg === '--checksums-only') checksumsOnly = true
     else if (arg === '--code-only') codeOnly = true
+    else if (arg === '--native-libraries') nativeLibraries = path.resolve(argv[++i] || usage('--native-libraries requires a directory'))
+    else if (arg === '--inno-setup') innoSetup = path.resolve(argv[++i] || usage('--inno-setup requires the path of ISCC.exe'))
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
+  if (nativeLibraries && !fs.statSync(nativeLibraries, { throwIfNoEntry: false })?.isDirectory()) usage(`No such directory: ${nativeLibraries}`)
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
+  if (innoSetup && !fs.statSync(innoSetup, { throwIfNoEntry: false })?.isFile()) usage(`No such file: ${innoSetup}`)
   if (codeOnly) {
-    if (targets.length || buildAssets || directoryOnly || checksumsOnly) usage('--code-only cannot be combined with other build options')
-    console.log(`Packaged ${archiveCode(output)}`)
+    if (targets.length || buildAssets || directoryOnly || checksumsOnly || innoSetup) usage('--code-only cannot be combined with other build options')
+    console.log(`Packaged ${packCode(output)}`)
     writeChecksums(output)
     return
   }
   if (checksumsOnly) {
-    if (targets.length || buildAssets || directoryOnly) usage('--checksums-only cannot be combined with build options')
+    if (targets.length || buildAssets || directoryOnly || innoSetup) usage('--checksums-only cannot be combined with build options')
     writeChecksums(output)
     return
   }
-  const selected = targets.length ? targets : Object.keys(TARGETS).filter(name =>
-    process.platform === 'darwin' ? name.startsWith('osx-') : !name.startsWith('osx-'))
-  if (selected.some(name => name.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
+  // By default, every published target this host can build.
+  const selected = targets.length ? targets : Object.keys(TARGETS).filter(name => !TARGETS[name].qualification
+    && (TARGETS[name].native ? TARGETS[name].rid === hostRid()
+      : process.platform === 'darwin' ? name.startsWith('osx-') : !name.startsWith('osx-')))
+  if (selected.some(name => TARGETS[name].rid.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
     throw new Error('macOS packages require an arm64 macOS build host for the native PTY library and helper.')
   }
-  if (selected.some(name => TARGETS[name].kind === 'desktop')) validateCodeAssets()
+  if (innoSetup && (!selected.includes(installerTarget) || directoryOnly)) usage(`--inno-setup needs the ${installerTarget} target and an archive`)
+  for (const name of selected) {
+    if (TARGETS[name].native && TARGETS[name].rid !== hostRid()) throw new Error(`${name} is a NativeAOT package and must be built on ${TARGETS[name].rid}.`)
+    // Only libraries linked with the static C runtime keep a Windows package free of the Visual C++ redistributable.
+    if (TARGETS[name].rid === 'win-x64' && !nativeLibraries) usage(`${name} needs --native-libraries DIR`)
+  }
+  if (selected.some(includesCode)) validateCodeAssets()
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })
   fs.mkdirSync(output, { recursive: true })
   const work = path.join(output, '.work')
   for (const name of selected) {
     ensureTargetNatives(TARGETS[name].rid, path.join(work, 'natives'))
     const prefix = TARGETS[name].kind === 'desktop' ? 'foxwarm-desktop' : 'foxwarm'
-    const staging = path.join(work, name, `${prefix}-${version}-${TARGETS[name].rid}`)
+    const staging = path.join(work, name, TARGETS[name].bundle ?? `${prefix}-${version}-${TARGETS[name].rid}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
-    publish(name, staging)
+    publish(name, staging, nativeLibraries)
     if (directoryOnly) {
       console.log(`Prepared ${staging}`)
       continue
     }
     console.log(`Packaged ${archive(name, staging, output)}`)
+    if (innoSetup && name === installerTarget) console.log(`Packaged ${installer(staging, output, innoSetup)}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
   }
   if (!directoryOnly) {

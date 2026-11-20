@@ -6,12 +6,16 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: foxwarm-test
+    security_opt:
+      - seccomp=../docker/seccomp-chromium.json
+    shm_size: 1gb
     environment:
       FOXWARM_DATA_DIR: /data
     ports:
       - "0.0.0.0:3002:3001"
     volumes:
       - ./state:/data/state
+      - ./keys:/data/keys
       - ./agents:/data/agents
     restart: unless-stopped
     stop_grace_period: 30s

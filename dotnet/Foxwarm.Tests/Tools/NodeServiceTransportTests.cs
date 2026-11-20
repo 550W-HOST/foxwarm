@@ -305,7 +305,7 @@ public sealed class NodeServiceTransportTests
         await f.Start();
         var one = await f.Connect("one", new() { ["vscode-pty"] = 1 });
         var two = await f.Connect("two", new());
-        var received = new List<NodeConnectionHub.ServiceEvent>();
+        var received = new List<NodeServiceEvent>();
         f.Manager.Nodes.ServiceReceived += value => received.Add(value);
         var message = new JsonObject
         {

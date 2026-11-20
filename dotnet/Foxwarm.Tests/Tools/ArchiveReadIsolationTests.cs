@@ -34,14 +34,14 @@ public sealed class ArchiveReadIsolationTests
                 new JsonObject
                 {
                     ["id"] = Guid.NewGuid().ToString("N"),
-                    ["name"] = unified ? "call_tool" : tool,
+                    ["name"] = unified ? "ctl" : tool,
                     ["args"] = unified
-                        ? new JsonObject
+                        ? CtlTestArgs.Unified(new JsonObject
                         {
                             ["source"] = "builtin",
                             ["name"] = tool,
                             ["args"] = args,
-                        }
+                        })
                         : args,
                 },
                 default
@@ -142,7 +142,7 @@ public sealed class ArchiveReadIsolationTests
                 ["newAgentName"] = "reader",
             }
         );
-        await manager.SetAgentIsolationAsync("reader", "offline-bound-node", true, new JsonArray());
+        await LegacyIsolationFixture.RestrictAsync(manager, "reader", "offline-bound-node");
         Contains(await Read(reader, tool, unified), "OWN-CONTENT");
         Contains(await Read(reader, tool, unified, sibling.Id), "SIBLING-CONTENT");
         Contains(await Read(reader, tool, unified, "former-main"), "MOVED-OWN-CONTENT");
@@ -156,10 +156,10 @@ public sealed class ArchiveReadIsolationTests
         Assert.NotNull(unrelatedMissing["error"]);
 
         // An exact capability grant cannot bypass the independent read restriction.
-        await manager.SetAgentIsolationAsync(
+        await LegacyIsolationFixture.RestrictAsync(
+            manager,
             "reader",
             "offline-bound-node",
-            true,
             new JsonArray(
                 new JsonObject
                 {

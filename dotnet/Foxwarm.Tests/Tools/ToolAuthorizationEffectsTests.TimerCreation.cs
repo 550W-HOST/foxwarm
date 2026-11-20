@@ -20,9 +20,14 @@ public sealed partial class ToolAuthorizationEffectsTests
         WorkspaceTools Files,
         Foxwarm.McpClient Mcp,
         ToolRegistry Registry
-    ) TimerExecutor(SessionManager manager, SessionOwner owner, string root)
+    ) TimerExecutor(
+        SessionManager manager,
+        SessionOwner owner,
+        string root,
+        IEnumerable<JsonNode?>? extra = null
+    )
     {
-        var execution = Executor(manager, owner, root);
+        var execution = Executor(manager, owner, root, extra);
         foreach (var definition in TimerToolDefinitions.Definitions().OfType<JsonObject>())
         {
             var name = definition["name"]!.GetValue<string>();
@@ -86,19 +91,19 @@ public sealed partial class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "call_tool",
-                    new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = transformed }
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = transformed })
                 )
             )
         );
         Assert.Single(manager.Timers.List(owner.Id));
-        Assert.Equal(
-            "tool_error",
-            Error(await Call(execution.Tools, "create_timer", FreshTimer("missing-agent")))
+        Assert.NotNull(
+            (await Call(execution.Tools, "create_timer", FreshTimer("missing-agent"))).FailureMessage()
         );
-        Assert.Equal(
-            "tool_error",
-            Error(await Call(execution.Tools, "create_timer", FreshTimer(owner: "missing-session")))
+        Assert.NotNull(
+            (
+                await Call(execution.Tools, "create_timer", FreshTimer(owner: "missing-session"))
+            ).FailureMessage()
         );
         await Policy(
             manager,
@@ -260,13 +265,13 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
-    public async Task Creation_policy_intersects_agent_rules_but_does_not_import_legacy_structural_denial()
+    public async Task Creation_policy_intersects_agent_rules()
     {
         using var temp = new TempDirectory();
         await Seed(
             temp.Path,
             Obj(
-                """{"isolated":true,"rules":[{"tool":{"source":"builtin","name":"create_session"},"args":{"agentName":{"agent":{"sameAgent":false}}},"action":"deny"}]}"""
+                """{"rules":[{"tool":{"source":"builtin","name":"create_session"},"args":{"agentName":{"agent":{"sameAgent":false}}},"action":"deny"}]}"""
             )
         );
         await using var manager = Manager(temp.Path);
@@ -274,24 +279,10 @@ public sealed partial class ToolAuthorizationEffectsTests
         var owner = await manager.RequiredAsync("self");
         var execution = TimerExecutor(manager, owner, temp.Path);
         await using var mcp = execution.Mcp;
-        Assert.Equal(
-            "tool_authorization_denied",
-            Error(
-                await Call(
-                    execution.Tools,
-                    "create_session",
-                    Obj("""{"agentName":"alpha","sessionName":"legacy_denied"}""")
-                )
-            )
-        );
         Assert.Null(Error(await Call(execution.Tools, "create_timer", FreshTimer("alpha"))));
         Assert.Equal(
             "tool_authorization_denied",
             Error(await Call(execution.Tools, "create_timer", FreshTimer("beta")))
-        );
-        Assert.Equal(
-            "tool_authorization_denied",
-            Error(await Call(execution.Tools, "create_timer", FreshTimer("alpha", "outside")))
         );
     }
 

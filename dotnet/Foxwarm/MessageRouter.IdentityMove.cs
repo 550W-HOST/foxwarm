@@ -1,53 +1,23 @@
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
 
 namespace Foxwarm;
 
 internal sealed partial class MessageRouter
 {
-    private static bool IsIdentityMoveCommand(string text) =>
-        Regex.IsMatch(SessionCatalog.Trim(text), @"^/session\s+move(?:\s|$)");
-
     private async Task<MessageRouteResult> HandleIdentityMoveCommandAsync(
         ChannelContext context,
-        string text,
+        JsonObject args,
         SessionOwner owner,
         bool publishReply = true
     )
     {
-        var tokens = Regex.Split(SessionCatalog.Trim(text), @"\s+").Skip(2).ToArray();
-        var args = new JsonObject { ["sessionId"] = context.SessionId };
-        string? parent = null;
+        var moved = SessionCatalog.Text(args["sessionId"]) ?? context.SessionId;
         try
         {
-            if (tokens.Length == 0)
-                throw new InvalidDataException("Missing move target.");
-            for (var index = 1; index < tokens.Length; index++)
-            {
-                if (tokens[index] != "--parent")
-                    throw new InvalidDataException(
-                        "Unknown /session move option: " + tokens[index]
-                    );
-                if (parent is not null)
-                    throw new InvalidDataException("--parent may be specified only once.");
-                if (++index == tokens.Length)
-                    throw new InvalidDataException("Missing parent session ID after --parent.");
-                parent = tokens[index];
-            }
-            var target = tokens[0].Split('/');
-            if (target.Length is < 1 or > 2 || target.Any(string.IsNullOrEmpty))
-                throw new InvalidDataException(
-                    "Provide a new Session name or an existing Agent and Session name."
-                );
-            args["newSessionId"] = target[^1];
-            if (target.Length == 2)
-                args["newAgentName"] = target[0];
-            if (parent is not null)
-                args["parentSessionId"] = parent;
             var result = await runtime.MoveIdentityAsync(owner, args);
             var reply =
-                $"✅ Session `{context.SessionId}` moved to `{SessionCatalog.Text(result["targetSessionId"])}`.";
+                $"✅ Session `{moved}` moved to `{SessionCatalog.Text(result["targetSessionId"])}`.";
             if (result["aliases"] is JsonArray aliases && aliases.Count > 0)
                 reply +=
                     "\nAliases: " + string.Join(", ", aliases.Select(alias => "`" + alias + "`"));
@@ -84,11 +54,11 @@ internal sealed partial class MessageRouter
                 runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 200,
-                new
+                new JsonObject
                 {
-                    success = true,
-                    commandResponse = reply,
-                    result,
+                    ["success"] = true,
+                    ["commandResponse"] = reply,
+                    ["result"] = JsonData.Node(result),
                 }
             );
         }
@@ -99,12 +69,12 @@ internal sealed partial class MessageRouter
                 runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 500,
-                new
+                new JsonObject
                 {
-                    success = false,
-                    error = error.Message,
-                    commandResponse = reply,
-                    result = error.Details,
+                    ["success"] = false,
+                    ["error"] = error.Message,
+                    ["commandResponse"] = reply,
+                    ["result"] = JsonData.Node(error.Details),
                 }
             );
         }
@@ -116,11 +86,11 @@ internal sealed partial class MessageRouter
                 runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 409,
-                new
+                new JsonObject
                 {
-                    success = false,
-                    error = error.Message,
-                    commandResponse = reply,
+                    ["success"] = false,
+                    ["error"] = error.Message,
+                    ["commandResponse"] = reply,
                 }
             );
         }

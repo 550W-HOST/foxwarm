@@ -42,3 +42,30 @@ export function createLocalSessionNotice(title: string, summary: string, details
     sessionNotice: { version: 1, id, source: 'session', severity: 'error', title: title.slice(0, 100), summary: summary.slice(0, 300), details: details.slice(0, 32768) },
   } }
 }
+
+/** Provider failure metadata, never a text-prefix heuristic or a whole-session failure. */
+export function getImageGenerationNotice(part: Message['parts'][number]): SessionNotice | null {
+  const failure = part.providerMeta?.openaiResponses?.imageGenerationFailure
+  if (!failure || failure.type !== 'image_generation_call') return null
+  const value = (input: unknown, max = 400) => typeof input === 'string' ? input.slice(0, max) : ''
+  const status = value(failure.status, 32)
+  const incomplete = ['incomplete', 'generating', 'in_progress', 'unknown'].includes(status)
+  const error = failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)
+    ? failure.error as Record<string, unknown> : null
+  const details = [
+    ['Call', value(failure.id, 128)],
+    ['Response', value(failure.responseId, 128)],
+    ['Status', status],
+    ['Reason', value(failure.reason)],
+    ['Code', value(error?.code, 128)],
+    ['Type', value(error?.type, 128)],
+    ['Message', value(error?.message)],
+  ].filter(([, text]) => text).map(([label, text]) => `${label}: ${text}`).join('\n')
+  return {
+    version: 1, id: `image:${value(failure.id, 120) || 'failure'}`,
+    source: 'model-request', severity: 'error',
+    title: incomplete ? 'Image generation incomplete' : 'Image generation failed',
+    summary: 'No usable image was returned.',
+    ...(details ? { details } : {}),
+  }
+}

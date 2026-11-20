@@ -121,8 +121,8 @@ internal sealed class ToolScriptDataBudget(long limit = ToolScriptDataBudget.Def
             case JsonTokenType.Number:
                 if (reader.TryGetInt64(out var integer))
                     return System.Text.Json.Nodes.JsonValue.Create(integer);
-                if (reader.TryGetDecimal(out var decimalValue))
-                    return System.Text.Json.Nodes.JsonValue.Create(decimalValue);
+                // Other numbers are binary64, as JSON.parse reads them. A CLR decimal would
+                // reach tool results and Session history, whose Archive rejects it.
                 var number = reader.GetDouble();
                 if (!double.IsFinite(number))
                     throw new JsonException("ToolScript JSON number is not finite.");
@@ -160,7 +160,12 @@ internal sealed class ToolScriptDataBudget(long limit = ToolScriptDataBudget.Def
                 Charge(checked(8L * Encoding.UTF8.GetByteCount(text)));
                 break;
             case JsonValue scalar when scalar.TryGetValue<JsonElement>(out var element):
-                using (var writer = new Utf8JsonWriter(new ToolScriptBudgetBuffer(this)))
+                using (
+                    var writer = new Utf8JsonWriter(
+                        new ToolScriptBudgetBuffer(this),
+                        new() { Encoder = JsonText.Encoder }
+                    )
+                )
                 {
                     element.WriteTo(writer);
                     writer.Flush();

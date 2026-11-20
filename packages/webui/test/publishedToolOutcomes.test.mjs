@@ -8,14 +8,14 @@ const failure = message => ({ error: { type: 'tool_error', message } })
 test('published diagnostics retain the initiating browser error alongside later failure and success', () => {
   const rows = [
     outcome('packaged-toolscript', 'run_script', { status: 'completed' }),
-    outcome('packaged-browser-open', 'browse_open', failure('Originating browser failure')),
-    outcome('packaged-browser-image', 'browse_get', failure('Tab tab1 not found')),
+    outcome('packaged-browser-open', 'browser_open', failure('Originating browser failure')),
+    outcome('packaged-browser-image', 'browser_screenshot', failure('Tab tab1 not found')),
     outcome('packaged-react-artifact', 'artifact', { output: 'artifact published' }),
   ]
   assert.deepEqual(publishedToolOutcomes(rows), [
     { id: 'packaged-toolscript', name: 'run_script', status: 'completed' },
-    { id: 'packaged-browser-open', name: 'browse_open', status: 'error', error: { type: 'tool_error', message: 'Originating browser failure' } },
-    { id: 'packaged-browser-image', name: 'browse_get', status: 'error', error: { type: 'tool_error', message: 'Tab tab1 not found' } },
+    { id: 'packaged-browser-open', name: 'browser_open', status: 'error', error: { type: 'tool_error', message: 'Originating browser failure' } },
+    { id: 'packaged-browser-image', name: 'browser_screenshot', status: 'error', error: { type: 'tool_error', message: 'Tab tab1 not found' } },
     { id: 'packaged-react-artifact', name: 'artifact', status: 'completed' },
   ])
 })
@@ -23,8 +23,8 @@ test('published diagnostics retain the initiating browser error alongside later 
 test('published diagnostics cover an earlier native failure and a later artifact failure', () => {
   const rows = [
     outcome('packaged-toolscript', 'run_script', { status: 'failed', error: 'Native resource read failed' }),
-    outcome('packaged-browser-open', 'browse_open', { output: 'Tab opened: tab1' }),
-    outcome('packaged-browser-image', 'browse_get', { inlineData: { data: 'image payload' } }),
+    outcome('packaged-browser-open', 'browser_open', { output: 'Tab opened: tab1' }),
+    outcome('packaged-browser-image', 'browser_screenshot', { inlineData: { data: 'image payload' } }),
     outcome('packaged-react-artifact', 'artifact', failure('Artifact preparation failed')),
   ]
   const tools = publishedToolOutcomes(rows)
@@ -38,9 +38,9 @@ test('published diagnostics cover an earlier native failure and a later artifact
 test('published diagnostics are bounded and exclude unrelated calls, output, images and nested error data', () => {
   const rows = [
     { parts: [{ text: 'private history' }, { inlineData: { data: 'image payload' } }] },
-    outcome('unrelated', 'browse_open', failure('unrelated failure')),
+    outcome('unrelated', 'browser_open', failure('unrelated failure')),
     outcome('packaged-browser-open', 'wrong-tool', failure('wrong identity')),
-    ...Array.from({ length: 10 }, () => outcome('packaged-browser-open', 'browse_open', {
+    ...Array.from({ length: 10 }, () => outcome('packaged-browser-open', 'browser_open', {
       output: 'private output', inlineData: { data: 'image payload' }, token: 'private credential',
       status: 's'.repeat(100), error: { type: 't'.repeat(100), message: 'm'.repeat(2000), details: 'private details' },
     })),

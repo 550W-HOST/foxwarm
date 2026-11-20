@@ -12,13 +12,12 @@ import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
 import { startScriptedProvider } from './mainHostModelCompact.provider.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
 
 const token = 'local-multimodel-test-api-token'
 const alphaToken = 'local-alpha-provider-secret'
 const betaToken = 'local-beta-provider-secret'
 const dll = process.env.FOXWARM_TEST_MAIN_DLL || resolve(import.meta.dirname, '../../../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK.')
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-model-compact-browser-'))
@@ -51,7 +50,7 @@ async function json(hostPort, method, path, body) {
 }
 async function hostStart(hostPort, dataRoot, modelsFile) {
   await migrateModelFixture(dataRoot, modelsFile, { FOXWARM_ALPHA_PROVIDER_KEY: alphaToken, FOXWARM_BETA_PROVIDER_KEY: betaToken })
-  const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
+  const child = spawn(...mainHostLaunch(dll), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
   let output = ''
   child.stdout.on('data', chunk => { output = (output + chunk).slice(-12000) })
   child.stderr.on('data', chunk => { output = (output + chunk).slice(-12000) })
@@ -186,6 +185,11 @@ try {
   await page.click('[data-model-child-mode="follow"]')
   await until(async () => (await history(hostPort, switchId)).session.childModelDefault === null, 'original follow clears model only')
   assert.equal((await history(hostPort, switchId)).session.childEffortDefault, 'high')
+  // The real projection keeps the explicit child effort while the child model follows this Session.
+  if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger')
+  await page.waitForFunction(() => document.querySelector('[data-model-column="child"] [data-model-child-mode="follow"]')?.getAttribute('data-model-option-selected') === 'true'
+    && document.querySelector('input[aria-label="Child effort"]')?.getAttribute('aria-valuetext') === 'Child effort: high'
+    && document.querySelector('[data-model-trigger-child="true"]')?.title === 'Children: Follow this session · High')
   provider.releaseSwitch()
   await until(async () => (await history(hostPort, switchId)).messages.length === 2, 'alpha frozen request finish')
   const heldRequest = provider.requests.find(item => item.input.includes('hold-switch'))
@@ -228,7 +232,7 @@ try {
   assert(!(await setting('effort-unset', 'set_session_child_model', { effort: 'unset' })).error)
   assert.equal((await view(parentId)).childEffortDefault, null)
   const threshold = await setting('fraction', 'set_session_compact_threshold', { thresholdTokens: .9 })
-  assert(threshold.output.includes('override: 0 tokens') && threshold.output.includes('15300'))
+  assert.equal(threshold.thresholdTokens, 0); assert.equal(threshold.effectiveThresholdTokens, 15300)
   assert.equal((await view(parentId)).compactThresholdTokens, 0)
   await setting('inspect-negative', 'set_session_compact_threshold', { thresholdTokens: -1 }); assert.equal((await view(parentId)).compactThresholdTokens, 0)
   await setting('threshold-clear', 'set_session_compact_threshold', { clear: true }); assert.equal((await view(parentId)).compactThresholdTokens, null)
@@ -287,26 +291,47 @@ try {
     throw error
   }
   assert(provider.invalidSent, 'First planner request submitted an invalid range')
-  assert(provider.requests.some(item => item.planner && item.input.includes('compact_plan_invalid')),
+  assert(provider.requests.some(item => item.planner && item.input.includes('Compact plan rejected') && item.input.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=99999, sourceEnd=100000) is not a required operation')),
     'Planner saw source-derived invalid-plan feedback and retried')
   await until(() => compactIdle(hostPort, layeredId), 'automatic compaction idle')
-  await startCompact(hostPort, layeredId)
-  await until(async () => provider.layerPlanCount >= 2 && (await history(hostPort, layeredId)).messages.filter(
-    row => row.__meta?.contextBlock?.level === 1).length >= 6, 'manual second L1 plan', 40000)
-  await until(() => compactIdle(hostPort, layeredId), 'manual L1 idle')
+  // Each compaction writes one new L1 block; the fourth leaves four L1 blocks, more than the
+  // three slots per level, so it also merges the oldest two into an L2 block.
+  let extraSeed = 0
+  async function seedMore(turns) {
+    for (let index = 0; index < turns; index++, extraSeed++) {
+      const marker = `seed-l1-more-${extraSeed} `
+      await send(hostPort, layeredId, marker + `more-${extraSeed}-`.repeat(125))
+      await until(async () => {
+        const rows = (await history(hostPort, layeredId)).messages
+        return rows.at(-1)?.parts?.[0]?.text === 'synthetic response' && rows.some(row => JSON.stringify(row).includes(marker))
+      }, `seed layered extra turn ${extraSeed}`, 25000)
+    }
+    // The reply row lands before busy release; manual compaction of this model needs an idle Session.
+    await until(() => compactIdle(hostPort, layeredId), 'seeded turns idle')
+  }
+  const levelOneCount = async () => (await history(hostPort, layeredId)).messages.filter(
+    row => row.__meta?.contextBlock?.level === 1).length
+  for (const plans of [2, 3]) {
+    await seedMore(8)
+    await startCompact(hostPort, layeredId)
+    await until(async () => provider.layerPlanCount >= plans && await levelOneCount() >= plans, `manual L1 plan ${plans}`, 40000)
+    await until(() => compactIdle(hostPort, layeredId), `manual L1 idle ${plans}`)
+  }
+  await seedMore(8)
   const beforeL2 = await history(hostPort, layeredId)
+  const toolPairBlock = beforeL2.messages.find(row => row.__meta?.contextBlock?.level === 1
+    && row.__meta.contextBlock.rawStartSeq <= 18 && row.__meta.contextBlock.rawEndSeq >= 19)
+  assert(toolPairBlock, 'One actual L1 operation covered the whole call+tool candidate')
   await startCompact(hostPort, layeredId)
-  await until(async () => provider.layerPlanCount >= 3 && (await history(hostPort, layeredId)).messages.some(
+  await until(async () => provider.layerPlanCount >= 4 && (await history(hostPort, layeredId)).messages.some(
     row => row.__meta?.contextBlock?.level === 2), 'manual L2 plan', 40000)
   await until(() => compactIdle(hostPort, layeredId), 'manual L2 idle')
   const layered = await history(hostPort, layeredId)
   const l2 = layered.messages.find(row => row.__meta?.contextBlock?.level === 2)?.__meta?.contextBlock
-  assert(l2?.sourceBlockIds?.length >= 2, 'Actual L2 has two archived L1 children')
+  assert.equal(l2?.sourceBlockIds?.length, 2, 'Actual L2 has two archived L1 children')
+  assert(l2.sourceBlockIds.includes(toolPairBlock.__meta.contextBlock.id), 'The oldest L1 blocks merged')
   assert(layered.messages.length < beforeL2.messages.length, 'L2 reduced the active history')
   assert(layered.historyVersion >= 3 && layered.nextMessageSeq > 54)
-  const toolPairBlock = layered.messages.find(row => row.__meta?.contextBlock?.level === 1
-    && row.__meta.contextBlock.rawStartSeq <= 18 && row.__meta.contextBlock.rawEndSeq >= 19)
-  assert(toolPairBlock, 'One actual L1 operation covered the whole call+tool candidate')
   assert.equal(layered.messages.filter(row => [18, 19].includes(row.__meta?.seq)).length, 0,
     'No orphan call or tool response remained active')
   const pairExpansion = await json(hostPort, 'GET', `/api/sessions/${layeredId}/context-blocks/${toolPairBlock.__meta.contextBlock.id}/expand?previewLength=6000`)
@@ -415,7 +440,7 @@ try {
   const beforeStop = await history(hostPort, stopId)
   await send(hostPort, stopId, 'queued-stop after planner cancellation')
   assert.equal((await history(hostPort, stopId)).queueLength, 1)
-  const stopped = await command(hostPort, stopId, '/stop compact')
+  const stopped = await command(hostPort, stopId, '/stop --compaction')
   assert.equal(stopped.status, 200)
   assert.equal(stopped.body.success, true)
   await until(() => provider.heldStopClosed, 'planner connection closed')

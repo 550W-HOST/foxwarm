@@ -6,6 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('session-sequence', options)
@@ -14,7 +15,7 @@ await mkdir(join(fixture.work, 'memory'), { recursive: true })
 await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 await writeFile(join(fixture.work, 'NOTES.md'), 'Build notes\n')
 const failures = []
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const text = (value, phase) => ({ type: 'message', role: 'assistant', ...(phase ? { phase } : {}), content: [{ type: 'output_text', text: value }] })
 const contentText = item => typeof item.content === 'string' ? item.content : (item.content || []).map(part => part.text || '').join('\n')
 

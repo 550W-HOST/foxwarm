@@ -6,7 +6,8 @@ namespace Foxwarm.Models;
 
 internal sealed class AnthropicEventAccumulator(
     ResponsesStreamCallbacks? callbacks = null,
-    Action<bool>? reasoningPhase = null
+    Action<bool>? reasoningPhase = null,
+    Action<double>? inputContext = null
 )
 {
     private sealed class Block(int index, JsonObject content)
@@ -60,6 +61,8 @@ internal sealed class AnthropicEventAccumulator(
                 usage = message["usage"] is JsonObject initial
                     ? (JsonObject)initial.DeepClone()
                     : null;
+                if (AnthropicCanonicalConverter.InputContext(usage) is double initialContext)
+                    inputContext?.Invoke(initialContext);
                 break;
             case "content_block_start":
                 var index = Index(item);
@@ -86,7 +89,11 @@ internal sealed class AnthropicEventAccumulator(
                         content["data"] = SessionWait.Text(content["data"]) ?? "";
                         reasoningPhase?.Invoke(true);
                         break;
+                    case "web_search_tool_result":
+                        callbacks?.OnMeaningfulProgress?.Invoke();
+                        break;
                     case "tool_use":
+                    case "server_tool_use":
                         // Stream input is defined by input_json_delta, not the start placeholder.
                         content.Remove("input");
                         break;
@@ -117,7 +124,19 @@ internal sealed class AnthropicEventAccumulator(
                     fragment = SessionWait.Text(update["thinking"]) ?? "";
                     Append(active.Content, "thinking", fragment);
                 }
-                else if (type == "input_json_delta" && active.Kind == "tool_use")
+                else if (type == "citations_delta" && active.Kind == "text")
+                {
+                    var citations = active.Content["citations"] as JsonArray ?? new JsonArray();
+                    if (update["citation"] is JsonObject citation)
+                        citations.Add(citation.DeepClone());
+                    if (citations.Parent is null)
+                        active.Content["citations"] = citations;
+                    break;
+                }
+                else if (
+                    type == "input_json_delta"
+                    && active.Kind is "tool_use" or "server_tool_use"
+                )
                 {
                     fragment = SessionWait.Text(update["partial_json"]) ?? "";
                     active.PartialJson += fragment;
@@ -125,7 +144,13 @@ internal sealed class AnthropicEventAccumulator(
                 else if (
                     type is null
                     || active.Kind
-                        is not ("text" or "thinking" or "redacted_thinking" or "tool_use")
+                        is not (
+                            "text"
+                            or "thinking"
+                            or "redacted_thinking"
+                            or "tool_use"
+                            or "server_tool_use"
+                        )
                 )
                     break;
                 else
@@ -139,7 +164,7 @@ internal sealed class AnthropicEventAccumulator(
             case "content_block_stop":
                 var closed = RequireBlock(item);
                 closed.Closed = true;
-                if (closed.Kind == "tool_use")
+                if (closed.Kind is "tool_use" or "server_tool_use")
                 {
                     closed.Content["input"] = FinalizeInput(closed.PartialJson);
                     EmitProgress();
@@ -249,10 +274,11 @@ internal static class AnthropicSseCollector
         Stream stream,
         CancellationToken token,
         ResponsesStreamCallbacks? callbacks = null,
-        Action<bool>? reasoningPhase = null
+        Action<bool>? reasoningPhase = null,
+        Action<double>? inputContext = null
     )
     {
-        var accumulator = new AnthropicEventAccumulator(callbacks, reasoningPhase);
+        var accumulator = new AnthropicEventAccumulator(callbacks, reasoningPhase, inputContext);
         await OpenAISseReader
             .ReadAsync(
                 stream,

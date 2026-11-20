@@ -1,0 +1,550 @@
+/**
+ * Custom window frame for the Desktop hosts and installed PWAs in window-controls overlay.
+ *
+ * Providers:
+ * - The Windows and macOS Desktop hosts inject `window.foxwarmFrame` at document
+ *   creation and replace it, dispatching a `foxwarm-frame` event, when the control
+ *   insets or the window state change.
+ * - An installed Chromium PWA in window-controls-overlay mode. index.css derives the
+ *   insets from env(titlebar-area-*).
+ * Without a provider this module installs nothing beyond two listeners, so ordinary
+ * browsers, Safari, Firefox and mobile PWAs render exactly as before.
+ *
+ * Layout reads `html[data-foxwarm-frame]` and `--foxwarm-frame-left|right|top`; index.css
+ * draws the framed layout (one title row, the sidebar and status row on the window
+ * background, panes as cards). This module adds what CSS can't express: per-row
+ * avoidance of the control zones (`data-frame-row`), fills that extend title-row drag
+ * surfaces through the shell gutter and panel padding to the window edges, no-drag
+ * holes for overlay controls that a later drag surface covers, the narrow-layout
+ * strip, and for the Desktop hosts the `frame-regions` report, because
+ * neither WinUI's WebView2 control nor WKWebView honours app-region.
+ */
+
+/** Host-provided frame state. Insets are CSS px and already account for full screen. */
+export type HostFrameState = {
+  platform: 'windows' | 'macos'
+  left: number
+  right: number
+  top: number
+  /** Window state tokens such as `inactive`, `maximized` or `fullscreen`. */
+  state?: string[]
+}
+
+declare global {
+  interface Window { foxwarmFrame?: HostFrameState }
+}
+
+export type FrameRect = { x: number; y: number; w: number; h: number }
+/** Control zones: `left` and `right` are widths at the window's top corners, `top` their height. */
+export type FrameZones = { left: number; right: number; top: number; width: number }
+type BoxLike = { left: number; top: number; right: number; bottom: number }
+
+/** Empty draggable width kept between the window controls and header content. */
+export const FRAME_DRAG_GAP = 40
+/** Thickest window chrome (shell gutter, panel border and padding) a drag surface extends through. */
+export const FRAME_EDGE_REACH = 24
+/** Rectangles per `frame-regions` report. */
+export const FRAME_REGION_LIMIT = 128
+
+import { refreshFrameChromeColor, setFrameChromeColor } from './theme/browserChrome'
+
+const OVERLAY_QUERY = '(display-mode: window-controls-overlay)'
+const NARROW_QUERY = '(max-width: 767px)'
+const HOST_PLATFORMS = new Set(['windows', 'macos'])
+
+/** Elements that keep their own clicks inside a drag surface. */
+export const FRAME_INTERACTIVE = 'button, a[href], input, select, textarea, summary, label, iframe, [contenteditable=""], [contenteditable="true"], [role="button"], [role="tab"], [role="menu"], [role="menuitem"], [role="dialog"], [role="listbox"], [role="option"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]'
+/** Floating layers that may cover a drag surface; they always keep their clicks. */
+export const FRAME_FLOATING = '[role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag]'
+const FILL_CLASS = 'foxwarm-frame-fill'
+const HOLE_CLASS = 'foxwarm-frame-hole'
+
+export function readHostFrame(value: unknown = typeof window === 'undefined' ? undefined : window.foxwarmFrame): HostFrameState | null {
+  if (!value || typeof value !== 'object') return null
+  const frame = value as Partial<HostFrameState>
+  if (typeof frame.platform !== 'string' || !HOST_PLATFORMS.has(frame.platform)) return null
+  const inset = (n: unknown) => typeof n === 'number' && Number.isFinite(n) ? Math.max(0, n) : 0
+  const state = Array.isArray(frame.state) ? frame.state.filter((token): token is string => typeof token === 'string' && /^[a-z-]+$/.test(token)) : []
+  return { platform: frame.platform, left: inset(frame.left), right: inset(frame.right), top: inset(frame.top), state }
+}
+
+export function subtractRect(base: FrameRect, hole: FrameRect): FrameRect[] {
+  const x1 = Math.max(base.x, hole.x), y1 = Math.max(base.y, hole.y)
+  const x2 = Math.min(base.x + base.w, hole.x + hole.w), y2 = Math.min(base.y + base.h, hole.y + hole.h)
+  if (x1 >= x2 || y1 >= y2) return [base]
+  const out: FrameRect[] = []
+  if (y1 > base.y) out.push({ x: base.x, y: base.y, w: base.w, h: y1 - base.y })
+  if (y2 < base.y + base.h) out.push({ x: base.x, y: y2, w: base.w, h: base.y + base.h - y2 })
+  if (x1 > base.x) out.push({ x: base.x, y: y1, w: x1 - base.x, h: y2 - y1 })
+  if (x2 < base.x + base.w) out.push({ x: x2, y: y1, w: base.x + base.w - x2, h: y2 - y1 })
+  return out
+}
+
+export type FrameRowPlan = {
+  inBand: boolean
+  /** Height of the drag band above a banded inline row's content. */
+  top: number
+  left: number
+  right: number
+  /** An inline row too narrow for its content beside the controls; it moves below a drag band. */
+  banded: boolean
+}
+
+/**
+ * How a frame row clears the control zones. A row is in the band when it starts above
+ * the zones' bottom edge. Column rows (sidebar, rail) only report that; their title-row
+ * segment is laid out by CSS. Inline rows (tab strips) reserve the overlap plus a drag
+ * gap. When an inline row declares a minimum content width (one tab plus its own
+ * controls) and the width left beside the reservation is smaller, the row instead keeps
+ * its full width below a drag band as tall as the controls.
+ */
+export function frameRowLayout(row: BoxLike, zones: FrameZones, kind: 'column' | 'inline', minContent = 0): FrameRowPlan {
+  const inBand = row.top < zones.top && row.bottom > 0
+  const hitsLeft = inBand && zones.left > 0 && row.left < zones.left
+  const hitsRight = inBand && zones.right > 0 && row.right > zones.width - zones.right
+  const band = Math.max(0, Math.ceil(zones.top - row.top))
+  if (kind === 'column') return { inBand, top: 0, left: 0, right: 0, banded: false }
+  const left = hitsLeft ? Math.ceil(zones.left - row.left) + FRAME_DRAG_GAP : 0
+  const right = hitsRight ? Math.ceil(row.right - (zones.width - zones.right)) + FRAME_DRAG_GAP : 0
+  if ((left || right) && minContent > 0 && row.right - row.left - left - right < minContent) {
+    return { inBand, top: band, left: 0, right: 0, banded: true }
+  }
+  return { inBand, top: 0, left, right, banded: false }
+}
+
+/**
+ * Window chrome between a drag surface and the window edges it nearly touches, as
+ * groups of alternatives: the first alternative that holds only chrome is used. The
+ * top fill takes the corners too when the surface also reaches a side edge.
+ */
+export function frameEdgeFillCandidates(surface: FrameRect, width: number, reach = FRAME_EDGE_REACH): FrameRect[][] {
+  const right = surface.x + surface.w
+  const near = (gap: number) => gap > 0.5 && gap <= reach
+  const up = near(surface.y), toLeft = near(surface.x), toRight = near(width - right)
+  const groups: FrameRect[][] = []
+  if (up) {
+    const narrow = { x: surface.x, y: 0, w: surface.w, h: surface.y }
+    const x1 = toLeft ? 0 : surface.x, x2 = toRight ? width : right
+    groups.push(x1 === surface.x && x2 === right ? [narrow] : [{ x: x1, y: 0, w: x2 - x1, h: surface.y }, narrow])
+  }
+  if (toLeft) groups.push([{ x: 0, y: surface.y, w: surface.x, h: surface.h }])
+  if (toRight) groups.push([{ x: right, y: surface.y, w: width - right, h: surface.h }])
+  return groups
+}
+
+const toRect = (r: DOMRect): FrameRect => ({ x: r.left, y: r.top, w: r.width, h: r.height })
+
+/** Drag surfaces that are currently active: in a title-band row, or outside any row. */
+function activeDragSurfaces(doc: Document): HTMLElement[] {
+  return [...doc.querySelectorAll<HTMLElement>('[data-frame-drag]')].filter(drag => {
+    const row = drag.closest('[data-frame-row]')
+    return !row || row.hasAttribute('data-frame-in-band')
+  })
+}
+
+/**
+ * Drag rectangles in CSS px relative to the viewport: active drag surfaces minus their
+ * interactive descendants and minus every floating layer.
+ */
+export function collectFrameDragRects(doc: Document = document): number[][] {
+  const floating = [...doc.querySelectorAll(FRAME_FLOATING)].map(el => toRect(el.getBoundingClientRect()))
+  const rects: FrameRect[] = []
+  for (const drag of activeDragSurfaces(doc)) {
+    const box = drag.getBoundingClientRect()
+    if (box.width < 1 || box.height < 1) continue
+    let parts = [toRect(box)]
+    const own = [...drag.querySelectorAll(FRAME_INTERACTIVE)].map(el => toRect(el.getBoundingClientRect()))
+    for (const hole of [...own, ...floating]) parts = parts.flatMap(part => subtractRect(part, hole))
+    rects.push(...parts)
+  }
+  return rects
+    .filter(r => r.w >= 2 && r.h >= 2)
+    .slice(0, FRAME_REGION_LIMIT)
+    .map(r => [Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)])
+}
+
+const hasOwnText = (element: Element) => [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && !!node.textContent?.trim())
+
+/**
+ * Whether a point shows only window chrome for `surface`: its own containers, another
+ * blank drag surface, or a plain container (no text, media or interactive role).
+ * Floating layers and fills are looked through; they never decide the shape.
+ */
+function isChromePoint(doc: Document, surface: Element, x: number, y: number): boolean {
+  for (const hit of doc.elementsFromPoint(x, y)) {
+    if (hit.classList.contains(FILL_CLASS) || hit.closest(FRAME_FLOATING)) continue
+    if (hit.contains(surface)) return true
+    if (hit.closest(FRAME_INTERACTIVE)) return false
+    if (hit.matches('[data-frame-drag]')) return true
+    return !hasOwnText(hit) && !(hit instanceof SVGElement) && !hit.matches('img, canvas, video, picture')
+  }
+  return true
+}
+
+function holdsOnlyChrome(doc: Document, surface: Element, piece: FrameRect): boolean {
+  // Hit testing works on whole pixels: sample every pixel row and column the piece covers, 6 px apart, plus its last ones.
+  const samples = (start: number, size: number) => {
+    const first = Math.ceil(start), last = Math.floor(start + size - 0.01)
+    const out: number[] = []
+    for (let v = first; v < last; v += 6) out.push(v)
+    if (last >= first) out.push(last)
+    return out
+  }
+  const xs = samples(piece.x, piece.w), ys = samples(piece.y, piece.h)
+  if (!xs.length || !ys.length) return false
+  return ys.every(y => xs.every(x => isChromePoint(doc, surface, x, y)))
+}
+
+/** Fills that extend every active drag surface to the window edges it nearly touches. */
+export function computeFrameEdgeFills(doc: Document = document): FrameRect[] {
+  const width = doc.documentElement.clientWidth
+  const fills: FrameRect[] = []
+  for (const surface of activeDragSurfaces(doc)) {
+    if (surface.classList.contains(FILL_CLASS)) continue
+    const box = surface.getBoundingClientRect()
+    if (box.width < 1 || box.height < 1) continue
+    for (const group of frameEdgeFillCandidates(toRect(box), width)) {
+      const piece = group.find(candidate => holdsOnlyChrome(doc, surface, candidate))
+      if (piece) fills.push(piece)
+    }
+  }
+  return fills
+}
+
+const boxesOverlap = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) >= 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) >= 1
+
+/**
+ * No-drag boxes for the PWA overlay: title-row controls that a later drag surface covers.
+ * Chromium applies app-region boxes in document order and the last box containing a point
+ * decides, so a control placed over a surface that follows it in the document (the collapsed
+ * rail's toggle, which floats over the first pane's strip after the lights on macOS) would
+ * drag the window. The holes are rendered after the page content, so they decide last. The
+ * Desktop hosts need none: their rectangles subtract every control from every surface.
+ */
+export function computeFrameNoDragHoles(doc: Document = document): FrameRect[] {
+  const surfaces = activeDragSurfaces(doc).filter(surface => !surface.classList.contains(FILL_CLASS))
+  const boxes = new Map(surfaces.map(surface => [surface, surface.getBoundingClientRect()]))
+  const holes: FrameRect[] = []
+  for (const surface of surfaces) {
+    for (const control of surface.querySelectorAll(FRAME_INTERACTIVE)) {
+      // A nested control lies inside its outer control's hole.
+      const outer = control.parentElement?.closest(FRAME_INTERACTIVE)
+      if (outer && surface.contains(outer)) continue
+      const box = control.getBoundingClientRect()
+      if (box.width < 1 || box.height < 1) continue
+      const covered = surfaces.some(other => other !== surface
+        && !control.contains(other)
+        && !!(control.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING)
+        && boxesOverlap(boxes.get(other)!, box))
+      if (covered) holes.push(toRect(box))
+    }
+  }
+  return holes
+}
+
+type HostChannel = { postMessage(message: unknown): void }
+
+type Rgba = [number, number, number, number]
+
+function parseColor(value: string): Rgba | null {
+  const rgb = /^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/.exec(value)
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), rgb[4] === undefined ? 1 : Number(rgb[4])]
+  // color-mix() and relative colours compute to color(srgb r g b / a) with 0..1 channels.
+  const srgb = /^color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)(?: \/ ([\d.]+))?\)$/.exec(value)
+  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] === undefined ? 1 : Number(srgb[4])]
+  return null
+}
+
+/**
+ * Opaque colour of the surface the window controls sit on, as #rrggbb: the topmost page
+ * element under the middle of the larger control zone, composited over its ancestors'
+ * backgrounds. Null without a control zone or an opaque background.
+ */
+export function frameSurfaceColor(doc: Document, zones: FrameZones): string | null {
+  if (!zones.top || (!zones.left && !zones.right)) return null
+  const x = zones.left >= zones.right ? zones.left / 2 : zones.width - zones.right / 2
+  const target = doc.elementsFromPoint(x, zones.top / 2).find(element => !element.closest('.foxwarm-frame-fills'))
+  return opaqueBackground(target ?? null)
+}
+
+/** An element's background composited over its ancestors' backgrounds, as #rrggbb; null without an opaque layer. */
+function opaqueBackground(target: Element | null): string | null {
+  const layers: Rgba[] = []
+  for (let element: Element | null = target; element; element = element.parentElement) {
+    const color = parseColor(getComputedStyle(element).backgroundColor)
+    if (!color || color[3] === 0) continue
+    layers.push(color)
+    if (color[3] >= 1) break
+  }
+  if (!layers.length || layers[layers.length - 1][3] < 1) return null
+  let [r, g, b] = layers.pop()!
+  for (const [lr, lg, lb, la] of layers.reverse()) {
+    r = lr * la + r * (1 - la)
+    g = lg * la + g * (1 - la)
+    b = lb * la + b * (1 - la)
+  }
+  return '#' + [r, g, b].map(channel => Math.round(Math.min(255, Math.max(0, channel))).toString(16).padStart(2, '0')).join('')
+}
+
+/** Page-to-host channel; present only inside a Desktop host's top-level document. */
+function hostChannel(): HostChannel | undefined {
+  const w = window as Window & {
+    chrome?: { webview?: HostChannel }
+    webkit?: { messageHandlers?: Record<string, HostChannel> }
+  }
+  return w.chrome?.webview ?? w.webkit?.messageHandlers?.foxwarmFrame
+}
+
+const frameListeners = new Set<() => void>()
+let frameActive = false
+
+/** Whether a frame provider is active (`html[data-foxwarm-frame]`); a React external store. */
+export function windowFrameActive(): boolean {
+  return frameActive
+}
+
+export function subscribeWindowFrame(listener: () => void): () => void {
+  frameListeners.add(listener)
+  return () => { frameListeners.delete(listener) }
+}
+
+export function initializeWindowFrame(): void {
+  if (typeof window === 'undefined' || window.parent !== window) return
+  const root = document.documentElement
+  const overlay = window.matchMedia?.(OVERLAY_QUERY) ?? null
+  let runtime: FrameRuntime | null = null
+
+  const sync = () => {
+    const host = readHostFrame()
+    if (host) {
+      root.dataset.foxwarmFrame = host.platform
+      root.style.setProperty('--foxwarm-frame-left', `${host.left}px`)
+      root.style.setProperty('--foxwarm-frame-right', `${host.right}px`)
+      root.style.setProperty('--foxwarm-frame-top', `${host.top}px`)
+      if (host.state?.length) root.dataset.foxwarmWindow = host.state.join(' ')
+      else delete root.dataset.foxwarmWindow
+    } else if (overlay?.matches) {
+      root.dataset.foxwarmFrame = 'overlay'
+    } else {
+      delete root.dataset.foxwarmFrame
+    }
+    if (root.dataset.foxwarmFrame && !runtime) runtime = startFrameRuntime(root, !!host)
+    else if (!root.dataset.foxwarmFrame && runtime) { runtime.stop(); runtime = null }
+    else runtime?.relayout()
+    if (frameActive !== !!runtime) {
+      frameActive = !!runtime
+      for (const listener of frameListeners) listener()
+    }
+  }
+
+  window.addEventListener('foxwarm-frame', sync)
+  overlay?.addEventListener('change', sync)
+  sync()
+}
+
+type FrameRuntime = { relayout(): void; stop(): void }
+
+function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
+  const narrow = window.matchMedia?.(NARROW_QUERY) ?? null
+  const probe = document.createElement('div')
+  probe.setAttribute('aria-hidden', 'true')
+  // Resolves the inset variables, including env() under the PWA overlay, to px.
+  probe.style.cssText = 'box-sizing:content-box;position:fixed;visibility:hidden;pointer-events:none;top:0;left:0;width:var(--foxwarm-frame-left,0px);height:var(--foxwarm-frame-top,0px);border-right:solid 0 transparent;border-right-width:var(--foxwarm-frame-right,0px)'
+  document.body.appendChild(probe)
+  // Fills come first in the document so that later no-drag layers win under app-region,
+  // and paint beneath the shell, which already shows the chrome they cover.
+  const fills = document.createElement('div')
+  fills.setAttribute('aria-hidden', 'true')
+  fills.className = 'foxwarm-frame-fills'
+  document.body.prepend(fills)
+  const overlay = root.dataset.foxwarmFrame === 'overlay'
+  // No-drag holes come after the page content (computeFrameNoDragHoles); only app-region needs them.
+  const holes = document.createElement('div')
+  holes.setAttribute('aria-hidden', 'true')
+  holes.className = 'foxwarm-frame-holes'
+  if (overlay) document.body.appendChild(holes)
+  let strip: HTMLDivElement | null = null
+  let frame = 0
+  let layoutDirty = true
+  let lastReport = ''
+
+  const readZones = (): FrameZones => {
+    const style = getComputedStyle(probe)
+    return {
+      left: parseFloat(style.width) || 0,
+      right: parseFloat(style.borderRightWidth) || 0,
+      top: parseFloat(style.height) || 0,
+      width: root.clientWidth,
+    }
+  }
+
+  const clearRow = (element: HTMLElement) => {
+    element.style.removeProperty('--foxwarm-frame-pad-left')
+    element.style.removeProperty('--foxwarm-frame-pad-right')
+    element.style.removeProperty('--foxwarm-frame-pad-top')
+    element.removeAttribute('data-frame-in-band')
+    element.removeAttribute('data-frame-banded')
+  }
+
+  /**
+   * Smallest width an inline row's content needs: everything but its fill element
+   * (`data-frame-row-fill`, the tab list) plus one tab at its minimum width. A row
+   * without a fill element never bands.
+   */
+  const minContentWidth = (row: HTMLElement, box: DOMRect) => {
+    const applied = (name: string) => parseFloat(row.style.getPropertyValue(name)) || 0
+    const fill = row.querySelector<HTMLElement>('[data-frame-row-fill]')
+    if (!fill || fill.closest('[data-frame-row]') !== row) return 0
+    const fixed = box.width - fill.getBoundingClientRect().width - applied('--foxwarm-frame-pad-left') - applied('--foxwarm-frame-pad-right')
+    const tab = fill.querySelector('[data-tab-id]')
+    return fixed + (tab ? parseFloat(getComputedStyle(tab).minWidth) || tab.getBoundingClientRect().width : 0)
+  }
+
+  let lastFills = ''
+  const renderFills = (pieces: FrameRect[]) => {
+    const key = JSON.stringify(pieces)
+    if (key === lastFills) return
+    lastFills = key
+    fills.replaceChildren(...pieces.map(piece => {
+      const element = document.createElement('div')
+      element.className = FILL_CLASS
+      element.setAttribute('data-frame-drag', '')
+      element.style.cssText = `left:${piece.x}px;top:${piece.y}px;width:${piece.w}px;height:${piece.h}px`
+      return element
+    }))
+  }
+
+  let lastHoles = ''
+  const renderHoles = (pieces: FrameRect[]) => {
+    if (!overlay) return
+    const key = JSON.stringify(pieces)
+    if (key === lastHoles) return
+    lastHoles = key
+    holes.replaceChildren(...pieces.map(piece => {
+      const element = document.createElement('div')
+      element.className = HOLE_CLASS
+      element.style.cssText = `left:${piece.x}px;top:${piece.y}px;width:${piece.w}px;height:${piece.h}px`
+      return element
+    }))
+  }
+
+  const layout = () => {
+    const zones = readZones()
+    const isNarrow = !!narrow?.matches
+    root.toggleAttribute('data-foxwarm-frame-narrow', isNarrow)
+    // Controls at the top left (macOS lights): the title row's first segment starts after them.
+    root.toggleAttribute('data-foxwarm-frame-leading', zones.left > 0)
+    if (isNarrow && !strip) {
+      strip = document.createElement('div')
+      strip.className = 'foxwarm-frame-strip'
+      strip.setAttribute('data-frame-drag', '')
+      strip.setAttribute('aria-hidden', 'true')
+      document.body.appendChild(strip)
+    } else if (!isNarrow && strip) {
+      strip.remove()
+      strip = null
+    }
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-frame-row]')]
+    if (isNarrow) {
+      rows.forEach(clearRow)
+      renderFills([])
+      renderHoles([])
+      return
+    }
+    // Read every row before writing so that one pass needs one layout.
+    const plans = rows.map(element => {
+      const box = element.getBoundingClientRect()
+      const kind = element.dataset.frameRow === 'column' ? 'column' : 'inline'
+      return { element, plan: frameRowLayout(box, zones, kind, kind === 'inline' ? minContentWidth(element, box) : 0) }
+    })
+    for (const { element, plan } of plans) {
+      element.toggleAttribute('data-frame-in-band', plan.inBand)
+      element.toggleAttribute('data-frame-banded', plan.banded)
+      element.style.setProperty('--foxwarm-frame-pad-top', `${plan.top}px`)
+      element.style.setProperty('--foxwarm-frame-pad-left', `${plan.left}px`)
+      element.style.setProperty('--foxwarm-frame-pad-right', `${plan.right}px`)
+    }
+    renderFills(computeFrameEdgeFills(document))
+    renderHoles(computeFrameNoDragHoles(document))
+  }
+
+  const report = () => {
+    const channel = hostChannel()
+    if (!channel) return
+    const regions = collectFrameDragRects(document)
+    // Caption buttons (Windows) and the window appearance (macOS) follow the page theme.
+    const colorScheme = root.classList.contains('dark') ? 'dark' : 'light'
+    const key = JSON.stringify([regions, colorScheme])
+    if (key === lastReport) return
+    lastReport = key
+    channel.postMessage({ type: 'frame-regions', regions, colorScheme })
+  }
+
+  // The theme runtime re-reads this on every theme change; layout changes refresh it below.
+  if (overlay) setFrameChromeColor(() => frameSurfaceColor(document, readZones()))
+
+  const run = () => {
+    frame = 0
+    if (layoutDirty) {
+      layoutDirty = false
+      layout()
+      if (overlay) refreshFrameChromeColor()
+    }
+    if (hosted) report()
+  }
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(run) }
+  const relayout = () => { layoutDirty = true; schedule() }
+
+  const resize = new ResizeObserver(relayout)
+  resize.observe(root)
+  const observed = new WeakSet<Element>()
+  const observeRows = () => {
+    for (const element of document.querySelectorAll('[data-frame-row]')) {
+      if (observed.has(element)) continue
+      observed.add(element)
+      resize.observe(element)
+    }
+  }
+  // Rows appear and disappear with sidebar collapse, pane splits and tab changes. The boot
+  // screen covers the controls until it is removed; the overlay colour is re-read then.
+  const touchesRow = (node: Node) => node instanceof Element && (node.id === 'foxwarm-boot' || node.matches('[data-frame-row]') || !!node.querySelector('[data-frame-row]'))
+  const rowObserver = new MutationObserver(records => {
+    if (!records.some(record => [...record.addedNodes, ...record.removedNodes].some(touchesRow))) return
+    observeRows()
+    relayout()
+  })
+  rowObserver.observe(document.body, { childList: true, subtree: true })
+  // Theme changes and boot completion change the surface under the overlay controls.
+  const themeObserver = new MutationObserver(relayout)
+  themeObserver.observe(root, { attributes: true, attributeFilter: ['class', 'style', 'data-foxwarm-theme', 'data-foxwarm-boot-ready'] })
+  // Menus, dialogs, tab changes and theme changes alter the reported regions.
+  const reportObserver = hosted && hostChannel() ? new MutationObserver(schedule) : null
+  reportObserver?.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'data-frame-in-band'] })
+  reportObserver?.observe(root, { attributes: true, attributeFilter: ['class'] })
+  narrow?.addEventListener('change', relayout)
+  const overlayGeometry = (navigator as Navigator & { windowControlsOverlay?: EventTarget }).windowControlsOverlay
+  overlayGeometry?.addEventListener('geometrychange', relayout)
+  observeRows()
+  relayout()
+
+  return {
+    relayout,
+    stop() {
+      if (frame) cancelAnimationFrame(frame)
+      resize.disconnect()
+      rowObserver.disconnect()
+      themeObserver.disconnect()
+      reportObserver?.disconnect()
+      narrow?.removeEventListener('change', relayout)
+      overlayGeometry?.removeEventListener('geometrychange', relayout)
+      document.querySelectorAll<HTMLElement>('[data-frame-row]').forEach(clearRow)
+      if (overlay) setFrameChromeColor(null)
+      root.removeAttribute('data-foxwarm-frame-narrow')
+      root.removeAttribute('data-foxwarm-frame-leading')
+      probe.remove()
+      fills.remove()
+      holes.remove()
+      strip?.remove()
+    },
+  }
+}

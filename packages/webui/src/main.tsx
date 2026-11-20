@@ -6,6 +6,10 @@ import './index.css'
 import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
+import BuildUpdateNotice from './components/BuildUpdateNotice'
+import { isStandaloneWebUi } from './updateReload'
+import { initializeWindowFrame } from './windowFrame'
+import { markIosStandaloneViewport, syncViewportHeight } from './viewportHeight'
 import { API_BASE_PATH } from './config'
 import { BootReadySignal, markBootReady } from './components/FoxLoaders'
 
@@ -17,17 +21,10 @@ const EmbeddedChatApp = lazy(() => import('./EmbeddedWebUiApp').then(module => (
 const EmbeddedAgentsApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedAgentsApp })))
 const EmbeddedSetupApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedSetupApp })))
 
-function syncViewportHeight() {
-  const vv = window.visualViewport
-  const height = Math.round(vv?.height ?? window.innerHeight)
-  const topOffset = Math.round(vv?.offsetTop ?? 0)
-
-  document.documentElement.style.setProperty('--foxwarm-app-height', `${height}px`)
-  document.documentElement.style.setProperty('--foxwarm-app-top-offset', `${topOffset}px`)
-}
-
+markIosStandaloneViewport()
 syncViewportHeight()
 initializeThemeRuntime()
+initializeWindowFrame()
 
 window.visualViewport?.addEventListener('resize', syncViewportHeight)
 window.visualViewport?.addEventListener('scroll', syncViewportHeight)
@@ -74,7 +71,7 @@ function AuthenticatedWebUiRoot() {
   useEffect(() => { if (failed) markBootReady() }, [failed])
   if (failed) return <div className="foxwarm-fixed-viewport-shell flex h-full items-center justify-center text-fw-text"><a href="login.html">Sign in again</a></div>
   if (!auth) return <div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />
-  return <>{auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content}<BootReadySignal /></>
+  return <>{auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content}<BootReadySignal />{isStandaloneWebUi() && <BuildUpdateNotice />}</>
 }
 
 class StartupErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {

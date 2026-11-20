@@ -59,15 +59,18 @@ public sealed class NodeRemovalTests
             definition => definition!["name"]!.GetValue<string>() == "node_remove"
         );
         var found = await Call(
-            "search_tools",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Search(new JsonObject
             {
                 ["query"] = "node_remove",
                 ["sources"] = new JsonArray("builtin"),
                 ["limit"] = 1,
-            }
+            })
         );
-        Assert.Contains("builtin:node_remove", found["output"]!.GetValue<string>());
+        Assert.True(
+            CtlTestArgs.ListsBuiltin(found["output"]!.GetValue<string>(), "node_remove"),
+            found["output"]!.GetValue<string>()
+        );
         var credential = manager.Nodes.Registry.Create("offline");
         var auth = credential["authToken"]!.GetValue<string>();
         var marker = Path.Combine(work, "retained.txt");
@@ -78,14 +81,14 @@ public sealed class NodeRemovalTests
         );
         manager.Authorization.Invalidate();
         var denied = await Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "builtin:node_remove",
                 ["args"] = new JsonObject { ["nodeId"] = "offline" },
-            }
+            })
         );
-        Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", denied.FailureCode()!);
         Assert.True(manager.Nodes.Registry.Authenticate("offline", auth));
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "tool-authorization.yaml"),
@@ -93,12 +96,12 @@ public sealed class NodeRemovalTests
         );
         manager.Authorization.Invalidate();
         var removed = await Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "builtin:node_remove",
                 ["args"] = new JsonObject { ["nodeId"] = "offline" },
-            }
+            })
         );
         Assert.Null(removed["error"]);
         Assert.Equal("offline", removed["nodeId"]!.GetValue<string>());

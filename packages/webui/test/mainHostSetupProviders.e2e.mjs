@@ -204,8 +204,8 @@ try {
   const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'setup-pricing' })
   assert.equal(created.status, 200, JSON.stringify(created))
   const sessionId = created.body.sessionId
-  const triggered = await fixture.api('POST', '/trigger', { sessionId, text: 'exercise saved pricing' })
-  assert.equal(triggered.status, 200, JSON.stringify(triggered))
+  const triggered = await fixture.api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/message`, { text: 'exercise saved pricing' })
+  assert.equal(triggered.status, 202, JSON.stringify(triggered))
   const history = await until(async () => {
     const response = await fixture.api('GET', `/api/sessions/${encodeURIComponent(sessionId)}/history`)
     return response.body.messages?.find(message => message.__meta?.usage?.cost !== undefined) && response.body

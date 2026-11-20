@@ -38,6 +38,6 @@ internal static class ResponsesRequestCommand
                 }
             );
         }
-        Console.Write(results.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
+        Console.Write(results.ToJsonText());
     }
 }

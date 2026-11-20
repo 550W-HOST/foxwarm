@@ -40,6 +40,7 @@ internal sealed partial class SessionCompactor
                         candidates
                             .Items.Skip(op.CandidateStart)
                             .Take(op.CandidateEnd - op.CandidateStart + 1)
+                            .Where(item => item.Kind == "block")
                             .Select(item => (JsonNode?)JsonValue.Create(item.Start))
                             .ToArray()
                     )
@@ -65,6 +66,20 @@ internal sealed partial class SessionCompactor
             );
             operations.Add((op, record));
         }
+        // Preserved raw rows retire when a regular compaction merges the block that kept them;
+        // they remain in the Archive.
+        var retired = candidates.InContext
+            ? new HashSet<long>()
+            : plan
+                .Operations.Where(op => op.Kind == "block")
+                .SelectMany(op =>
+                    candidates
+                        .Items.Skip(op.CandidateStart)
+                        .Take(op.CandidateEnd - op.CandidateStart + 1)
+                        .Where(item => item.Kind == "block")
+                        .Select(item => item.Start)
+                )
+                .ToHashSet();
         var history = new List<HistoryMessage>();
         var cursor = 0;
         foreach (var (op, record) in operations)
@@ -72,26 +87,42 @@ internal sealed partial class SessionCompactor
             AppendRetained(
                 original.History.Skip(cursor).Take(op.HistoryStart - cursor),
                 plan.Remove,
+                retired,
                 history,
                 candidates.InContext
             );
             history.Add(HistoryMessage.FromJson(record.ToMessage()));
-            foreach (
-                var row in original
-                    .History.Skip(op.HistoryStart)
-                    .Take(op.HistoryEnd - op.HistoryStart + 1)
-            )
+            var sources = candidates
+                .Items.Skip(op.CandidateStart)
+                .Take(op.CandidateEnd - op.CandidateStart + 1)
+                .Where(item => item.Kind == op.Kind)
+                .SelectMany(item =>
+                    Enumerable.Range(item.HistoryStart, item.HistoryEnd - item.HistoryStart + 1)
+                )
+                .ToHashSet();
+            for (var index = op.HistoryStart; index <= op.HistoryEnd; index++)
+            {
+                var row = original.History[index];
+                if (!sources.Contains(index))
+                {
+                    // Rows inside the range that are not sources of this block, such as
+                    // lifecycle boundaries or preserved rows, keep their order after it.
+                    AppendRetained([row], plan.Remove, retired, history, false);
+                    continue;
+                }
                 if (row.Sequence is long seq && plan.Preserve.Contains(seq))
                 {
                     var preserved = row.ToJson();
                     ((JsonObject)preserved["__meta"]!)["preservedFromBlockId"] = record.Id;
                     history.Add(HistoryMessage.FromJson(preserved));
                 }
+            }
             cursor = op.HistoryEnd + 1;
         }
         AppendRetained(
             original.History.Skip(cursor).Take(candidates.Split - cursor),
             plan.Remove,
+            retired,
             history,
             candidates.InContext
         );
@@ -167,6 +198,7 @@ internal sealed partial class SessionCompactor
     private static void AppendRetained(
         IEnumerable<HistoryMessage> source,
         IReadOnlySet<long> removed,
+        IReadOnlySet<long> retired,
         List<HistoryMessage> output,
         bool retainDisplayOnly
     )
@@ -190,20 +222,23 @@ internal sealed partial class SessionCompactor
             )
                 continue;
             var seq = record.Sequence;
+            var preservedFrom = CompactCandidateBuilder.Number(
+                CompactCandidateBuilder.Meta(row)?["preservedFromBlockId"]
+            );
             if (
-                seq is not null
-                && removed.Contains(seq.Value)
-                && CompactCandidateBuilder.Number(
-                    CompactCandidateBuilder.Meta(row)?["preservedFromBlockId"]
+                preservedFrom is > 0
+                && (
+                    seq is not null && removed.Contains(seq.Value)
+                    || retired.Contains(preservedFrom.Value)
                 )
-                    is > 0
             )
                 continue;
             output.Add(record);
         }
     }
 
-    private static string FormatSummary(string summary, JsonArray? facts)
+    /// <summary>The stored block summary: the summary text followed by its memory facts.</summary>
+    internal static string FormatSummary(string summary, JsonArray? facts)
     {
         if (facts is not { Count: > 0 })
             return summary;
@@ -233,15 +268,24 @@ internal sealed partial class SessionCompactor
             if (part["functionCall"] is not JsonObject call)
                 continue;
             var name = SessionWait.Text(call["name"]);
+            var args = call["args"] as JsonObject;
+            // `ctl skill load <name>` counts as the skill load it runs.
+            if (
+                name == "ctl"
+                && call["argsParseError"] is null
+                && args is not null
+                && Foxwarm.Tools.CtlParser.Describe(args) is { Source: "builtin", Name: "skill" } described
+            )
+            {
+                name = "skill";
+                args = described.Args;
+            }
             if (
                 name != "load_skill"
-                && !(
-                    name == "skill"
-                    && SessionWait.Text((call["args"] as JsonObject)?["action"]) == "load"
-                )
+                && !(name == "skill" && SessionWait.Text(args?["action"]) == "load")
             )
                 continue;
-            var skill = SessionWait.Text((call["args"] as JsonObject)?["skillName"]);
+            var skill = SessionWait.Text(args?["skillName"]);
             if (
                 skill is not null
                 && OpenAIRequestText.Trim(skill) is { Length: > 0 } trimmed
@@ -265,9 +309,9 @@ internal sealed partial class SessionCompactor
                 ? ""
                 : " hint=\""
                     + Attribute(
-                        "Note: The following skill(s) were loaded with skill(action=\"load\") but their content was compacted away: "
+                        "Note: The following skill(s) were loaded with `ctl skill load` but their content was compacted away: "
                             + string.Join(", ", skills.Select(skill => "`" + skill + "`"))
-                            + ". If you still need them, call skill with action=\"load\" again."
+                            + ". If you still need them, run `ctl skill load <name>` again."
                     )
                     + "\"";
         return $"<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"{Attribute(string.IsNullOrEmpty(parent) ? "(none)" : parent)}\" currentSessionId=\"{Attribute(id)}\" time=\"{ArchiveBlockRecord.LocalTimestamp(now)}\"{hint} />";

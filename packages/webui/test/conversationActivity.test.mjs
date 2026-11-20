@@ -77,3 +77,26 @@ test('notification counts retain nonnegative-integer semantics and prefer native
   assert.equal(summary([call('zero'), result('zero', { ...historical(4), ...receipt(0) })]), '1 call')
   assert.equal(summary([call('missing'), result('missing', { taskId: 'fixture-task' })]), '1 call')
 })
+
+// Receipts without sentNotifications rely on the terminal turn action, whose name changed.
+for (const [label, args, counted] of [
+  ['end_turn', { suffix: 'kid', message: 'go', currentSessionTurnAction: 'end_turn' }, true],
+  ['wait', { suffix: 'kid', message: 'go', currentSessionTurnAction: 'wait' }, true],
+  ['continue', { suffix: 'kid', message: 'go', currentSessionTurnAction: 'continue' }, false],
+  ['persisted afterSend finish', { suffix: 'kid', message: 'go', afterSend: 'finish' }, true],
+  ['persisted afterSend continue', { suffix: 'kid', message: 'go', afterSend: 'continue' }, false],
+]) {
+  test(`child creation with ${label} counts its initial message only when delivery was awaited`, () => {
+    const created = { output: 'Child session created: `fixture/kid` (new session). Initial message sent.' }
+    assert.equal(
+      summary([call('child', 'create_child_session', args), result('child', created, 'create_child_session')]),
+      counted ? '1 call · 1 child session · 1 sent' : '1 call · 1 child session',
+    )
+  })
+}
+
+test('native hosted search counts the server call once across a deferred result message', () => {
+  const search = { role: 'model', parts: [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'server_tool_use', name: 'web_search', id: 'srv-a', input: { query: 'native query' } }] } } }] }
+  const result = { role: 'model', parts: [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [] }] } } }] }
+  assert.equal(summary([search, result]), '1 call')
+})

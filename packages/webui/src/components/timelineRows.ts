@@ -13,6 +13,7 @@ import {
   type ToolTagItem,
 } from './chatShared'
 import { readPersistedRequestTiming, deriveRequestTimings, type DerivedRequestTiming, type DurationSample } from '../usageTiming'
+import { readTextRedaction, sameTextRedaction, type TextRedactionTurn } from '../textRedaction'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
 import { deriveTimelineTimeMarkers, selectTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
@@ -22,8 +23,9 @@ import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { buildConversationActivitySummary } from './conversationActivity'
 import { applyConversationTiming, readConversationWorkInterval, getConversationActivityStart, getConversationLiveRequestStart, type ConversationTimingContext } from './conversationTiming'
 import { isCompactCompletionMaintenanceMessage } from '../../../shared/src/sessionContinuation'
-import { getWebSearchAction } from '../webSearchAction'
+import { getPartWebSearchAction } from '../webSearchAction'
 import { askUserArgs, isAskUserCall } from '../sessionQuestions'
+import { ctlConcrete } from '../ctlCall'
 
 /**
  * Explicit view model for one `ChatTimeline` render pass.
@@ -38,6 +40,8 @@ import { askUserArgs, isAskUserCall } from '../sessionQuestions'
 interface TokenUsage {
   cost?: number
   cachedTokens?: number | null
+  contextTokens?: number
+  contextTokensSource?: string
   inputTokens?: number | null
   outputTokens?: number | null
   cachedContentTokenCount?: number | null
@@ -58,6 +62,8 @@ export type UsageAttribution = {
   apiDurationsMs: DurationSample[]
   /** One persisted model-message sequence per usage-bearing model message, in source order. */
   messageSeqs: Array<number | null>
+  /** Text redaction summary per usage-bearing model message; null when that request did not redact. */
+  textRedaction: Array<TextRedactionTurn | null>
 }
 
 /** Shared per-group view: every row of one tool-call group carries the same object. */
@@ -214,10 +220,11 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
   timestamps: [getUsageTimestamp(msg)],
   apiDurationsMs: [timing.apiDurationMs],
   messageSeqs: [getValidMessageSeq(msg)],
+  textRedaction: [readTextRedaction(msg.__meta?.textRedaction)],
 })
 
 /** Whole event/reminder wrappers and metadata-classified display-only LLM retry notices may join a tool run; quoted content does not. */
-const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-error' | null => {
+const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'task-reminder' | 'llm-error' | null => {
   if (getSessionNotice(msg) && !getLlmErrorMessageDetails(msg)) return null
   if (getLlmErrorMessageDetails(msg)) return 'llm-error'
   if (msg.role !== 'user' || msg.parts.length !== 1) return null
@@ -227,13 +234,15 @@ const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-
   if (!opening) return null
   const tag = parseFoxwarmMetadataLine(opening)
   const kind = tag?.attrs.kind
-  if (tag?.tagName !== 'foxwarm-system' || tag.closing || (kind !== 'event' && kind !== 'goal-reminder')) return null
+  if (tag?.tagName !== 'foxwarm-system' || tag.closing || (kind !== 'event' && kind !== 'goal-reminder' && kind !== 'task-reminder')) return null
   const wrapper = value.trim()
   if (/\/\s*>$/.test(opening)) return wrapper === opening ? kind : null
   // Text-backed history uses standalone wrapper lines. A direct-user inline quote is not one.
   if (part.text && !/^\r?\n/.test(wrapper.slice(opening.length))) return null
   return wrapper.slice(opening.length).trimEnd().endsWith('</foxwarm-system>') ? kind : null
 }
+
+const systemKindLabels = { event: 'Event', 'goal-reminder': 'Goal reminder', 'task-reminder': 'Task reminder' } as const
 
 const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKind(msg) !== null
 
@@ -309,7 +318,7 @@ const conversationRequests = (history: readonly Message[], visible: readonly Mes
     const request = id ? requests.get(id) || { messages: [], tools: false, complete: false } : { messages: [], tools: false, complete: false }
     if (id) requests.set(id, request)
     request.messages.push(message)
-    request.tools ||= message.parts.some(part => !!part.functionCall || !!getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem))
+    request.tools ||= message.parts.some(part => !!part.functionCall || !!getPartWebSearchAction(part, message.parts))
     request.complete ||= !message.__meta?.streaming && isCommittedHistoryMessage(message) && message.__meta?.llmSegment?.complete !== false
     byMessage.set(message, request)
   }
@@ -441,7 +450,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
 
   const items: ToolTagItem[] = []
   const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [] }
+  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [], textRedaction: [] }
   let callCount = 0
 
   for (let index = start; index < end; index++) {
@@ -453,7 +462,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
         items.push({ name: 'system-llm-error', label: 'LLM error', tone: 'system' })
       }
     } else if (systemKind) {
-      items.push({ name: `system-${systemKind}`, label: systemKind === 'event' ? 'Event' : 'Goal reminder', tone: 'system' })
+      items.push({ name: `system-${systemKind}`, label: systemKindLabels[systemKind], tone: 'system' })
     }
     const parts = index === start ? msg.parts.slice(startPartFrom) : msg.parts
     parts.forEach((part) => {
@@ -465,7 +474,8 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
       if (part.functionCall) {
         const status = part.functionCall.id ? toolStatusById.get(part.functionCall.id) : undefined
         items.push({
-          name: part.functionCall.name,
+          // The icon is the tool a ctl command runs; the label is its command path.
+          name: ctlConcrete(part.functionCall).name,
           toolCall: true,
           label: formatToolLabel(part.functionCall.name, part.functionCall.args),
           tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
@@ -487,6 +497,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     attribution.timestamps.push(...messageAttribution.timestamps)
     attribution.apiDurationsMs.push(...messageAttribution.apiDurationsMs)
     attribution.messageSeqs.push(...messageAttribution.messageSeqs)
+    attribution.textRedaction.push(...messageAttribution.textRedaction)
   }
 
   // The message whose ordinary output ends this group keeps its own group for everything after that
@@ -546,6 +557,8 @@ const sameAttribution = (a: UsageAttribution, b: UsageAttribution): boolean => (
     && sameSampleList(a.timestamps, b.timestamps)
     && sameSampleList(a.apiDurationsMs, b.apiDurationsMs)
     && sameMessageSeqs(a.messageSeqs, b.messageSeqs)
+    && a.textRedaction.length === b.textRedaction.length
+    && a.textRedaction.every((item, index) => sameTextRedaction(item, b.textRedaction[index]))
   )
 )
 
@@ -913,7 +926,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
           emitRow(index, null, false, null, { key: `${messageKeys[index]}-question-${call.id || partIndex}`, partIndex, question: call })
           return
         }
-        const technical = foldedText || part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
+        const technical = foldedText || part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getPartWebSearchAction(part, msg.parts) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
         if (technical) {
           const fragment = textBody || image ? { ...part, text: foldedText ? part.text : undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
           // Mixed-field technical fragments keep the original part's presentation ownership.
@@ -944,7 +957,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
         if (!row.activity) continue
         const owned = [...requestOwners].filter(([, key]) => key === row.key).map(([request]) => request)
         const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-        const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [] }
+        const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [], textRedaction: [] }
         let callCount = 0
         let pendingRequests = 0
         let missingRequests = 0
@@ -964,6 +977,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
           attribution.timestamps.push(...details.timestamps)
           attribution.apiDurationsMs.push(...details.apiDurationsMs)
           attribution.messageSeqs.push(...details.messageSeqs)
+          attribution.textRedaction.push(...details.textRedaction)
         }
         const usage = callCount ? { usage: total, callCount, attribution } : null
         const old = previous?.rows.get(row.key)?.activity

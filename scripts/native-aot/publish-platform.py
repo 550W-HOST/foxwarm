@@ -8,7 +8,6 @@ import platform
 import shutil
 import subprocess
 import tempfile
-import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 SDK = "10.0.403"
@@ -63,18 +62,6 @@ def publish(args, sdk_directory):
         for source, suffix in [("license.txt", "LICENSE"), ("third-party-notices.txt", "NOTICES")]:
             shutil.copyfile(files[source], notices / f"{prefix}-{suffix}.txt")
             sources.append(f"{prefix}-{suffix}.txt NuGet {package}/{RUNTIME}/{files[source].name}")
-    # These pins match the resolved managed dependencies and the Linux collector.
-    for name, repository, commit in [
-        ("PuppeteerSharp", "hardkoded/puppeteer-sharp", "7ee221b6b9b4286ccc400bbc2537e4ec9a315dcd"),
-        ("ReactiveExtensionsSharp", "hardkoded/ReactiveExtensions-Sharp", "787712268f4bedf5945d43082d450042be275bce"),
-        ("RecyclableMemoryStream", "microsoft/Microsoft.IO.RecyclableMemoryStream", "e29a28387da9018fa9605a1dcb3f7a0435aa9974"),
-    ]:
-        url = f"https://raw.githubusercontent.com/{repository}/{commit}/LICENSE"
-        data = urllib.request.urlopen(url, timeout=60).read()
-        if not data:
-            raise ValueError(f"Empty license: {url}")
-        (notices / f"{name}-LICENSE.txt").write_bytes(data)
-        sources.append(f"{name}-LICENSE.txt {url}")
     (notices / "SOURCES.txt").write_text("\n".join(sources) + "\n", encoding="utf-8")
     inventory = [platform.platform(), run("dotnet", "--info", cwd=sdk_directory), run("dotnet", "list", str(ROOT / "dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj"), "package", "--include-transitive", cwd=sdk_directory)]
     if args.target == "osx-arm64":

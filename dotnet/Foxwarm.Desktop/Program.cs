@@ -1,4 +1,5 @@
-using System.Security.Principal;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
 
 namespace Foxwarm.Desktop;
 
@@ -16,12 +17,15 @@ internal static class Program
             return;
         if (Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args).GetAwaiter().GetResult())
             return;
-        ApplicationConfiguration.Initialize();
-        using var instance = new Mutex(
-            false,
-            "Foxwarm.Desktop." + WindowsIdentity.GetCurrent().User!.Value,
-            new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false }
-        );
+        // The installer stops this executable's running copy before changing its files.
+        if (args is ["--exit"])
+        {
+            Environment.ExitCode = DesktopInstance.RequestExit();
+            return;
+        }
+        // A sign-in start stays in the notification area until the window is opened.
+        var tray = args is ["--tray"];
+        using var instance = DesktopInstance.Lock();
         bool acquired;
         try
         {
@@ -31,23 +35,70 @@ internal static class Program
         {
             acquired = true;
         }
+        // A further start shows the running copy's window; a further sign-in start changes nothing.
         if (!acquired)
         {
-            MessageBox.Show(
-                "Foxwarm is already running. Open it from the tray icon.",
-                "Foxwarm",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            if (!tray)
+                DesktopInstance.RequestOpen();
             return;
         }
+        using var openRequests = DesktopInstance.OpenRequests();
+        using var exitRequests = DesktopInstance.ExitRequests();
         try
         {
-            Application.Run(new DesktopWindow());
+            // Initialize the self-contained WinRT runtime only after private helper dispatch.
+            Microsoft.Windows.Foundation.UndockedRegFreeWinRTCS.AutoInitialize.AccessWindowsAppSDK();
+            WinRT.ComWrappersSupport.InitializeComWrappers();
+            Application.Start(initialization =>
+            {
+                SynchronizationContext.SetSynchronizationContext(
+                    new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread())
+                );
+                _ = new DesktopApplication(tray, openRequests, exitRequests);
+            });
         }
         finally
         {
             instance.ReleaseMutex();
         }
+    }
+}
+
+public sealed partial class DesktopApplication : Application
+{
+    private readonly bool tray;
+    private readonly WaitHandle openRequests;
+    private readonly WaitHandle exitRequests;
+    private DesktopWindow? window;
+    private RegisteredWaitHandle? openRequest;
+    private RegisteredWaitHandle? exitRequest;
+
+    internal DesktopApplication(bool tray, WaitHandle openRequests, WaitHandle exitRequests)
+    {
+        this.tray = tray;
+        this.openRequests = openRequests;
+        this.exitRequests = exitRequests;
+        InitializeComponent();
+    }
+
+    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    {
+        var window = new DesktopWindow();
+        this.window = window;
+        window.Start(tray);
+        openRequest = ThreadPool.RegisterWaitForSingleObject(
+            openRequests,
+            (_, _) => window.DispatcherQueue.TryEnqueue(window.OpenWindow),
+            null,
+            Timeout.Infinite,
+            executeOnlyOnce: false
+        );
+        exitRequest = ThreadPool.RegisterWaitForSingleObject(
+            exitRequests,
+            (_, _) => window.DispatcherQueue.TryEnqueue(window.ExitApplication),
+            null,
+            Timeout.Infinite,
+            executeOnlyOnce: true
+        );
     }
 }

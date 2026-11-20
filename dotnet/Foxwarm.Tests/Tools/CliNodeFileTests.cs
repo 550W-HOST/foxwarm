@@ -6,6 +6,41 @@ namespace Foxwarm.Tests;
 
 public sealed class CliNodeFileTests
 {
+    [Fact]
+    public async Task Streaming_source_opens_FIFOs_without_blocking_and_checks_the_open_handle()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+        using var temp = new TempDirectory();
+        var fifo = Path.Combine(temp.Path, "fifo");
+        using (
+            var process = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("mkfifo") { ArgumentList = { fifo } }
+            )!
+        )
+        {
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+        }
+        var link = Path.Combine(temp.Path, "link");
+        File.CreateSymbolicLink(link, fifo);
+        var attempts = Enumerable
+            .Range(0, 4)
+            .Select(_ =>
+                Task.Run(() =>
+                    Assert.Throws<IOException>(() => NodeFileStream.OpenSource(link, link))
+                )
+            );
+        await Task.WhenAll(attempts).WaitAsync(TimeSpan.FromSeconds(3));
+        var regular = Path.Combine(temp.Path, "regular");
+        await File.WriteAllTextAsync(regular, "content");
+        File.Delete(link);
+        File.CreateSymbolicLink(link, regular);
+        await using var stream = NodeFileStream.OpenSource(link, link);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("content", await reader.ReadToEndAsync());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -120,6 +155,47 @@ public sealed class CliNodeFileTests
         Assert.Equal(
             0L,
             (await transfer.Read(empty, "main", false))["sizeBytes"]!.GetValue<long>()
+        );
+    }
+
+    [Fact]
+    public async Task Transfers_resolve_relative_paths_against_the_session_cwd_when_supplied()
+    {
+        using var temp = new TempDirectory();
+        var paths = new NodePaths(temp.Path);
+        var project = Path.Combine(temp.Path, "project");
+        Directory.CreateDirectory(project);
+        var transfer = new NodeFileTransfer(paths);
+        var receipt = await transfer.Write(
+            "nested/out.txt",
+            "main",
+            Convert.ToBase64String("cwd"u8),
+            false,
+            false,
+            project
+        );
+        Assert.Equal(
+            Path.Combine(project, "nested", "out.txt"),
+            receipt["absolutePath"]!.GetValue<string>()
+        );
+        var file = await transfer.Read("nested/out.txt", "main", false, project);
+        Assert.Equal(Convert.ToBase64String("cwd"u8), file["dataBase64"]!.GetValue<string>());
+        // Without the field, or with a blank one, the Agent directory is the basis.
+        Assert.Equal(
+            Path.Combine(paths.AgentDirectory("main"), "nested", "out.txt"),
+            paths.Transfer("nested/out.txt", "main", false)
+        );
+        Assert.Equal(
+            paths.Transfer("nested/out.txt", "main", false),
+            paths.Transfer("nested/out.txt", "main", false, "  ")
+        );
+        Assert.Equal(
+            Path.Combine(project, "a.txt"),
+            paths.Transfer("a.txt", "main", false, project)
+        );
+        Assert.Equal(
+            Path.Combine(paths.AgentDirectory("main"), "tmp", "a.txt"),
+            paths.Transfer("$fw_tmp/a.txt", "main", false, project)
         );
     }
 

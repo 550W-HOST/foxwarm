@@ -5,7 +5,7 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readNodeTransferFile, writeNodeTransferFile } from './nodeFileTransfer';
+import { readNodeTransferFile, resolveNodeTransferPath, writeNodeTransferFile } from './nodeFileTransfer';
 
 test('resident CLI transfer retains binary/empty/large bytes, no-overwrite publication and existing digest receipts', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-node-transfer-'));
@@ -28,5 +28,20 @@ test('resident CLI transfer retains binary/empty/large bytes, no-overwrite publi
       assert.equal(await fs.readFile(file, 'utf8'), 'new');
       assert.deepEqual(await fs.readdir(root), ['transfer.bin'], 'native temporary publication files are cleaned');
     }
+  } finally { await fs.remove(root); }
+});
+
+test('resident CLI transfer resolves a relative path against the Session cwd when supplied, else the Agent directory', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-node-transfer-cwd-'));
+  try {
+    const project = path.join(root, 'project');
+    await fs.ensureDir(project);
+    const written = await writeNodeTransferFile('nested/out.txt', 'main', Buffer.from('cwd').toString('base64'), false, false, project);
+    assert.equal(written.absolutePath, path.join(project, 'nested', 'out.txt'));
+    const read = await readNodeTransferFile('nested/out.txt', 'main', false, project);
+    assert.equal(Buffer.from(read.dataBase64, 'base64').toString(), 'cwd');
+    await assert.rejects(() => readNodeTransferFile('nested/out.txt', 'main', false), /ENOENT|no such file/i);
+    assert.equal(resolveNodeTransferPath('a.txt', 'main', false, '   '), resolveNodeTransferPath('a.txt', 'main', false));
+    assert.equal(resolveNodeTransferPath('/abs/a.txt', 'main', false, project), path.resolve('/abs/a.txt'));
   } finally { await fs.remove(root); }
 });

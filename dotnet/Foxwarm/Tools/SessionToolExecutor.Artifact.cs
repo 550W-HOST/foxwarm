@@ -47,8 +47,9 @@ internal sealed partial class SessionToolExecutor
             metadata["createdAt"] = record["createdAt"]?.DeepClone();
             return new JsonObject
             {
-                ["output"] = metadata.ToJsonString(),
                 ["marker"] = ArtifactMarker(record["receipt"]!),
+                // Not `artifact`: that field shows a standalone reply card in the WebUI.
+                ["metadata"] = metadata,
             };
         }
         if (!ToolRegistry.ArtifactFileSource(args))
@@ -81,14 +82,12 @@ internal sealed partial class SessionToolExecutor
                 ExecutionNode: node
             ),
             files,
-            token,
-            toolScriptSourceRead: true
+            token
         );
         byte[] bytes;
         if (node == "master")
         {
             var actual = AuthorizationPaths.CanonicalPotential(files.Paths.FilePath(file));
-            sessions.RequireMainFileSourcePath(hosted, actual);
             if (!WorkspaceTools.RegularFile(actual))
                 throw new InvalidDataException("Artifact source must be a regular file");
             await using var stream = new FileStream(
@@ -161,16 +160,12 @@ internal sealed partial class SessionToolExecutor
         var result = new JsonObject { ["marker"] = ArtifactMarker(receipt) };
         if (SessionWait.Text(args["action"]) == "prepare")
         {
-            result["output"] =
-                $"Prepared {SessionWait.Text(receipt["type"])}: {SessionWait.Text(receipt["title"])}. Place the marker on its own line between blank lines in assistant prose to display it.";
             result["preparedArtifact"] = receipt.DeepClone();
+            result["note"] =
+                "Place the marker on its own line between blank lines in assistant prose to display it.";
         }
         else
-        {
-            result["output"] =
-                $"Published {SessionWait.Text(receipt["type"])}: {SessionWait.Text(receipt["title"])} (revision {receipt["revision"]}).";
             result["artifact"] = receipt.DeepClone();
-        }
         return result;
     }
 }

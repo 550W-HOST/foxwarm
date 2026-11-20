@@ -4,7 +4,7 @@ import { createServer, request as httpRequest } from 'node:http'
 import { createServer as createTlsServer, request as tlsRequest } from 'node:https'
 import { once } from 'node:events'
 import { execFileSync, spawn } from 'node:child_process'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import sharp from 'sharp'
@@ -14,12 +14,14 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const startedAt = Date.now()
 let currentStage
+const nativeDialogPages = new WeakSet()
 function stage(name) {
   currentStage = name
   console.error(JSON.stringify({ fixture: 'mainHostCode', stage: name, elapsedMs: Date.now() - startedAt }))
 }
 function observeNativeDialogs(page, surface) {
   page.on('dialog', dialog => {
+    nativeDialogPages.add(page)
     console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'native-dialog', surface, type: dialog.type(), message: dialog.message().slice(0, 2048), elapsedMs: Date.now() - startedAt }))
   })
 }
@@ -43,8 +45,6 @@ function observePrefixNavigation(page) {
 }
 stage('owned fixture preparation')
 
-const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
-await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
 const options = { env: {} }, owned = await createHostFixture('code', options)
 options.cwd = owned.root
 options.env = { HOME: join(owned.root, 'home') }
@@ -118,7 +118,47 @@ const workspaceHas = async path => { try { return (JSON.parse(await readFile(wor
 async function palette(frame, command) {
   await frame.click('.monaco-workbench')
   const page = frame.page(); await page.keyboard.down('Control'); await page.keyboard.down('Shift'); await page.keyboard.press('P'); await page.keyboard.up('Shift'); await page.keyboard.up('Control')
-  await frame.waitForSelector('.quick-input-widget input'); await frame.type('.quick-input-widget input', command); await page.keyboard.press('Enter')
+  await frame.waitForSelector('.quick-input-widget input', { visible: true })
+  await frame.type('.quick-input-widget input', command)
+  try {
+    await frame.waitForFunction(command => [...document.querySelectorAll('.quick-input-list .monaco-list-row.focused')].some(row => row.textContent.includes(command)), {}, command)
+  } catch (error) {
+    let state
+    // Native dialogs can block CDP evaluation; their existing event log is the evidence.
+    if (!nativeDialogPages.has(page)) {
+      try {
+        state = await frame.evaluate(() => {
+          const describe = element => element ? {
+            tag: element.tagName, role: element.getAttribute('role'),
+            label: element.getAttribute('aria-label')?.slice(0, 200),
+            className: String(element.className).slice(0, 200),
+          } : null
+          const input = document.querySelector('.quick-input-widget input')
+          return {
+            input: input?.value.slice(0, 200), inputVisible: !!input?.getClientRects().length,
+            documentFocused: document.hasFocus(), activeElement: describe(document.activeElement),
+            selectedResult: input?.getAttribute('aria-activedescendant'),
+            results: [...document.querySelectorAll('.quick-input-list .monaco-list-row')].slice(0, 5).map(row => ({
+              text: row.textContent.slice(0, 200), focused: row.classList.contains('focused'),
+              selected: row.getAttribute('aria-selected'),
+            })),
+            otherFocusedRows: [...document.querySelectorAll('.monaco-list-row.focused')].filter(row => !row.closest('.quick-input-widget')).slice(0, 4).map(row => row.textContent.slice(0, 200)),
+          }
+        })
+      } catch (diagnosticError) { state = { unavailable: String(diagnosticError).slice(0, 300) } }
+    }
+    console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'palette-failure', command, nativeDialog: nativeDialogPages.has(page), state }))
+    throw error
+  }
+  await page.keyboard.press('Enter')
+}
+// Root commands end by focusing their revealed root in Explorer. The root becomes
+// visible earlier, so input sent before this point races the command's own focus.
+function explorerFocusedOn(frame, label) {
+  return frame.waitForFunction(label => {
+    const list = document.activeElement
+    return !!list?.closest('.explorer-folders-view') && [...list.querySelectorAll('.monaco-list-row.focused')].some(row => row.textContent.includes(label))
+  }, {}, label)
 }
 async function codeFrame(page, nodeId = 'master') {
   return until(() => page.frames().find(frame => { const url = new URL(frame.url() || 'about:blank'); return url.pathname.endsWith('/vscode-web/') && url.searchParams.get('nodeId') === nodeId && frame.parentFrame() === page.mainFrame() }), 'actual Code iframe', 30000)
@@ -160,17 +200,38 @@ try {
   assert.equal((await remoteWorkspace()).folders.length, 2)
   assert.equal((await remoteWorkspace()).settings['editor.fontSize'], 15)
   assert.equal((JSON.parse(await readFile(workspaceFile, 'utf8'))).folders.length, 1)
+  await page.evaluate(() => {
+    window.codeOpenResults = []
+    window.addEventListener('message', event => {
+      if (event.origin !== location.origin || event.data?.channel !== 'foxwarm-code-bridge' || event.data.version !== 1 || event.data.type !== 'response') return
+      const frame = [...document.querySelectorAll('iframe[data-code-node]')].find(frame => frame.contentWindow === event.source)
+      if (frame) window.codeOpenResults.push({ nodeId: frame.dataset.codeNode, ...event.data })
+    })
+  })
   const launch = async (nodeId, path) => {
+    const firstResult = await page.evaluate(() => window.codeOpenResults.length)
     await page.click('button[aria-label="Open code options"]')
     await page.waitForFunction(nodeId => [...document.querySelectorAll('select option')].some(option => option.value === nodeId && !option.disabled), {}, nodeId)
     await page.select('select', nodeId)
     await page.click('input[placeholder="/"]', { clickCount: 3 }); await page.type('input[placeholder="/"]', path)
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Open code')?.click())
+    // Completion includes the workspace write and Explorer focus. Starting the next
+    // launcher interaction during that focus transition can redirect its typing.
+    await page.waitForFunction(({ nodeId, firstResult }) => window.codeOpenResults.slice(firstResult).some(result => result.nodeId === nodeId), { timeout: 30000 }, { nodeId, firstResult })
+    const result = await page.evaluate(({ nodeId, firstResult }) => window.codeOpenResults.slice(firstResult).find(result => result.nodeId === nodeId), { nodeId, firstResult })
+    assert.equal(result.ok, true, result.error)
+    assert.equal(decodeURIComponent(new URL(result.result.uri).pathname), path)
   }
-  await launch('code-peer', remoteRoot)
+  const mergedWorkspaceWrite = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return response.request().method() === 'PUT' && url.pathname === '/api/vscode-web/fs/write-file'
+      && url.searchParams.get('path') === remoteWorkspaceFile
+  }, { timeout: 30000 })
+  const [, mergedResponse] = await Promise.all([launch('code-peer', remoteRoot), mergedWorkspaceWrite])
+  assert.equal(mergedResponse.status(), 200)
   let remoteCode = await codeFrame(page, 'code-peer')
   await remoteCode.waitForSelector('.monaco-workbench', { timeout: 30000 })
-  await until(async () => (await remoteWorkspace()).folders.length === 1, 'remote child roots merged')
+  assert.equal((await remoteWorkspace()).folders.length, 1)
   assert.equal(await page.$$eval('iframe[data-code-node]', frames => frames.length), 2)
   assert.equal(await page.$eval('iframe[data-code-node="master"]', frame => frame.dataset.codeProof), 'same-frame')
   assert((await remoteWorkspace()).folders.every(folder => folder.uri.startsWith('foxwarm://node+code-peer')))
@@ -208,10 +269,11 @@ try {
   stage('persistent workspace root commands')
   await palette(code, 'Foxwarm: Open Foxwarm data folder')
   await until(() => workspaceHas(owned.data), 'data workspace command')
-  code = await codeFrame(page); await code.waitForFunction(() => document.body.innerText.includes('Foxwarm Data'))
+  code = await codeFrame(page); await explorerFocusedOn(code, 'Foxwarm Data')
   await palette(code, 'Foxwarm: Open Foxwarm app folder')
   const roots = (await owned.api('GET', '/api/vscode-web/fs/workspace-roots')).body
   await until(() => workspaceHas(roots.roots.app.path), 'app workspace command')
+  await explorerFocusedOn(code, 'Foxwarm App')
   assert.equal(await page.evaluate(() => document.querySelector('iframe[src*="vscode-web"]').dataset.codeProof), 'same-frame')
   stage('commit details and immutable diffs')
   // Clicking the real marker is the commit bridge producer, not a direct test-only command.
@@ -252,8 +314,7 @@ try {
   await sidebar.click('[data-session-id="main"]')
   const chat = await until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').searchParams.get('foxwarmEmbed') === 'chat'), 'actual nested Chat editor', 30000)
   await chat.waitForFunction(() => document.body.innerText.includes('CODE-TURN-DONE')); assert(!await chat.$('button[title="Terminal"], button[aria-label="Toggle terminal panel"]'))
-  await sidebar.click('button[title="UI settings"]'); await sidebar.waitForFunction(() => document.body.innerText.includes('Open setup'))
-  await sidebar.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent.trim() === 'Open setup').click())
+  await sidebar.click('button[aria-label="Open setup"]')
   const setup = await until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').searchParams.get('foxwarmEmbed') === 'setup'), 'actual nested Setup editor', 30000)
   await setup.waitForFunction(() => document.body.innerText.includes('Models') && document.body.innerText.includes('Setup'))
   stage('original App terminal and cwd')
@@ -303,7 +364,10 @@ try {
   }
   await clickReadableAction('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-  await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
+  await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page)
+  await code.waitForFunction(() => document.querySelector('.monaco-workbench')
+    && document.querySelector('.tab.active')?.getAttribute('aria-label')?.includes('notes.txt')
+    && document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'), { timeout: 30000 })
   const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/node-master.code-workspace'), 'utf8')); assert(persisted.folders.length >= 2); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
   assert.equal((await owned.api('GET', '/api/vscode-web/git/commit?workspace=' + encodeURIComponent(owned.work) + '&id=' + rootCommit)).body.comparison.mode, 'empty-tree')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
@@ -414,6 +478,8 @@ try {
   }
   stage('final effects and host shutdown')
   assert.equal(git('rev-parse', 'HEAD'), commit); assert.equal(requests.length, declaredMode ? 6 : 3)
+  const missingResources = codeResponses.filter(row => row.status >= 400 && /\/vscode-web\/(?:static|extensions|webview)\//.test(new URL(row.url).pathname) && !new URL(row.url).pathname.endsWith('/package.nls.json'))
+  assert.deepEqual(missingResources, [])
   assert(!codeResponses.some(row => row.status >= 500), JSON.stringify(codeResponses.filter(row => row.status >= 500)))
   await owned.stop(); console.log(JSON.stringify({ status: 'passed', requests: requests.length, codeRequests: codeResponses.length, browserErrors, roots, folders: persisted.folders.length, prefixedWorkbench: !declaredMode, originHeaderIsNotAuthentication: Boolean(declaredMode), declaredMode, proxyUpgrades }))
 } catch (error) {

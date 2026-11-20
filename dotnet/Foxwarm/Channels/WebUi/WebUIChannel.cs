@@ -22,7 +22,7 @@ internal sealed partial class WebUIChannel(
     private WebUiRealtime realtime = null!;
     private readonly Foxwarm.Terminal.TerminalRouter terminalRouter = new(
         terminals,
-        sessions.Nodes
+        sessions.NodeProviders
     );
 
     public void Register(WebApplication app)
@@ -59,10 +59,10 @@ internal sealed partial class WebUIChannel(
                 {
                     await Results
                         .Json(
-                            new
+                            new JsonObject
                             {
-                                error = "WebUI identity session binding changed.",
-                                code = "WEBUI_SESSION_NOT_ALLOWED",
+                                ["error"] = "WebUI identity session binding changed.",
+                                ["code"] = "WEBUI_SESSION_NOT_ALLOWED",
                             },
                             statusCode: 403
                         )
@@ -73,10 +73,10 @@ internal sealed partial class WebUIChannel(
                 {
                     await Results
                         .Json(
-                            new
+                            new JsonObject
                             {
-                                error = MainLog.SafeFailure(error),
-                                code = "SESSION_STATE_UNAVAILABLE",
+                                ["error"] = MainLog.SafeFailure(error),
+                                ["code"] = "SESSION_STATE_UNAVAILABLE",
                             },
                             statusCode: 500
                         )
@@ -109,17 +109,18 @@ internal sealed partial class WebUIChannel(
         app.MapGet(
             "/api/models",
             (HttpRequest request) =>
-                Results.Ok(WebUiContract.Models(models, request.Query["current"]))
+                Results.Ok(JsonData.WebNode(WebUiContract.Models(models, request.Query["current"])))
         );
         RegisterSetupRoutes(app);
         RegisterSessionNodeRoutes(app);
+        RegisterSessionExecRoutes(app);
         app.MapPost(
             "/api/sessions/{id}/cwd",
             async (string id, HttpRequest request) =>
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (!sessions.Accepting)
                     return Results.StatusCode(503);
                 JsonObject body;
@@ -131,9 +132,11 @@ internal sealed partial class WebUIChannel(
                 }
                 catch (JsonException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
-                return Results.Ok(await hosted.UpdateCwdAsync(SessionWait.Text(body["cwd"])));
+                return Results.Ok(
+                    JsonData.WebNode(await hosted.UpdateCwdAsync(SessionWait.Text(body["cwd"])))
+                );
             }
         );
         app.MapPost(
@@ -142,7 +145,7 @@ internal sealed partial class WebUIChannel(
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (!sessions.Accepting)
                     return Results.StatusCode(503);
                 try
@@ -151,9 +154,11 @@ internal sealed partial class WebUIChannel(
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Model settings must be an object.");
                     return Results.Ok(
-                        await runtime.UpdateSettingsAsync(
-                            hosted.Id,
-                            NormalizeHttpModelSettings(body, child: false)
+                        JsonData.WebNode(
+                            await runtime.UpdateSettingsAsync(
+                                hosted.Id,
+                                NormalizeHttpModelSettings(body, child: false)
+                            )
                         )
                     );
                 }
@@ -164,7 +169,7 @@ internal sealed partial class WebUIChannel(
                                 or InvalidOperationException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
@@ -174,7 +179,7 @@ internal sealed partial class WebUIChannel(
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (!sessions.Accepting)
                     return Results.StatusCode(503);
                 try
@@ -183,9 +188,11 @@ internal sealed partial class WebUIChannel(
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Child settings must be an object.");
                     return Results.Ok(
-                        await hosted.UpdateSettingsAsync(
-                            NormalizeHttpModelSettings(body, child: true),
-                            child: true
+                        JsonData.WebNode(
+                            await hosted.UpdateSettingsAsync(
+                                NormalizeHttpModelSettings(body, child: true),
+                                child: true
+                            )
                         )
                     );
                 }
@@ -196,13 +203,21 @@ internal sealed partial class WebUIChannel(
                                 or InvalidOperationException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
         app.MapGet(
             "/api/commands",
-            () => Results.Ok(new { commands = Foxwarm.Channels.ExternalCommands.WebUiCommands() })
+            () =>
+                Results.Ok(
+                    new JsonObject
+                    {
+                        ["commands"] = JsonData.WebNode(
+                            Foxwarm.Channels.UserCommands.WebUiCommands()
+                        ),
+                    }
+                )
         );
         new Foxwarm.Asr.AsrProxy(
             models.ConfigurationOwner,
@@ -218,10 +233,14 @@ internal sealed partial class WebUIChannel(
         RegisterHistoryRoutes(app);
         RegisterTaskRoutes(app);
         RegisterTimerRoutes(app);
+        RegisterUsageRoutes(app);
+        RegisterRedactionRoutes(app);
+        RegisterActivityRoutes(app);
         RegisterUploadAndImageRoutes(app);
         RegisterFileRoutes(app);
         RegisterArtifactRoutes(app);
         RegisterQuestionRoutes(app);
+        RegisterApprovalRoutes(app);
         app.MapPost(
             "/api/sessions/{id}/message",
             async (string id, HttpRequest request) =>
@@ -236,7 +255,7 @@ internal sealed partial class WebUIChannel(
                 }
                 catch (JsonException)
                 {
-                    return Results.BadRequest(new { error = "Invalid JSON" });
+                    return Results.BadRequest(new JsonObject { ["error"] = "Invalid JSON" });
                 }
                 if (
                     input is null
@@ -252,14 +271,19 @@ internal sealed partial class WebUIChannel(
                             )
                     )
                 )
-                    return Results.BadRequest(new { error = "Invalid message fields." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Invalid message fields." }
+                    );
                 if (
                     new[] { "parts", "uploadedFiles", "filePaths" }.Any(key =>
                         input.ContainsKey(key) && input[key] is not JsonArray
                     )
                 )
                     return Results.BadRequest(
-                        new { error = "Message parts and uploaded files must be arrays." }
+                        new JsonObject
+                        {
+                            ["error"] = "Message parts and uploaded files must be arrays.",
+                        }
                     );
                 var text =
                     SessionWait.Text(input["text"])
@@ -273,7 +297,9 @@ internal sealed partial class WebUIChannel(
                     (input["uploadedFiles"] as JsonArray ?? input["filePaths"] as JsonArray)?.Count
                     > 0;
                 if (string.IsNullOrWhiteSpace(text) && !hasUploads)
-                    return Results.BadRequest(new { error = "Missing message content." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Missing message content." }
+                    );
                 var clientId =
                     input["clientMessageId"] is JsonValue idValue
                     && idValue.TryGetValue<string>(out var idText)
@@ -281,13 +307,17 @@ internal sealed partial class WebUIChannel(
                         ? idText
                         : null;
                 if (input.ContainsKey("clientMessageId") && clientId is null)
-                    return Results.BadRequest(new { error = "Invalid clientMessageId" });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Invalid clientMessageId" }
+                    );
                 var controlId = SessionWait.Text(input["controlRequestId"]);
                 if (
                     input.ContainsKey("controlRequestId")
                     && (controlId is null || controlId.Length is < 1 or > 128)
                 )
-                    return Results.BadRequest(new { error = "Invalid controlRequestId" });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Invalid controlRequestId" }
+                    );
                 var scoped = WebUiAccess.Request(request);
                 if (scoped is not null)
                 {
@@ -300,16 +330,10 @@ internal sealed partial class WebUIChannel(
                         )
                     )
                         return Results.BadRequest(
-                            new { error = "WebUI identity messages may only include text parts." }
-                        );
-                    bool Slash(string value) =>
-                        System.Text.RegularExpressions.Regex.IsMatch(
-                            value,
-                            "^"
-                                + MessageRouter.CommandSpace
-                                + "*(?:@[a-zA-Z_\\-.]+"
-                                + MessageRouter.CommandSpace
-                                + "+)?/"
+                            new JsonObject
+                            {
+                                ["error"] = "WebUI identity messages may only include text parts.",
+                            }
                         );
                     var partsText = string.Join(
                         "\n",
@@ -317,12 +341,15 @@ internal sealed partial class WebUIChannel(
                             .OfType<JsonObject>()
                             .Select(part => SessionWait.Text(part["text"]) ?? "")
                     );
-                    if (Slash(text) || Slash(partsText))
+                    if (
+                        MessageRouter.IsKnownCommand(text, allowMention: true)
+                        || MessageRouter.IsKnownCommand(partsText, allowMention: true)
+                    )
                         return Results.Json(
-                            new
+                            new JsonObject
                             {
-                                error = "WebUI identity tokens cannot use slash commands.",
-                                code = "WEBUI_COMMANDS_DISABLED",
+                                ["error"] = "WebUI identity tokens cannot use slash commands.",
+                                ["code"] = "WEBUI_COMMANDS_DISABLED",
                             },
                             statusCode: 403
                         );
@@ -334,21 +361,26 @@ internal sealed partial class WebUIChannel(
                     if (MessageRouter.IsPresentationCommand(text))
                     {
                         if (canonical is null)
-                            return Results.NotFound(new { error = "Session not found" });
+                            return Results.NotFound(
+                                new JsonObject { ["error"] = "Session not found" }
+                            );
                     }
                     else
                     {
                         var owner = await FindRouteAsync(request, id);
                         if (owner is null)
-                            return Results.NotFound(new { error = "Session not found" });
+                            return Results.NotFound(
+                                new JsonObject { ["error"] = "Session not found" }
+                            );
                         canonical = owner.Id;
                         ingressOwner = owner;
                     }
-                    if (hasUploads && text.TrimStart().StartsWith("/", StringComparison.Ordinal))
+                    if (hasUploads && MessageRouter.IsKnownCommand(text, allowMention: true))
                         return Results.BadRequest(
-                            new
+                            new JsonObject
                             {
-                                error = "Send attachments as a message without a Session command.",
+                                ["error"] =
+                                    "Send attachments as a message without a Session command.",
                             }
                         );
                     if (scoped is not null && hasUploads)
@@ -381,23 +413,37 @@ internal sealed partial class WebUIChannel(
                         canonical = ingressOwner.Id;
                     var result = await router.HandleMessageAsync(
                         new ChannelContext(canonical, "webui"),
-                        new ChannelMessage(text, clientId, prepared.Parts, controlId),
+                        new ChannelMessage(
+                            text,
+                            clientId,
+                            prepared.Parts,
+                            controlId,
+                            WebUiAccess.Sender(request)
+                        ),
                         hasUploads || scoped is not null ? ingressOwner : null,
                         scoped is null ? null : () => scoped.Require(ingressOwner!.Id)
                     );
-                    return Results.Json(result.Value, statusCode: result.Status);
+                    return Results.Json(JsonData.WebNode(result.Value), statusCode: result.Status);
                 }
                 catch (WebUiAccessException)
                 {
                     return Results.Json(
-                        new { error = "WebUI identity session binding changed.", savedFiles },
+                        new JsonObject
+                        {
+                            ["error"] = "WebUI identity session binding changed.",
+                            ["savedFiles"] = JsonData.WebNode(savedFiles),
+                        },
                         statusCode: 403
                     );
                 }
                 catch (UploadPreparationException error)
                 {
                     return Results.Json(
-                        new { error = error.Message, savedFiles = error.SavedFiles },
+                        new JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["savedFiles"] = JsonData.WebNode(error.SavedFiles),
+                        },
                         statusCode: error.InnerException is WebUiAccessException ? 403
                             : error.InvalidInput ? 400
                             : 500
@@ -405,20 +451,21 @@ internal sealed partial class WebUIChannel(
                 }
                 catch (Foxwarm.Images.ImageInputException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
                 catch (Exception error)
                 {
                     if (!hasUploads)
                         return Results.Problem(error.Message, statusCode: 500);
                     return Results.Json(
-                        new
+                        new JsonObject
                         {
-                            error = error.Message,
-                            savedFiles,
-                            note = savedFiles.Count > 0
-                                ? "Saved attachment files were not removed; message admission did not complete."
-                                : null,
+                            ["error"] = error.Message,
+                            ["savedFiles"] = JsonData.WebNode(savedFiles),
+                            ["note"] =
+                                savedFiles.Count > 0
+                                    ? "Saved attachment files were not removed; message admission did not complete."
+                                    : null,
                         },
                         statusCode: 500
                     );
@@ -448,19 +495,23 @@ internal sealed partial class WebUIChannel(
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (hosted.Compactor.Standalone)
-                    return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
+                    return Results.Ok(
+                        new JsonObject { ["stoppedCurrent"] = false, ["abortedInFlight"] = false }
+                    );
                 if (!hosted.Metadata().Busy)
-                    return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
+                    return Results.Ok(
+                        new JsonObject { ["stoppedCurrent"] = false, ["abortedInFlight"] = false }
+                    );
                 try
                 {
                     var result = await runtime.StopAsync(hosted.Id);
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            stoppedCurrent = result.StoppedCurrent,
-                            abortedInFlight = result.AbortedInFlight,
+                            ["stoppedCurrent"] = result.StoppedCurrent,
+                            ["abortedInFlight"] = result.AbortedInFlight,
                         }
                     );
                 }
@@ -495,17 +546,15 @@ internal sealed partial class WebUIChannel(
                     await SendSse(context, new JsonObject { ["type"] = "connected" });
                     await SendSse(
                         context,
-                        JsonSerializer
-                            .SerializeToNode(
-                                new
-                                {
-                                    type = "session-state",
-                                    session = scoped is null
-                                        ? hosted.BuildDto()
-                                        : scoped.Session(hosted.BuildDto()),
-                                }
-                            )!
-                            .AsObject()
+                        new JsonObject
+                        {
+                            ["type"] = "session-state",
+                            ["session"] = JsonData.WebNode(
+                                scoped is null
+                                    ? hosted.BuildDto()
+                                    : scoped.Session(hosted.BuildDto())
+                            ),
+                        }
                     );
                     await SendSse(context, WebUiContract.ToolCalls(hosted));
                     var available = reader.WaitToReadAsync(lifetime.Token).AsTask();
@@ -548,7 +597,10 @@ internal sealed partial class WebUIChannel(
                             {
                                 if (scoped is not null && payload["session"] is JsonObject session)
                                     payload["session"] = scoped.Session(session);
-                                await SendSse(context, payload);
+                                await SendSse(
+                                    context,
+                                    scoped is null ? payload : InputSender.Without(payload)!
+                                );
                             }
                             if (item.Kind == SessionEventKind.Deleted)
                             {
@@ -632,7 +684,7 @@ internal sealed partial class WebUIChannel(
     {
         WebUiAccess.Request(context)?.Require();
         await context.Response.WriteAsync(
-            "data: " + Foxwarm.Images.ImageTransport.Project(payload)!.ToJsonString() + "\n\n",
+            "data: " + Foxwarm.Images.ImageTransport.Project(payload)!.ToJsonText() + "\n\n",
             context.RequestAborted
         );
         await context.Response.Body.FlushAsync(context.RequestAborted);

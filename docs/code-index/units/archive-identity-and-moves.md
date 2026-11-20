@@ -26,7 +26,7 @@ Completed SQLite-only migration evidence must have matching database authority m
 
 ## Platform durability
 
-Ledger writes retain flush-to-disk, atomic replacement and the committed-failure callback boundary on Windows as well as Linux. Unix private modes are applied only where supported; the existing `LinuxDirectorySync` reports `Unsupported` on non-Linux systems. Normal desktop shutdown/restart persistence does not establish Windows power-loss durability or add a new recovery mechanism.
+Ledger writes go through the shared [`AtomicJsonFile`](./dotnet-node-primitives.md#durable-state-files) with an owner-only creation mode: flush-to-disk, atomic replacement and the committed-after-rename classification apply on Windows as well as Linux. Unix private modes are applied only where supported; `DirectorySync` reports `Unsupported` on non-Linux systems. Normal desktop shutdown/restart persistence does not establish Windows power-loss durability or add a new recovery mechanism.
 
 ## Tests
 

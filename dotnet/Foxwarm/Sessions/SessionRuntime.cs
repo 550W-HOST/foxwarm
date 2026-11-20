@@ -100,23 +100,6 @@ internal sealed class SessionRuntime(SessionManager manager)
         remove => manager.TopologyChanged -= value;
     }
 
-    internal async Task QueueTriggerAsync(string id, string text)
-    {
-        var owner = await manager.RequiredAsync(id);
-        await SubmitExternalAsync(
-            owner,
-            new QueueItem(
-                QueueItemType.Trigger,
-                [new JsonObject { ["system"] = SessionBoundary.SessionEvent("trigger", text) }]
-            ),
-            () =>
-            {
-                if (!manager.Accepting)
-                    throw new InvalidOperationException("Host is shutting down.");
-            }
-        );
-    }
-
     public async Task ContinueAsync(string id) =>
         await (await manager.RequiredAsync(id)).StartProcessing(retry: true);
 
@@ -157,6 +140,58 @@ internal sealed class SessionRuntime(SessionManager manager)
         Action beforeAdmission
     )
     {
+        await RequireExternalOwnerAsync(owner);
+        await owner.Registry.Ingress.EnqueueExternalAsync(owner.Id, item, beforeAdmission);
+    }
+
+    /// <summary>
+    /// Strictly admits one verified webhook delivery to an existing Session. Returns false when
+    /// the same delivery receipt was already accepted or <paramref name="shape"/> declined it;
+    /// a missing target is never created.
+    /// </summary>
+    internal async Task<bool> SubmitWebhookAsync(
+        string id,
+        QueueItem item,
+        string? receipt,
+        bool wake = true,
+        Func<IReadOnlyList<QueueItem>, QueueItem, QueueItem?>? shape = null
+    )
+    {
+        var owner = await manager.RequiredAsync(id);
+        await RequireExternalOwnerAsync(owner);
+        return await owner.Registry.Ingress.EnqueueWebhookAsync(
+            owner.Id,
+            item,
+            receipt,
+            () =>
+            {
+                if (!manager.Accepting)
+                    throw new InvalidOperationException("Host is shutting down.");
+            },
+            wake,
+            shape
+        );
+    }
+
+    /// <summary>Runs a webhook handler as an unattended ToolScript owned by the target Session.</summary>
+    internal Task<JsonObject?> RunWebhookScriptAsync(
+        string id,
+        JsonObject script,
+        string? webhookId = null
+    ) => manager.RunWebhookScriptAsync(id, script, webhookId);
+
+    internal Task<JsonObject> ReadScriptRunAsync(
+        string runId,
+        string ownerId,
+        CancellationToken token
+    ) => manager.ToolScript.ReadOwnedRunAsync(runId, ownerId, token);
+
+    internal WebhookActivity Webhooks => manager.Webhooks;
+
+    internal bool Accepting => manager.Accepting;
+
+    private async Task RequireExternalOwnerAsync(SessionOwner owner)
+    {
         await manager.WaitForIdentityMutationAsync(owner.Id);
         // Text-only external admission has no attachment/Node materialization dependency.
         owner.Entry.RequireIdentityAuthority();
@@ -164,7 +199,6 @@ internal sealed class SessionRuntime(SessionManager manager)
             throw new InvalidOperationException(
                 "External input Session owner is no longer current."
             );
-        await owner.Registry.Ingress.EnqueueExternalAsync(owner.Id, item, beforeAdmission);
     }
 
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) =>
@@ -255,10 +289,9 @@ internal sealed class SessionRuntime(SessionManager manager)
 internal sealed partial class SessionOwner
 {
     internal Func<SessionMetadata, SessionMetadata>? MainMetadata { get; init; }
-    internal Func<string, string?>? ResolveBoundNode { get; init; }
 
     internal string ExecutionNode(JsonObject authority) =>
-        SessionManager.ResolveExecutionNode(authority, ResolveBoundNode?.Invoke(Agent));
+        SessionManager.ResolveExecutionNode(authority);
 
     public SessionMetadata Metadata()
     {
@@ -316,12 +349,16 @@ internal sealed partial class SessionOwner
         return MainMetadata?.Invoke(result) ?? result;
     }
 
+    internal Func<int>? RunningExecCount { get; set; }
+
     public JsonObject BuildDto() => BuildDto(Metadata());
 
     public JsonObject BuildDto(SessionMetadata meta)
     {
         var dto = SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
         dto["runtimeState"] = RuntimeSnapshot(meta);
+        // Background commands still tracked for this Session; the WebUI lists them on request.
+        dto["runningExecs"] = RunningExecCount?.Invoke() ?? 0;
         Entry.WithState(state =>
         {
             dto["currentNode"] = ExecutionNode(state.AuthorityEnvelope);

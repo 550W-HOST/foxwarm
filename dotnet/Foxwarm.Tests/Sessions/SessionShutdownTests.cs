@@ -554,7 +554,7 @@ public sealed class SessionShutdownTests
             {
                 ["sessionId"] = target.Id,
                 ["message"] = "actual committed handoff",
-                ["afterSend"] = "finish",
+                ["currentSessionTurnAction"] = "end_turn",
             }
             : new JsonObject { ["waitForInput"] = true };
         var chat = new CallsChat(1, handoff ? "send_to_session" : "wait", args);

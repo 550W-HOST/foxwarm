@@ -138,12 +138,27 @@ function respondJson(request, body, status = 200) {
 }
 
 async function attachRequestMocks(targetPage, options = {}) {
+  // The resource timeline is bounded; observers still receive entries after it
+  // fills. Capture the loaded module URL per document before navigation starts.
+  await targetPage.evaluateOnNewDocument(() => {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (/\/deps\/monaco-editor\.js(?:\?|$)/.test(entry.name)) {
+          window.__setupMonacoModuleUrl = entry.name
+        }
+      }
+    }).observe({ type: 'resource', buffered: true })
+  })
   const blockedEditorAssets = options.blockYamlWorkerImport ? ['yaml.worker']
     : options.blockEditorChunks ? ['monaco-editor', 'monaco-yaml', 'yaml.worker', 'editor.worker'] : []
   let mockModelsRawYaml = options.oobe ? '' : (options.modelsRawYaml ?? statusPayload.models.rawYaml)
   let mockConfigRawYaml = options.configRawYaml ?? statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
   let mockSessionModel = 'route'
+  const secretRequests = options.secretRequests ?? []
+  let mockSecrets = [
+    { name: 'openai-key', description: 'Primary provider', isSet: true, redactable: true, createdAt: 1, updatedAt: 1, setAt: 1, retiredVersions: 0, retainedUntil: null, usages: [{ kind: 'provider', id: 'openai' }] },
+  ]
   let mockSessionEffort = null
   let mockChildModel = null
   let mockChildEffort = null
@@ -265,6 +280,26 @@ async function attachRequestMocks(targetPage, options = {}) {
       }
       return
     }
+    if (url.pathname.includes('/api/setup/secrets')) {
+      const body = request.postData() ? JSON.parse(request.postData()) : null
+      secretRequests.push({ method: request.method(), path: url.pathname, body })
+      const name = decodeURIComponent(url.pathname.split('/api/setup/secrets/')[1] || '')
+      if (request.method() === 'PUT' && body?.value) {
+        mockSecrets = [...mockSecrets.filter(secret => secret.name !== name), { name, description: body.description || '', isSet: true, redactable: body.value.length >= 12, createdAt: 2, updatedAt: 2, setAt: 2, retiredVersions: 0, retainedUntil: null, usages: [] }]
+        void respondJson(request, { secret: mockSecrets.at(-1), restartedChannels: [], ...(body.value.length < 12 ? { warning: 'Values shorter than 12 characters cannot be hidden from tool output and model requests.' } : {}) })
+        return
+      }
+      void respondJson(request, {
+        locked: false,
+        keyFile: '/srv/foxwarm/keys/secrets.key',
+        minimumRedactableLength: 12,
+        retiredRetentionDays: 90,
+        secrets: mockSecrets,
+        missing: mockSecrets.some(secret => secret.name === 'telegram-token') ? [] : [{ name: 'telegram-token', usages: [{ kind: 'channel', id: 'telegram' }] }],
+        exposures: [{ label: 'openai-key', count: 2, firstSeenAt: 1, lastSeenAt: 3, lastSource: 'tool-output', lastSessionId: 'main' }],
+      })
+      return
+    }
     if (url.pathname.endsWith('/api/auth/session')) {
       void respondJson(request, { role: 'admin' })
       return
@@ -335,6 +370,12 @@ async function attachRequestMocks(targetPage, options = {}) {
       void respondJson(request, { summary: options.globalSummary ?? { total: 0, busy: 0 } })
       return
     }
+    if (url.pathname.endsWith('/api/usage')) {
+      const boundaries = (url.searchParams.get('boundaries') || '').split(',').filter(Boolean).map(Number)
+      const empty = { requests: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0, unpricedRequests: 0 }
+      void respondJson(request, { boundaries, groupBy: null, agent: null, total: empty, buckets: boundaries.slice(1).map(() => empty), coverage: { earliest: null, complete: true } })
+      return
+    }
     if (url.pathname.endsWith('/api/agents')) {
       void respondJson(request, { agents: [] })
       return
@@ -397,10 +438,7 @@ async function runMonacoEditorAction(targetPage, modelUri, action, payload = {})
 
 async function evaluateMonacoEditorAction(targetPage, modelUri, action, payload = {}) {
   return targetPage.evaluate(async ({ targetModelUri, editorAction, actionPayload }) => {
-    const monacoUrl = performance.getEntriesByType('resource')
-      .map((entry) => entry.name)
-      // An external Vite cache is served through /@fs/, not /node_modules/.vite/.
-      .find((name) => /\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
+    const monacoUrl = window.__setupMonacoModuleUrl
     if (!monacoUrl) throw new Error('Monaco module URL was not loaded')
     const monaco = await import(monacoUrl)
     const editor = monaco.editor.getEditors().find((candidate) => candidate.getModel()?.uri.toString() === targetModelUri)
@@ -603,11 +641,12 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Appearance, Models, Config and Notifications tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models, Config, Secrets and Notifications tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
   const requestStart = requestPaths.length
   await setupPage.setBypassServiceWorker(true)
-  await attachRequestMocks(setupPage)
+  const secretRequests = []
+  await attachRequestMocks(setupPage, { secretRequests })
   try {
     await setupPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
     await waitForWebUiReady(setupPage)
@@ -633,6 +672,7 @@ test('Setup uses accessible Appearance, Models, Config and Notifications tabs wi
       { tab: 'appearance', selected: 'true', status: null },
       { tab: 'models', selected: 'false', status: 'complete' },
       { tab: 'config', selected: 'false', status: null },
+      { tab: 'secrets', selected: 'false', status: null },
       { tab: 'notifications', selected: 'false', status: null },
     ])
     assert.deepEqual(await setupPage.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
@@ -665,9 +705,36 @@ test('Setup uses accessible Appearance, Models, Config and Notifications tabs wi
 
     await setupPage.focus('[data-setup-tab="config"]')
     await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="secrets"][aria-selected="true"]')
+    await setupPage.waitForSelector('[data-secret="openai-key"]')
+    const secretsText = await setupPage.$eval('[data-setup-section="secrets"]', element => element.textContent || '')
+    assert.ok(secretsText.includes('Used by Model provider openai'))
+    assert.ok(secretsText.includes('Tool output in main'))
+    await setupPage.click('[data-missing-secret="telegram-token"] button')
+    assert.equal(await setupPage.$eval('form[aria-label="Add secret"] input[placeholder="openai-key"]', input => input.value), 'telegram-token')
+    await setupPage.type('form[aria-label="Add secret"] input[type="password"]', 'short-value')
+    await setupPage.click('form[aria-label="Add secret"] button[type="submit"]')
+    await setupPage.waitForSelector('[data-secret="telegram-token"]')
+    await setupPage.waitForFunction(() => document.querySelector('[data-setup-section="secrets"] [role="status"]')?.textContent?.includes('cannot be hidden'))
+    assert.deepEqual(secretRequests.filter(entry => entry.method === 'PUT').map(entry => ({ ...entry, path: entry.path.replace(/^.*\/api\//, '/api/') })), [{ method: 'PUT', path: '/api/setup/secrets/telegram-token', body: { value: 'short-value' } }])
+    assert.equal(await setupPage.$eval('form[aria-label="Add secret"] input[type="password"]', input => input.value), '')
+    assert.equal((await setupPage.$eval('[data-setup-section="secrets"]', element => element.textContent || '')).includes('short-value'), false)
+    // The Setup Refresh action also reloads Secrets, which has no refresh control of its own.
+    const secretLoads = () => secretRequests.filter(entry => entry.method === 'GET').length
+    const loadsBeforeRefresh = secretLoads()
+    await setupPage.click('button::-p-text(Refresh)')
+    const deadline = Date.now() + 5000
+    while (secretLoads() === loadsBeforeRefresh && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(secretLoads(), loadsBeforeRefresh + 1)
+    const contentBox = (section) => setupPage.$eval(`[data-setup-section="${section}"] > div`, element => { const box = element.getBoundingClientRect(); return { left: box.left, width: box.width } })
+    const secretsBox = await contentBox('secrets')
+    await setupPage.focus('[data-setup-tab="secrets"]')
+    await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="notifications"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-setup-section="notifications"]', (panel) => panel.hidden), false)
     await setupPage.waitForSelector('[data-question-notification-choice="all"] input:checked')
+    // Secrets uses the same content column as the other Setup panels.
+    assert.deepEqual(secretsBox, await contentBox('notifications'))
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('Appearance')), true)
@@ -1144,6 +1211,28 @@ test('Setup editors fill available desktop space and remain scroll-reachable on 
     }
   } finally {
     await mobilePage.close()
+  }
+})
+
+test('Setup editor actions work after the Resource Timing buffer fills', async () => {
+  const timingPage = await browser.newPage()
+  await attachRequestMocks(timingPage)
+  await timingPage.evaluateOnNewDocument(() => performance.setResourceTimingBufferSize(1))
+  try {
+    await timingPage.goto(`${baseUrl}/setup-resource-timing/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(timingPage)
+    for (const section of ['models', 'config']) {
+      const modelUri = `inmemory://foxwarm/setup/foxwarm-${section}.yaml`
+      await timingPage.waitForSelector(`[data-monaco-model-uri="${modelUri}"][data-editor-ready="true"]`)
+      const resources = await timingPage.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name))
+      assert.equal(resources.length, 1)
+      assert.ok(resources.every(url => !/\/deps\/monaco-editor\.js(?:\?|$)/.test(url)))
+      const value = `# ${section} editor remains editable\n`
+      await runMonacoEditorAction(timingPage, modelUri, 'replace-value', { value })
+      assert.equal((await runMonacoEditorAction(timingPage, modelUri, 'snapshot')).value, value)
+    }
+  } finally {
+    await timingPage.close()
   }
 })
 
@@ -2254,7 +2343,7 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     const reopenedFilter = await chatFrame.waitForSelector('input[aria-label="Filter models"]')
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
-    assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
+    assert.equal(await chatFrame.$$eval('[data-model-column="current"] :is(button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"])', (buttons) => buttons.length), 4)
     // Selection closes the menu before the canonical model response is published.
     const currentEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Current effort"][aria-valuetext*="unavailable"]')
     assert.equal(await currentEffort.evaluate(input => input.value), '0')
@@ -2269,13 +2358,15 @@ test('embedded model filter selects one result and keeps the accessible Setup br
       body: { effort: 'low' },
     })
 
-    await chatFrame.click('[data-model-child-mode="specific"]')
-    await chatFrame.waitForSelector('[data-model-child-mode="follow"]')
+    // The stale child effort is a configured child policy, so its column is visible while the model follows.
+    await chatFrame.waitForSelector('[data-model-column="child"] [data-model-child-mode="follow"][data-model-option-selected="true"]')
+    assert.equal(await chatFrame.$('[data-model-child-mode="specific"]'), null)
+    assert.ok(await chatFrame.$('[data-model-trigger-child="true"]'))
     assert.ok(await chatFrame.$('input[aria-label="Filter models"]'))
     assert.ok(await chatFrame.$('input[aria-label="Filter child models"]'))
     const childFilter = await chatFrame.$('input[aria-label="Filter child models"]')
     await childFilter.type('model-b')
-    await chatFrame.waitForFunction(() => document.querySelectorAll('[data-model-column="child"] [data-model-option-row]').length === 1)
+    await chatFrame.waitForFunction(() => document.querySelectorAll('[data-model-column="child"] [data-model-option-row]:not([data-model-child-mode="follow"])').length === 1)
     assert.equal(await chatFrame.$eval('input[aria-label="Filter models"]', input => input.value), '')
     assert.equal(await chatFrame.$$eval('[data-model-column="current"] [data-model-option-row]', nodes => nodes.length), 5)
     assert.ok(await chatFrame.$eval('[data-model-selector-popup="true"]', popup => {
@@ -2383,7 +2474,13 @@ test('model columns preserve child policy and commit effort only after dragging 
     assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Current effort"]', nodes => nodes.length), 1)
     assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Child effort"]', nodes => nodes.length), 1)
     assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
-    await desktopPage.keyboard.press('Escape')
+    const childUpdatesBeforePin = modelUpdateRequests.length
+    assert.equal(await desktopPage.$eval('[data-model-column="child"] [data-model-child-mode="follow"]', row => row.getAttribute('data-model-option-selected')), 'true')
+    await desktopPage.click('[data-model-column="child"] [data-model-option-key="leaf/model-a"]')
+    await desktopPage.waitForSelector('[data-model-trigger-child="true"]')
+    assert.deepEqual(modelUpdateRequests.slice(childUpdatesBeforePin).map(request => request.body), [{ model: 'leaf/model-a' }])
+    if (await desktopPage.$('[data-model-selector-popup="true"]')) await desktopPage.keyboard.press('Escape')
+    await desktopPage.waitForSelector('[data-model-selector-popup="true"]', { hidden: true })
     await desktopPage.click('[data-model-trigger-child="true"]')
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     await desktopPage.click('input[aria-label="Filter child models"]')
@@ -2407,7 +2504,18 @@ test('model columns preserve child policy and commit effort only after dragging 
     assert.equal(modelUpdateRequests.length, beforeDrag + 1)
     await desktopPage.waitForSelector('[data-model-child-mode="follow"]:not(:disabled)')
     await desktopPage.click('[data-model-child-mode="follow"]')
+    // Following this session clears only the child model; the explicit child effort stays visible and editable.
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-column="child"] [data-model-child-mode="follow"]')?.getAttribute('data-model-option-selected') === 'true')
+    assert.deepEqual(modelUpdateRequests.at(-1).body, { clear: true })
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-trigger-child="true"]')?.title === 'Children: Follow this session · High')
+    await desktopPage.waitForFunction(() => {
+      const input = document.querySelector('input[type="range"][aria-label="Child effort"]')
+      return input && !input.disabled && input.getAttribute('aria-valuetext') === 'Child effort: high'
+    })
+    assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
+    await desktopPage.click('button[aria-label="Child: Follow this session"]')
     await desktopPage.waitForSelector('[data-model-column="child"]', { hidden: true })
+    assert.deepEqual(modelUpdateRequests.at(-1).body, { childEffortDefault: null })
     assert.equal(await desktopPage.$('[data-model-trigger-child="true"]'), null)
     assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
 
@@ -2531,13 +2639,8 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
         !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
       ), { timeout: 15_000 })
     }
-    const openSetupFromSettingsMenu = async () => {
-      await normalPage.click('button[aria-label="Open UI settings"]')
-      await normalPage.waitForSelector('[data-global-ui-settings-menu]')
-      await normalPage.evaluate(() => {
-        const button = [...document.querySelectorAll('[data-global-ui-settings-menu] button')].find((candidate) => candidate.textContent?.includes('Open setup'))
-        button?.click()
-      })
+    const openSetupFromSidebarGear = async () => {
+      await normalPage.click('[data-sidebar-brand] button[aria-label="Open setup"]')
       await normalPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
     }
 
@@ -2553,7 +2656,7 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
     await normalPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
     await normalPage.waitForFunction(() => !document.querySelector('[data-tab-id="system:setup"]'), { timeout: 15_000 })
 
-    await openSetupFromSettingsMenu()
+    await openSetupFromSidebarGear()
     await normalPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]', { timeout: 15_000 })
     await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
     assert.equal(await modelsEditorFocused(), false, 'a reopened Setup must not reclaim Models focus from an old request')
@@ -2561,7 +2664,7 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
 
     await normalPage.click('[data-setup-tab="config"]')
     await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
-    await openSetupFromSettingsMenu()
+    await openSetupFromSidebarGear()
     await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]', { timeout: 15_000 })
     assert.equal(await modelsEditorFocused(), false, 'ordinary activation of an open Setup keeps its tab and does not move focus')
 

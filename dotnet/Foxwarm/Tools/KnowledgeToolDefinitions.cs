@@ -12,7 +12,7 @@ internal static class KnowledgeToolDefinitions
                 ["name"] = "skill",
                 ["strict"] = false,
                 ["description"] =
-                    "List available skills or read a skill's instructions and resource list. Skills may come from the agent, its inherited agents, or the global collection. Read any needed resource files separately; loading instructions does not enable additional tools.",
+                    "List available skills or read a skill's instructions and resource list. Skills may come from the Agent, its inherited Agents, or the global collection. Read any needed resource files separately; loading instructions does not enable additional tools.",
                 ["parameters"] = new JsonObject
                 {
                     ["type"] = "object",
@@ -35,7 +35,7 @@ internal static class KnowledgeToolDefinitions
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Agent whose available skills to use. Defaults to this session's agent.",
+                                "Agent whose available skills to use. Defaults to this Session's Agent.",
                         },
                     },
                 },

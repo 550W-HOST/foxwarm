@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const largeSummary = (index) => `Source-bound summary ${index}: ` + ('detail-continued-' + index + '; ').repeat(350)
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
@@ -9,30 +10,22 @@ function completed(res, output, usage = { input_tokens: 100, output_tokens: 12 }
   event(res, { type: 'response.completed', response: { output, usage } }); res.end()
 }
 function call(res, id, name, args) {
-  completed(res, [{ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) }])
+  completed(res, [functionCall(id, name, args)])
 }
 function promptOf(input) {
   const messages = input.filter(item => item.type === 'message').flatMap(item => item.content || [])
     .map(content => content.text || '')
   return messages.findLast(item => item.includes('COMPACTION STARTED:')) || ''
 }
+// Submit exactly the operations the retention schedule requires.
 function plannerBlocks(prompt, index) {
-  const raw = [...prompt.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)]
-    .map(item => ({ start: Number(item[1]), end: Number(item[2] || item[1]) }))
-  const levelOne = [...prompt.matchAll(/^- B#(\d+) L1 raw#/gm)].map(item => Number(item[1]))
-  const plans = []
-  if (index >= 3 && levelOne.length >= 2)
-    plans.push({ level: 2, sourceKind: 'block', sourceStart: levelOne[0], sourceEnd: levelOne[1],
-      summary: 'The first two older source-bound L1 summaries were summarized into this L2 block. Continue using the later blocks and current context.',
-      memoryFacts: [{ kind: 'decision', text: 'Local synthetic scenario retained two nested blocks as source evidence.', attributedTo: 'assistant' }] })
-  const count = index <= 2 ? 3 : raw.length >= 5 ? 1 : 0
-  for (let block = 0; block < count; block++) {
-    const slice = raw.slice(block * 5, block * 5 + 5)
-    if (slice.length < 5) break
-    plans.push({ level: 1, sourceKind: 'message', sourceStart: slice[0].start,
-      sourceEnd: slice.at(-1).end, summary: largeSummary(`${index}-${block}`) })
-  }
-  return plans
+  return [...prompt.matchAll(/^\d+\. sourceKind=(message|block), sourceStart=(\d+), sourceEnd=(\d+), level=(\d+)/gm)].map(match => {
+    const operation = { level: Number(match[4]), sourceKind: match[1], sourceStart: Number(match[2]), sourceEnd: Number(match[3]) }
+    return operation.sourceKind === 'block'
+      ? { ...operation, summary: 'The two oldest source-bound L1 summaries were summarized into this L2 block. Continue using the later blocks and current context.',
+        memoryFacts: [{ kind: 'decision', text: 'Local synthetic scenario retained two nested blocks as source evidence.', attributedTo: 'assistant' }] }
+      : { ...operation, summary: largeSummary(index) }
+  })
 }
 
 export async function startScriptedProvider({ alphaToken, betaToken }) {
@@ -93,7 +86,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
             sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid source range.' }] })
           return
         }
-        if (layerPlanCount === 0) assert(input.includes('compact_plan_invalid'), 'The invalid plan must receive actual validation feedback')
+        if (layerPlanCount === 0) assert(input.includes('Compact plan rejected') && input.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=99999, sourceEnd=100000) is not a required operation'), 'The invalid plan must receive actual validation feedback')
         const blocks = plannerBlocks(planPrompt, layerPlanCount + 1)
         assert(blocks.length > 0, { index: layerPlanCount, prompt: planPrompt.slice(0, 700) })
         layerPlanCount++
@@ -105,7 +98,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
           assert(input.includes('historical tool response pruned') && input.includes('msg#3'),
             'Normal provider received the pruned output with an exact recall source marker')
           if (input.includes('SENTINEL_MIDDLE')) completed(res, [text('The archived original contains SENTINEL_MIDDLE.')])
-          else if (calls.some(call => call.name === 'recall'))
+          else if (calls.some(call => call.call_id === 'recall-first-page'))
             call(res, 'recall-middle-page', 'recall', { target: 'msg#3', contentFilter: 'SENTINEL_MIDDLE', toolDetail: 'snippets', previewLength: 2000 })
           else call(res, 'recall-first-page', 'recall', { target: 'msg#3' })
           return

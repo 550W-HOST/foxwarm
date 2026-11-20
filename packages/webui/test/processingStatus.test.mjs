@@ -155,3 +155,49 @@ test('settled LLM failure remains an explicit static outcome with eligible Conti
   assert.doesNotMatch(render({ ...props, turnIncomplete: false }), />Continue</)
   assert.match(render({ ...props, pendingControl: 'continue' }), /Continuing/)
 })
+
+
+test('the owner activity is the caption: the later of the reasoning heading and tool summary', () => {
+  const activity = { reasoning: 'Planning <next> & steps', tool: 'Inspect <source> & tests', latest: 'reasoning' }
+  for (const [name, source] of [['exec', 'node'], ['run_script', 'builtin']]) {
+    const runtimeState = activeRuntimeState('running-tool', { activity, tool: { name, source, argsPreview: 'Arguments preview', executionNode: 'compute', startedAt: 1 } })
+    const html = render({ runtimeState })
+    assert.match(html, />Planning &lt;next&gt; &amp; steps<\/span>/)
+    assert.match(html, /text-fw-special/)
+    assert.match(html, /aria-label="Runtime details: (Executing exec|Running script) · compute"/)
+    assert.doesNotMatch(html, /data-fox-thinking-copy|>Arguments preview</)
+    assert.match(render({ runtimeState: { ...runtimeState, activity: { ...activity, latest: 'tool' } } }), />Inspect &lt;source&gt; &amp; tests<\/span>/)
+  }
+  // A reasoning heading alone is a caption for requests and any running tool.
+  const reasoningOnly = { reasoning: 'Planning', latest: 'reasoning' }
+  assert.match(render({ runtimeState: activeRuntimeState('requesting-model', { active: { phase: 'normal-turn' }, activity: reasoningOnly }) }), />Planning<\/span>/)
+  const tool = render({ runtimeState: activeRuntimeState('running-tool', { activity: reasoningOnly, tool: { name: 'read', source: 'node', target: 'a.txt', startedAt: 1 } }) })
+  assert.match(tool, />Planning<\/span>/)
+  assert.match(tool, /aria-label="Runtime details: Reading a\.txt"/)
+  // A runtime preview without owner activity is never a caption.
+  assert.doesNotMatch(render({ runtimeState: activeRuntimeState('running-tool', { tool: { name: 'exec', source: 'node', argsPreview: 'Do not use as a caption', startedAt: 1 } }) }), /Do not use as a caption<\/span>|title="Do not use/)
+})
+
+test('the owner activity follows the current runtime style and yields to critical labels', () => {
+  const activity = { tool: 'Doing A', latest: 'tool' }
+  const request = activeRuntimeState('requesting-model', { active: { phase: 'normal-turn' }, activity })
+  const html = render({ runtimeState: request })
+  assert.match(html, />Doing A<\/span>/)
+  assert.match(html, /aria-label="Requesting model…"/)
+  assert.match(html, /text-fw-accent/)
+  assert.doesNotMatch(html, /data-fox-thinking-copy/)
+  const tool = render({ runtimeState: activeRuntimeState('running-tool', { activity, tool: { id: 'later', name: 'read', source: 'node', argsPreview: 'file', startedAt: 1 } }) })
+  assert.match(tool, />Doing A<\/span>/)
+  assert.match(tool, /text-fw-special/)
+  assert.match(render({ runtimeState: { ...request, activity: undefined } }), /data-fox-thinking-copy/)
+  for (const override of [
+    { pendingControl: 'stop' },
+    { runtimeState: { ...request, retry: { attempt: 1, maxAttempts: 3 } } },
+    { runtimeState: { ...request, active: { phase: 'compaction' } } },
+    { runtimeState: { ...request, stopping: true } },
+    { runtimeState: activeRuntimeState('running-tool', { activity, tool: { name: 'exec', source: 'node', approval: { id: 'a', status: 'pending' }, startedAt: 1 } }) },
+    { runtimeState: activeRuntimeState('waiting', { activity }) },
+    { runtimeState: activeRuntimeState('llm-failed', { activity }) },
+    { runtimeState: activeRuntimeState('idle', { activity }) },
+  ]) assert.doesNotMatch(render({ runtimeState: request, ...override }), /Doing A/)
+})

@@ -14,7 +14,7 @@ Coordinates history mutation safe points for fork and clear without letting conc
 
 - `DeleteMessagesAsync` stages an oldest/newest active slice with a new history version and legacy indexing-position updates. It preserves next message/block identities, queue/busy/Stop state and committed Archive rows. It joins ordinary canonical writes through the lane without claiming the fork/clear history-mutation gate.
 
-Callers: `/delete-messages`, `SessionManager.ForkAsync`, `SessionManager.ClearAsync`, `MessageRouter` `/fork` and `/session clear`, and lifecycle tests. Archive branch creation and child publication are coordinated by the manager and `PersistentSessionAuthorityStore`, not by copying parent Archive rows.
+Callers: `/session delete-messages`, `SessionManager.ForkAsync`, `SessionManager.ClearAsync`, `MessageRouter` `/fork` and `/session clear`, and lifecycle tests. Archive branch creation and child publication are coordinated by the manager and `PersistentSessionAuthorityStore`, not by copying parent Archive rows.
 
 ## Contract and side effects
 

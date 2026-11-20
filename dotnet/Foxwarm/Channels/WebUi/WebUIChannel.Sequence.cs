@@ -61,7 +61,9 @@ internal sealed partial class WebUIChannel
                                     || seq < 0
                                     || Math.Truncate(seq) != seq
                                 )
-                                    throw Invalid("after must map Session IDs to sequence numbers.");
+                                    throw Invalid(
+                                        "after must map Session IDs to sequence numbers."
+                                    );
                                 after[id] = (long)seq;
                             }
                         }
@@ -70,14 +72,18 @@ internal sealed partial class WebUIChannel
                             since =
                                 SessionCatalog.Number(body["since"]) is { } value && value >= 0
                                     ? value
-                                    : throw Invalid("since must be a nonnegative time in milliseconds.");
+                                    : throw Invalid(
+                                        "since must be a nonnegative time in milliseconds."
+                                    );
                         if (after is not null != since is not null)
                             throw Invalid("after and since are used together, for live updates.");
                         ArchiveSequenceCursor? before = null;
                         if (body.ContainsKey("before") && body["before"] is not null)
                         {
                             if (after is not null)
-                                throw Invalid("before pages older rows and cannot be combined with after.");
+                                throw Invalid(
+                                    "before pages older rows and cannot be combined with after."
+                                );
                             before =
                                 body["before"] is JsonObject cursor
                                 && cursor.All(pair => pair.Key is "at" or "sessionId" or "seq")
@@ -86,7 +92,8 @@ internal sealed partial class WebUIChannel
                                 && (cursor["sessionId"] is null) == (cursor["seq"] is null)
                                 && (
                                     cursor["sessionId"] is null
-                                    || SessionCatalog.Text(cursor["sessionId"]) is { Length: >= 1 and <= 512 }
+                                    || SessionCatalog.Text(cursor["sessionId"])
+                                        is { Length: >= 1 and <= 512 }
                                         && SessionCatalog.Number(cursor["seq"]) is { } tie
                                         && tie >= 0
                                         && Math.Truncate(tie) == tie
@@ -94,7 +101,9 @@ internal sealed partial class WebUIChannel
                                     ? new(
                                         at,
                                         SessionCatalog.Text(cursor["sessionId"]),
-                                        SessionCatalog.Number(cursor["seq"]) is { } n ? (long)n : null
+                                        SessionCatalog.Number(cursor["seq"]) is { } n
+                                            ? (long)n
+                                            : null
                                     )
                                     : throw Invalid("before must be a cursor returned as next.");
                         }

@@ -67,6 +67,43 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
 
+test('idle compaction schema validates models defaults and concrete overrides', () => {
+  assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'idleCompactMinutes'), false)
+  assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'idleCompactMinContextPercent'), false)
+  const options = { idleCompactMinutes: 55, idleCompactMinContextPercent: 0.5 }
+  assert.equal(validateModelsSchema({ defaults: options, providers: { p: { ...options, models: ['inherited', { id: 'off', idleCompactMinutes: 0 }] } } }), true)
+  for (const [field, value] of [['idleCompactMinutes', -1], ['idleCompactMinutes', '55'], ['idleCompactMinContextPercent', 0], ['idleCompactMinContextPercent', 1.1]]) {
+    assert.equal(validateModelsSchema({ defaults: { [field]: value }, providers: { p: {} } }), false)
+    assert.equal(validateModelsSchema({ providers: { p: { [field]: value } } }), false)
+    assert.equal(validateModelsSchema({ providers: { p: { models: [{ id: 'wire', [field]: value }] } } }), false)
+  }
+  for (const field of Object.keys(options)) {
+    assert.equal(validateModelsSchema({ providers: { leaf: {}, route: { providerType: 'session-hash', targets: ['leaf'], [field]: options[field] } } }), false)
+  }
+})
+
+test('text redaction schema supports inherited options and concrete disablement', () => {
+  const config = {
+    defaults: { textRedaction: { enabled: true, endpoint: 'https://detector.example/classify', threshold: 0.5, knownLabels: ['private_email'] } },
+    providers: {
+      p: { textRedaction: { timeoutMs: 1000, maxConcurrency: 4, batchBytes: 65536, keepValues: ['Foxwarm'], excludeLabels: [] }, models: ['inherited', { id: 'off', textRedaction: false }, { id: 'dates', textRedaction: { excludeLabels: ['private_url'] } }] },
+    },
+  }
+  assert.equal(validateModelsSchema(config), true, JSON.stringify(validateModelsSchema.errors))
+  for (const invalid of [null, { enabled: 'yes' }, { threshold: 1.1 }, { timeoutMs: 0 }, { maxConcurrency: 0 }, { maxConcurrency: 65 }, { maxConcurrency: 1.5 }, { batchBytes: -1 }, { batchBytes: 262145 }, { batchBytes: 0.5 }, { keepValues: 'Foxwarm' }, { keepValues: [''] }, { keepValues: [1] }, { endpoint: 'file:///invalid' }, { unknown: true }, { excludeLabels: 'private_url' }, { excludeLabels: [''] }, { excludeLabels: [' '] }, { excludeLabels: [1] }]) {
+    assert.equal(validateModelsSchema({ defaults: { textRedaction: invalid }, providers: { p: {} } }), false)
+  }
+  for (const knownLabels of [[], ['private_email', ' PRIVATE_PHONE '], 'all']) {
+    assert.equal(validateModelsSchema({ defaults: { textRedaction: { knownLabels } }, providers: { p: {} } }), true)
+    assert.equal(validateModelsSchema({ providers: { p: { textRedaction: { knownLabels } } } }), false)
+    assert.equal(validateModelsSchema({ providers: { p: { models: [{ id: 'm', textRedaction: { knownLabels } }] } } }), false)
+  }
+  for (const knownLabels of [null, true, 1, 'ALL', [''], [' '], [1], {}]) {
+    assert.equal(validateModelsSchema({ defaults: { textRedaction: { knownLabels } }, providers: { p: {} } }), false)
+  }
+  assert.equal(validateModelsSchema({ providers: { p: {}, alias: { providerType: 'session-hash', targets: ['p'], textRedaction: false } } }), false)
+})
+
 test('app config schema validates the sessionAutoTitle boolean and the new-install template', async () => {
   const { parse } = await import('yaml')
   const template = parse(await readFile(new URL('../../../templates/config.example.yaml', import.meta.url), 'utf8'))
@@ -180,6 +217,21 @@ test('WebUI schema wrappers reuse the shared canonical schema objects without a 
   const wrapperSource = await readFile(path.join(webuiRoot, 'src/yamlConfigSchemas.ts'), 'utf8')
   assert.match(wrapperSource, /shared\/src\/configSchemas/)
   assert.doesNotMatch(wrapperSource, /Foxwarm models configuration|providerEntry|channelEntry/)
+})
+
+test('models schema accepts complete image pricing at provider and model level and rejects partial or extra rates', () => {
+  const pricing = { input: 5, imageInput: 8, output: 30 }
+  const provider = (imageGeneration, model = 'model-a') => ({ providers: { p: { providerType: 'openai-ws', models: [model], imageGeneration } } })
+  const imageGeneration = { mode: 'separate', api: 'images', model: 'image-model', pricing }
+  for (const document of [provider(imageGeneration), provider({ enabled: true }, { id: 'model-a', imageGeneration })]) {
+    assert.equal(validateModelsSchema(document), true, JSON.stringify(validateModelsSchema.errors))
+    assert.equal(validateSharedModelsSchema(document), true, JSON.stringify(validateSharedModelsSchema.errors))
+  }
+  for (const bad of [{ input: 5, output: 30 }, { ...pricing, cached: 1 }, { ...pricing, output: -1 }, { ...pricing, input: '5' }]) {
+    const document = provider({ ...imageGeneration, pricing: bad })
+    assert.equal(validateModelsSchema(document), false, JSON.stringify(bad))
+    assert.equal(validateSharedModelsSchema(document), false, JSON.stringify(bad))
+  }
 })
 
 test('models schema deliberately accepts current, legacy, custom, and backend-tolerant fixtures', () => {
@@ -355,6 +407,7 @@ providers:
 
 test('invalid partial YAML returns null so the editor can retain its last valid suggestions', () => {
   assert.equal(completions.parseModelsYamlSuggestions('providers:\n  broken: [\n'), null)
+  assert.equal(completions.parseModelsYamlSuggestions('providers:\n  one:\n    apiKey: *c\n'), null)
   assert.deepEqual(completions.getModelsCompletionKind(['default: rou'], 0), 'default')
   assert.deepEqual(completions.getModelsCompletionKind(['providers:', '  route:', '    targets:', '      - one'], 3), 'targets')
   assert.equal(completions.getModelsCompletionKind(['providers:', '  route:', '    providerType: failover'], 2), null)
@@ -646,4 +699,21 @@ test('history compatibility completions suggest whole configured concrete keys w
     assert.equal(result.suggestions[0].range.startColumn, lines[index].indexOf('pri') + 1)
   }
   support.dispose()
+})
+
+
+test('models schema validates retry interval arrays at defaults, provider, model and virtual scopes', () => {
+  const documents = (value) => [
+    { defaults: { retryIntervalsMs: value }, providers: { p: {} } },
+    { providers: { p: { retryIntervalsMs: value, models: ['m'] } } },
+    { providers: { p: { models: [{ id: 'm', retryIntervalsMs: value }] } } },
+    { providers: { route: { providerType: 'failover', targets: ['a', 'b'], retryIntervalsMs: value } } },
+    { providers: { route: { providerType: 'session-hash', targets: ['a'], retryIntervalsMs: value } } },
+  ]
+  for (const value of [[0], [17000, 25000], [2147483647]]) {
+    for (const document of documents(value)) assert.equal(validateModelsSchema(document), true)
+  }
+  for (const value of [null, 1000, '1000', true, [], {}, [null], [-1], [0.5], [2147483648], ['1000'], [true]]) {
+    for (const document of documents(value)) assert.equal(validateModelsSchema(document), false)
+  }
 })

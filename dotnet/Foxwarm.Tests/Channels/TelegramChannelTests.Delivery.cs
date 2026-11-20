@@ -7,7 +7,7 @@ namespace Foxwarm.Tests;
 public sealed partial class TelegramChannelTests
 {
     [Fact]
-    public async Task File_fanout_reports_delivered_send_only_no_file_and_missing_targets_and_isolated_explicit_sends_require_own_attachment()
+    public async Task File_fanout_reports_delivered_send_only_no_file_and_missing_targets_and_migrated_isolation_denies_channel_sends()
     {
         await using var peer = await TelegramPeer.StartAsync();
         await using var f = await ExternalChannelFixture.CreateAsync(
@@ -34,11 +34,20 @@ public sealed partial class TelegramChannelTests
         await File.WriteAllTextAsync(path, "file bytes");
         var sent = await f.ToolAsync("send_file", new JsonObject { ["filePath"] = path });
         Assert.Null(sent!["error"]);
-        var output = SessionWait.Text(sent["output"])!;
-        Assert.Contains("Delivered: 2", output);
-        Assert.Contains("beta:42` (send-only)", output);
-        Assert.Contains("text-only:42` (no file support)", output);
-        Assert.Contains("missing:42", output);
+        Assert.Null(sent["output"]);
+        Assert.Equal(2, sent["delivered"]!.AsArray().Count);
+        static string[] Outcomes(JsonNode? list) =>
+            list!
+                .AsArray()
+                .Select(item =>
+                    SessionWait.Text(item!["channelTargetId"]) + " " + SessionWait.Text(item["reason"])
+                )
+                .ToArray();
+        Assert.Equal(
+            new[] { "beta:42 send-only", "text-only:42 no file support" },
+            Outcomes(sent["skipped"]).Order().ToArray()
+        );
+        Assert.Equal("missing:42", Assert.Single(sent["failed"]!.AsArray())!["channelTargetId"]!.GetValue<string>());
         Assert.Single(peer.Sent("a", "sendDocument"));
         Assert.Empty(peer.Sent("b", "sendDocument"));
         Assert.NotNull(sent["fileDelivery"]);
@@ -51,11 +60,13 @@ public sealed partial class TelegramChannelTests
             )!["error"]
         );
 
+        // A migrated isolated Agent has no attached-channel matcher, so its layer denies
+        // send_to_channel and channel-target send_file even for its own attachment.
         f.Manager.Nodes.Registry.Create("owned-fixture-node");
-        await f.Manager.SetAgentIsolationAsync(
+        await LegacyIsolationFixture.RestrictAsync(
+            f.Manager,
             "main",
             "owned-fixture-node",
-            true,
             new JsonArray(
                 new JsonObject
                 {
@@ -71,60 +82,32 @@ public sealed partial class TelegramChannelTests
                 }
             )
         );
-        Assert.NotNull(
-            (
-                await f.ToolAsync(
-                    "send_to_channel",
-                    new JsonObject
-                    {
-                        ["channelTargetId"] = "alpha:99",
-                        ["message"] = "unattached denied",
-                    }
-                )
-            )!["error"]
-        );
-        Assert.Null(
-            (
-                await f.ToolAsync(
-                    "send_to_channel",
-                    new JsonObject
-                    {
-                        ["channelTargetId"] = "alpha:42",
-                        ["message"] = "own attachment",
-                    }
-                )
-            )!["error"]
-        );
-        Assert.Null(
-            (
-                await f.ToolAsync(
-                    "send_file",
-                    new JsonObject
-                    {
-                        ["filePath"] = path,
-                        ["node"] = "master",
-                        ["channelTargetId"] = "alpha:42",
-                    }
-                )
-            )!["error"]
-        );
-        Assert.NotNull(
-            (
-                await f.ToolAsync(
-                    "send_file",
-                    new JsonObject
-                    {
-                        ["filePath"] = path,
-                        ["node"] = "master",
-                        ["channelTargetId"] = "alpha:99",
-                    }
-                )
-            )!["error"]
-        );
-        Assert.DoesNotContain(
-            peer.Sent("a"),
-            call => SessionWait.Text(call.Body["text"]) == "unattached denied"
-        );
+        var sentBefore = peer.Sent("a").Count();
+        foreach (var target in new[] { "alpha:42", "alpha:99" })
+        {
+            Assert.NotNull(
+                (
+                    await f.ToolAsync(
+                        "send_to_channel",
+                        new JsonObject { ["channelTargetId"] = target, ["message"] = "denied" }
+                    )
+                )!["error"]
+            );
+            Assert.NotNull(
+                (
+                    await f.ToolAsync(
+                        "send_file",
+                        new JsonObject
+                        {
+                            ["filePath"] = path,
+                            ["node"] = "master",
+                            ["channelTargetId"] = target,
+                        }
+                    )
+                )!["error"]
+            );
+        }
+        Assert.Equal(sentBefore, peer.Sent("a").Count());
     }
 
     [Fact]
@@ -212,7 +195,8 @@ public sealed partial class TelegramChannelTests
             new JsonObject { ["target"] = "config", ["filePath"] = candidate }
         );
         Assert.Null(installed!["error"]);
-        var toolResult = JsonNode.Parse(SessionWait.Text(installed["output"])!)!;
+        Assert.Null(installed["output"]);
+        var toolResult = installed;
         Assert.True(SessionCatalog.Flag(toolResult["saved"]));
         Assert.NotNull(toolResult["reload"]);
         Assert.Equal(

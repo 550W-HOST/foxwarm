@@ -1,6 +1,6 @@
 // Real file consumers through two unchanged official CLI clients and the original WebUI.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile, access, readdir } from 'node:fs/promises'
@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { functionCall, listsBuiltin } from './ctlModelCalls.mjs'
 
 // Inspect historical transfer receipts through their original technical tool rows.
 const fixture = await createHostFixture('node-files', { env: {}, onPage: page => page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')) })
@@ -16,7 +17,7 @@ const held = new Map(), holdWrites = new Set(), credentialsByNode = new Map()
 const exists = path => access(path).then(() => true, () => false)
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'FILES-DONE-' + key }] }]
 function labels(body) {
@@ -43,7 +44,16 @@ const peer = createServer(async (request, response) => {
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }))
-const proxyServer = createServer(), proxy = new WebSocketServer({ server: proxyServer, maxPayload: 75 * 1024 * 1024 })
+// Keep the intercepted WebSocket and the Node-initiated streaming requests on the same origin.
+const proxyServer = createServer((request, response) => {
+  const upstream = httpRequest(new URL(request.url, fixture.origin), { method: request.method, headers: request.headers }, reply => {
+    response.writeHead(reply.statusCode, reply.headers); reply.pipe(response)
+  })
+  request.on('aborted', () => upstream.destroy())
+  response.on('close', () => { if (!response.writableFinished) upstream.destroy() })
+  upstream.on('error', error => { if (!response.headersSent) response.writeHead(502); response.end(); failures.push(error.stack) })
+  request.pipe(upstream)
+}), proxy = new WebSocketServer({ server: proxyServer, maxPayload: 75 * 1024 * 1024 })
 proxyServer.listen(0, '127.0.0.1'); await once(proxyServer, 'listening')
 const nodeHost = `http://127.0.0.1:${proxyServer.address().port}`
 proxy.on('connection', (downstream, request) => {
@@ -87,6 +97,10 @@ const copy = (id, sourceNode, sourcePath, targetNode, targetPath, overwrite) => 
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 140, g: 20, b: 80, alpha: 1 } } }).png().toBuffer()
 const headers = { authorization: 'Bearer ' + fixture.token }
 async function upload(bytes, name = 'input.txt', mime = 'text/plain') { const form = new FormData(); form.append('file', new Blob([bytes], { type: mime }), name); const response = await fetch(fixture.origin + '/api/upload', { method: 'POST', headers, body: form }); assert.equal(response.status, 200); return response.json() }
+// A legacy isolated Agent bound to Node one, as an older release left it; startup migrates it.
+await mkdir(join(fixture.data, 'agents/bound/memory'), { recursive: true })
+await mkdir(join(fixture.data, 'state'), { recursive: true })
+await writeFile(join(fixture.data, 'state/agents.json'), JSON.stringify({ bound: { isolated: true, isolatedNode: 'one' } }))
 try {
   await fixture.start()
   for (const [node, paths] of Object.entries(homes)) {
@@ -102,27 +116,33 @@ try {
     await online(node)
   }
   const actor = await create('files-owner'), target = await create('delivery-target')
-  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session clear-parent' })).status, 200)
   let state = await turn(actor, 'select', [[call('select', 'node', { action: 'select', nodeId: 'one' })]])
   good(state, 'select'); assert.equal((await fixture.api('POST', route(actor) + '/cwd', { cwd: homes.one.project })).status, 200)
   const binary = Buffer.from(Array.from({ length: 1024 * 1024 + 7 }, (_, i) => i % 256)), unicode = '中文 café 🦊\n', remoteOne = join(homes.one.agents, 'main'), remoteTwo = join(homes.two.agents, 'main')
-  await writeFile(join(fixture.work, '二进制.bin'), binary); await writeFile(join(remoteOne, '中文.txt'), unicode); await writeFile(join(homes.one.project, 'cwd-only.txt'), 'real selected cwd')
+  await writeFile(join(fixture.work, '二进制.bin'), binary); await writeFile(join(homes.one.project, '中文.txt'), unicode); await writeFile(join(homes.one.project, 'cwd-only.txt'), 'real selected cwd')
   state = await turn(actor, 'copies', [[copy('to-one', 'master', '二进制.bin', 'one', 'nested/binary.bin'), copy('between', 'one', 'nested/binary.bin', 'two', 'copied.bin'), copy('to-main', 'two', 'copied.bin', 'master', 'back.bin'), copy('unicode', 'one', '中文.txt', 'two', 'café.txt'), copy('same', 'one', '中文.txt', 'one', 'same.txt'), call('ordinary-cwd', 'read', { filePath: 'cwd-only.txt' })]])
-  for (const id of ['to-one', 'between', 'to-main', 'unicode', 'same', 'ordinary-cwd']) good(state, id)
+  for (const id of ['to-one', 'between', 'to-main', 'unicode', 'same', 'ordinary-cwd']) {
+    const result = good(state, id)
+    if (['to-one', 'between', 'to-main'].includes(id)) assert.equal(result.transferId, undefined, `${id} must finish before the next copy`)
+  }
   assert(good(state, 'ordinary-cwd').output.includes('real selected cwd'))
-  for (const path of [join(remoteOne, 'nested/binary.bin'), join(remoteTwo, 'copied.bin'), join(fixture.work, 'back.bin')]) assert.deepEqual(await readFile(path), binary)
-  assert.equal(await readFile(join(remoteTwo, 'café.txt'), 'utf8'), unicode); assert(!await exists(join(homes.one.project, 'nested/binary.bin')))
+  for (const path of [join(homes.one.project, 'nested/binary.bin'), join(remoteTwo, 'copied.bin'), join(fixture.work, 'back.bin')]) assert.deepEqual(await readFile(path), binary)
+  assert.equal(await readFile(join(remoteTwo, 'café.txt'), 'utf8'), unicode); assert(!await exists(join(remoteOne, 'nested/binary.bin')))
+  // A relative copy endpoint uses the Session cwd only on the current Node; master and the other Node keep their own defaults.
+  for (const entry of wire.filter(item => item.direction === 'request' && ['file_stream_read_request', 'file_stream_write_request', 'file_read_request', 'file_write_request'].includes(item.type) && item.sessionId === actor)) assert.equal(entry.sessionCwd, entry.node === 'one' ? homes.one.project : undefined, entry.type + ' on ' + entry.node)
+  assert(wire.some(item => item.node === 'one' && item.sessionCwd === homes.one.project && item.type.startsWith('file_stream')))
   state = await turn(actor, 'overwrite', [[copy('no-overwrite', 'one', '中文.txt', 'two', 'copied.bin'), copy('overwrite', 'one', '中文.txt', 'two', 'copied.bin', true)]])
   assert(pair(state, 'no-overwrite').error); good(state, 'overwrite'); assert.equal(await readFile(join(remoteTwo, 'copied.bin'), 'utf8'), unicode)
   // A 50 MiB response is larger than the old 64 MiB transport frame after base64 encoding.
-  const boundary = Buffer.alloc(50 * 1024 * 1024, 0x93); await writeFile(join(remoteOne, 'boundary.bin'), boundary)
+  const boundary = Buffer.alloc(50 * 1024 * 1024, 0x93); await writeFile(join(homes.one.project, 'boundary.bin'), boundary)
   state = await turn(actor, 'boundary', [[copy('boundary', 'one', 'boundary.bin', 'master', 'boundary.bin'), copy('boundary-write', 'master', 'boundary.bin', 'two', 'boundary.bin')]])
   good(state, 'boundary'); good(state, 'boundary-write'); assert.deepEqual(await readFile(join(fixture.work, 'boundary.bin')), boundary); assert.deepEqual(await readFile(join(remoteTwo, 'boundary.bin')), boundary)
   const aboveCodeLimit = Buffer.alloc(boundary.length + 1, 0x71)
   await writeFile(join(fixture.work, 'above-code-limit.bin'), aboveCodeLimit)
-  const writesBefore = wire.filter(entry => entry.type === 'file_write_request').length
+  const writesBefore = wire.filter(entry => entry.type === 'file_stream_write_request').length
   state = await turn(actor, 'above-code-limit', [[copy('above-code-limit', 'master', 'above-code-limit.bin', 'two', 'above-code-limit.bin')]])
-  good(state, 'above-code-limit'); assert.equal(wire.filter(entry => entry.type === 'file_write_request').length, writesBefore + 1); assert.deepEqual(await readFile(join(remoteTwo, 'above-code-limit.bin')), aboveCodeLimit)
+  good(state, 'above-code-limit'); assert.equal(wire.filter(entry => entry.type === 'file_stream_write_request').length, writesBefore + 1); assert.deepEqual(await readFile(join(remoteTwo, 'above-code-limit.bin')), aboveCodeLimit)
   // Whole source after hundreds of comment lines, from Session cwd, runs in Main Monty with normal nested routing.
   const source = '# source beyond ordinary preview\n' + '# bounded full source 中文\n'.repeat(40000) + 'r = call_tool("builtin:copy_between_nodes", {"sourceNode": "one", "sourcePath": "中文.txt", "targetNode": "two", "targetPath": "monty-copy.txt"})\nreturn {"last_line_executed": True, "copy": r}\n' + '# trailing bounded comments\n'.repeat(40000)
   await writeFile(join(homes.one.project, 'whole.py'), source)
@@ -136,9 +156,9 @@ try {
   assert.equal(wire.findLast(entry => entry.node === 'two' && entry.tool === 'read' && entry.args?.filePath === 'other-source.py').sessionCwd, undefined)
   const otherRun = JSON.parse(await readFile(join(fixture.data, 'state/toolscript-runs', good(state, 'other-source').runId + '.json'), 'utf8')); assert.equal(otherRun.sourceNode, 'two')
   await writeFile(join(remoteTwo, 'reject.py'), 'return "must not execute"')
-  const rejectedTransfers = wire.filter(entry => entry.node === 'two' && entry.type === 'file_read_request').length
+  const rejectedTransfers = wire.filter(entry => entry.node === 'two' && ['file_read_request', 'file_stream_read_request'].includes(entry.type)).length
   state = await turn(actor, 'approval-rejected', [[call('approval-rejected', 'run_script', { node: 'two', filePath: 'reject.py' })]])
-  assert(pair(state, 'approval-rejected').error); assert.equal(wire.filter(entry => entry.node === 'two' && entry.type === 'file_read_request').length, rejectedTransfers)
+  assert(pair(state, 'approval-rejected').error); assert.equal(wire.filter(entry => entry.node === 'two' && ['file_read_request', 'file_stream_read_request'].includes(entry.type)).length, rejectedTransfers)
   for (const name of ['run_script', 'read']) {
     await writeFile(join(fixture.work, 'source-policy.yaml'), `version: 1
 rules:
@@ -162,7 +182,7 @@ rules:
   await writeFile(join(homes.one.project, 'waiting.py'), waitingSource)
   state = await turn(actor, 'source-wait', [[call('source-wait', 'run_script', { filePath: 'waiting.py', mode: 'background' })]])
   const paused = good(state, 'source-wait'); assert.equal(paused.status, 'waiting'); assert.equal(paused.stdout, 'before\n')
-  const sourceReads = wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length
+  const sourceReads = wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length
   assert.equal(sourceReads, 0, 'Complete approved programmatic content does not require a second transfer.')
   const sourceRequest = wire.findLast(entry => entry.node === 'one' && entry.tool === 'read' && entry.args?.filePath === 'waiting.py')
   assert.equal(sourceRequest.programmatic, true)
@@ -172,7 +192,7 @@ rules:
   await writeFile(join(homes.one.project, 'waiting.py'), 'call_tool("node:one/write", {"filePath": "must-not-reload", "content": "forbidden"})\nreturn "changed"')
   state = await turn(actor, 'source-continue', [[call('source-select-two', 'node', { action: 'select', nodeId: 'two' }), call('source-continue', 'continue_script', { runId: paused.runId, continuationId: paused.continuationId, input: 'accepted' })]])
   const resumed = good(state, 'source-continue'); assert.equal(resumed.status, 'completed'); assert.deepEqual(resumed.result, { answer: 'accepted', remote: unicode })
-  assert.equal(wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length, sourceReads); assert.equal(wire.filter(entry => entry.node === 'one' && entry.tool === 'read' && entry.args?.filePath === 'waiting.py').length, sourceApprovals); assert(!await exists(join(remoteOne, 'must-not-reload')))
+  assert.equal(wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length, sourceReads); assert.equal(wire.filter(entry => entry.node === 'one' && entry.tool === 'read' && entry.args?.filePath === 'waiting.py').length, sourceApprovals); assert(!await exists(join(remoteOne, 'must-not-reload')))
   state = await turn(actor, 'source-return-one', [[call('source-return-one', 'node', { action: 'select', nodeId: 'one' })]])
   good(state, 'source-return-one'); assert.equal((await fixture.api('POST', route(actor) + '/cwd', { cwd: homes.one.project })).status, 200)
   // Concrete source and destination permission decisions; neither denial dispatches a transfer.
@@ -190,7 +210,7 @@ rules:
   good(state, 'clear-policy')
   const outsideCopy = join(fixture.root, 'outside-copy.txt'); await writeFile(outsideCopy, 'permitted non-isolated outside bytes')
   state = await turn(actor, 'outside-copy', [[copy('outside-copy', 'master', outsideCopy, 'one', 'outside-copy.txt')]])
-  good(state, 'outside-copy'); assert.equal(await readFile(join(remoteOne, 'outside-copy.txt'), 'utf8'), 'permitted non-isolated outside bytes')
+  good(state, 'outside-copy'); assert.equal(await readFile(join(homes.one.project, 'outside-copy.txt'), 'utf8'), 'permitted non-isolated outside bytes')
   await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules:\n- id: endpoint-path\n  action: deny\n  match:\n    tool: {source: builtin, name: copy_between_nodes}\n    path: {arg: targetPath, anyNotWithin: "${agent.dir}"}\n')
   state = await turn(actor, 'path-policy', [[call('path-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]])
   good(state, 'path-policy')
@@ -225,21 +245,21 @@ rules:
   assert(pair(state, 'image-no-overwrite').error); assert(pair(state, 'delivery-failure').error); assert.deepEqual(await readFile(join(remoteTwo, 'export/crop.png')), cropped)
   state = await turn(actor, 'default-image', [[call('default-export', 'image_write_to_file', { id: 'crop#1', filePath: 'default/crop.png' }), call('default-send', 'send_file', { filePath: 'default/crop.png' }), call('master-export', 'image_write_to_file', { id: 'crop#1', filePath: join(fixture.work, 'explicit-master.png'), node: 'master' })]])
   good(state, 'default-export'); good(state, 'default-send'); good(state, 'master-export')
-  assert.deepEqual(await readFile(join(remoteOne, 'default/crop.png')), cropped); assert.deepEqual(await readFile(join(fixture.work, 'explicit-master.png')), cropped)
-  assert(!await exists(join(homes.one.project, 'default/crop.png')))
+  assert.deepEqual(await readFile(join(homes.one.project, 'default/crop.png')), cropped); assert.deepEqual(await readFile(join(fixture.work, 'explicit-master.png')), cropped)
+  assert(!await exists(join(remoteOne, 'default/crop.png')))
   await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules:\n- id: ordinary-remote-files\n  action: deny\n  match:\n    tool: {source: node, name: [read, write]}\n    targetNode: [one, two]\n')
   state = await turn(actor, 'node-file-deny-policy', [[call('node-file-deny-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]])
   good(state, 'node-file-deny-policy')
-  const deniedSourceReadsBefore = wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length
+  const deniedSourceReadsBefore = wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length
   state = await turn(actor, 'builtin-grants', [[copy('builtin-copy', 'one', '中文.txt', 'two', 'builtin-copy.txt'), call('builtin-export', 'image_write_to_file', { id: 'crop#1', filePath: 'builtin/crop.png', node: 'two' }), call('builtin-send', 'send_file', { filePath: 'builtin/crop.png', node: 'two', sessionId: target }), call('denied-ordinary-read', 'call_tool', { toolId: 'node:one/read', args: { filePath: '中文.txt' } }), call('denied-source-read', 'run_script', { filePath: 'waiting.py' })]])
   for (const id of ['builtin-copy', 'builtin-export', 'builtin-send']) good(state, id)
   assert(pair(state, 'denied-ordinary-read').error); assert(pair(state, 'denied-source-read').error || pair(state, 'denied-source-read').status === 'failed')
-  assert.equal(wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length, deniedSourceReadsBefore, 'run_script retains the real node:read source grant before transfer')
+  assert.equal(wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length, deniedSourceReadsBefore, 'run_script retains the real node:read source grant before transfer')
   assert.equal(await readFile(join(remoteTwo, 'builtin-copy.txt'), 'utf8'), unicode); assert.deepEqual(await readFile(join(remoteTwo, 'builtin/crop.png')), cropped)
-  // Actual original picker upload into a bound Agent: Administrator ingress does not impersonate a tool caller.
-  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'bound' })).status, 201)
-  assert.equal((await fixture.api('PUT', '/api/agents/bound', { isolatedNode: 'one' })).status, 200)
+  // Actual original picker upload into the migrated Agent: Administrator ingress stores on master
+  // under the Agent directory and does not impersonate a tool caller.
   const bound = await create('attachment-owner', 'bound')
+  assert.equal((await saved(bound)).currentNode, 'one')
   const page = await fixture.openApp(); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), actor)
   await page.waitForSelector('button[title="Download crop.png"]')
@@ -250,8 +270,8 @@ rules:
   assert.deepEqual(await readFile(join(downloads, 'crop.png')), cropped)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), bound); await page.waitForSelector('#file-upload')
   plans.set('picker', [body => {
-    const descriptors = JSON.stringify(body).match(/node=\\"one\\" path=\\"([^"\\]+)\\"/g) || []
-    assert(descriptors.length >= 2, 'provider gets actual remote file and image descriptors')
+    const descriptors = JSON.stringify(body).match(/node=\\"master\\" path=\\"([^"\\]+)\\"/g) || []
+    assert(descriptors.length >= 2, 'provider gets actual master file and image descriptors')
     assert(labels(body).length > 0, 'canonical Main image reaches provider')
     return done('picker')
   }])
@@ -261,23 +281,24 @@ rules:
   }, png.toString('base64'))
   await page.waitForSelector('.foxwarm-composer-attachment-chip'); await page.click('button[aria-label="Send message"]'); state = await finish(bound, 'picker')
   const descriptors = state.history.flatMap(row => row.parts || []).filter(part => part.text?.includes('<foxwarm-')).map(part => part.text)
-  assert(descriptors.every(text => text.includes('node="one"') && text.includes(join(homes.one.agents, 'bound'))))
+  assert(descriptors.every(text => text.includes('node="master"') && text.includes(join(fixture.data, 'agents/bound/.temp/channel-files/webui'))))
   const uploadedPaths = descriptors.map(text => /path="([^"]+)"/.exec(text)[1])
   assert.equal(await readFile(uploadedPaths[0], 'utf8'), '上传 Unicode 🦊'); assert.deepEqual(await readFile(uploadedPaths[1]), png)
-  assert(!await exists(join(fixture.data, 'agents/bound/.temp/channel-files/webui')))
   const ref = state.history.flatMap(row => row.parts || []).find(part => part.inlineDataRef)?.inlineDataRef; assert(ref?.blobId)
   response = await fetch(fixture.origin + '/api/blobs/' + ref.blobId, { headers }); assert.equal(response.status, 200); assert.deepEqual(Buffer.from(await response.arrayBuffer()), png)
   assert.equal((await fetch(fixture.origin + '/api/blobs/' + ref.blobId)).status, 401)
   await page.waitForSelector('.foxwarm-image-item img'); assert.equal(await page.$eval('.foxwarm-image-item img', image => image.naturalWidth), 3)
-  state = await turn(bound, 'isolated-copy', [[copy('isolated-copy', 'one', uploadedPaths[0], 'master', 'copied.txt'), call('isolated-send', 'send_file', { filePath: uploadedPaths[0] }), copy('isolated-outside', 'master', outsideCopy, 'one', 'must-not-copy-outside'), copy('isolated-other-node', 'two', 'café.txt', 'master', 'must-not-copy-other-node'), call('isolated-target', 'send_file', { filePath: uploadedPaths[0], sessionId: actor })]])
-  good(state, 'isolated-copy'); good(state, 'isolated-send')
-  assert.equal(await readFile(join(fixture.data, 'agents/bound/copied.txt'), 'utf8'), '上传 Unicode 🦊')
+  state = await turn(bound, 'isolated-copy', [[copy('isolated-copy', 'master', uploadedPaths[0], 'one', 'copied.txt')]])
+  good(state, 'isolated-copy')
+  assert.equal(await readFile(join(homes.one.agents, 'bound/copied.txt'), 'utf8'), '上传 Unicode 🦊')
+  state = await turn(bound, 'isolated-limits', [[call('isolated-send', 'send_file', { filePath: 'copied.txt' }), copy('isolated-outside', 'master', outsideCopy, 'one', 'must-not-copy-outside'), copy('isolated-other-node', 'two', 'café.txt', 'master', 'must-not-copy-other-node'), call('isolated-target', 'send_file', { filePath: 'copied.txt', sessionId: actor })]])
+  good(state, 'isolated-send')
   for (const id of ['isolated-outside', 'isolated-other-node', 'isolated-target']) assert(pair(state, id).error)
   assert(!await exists(join(homes.one.agents, 'bound/must-not-copy-outside'))); assert(!await exists(join(fixture.data, 'agents/bound/must-not-copy-other-node')))
-  // Partial ingress keeps already-written remote bytes and reports the real destination without a turn commit.
+  // Partial ingress keeps already-written bytes and reports the real destination without a turn commit.
   const first = await upload('partial remote', 'partial.txt'), outside = join(fixture.root, 'outside.txt'); await writeFile(outside, 'outside')
   const partial = await fixture.api('POST', route(bound) + '/message', { text: 'NODEFILES:partial', uploadedFiles: [first, { path: outside, filename: 'bad.txt' }] })
-  assert.equal(partial.status, 400); assert.equal(partial.body.savedFiles.length, 1); assert.equal(partial.body.savedFiles[0].node, 'one'); assert.equal(await readFile(partial.body.savedFiles[0].path, 'utf8'), 'partial remote'); assert(!JSON.stringify((await saved(bound)).history).includes('NODEFILES:partial'))
+  assert.equal(partial.status, 400); assert.equal(partial.body.savedFiles.length, 1); assert.equal(partial.body.savedFiles[0].node, 'master'); assert.equal(await readFile(partial.body.savedFiles[0].path, 'utf8'), 'partial remote'); assert(!JSON.stringify((await saved(bound)).history).includes('NODEFILES:partial'))
   // A non-isolated Session selected remote retains the established Main attachment ingress.
   const normal = await upload('ordinary Main ingress')
   assert.equal((await fixture.api('POST', route(actor) + '/message', { text: 'NODEFILES:normal-ingress', uploadedFiles: [normal] })).status, 202); state = await finish(actor, 'normal-ingress')
@@ -313,7 +334,7 @@ rules:
   state = await turn('following/main', 'following-main-select', [[call('following-main-select', 'node', { action: 'select', nodeId: 'one' })]]); good(state, 'following-main-select')
   for (const name of ['named', undefined]) {
     const response = await fixture.api('POST', '/api/sessions', { agentId: 'following', ...(name ? { sessionId: name } : {}) }); assert.equal(response.status, 200)
-    const created = await saved(response.body.sessionId); assert.equal(created.currentNode, 'one'); assert.equal(created.cwd, undefined)
+    const created = await saved(response.body.sessionId); assert.equal(created.currentNode, 'master'); assert.equal(created.cwd, undefined)
   }
   // Shared description edits go through TaskService, ordinary discovery and native Monty rather than a second policy path.
   state = await turn(actor, 'shared-task-create', [[call('shared-task-create', 'task', { action: 'create', title: 'shared scope' })]])
@@ -331,7 +352,7 @@ rules:
   state = await turn(actor, 'clear-capability-denial', [[call('clear-capability-denial', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]]); good(state, 'clear-capability-denial')
   const offline = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'remove-offline' })).body
   state = await turn(actor, 'remove-offline', [[call('discover-remove', 'search_tools', { query: 'node_remove', sources: ['builtin'], limit: 1 }), call('remove-offline', 'run_script', { code: 'return call_tool("builtin:node_remove", {"nodeId":"remove-offline"})' })]])
-  assert(good(state, 'discover-remove').output.includes('builtin:node_remove')); assert.deepEqual(good(state, 'remove-offline').result, { nodeId: 'remove-offline', disconnected: false })
+  assert(listsBuiltin(good(state, 'discover-remove').output, 'node_remove'), good(state, 'discover-remove').output); assert.deepEqual(good(state, 'remove-offline').result, { nodeId: 'remove-offline', disconnected: false })
   assert(requests.every(request => !(request.body.tools || []).some(tool => tool.name === 'node_remove')))
   state = await turn(actor, 'remove-active', [[call('remove-active', 'call_tool', { toolId: 'builtin:node_remove', args: { nodeId: 'two' } })]])
   assert.deepEqual(good(state, 'remove-active'), { nodeId: 'two', disconnected: true }); assert.equal(clients[1].child.exitCode, null); assert.equal(clients[1].child.signalCode, null)

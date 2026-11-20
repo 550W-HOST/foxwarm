@@ -8,7 +8,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-public sealed class NodeOnboardingHttpTests
+public sealed partial class NodeOnboardingHttpTests
 {
     private sealed class Fixture : IAsyncDisposable
     {
@@ -71,7 +71,7 @@ public sealed class NodeOnboardingHttpTests
             var file = typeof(ApprovedNodeRegistry)
                 .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(Hub.Registry)!;
-            typeof(LinuxAtomicJsonFile)
+            typeof(AtomicJsonFile)
                 .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(file, hook);
         }
@@ -82,6 +82,37 @@ public sealed class NodeOnboardingHttpTests
             await Host.DisposeAsync();
             Temp.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task Bootstrap_API_and_nested_tool_output_keep_shell_commands_readable()
+    {
+        await using var fixture = await Fixture.Start();
+        var directory = "/work/" + SerializationTests.ReadableText;
+        using var response = await fixture.Admin.PostAsJsonAsync(
+            "api/nodes/onboarding/commands",
+            new { baseUrl = "https://example.invalid", installDir = directory }
+        );
+        response.EnsureSuccessStatusCode();
+        var raw = await response.Content.ReadAsStringAsync();
+        SerializationTests.AssertReadable(raw);
+        var decoded = JsonNode.Parse(raw)!;
+        var expected = fixture.Sessions.Bootstrap!.Commands(
+            "https://example.invalid",
+            directory: directory
+        );
+        Assert.Equal(
+            expected["commands"]!["bareMetal"]!.GetValue<string>(),
+            decoded["commands"]!["bareMetal"]!.GetValue<string>()
+        );
+        var tokenPath = Path.Combine(fixture.Temp.Path, "中文+'token");
+        var nested = await fixture.Sessions.NodeBootstrapInfoAsync(
+            new JsonObject { ["filePath"] = tokenPath },
+            default
+        );
+        Assert.Null(nested["output"]);
+        Assert.Equal(tokenPath, nested["pairingTokenFile"]!.GetValue<string>());
+        Assert.DoesNotContain("\\u", nested.ToJsonText());
     }
 
     [Fact]
@@ -183,6 +214,12 @@ public sealed class NodeOnboardingHttpTests
         );
         var token = created["authToken"]!.GetValue<string>();
         Assert.Equal(url, created["baseUrl"]!.GetValue<string>());
+        var androidPairing = created["androidPairing"]!.AsObject();
+        Assert.Equal("foxwarm-node", androidPairing["type"]!.GetValue<string>());
+        Assert.Equal(1, androidPairing["version"]!.GetValue<int>());
+        Assert.Equal(url, androidPairing["baseUrl"]!.GetValue<string>());
+        Assert.Equal("owned-node", androidPairing["nodeId"]!.GetValue<string>());
+        Assert.Equal(token, androidPairing["authToken"]!.GetValue<string>());
         var commands = created["commands"]!.AsObject();
         Assert.Equal(9, commands.Count);
         foreach (var command in commands)

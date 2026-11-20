@@ -18,7 +18,6 @@ internal sealed record CompactCandidate(
     string Preview,
     int Tokens,
     int Segment,
-    bool Stranded = false,
     int? FrictionScore = null
 )
 {
@@ -30,18 +29,6 @@ internal sealed record CompactCandidate(
             : $"B#{Start}";
     public int TargetLevel => Kind == "message" ? 1 : SourceLevel + 1;
 }
-
-internal sealed record BlockPolicy(
-    int SourceLevel,
-    int TotalCount,
-    int TotalTokens,
-    int ForcedKeep,
-    int CandidateCount,
-    int RequestedMin,
-    int FeasibleMax,
-    int EffectiveMin,
-    string? Skipped
-);
 
 internal sealed record PreservedCompactMessage(long Seq, long BlockId, string Preview)
 {
@@ -55,32 +42,15 @@ internal sealed record CompactCandidates(
     IReadOnlyList<PreservedCompactMessage> Preserved,
     int EligibleRawTokens,
     int RequiredRawTokens,
-    string? RawSkipped,
-    IReadOnlyList<BlockPolicy> BlockPolicies,
+    IReadOnlyList<RetentionOperation> Retention,
     bool InContext = false
 )
 {
-    public IReadOnlyList<IReadOnlyList<CompactCandidate>> Segments()
-    {
-        var segments = new List<IReadOnlyList<CompactCandidate>>();
-        List<CompactCandidate>? current = null;
-        foreach (var item in Items)
-        {
-            if (
-                current is null
-                || current.Count == 0
-                || item.Segment != current[^1].Segment
-                || item.Kind != current[^1].Kind
-                || item.SourceLevel != current[^1].SourceLevel
-            )
-            {
-                current = [];
-                segments.Add(current);
-            }
-            current.Add(item);
-        }
-        return segments;
-    }
+    /// <summary>
+    /// Whether summaries can be written: any candidate in in-context mode, otherwise at least
+    /// one operation required by the retention policy.
+    /// </summary>
+    public bool HasWork => InContext ? Items.Count > 0 : Retention.Count > 0;
 }
 
 internal static class CompactCandidateBuilder
@@ -93,41 +63,95 @@ internal static class CompactCandidateBuilder
         return (int)Math.Ceiling(count);
     }
 
-    public static int Split(IReadOnlyList<JsonObject> history, double keepPercent = .3) =>
-        Split(history, keepPercent, RawSequenceCounts(history));
+    /// <summary>
+    /// Start of the force-kept recent raw tail: the newest rows whose estimated tokens fit within
+    /// <paramref name="keepTokens"/>, moved back to the start of a complete tool exchange. The
+    /// newest row is always kept, and the tail never extends over a summary block. Zero keeps
+    /// nothing.
+    /// </summary>
+    public static int Split(IReadOnlyList<JsonObject> history, double keepTokens) =>
+        Split(history, keepTokens, RawSequenceCounts(history));
+
+    /// <summary>
+    /// Raw-tail token budget: the keep fraction of the effective compact threshold or of the raw
+    /// region after the newest summary block, whichever is smaller. Automatic compaction runs at or
+    /// above the threshold; a manual compaction of a shorter history keeps the same share of what
+    /// is present.
+    /// </summary>
+    public static double KeepTokens(
+        double keepFraction,
+        double threshold,
+        IReadOnlyList<JsonObject> history
+    )
+    {
+        if (keepFraction <= 0 || threshold <= 0)
+            return 0;
+        var raw = 0d;
+        for (var index = history.Count - 1; index >= 0; index--)
+        {
+            if (Meta(history[index])?["contextBlock"] is not null)
+                break;
+            raw += RowTokens(history[index]);
+        }
+        return Math.Max(1, Math.Floor(keepFraction * Math.Min(threshold, raw)));
+    }
+
+    public static int RowTokens(JsonObject row) =>
+        Visible(row) && !Completion(row) ? Tokens(Preview(row, true)) : 0;
 
     private static int Split(
         IReadOnlyList<JsonObject> history,
-        double keepPercent,
+        double keepTokens,
         IReadOnlyDictionary<long, int> seqCounts
     )
     {
-        var split =
-            keepPercent > 0 ? (int)Math.Floor(history.Count * (1 - keepPercent)) : history.Count;
-        if (keepPercent > 0 && split < history.Count)
+        var split = history.Count;
+        if (keepTokens > 0)
         {
-            var cursor = split;
-            while (cursor > 0 && (Role(history[cursor]) == "tool" || Transparent(history[cursor])))
-                cursor--;
-            if (
-                Role(history[cursor]) == "model"
-                && Calls(history[cursor])
-                && RawExchangeEnd(history, cursor, seqCounts) >= split
-            )
-                split = cursor;
+            var total = 0d;
+            while (split > 0 && Meta(history[split - 1])?["contextBlock"] is null)
+            {
+                total += RowTokens(history[split - 1]);
+                if (total > keepTokens && split < history.Count)
+                    break;
+                split--;
+            }
+        }
+        return keepTokens > 0 && split < history.Count
+            ? WholeExchangeStart(history, split, seqCounts)
+            : split;
+    }
+
+    internal static int WholeExchangeStart(IReadOnlyList<JsonObject> history, int split) =>
+        WholeExchangeStart(history, split, RawSequenceCounts(history));
+
+    private static int WholeExchangeStart(
+        IReadOnlyList<JsonObject> history,
+        int split,
+        IReadOnlyDictionary<long, int> seqCounts
+    )
+    {
+        for (var cursor = 0; cursor < split; cursor++)
+        {
+            if (Role(history[cursor]) != "model" || !StartsExchange(history[cursor]))
+                continue;
+            var end = RawExchangeEnd(history, cursor, seqCounts);
+            if (end >= split)
+                return cursor;
+            cursor = end;
         }
         return split;
     }
 
     public static CompactCandidates Build(
         IReadOnlyList<JsonObject> history,
-        double keepPercent = .3,
+        double keepTokens = 0,
         bool inContext = false
     )
     {
         var seqCounts = RawSequenceCounts(history);
         var unsequencedExchanges = UnsequencedExchangeMembers(history);
-        var split = inContext ? history.Count : Split(history, keepPercent, seqCounts);
+        var split = inContext ? history.Count : Split(history, keepTokens, seqCounts);
         var older = history.Take(split).ToArray();
         var blockCounts = new Dictionary<long, int>();
         for (var index = 0; index < older.Length; index++)
@@ -140,50 +164,9 @@ internal static class CompactCandidateBuilder
             )
                 blockCounts[id] = blockCounts.GetValueOrDefault(id) + 1;
         }
-        var blocksByLevel = older
-            .Select(message => Meta(message)?["contextBlock"] as JsonObject)
-            .Where(block =>
-                block is not null
-                && ValidBlock(block)
-                && blockCounts[Number(block["id"])!.Value] == 1
-            )
-            .GroupBy(block => (int)Number(block!["level"])!.Value)
-            .ToDictionary(group => group.Key, group => group.ToArray());
-        var prelim =
-            new Dictionary<
-                int,
-                (int Count, int Tokens, int Keep, int Candidate, int Minimum, HashSet<long> Ids)
-            >();
-        foreach (var (level, blocks) in blocksByLevel)
-        {
-            var tokens = blocks.Sum(block =>
-                Tokens(
-                    Preview(
-                        older.First(message =>
-                            Number(Meta(message)?["contextBlock"]?["id"]) == Number(block!["id"])
-                        ),
-                        false
-                    )
-                )
-            );
-            var candidateCount =
-                inContext ? blocks.Length
-                : tokens < 3000 ? 0
-                : (int)Math.Floor(blocks.Length * .4);
-            var minimum = !inContext && tokens >= 5000 ? (int)Math.Ceiling(blocks.Length * .2) : 0;
-            prelim[level] = (
-                blocks.Length,
-                tokens,
-                blocks.Length - candidateCount,
-                candidateCount,
-                minimum,
-                blocks.Take(candidateCount).Select(block => Number(block!["id"])!.Value).ToHashSet()
-            );
-        }
         var entries = new List<CompactCandidate>();
         var preserved = new List<PreservedCompactMessage>();
-        var preservedExchanges =
-            new List<(HashSet<string> Calls, List<PreservedCompactMessage> Items, int EndIndex)>();
+        var preservedByIndex = new Dictionary<int, PreservedCompactMessage>();
         var segment = 1;
         string? priorKind = null;
         int priorLevel = 0;
@@ -212,22 +195,7 @@ internal static class CompactCandidateBuilder
                         Preview(message, true)
                     );
                     preserved.Add(item);
-                    var prior = preservedExchanges.LastOrDefault();
-                    if (
-                        Role(message) == "tool"
-                        && prior.Items is { Count: > 0 }
-                        && FollowsAcrossTransparentRows(older, prior.EndIndex, index, seqCounts)
-                        && ToolIds(message, "functionResponse", "tool_use_id")
-                            .Any(prior.Calls.Contains)
-                    )
-                    {
-                        prior.Items.Add(item);
-                        preservedExchanges[^1] = (prior.Calls, prior.Items, index);
-                    }
-                    else
-                        preservedExchanges.Add(
-                            (ToolIds(message, "functionCall", "id").ToHashSet(), [item], index)
-                        );
+                    preservedByIndex[index] = item;
                 }
                 segment++;
                 priorKind = null;
@@ -249,8 +217,6 @@ internal static class CompactCandidateBuilder
                     || rawEnd < rawStart
                     || !ValidBlock(block)
                     || blockCounts.GetValueOrDefault(id.Value) != 1
-                    || !prelim.TryGetValue((int)level.Value, out var policy)
-                    || !policy.Ids.Contains(id.Value)
                     || Role(message) != "model"
                 )
                 {
@@ -263,11 +229,6 @@ internal static class CompactCandidateBuilder
                     segment++;
                 if (previousBlockEnd is not null && rawStart <= previousBlockEnd)
                     segment++;
-                var stranded =
-                    index > 0
-                    && index + 1 < older.Length
-                    && Number(Meta(older[index - 1])?["contextBlock"]?["level"]) > level
-                    && Number(Meta(older[index + 1])?["contextBlock"]?["level"]) > level;
                 var summary = Preview(message, false);
                 entries.Add(
                     new CompactCandidate(
@@ -284,7 +245,6 @@ internal static class CompactCandidateBuilder
                         summary,
                         Tokens(summary),
                         segment,
-                        stranded,
                         CompactPlanValidator.Friction(block["frictionScore"])
                     )
                 );
@@ -323,7 +283,7 @@ internal static class CompactCandidateBuilder
             if (priorKind is not null && priorKind != "message")
                 segment++;
             var endIndex =
-                Role(message) == "model" && Calls(message)
+                Role(message) == "model" && StartsExchange(message)
                     ? RawExchangeEnd(older, index, seqCounts)
                     : index;
             var grouped = older.Skip(index).Take(endIndex - index + 1).ToArray();
@@ -366,42 +326,32 @@ internal static class CompactCandidateBuilder
             previousSeq = endSeq;
             index = endIndex;
         }
-        var rawTokens = entries.Where(item => item.Kind == "message").Sum(item => item.Tokens);
+        // A regular compaction writes its new level-1 block from the raw messages after the
+        // newest block; older raw messages left between blocks are not part of that source.
+        var newestBlock = entries.FindLastIndex(item => item.Kind == "block");
+        var rawTokens = entries
+            .Where((item, index) => item.Kind == "message" && (inContext || index > newestBlock))
+            .Sum(item => item.Tokens);
         var eligible = inContext || rawTokens > 2000;
         if (!eligible)
             entries.RemoveAll(item => item.Kind == "message");
-        var policies = new List<BlockPolicy>();
-        foreach (var (level, policy) in prelim)
+        foreach (var (index, item) in preservedByIndex)
         {
-            var group = entries
-                .Where(item => item.Kind == "block" && item.SourceLevel == level)
+            if (item.Exchange.Count > 0)
+                continue;
+            var end =
+                Role(older[index]) == "model" && StartsExchange(older[index])
+                    ? RawExchangeEnd(older, index, seqCounts, matchToolIds: true)
+                    : index;
+            var members = Enumerable
+                .Range(index, end - index + 1)
+                .Where(preservedByIndex.ContainsKey)
+                .Select(member => preservedByIndex[member])
                 .ToArray();
-            var feasible = group
-                .GroupBy(item => item.Segment)
-                .Sum(segmentItems => segmentItems.Count() >= 2 ? segmentItems.Count() : 0);
-            policies.Add(
-                new BlockPolicy(
-                    level,
-                    policy.Count,
-                    policy.Tokens,
-                    policy.Keep,
-                    policy.Candidate,
-                    policy.Minimum,
-                    feasible,
-                    Math.Min(policy.Minimum, feasible),
-                    !inContext && policy.Tokens < 3000
-                            ? "below the 3000-token block eligibility threshold"
-                        : policy.Candidate == 0
-                            ? "the strict oldest-candidate window is empty at this level size"
-                        : policy.Minimum > 0 && feasible == 0
-                            ? "no legal contiguous multi-block candidate segment is available"
-                        : null
-                )
-            );
+            var sequences = members.Select(member => member.Seq).ToArray();
+            foreach (var member in members)
+                member.Exchange = sequences;
         }
-        foreach (var (_, items, _) in preservedExchanges)
-        foreach (var item in items)
-            item.Exchange = items.Select(member => member.Seq).ToArray();
         return new CompactCandidates(
             history,
             split,
@@ -409,11 +359,7 @@ internal static class CompactCandidateBuilder
             preserved,
             eligible ? rawTokens : 0,
             eligible && !inContext ? (int)Math.Ceiling(rawTokens * .2) : 0,
-            eligible ? null
-                : rawTokens > 0
-                    ? $"~{rawTokens} raw-message tokens do not exceed the 2000-token eligibility threshold"
-                : "no eligible model-visible raw message candidates",
-            policies,
+            inContext ? [] : CompactRetention.Plan(entries),
             inContext
         );
     }
@@ -423,20 +369,9 @@ internal static class CompactCandidateBuilder
         var members = new HashSet<int>();
         for (var start = 0; start < history.Count; start++)
         {
-            if (Role(history[start]) != "model" || !Calls(history[start]))
+            if (Role(history[start]) != "model" || !StartsExchange(history[start]))
                 continue;
-            var end = start;
-            for (var next = start + 1; next < history.Count; next++)
-            {
-                var row = history[next];
-                if (
-                    Meta(row)?["contextBlock"] is not null
-                    || Role(row) != "tool" && !Transparent(row)
-                )
-                    break;
-                if (Role(row) == "tool")
-                    end = next;
-            }
+            var end = RawExchangeEnd(history, start, seqCounts: null);
             if (
                 end > start
                 && Enumerable
@@ -462,15 +397,27 @@ internal static class CompactCandidateBuilder
         return counts;
     }
 
+    // Both client tools and deferred native search share the same history range.
+    // A pending direct server call joins its next assistant response. That
+    // response answers or abandons it; only newly issued calls extend the range.
+    // A user message or summary block also ends the exchange.
     private static int RawExchangeEnd(
         IReadOnlyList<JsonObject> history,
         int start,
-        IReadOnlyDictionary<long, int> seqCounts
+        IReadOnlyDictionary<long, int>? seqCounts,
+        bool matchToolIds = false
     )
     {
         var end = start;
         var walkedSeq = Number(Meta(history[start])?["seq"]);
         var preserved = Number(Meta(history[start])?["preservedFromBlockId"]) is > 0;
+        var pendingSearch = new HashSet<string>();
+        AnthropicSearchHistory.UpdatePending(
+            AnthropicSearchHistory.Blocks(history[start]),
+            pendingSearch
+        );
+        var localBatch = Calls(history[start]);
+        var localIds = ToolIds(history[start], "functionCall", "id").ToHashSet();
         for (var next = start + 1; next < history.Count; next++)
         {
             var row = history[next];
@@ -479,47 +426,49 @@ internal static class CompactCandidateBuilder
             if (
                 meta?["contextBlock"] is not null
                 || !preserved && Number(meta?["preservedFromBlockId"]) is > 0
-                || seq is null
-                || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq <= walkedSeq
-                || Role(row) != "tool" && !Transparent(row)
+                || seqCounts is not null
+                    && (
+                        seq is null
+                        || seqCounts.GetValueOrDefault(seq.Value) != 1
+                        || seq <= walkedSeq
+                    )
             )
                 break;
             walkedSeq = seq;
-            // A trailing presentation notice alone does not extend a call-only source.
-            if (Role(row) == "tool")
+            if (Role(row) == "tool" && (localBatch || pendingSearch.Count > 0))
+            {
+                if (
+                    matchToolIds
+                    && !ToolIds(row, "functionResponse", "tool_use_id").Any(localIds.Contains)
+                )
+                    break;
                 end = next;
+            }
+            else if (Transparent(row))
+                continue;
+            else if (Role(row) == "model" && pendingSearch.Count > 0)
+            {
+                AnthropicSearchHistory.UpdatePending(
+                    AnthropicSearchHistory.Blocks(row),
+                    pendingSearch
+                );
+                localBatch = Calls(row);
+                localIds.UnionWith(ToolIds(row, "functionCall", "id"));
+                end = next;
+            }
+            else
+                break;
         }
         return end;
     }
 
-    private static bool Transparent(JsonObject row) => !Visible(row) || Completion(row);
+    private static bool StartsExchange(JsonObject row) =>
+        Calls(row)
+        || AnthropicSearchHistory
+            .Blocks(row)
+            .Any(block => SessionWait.Text(block["type"]) == "server_tool_use");
 
-    private static bool FollowsAcrossTransparentRows(
-        IReadOnlyList<JsonObject> history,
-        int previousIndex,
-        int currentIndex,
-        IReadOnlyDictionary<long, int> seqCounts
-    )
-    {
-        var previousSeq = Number(Meta(history[previousIndex])?["seq"]);
-        for (var index = previousIndex + 1; index <= currentIndex; index++)
-        {
-            var row = history[index];
-            var meta = Meta(row);
-            var seq = Number(meta?["seq"]);
-            if (
-                seq is null
-                || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq <= previousSeq
-                || meta?["contextBlock"] is not null
-                || index < currentIndex && !Transparent(row)
-            )
-                return false;
-            previousSeq = seq;
-        }
-        return true;
-    }
+    private static bool Transparent(JsonObject row) => !Visible(row) || Completion(row);
 
     public static long? Number(JsonNode? node)
     {
@@ -711,11 +660,11 @@ internal static class CompactCandidateBuilder
                 pieces.Add(content);
             if (part["functionCall"] is JsonObject call)
                 pieces.Add(
-                    $"[call:{call["name"]?.GetValue<string>()}] {call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonString() ?? ""}"
+                    $"[call:{call["name"]?.GetValue<string>()}] {call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonText() ?? ""}"
                 );
             if (part["functionResponse"] is JsonObject response)
             {
-                var source = response["response"];
+                var source = InputSender.Without(response["response"]);
                 var value = source as JsonObject;
                 var output =
                     value?["error"] is JsonNode error
@@ -724,14 +673,14 @@ internal static class CompactCandidateBuilder
                                 error is JsonValue stringError
                                 && stringError.TryGetValue<string>(out var message)
                                     ? message
-                                    : error.ToJsonString()
+                                    : error.ToJsonText()
                             )
                     : value?["output"] is JsonValue outputValue
                     && outputValue.TryGetValue<string>(out var textOutput)
                         ? textOutput
-                    : value?["output"]?.ToJsonString()
-                        ?? value?["content"]?.ToJsonString()
-                        ?? source?.ToJsonString()
+                    : value?["output"]?.ToJsonText()
+                        ?? value?["content"]?.ToJsonText()
+                        ?? source?.ToJsonText()
                         ?? "";
                 pieces.Add($"[tool:{response["name"]?.GetValue<string>() ?? "unknown"}] {output}");
             }

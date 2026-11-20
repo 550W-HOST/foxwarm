@@ -6,6 +6,7 @@ export type WebUiNodeTarget = {
   availability?: 'ready' | 'offline' | 'unavailable' | 'error'
   lastSeenAt?: number
   services: Record<string, number>
+  credentialManaged?: boolean
   unavailable?: boolean
   protocolStatus?: 'compatible' | 'upgrade-required'
   protocolMessage?: string
@@ -50,6 +51,7 @@ export function parseWebUiNodeTargets(payload: unknown): WebUiNodeTarget[] {
       type: typeof item.type === 'string' && item.type.trim() ? item.type.trim() : 'remote',
       displayName: typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : id,
       online: item.online === true,
+      credentialManaged: item.credentialManaged === true,
       ...(['ready', 'offline', 'unavailable', 'error'].includes(String(item.availability)) ? { availability: item.availability as WebUiNodeTarget['availability'] } : {}),
       ...(Number.isFinite(item.lastSeenAt) ? { lastSeenAt: Number(item.lastSeenAt) } : {}),
       services,
@@ -98,6 +100,15 @@ export function getNodeTargetAvailability(node: WebUiNodeTarget, service: NodeTa
     return { available: false, reason: service === 'vscode-pty' ? 'terminal unavailable' : 'filesystem unavailable' }
   }
   return { available: true }
+}
+
+/** Short status for an execution Node that can't run tools right now; null when it can. */
+export function describeExecutionNodeProblem(nodes: readonly WebUiNodeTarget[], nodeId: string): string | null {
+  const node = nodes.find(candidate => candidate.id === nodeId)
+  if (!node || node.unavailable) return 'Unavailable'
+  if (!node.online) return 'Offline'
+  if (node.protocolStatus === 'upgrade-required') return 'Update required'
+  return null
 }
 
 export function formatNodeTargetLabel(node: WebUiNodeTarget, service: NodeTargetService): string {

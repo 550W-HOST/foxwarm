@@ -2,15 +2,23 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { completionEvent, isCompletionFor, receiptExecId, receiptLogPath } from './execReceipt.mjs'
 
-const env = {}, options = { env, corePath: process.env.FOXWARM_PUBLISHED_CORE ? join(process.env.FOXWARM_PUBLISHED_CORE, 'Foxwarm.dll') : undefined }
+// FOXWARM_PUBLISHED_CORE names an extracted release package: its NativeAOT executable when
+// the package is native, otherwise its managed Foxwarm.dll.
+const published = process.env.FOXWARM_PUBLISHED_CORE
+const windows = process.platform === 'win32'
+const env = {}, options = { env }
+if (published && !existsSync(join(published, 'Foxwarm.dll'))) options.coreExecutable = join(published, windows ? 'Foxwarm.exe' : 'Foxwarm')
+else if (published) options.corePath = join(published, 'Foxwarm.dll')
 const fixture = await createHostFixture('native-exec', options)
 options.cwd = fixture.root
 Object.assign(env, { FOXWARM_NATIVE_OWNED_VALUE: 'inherited ordinary value' })
-await writeFile(join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 } }))
+await writeFile(join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port, httpHost: '127.0.0.1' }, vector: false, llm: { maxOutput: 713 } }))
 for (const root of [join(fixture.data, 'state/logs'), join(fixture.work, '.temp/exec')])
   for (let day = 17; day <= 20; day++) {
     const date = join(root, '2026-10-' + day); await mkdir(date, { recursive: true }); await writeFile(join(date, 'retained.log'), 'owned historical output')
@@ -18,6 +26,18 @@ for (const root of [join(fixture.data, 'state/logs'), join(fixture.work, '.temp/
 let phase = 'parallel', restartId, restartLog
 const failures = [], requests = []
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+// exec runs Bash on Unix and PowerShell on Windows.
+const commands = windows ? {
+  parallel: 'Start-Sleep -Milliseconds 200; [Console]::Out.Write($env:FOXWARM_NATIVE_OWNED_VALUE); Set-Content -NoNewline -Path parallel-one -Value x',
+  two: 'Set-Content -NoNewline -Path parallel-two -Value x',
+  stop: 'Start-Sleep 2; Add-Content -NoNewline -Path stop-effect -Value x',
+  restart: 'Start-Sleep 8; Add-Content -NoNewline -Path restart-effect -Value x; [Console]::Out.Write("  native finished`n")',
+} : {
+  parallel: 'sleep .2; printf "$FOXWARM_NATIVE_OWNED_VALUE"; printf x > parallel-one',
+  two: 'printf x > parallel-two',
+  stop: 'sleep 2; printf x >> stop-effect',
+  restart: 'sleep 8; printf x >> restart-effect; printf "  native finished\\n"',
+}
 const message = text => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
 const model = createServer(async (request, response) => {
   try {
@@ -27,12 +47,12 @@ const model = createServer(async (request, response) => {
     let output
     if (!result) {
       output = phase === 'parallel'
-        ? [call('parallel-command', 'exec', { command: 'sleep .2; printf "$FOXWARM_NATIVE_OWNED_VALUE"; printf x > parallel-one' }), call('parallel-two', 'exec', { command: 'printf x > parallel-two' })]
-        : [call(phase + '-command', 'exec', { command: phase === 'stop' ? 'sleep 2; printf x >> stop-effect' : 'sleep 8; printf x >> restart-effect; printf "  native finished\\n"', timeout: phase === 'stop' ? 15 : 1 })]
+        ? [call('parallel-command', 'exec', { command: commands.parallel }), call('parallel-two', 'exec', { command: commands.two })]
+        : [call(phase + '-command', 'exec', { command: commands[phase], timeout: phase === 'stop' ? 15 : 1 })]
     } else if (phase === 'restart') {
       const text = typeof result.output === 'string' ? result.output : result.output.map(part => part.text).join('\n')
-      restartId = /execId: ([a-z]+-[a-z]+)/.exec(text)?.[1]
-      restartLog = /Log file: ([^\n]+)/.exec(text)?.[1]
+      restartId = receiptExecId(text)
+      restartLog = receiptLogPath(text)
       assert(restartId && restartLog, text)
       const event = body.input.some(row => JSON.stringify(row).includes('background-process-finished') && JSON.stringify(row).includes(restartId))
       output = !event ? [call('await-native', 'wait', { waitExecIds: [restartId] })]
@@ -49,6 +69,7 @@ await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', provi
 const registry = async () => JSON.parse(await readFile(join(fixture.data, 'state/running-exec.json'), 'utf8').catch(() => '{"execs":[]}'))
 let route
 const history = async () => (await fixture.api('GET', route + '/history')).body
+let failed = false
 const finished = async marker => !(await history()).session.busy && JSON.stringify((await history()).messages).includes(marker)
 try {
   await fixture.start()
@@ -72,7 +93,10 @@ try {
   await until(async () => restartId && !(await history()).session.busy && (await registry()).execs.length === 1, 'native background and persisted wait')
   const before = (await registry()).execs[0]
   assert.equal(before.id, restartId); assert.equal(before.logPath, restartLog); assert.equal(before.nodeId, 'master')
-  assert(before.logPath.startsWith(join(fixture.work, '.temp/exec/')))
+  // Compare resolved paths: the temporary directory can be an 8.3 short name on Windows, which
+  // Main records in its long form, and a symlink (/var) on macOS, which Main keeps.
+  const execRoot = join(realpathSync.native(fixture.work), '.temp/exec/'), resolvedLog = realpathSync.native(before.logPath)
+  assert(windows ? resolvedLog.toLowerCase().startsWith(execRoot.toLowerCase()) : resolvedLog.startsWith(execRoot), before.logPath + ' outside ' + execRoot)
   await fixture.stop()
   assert.equal(await readFile(join(fixture.work, 'restart-effect'), 'utf8').catch(() => ''), '')
   process.kill(before.pid, 0) // The shell, not its exited Main, owns its lifetime and descriptors.
@@ -85,11 +109,19 @@ try {
   assert((await registry()).recentExecIds.includes(restartId))
   assert(!(await readdir(join(fixture.data, 'state'))).includes('exec'))
   const resumed = (await history()).messages.flatMap(row => row.parts || [])
-  assert.equal(resumed.filter(part => part.system?.includes('background-process-finished') && part.system.includes(restartId)).length, 1)
+  const completions = resumed.filter(part => isCompletionFor(part, restartId))
+  assert.equal(completions.length, 1)
+  assert.equal(completionEvent(completions[0].system).exitCode, 0)
   assert(resumed.some(part => part.functionResponse?.tool_use_id === 'original-log' && part.functionResponse.response.output.includes('native finished')))
   assert.match(await readFile(join(fixture.data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
   await fixture.stop(); assert.deepEqual(failures, []); assert.equal(new Set(fixture.hostPids).size, 2)
   console.log(JSON.stringify({ result: 'Native adjacent commands, inherited environment, Stop, detached lifetime, actual Main restart, exact completion, original-path read and startup log rotation passed.', mainProcesses: fixture.hostPids.length, modelRequests: requests.length }))
+} catch (error) {
+  failed = true
+  console.error('Main output:\n' + (fixture.output ?? '') + '\nExec registry: ' + JSON.stringify(await registry().catch(() => null)))
+  throw error
 } finally {
-  await fixture.cleanup(); model.closeAllConnections(); await new Promise(done => model.close(done))
+  // A cleanup failure must not hide the failure that caused it.
+  try { await fixture.cleanup() } catch (error) { if (!failed) throw error; console.error('Cleanup also failed: ' + error.message) }
+  model.closeAllConnections(); await new Promise(done => model.close(done))
 }

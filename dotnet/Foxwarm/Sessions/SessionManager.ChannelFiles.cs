@@ -44,13 +44,8 @@ internal sealed partial class SessionManager
     )
     {
         using var admission = owner is null ? null : BeginOwnerMutation(owner);
+        // Inbound channel files are stored on master under the receiving Agent's directory.
         var agent = owner?.Agent ?? "main";
-        // External Source saves differ from WebUI staging: only effectively isolated Sessions select a Node.
-        var isolated = owner is not null && AgentIsolated(agent);
-        var node =
-            isolated && CurrentNode(owner!) is { } current && current != "master" ? current
-            : isolated ? BoundNode(agent) ?? "master"
-            : "master";
         var segment = Regex.Replace(platform.Trim(), "[^a-zA-Z0-9._-]+", "_").TrimStart('.');
         if (segment.Length == 0)
             segment = "file";
@@ -61,32 +56,12 @@ internal sealed partial class SessionManager
             Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(4))
         );
         var relative = ".temp/channel-files/" + segment + "/" + name;
-        string path;
-        if (node != "master")
-        {
-            var result = await NodeProviders.WriteFileAsync(
-                node,
-                relative,
-                bytes,
-                false,
-                owner!,
-                true,
-                token
-            );
-            path =
-                SessionWait.Text(result["absolutePath"])
-                ?? SessionWait.Text(result["filePath"])
-                ?? relative;
-        }
-        else
-        {
-            path = Path.Combine(AgentDirectory(agent), relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            if (!await FileToolWrite.WriteBytesAtomic(path, bytes, false, () => { }, token))
-                throw new IOException("Inbound file already exists.");
-        }
+        var path = Path.Combine(AgentDirectory(agent), relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        if (!await FileToolWrite.WriteBytesAtomic(path, bytes, false, () => { }, token))
+            throw new IOException("Inbound file already exists.");
         var image = isImage ?? Foxwarm.Images.ImageInputPolicy.IsImageInput(mime);
-        var descriptor = ChannelFileNames.Descriptor(filename, path, mime, node, image);
+        var descriptor = ChannelFileNames.Descriptor(filename, path, mime, "master", image);
         var parts = new List<JsonObject>
         {
             new()

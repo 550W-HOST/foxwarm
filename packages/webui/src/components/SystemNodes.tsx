@@ -6,6 +6,7 @@ import NodeOnboardingModal, { useNodePendingApprovals } from './NodeOnboardingMo
 import { getArchitectureNodePreview, groupArchitectureSessionsByNode } from '../architectureOperations'
 import { getRuntimeStateSummary, isSessionRuntimeActive } from '../sessionRuntimeState'
 import { getStatusTone } from './SystemShared'
+import NodeActionsModal from './NodeActionsModal'
 
 function NodeSessionRow({ session, onSelect }: { session: Session; onSelect: () => void }) {
   const tool = session.runtimeState?.state === 'running-tool' ? session.runtimeState.tool?.name : undefined
@@ -19,7 +20,7 @@ function NodeSessionRow({ session, onSelect }: { session: Session; onSelect: () 
   )
 }
 
-function NodeOverviewCard({ node, sessions, onSelectSession }: { node: WebUiNodeTarget; sessions: Session[]; onSelectSession: (sessionId: string) => void }) {
+function NodeOverviewCard({ node, sessions, onSelectSession, onAction }: { node: WebUiNodeTarget; sessions: Session[]; onSelectSession: (sessionId: string) => void; onAction: (action: 'command' | 'delete') => void }) {
   const [expanded, setExpanded] = useState(false)
   const incompatible = node.protocolStatus === 'upgrade-required'
   const shown = expanded ? sessions : getArchitectureNodePreview(sessions, new Set())
@@ -36,6 +37,10 @@ function NodeOverviewCard({ node, sessions, onSelectSession }: { node: WebUiNode
     {node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
     {Object.keys(node.services).length ? <div className="mt-3 flex flex-wrap gap-1.5">
       {Object.entries(node.services).map(([name, version]) => <span key={name} className="rounded bg-fw-canvas px-2 py-1 text-xs text-fw-text-muted">{name} v{version}</span>)}
+    </div> : null}
+    {node.credentialManaged ? <div className="mt-3 flex flex-wrap gap-2">
+      {node.type === 'cli-node' || node.type === 'shell-node' ? <button type="button" className="rounded-lg border border-fw-border px-2 py-1 text-xs hover:bg-fw-hover" onClick={() => onAction('command')}>Start command</button> : null}
+      <button type="button" className="rounded-lg border border-fw-border px-2 py-1 text-xs text-fw-danger hover:bg-fw-hover" onClick={() => onAction('delete')}>Delete</button>
     </div> : null}
     <section className="mt-3 border-t border-fw-border-muted pt-2" data-system-node-sessions>
       <div className="flex items-center justify-between px-2 text-[11px] text-fw-text-muted">
@@ -66,6 +71,7 @@ export default function SystemNodes({ nodes, error, sessions, onNodesChanged, on
   onSelectSession: (sessionId: string) => void
 }) {
   const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [nodeAction, setNodeAction] = useState<{ node: WebUiNodeTarget; action: 'command' | 'delete' } | null>(null)
   const closeOnboarding = useCallback(() => setOnboardingOpen(false), [])
   const pendingApprovals = useNodePendingApprovals(true)
   const placed = useMemo(() => groupArchitectureSessionsByNode(sessions), [sessions])
@@ -86,7 +92,8 @@ export default function SystemNodes({ nodes, error, sessions, onNodesChanged, on
       </div>
     </div>
     {error || pendingApprovals.error ? <p role="alert" className="text-sm text-fw-danger">{error || pendingApprovals.error}</p> : null}
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{cards.map(node => <NodeOverviewCard key={node.id} node={node} sessions={placed.get(node.id) || []} onSelectSession={onSelectSession} />)}</div>
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{cards.map(node => <NodeOverviewCard key={node.id} node={node} sessions={placed.get(node.id) || []} onSelectSession={onSelectSession} onAction={action => setNodeAction({ node, action })} />)}</div>
+    {nodeAction ? <NodeActionsModal key={`${nodeAction.node.id}:${nodeAction.action}`} {...nodeAction} onClose={() => setNodeAction(null)} onNodesChanged={onNodesChanged} /> : null}
     {onboardingOpen ? <NodeOnboardingModal pending={pendingApprovals} onClose={closeOnboarding} onNodesChanged={onNodesChanged} /> : null}
   </div>
 }

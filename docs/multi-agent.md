@@ -72,7 +72,7 @@ send_to_session({
   fork?: boolean,
   handoffRecall?: string,
   message?: string,
-  afterSend?: 'continue' | 'finish' | 'wait',
+  currentSessionTurnAction?: 'continue' | 'end_turn' | 'wait',
   node?: string,
   forceModel?: {
     modelId?: string,
@@ -85,7 +85,7 @@ send_to_session({
 说明：
 - `fork: true` 会继承当前上下文
 - `message` 可用于直接下发第一条任务
-- `afterSend` 控制初始消息成功发送后的行为：`continue` 继续当前回合（默认），`finish` 结束并进入 idle，`wait` 结束并等待 child 后续活动；`wait` 需要非空 `message`
+- `currentSessionTurnAction` 控制当前 Session 在创建及初始消息发送后的回合：`continue` 继续当前回合（默认），`end_turn` 结束本回合并进入 idle，`wait` 结束并等待 child 后续活动；`wait` 需要 `taskId` 或非空 `message`
 - `node` 可让 child session 绑定到特定 node
 - 只有明确需要覆盖继承/default 行为时才传 `forceModel`；`forceModel: {}` 等同于不覆盖
 - Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
@@ -97,7 +97,7 @@ send_to_session({
   sessionId: string,
   handoffRecall?: string,
   message: string,
-  afterSend?: 'continue' | 'finish' | 'wait',
+  currentSessionTurnAction?: 'continue' | 'end_turn' | 'wait',
   handoffConfirmation?: string,
 }
 ```
@@ -112,12 +112,12 @@ send_to_session({
   sessionId: 'main_analysis',
   handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Review complete.',
-  afterSend: 'finish',
+  currentSessionTurnAction: 'end_turn',
   handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.',
 })
 ```
 
-只有确实需要目标后续回复时才使用 `afterSend:'wait'`；它会记录已解析目标作为预期来源，但不按目标 session 过滤，也不等待任务完成。`afterSend:'continue'` 发送后继续当前工具循环。显式 `wait` 必须声明 `waitAllSessions`、`waitAnySessions`、精确的 `waitExecIds`、`waitForInput:true` 或正数 `wakeIfNoActivityAfterSeconds` 之一；不要调用 `wait({})`。
+只有确实需要目标后续回复时才使用 `currentSessionTurnAction:'wait'`；它会记录已解析目标作为预期来源，但不按目标 session 过滤，也不等待任务完成。`currentSessionTurnAction:'continue'` 发送后继续当前工具循环。显式 `wait` 必须声明 `waitAllSessions`、`waitAnySessions`、精确的 `waitExecIds`、`waitForInput:true` 或正数 `wakeIfNoActivityAfterSeconds` 之一；不要调用 `wait({})`。
 
 ### `wait`
 
@@ -143,13 +143,12 @@ send_to_session({
 /session list
 /session create <agent> <session>
 /session fork
-/session parent <parent-session-id> [child-session-id]
-/session unparent [child-session-id]
-/session isolated [on|off] [node]
+/session set-parent <parent-session-id> [--session-id <child-session-id>]
+/session clear-parent [--session-id <child-session-id>]
 /agent list
-/agent create <name> [--no-main]
-/agent inherit <agent> <parent-agent|none>
-/skill show <skill>
+/agent create <name> [--no-create-main-session]
+/agent inherit <agent> [parent-agent]
+/skill load <skill>
 ```
 
 ## 推荐模式
@@ -167,6 +166,6 @@ send_to_session({
 
 1. child session 是 session，不是独立 agent
 2. `agent.inherit` 只影响 memory 组合，不影响消息汇报关系
-3. isolated session 会限制跨 session / 跨 node 操作
+3. 跨 session / 跨 node 操作由全局工具策略与 agent 本地规则层决定
 4. child session 通常应显式调用 `send_to_session(...)` 回报，父会话仍应做最终协调
-5. snapshot 中会注入当前 agent 可见的 skills catalog；完整 skill 文档需按需调用 `skill({ action: "load", ... })`
+5. snapshot 中会注入当前 agent 可见的 skills catalog；完整 skill 文档需按需运行 `ctl skill load <name>`

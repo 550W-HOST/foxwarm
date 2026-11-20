@@ -22,7 +22,7 @@ Implements the fixed-operation filesystem and read-only Git services used by Cod
 - `commit` accepts only a direct 7–64 digit hexadecimal commit id (annotated-tag object ids do not silently peel), resolves the canonical Git top-level, and returns metadata plus rename-aware first-parent file/stat changes. Root commits compare with the empty tree; merge commits intentionally compare with their first parent. Results cap at 5,000 files and distinguish binary/submodule entries.
 - Binary payloads are base64 inside the node WebSocket JSON protocol.
 - Git commands use spawn arguments, not shell interpolation, and repository-relative paths are checked against traversal.
-- The current path normalization is POSIX-oriented for Code workspaces; Windows path mapping is deferred with remote PTY/platform work.
+- The current path normalization is POSIX-oriented for Code workspaces; Windows path mapping is deferred with remote PTY/platform work; the .NET CLI Node maps Windows drive paths and the `/` drive directory (see [code services](./code-services.md)).
 
 ## Integration
 

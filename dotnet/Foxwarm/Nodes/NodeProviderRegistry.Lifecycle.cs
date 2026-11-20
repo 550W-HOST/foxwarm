@@ -28,7 +28,7 @@ internal sealed partial class NodeProviderRegistry
         return description;
     }
 
-    internal async Task<JsonArray> ListProvidersAsync(bool isolated, CancellationToken token)
+    internal async Task<JsonArray> ListProvidersAsync(CancellationToken token)
     {
         var result = new JsonArray();
         foreach (var id in new[] { "master", "authenticated-remote" }.Concat(providers.Keys))
@@ -40,22 +40,13 @@ internal sealed partial class NodeProviderRegistry
             {
                 ["id"] = id,
                 ["label"] = description["label"]!.DeepClone(),
-                ["lifecycle"] = DisclosedActions(description, isolated),
+                ["lifecycle"] = description["lifecycle"]!.DeepClone(),
             };
             ExecutableNodeProvider.BoundedJson(summary, 64 * 1024, 12, int.MaxValue, true);
             result.Add(summary);
         }
         return result;
     }
-
-    internal static JsonArray DisclosedActions(JsonObject description, bool isolated) =>
-        new(
-            description["lifecycle"]!
-                .AsArray()
-                .Where(action => !isolated || SessionWait.Text(action) == "inspect")
-                .Select(action => action!.DeepClone())
-                .ToArray()
-        );
 
     private ExecutableNodeProvider RequiredProvider(string id) =>
         providers.TryGetValue(id, out var provider)
@@ -252,8 +243,14 @@ internal sealed partial class NodeProviderRegistry
         };
         if (value["exec"] is not null)
             value["primitiveBackends"]!["exec"] = value["exec"]!.DeepClone();
+        if (value["execEnv"] is not null)
+            value["primitiveBackends"]!["execEnv"] = value["execEnv"]!.DeepClone();
+        if (value["execStop"] is not null)
+            value["primitiveBackends"]!["execStop"] = value["execStop"]!.DeepClone();
         value.Remove("filesystem");
         value.Remove("exec");
+        value.Remove("execEnv");
+        value.Remove("execStop");
         value["tools"] = HasAuthorizationAncestry(SessionWait.Text(value["id"])!)
             ? DefinitionsFor(descriptor)
             : new JsonArray();

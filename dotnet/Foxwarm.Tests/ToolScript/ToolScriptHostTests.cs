@@ -195,7 +195,7 @@ public sealed class ToolScriptHostTests
             new JsonObject
             {
                 ["code"] =
-                    "call_tool({'name':'write','filePath':'wrong','content':'descriptor-loose','args':{'filePath':'winner','content':'descriptor-explicit'}}, {'filePath':'positional','content':'positional'}, content='keyword-loose', args={'content':'keyword-explicit'})\ncall_tool('write', {'filePath':'shorthand','content':'positional'}, args={'content':'explicit'}, content='loose')\nreturn call_tool('search_tools', {'query':'run_script','sources':['builtin']})['tools']\n",
+                    "call_tool({'name':'write','filePath':'wrong','content':'descriptor-loose','args':{'filePath':'winner','content':'descriptor-explicit'}}, {'filePath':'positional','content':'positional'}, content='keyword-loose', args={'content':'keyword-explicit'})\ncall_tool('write', {'filePath':'shorthand','content':'positional'}, args={'content':'explicit'}, content='loose')\nreturn call_tool('ctl', {'command':'tool search run_script --source builtin'})['tools']\n",
             }
         );
         Assert.Equal("completed", result["status"]!.GetValue<string>());
@@ -395,7 +395,7 @@ public sealed class ToolScriptHostTests
         );
         f.Manager.Authorization.Invalidate();
         var denied = await f.Call("run_script", new JsonObject { ["filePath"] = " source.py " });
-        Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", denied.FailureCode()!);
         var inline = await f.Call(
             "run_script",
             new JsonObject { ["code"] = "return 'open('\n", ["filePath"] = "unused.py" }

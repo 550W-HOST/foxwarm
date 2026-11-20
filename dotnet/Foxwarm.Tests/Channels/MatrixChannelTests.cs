@@ -225,12 +225,12 @@ public sealed class MatrixChannelTests
         Assert.Null(
             (
                 await f.ToolAsync(
-                    "call_tool",
-                    new JsonObject
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject
                     {
                         ["toolId"] = "builtin:send_to_channel",
                         ["args"] = Args("unified"),
-                    }
+                    })
                 )
             )!["error"]
         );
@@ -360,7 +360,7 @@ public sealed class MatrixChannelTests
             f.Manager,
             f.Router,
             null,
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         var live = ExternalProtocolPeer.MatrixText("repeated", "live");
         await adapter.ProcessTimelineAsync("!room:fixture", live, true);

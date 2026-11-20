@@ -1,6 +1,6 @@
 # Behavior: execution and waiting
 
-For developers and Agents changing shell execution, turn controls, or explicit waits. This page owns their observable meanings; [ToolScript and scheduled work](automation-and-scheduled-work.md) owns program results, continuations and scheduled invocation. A Session turn, a shell process, a persisted script run, and a wait are different lifetimes; ending one does not imply that the others ended. [Messages and turns](./messages-and-turns.md) owns input/request boundaries, while [Nodes, workspaces, and permissions](./nodes-workspaces-and-permissions.md) owns placement and path authority.
+For developers and Agents changing shell execution, file-copy transfers, turn controls, or explicit waits. This page owns their observable meanings; [ToolScript and scheduled work](automation-and-scheduled-work.md) owns program results, continuations and scheduled invocation. A Session turn, a shell process, a persisted script run, and a wait are different lifetimes; ending one does not imply that the others ended. [Messages and turns](./messages-and-turns.md) owns input/request boundaries, while [Nodes, workspaces, and permissions](./nodes-workspaces-and-permissions.md) owns placement and path authority.
 
 ## Exec waits for a process; it does not lease its lifetime
 
@@ -20,7 +20,7 @@ The following receipts describe persistent exec; limited transports are distingu
 | Completion is already available when interruption is observed | The settled completion wins and its real output/status is retained. | An abort should replace it with a synthetic cancellation error. |
 | Dispatch/start outcome is uncertain | An error/unknown receipt at that boundary, not permission to launch again. | The command definitely never started. |
 
-A background receipt means completion is still outstanding. Normal tracked completion queues a later event to the owning Session, with the same execution identity and exit information. The Agent can do independent work or explicitly wait for that event; repeatedly rerunning the command is not a way to check it. When a log is available, it belongs to the execution Node, not automatically to Main's filesystem. Output excerpts are bounded; a receipt or preview is not necessarily the complete log.
+A background receipt means completion is still outstanding. Normal tracked completion queues a later event to the owning Session, with the same execution identity and exit information and a bounded tail of the captured output ([completion output tail](../units/shared-persistent-exec.md#d-persistent-exec-completion-output-tail)). The Agent can do independent work or explicitly wait for that event; repeatedly rerunning the command is not a way to check it. When a log is available, it belongs to the execution Node, not automatically to Main's filesystem. Output excerpts are bounded; a receipt or preview is not necessarily the complete log.
 
 ### Persistence and capability limits
 
@@ -36,10 +36,10 @@ These control the current Session turn, not all work launched by the Agent:
 
 | Action | Current turn | Queued input | Already-started external work |
 | --- | --- | --- | --- |
-| Stop (`/stop`) | Interrupts the current provider request/foreground tool batch and ends the main run. | Commits queued message/event inputs as ordinary history without running another provider turn for them. Later input can start a new turn. | Exec stops waiting, not the process. Other tools use their supported cancellation path; effects may already have occurred. |
+| Stop (`/stop`) | Interrupts the current provider request/foreground tool batch and ends the main run. | Commits queued message/event inputs as ordinary history without running another provider turn for them. Later input can start a new turn. | Exec, copy and background ToolScript stop waiting, not the underlying operation. Other tools use their supported cancellation path; effects may already have occurred. |
 | Run queued (`/dequeue`) | Stops current work when necessary, then continues through the ordinary runner. | Runs queued work rather than passively committing it and stopping. | Same foreground cancellation boundary as Stop; no background-work sweep. |
 | Continue (`/continue`) | Resumes an interrupted idle turn using current committed context. It is not regenerate/retry-the-previous-answer. | New compatible input joins at normal safe points. | Does not replay an uncertain external operation automatically. |
-| Cancel compaction (`/stop compact`) | Cancels active/pending compaction, independently of the main run. | Does not itself apply Stop's passive-input behavior. | Not a shell-process control. |
+| Cancel compaction (`/stop --compaction`) | Cancels active/pending compaction, independently of the main run. | Does not itself apply Stop's passive-input behavior. | Not a shell-process control. |
 
 Bare Stop does not cancel compaction. If the main run is awaiting synchronous automatic compaction, that compact finishes before ordinary Stop finalization. Standalone compaction is not a main run that bare Stop can stop.
 
@@ -69,7 +69,7 @@ Wait and handoff authority comes from the executed control operation, not contro
 
 `wait` registers Session wait state and returns; it does not hold the tool invocation open until work completes. Its stop-turn request takes effect after the current tool batch.
 
-[2026-10-29] In the maintained runtime, any non-null top-level tool-response `error` in the complete batch suppresses that batch's terminal controls: explicit `wait`, `afterSend:"wait"`, and `afterSend:"finish"`, including mixed controls. The complete ordered call/result exchange is committed before the model continues to handle the error. The executor consumes pending controls, clears only explicit wait tokens created by that batch, and does not arm a handoff wait. Successful delivery, child creation and Task effects remain committed and are not replayed. A failed handoff supplies no successful terminal effect.
+[2026-10-29] In the maintained runtime, any non-null top-level tool-response `error` in the complete batch suppresses that batch's terminal controls: explicit `wait`, `currentSessionTurnAction:"wait"`, and `currentSessionTurnAction:"end_turn"`, including mixed controls. The complete ordered call/result exchange is committed before the model continues to handle the error. The executor consumes pending controls, clears only explicit wait tokens created by that batch, and does not arm a handoff wait. Successful delivery, child creation and Task effects remain committed and are not replayed. A failed handoff supplies no successful terminal effect.
 
 This rule uses the existing tool-error classification, not a scan of script return values, stdout or nonzero exec status. Successful controls keep their existing queue/fast-reply behavior. User Stop, unavailable authorization and fatal persistence failures retain their independent handling.
 
@@ -79,7 +79,7 @@ Use a wait when no useful reply or tool work remains, and declare where progress
 | --- | --- |
 | `waitAnySessions: [id, ...]` | At least one accessible, non-self Session is an expected source. This is not a filter excluding ordinary incoming activity. |
 | `waitAllSessions: [a, b, ...]` | At least two distinct accessible, non-self Sessions must each send a new message after the wait starts. Listed messages are deferred and released together after all report; duplicates from one do not satisfy another. |
-| `waitExecIds: [execId, ...]` | Names actual accessible active executions owned by this Session/Agent or already-queued completions. PIDs, log paths, and command strings are not execution identities. |
+| `waitExecIds: [execId, transferId, runId, ...]` | Names actual accessible active executions, background copies or detached background ToolScript runs owned by this Session/Agent, or already-queued completions. PIDs, log paths, and command strings are not identities. |
 | `waitForInput: true` | Declares external/user input as a real progress source. It does not prevent other ordinary activity from waking the Session. |
 | `waitQuestionIds: [id, ...]` | Open `ask_user` questions of this Session whose answers the Agent needs. A real progress source like `waitForInput`, with no automatic deadline. While the wait lists them, any ordinary user message answers them. Validated against the Session's open questions. |
 | `wakeIfNoActivityAfterSeconds: n` | A positive, one-shot fallback wake, not a polling interval and not cancellation of the dependency. Can accompany a source or stand alone. |
@@ -94,13 +94,26 @@ Declared Session dependencies also support a quiescence diagnostic: a closed dep
 
 ### Example: long command, one completion wake
 
-An exec returns `execId` after its foreground budget. The Agent can then call `wait` with `waitExecIds` containing that exact ID. Completion is ordinary Session input; a fallback wake merely asks the Agent to reassess while the command may still run. Neither wake authorizes replaying the launch.
+An exec returns `execId` after its foreground budget; a background copy returns `transferId`; a detached background ToolScript run returns its `runId` ([background mode](automation-and-scheduled-work.md#pause-and-resume-the-run)). The Agent can then call `wait` with `waitExecIds` containing that exact ID. Completion is ordinary Session input; a fallback wake merely asks the Agent to reassess while the command may still run. Neither wake authorizes replaying the launch.
 
-A terminal handoff can also end a turn, with or without a Session activity wait. It does not mean the target Task completed. Keep delivery/terminal behavior at the adjacent [handoff contract](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait), including `afterSend`, sibling errors, coalescing and fast replies.
+A terminal handoff can also end a turn, with or without a Session activity wait. It does not mean the target Task completed. Keep delivery/terminal behavior at the adjacent [handoff contract](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait), including `currentSessionTurnAction`, sibling errors, coalescing and fast replies.
 
 ### Asking the user
 
-[2026-11-06] User decisions. `ask_user` asks the user one to four questions, optionally with choices. By default (`afterAsk:"wait"`) it is the same terminal control as `wait` on the new question ID: it applies after the batch and a sibling tool error suppresses it. `afterAsk:"continue"` returns at once and the answer arrives later as user input. Answers are user input, not system events: a WebUI card answer becomes a user message carrying structured answer metadata, and while the Session waits on a question any ordinary user message (WebUI or external channel) is its answer. Messages from other Sessions, timers and system events never answer. The first answer wins; there is no default answer or timeout choice. Delegated Sessions are told to ask their parent first. Records, projection, reminder and WebUI behavior are owned by the [structured user questions](../units/session-questions.md) unit.
+[2026-11-06] User decisions. `ask_user` asks the user one to four questions, optionally with choices. By default (`afterAsk:"wait"`) it is the same terminal control as `wait` on the new question ID: it applies after the batch and a sibling tool error suppresses it. `afterAsk:"continue"` returns at once and the answer arrives later as user input. Answers are user input, not system events: a WebUI card answer becomes a user message carrying structured answer metadata, and while the Session waits on a question any ordinary user message (WebUI or external channel) is its answer. Messages from other Sessions, timers and system events never answer. The first answer wins; there is no default answer or timeout choice. Delegated Sessions are told to ask their parent first. Records, projection and WebUI behavior are owned by the [structured user questions](../units/session-questions.md) unit.
+
+## A call can wait for approval
+
+[2026-11-08] User decisions ([D-dispatch-approval-ask](../threads/tool-dispatch-authorization.md#d-dispatch-approval-ask)). When policy answers `ask` for a call, that call pauses inside its own invocation until an approver decides in the WebUI, the rule's deadline passes, or the user stops the turn. Nothing else in the Session is suspended by the request itself, but the foreground batch does not continue past the waiting call, and the runtime state shows the call waiting for approval.
+
+- **Approved:** the call is authorized again against the current policy and then runs once; a deny installed meanwhile still wins. The approver's note accompanies the result.
+- **Rejected or expired:** the call never starts and returns an error with the approval ID; a rejection carries the note.
+- **Stop or Run queued:** the request is settled as cancelled and the call receives the ordinary not-started receipt.
+- **Restart:** a pending request expires and its call is not replayed; the resumed turn is told which call did not run.
+- **Parallel exec:** all approvals of a segment are requested before any member starts.
+- **Deadlines:** foreground calls wait without a default deadline unless the rule sets `approval.timeoutSeconds`; unattended timer script slices and webhook handler runs default to one hour.
+
+The Claude Code runtime calls tools over its Foxwarm MCP server. That server entry declares a timeout of the longest approval deadline plus a margin, so the effective bound there is the rule's deadline or that server timeout, whichever is shorter. This bound is taken from Claude Code's documented MCP timeout behavior and still needs qualification with a real CLI.
 
 ## ToolScript completion is not a return-value control protocol
 

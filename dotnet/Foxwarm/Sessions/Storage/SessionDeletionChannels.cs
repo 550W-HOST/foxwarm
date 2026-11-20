@@ -307,7 +307,7 @@ internal sealed class SessionDeletionChannels(
         if (keys.Length == 0)
         {
             if (ReadOptional(FilePath) is not null)
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
+                DirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
             return;
         }
         foreach (var key in keys)
@@ -320,31 +320,16 @@ internal sealed class SessionDeletionChannels(
 
     private void Write(JsonObject payload)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        var temp = FilePath + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
-            using (
-                var stream = new FileStream(
-                    temp,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    4096,
-                    FileOptions.WriteThrough
-                )
-            )
-            {
-                stream.Write(Encoding.UTF8.GetBytes(payload.ToJsonString()));
-                stream.Flush(true);
-            }
-            File.Move(temp, FilePath, true);
-            pendingOrdinary = null;
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
+            new AtomicJsonFile(root, Path.Combine("state", "channels.json")).WritePayload(payload);
         }
-        finally
+        catch (AuthorityCommittedException)
         {
-            File.Delete(temp);
+            // The file holds this payload even though its directory sync failed.
+            pendingOrdinary = null;
+            throw;
         }
+        pendingOrdinary = null;
     }
 }

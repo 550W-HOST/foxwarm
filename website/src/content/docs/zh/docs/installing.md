@@ -3,7 +3,7 @@ title: 安装 Foxwarm
 description: 在 Linux、WSL、macOS、Windows 或 Docker 上安装 Foxwarm，以及启动、停止、更新和定位实例。
 ---
 
-Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Apple Silicon）和 **Windows x64**，也可以在 Linux x64 上用 Docker 运行。Windows 上还可以使用[桌面版](#windows-桌面版)。
+Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Apple Silicon）和 **Windows x64**，也可以在 Linux x64 上用 Docker 运行。Windows 和 Apple Silicon Mac 上还可以使用桌面版（[Windows](#windows-桌面版)、[macOS](#macos-桌面版)）。
 
 | 平台 | 命令 |
 | --- | --- |
@@ -22,16 +22,43 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 
 | 安装包 | 用途 |
 | --- | --- |
-| `foxwarm-linux-x64.tar.gz` | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| `foxwarm-linux-x64-self-contained.tar.gz` | Linux 服务器，自带 .NET 运行时 |
-| `foxwarm-osx-arm64.tar.gz` | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| `foxwarm-osx-arm64-self-contained.tar.gz` | Apple Silicon Mac 服务器，自带 .NET 运行时 |
-| `foxwarm-win-x64.zip` | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| `foxwarm-win-x64-self-contained.zip` | Windows 服务器，自带 .NET 运行时 |
-| `foxwarm-desktop-win-x64.zip` | Windows 桌面版，自带 .NET 运行时 |
-| `SHA256SUMS` | 以上文件的校验和 |
+| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux 服务器，编译为原生程序（Linux 默认） |
+| [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac 服务器，编译为原生程序（macOS 默认） |
+| [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows 服务器，编译为原生程序（Windows 默认） |
+| [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe) | Windows x64 桌面版安装程序，见 [Windows 桌面版](#windows-桌面版) |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | 同一 Windows 桌面版的便携版 ZIP |
+| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac 桌面版；需要 macOS 15 或更新版本，见 [macOS 桌面版](#macos-桌面版) |
+| [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node 应用；需要 Android 11 或更新版本，通过 APK 侧载安装，见 [Android Node](#android-node) |
+| [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Release 中各文件的校验和 |
 
-如果 `dotnet --list-runtimes` 里有 `Microsoft.AspNetCore.App 10.x`，安装脚本会选较小的安装包，否则选自带运行时的版本。也可以用 `--self-contained` / `--framework-dependent`（Linux/macOS）或 `-SelfContained` / `-FrameworkDependent`（Windows）自己指定。
+每个 Release 还包含：
+
+- `foxwarm-code-<版本>.fwassets`：服务器安装包使用的 Code 编辑器，桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
+- `native-cli-node-*`：Linux、macOS 和 Windows 的独立 [Node](/docs/nodes/) 客户端，Node 的引导命令会自动下载。
+- Docker 镜像 `ghcr.io/550w-host/foxwarm`，标签有完整版本号（如 `0.9.4`）、次版本号（`0.9`）和 `latest`，见 [Docker](#docker)。
+
+旧版本见 [Releases 页面](https://github.com/550W-HOST/foxwarm/releases)；把链接里的 `latest/download` 换成 `download/v<版本>` 即可下载指定版本。
+
+安装脚本使用原生安装包；`--framework-dependent`（Windows 上为 `-FrameworkDependent`）选择使用系统 ASP.NET Core 10 运行时的安装包。原生安装包取代了同样不需要安装 .NET 的自带运行时安装包：Linux 从 0.9.4 起，macOS 和 Windows 从 0.9.6 起。
+
+## Android Node
+
+在 Android 11 或更新版本的手机上扫描二维码，或打开 [foxwarm.net/android](https://foxwarm.net/android)，下载 `foxwarm-android-node.apk`。打开 APK，并按提示允许浏览器安装应用。此应用把手机连接为 Node；需要已有的 Foxwarm 服务器。
+
+<a href="https://foxwarm.net/android"><img src="/android-download.svg" width="240" height="240" alt="下载 Foxwarm Android Node 的二维码" /></a>
+
+在 WebUI 中打开 **System → Nodes → New nodes → Android**，创建凭据后，用应用扫描第二步的配对二维码。按应用提示启用无障碍服务并连接。
+
+安装前，可用 Android SDK 的 `apksigner verify --print-certs foxwarm-android-node.apk` 验证签名。签名证书的 SHA-256 指纹为：
+
+```text
+F9:E3:C6:5A:44:F3:08:23:D2:FF:23:DE:F4:70:8F:6E:8B:0C:42:42:18:70:85:69:3C:72:45:36:D9:34:65:D6
+```
+
+后续 Release 使用同一签名密钥，可直接安装更新并保留应用数据。若已安装使用调试密钥签名的开发版，需要先卸载再安装正式版，然后重新配对；卸载会清除保存的凭据。
 
 ## 环境要求
 
@@ -41,14 +68,14 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 | curl 或 wget、tar | ✓ | 系统自带 | — |
 | sha256sum 或 shasum | ✓ | 系统自带 shasum | — |
 | ICU 和 OpenSSL 库（多数 Linux 系统已自带） | ✓ | 使用 macOS 系统库 | — |
-| ASP.NET Core 10 运行时 | 仅较小的安装包需要 | 仅较小的安装包需要 | 仅较小的安装包需要 |
+| ASP.NET Core 10 运行时 | 仅 framework-dependent 安装包需要 | 仅 framework-dependent 安装包需要 | 仅 framework-dependent 安装包需要 |
 
-Linux 安装包需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）；语义历史检索需要 glibc 2.39。
+Linux 安装包（包括语义历史检索）需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）。
 
 部分功能会用到的可选工具：
 
-- `PATH` 上的 **Node.js**：用于准备 Agent 在 WebUI 中展示的图表、图片和 React artifact，其他功能不需要它。
-- **Chromium 或 Chrome**：浏览器工具。
+- `PATH` 上的 **Node.js**：用于准备 Agent 在 WebUI 中展示的图表、图片和 React artifact，也用于运行 `browser_*` 工具，其他功能不需要它。
+- **Chromium 或 Chrome**：`browser_*` 工具需要它；只有 Node.js 与浏览器都已安装时，该机器才提供这些工具。可通过 `PUPPETEER_EXECUTABLE_PATH` 指定浏览器。Foxwarm 保持浏览器自身的沙箱开启；在 Chromium 无法创建沙箱的环境（以 root 运行、受限容器）中，请让 `PUPPETEER_EXECUTABLE_PATH` 指向适合该环境的启动脚本。
 - **Git**：Code 工作台的源代码管理视图。
 
 ## Linux x64 或 x64 WSL
@@ -68,24 +95,41 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 
 `--package FILE` 安装已下载的安装包，`--no-start` 只安装不启动。运行前可以先阅读[安装脚本](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh)。
 
-## macOS（Apple Silicon）
+要把已有安装切换到另一种安装包，用 `--native` 或 `--framework-dependent`，或用另一种类型的 `--package FILE` 重新运行安装脚本。程序目录、数据和配置都保持不变。
 
-需要 **macOS 15 或更新版本**，与 [.NET 10 支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)一致。不支持 Intel Mac，也不提供 macOS 桌面版。
+### 从自带运行时的 Linux 安装包迁移
+
+从 0.9.4 起，原生安装包取代了 `foxwarm-linux-x64-self-contained.tar.gz`。使用自带运行时安装包的安装会在下次更新时切换到原生安装包，数据和配置保持不变，之后的更新也会继续使用原生安装包。
+
+- 要经由 0.9.4 更新，运行 `./foxwarm/foxwarmctl update 0.9.4`。0.9.4 版本为此也以旧文件名发布了原生安装包；之后再运行一次 `update` 即可更新到最新版本。
+- 0.9.4 之后的版本不再发布这个文件名，直接运行 `update` 会失败。要把这样的安装直接更新到 0.9.5 或更高版本，请在当初安装时所在的目录重新运行安装脚本；如果安装时用了 `--dir`，请传入相同的 `--dir`：
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
-目录、版本和安装包参数与 Linux 相同。安装脚本会自动选择依赖已安装运行时或自带运行时的 arm64 安装包，不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
+安装脚本会下载原生安装包，在旧版本继续运行时用它检查数据，然后切换并重启 Foxwarm。
+
+## macOS（Apple Silicon）
+
+需要 **macOS 15 或更新版本**，与 [.NET 10 支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)一致。不支持 Intel Mac。[macOS 桌面版](#macos-桌面版)需单独下载。
+
+```bash
+curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
+```
+
+参数与 Linux 相同，包括 `--native` 和 `--framework-dependent`。不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
 
 安装包已在 Apple Silicon 的 macOS 15 上测试。语义历史检索和浏览器工具已包含在内，但尚未在 macOS 上验证。
+
+从 0.9.6 起，原生安装包取代了 `foxwarm-osx-arm64-self-contained.tar.gz`。使用自带运行时安装包的安装会在下次更新时切换到原生安装包，数据和配置保持不变；0.9.6 版本为此也以旧文件名发布了原生安装包。0.9.6 之后，这样的安装直接运行 `update` 会失败，请改为重新运行安装脚本；如果安装时用了 `--dir`，请传入相同的 `--dir`。
 
 安装包未做发行签名或公证。curl 安装脚本不会添加隔离标记；浏览器下载的归档可能带有 Gatekeeper 隔离标记。先用 Release 的 `SHA256SUMS` 校验归档，确认信任后，仅移除该归档的隔离标记再安装：
 
 ```bash
-xattr -d com.apple.quarantine foxwarm-osx-arm64-self-contained.tar.gz
+xattr -d com.apple.quarantine foxwarm-osx-arm64-native.tar.gz
 curl -fsSLO https://foxwarm.net/install-foxwarm.sh
-bash install-foxwarm.sh --package foxwarm-osx-arm64-self-contained.tar.gz
+bash install-foxwarm.sh --package foxwarm-osx-arm64-native.tar.gz
 ```
 
 如果已经解压且 Gatekeeper 阻止运行，可以对该解压目录执行 `xattr -dr com.apple.quarantine /path/to/extracted-package`。不要关闭系统全局的 Gatekeeper。
@@ -103,11 +147,36 @@ Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwa
 .\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data
 ```
 
-脚本还支持 `-Version`、`-Package FILE` 和 `-NoStart`。如果系统禁止运行脚本，用 `powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1` 运行下载的文件。
+脚本还支持 `-Version`、`-Package FILE`、`-Native`、`-FrameworkDependent` 和 `-NoStart`。与 Linux 一样，用 `-Native`、`-FrameworkDependent` 或另一种类型的 `-Package` 重新运行脚本，会切换已有安装并保留数据。如果系统禁止运行脚本，用 `powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1` 运行下载的文件。
+
+从 0.9.6 起，原生安装包取代了 `foxwarm-win-x64-self-contained.zip`，方式与 [macOS](#macosapple-silicon) 相同：使用自带运行时安装包的安装在更新到 0.9.6 时，或重新运行安装脚本后，会切换到原生安装包。
 
 ## Windows 桌面版
 
-从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载 [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip)，解压后打开 **Foxwarm.Desktop.exe**。它在窗口中运行 Foxwarm，带托盘图标，数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
+从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载并运行 [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe)。它为当前 Windows 账户安装 Foxwarm，不需要管理员权限，安装位置是 `%LOCALAPPDATA%\Programs\Foxwarm`，并在开始菜单和**设置 → 应用**中添加 Foxwarm。如果希望登录时让 Foxwarm 在托盘中启动，勾选**登录 Windows 时启动 Foxwarm**。中文 Windows 上安装程序显示中文界面，其他语言的系统显示英文。
+
+Foxwarm 在窗口中运行，带托盘图标。关闭窗口后它继续在托盘中运行；在托盘图标菜单中选择 **Exit** 才会退出。数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带；如果缺少，安装程序会提示并提供微软的下载页面。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
+
+更新时，运行新版本的安装程序即可。它会先退出正在运行的 Foxwarm，并保留数据和登录启动的选择。
+
+卸载时，在**设置 → 应用**中选择 Foxwarm 并卸载。卸载会在 Foxwarm 运行时先退出它，然后删除程序、开始菜单项和登录启动项。数据仍保留在 `%LOCALAPPDATA%\Foxwarm\Desktop`；如需一并删除，请删除该文件夹。
+
+### 便携版 ZIP
+
+[`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) 是不需要安装的同一个应用：解压后打开 **Foxwarm.Desktop.exe**。更新时，从托盘退出 Foxwarm，再替换解压出的文件夹。便携版和安装版使用同一份数据，同一时间只能运行其中一个；启动其中一个前，请先退出另一个。
+
+## macOS 桌面版
+
+从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载 [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip)。需要 Apple Silicon 上的 macOS 15 或更新版本。应用未做发行签名或公证，浏览器下载的归档会带有 Gatekeeper 隔离标记。先用 Release 的 `SHA256SUMS` 校验归档，确认信任后，仅移除该归档的隔离标记，再把 **Foxwarm.app** 解压到“应用程序”：
+
+```bash
+xattr -d com.apple.quarantine foxwarm-desktop-osx-arm64.zip
+ditto -x -k foxwarm-desktop-osx-arm64.zip /Applications
+```
+
+如果已经解压且 Gatekeeper 阻止打开，只对该应用执行 `xattr -dr com.apple.quarantine /Applications/Foxwarm.app`。
+
+Foxwarm.app 在窗口中运行 Foxwarm，数据保存在 `~/Library/Application Support/Foxwarm/Desktop`。关闭窗口后 Foxwarm 继续运行；在其菜单中选择 **Quit Foxwarm** 才会退出。与 Windows 桌面版一样，它只在本机监听，并自带 Code 编辑器。
 
 ## 打开 WebUI
 
@@ -118,6 +187,16 @@ http://localhost:3001/#token=...
 ```
 
 如果找不到链接，读取数据目录下的 `state/token`，例如 `cat foxwarm-data/state/token` 或 `Get-Content .\foxwarm-data\state\token`。请像对待密码一样保管 token 和链接。
+
+Foxwarm 默认在所有网络地址的 3001 端口上监听。要修改，在 `state/config.yaml` 中设置 `bot.httpPort` 和 `bot.httpHost`，然后重启：
+
+```yaml
+bot:
+  httpPort: 3001
+  httpHost: 127.0.0.1   # 只允许本机访问；默认的 0.0.0.0 允许其他设备访问
+```
+
+`httpHost` 填写本机的 IPv4 或 IPv6 地址，例如 `127.0.0.1`、`::1` 或某个局域网地址，不接受主机名（包括 `localhost`）。桌面版忽略这两项设置。
 
 新安装的 Foxwarm 会打开 **Setup → Models**。按照[配置第一个模型](/zh/docs/model-setup/)连接模型服务商。
 
@@ -137,19 +216,25 @@ http://localhost:3001/#token=...
 
 在 Linux 和 macOS 上，安装了 tmux 时会在 tmux 会话 `foxwarm` 中启动（可用 `FOXWARM_TMUX_SESSION` 改名）；按 <kbd>Ctrl</kbd>+<kbd>b</kbd> 再按 <kbd>d</kbd> 可以退出而不停止。没有 tmux 时会自动在后台启动，关闭终端或 SSH 连接后继续运行。此时 `attach` 会显示数据目录下 `state/logs/foxwarm.stdout.log` 和 `foxwarm.stderr.log` 的路径。`status` 会报告 PID 和启动方式。两种方式都会在程序目录写入 `foxwarm.pid`，过期的 PID 文件会被忽略。停止时最多等待 60 秒让正在进行的工作结束，之后结束进程。
 
-`update` 会在旧版本继续运行时下载并检查新版本，然后停止 Foxwarm、切换到新版本、如果之前在运行就重新启动，并删除旧版本。`update 0.9.1` 安装指定版本。对已有安装重新运行安装脚本效果相同。升级重要数据前请阅读[数据、更新与备份](/zh/docs/data-upgrades-backups/)。
+`update` 会在旧版本继续运行时下载并检查新版本，然后停止 Foxwarm、切换到新版本、如果之前在运行就重新启动，并删除旧版本。`update 0.9.1` 安装指定版本。`update` 不改变已安装的安装包类型。对已有安装重新运行安装脚本效果相同，还可以切换安装包类型（见 [Linux](#linux-x64-或-x64-wsl)）。升级重要数据前请阅读[数据、更新与备份](/zh/docs/data-upgrades-backups/)。
 
 日志在数据目录的 `state/logs/` 下。
 
 ## Docker
 
-镜像内含 ASP.NET Core 运行时、Node.js 和 Chromium：
+镜像运行 Foxwarm 的原生 Linux 版本，包含 Node.js 和 Chromium：
 
 ```bash
 mkdir -p foxwarm-data
+sudo chown 1000:1000 foxwarm-data
+curl -fsSLO https://foxwarm.net/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
-  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+  --security-opt seccomp=seccomp-chromium.json \
+  --shm-size 1g -v "$PWD/foxwarm-data:/data" \
+  ghcr.io/550w-host/foxwarm:latest
 ```
+
+容器以非 root 的 `node` 用户（uid 1000）运行 Foxwarm，并提供免密 `sudo`，因此 Agent 仍可安装软件包。挂载的数据目录必须允许 uid 1000 写入；Foxwarm 不会修改它的属主，不可写时不会启动。早期以 root 运行的镜像写入的数据目录，升级前需要执行一次 `sudo chown -R 1000:1000 foxwarm-data`。seccomp 配置文件即仓库中 [`docker/seccomp-chromium.json`](https://github.com/550W-HOST/foxwarm/blob/main/docker/seccomp-chromium.json) 的副本，是 Docker 默认配置加上 Chromium 沙箱所需的命名空间调用，因此浏览器工具可在保持沙箱开启、无需额外权限的情况下工作。缺少该配置时，第一次调用浏览器工具会报沙箱错误。
 
 使用 `foxwarm-data/state/token` 中的 token 打开 `http://localhost:3001/`。镜像标签跟随版本，例如 `0.9.0`、`0.9` 和 `latest`；更新时拉取新镜像并重新创建容器。首次配置模型的方式与本地安装相同。
 
@@ -159,15 +244,16 @@ docker run -d --name foxwarm --init -p 3001:3001 \
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm
 cd foxwarm
 mkdir -p foxwarm-data/state foxwarm-data/agents
+sudo chown -R 1000:1000 foxwarm-data
 docker compose up -d foxwarm
 ```
 
-如果修改了 `bot.httpPort`，也要同步修改端口映射和健康检查。要访问 Docker 宿主机上的模型或 embedding 服务，请使用宿主机可达的地址；容器内的 `localhost` 指的是 Foxwarm 容器本身。
+如果修改了 `bot.httpPort`，也要同步修改端口映射和健康检查。容器中请保持 `bot.httpHost` 的默认值；设为回环地址后，通过端口映射将无法访问。要访问 Docker 宿主机上的模型或 embedding 服务，请使用宿主机可达的地址；容器内的 `localhost` 指的是 Foxwarm 容器本身。
 
 ## 可选组件
 
 - **语义历史检索**：默认关闭，需要 embedding 服务，见[检索要求](/zh/docs/history-search/#enable-semantic-search)（英文）。
-- **Code 工作台**：体积较大的编辑器资源不包含在安装包和镜像中，见[工作台配置说明](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md)。
+- **Code 工作台**：桌面版已自带编辑器，服务器安装包和 Docker 镜像不包含。每个 Release 都以 `foxwarm-code-<版本>.fwassets` 发布它（见[安装包](#安装包)）。服务器安装缺少 Code 时，WebUI 的 Code 页面会给出一条命令，在运行 Foxwarm 的电脑上执行：它会下载这个文件，用 Release 的 `SHA256SUMS` 校验后安装，刷新页面即可使用。如需从源码构建工作台，见[工作台配置说明](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md)。
 - **HEIC/HEIF 图片**：需要额外的原生解码库，见[图片依赖说明](https://github.com/550W-HOST/foxwarm/blob/main/docs/native-image-prerequisites.md)。PNG/JPEG 使用内置的图片支持。
 
 ## 从源码运行

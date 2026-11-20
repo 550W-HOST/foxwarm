@@ -1,12 +1,14 @@
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Copy, Plus, RefreshCw, X } from 'lucide-react'
+import AndroidPairingDetails from './AndroidPairingDetails'
+import NodeSetupQr from './NodeSetupQr'
 import { API_BASE_PATH } from '../config'
 
 type PendingRequest = { id: string; requestedName: string; nodeType: string; requestedAt: number; connected: boolean }
 type PendingPage = { items: PendingRequest[]; total: number; nextOffset: number | null }
 type Commands = Record<string, string>
-type CreatedNode = { nodeId: string; baseUrl: string; authToken: string; commands: Commands }
+type CreatedNode = { nodeId: string; baseUrl: string; authToken: string; commands: Commands; androidPairing: { type: string; version: number; baseUrl: string; nodeId: string; authToken: string } }
 
 export function useNodePendingApprovals(enabled: boolean) {
   const [page, setPage] = useState<PendingPage>({ items: [], total: 0, nextOffset: null })
@@ -50,6 +52,7 @@ const methods = [
   { id: 'windowsShell', label: 'Windows Shell', detail: 'Use Windows PowerShell for commands only, without Node.js.' },
   { id: 'shell', label: 'Linux Shell', detail: 'Use POSIX sh and curl for commands only.' },
   { id: 'docker', label: 'Docker', detail: 'Run the CLI Node in a container.' },
+  { id: 'android', label: 'Android', detail: 'Connect an Android 11 or later phone with the Foxwarm Node app.' },
   { id: 'browser', label: 'Browser', detail: 'Share existing Chrome, Chromium, or Firefox tabs and windows.' },
   { id: 'windows', label: 'Windows CLI', detail: 'Download and run the PowerShell launcher.' },
 ]
@@ -67,7 +70,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const [tokenMode, setTokenMode] = useState(false)
   const [created, setCreated] = useState<CreatedNode | null>(null)
   const shellOnly = method === 'shell' || method === 'windowsShell'
-  const direct = method !== 'browser' && (shellOnly || tokenMode)
+  const direct = method === 'android' || method !== 'browser' && (shellOnly || tokenMode)
   const address = direct && created ? created.baseUrl : baseUrl
   const name = direct && created ? created.nodeId : nodeId
   const [install, setInstall] = useState(false)
@@ -193,22 +196,34 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
           </div>
         </div> : null}
         {method !== 'browser' ? <>
-        {!shellOnly ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
+        {method === 'android' ? <>
+          <div className="mt-4 space-y-3" data-android-download>
+            <h3 className="text-sm font-semibold text-fw-text-strong">1. Install the app</h3>
+            <p className="text-sm">Scan with your phone’s camera to download Foxwarm Node. Requires Android 11 or later. Allow installation from your browser when prompted.</p>
+            <NodeSetupQr value="https://foxwarm.net/android" alt="Download Foxwarm Node for Android" failure="Could not create the QR code. Open the download link on your phone." />
+            <a href="https://foxwarm.net/android" target="_blank" rel="noopener noreferrer" className="block break-all text-sm text-fw-accent underline">https://foxwarm.net/android</a>
+          </div>
+          <h3 className="mt-5 text-sm font-semibold text-fw-text-strong">2. Connect to your Main server</h3>
+          <p className="mt-2 text-sm">Create a credential below, then scan the pairing QR code in the app or enter the fields manually.</p>
+        </> : null}
+        {!shellOnly && method !== 'android' ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-medium">Reachable address<input aria-label="Reachable address" disabled={busy || (direct && !!created)} value={address} onChange={event => { setBaseUrl(event.target.value); setCommands({}); setCopied(false) }} className={fieldClass} /></label>
-          <label className="text-xs font-medium">Node name<input aria-label="Node name" value={name} onChange={event => { setNodeId(event.target.value); setCommands({}); setCopied(false) }} disabled={busy || (direct && !!created)} className={fieldClass} /></label>
+          <label className="text-xs font-medium">{method === 'android' ? 'Main server address' : 'Reachable address'}<input aria-label={method === 'android' ? 'Main server address' : 'Reachable address'} readOnly={method === 'android' && !!created} disabled={busy || (direct && !!created && method !== 'android')} value={address} onChange={event => { setBaseUrl(event.target.value); setCommands({}); setCopied(false) }} className={fieldClass} /></label>
+          <label className="text-xs font-medium">{method === 'android' ? 'Node ID' : 'Node name'}<input aria-label={method === 'android' ? 'Node ID' : 'Node name'} readOnly={method === 'android' && !!created} value={name} onChange={event => { setNodeId(event.target.value); setCommands({}); setCopied(false) }} disabled={busy || (direct && !!created && method !== 'android')} className={fieldClass} /></label>
           {method === 'bareMetal' ? <label className="text-xs font-medium">Installation directory<input aria-label="Installation directory" disabled={busy} value={installDir} onChange={event => { setInstallDir(event.target.value); setCommands({}); setCreated(current => current ? { ...current, commands: { ...current.commands, bareMetal: '', bareMetalBackground: '', bareMetalInstall: '' } } : null); setCopied(false) }} className={fieldClass} /></label> : null}
         </div>
         {method === 'bareMetal' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" disabled={busy} checked={install} onChange={event => { setInstall(event.target.checked); setCopied(false) }} />Start automatically with systemd</label> : null}
         {method === 'docker' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" disabled={busy} checked={compose} onChange={event => { setCompose(event.target.checked); setCopied(false) }} />Manual Docker Compose</label> : null}
         <div className="mt-3 flex items-center gap-2">
-          {direct && !created ? <button type="button" disabled={busy || !address || !name} onClick={() => void createNode()} className="inline-flex items-center gap-2 rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text disabled:opacity-50"><Plus className="h-4 w-4" />Create</button> : !shellOnly ? <button type="button" disabled={busy || !address || !name} onClick={() => void updateCommands()} className="inline-flex items-center gap-2 rounded-lg border border-fw-border px-3 py-2 text-sm hover:bg-fw-hover disabled:opacity-50"><RefreshCw className="h-4 w-4" />Update command</button> : null}
+          {direct && !created ? <button type="button" disabled={busy || !address || !name} onClick={() => void createNode()} className="inline-flex items-center gap-2 rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text disabled:opacity-50"><Plus className="h-4 w-4" />Create</button> : !shellOnly && method !== 'android' ? <button type="button" disabled={busy || !address || !name} onClick={() => void updateCommands()} className="inline-flex items-center gap-2 rounded-lg border border-fw-border px-3 py-2 text-sm hover:bg-fw-hover disabled:opacity-50"><RefreshCw className="h-4 w-4" />Update command</button> : null}
           {busy ? <span role="status" className="text-xs text-fw-text-muted">Loading…</span> : null}
         </div>
-        {direct && created ? <p className="mt-2 text-sm">{created.nodeId} created. Copy its command before closing.</p> : null}
+        {method === 'android' ? <>
+          {created ? <AndroidPairingDetails pairing={created.androidPairing} /> : null}
+        </> : direct && created ? <p className="mt-2 text-sm">{created.nodeId} created. Copy its command before closing.</p> : null}
         {error ? <p role="alert" className="mt-3 text-sm text-fw-danger">{error}</p> : null}
-        {command ? <div className="mt-4 rounded-xl border border-fw-border bg-fw-canvas"><div className="flex items-center justify-between gap-2 border-b border-fw-border px-3 py-2"><span className="text-xs text-fw-text-muted">Run on the new Node</span><button type="button" onClick={() => { void navigator.clipboard.writeText(command).then(() => { if (mounted.current) setCopied(true) }).catch(() => { if (mounted.current) setError('Copy failed. Select the command and copy it manually.') }) }} className="inline-flex items-center gap-1.5 text-xs font-medium text-fw-accent">{copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{copied ? 'Copied' : 'Copy command'}</button></div><pre data-node-command className="overflow-x-auto whitespace-pre-wrap break-all p-3 text-xs leading-5"><code>{command}</code></pre></div> : null}
-        <p className="mt-2 text-xs text-fw-text-muted">Keep setup commands private. They contain credentials.</p>
+        {command && method !== 'android' ? <div className="mt-4 rounded-xl border border-fw-border bg-fw-canvas"><div className="flex items-center justify-between gap-2 border-b border-fw-border px-3 py-2"><span className="text-xs text-fw-text-muted">Run on the new Node</span><button type="button" onClick={() => { void navigator.clipboard.writeText(command).then(() => { if (mounted.current) setCopied(true) }).catch(() => { if (mounted.current) setError('Copy failed. Select the command and copy it manually.') }) }} className="inline-flex items-center gap-1.5 text-xs font-medium text-fw-accent">{copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{copied ? 'Copied' : 'Copy command'}</button></div><pre data-node-command className="overflow-x-auto whitespace-pre-wrap break-all p-3 text-xs leading-5"><code>{command}</code></pre></div> : null}
+        <p className="mt-2 text-xs text-fw-text-muted">{method === 'android' ? 'Keep this QR code and credential private. Save them in the app before closing.' : 'Keep setup commands private. They contain credentials.'}</p>
         </> : error ? <p role="alert" className="mt-3 text-sm text-fw-danger">{error}</p> : null}
         <div className="mt-5 border-t border-fw-border pt-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-fw-text-strong">Pending approvals{pending.total ? ` (${pending.total})` : ''}</h3><button type="button" onClick={() => { setApprovalError(''); setApprovalNotice(''); void pending.refresh() }} aria-label="Refresh pending approvals" className="rounded-lg p-2 hover:bg-fw-hover"><RefreshCw className="h-4 w-4" /></button></div>
           <p className="mt-1 text-xs text-fw-text-muted">Approve only requests from Nodes you recognize.</p>

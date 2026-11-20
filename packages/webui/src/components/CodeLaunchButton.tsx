@@ -5,6 +5,7 @@ import { normalizeCodePath } from '../vscodeWeb'
 import NodeTargetSelect from './NodeTargetSelect'
 import { getNodeTargetAvailability, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
 import { selectLauncherDraftNode } from '../launcherDraft'
+import { newWindowCopy, useAppWindow } from '../appWindow'
 
 interface CodeLaunchButtonProps {
   path: string
@@ -42,6 +43,7 @@ export default function CodeLaunchButton({
   const [draftNodeId, setDraftNodeId] = useState(nodeId)
   const [pathError, setPathError] = useState('')
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const copy = newWindowCopy(useAppWindow())
 
   useEffect(() => {
     if (!open) {
@@ -93,7 +95,7 @@ export default function CodeLaunchButton({
           active={active}
           dataNav="code"
           onClick={() => onOpen(nodeId, path)}
-          title={`Open code${openInNewWindow ? ' in a new browser tab' : ''}`}
+          title={openInNewWindow ? copy.codeTooltip : 'Open code'}
           trailing={openInNewWindow ? <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" /> : undefined}
           options={{
             open,
@@ -144,7 +146,7 @@ export default function CodeLaunchButton({
               {pathError && <div className="mt-1 text-xs text-fw-danger dark:text-fw-danger">{pathError}</div>}
             </div>
             <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1 text-sm text-fw-text-strong">
-              <span>Open in new browser tab</span>
+              <span>{copy.codeOption}</span>
               <input
                 type="checkbox"
                 checked={openInNewWindow}

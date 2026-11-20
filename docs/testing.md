@@ -1,6 +1,6 @@
 # Local tests
 
-The retained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Managed tests require a net10.0-capable .NET SDK and ASP.NET Core 10 runtime, Python 3 for fresh pinned Monty acquisition and Linux native-build prerequisites. The full managed suite also exercises the optional pinned HEIC decoder: build it into an owned directory using `dotnet/scripts/build-image-decoder.sh` and supply `prefix/lib` through `LD_LIBRARY_PATH`. CI does this in runner-temporary storage; the ordinary production image does not require or include that optional codec. Install and build both the backend packages and WebUI before running the suites:
+The retained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Managed tests require a .NET 10 SDK (the repository `global.json` accepts any 10.0.x and rejects SDK 11) and ASP.NET Core 10 runtime, Python 3 for fresh pinned Monty acquisition and Linux native-build prerequisites. The full managed suite also exercises the optional pinned HEIC decoder: build it into an owned directory using `dotnet/scripts/build-image-decoder.sh` and supply `prefix/lib` through `LD_LIBRARY_PATH`. CI does this in runner-temporary storage; the ordinary production image does not require or include that optional codec. Install and build both the backend packages and WebUI before running the suites:
 
 ```bash
 npm ci
@@ -26,12 +26,18 @@ npm test
 # Equivalent after the build prerequisite:
 npm run test:unit
 
+# The same component groups without managed tests (the parallel Core CI lane).
+npm run test:unit:components
+
 # Retired TypeScript Main tests, their nested isolation regressions and two selftests.
 # Requires build:reference; does not run managed or active component groups.
 npm run test:reference
 
 # Managed solution only (includes optional HEIC coverage with its prerequisite).
 npm run test:managed
+
+# Optional VSTest selection; a selection matching no tests fails.
+npm run test:managed -- --filter="FullyQualifiedName~Foxwarm.Tests.ToolScript"
 
 # Publish complete managed Main into owned artifacts and prove original App delivery.
 FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:published
@@ -45,6 +51,9 @@ FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:webui:e2e -- --shard=1/8 --w
 # Real disposable Foxwarm application, scripted loopback LLM, and Chromium.
 FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:app:e2e
 
+# Full application plus the native smoke fixtures against a published Main executable.
+FOXWARM_TEST_MAIN_EXECUTABLE=/path/to/native-main/Foxwarm FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:native
+
 # Unit, managed publish, local component-browser and full-application groups.
 FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:local
 ```
@@ -55,7 +64,7 @@ Launcher fixtures resolve required local utilities from the invocation `PATH` be
 
 Historical backend test shards default to `FOXWARM_SYNC_FILE_LOG=1` so short-lived test processes do not wait on an asynchronous logging transport during teardown. Their subprocesses inherit this setting unless a fixture clears it; the dedicated async logger fixture does so and still tests asynchronous writes and natural exit. An explicitly supplied `FOXWARM_SYNC_FILE_LOG` value overrides the backend default. The application logger's production default is unchanged.
 
-The full-application harness starts managed Main through `node .` and verifies its authenticated managed health result. It uses the real compiled server and built WebUI against a generated data root, synthetic token, seeded authority files, and ephemeral ports. Clients use loopback URLs and the mock provider binds loopback. The application retains its production `0.0.0.0` listener, so run this synthetic-token fixture in a private development or CI environment rather than exposing its port to an untrusted network. A local scripted server implements OpenAI Responses SSE, Chat Completions SSE, and Responses WebSocket exchanges; only the provider network boundary is mocked. Session routing, tools, persistence, authentication, realtime delivery, and browser rendering remain production paths. Expected provider steps have exact order and counts, invalid or extra requests fail, and missing steps fail final harness verification. Explicit controls release one held incremental response and close one idle WebSocket so timing and reconnect behavior do not depend on sleeps. Failures retain application/provider/test logs plus a diagnostic screenshot and browser console.
+The full-application harness starts managed Main through `node .`, or the executable named by `FOXWARM_TEST_MAIN_EXECUTABLE`, and verifies its authenticated health result. It uses the real compiled server and built WebUI against a generated data root, synthetic token, seeded authority files, and ephemeral ports. Clients use loopback URLs and the mock provider binds loopback. The application retains its production `0.0.0.0` listener, so run this synthetic-token fixture in a private development or CI environment rather than exposing its port to an untrusted network. A local scripted server implements OpenAI Responses SSE, Chat Completions SSE, and Responses WebSocket exchanges; only the provider network boundary is mocked. Session routing, tools, persistence, authentication, realtime delivery, and browser rendering remain production paths. Expected provider steps have exact order and counts, invalid or extra requests fail, and missing steps fail final harness verification. Explicit controls release one held incremental response and close one idle WebSocket so timing and reconnect behavior do not depend on sleeps. Failures retain application/provider/test logs plus a diagnostic screenshot and browser console.
 
 Scenario files run in order, and the harness can stop and restart the application between them against the same data root, which the hosted image generation coverage uses to prove persisted images and canonical replay survive a real process restart. `FOXWARM_APP_E2E_FILES` or positional repository-relative scenario paths select files for focused work; a targeted run relaxes only the global request-order check and still fails on any unexpected request.
 
@@ -82,7 +91,7 @@ Other Source Node tests exercise the old Main registry, transports, command gene
 
 `build:reference` stays in every Ubuntu CI test job because managed oracle/migration fixtures, WebUI fixture producers and the App Archive seed still import compiled Source. It is separate from directly executing the retired unit suite. The old implementation and test sources remain available; retained comparisons follow the managed [compatibility boundary](code-index/units/dotnet-tests.md#contract-boundary).
 
-Managed frozen-source comparisons additionally require the pinned ancestor commits in the reference checkout's Git history. Core CI checks out full history; see [managed source prerequisites](../dotnet/Foxwarm.Tests/README.md) for shallow-clone preparation. The build prerequisite remains necessary alongside those historical objects.
+Managed frozen-source comparisons additionally require the pinned ancestor commits in the reference checkout's Git history. The managed CI job checks out full history; see [managed source prerequisites](../dotnet/Foxwarm.Tests/README.md) for shallow-clone preparation. The build prerequisite remains necessary alongside those historical objects.
 
 ## Separately owned tests
 
@@ -90,7 +99,7 @@ Managed frozen-source comparisons additionally require the pinned ancestor commi
 
 - The VS Code YAML browser test requires separately prepared VS Code and YAML-extension assets.
 - Website tests remain owned by the website package and workflow.
-- The Android `test.py` driver requires explicitly assigned live hardware and remains a manual hardware smoke check.
+- Android Node has a separate Gradle/CI lane for JVM protocol tests, Robolectric component lifecycle tests, lint and debug APK assembly. `node packages/android-node/node-test/main-host.mjs` exercises its production JVM transport against a disposable Main with synthetic device operations. Real-phone checks are listed in `packages/android-node/PHONE-TESTING.md`.
 - Stateful `test/*Smoke.js` scripts remain manual checks; their entry points now allocate owned disposable data before loading the backend.
 - The historical LLM serialization script remains a manual regression check; canonical shared response-formatting assertions live in the shared package suite.
 - The historical ToolScript skill Agent trial remains outside the maintained baseline. Its entry point now isolates state and clears inherited provider credentials; it has no maintained synthetic provider setup and must not be used to exercise a live installation.
@@ -102,15 +111,19 @@ The maintained `node-bootstrap` group has one expected non-Windows skip for the 
 
 ## GitHub Actions
 
-`.github/workflows/tests.yml` defines two shared resource-preparation jobs and ten Ubuntu 24.04 test jobs: Core, Real app, and eight Chromium matrix shards. Actual overlap depends on available GitHub runner capacity:
+`.github/workflows/tests.yml` defines two shared resource-preparation jobs and twelve Ubuntu 24.04 test jobs: Core, managed .NET, Real app, Native Main smoke and eight Chromium matrix shards. Actual overlap depends on available GitHub runner capacity:
 
 - **Prepare shared Code workbench / HEIF prerequisite** restore exact caches keyed on pinned inputs and build scripts, or build each missing resource once. Code caches include its YAML extension assets. Runtime-test jobs consume and validate these outputs before tests. Code uses a per-run archive from the shared Tests/Release producer; HEIF uses exact cache restores. A Code producer cache miss builds once, while consumers never independently rebuild. Code assets use the normal `packages/vscode-web/assets` location and are installed below the executable resource root by ordinary browser preparation. A corrupt cache must be deleted before retrying. HEIF cache eviction or unavailable storage can fail its consumers; Code artifact transfer is independent of cache retention after production. Managed and Source builds remain checkout-local.
-- **Core, packages, and quality** sets up .NET 10, builds managed delivery plus the explicit Source reference, restores the shared pinned HEIF test prerequisite, runs `npm run test:unit` (managed solution and maintained component tests), then runs Code Index and unused-code checks.
+- **Core, packages, and quality** sets up .NET 10, builds managed delivery plus the explicit Source reference, restores the shared pinned HEIF test prerequisite, runs `npm run test:unit:components` (all maintained component groups), then runs Code Index and unused-code checks. Its 10-minute limit leaves room beyond the roughly 5-minute setup/test/quality workload.
+- **Managed .NET tests** runs independently of Core after the same HEIF producer, with the same Node/.NET setup, managed delivery and Source reference builds, HEIF library path and failure/cancellation diagnostics. Its full-history checkout supplies frozen-source comparisons. `npm run test:managed` executes the complete solution once; the local `test:unit` command still combines managed and components. The managed build/test command has 40 minutes and the job has 45 minutes, versus a measured 27.5-minute managed step and roughly 29–30 minutes including setup. This separate job removes the managed suite from Core without adding a test partition. Optional `test:managed -- --filter=EXPRESSION` supports VSTest-filtered selections, records the filter in runner inventory, and fails on zero matches.
 - **Chromium fixtures (1–8)** each sets up .NET 10 and the pinned Chrome for Testing build, builds managed delivery and Source reference, restores shared Code assets and the pinned optional HEIF decoder, prepares the root-owned mode-0755 SSH privilege-separation directory, runs `npm run test:webui:e2e -- --shard=INDEX/8 --workers=2` with the HEIF library prefix. Each shard owns its checkout, resources and artifacts and prepares browser dependencies once. Shard 1 first runs `npm run test:published` against an owned complete publish; the other seven do not repeat that qualification. Matrix `fail-fast: false` lets sibling shards finish reporting after a failure, and each failed shard remains a failed job. The SSH fixture starts its own loopback-only daemon, not a system service. The publish proof covers original login/Setup, packaged Node archive/resources, real native ToolScript and Main browser screenshot/image references, plus ordinary stop/restart with preserved data.
 - **Real app with mock LLM** sets up .NET 10 and the same browser/build preparation and runs `npm run test:app:e2e`.
+- **Native Main smoke (Linux x64)** builds delivery assets, the Source reference and the CLI Node fixture, publishes NativeAOT Main once (`-r linux-x64 -p:PublishAot=true`), fails on new first-party NativeAOT warnings through `scripts/test/native-main-warnings.mjs`, then runs `npm run test:native`: the full-application harness and a bounded set of Main-host fixtures against that executable. It needs no Code or HEIF resources.
 
-Node jobs use Node.js 24.21.0; runtime-test jobs use the official SHA-pinned setup-dotnet action for the .NET 10 SDK channel. CI Chrome is a test fixture pin, not the production Docker browser update policy. The workflow runs for pull requests and pushes to `testing` or `main`. Superseded runs for the same workflow and pull request or ref are cancelled. It also declares manual and daily 03:17 UTC triggers; GitHub registers and executes those triggers from the default branch, so pushing the workflow only to `testing` exercises the push event immediately but does not make the scheduled/manual definition available until a later authorized promotion to the default branch.
+Node jobs use Node.js 24.21.0; runtime-test jobs use the official SHA-pinned setup-dotnet action to install .NET SDK 10.0.403; the repository `global.json` keeps `dotnet` on the .NET 10 line even when a runner image also has a newer major SDK. CI Chrome is a test fixture pin, not the production Docker browser update policy. The workflow runs for pull requests and pushes to `testing` or `main`. Superseded runs for the same workflow and pull request or ref are cancelled. It also declares manual and daily 03:17 UTC triggers; GitHub registers and executes those triggers from the default branch, so pushing the workflow only to `testing` exercises the push event immediately but does not make the scheduled/manual definition available until a later authorized promotion to the default branch.
 
 On failure or cancellation, each runtime-test job retains seven-day diagnostics from its visible runner-temporary artifact parent: the runner inventory/summary, runner logs, explicit screenshots, and, for full-application E2E, its nested application/provider/test logs and screenshots. Chromium artifact names include their shard index. The upload patterns do not include disposable data roots, Session state, model/token configuration, request journals, browser profiles, dependencies, or the workspace.
 
-`.github/workflows/release.yml` (**Release packages**) builds every release package on pushes to `testing` and `main` and on `v*` tags, then qualifies the Linux packages (including the self-contained package on Ubuntu 22.04 without .NET), both Windows server packages, the Desktop package through `qualify-desktop-package.mjs` with real WebView2 sign-in, Setup/native ToolScript and restart, and the container image. Packages stay available as the `release-packages` artifact for 14 days; tags also publish the GitHub release and container image. See [release packages](releasing.md).
+`.github/workflows/container-provider.yml` (**Container Provider**) runs on manual dispatch and on pushes to the `ci/container-provider` branch, never for other pushes or pull requests; a newer run for the same ref cancels an older one. It builds the static CLI Node from the dispatched commit, then qualifies the [container Provider reference](../skills/node-setup/examples/container/README.md) with `mainHostProviderContainer.e2e.mjs` against the runner's Docker and against rootless Podman, using the example image targets. On failure it keeps the test output and the Main server log for seven days.
+
+`.github/workflows/release.yml` (**Release packages**) builds every release package on pushes to `testing` and `main` and on `v*` tags, then qualifies the Linux packages (including the native package on Ubuntu 22.04 without .NET), both Windows server packages, the native Desktop package through `qualify-desktop-package.mjs` with real WebView2 sign-in, Setup/native ToolScript, the Vector child, no CoreCLR, the notification icon (close to tray, reopen, Exit) and restart, and the container image. Download each package or `SHA256SUMS` by its filename from the workflow run for 14 days; tags also publish the GitHub release and container image. See [release packages](releasing.md).

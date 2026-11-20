@@ -113,7 +113,6 @@ public sealed partial class WorkspaceTools
         catch (NodeProviderException error) when (!overwrite && error.Code == "EEXIST")
         {
             return Error(
-                "file_exists",
                 $"File already exists: {display}. Use overwrite=true to overwrite, or use edit to modify it."
                     + hint(false)
             );
@@ -124,12 +123,11 @@ public sealed partial class WorkspaceTools
             var stat = await TargetStatAsync(parent, token);
             if (stat is null)
                 return Error(
-                    "missing_parent",
                     $"Parent directory does not exist: {parent}. write does not create parent directories by default. Retry with createDirs=true."
                         + hint(true)
                 );
             if (stat.Kind != "directory")
-                return Error("not_directory", $"Parent path is not a directory: {parent}.");
+                return Error($"Parent path is not a directory: {parent}.");
             throw;
         }
         return null;

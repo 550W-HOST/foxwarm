@@ -12,20 +12,20 @@ internal static partial class CompactPrompt
                 {
                   "type":"function",
                   "name":"submit_compact_plan",
-                  "description":"Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. For a dedicated compaction request, use its supplied candidate ranges. Supply direct plan fields or argsFilePath, not both. Items not covered by the plan remain unchanged.",
+                  "description":"Submit a compaction plan: summaries that replace older context with blocks and, where needed, removal of previously preserved messages from active context. It is for compaction requests, which list the operations to submit; outside one, use it only as the in-context-compaction skill describes. Supply direct plan fields or argsFilePath, not both. Items not covered by the plan remain unchanged.",
                   "parameters":{
                     "type":"object",
                     "properties":{
                       "argsFilePath":{"type":"string","description":"Read a JSON compaction plan from this file instead of direct plan fields."},
                       "replaceAsBlocks":{
-                        "description":"Blocks to create from continuous candidate ranges. Supply an array, or a JSON string encoding the same array. Use an empty array when only removing previously preserved messages.",
+                        "description":"Blocks to create, one per operation. Supply an array, or a JSON string encoding the same array. Use an empty array when only removing previously preserved messages.",
                         "oneOf":[
                           {"type":"array","items":{
                             "type":"object",
                             "properties":{
-                              "level":{"type":"integer","minimum":1,"description":"Level of the new block: 1 for raw messages, or one above the source blocks."},
+                              "level":{"type":"integer","minimum":1,"description":"Level of the new block. Use the level the requested operation states. In an in-context plan: 1 for raw messages; one above the source blocks when merging several; the same level when rewriting one block (level 2 for a level-1 block)."},
                               "sourceKind":{"type":"string","enum":["message","block"],"description":"Whether this range contains raw messages or existing blocks."},
-                              "sourceStart":{"type":"integer","minimum":1,"description":"First message sequence number or block ID in the candidate range."},
+                              "sourceStart":{"type":"integer","minimum":1,"description":"First message sequence number or block ID of the source range."},
                               "sourceEnd":{"type":"integer","minimum":1,"description":"Last message sequence number or block ID in the range, following its displayed history order."},
                               "summary":{"type":"string","description":"Summary of this range, retaining what is needed to continue the work."},
                               "frictionScore":{"type":"integer","minimum":0,"maximum":100,"description":"Estimated execution friction in this range, as an integer from 0 (none observed) to 100 (severe or repeated friction). Flags possible workflow, skills, memory, or framework improvements; not task difficulty, a probability, or an established diagnosis."},

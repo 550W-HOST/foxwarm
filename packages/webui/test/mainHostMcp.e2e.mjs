@@ -11,17 +11,18 @@ import { mkdtemp, mkdir, readFile, rm, writeFile, access } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall, listsBuiltin } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-unified-mcp-'))
 const data = join(root, 'data'); const work = join(data, 'agents', 'main'); const peerRoot = join(root, 'peer')
 const peerFile = resolve(import.meta.dirname, 'mainHostMcp.peer.mjs')
 const token = 'synthetic-mcp-api-token'; const providerToken = 'synthetic-mcp-provider-token'
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
-const dotnet = join(process.env.DOTNET_ROOT, 'dotnet')
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const exists = file => access(file).then(() => true, () => false)
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
-const fn = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const fn = functionCall
 const invoke = (id, target, args = {}) => fn(id, 'call_tool', typeof target === 'string' ? { toolId: target, args } : { ...target, args })
 const requests = []; const failures = []; const scripts = new Map(); const pids = []; let serial = 0
 let provider, browser, page, host, httpPeer, port, httpPort, current
@@ -59,13 +60,14 @@ async function task(calls, { owner = current, final = true, browserSend = false 
   }
   return key
 }
-async function perform(target, args, id, owner = current) { await task([invoke(id, target, args)], { owner }); return pair(id, owner) }
+// Discovery is `ctl tool search`; every other target is `ctl tool call`.
+async function perform(target, args, id, owner = current) { await task([target === 'builtin:search_tools' ? fn(id, 'search_tools', args) : invoke(id, target, args)], { owner }); return pair(id, owner) }
 async function lines(file) { return (await readFile(join(peerRoot, file), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) }
 async function startHost() {
   await mkdir(join(data, 'state'), { recursive: true })
   await writeFile(join(data, 'state', 'token'), token, { mode: 0o600 })
   await writeModelFixture(data, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data),
+  const child = spawn(...mainHostLaunch(resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')), { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data),
     MCP_HOST_ONLY_SENTINEL: 'synthetic-host-only-credential' } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) })
   host = { child, get output() { return output } }; pids.push(child.pid)
@@ -83,12 +85,12 @@ try {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString()); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert(body.tools.some(tool => tool.name === 'call_tool')); assert(body.tools.some(tool => tool.name === 'search_tools'))
+      assert(body.tools.some(tool => tool.name === 'ctl')); assert(!body.tools.some(tool => tool.name === 'call_tool' || tool.name === 'search_tools'))
       assert(!body.tools.some(tool => tool.name === 'mcp_config' || tool.name === 'list_mcp_servers' || tool.name === 'echo_effect'))
       for (const tool of body.tools) {
         const fields = tool.parameters.properties
-        if (tool.name === 'submit_compact_plan') assert.equal(fields.__cancelTool, undefined)
-        else { assert.deepEqual(fields.__cancelTool.enum, [true]); assert.equal(Object.keys(fields).at(-1), '__cancelAllToolsThisTurn') }
+        // The cancellation controls are accepted on every call but declared in no schema.
+        assert.equal(fields.__cancelTool, undefined, tool.name); assert.equal(fields.__cancelAllToolsThisTurn, undefined, tool.name)
       }
       for (const call of body.input.filter(item => item.type === 'function_call')) assert(body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id), call.call_id + ' historical provider pairing')
       const inputs = body.input.filter(item => item.type === 'message' && item.role === 'user').flatMap(item => item.content || []).map(part => part.text || '')
@@ -110,6 +112,9 @@ try {
   await mkdir(join(data, 'state'), { recursive: true })
   await writeFile(join(data, 'state/config.yaml'), `bot: {httpPort: ${port}}\n`)
   await writeFile(join(data, 'state/token'), token, { mode: 0o600 })
+  // Manual MCP configuration edits take effect at startup: begin with a broken file.
+  const configFile = join(data, 'state', 'mcp.json')
+  await writeFile(configFile, JSON.stringify({ servers: { malformed: { transport: 'synthetic-private-transport', token: 'synthetic-private-transport' } } }))
   await startHost(); assert.equal((await request('POST', '/api/agents', { agentId: 'team' })).status, 201)
   current = await create('driver'); const admin = await create('operator')
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
@@ -117,15 +122,14 @@ try {
   await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
 
   await task([fn('discover-builtin', 'search_tools', { query: 'MCP server', sources: ['builtin'], limit: 10 }), fn('discover-node', 'search_tools', { query: 'read', sources: ['node'], limit: 1 })], { browserSend: true })
-  assert.match((await pair('discover-builtin')).output, /builtin:mcp_config/); assert.match((await pair('discover-builtin')).output, /builtin:list_mcp_servers/)
-  assert.match((await pair('discover-node')).output, /node:master\/read/); assert(!(await pair('discover-node')).output.includes('builtin:read'))
-  const configFile = join(data, 'state', 'mcp.json')
-  await writeFile(configFile, JSON.stringify({ servers: { malformed: { transport: 'synthetic-private-transport', token: 'synthetic-private-transport' } } }))
+  for (const name of ['mcp_config', 'list_mcp_servers']) assert(listsBuiltin((await pair('discover-builtin')).output, name), (await pair('discover-builtin')).output)
+  // read runs on the current Node (master) and is listed once, as the declared tool.
+  assert.match((await pair('discover-node')).output, /\nread \(declared tool\) — /); assert(!(await pair('discover-node')).output.includes('node:master/read'))
   for (let index = 0; index < 2; index++) {
     const partial = await perform('builtin:search_tools', { sources: ['builtin', 'mcp'], query: 'session', limit: 1 }, 'config-unavailable-' + index)
-    assert.match(partial.output, /builtin:session/); assert.match(partial.output, /configuration is unavailable/); assert(!partial.output.includes('synthetic-private-transport'))
+    assert.match(partial.output, /\nsession [a-z-]+ /); assert.match(partial.output, /configuration is unavailable/); assert(!partial.output.includes('synthetic-private-transport'))
   }
-  await writeFile(configFile, JSON.stringify({ servers: {} }))
+  await stopHost(); await writeFile(configFile, JSON.stringify({ servers: {} })); await startHost()
   assert((await perform('builtin:skill', { action: 'load', skillName: 'mcp-management' }, 'guide')).output.includes('MCP management'))
   assert.equal((await perform('node:master/write', { filePath: 'same-owner.txt', content: 'one-write' }, 'owned-write')).error, undefined)
   assert.match((await perform({ source: 'node', name: 'read', nodeId: 'current' }, { filePath: 'same-owner.txt' }, 'owned-read')).output, /one-write/)
@@ -152,10 +156,13 @@ try {
   assert(!await exists(join(data, 'agents', 'team', 'cancel-one.txt')))
   const controls = (await history()).flatMap(row => row.parts || []).find(part => part.functionCall?.id === 'single-cancel').functionCall
   assert.equal(controls.args.__cancelTool, true)
-  await task([fn('primary-object-wins', 'call_tool', { toolId: 'node:master/write', args: { filePath: 'fallback.txt', content: 'primary' }, argsJson: '{malformed-ignored' }),
-    fn('invalid-primary-json-fallback', 'call_tool', { toolId: 'node:master/read', args: 'not-object', argsJson: JSON.stringify({ filePath: 'fallback.txt' }) }),
-    fn('bad-json-fallback', 'call_tool', { toolId: 'node:master/write', argsJson: '[1,2]' })])
-  assert.match((await pair('invalid-primary-json-fallback')).output, /primary/); assert((await pair('bad-json-fallback')).error)
+  // ctl envelope: values or valuesJson supply @name arguments; both at once or a non-object is rejected.
+  const ctl = (id, args) => ({ type: 'function_call', call_id: id, name: 'ctl', arguments: JSON.stringify(args) })
+  await task([ctl('values-json-write', { command: 'tool call node:master/write --args @a', valuesJson: JSON.stringify({ a: { filePath: 'fallback.txt', content: 'primary' } }) }),
+    ctl('values-json-read', { command: 'tool call node:master/read --args @a', valuesJson: JSON.stringify({ a: { filePath: 'fallback.txt' } }) }),
+    ctl('values-and-json', { command: 'tool call node:master/write --args @a', values: { a: { filePath: 'fallback.txt', content: 'both' } }, valuesJson: '{}' }),
+    ctl('bad-values-json', { command: 'tool call node:master/write --args @a', valuesJson: '[1,2]' })])
+  assert.match((await pair('values-json-read')).output, /primary/); assert((await pair('values-and-json')).error); assert((await pair('bad-values-json')).error)
   const discovery = await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', limit: 1, query: 'echo_effect' }, 'discover-real')
   assert.match(discovery.output, /mcp:local\/echo_effect/)
   const echo = await perform('mcp:local/echo_effect', { tag: 'inner-data', value: { nested: true }, __cancelTool: true }, 'echo-inner')
@@ -199,14 +206,14 @@ try {
   const large = await perform('mcp:local/result_case', { kind: 'large' }, 'case-large')
   assert.equal(large.outputTruncated, true); assert(large.output.length < 40000); assert.match(await readFile(large.outputFullPath, 'utf8'), /^long: START-/)
   assert((await readFile(large.outputFullPath, 'utf8')).includes('-END')); assert(large.outputOriginalLengthChars > 100000)
-  const meta = await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', limit: 200 }, 'all-metadata')
-  assert(meta.output.length <= 32000); assert(!meta.output.includes('\u202e')); assert(meta.output.includes('schema omitted'))
+  const meta = await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', limit: 200, includeSchema: true }, 'all-metadata')
+  assert(meta.output.length <= 32000); assert(!meta.output.includes('\u202e')); assert(meta.output.split('\n').filter(line => line.startsWith('mcp:local/')).length > 10); assert.equal(meta.output.split('\n    args: ').length - 1, 10, 'schemas are shown for the first ten results only')
   const unsafe = 'unsafe*/\nline\u202e'
   const dangerous = await perform('builtin:search_tools', { query: 'unsafe', sources: ['mcp'], server: 'local' }, 'unsafe-schema')
-  assert.match(dangerous.output, /source: "mcp"/); assert(!dangerous.output.includes('\nDO-NOT-EXECUTE')); assert(dangerous.output.includes('\\u202e'))
+  assert.match(dangerous.output, /--source mcp --name @name --server local with values \{"name": "/); assert(!dangerous.output.includes('\nDO-NOT-EXECUTE')); assert(dangerous.output.includes('\\u202e'))
   assert.equal((await perform({ source: 'mcp', server: 'local', name: unsafe }, { tag: 'unsafe-name', 'key*/\nname': 'exact' }, 'call-unsafe')).args['key*/\nname'], 'exact')
   for (const [query, expected] of [['schema_required_open', /extra: number/], ['schema_required_closed', /never/], ['schema_many', /required keys omitted/], ['schema_ref', /Record<string, unknown>/]])
-    assert.match((await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', query, limit: 1 }, 'schema-' + query)).output, expected)
+    assert.match((await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', query, limit: 1, includeSchema: true }, 'schema-' + query)).output, expected)
   const bad = await perform('mcp:missing-server/echo_effect', { tag: 'unknown-server' }, 'unknown-server')
   assert(bad.error); assert(!await exists(join(peerRoot, 'effect-unknown-server.txt')))
   for (let index = 0; index < 15; index++) assert.equal((await perform('mcp:local/echo_effect', { tag: 'repeat-' + index }, 'repeat-' + index)).pid, echo.pid)
@@ -229,7 +236,7 @@ try {
   assert.equal((await request('POST', route(current) + '/message', { text: '/stop' })).status, 200)
   await idle(); await until(() => exists(join(peerRoot, 'cancelled-stop')), 'actual peer observed Stop cancellation')
   assert(!await exists(join(peerRoot, 'effect-after-stop.txt')))
-  assert.equal((await pair('after-stop-no-effect')).canceled, true); assert.equal((await pair('held-stop')).error.type, 'tool_call_cancelled')
+  assert.equal((await pair('after-stop-no-effect')).canceled, true); assert.equal((await pair('held-stop')).code, 'tool_call_cancelled')
   await perform('mcp:local/echo_effect', { tag: 'after-stop-valid' }, 'after-stop-valid')
 
   for (const [name, transport, endpoint] of [['http', 'streamable-http', '/mcp'], ['sse', 'sse', '/sse'], ['auto-http', 'auto', '/mcp'], ['auto-sse', 'auto', '/sse']]) {
@@ -241,7 +248,7 @@ try {
   // The same resolved handlers retain complete-batch handoff/finish/wait semantics.
   const sink = await create('sink')
   const sinkScript = 'task-' + (++serial); scripts.set(sinkScript, { calls: [], owner: sink })
-  await task([invoke('unified-handoff', 'builtin:send_to_session', { sessionId: sink, message: 'MCP-TASK ' + sinkScript, afterSend: 'finish' }), invoke('handoff-following-write', 'node:master/write', { filePath: 'handoff-paired.txt', content: 'complete-batch' })], { final: false })
+  await task([invoke('unified-handoff', 'builtin:send_to_session', { sessionId: sink, message: 'MCP-TASK ' + sinkScript, currentSessionTurnAction: 'end_turn' }), invoke('handoff-following-write', 'node:master/write', { filePath: 'handoff-paired.txt', content: 'complete-batch' })], { final: false })
   await pair('unified-handoff'); await pair('handoff-following-write'); await idle()
   assert.equal(await readFile(join(data, 'agents', 'team', 'handoff-paired.txt'), 'utf8'), 'complete-batch')
   await until(async () => (await history(sink)).some(row => row.parts?.some(part => part.text === 'DONE-' + sinkScript)), 'delivered peer')
@@ -252,8 +259,8 @@ try {
 
   const childTask = 'task-' + (++serial); const childId = current + '_mcp-kid'
   const parentTask = 'task-' + (++serial)
-  scripts.set(childTask, { calls: [invoke('child-report', 'builtin:send_to_session', { sessionId: current, message: 'CHILD-RESULT', afterSend: 'finish' })], owner: childId })
-  scripts.set(parentTask, { calls: [invoke('unified-create-child', 'builtin:create_child_session', { suffix: 'mcp-kid', message: 'MCP-TASK ' + childTask, afterSend: 'wait' }),
+  scripts.set(childTask, { calls: [invoke('child-report', 'builtin:send_to_session', { sessionId: current, message: 'CHILD-RESULT', currentSessionTurnAction: 'end_turn' })], owner: childId })
+  scripts.set(parentTask, { calls: [invoke('unified-create-child', 'builtin:create_child_session', { suffix: 'mcp-kid', message: 'MCP-TASK ' + childTask, currentSessionTurnAction: 'wait' }),
     invoke('child-parent-following-write', 'node:master/write', { filePath: 'child-parent-paired.txt', content: 'paired-before-postaction' })], owner: current })
   assert.equal((await request('POST', route(current) + '/message', { text: 'MCP-TASK ' + parentTask })).status, 202)
   await pair('unified-create-child'); await pair('child-parent-following-write'); await pair('child-report', childId)

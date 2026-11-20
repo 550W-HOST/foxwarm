@@ -71,7 +71,7 @@ public sealed partial class HandoffConfirmationTests
                 )!.AsObject();
             var callName =
                 path == "script" ? "run_script"
-                : path == "unified" ? "call_tool"
+                : path == "unified" ? "ctl"
                 : name;
             var callArgs =
                 path == "script"
@@ -81,7 +81,7 @@ public sealed partial class HandoffConfirmationTests
                         ["args"] = args,
                     }
                 : path == "unified"
-                    ? new JsonObject { ["toolId"] = "builtin:" + name, ["args"] = args }
+                    ? CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:" + name, ["args"] = args })
                 : args;
             return (
                 await tools.ExecuteAsync(

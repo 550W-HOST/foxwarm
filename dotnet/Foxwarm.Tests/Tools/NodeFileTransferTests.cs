@@ -24,7 +24,7 @@ public sealed partial class NodeFileTransferTests
         internal string Work => Path.Combine(Temp.Path, "work");
         internal string Data => Path.Combine(Temp.Path, "data");
 
-        internal async Task Start()
+        internal async Task Start(bool strictDataRate = false)
         {
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
@@ -40,13 +40,28 @@ public sealed partial class NodeFileTransferTests
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
+            builder.WebHost.ConfigureKestrel(server =>
+            {
+                server.Limits.MaxRequestBodySize = 2 * 1024 * 1024;
+                if (strictDataRate)
+                    server.Limits.MinRequestBodyDataRate =
+                        new Microsoft.AspNetCore.Server.Kestrel.Core.MinDataRate(
+                            1024 * 1024,
+                            TimeSpan.FromSeconds(2)
+                        );
+            });
             App = builder.Build();
             App.UseWebSockets();
             App.Map("/node_ws", Manager.Nodes.HandleAsync);
+            Manager.Nodes.RegisterFileStreamRoutes(App);
             await App.StartAsync();
         }
 
-        internal async Task<ClientWebSocket> Connect(string id, JsonObject? credential = null)
+        internal async Task<ClientWebSocket> Connect(
+            string id,
+            JsonObject? credential = null,
+            bool streaming = false
+        )
         {
             credential ??= Manager.Nodes.Registry.Create(id);
             var socket = new ClientWebSocket();
@@ -73,6 +88,9 @@ public sealed partial class NodeFileTransferTests
                             new JsonObject { ["name"] = "read" },
                             new JsonObject { ["name"] = "write" }
                         ),
+                        ["features"] = streaming
+                            ? new JsonObject { ["fileStream"] = 1 }
+                            : new JsonObject(),
                     },
                     ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
                 }
@@ -372,13 +390,10 @@ public sealed partial class NodeFileTransferTests
     }
 
     [Fact]
-    public async Task Master_copy_ignores_session_cwd_and_preserves_no_overwrite_and_binary_bytes()
+    public async Task Master_copy_preserves_no_overwrite_and_binary_bytes()
     {
         await using var f = new Fixture();
         await f.Start();
-        var project = Path.Combine(f.Temp.Path, "project");
-        Directory.CreateDirectory(project);
-        await f.Owner.Entry.SaveLane.CommitCwdAsync(project);
         byte[] bytes = [0, 1, 255];
         await File.WriteAllBytesAsync(Path.Combine(f.Work, "binary"), bytes);
         var args = new JsonObject
@@ -390,7 +405,6 @@ public sealed partial class NodeFileTransferTests
         };
         await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(f.Work, "nested/copy")));
-        Assert.False(File.Exists(Path.Combine(project, "nested/copy")));
         await Assert.ThrowsAsync<IOException>(() =>
             f.Manager.CopyBetweenNodesAsync(f.Owner, args, default)
         );

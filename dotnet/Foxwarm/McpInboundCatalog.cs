@@ -7,7 +7,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm;
 
-internal sealed class McpInboundCatalog
+internal sealed partial class McpInboundCatalog
 {
     private readonly McpClient mcp;
     internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; }
@@ -15,10 +15,12 @@ internal sealed class McpInboundCatalog
     private readonly McpExternalAuthorization authorization;
     private readonly McpInboundSessions sessions;
     private readonly McpInboundNodes externalNodes;
+    private readonly SessionManager manager;
     private static readonly JsonArray wrappers = LoadWrappers();
 
     internal McpInboundCatalog(SessionManager manager)
     {
+        this.manager = manager;
         mcp = manager.OutboundMcp;
         ChannelRegistry = manager.ChannelRegistry;
         nodes = manager.Nodes;
@@ -69,7 +71,7 @@ internal sealed class McpInboundCatalog
                     ["type"] = "text",
                     ["text"] = value is null
                         ? "null"
-                        : SessionWait.Text(value) ?? value.ToJsonString(),
+                        : SessionWait.Text(value) ?? value.ToJsonText(),
                 }
             ),
         };
@@ -146,10 +148,44 @@ internal sealed class McpInboundCatalog
             JsonNode? result;
             switch (name)
             {
+                case "ctl":
+                    return await CtlAsync(context, args, token);
                 case "foxwarm_discover":
                     return await DiscoverAsync(context, args, token);
                 case "foxwarm_call":
-                    return await CallConcreteAsync(context, args, token);
+                {
+                    var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    JsonObject? called = null;
+                    try
+                    {
+                        Keys(args, "toolId", "args");
+                        var toolId = Text(args, "toolId", true)!;
+                        var callArgs = !args.ContainsKey("args")
+                            ? new JsonObject()
+                            : args["args"] as JsonObject
+                                ?? throw new McpInboundSafeException("Invalid tool call arguments.");
+                        var (source, scope, tool, valid) = ToolIdParts(toolId);
+                        if (!valid)
+                            throw new McpInboundSafeException("Invalid tool ID.");
+                        return called = await CallConcreteAsync(context, source!, scope, tool, callArgs, token);
+                    }
+                    finally
+                    {
+                        if (args["toolId"] is JsonValue value && value.TryGetValue<string>(out var recorded))
+                        {
+                            var (source, scope, tool, _) = ToolIdParts(recorded);
+                            RecordExternal(
+                                context,
+                                source,
+                                scope,
+                                tool,
+                                args["args"] as JsonObject ?? new JsonObject(),
+                                started,
+                                called
+                            );
+                        }
+                    }
+                }
                 case "foxwarm_node":
                     Keys(args, "action", "nodeId");
                     var action = Text(args, "action", true)!;
@@ -259,27 +295,111 @@ internal sealed class McpInboundCatalog
         );
     }
 
-    private async Task<JsonObject> CallConcreteAsync(
+    // Inbound MCP calls never reach a Session Archive, so their activity is recorded directly.
+    // A call that ended in an exception is recorded as an error with no further detail.
+    private void RecordExternal(
         McpExternalContext context,
-        JsonObject args,
+        string? source,
+        string? scope,
+        string tool,
+        JsonObject callArgs,
+        long started,
+        JsonObject? result
+    )
+    {
+        try
+        {
+            var failed = result is null || result["isError"]?.GetValue<bool>() == true;
+            var target = new JsonObject { ["name"] = tool };
+            if (source is not null)
+                target["source"] = source;
+            if (source == "mcp" && scope is not null)
+                target["server"] = scope;
+            if (source == "node" && scope is not null)
+                target["node"] = scope;
+            if (
+                callArgs["action"] is JsonValue actionValue
+                && actionValue.TryGetValue<string>(out var action)
+                && action is { Length: > 0 and <= 40 }
+            )
+                target["action"] = action;
+            manager.Activity.RecordDirect(() =>
+                ArchiveToolEffects.FromDirectCall(
+                    null,
+                    null,
+                    "external-mcp",
+                    started,
+                    target,
+                    tool,
+                    null,
+                    failed
+                        ? ToolFailure.Result("The external call failed.", "external_call_failed")
+                        : new JsonObject(),
+                    SessionToolExecutor.ActivitySummary(manager, tool, callArgs, null),
+                    new(0, "mcp-client", context.ExternalId),
+                    null
+                )
+            );
+        }
+        catch (Exception)
+        {
+            // Activity is presentation; it never changes the call's result.
+        }
+    }
+
+    // A tool ID as foxwarm_call reads it: the two pairing builtins, or source:scope/name split
+    // at the first slash. An invalid ID is still split as far as it goes, for its activity record.
+    private static (string? Source, string? Scope, string Name, bool Valid) ToolIdParts(string id)
+    {
+        var colon = id.IndexOf(':');
+        var slash = id.IndexOf('/', colon + 1);
+        var source = colon > 0 ? id[..colon] : null;
+        var scope = colon > 0 && slash > colon ? id[(colon + 1)..slash] : null;
+        var name =
+            slash > 0 ? id[(slash + 1)..]
+            : colon > 0 ? id[(colon + 1)..]
+            : id;
+        var valid =
+            id is "builtin:node_pair_list" or "builtin:node_pair_approve"
+            || colon > 0 && slash > colon + 1 && slash < id.Length - 1;
+        return (source, scope, name, valid);
+    }
+
+    // One concrete tool call by `ctl` and its activity record, as for foxwarm_call.
+    private async Task<JsonObject> CallRecordedAsync(
+        McpExternalContext context,
+        string source,
+        string? scope,
+        string name,
+        JsonObject callArgs,
         CancellationToken token
     )
     {
-        Keys(args, "toolId", "args");
-        var id = Text(args, "toolId", true)!;
-        var callArgs = !args.ContainsKey("args")
-            ? new JsonObject()
-            : args["args"] as JsonObject
-                ?? throw new McpInboundSafeException("Invalid tool call arguments.");
-        if (id is "builtin:node_pair_list" or "builtin:node_pair_approve")
-            return Result(await PairAsync(context, id[8..], callArgs, token));
-        var colon = id.IndexOf(':');
-        var slash = id.IndexOf('/', colon + 1);
-        if (colon <= 0 || slash <= colon + 1 || slash == id.Length - 1)
+        var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        JsonObject? called = null;
+        try
+        {
+            return called = await CallConcreteAsync(context, source, scope, name, callArgs, token);
+        }
+        finally
+        {
+            RecordExternal(context, source, scope, name, callArgs, started, called);
+        }
+    }
+
+    private async Task<JsonObject> CallConcreteAsync(
+        McpExternalContext context,
+        string source,
+        string? scope,
+        string name,
+        JsonObject callArgs,
+        CancellationToken token
+    )
+    {
+        if (source == "builtin" && scope is null && name is "node_pair_list" or "node_pair_approve")
+            return Result(await PairAsync(context, name, callArgs, token));
+        if (scope is null)
             throw new McpInboundSafeException("Invalid tool ID.");
-        var source = id[..colon];
-        var scope = id[(colon + 1)..slash];
-        var name = id[(slash + 1)..];
         if (source == "mcp")
             return await mcp.CallExternalAsync(
                 context,
@@ -334,57 +454,22 @@ internal sealed class McpInboundCatalog
         return result;
     }
 
-    private async Task<JsonObject> DiscoverAsync(
+    // The tools this connection may discover: the pairing builtins its policy may allow,
+    // tools of its outbound MCP servers and of its Nodes. TotalKnown is false when an MCP
+    // server could not be listed.
+    private async Task<(
+        List<(string Source, string Scope, JsonObject Tool)> Tools,
+        bool TotalKnown
+    )> CollectAsync(
         McpExternalContext context,
-        JsonObject args,
+        string[] sources,
+        string? serverFilter,
+        string? nodeFilter,
         CancellationToken token
     )
     {
-        Keys(args, "query", "sources", "nodeId", "server", "limit", "includeSchema");
-        var query = Text(args, "query") ?? "";
-        var nodeFilter = Text(args, "nodeId");
-        var serverFilter = Text(args, "server");
-        var limit = Integer(args, "limit", 1, 50) ?? 5;
-        var includeSchema = Boolean(args, "includeSchema") ?? true;
-        var sources = new[] { "mcp", "node", "builtin" };
-        if (args.ContainsKey("sources"))
-        {
-            if (
-                args["sources"] is not JsonArray list
-                || list.Any(value => SessionWait.Text(value) is not ("mcp" or "node" or "builtin"))
-            )
-                throw new McpInboundSafeException("Invalid discovery arguments.");
-            sources = list.Select(value => SessionWait.Text(value)!).ToArray();
-            if (sources.Distinct().Count() != sources.Length)
-                throw new McpInboundSafeException("Invalid discovery arguments.");
-        }
-        var collected =
-            new List<(int Score, string Source, string Scope, string Name, JsonObject Tool)>();
+        var tools = new List<(string Source, string Scope, JsonObject Tool)>();
         var totalKnown = true;
-        void Add(string source, string scope, JsonObject tool)
-        {
-            var name = SessionWait.Text(tool["name"])!;
-            var description = SessionWait.Text(tool["description"]) ?? "";
-            var score = UnifiedTools.Score(query, name, description, scope);
-            if (score < 0)
-                return;
-            var row = new JsonObject
-            {
-                ["toolId"] = source + ":" + (source == "builtin" ? "" : scope + "/") + name,
-                ["source"] = source,
-                ["name"] = name,
-                ["description"] = description,
-            };
-            if (source != "builtin")
-                row[source == "node" ? "nodeId" : "server"] = scope;
-            if (includeSchema)
-            {
-                row["inputSchema"] = (tool["inputSchema"] ?? tool["parameters"])?.DeepClone();
-                if (source == "mcp" && tool["annotations"] is not null)
-                    row["annotations"] = tool["annotations"]!.DeepClone();
-            }
-            collected.Add((score, source, scope, name, row));
-        }
         if (sources.Contains("builtin"))
             foreach (
                 var definition in NodeToolDefinitions
@@ -402,7 +487,7 @@ internal sealed class McpInboundCatalog
                         authorization.Request(context, "builtin", name, new())
                     )
                 )
-                    Add("builtin", "", definition);
+                    tools.Add(("builtin", "", definition));
             }
         if (sources.Contains("mcp"))
             foreach (
@@ -421,7 +506,7 @@ internal sealed class McpInboundCatalog
                             token
                         )
                     )
-                        Add("mcp", server, tool);
+                        tools.Add(("mcp", server, tool));
                 }
                 catch (ToolAuthorizationUnavailableException)
                 {
@@ -442,58 +527,171 @@ internal sealed class McpInboundCatalog
                         || SessionWait.Text(tool["nodeId"]) == nodeFilter
                     )
             )
-                Add("node", SessionWait.Text(tool["nodeId"])!, tool);
-        var comparer = StringComparer.Create(CultureInfo.GetCultureInfo("en-US"), false);
+                tools.Add(("node", SessionWait.Text(tool["nodeId"])!, tool));
+        return (tools, totalKnown);
+    }
+
+    // foxwarm_discover and, with commands, `ctl tool search`. The command form lists the
+    // pairing builtins as their external commands and shows schemas only when asked; the
+    // wrapper keeps its tool IDs and default schemas.
+    private async Task<JsonObject> DiscoverAsync(
+        McpExternalContext context,
+        JsonObject args,
+        CancellationToken token,
+        bool commands = false
+    )
+    {
+        Keys(args, "query", "sources", "nodeId", "server", "limit", "includeSchema");
+        var query = Text(args, "query") ?? "";
+        var nodeFilter = Text(args, "nodeId");
+        var serverFilter = Text(args, "server");
+        var limit = Integer(args, "limit", 1, 50) ?? 5;
+        var includeSchema = Boolean(args, "includeSchema") ?? !commands;
+        var sources = new[] { "mcp", "node", "builtin" };
+        if (args.ContainsKey("sources"))
+        {
+            if (
+                args["sources"] is not JsonArray list
+                || list.Any(value => SessionWait.Text(value) is not ("mcp" or "node" or "builtin"))
+            )
+                throw new McpInboundSafeException("Invalid discovery arguments.");
+            sources = list.Select(value => SessionWait.Text(value)!).ToArray();
+            if (sources.Distinct().Count() != sources.Length)
+                throw new McpInboundSafeException("Invalid discovery arguments.");
+        }
+        var (found, totalKnown) = await CollectAsync(
+            context,
+            sources,
+            serverFilter,
+            nodeFilter,
+            token
+        );
+        var collected = new List<(SearchTool Entry, JsonObject Tool)>();
+        foreach (var (source, scope, tool) in found)
+        {
+            var name = SessionWait.Text(tool["name"])!;
+            var description = SessionWait.Text(tool["description"]) ?? "";
+            var schema = tool["inputSchema"] ?? tool["parameters"];
+            if (commands && source == "builtin")
+            {
+                foreach (var (command, commandScore) in UnifiedTools.CommandMatches(query, name, Ingress))
+                    collected.Add(
+                        (
+                            new(
+                                source,
+                                name,
+                                description,
+                                schema,
+                                null,
+                                false,
+                                commandScore,
+                                Kind: SearchKinds.Command,
+                                Command: command
+                            ),
+                            tool
+                        )
+                    );
+                continue;
+            }
+            var score = UnifiedTools.Score(
+                query,
+                [name],
+                source == "builtin" ? [description] : [description, scope]
+            );
+            if (score >= 0)
+                collected.Add(
+                    (
+                        new(
+                            source,
+                            name,
+                            description,
+                            schema,
+                            source == "builtin" ? null : scope,
+                            false,
+                            score
+                        ),
+                        tool
+                    )
+                );
+        }
+        var order = UnifiedTools.Rank(collected.Select(item => item.Entry)).ToList();
         var sorted = collected
-            .OrderByDescending(item => item.Score)
-            .ThenBy(item => item.Source, comparer)
-            .ThenBy(item => item.Scope, comparer)
-            .ThenBy(item => item.Name, comparer)
+            .OrderBy(item => order.IndexOf(item.Entry))
             .Take(limit);
         var tools = new JsonArray();
+        var entries = new List<SearchTool>();
         const int maxTextBytes = 16 * 1024;
         var size = 1024 + 2 * maxTextBytes;
         var schemaOmitted = false;
-        foreach (var item in sorted)
+        foreach (var (entry, source) in sorted)
         {
-            var tool = item.Tool;
-            var cost = Encoding.UTF8.GetByteCount(tool.ToJsonString());
+            var tool = new JsonObject
+            {
+                ["toolId"] = entry.Source + ":" + (entry.Source == "builtin" ? "" : entry.Scope + "/") + entry.Name,
+                ["source"] = entry.Source,
+                ["name"] = entry.Name,
+                ["description"] = entry.Description,
+            };
+            if (entry.Source != "builtin")
+                tool[entry.Source == "node" ? "nodeId" : "server"] = entry.Scope;
+            if (commands)
+                UnifiedTools.Describe(tool, entry, Ingress);
+            if (includeSchema)
+            {
+                tool["inputSchema"] = entry.Schema?.DeepClone();
+                if (entry.Source == "mcp" && source["annotations"] is not null)
+                    tool["annotations"] = source["annotations"]!.DeepClone();
+            }
+            var cost = Encoding.UTF8.GetByteCount(tool.ToJsonText());
             if (cost + size > 512 * 1024 && includeSchema)
             {
                 tool.Remove("inputSchema");
                 tool.Remove("annotations");
                 tool["schemaOmitted"] = true;
                 schemaOmitted = true;
-                cost = Encoding.UTF8.GetByteCount(tool.ToJsonString());
+                cost = Encoding.UTF8.GetByteCount(tool.ToJsonText());
             }
             if (cost + size > 512 * 1024)
                 break;
             tools.Add(tool);
+            entries.Add(entry);
             size += cost;
         }
         context.Require();
         var truncated = tools.Count < collected.Count;
-        var text = new StringBuilder(
-            $"Showing {tools.Count} of {collected.Count} matching available tools{(totalKnown ? "" : " from reachable servers")}{(truncated ? " (truncated)" : "")}."
-        );
-        var textBytes = Encoding.UTF8.GetByteCount(text.ToString()) + 256;
-        var textCount = 0;
-        foreach (var tool in tools.OfType<JsonObject>())
+        string text;
+        if (commands)
         {
-            var line = "\n- " + tool["toolId"]!.ToJsonString();
-            var bytes = Encoding.UTF8.GetByteCount(line);
-            if (textBytes + bytes > maxTextBytes)
-                break;
-            text.Append(line);
-            textBytes += bytes;
-            textCount++;
+            var warnings = totalKnown
+                ? new List<string>()
+                : ["Some MCP servers could not be searched; results cover the reachable ones."];
+            text = UnifiedTools.RenderExternal(entries, collected.Count, warnings, includeSchema);
         }
-        if (textCount < tools.Count)
-            text.Append("\nAdditional returned tool IDs are available in structuredContent.tools.");
+        else
+        {
+            var builder = new StringBuilder(
+                $"Showing {tools.Count} of {collected.Count} matching available tools{(totalKnown ? "" : " from reachable servers")}{(truncated ? " (truncated)" : "")}."
+            );
+            var textBytes = Encoding.UTF8.GetByteCount(builder.ToString()) + 256;
+            var textCount = 0;
+            foreach (var tool in tools.OfType<JsonObject>())
+            {
+                var line = "\n- " + tool["toolId"]!.ToJsonText();
+                var bytes = Encoding.UTF8.GetByteCount(line);
+                if (textBytes + bytes > maxTextBytes)
+                    break;
+                builder.Append(line);
+                textBytes += bytes;
+                textCount++;
+            }
+            if (textCount < tools.Count)
+                builder.Append("\nAdditional returned tool IDs are available in structuredContent.tools.");
+            text = builder.ToString();
+        }
         return new JsonObject
         {
             ["content"] = new JsonArray(
-                new JsonObject { ["type"] = "text", ["text"] = text.ToString() }
+                new JsonObject { ["type"] = "text", ["text"] = text }
             ),
             ["structuredContent"] = new JsonObject
             {
@@ -504,6 +702,78 @@ internal sealed class McpInboundCatalog
                 ["truncated"] = truncated,
                 ["schemaOmitted"] = schemaOmitted,
             },
+        };
+    }
+
+    // `tool call <tool-id> --help` for this connection: the description and arguments of a
+    // tool it may discover, or the command that runs a pairing builtin.
+    private async Task<JsonObject> ToolHelpAsync(
+        McpExternalContext context,
+        CtlDescription target,
+        CancellationToken token
+    )
+    {
+        var (found, _) = await CollectAsync(
+            context,
+            [target.Source],
+            target.Source == "mcp" ? target.Server : null,
+            target.Source == "node" ? target.Node : null,
+            token
+        );
+        var match = found.FirstOrDefault(item =>
+            item.Source == target.Source
+            && SessionWait.Text(item.Tool["name"]) == target.Name
+            && (target.Source == "builtin" || item.Scope == (target.Source == "mcp" ? target.Server : target.Node))
+        );
+        context.Require();
+        if (match.Tool is null)
+            return Error("Unknown tool. Find tools with `tool search`.");
+        if (match.Source == "builtin")
+        {
+            var lines = CtlRegistry
+                .ForTarget("builtin", target.Name, Ingress)
+                .Select(command => CtlHelp.Synopsis(command, compact: true, Ingress) + " — " + command.Summary)
+                .ToArray();
+            if (lines.Length > 0)
+                return Result(
+                    JsonValue.Create(
+                        "Run it with "
+                            + (lines.Length == 1 ? "this command" : "these commands")
+                            + ":\n\n"
+                            + string.Join('\n', lines)
+                            + "\n\nAdd --help to a command for its arguments."
+                    )
+                );
+        }
+        var schema = match.Tool["inputSchema"] ?? match.Tool["parameters"];
+        var tool = new JsonObject
+        {
+            ["toolId"] = match.Source + ":" + (match.Source == "builtin" ? "" : match.Scope + "/") + target.Name,
+            ["source"] = match.Source,
+            ["name"] = target.Name,
+            ["description"] = SessionWait.Text(match.Tool["description"]) ?? "",
+        };
+        if (match.Source != "builtin")
+            tool[match.Source == "node" ? "nodeId" : "server"] = match.Scope;
+        if (schema is not null)
+            tool["inputSchema"] = schema.DeepClone();
+        return new JsonObject
+        {
+            ["content"] = new JsonArray(
+                new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = UnifiedTools.ToolHelp(
+                        match.Source,
+                        target.Name,
+                        match.Source == "builtin" ? null : match.Scope,
+                        SessionWait.Text(match.Tool["description"]) ?? "",
+                        schema,
+                        match.Tool["outputSchema"]
+                    ),
+                }
+            ),
+            ["structuredContent"] = new JsonObject { ["tool"] = tool },
         };
     }
 }

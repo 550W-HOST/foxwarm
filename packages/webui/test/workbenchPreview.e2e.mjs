@@ -138,6 +138,11 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       }
       if (pathname.endsWith('/api/session-list/descendant-activity')) return json({ results: [] })
       if (pathname.endsWith('/api/session-list/architecture')) return json({ version: 1, revision: 'r1', sessions: [], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {}, summary: { total: 3, busy: 0, queued: 0, managed: 0, cachedTokens: 3000000000, inputTokens: 200000000, outputTokens: 30000000 } })
+      if (pathname.endsWith('/api/usage')) {
+        const boundaries = url.searchParams.get('boundaries').split(',').map(Number)
+        const empty = { requests: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0, unpricedRequests: 0 }
+        return json({ boundaries, groupBy: null, agent: null, total: { requests: 12, cachedTokens: 3000000000, inputTokens: 200000000, outputTokens: 30000000, unpricedRequests: 12 }, buckets: boundaries.slice(1).map(() => empty), coverage: { earliest: null, complete: true } })
+      }
       if (pathname.includes('/api/session-list/')) return json({ sessions: [], results: [] })
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/message')) {
         window.__sent.push({ path: pathname, body: options.body })
@@ -1319,7 +1324,7 @@ test('collapsed rail keeps the navigation entries at the top and mobile uses its
     await page.click('button[title="Collapse sidebar"]')
     const rail = '.w-12 [data-sidebar-nav-list]'
     await page.waitForSelector(`${rail} button[aria-label="Search history"]`)
-    assert.deepEqual(await page.$$eval(`${rail} button[aria-label]`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open UI settings', 'System', 'Tasks', 'Search history'])
+    assert.deepEqual(await page.$$eval(`${rail} button[aria-label]`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open setup', 'Open UI settings', 'System', 'Tasks', 'Search history'])
     assert.ok(await page.$(`${rail} button[aria-label="Search history"] svg.lucide-search`))
     assert.equal(await page.$('.w-12 [data-sidebar-footer]'), null)
     assert.ok(await page.$('.w-12 button[aria-label="New session"]'))
@@ -1491,63 +1496,152 @@ test('Chat Code still opens the embedded workbench when the new-tab preference i
   } finally { await page.close() }
 })
 
-test('Application menu icons precede their labels and retain Setup, Logs, and reload actions', async () => {
-  const page = await openFixture({ themeId: 'foxwarm.550a' })
-  try {
-    const menu = '[data-global-ui-settings-menu]'
-    const trigger = '[data-sidebar-brand] button[aria-label="Open UI settings"]'
-    const openMenu = async () => {
-      await page.waitForSelector(trigger)
-      await page.click(trigger)
+const settingsScreenshotDirectory = process.env.FOXWARM_SETTINGS_SPLIT_SCREENSHOT_DIR
+
+async function captureSettingsHeader(page, name, region) {
+  if (!settingsScreenshotDirectory) return
+  await mkdir(settingsScreenshotDirectory, { recursive: true })
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(animation => animation instanceof CSSTransition).map(animation => animation.finished.catch(() => {}))))
+  const clip = await page.evaluate((region) => {
+    const header = document.querySelector(region).getBoundingClientRect()
+    const menu = document.querySelector('[data-global-ui-settings-menu]')?.getBoundingClientRect()
+    const bottom = Math.max(header.bottom, menu ? menu.bottom + 8 : 0)
+    const right = Math.max(header.right, menu ? menu.right + 8 : 0)
+    return { x: 0, y: 0, width: Math.ceil(right), height: Math.ceil(bottom) }
+  }, region)
+  await page.screenshot({ path: path.join(settingsScreenshotDirectory, `${name}.png`), clip, captureBeyondViewport: false })
+}
+
+test('sidebar settings split button opens Setup from the gear and the menu from its attached dropdown', async () => {
+  const menu = '[data-global-ui-settings-menu]'
+  const gear = '[data-sidebar-brand] button[aria-label="Open setup"]'
+  const trigger = '[data-sidebar-brand] button[aria-label="Open UI settings"]'
+  const openMenu = async (page) => {
+    await page.waitForSelector(trigger)
+    await page.click(trigger)
+    await page.waitForSelector(menu, { visible: true })
+    await page.waitForFunction(selector => getComputedStyle(document.querySelector(selector)).visibility === 'visible', {}, menu)
+  }
+  for (const colorMode of ['light', 'dark']) {
+    const page = await openFixture({ themeId: 'foxwarm.550a', colorMode })
+    try {
+      await page.waitForSelector(gear)
+      assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), colorMode === 'dark')
+      const geometry = await page.evaluate(({ gear, trigger }) => {
+        const rect = selector => document.querySelector(selector).getBoundingClientRect()
+        const g = rect(gear)
+        const t = rect(trigger)
+        const collapse = rect('[data-sidebar-brand] button[title="Collapse sidebar"]')
+        const split = document.querySelector(gear).parentElement.getBoundingClientRect()
+        return { gearRight: g.right, triggerLeft: t.left, gearTop: g.top, triggerTop: t.top, gearHeight: g.height, triggerHeight: t.height, splitHeight: split.height, splitRight: split.right, collapseLeft: collapse.left, collapseHeight: collapse.height, triggerWidth: t.width, gearWidth: g.width }
+      }, { gear, trigger })
+      // One attached control: the dropdown part is flush to the gear's right edge, inside one shared border.
+      assert.ok(Math.abs(geometry.triggerLeft - geometry.gearRight) <= 1.5, JSON.stringify(geometry))
+      assert.equal(geometry.gearTop, geometry.triggerTop)
+      assert.equal(geometry.gearHeight, geometry.triggerHeight)
+      assert.equal(geometry.splitHeight, geometry.collapseHeight, 'the split button matches the collapse button height')
+      assert.ok(geometry.splitRight < geometry.collapseLeft, 'the collapse button stays beside the split button')
+      assert.ok(geometry.triggerWidth < geometry.gearWidth, 'the dropdown part is the narrower part')
+      assert.deepEqual(await page.$eval(gear, button => ({ title: button.title, haspopup: button.getAttribute('aria-haspopup'), expanded: button.getAttribute('aria-expanded'), current: button.getAttribute('aria-current') })), { title: 'Open setup', haspopup: null, expanded: null, current: null })
+      assert.deepEqual(await page.$eval(trigger, button => ({ title: button.title, haspopup: button.getAttribute('aria-haspopup'), expanded: button.getAttribute('aria-expanded') })), { title: 'UI settings', haspopup: 'dialog', expanded: 'false' })
+      await captureSettingsHeader(page, `sidebar-header-${colorMode}`, '[data-sidebar-brand]')
+
+      await openMenu(page)
+      assert.equal(await page.$eval(trigger, button => button.getAttribute('aria-expanded')), 'true')
+      assert.equal(await page.$eval(trigger, button => document.getElementById(button.getAttribute('aria-controls'))?.hasAttribute('data-global-ui-settings-menu')), true)
+      assert.equal(await page.$eval(menu, element => `${element.getAttribute('role')}:${element.getAttribute('aria-label')}`), 'dialog:UI settings')
+      assert.equal(await page.$(`${menu} .lucide-clipboard-list`), null, 'Tasks is not duplicated in settings')
+      assert.equal(await page.$(`${menu} .lucide-settings`), null, 'Setup is not duplicated in the menu')
+      const rows = await page.$$eval(`${menu} button`, buttons => buttons.filter(button => /Open setup|Reload WebUI|Open logs/.test(button.textContent)).map(button => {
+        const label = button.firstElementChild
+        const icon = label.firstElementChild
+        const text = label.lastChild
+        const range = document.createRange()
+        range.selectNodeContents(text)
+        return {
+          text: label.textContent,
+          icon: [...icon.classList].find(name => /^lucide-(settings|refresh-cw|file-text)$/.test(name)),
+          svgCount: button.querySelectorAll('svg').length,
+          width: icon.getBoundingClientRect().width,
+          beforeText: icon.getBoundingClientRect().right < range.getBoundingClientRect().left,
+        }
+      }))
+      assert.deepEqual(rows, [
+        { text: 'Reload WebUI', icon: 'lucide-refresh-cw', svgCount: 1, width: 14, beforeText: true },
+        { text: 'Open logs', icon: 'lucide-file-text', svgCount: 1, width: 14, beforeText: true },
+      ])
+      await captureSettingsHeader(page, `sidebar-header-${colorMode}-menu-open`, '[data-sidebar-brand]')
+      if (colorMode === 'dark') continue
+
+      // Gear click from an open menu closes it and opens Setup with the active treatment.
+      await page.click(gear)
+      await page.waitForSelector('[data-setup-tab="appearance"]')
+      assert.equal(await page.$(menu), null)
+      await page.waitForFunction(selector => document.querySelector(selector).getAttribute('aria-current') === 'page', {}, gear)
+      assert.equal(await page.$eval(trigger, button => button.getAttribute('aria-expanded')), 'false')
+      await captureSettingsHeader(page, 'sidebar-header-light-setup-active', '[data-sidebar-brand]')
+
+      // Keyboard: Tab moves from the gear to the dropdown part; Enter opens; Escape closes and returns focus.
+      await page.focus(gear)
+      await page.keyboard.press('Tab')
+      assert.equal(await page.$eval(trigger, button => button === document.activeElement), true)
+      await page.keyboard.press('Enter')
       await page.waitForSelector(menu, { visible: true })
-    }
-    await openMenu()
-    assert.equal(await page.$(`${menu} .lucide-clipboard-list`), null, 'Tasks is not duplicated in settings')
-    const rows = await page.$$eval(`${menu} button`, buttons => buttons.filter(button => /Open setup|Reload WebUI|Open logs/.test(button.textContent)).map(button => {
-      const label = button.firstElementChild
-      const icon = label.firstElementChild
-      const text = label.lastChild
-      const range = document.createRange()
-      range.selectNodeContents(text)
-      return {
-        text: label.textContent,
-        icon: [...icon.classList].find(name => /^lucide-(settings|refresh-cw|file-text)$/.test(name)),
-        svgCount: button.querySelectorAll('svg').length,
-        width: icon.getBoundingClientRect().width,
-        beforeText: icon.getBoundingClientRect().right < range.getBoundingClientRect().left,
-      }
-    }))
-    assert.deepEqual(rows, [
-      { text: 'Reload WebUI', icon: 'lucide-refresh-cw', svgCount: 1, width: 14, beforeText: true },
-      { text: 'Open logs', icon: 'lucide-file-text', svgCount: 1, width: 14, beforeText: true },
-      { text: 'Open setup', icon: 'lucide-settings', svgCount: 1, width: 14, beforeText: true },
-    ])
-    if (process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH) {
-      await page.screenshot({ path: process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH })
-    }
-    await clickReadyControl(page, `${menu} button:has(.lucide-settings)`)
-    await page.waitForSelector('[data-setup-tab="appearance"]')
-    assert.equal(await page.$(menu), null)
-    await openMenu()
-    assert.equal(await page.$eval(`${menu} .lucide-settings`, icon => icon.closest('button').textContent), 'Open setupactive')
-    await clickReadyControl(page, `${menu} button:has(.lucide-file-text)`)
-    await page.waitForSelector('[data-logs-view]')
-    assert.equal((await state(page)).root.activeTabId, 'system:logs')
-    assert.equal(await page.$(menu), null)
-    await openMenu()
-    await page.waitForFunction(() => {
-      const button = document.querySelector('[data-global-ui-settings-menu] button[aria-label="Reload app"]')
-      const rect = button?.getBoundingClientRect()
-      return rect && button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
-    })
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-      page.click(`${menu} button[aria-label="Reload app"]`),
-    ])
-    await page.waitForFunction(() => !!window.foxwarmTest)
-    assert.equal(await page.$(menu), null)
-    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmComponentTreatment), 'console')
-  } finally { await page.close() }
+      await page.keyboard.press('Escape')
+      await page.waitForSelector(menu, { hidden: true })
+      assert.equal(await page.$eval(trigger, button => button === document.activeElement), true)
+
+      await openMenu(page)
+      await clickReadyControl(page, `${menu} button:has(.lucide-file-text)`)
+      await page.waitForSelector('[data-logs-view]')
+      assert.equal((await state(page)).root.activeTabId, 'system:logs')
+      assert.equal(await page.$(menu), null)
+      assert.equal(await page.$eval(gear, button => button.getAttribute('aria-current')), 'page', 'Logs keeps the Setup highlight')
+
+      // Collapsed rail: the dropdown part is stacked under the gear and both parts keep their roles.
+      await page.click('[data-sidebar-brand] button[title="Collapse sidebar"]')
+      const rail = '.w-12 [data-sidebar-nav-list]'
+      await page.waitForSelector(`${rail} button[aria-label="Open setup"]`)
+      const railGeometry = await page.evaluate((rail) => {
+        const g = document.querySelector(`${rail} button[aria-label="Open setup"]`).getBoundingClientRect()
+        const t = document.querySelector(`${rail} button[aria-label="Open UI settings"]`).getBoundingClientRect()
+        const railRect = document.querySelector(rail).getBoundingClientRect()
+        return { gearBottom: g.bottom, triggerTop: t.top, gearLeft: g.left, triggerLeft: t.left, gearWidth: g.width, triggerWidth: t.width, splitRight: Math.max(g.right, t.right), railRight: railRect.right }
+      }, rail)
+      assert.ok(Math.abs(railGeometry.triggerTop - railGeometry.gearBottom) <= 1.5, JSON.stringify(railGeometry))
+      assert.equal(railGeometry.gearLeft, railGeometry.triggerLeft)
+      assert.equal(railGeometry.gearWidth, railGeometry.triggerWidth)
+      assert.ok(railGeometry.splitRight <= railGeometry.railRight)
+      assert.equal(await page.$eval(`${rail} button[aria-label="Open setup"]`, button => button.getAttribute('aria-current')), 'page')
+      await page.click(`${rail} button[aria-label="Open UI settings"]`)
+      await page.waitForFunction(selector => { const element = document.querySelector(selector); return element && getComputedStyle(element).visibility === 'visible' }, {}, menu)
+      const railMenu = await page.$eval(menu, element => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: innerWidth } })
+      assert.ok(railMenu.left >= 7.5 && railMenu.right <= railMenu.width - 7.5, JSON.stringify(railMenu))
+      await captureSettingsHeader(page, 'collapsed-rail-light-menu-open', '.w-12 [data-sidebar-nav-list]')
+      await page.keyboard.press('Escape')
+      await page.waitForSelector(menu, { hidden: true })
+      assert.equal(await page.$eval(`${rail} button[aria-label="Open UI settings"]`, button => button === document.activeElement), true)
+      await clickReadyControl(page, `${rail} button[aria-label="Search history"]`)
+      await page.waitForFunction(selector => document.querySelector(selector).getAttribute('aria-current') === null, {}, `${rail} button[aria-label="Open setup"]`)
+      await page.click(`${rail} button[aria-label="Open setup"]`)
+      await page.waitForSelector('[data-setup-tab="appearance"]')
+      await page.click('.w-12 button[title="Expand sidebar"]')
+
+      await openMenu(page)
+      await page.waitForFunction(() => {
+        const button = document.querySelector('[data-global-ui-settings-menu] button[aria-label="Reload app"]')
+        const rect = button?.getBoundingClientRect()
+        return rect && button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+      })
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+        page.click(`${menu} button[aria-label="Reload app"]`),
+      ])
+      await page.waitForFunction(() => !!window.foxwarmTest)
+      assert.equal(await page.$(menu), null)
+      assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmComponentTreatment), 'console')
+    } finally { await page.close() }
+  }
 })
 
 
@@ -1970,7 +2064,12 @@ test('Code-embedded sidebar keeps a direct Tasks popup entry next to settings', 
     await page.click('button[aria-label="Open UI settings"]')
     await page.waitForSelector('[data-global-ui-settings-menu]', { visible: true })
     assert.equal(await page.$('[data-global-ui-settings-menu] .lucide-clipboard-list'), null)
-    assert.equal(await page.$eval('[data-global-ui-settings-menu]', menu => Array.from(menu.querySelectorAll('button')).at(-1).textContent.trim()), 'Open setup')
+    assert.equal(await page.$eval('[data-global-ui-settings-menu]', menu => Array.from(menu.querySelectorAll('button')).at(-1).textContent.trim()), 'Open logs')
+    assert.equal(await page.$('[data-global-ui-settings-menu] .lucide-settings'), null)
+    assert.equal(await page.$eval('button[aria-label="Open setup"]', button => button.getAttribute('aria-current')), null)
+    await page.click('button[aria-label="Open setup"]')
+    assert.equal(await page.$('[data-global-ui-settings-menu]'), null)
+    await page.waitForFunction(() => document.querySelector('button[aria-label="Open setup"]').getAttribute('aria-current') === 'page')
   } finally { await page.close() }
 })
 
@@ -2010,9 +2109,12 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
     assert.ok(await readWidth() > 1100, 'new browsers retain the full-width message layout')
     await page.click('button[aria-label="Open session options"]')
     await page.waitForSelector('[data-session-ui-settings-menu]', { visible: true })
+    // A DOM-visible menu does not settle the accessibility-tree query; wait for the switch itself.
     const toggle = '::-p-aria(Full width[role="switch"])'
-    assert.equal(await page.$eval(toggle, element => element.textContent.trim()), 'Full width')
-    assert.equal(await page.$eval(toggle, element => element.getAttribute('aria-checked')), 'true')
+    const fullWidthSwitch = await page.waitForSelector(toggle)
+    assert.equal(await fullWidthSwitch.evaluate(element => element.textContent.trim()), 'Full width')
+    assert.equal(await fullWidthSwitch.evaluate(element => element.getAttribute('aria-checked')), 'true')
+    await fullWidthSwitch.dispose()
     await page.locator(toggle).click()
     await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').dataset.fullWidth === 'false')
     assert.ok(await readWidth() <= 1100)
@@ -2215,7 +2317,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-node-surface]')
-    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers'])
+    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage', 'Activity'])
     await workbenchScreenshot(page, 'system-tabs.png')
     await page.click('[data-system-tab="agents"]')
     await page.waitForSelector('[data-system-summary="agents"]')
@@ -2330,11 +2432,11 @@ test('Status usage separates global totals from the focused Chat and follows foc
   try {
     const total = '[data-workbench-status-bar] button[aria-label="Total token usage"]'
     const current = '[data-workbench-status-bar] button[aria-label="Current Session token usage"]'
-    await page.waitForFunction(() => document.querySelector('[aria-label="Total token usage"]')?.textContent.includes('3.2B'))
+    await page.waitForFunction(() => document.querySelector('[aria-label="Total token usage"]')?.textContent === 'Today3.2B')
     assert.match(await page.$eval(current, element => element.textContent), /13.2K/)
     await clickReadyControl(page, total)
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
-    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Total usageTokens3.2B.*Cached3B92.9%.*Input200M6.2%.*Output30M0.9%/)
+    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Total usageTodayThis monthTokens3.2B.*Cached3B92.9%.*Input200M6.2%.*Output30M0.9%.*Model requests12/)
     await page.keyboard.press('Escape')
     await clickReadyControl(page, current)
     assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /e2e-a.*Cached12K90.9%/)

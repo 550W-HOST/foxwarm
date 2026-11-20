@@ -8,9 +8,9 @@ Use `artifact` for a chart or image figure. Choose `prepare` for a figure betwee
 
 1. Read the source data. Preserve units, missing values and provenance; do not fabricate measured values.
 2. Write one UTF-8 JSON manifest on the source Node, using the format below. All data is embedded in this snapshot. Aggregate oversized input before publishing and retain the original data separately.
-3. Discover `artifact` with `search_tools`, then call `artifact({action:"prepare",filePath:"chart.json"})`. Place its exact returned `marker` between the relevant paragraphs, on its own line at column 0 with blank lines above and below. Add a short ordinary Markdown caption beneath it. For a standalone reply-end card, use `action:"publish"` instead. `node` explicitly selects a source Node when needed.
+3. Run `ctl artifact prepare chart.json`. Place its exact returned `marker` between the relevant paragraphs, on its own line at column 0 with blank lines above and below. Add a short ordinary Markdown caption beneath it. For a standalone reply-end card, use `ctl artifact publish` instead. `--node` explicitly selects a source Node when needed.
 4. Explain the result briefly. Do not paste the entire manifest into the reply.
-5. To update, provide the returned `artifactId` and `expectedRevision`. A new revision is published; old replies do not change. A conflict requires reading the latest publication, not blindly retrying.
+5. To update, pass the returned `--artifact-id` and `--expected-revision`. A new revision is published; old replies do not change. A conflict requires reading the latest publication, not blindly retrying.
 
 ## Existing image figures
 

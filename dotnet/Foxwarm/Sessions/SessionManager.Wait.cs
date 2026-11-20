@@ -105,10 +105,15 @@ internal sealed partial class SessionManager
                 if (
                     !executor.IsOwnedActive(source.Id, id)
                     && !Nodes.ExecClaims.Has(source, id)
+                    && !HasCopyTransfer(source, id)
+                    && !ToolScript.IsDetached(source.Id, id)
                     && !queued.Contains(id)
+                    && !source.Entry.WithState(state =>
+                        state.Queue.Any(item => SessionWait.Text(item.OpenFields?["execId"]) == id)
+                    )
                 )
                     throw new InvalidDataException(
-                        $"waitExecIds entry `{id}` is not an active exec owned by this Session and has no queued completion. Use the exact execId, never a PID, log path, or command text."
+                        $"waitExecIds entry `{id}` is not an active execution, copy or background ToolScript run owned by this Session and has no queued completion. Use the exact execId, transferId or runId, never a PID, log path, or command text."
                     );
         }
         if (questions is not null)

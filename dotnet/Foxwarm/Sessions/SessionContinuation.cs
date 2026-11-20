@@ -143,7 +143,13 @@ public static class SessionContinuation
     private static bool Transparent(JsonElement message) =>
         Flag(Property(Property(message, "__meta"), "temporary"), true)
         || Flag(Property(Property(message, "__meta"), "optimistic"), true)
-        || !Retry(message) && (Flag(Property(message, "modelVisible"), false) || Compact(message));
+        || !Retry(message)
+            && (
+                Flag(Property(message, "modelVisible"), false)
+                || Compact(message)
+                // Appended immediately before a provider request; the history before it decides.
+                || TaskReminder.IsRow(message)
+            );
 
     private static bool BareWait(JsonElement args)
     {
@@ -175,7 +181,11 @@ public static class SessionContinuation
                 : BareWait(Property(call, "args"));
         return name is "send_to_session" or "create_child_session"
             && (
-                Text(Property(Property(call, "args"), "afterSend")) is "wait" or "finish"
+                Text(Property(Property(call, "args"), "currentSessionTurnAction"))
+                    is "wait"
+                        or "end_turn"
+                // Read-only history: calls persisted before the rename used afterSend.
+                || Text(Property(Property(call, "args"), "afterSend")) is "wait" or "finish"
                 || Flag(Property(Property(call, "args"), "waitAfterHandoff"), true)
                 || Flag(Property(Property(call, "args"), "noFurtherAssistantReply"), true)
             );

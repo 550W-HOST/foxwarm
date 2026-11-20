@@ -53,7 +53,7 @@ public sealed partial class RequestPrefixTests
         // Deliberately different order, schemas, descriptions and capability set.
         var advertised = new JsonArray(
             new JsonObject { ["name"] = "remote_status", ["description"] = "remote-only" },
-            new JsonObject { ["name"] = "browse_list", ["description"] = "hidden remote browser" },
+            new JsonObject { ["name"] = "browser_tabs", ["description"] = "hidden remote browser" },
             new JsonObject { ["name"] = "session", ["description"] = "colliding remote session" },
             new JsonObject
             {
@@ -134,7 +134,7 @@ public sealed partial class RequestPrefixTests
         Assert.Contains("exec", names);
         Assert.Contains("read", names);
         Assert.DoesNotContain("remote_status", names);
-        Assert.DoesNotContain("browse_list", names);
+        Assert.DoesNotContain("browser_tabs", names);
         Assert.DoesNotContain("remoteOnly", captures[0]["tools"]!.ToJsonString());
         socket.Abort();
         await app.StopAsync();

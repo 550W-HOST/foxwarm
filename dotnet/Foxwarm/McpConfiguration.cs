@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
@@ -10,6 +11,12 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
     private readonly object gate = new();
     private JsonObject? live;
     private bool closed;
+
+    // Resolves `${secret:NAME}` in credential fields of definitions handed to connections.
+    // Snapshot and summaries keep the reference text.
+    internal Func<string, string?>? SecretLookup { get; set; }
+
+    internal string FilePath => configPath ?? Path.Combine(root, "state", "mcp.json");
 
     private JsonObject Load()
     {
@@ -54,14 +61,37 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
             && !flag
         )
             throw new InvalidDataException($"MCP server \"{name}\" is disabled.");
-        return config;
+        return ResolveSecrets(name, config);
     }
 
+    // Only connection owners call Get; the resolved copy never reaches summaries or tools.
+    private JsonObject ResolveSecrets(string name, JsonObject config)
+    {
+        var names = Foxwarm.Secrets.SecretReferences.ReferencedNames(config);
+        if (names.Count == 0)
+            return config;
+        if (SecretLookup is not { } lookup)
+            throw Foxwarm.Secrets.SecretUnavailableException.For("MCP server " + name, names);
+        var missing = new List<string>();
+        var resolved = Foxwarm.Secrets.SecretReferences.Resolve(
+            config,
+            Foxwarm.Secrets.SecretSinks.McpServer,
+            "MCP server " + name,
+            lookup,
+            missing
+        );
+        if (missing.Count > 0)
+            throw Foxwarm.Secrets.SecretUnavailableException.For("MCP server " + name, missing);
+        return resolved;
+    }
+
+    // admit sees every server before and after the update, inside this lane, and may refuse it.
     internal async Task UpdateAsync(
         string name,
         JsonObject patch,
         bool enabledOnly,
-        Action<JsonObject?, JsonObject>? published = null
+        Action<JsonObject?, JsonObject>? published = null,
+        Func<JsonObject, JsonObject, Task>? admit = null
     )
     {
         await mutation.WaitAsync();
@@ -78,6 +108,8 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
             foreach (var (key, value) in patch)
                 merged[key] = value?.DeepClone();
             next[name] = Normalize(merged, managed: true);
+            if (admit is not null)
+                await admit(Snapshot(), (JsonObject)next.DeepClone());
             try
             {
                 Persist(next);
@@ -101,7 +133,7 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
 
     private void Persist(JsonObject servers)
     {
-        new LinuxAtomicJsonFile(
+        new AtomicJsonFile(
             Path.GetDirectoryName(configPath ?? Path.Combine(root, "state", "mcp.json"))!,
             Path.GetFileName(configPath ?? "mcp.json"),
             privateFile: true
@@ -117,6 +149,11 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
     internal static JsonObject Normalize(JsonObject raw, bool managed)
     {
         var config = (JsonObject)raw.DeepClone();
+        Foxwarm.Secrets.SecretReferences.Validate(
+            config,
+            Foxwarm.Secrets.SecretSinks.McpServer,
+            "MCP server"
+        );
         foreach (
             var key in new[]
             {
@@ -237,7 +274,11 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
 
     internal string Redact(string message, params JsonObject[] captured)
     {
-        var configs = Snapshot().Select(pair => pair.Value).OfType<JsonObject>().Concat(captured);
+        var configs = Snapshot()
+            .Select(pair => pair.Value)
+            .OfType<JsonObject>()
+            .Concat(captured)
+            .ToArray();
         var secrets = configs
             .SelectMany(config =>
                 new[] { config["token"], config["oauth"]?["clientSecret"] }
@@ -249,12 +290,39 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
                             : []
                     )
                     .Select(SessionWait.Text)
-                    .Concat(UrlSecrets(SessionWait.Text(config["url"])))
             )
             .Where(value => !string.IsNullOrEmpty(value));
-        return secrets.Any(secret => message.Contains(secret!, StringComparison.Ordinal))
+        var urlSecrets = configs.SelectMany(config => UrlSecrets(SessionWait.Text(config["url"])));
+        var normalizedMessage = NormalizeUrlEscapes(message);
+        return
+            secrets.Any(secret => message.Contains(secret!, StringComparison.Ordinal))
+            || urlSecrets.Any(secret =>
+                normalizedMessage.Contains(NormalizeUrlEscapes(secret), StringComparison.Ordinal)
+            )
             ? "MCP operation failed because the underlying error contained configured secret data."
             : message;
+    }
+
+    private static string NormalizeUrlEscapes(string value)
+    {
+        var normalized = new StringBuilder(value.Length);
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (
+                value[i] == '%'
+                && i + 2 < value.Length
+                && Uri.IsHexDigit(value[i + 1])
+                && Uri.IsHexDigit(value[i + 2])
+            )
+            {
+                normalized.Append('%');
+                normalized.Append(char.ToUpperInvariant(value[++i]));
+                normalized.Append(char.ToUpperInvariant(value[++i]));
+            }
+            else
+                normalized.Append(value[i]);
+        }
+        return normalized.ToString();
     }
 
     // The URL parts that server summaries redact: user info, each query value (or
@@ -271,10 +339,37 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
         var beforeFragment = hash >= 0 ? url[..hash] : url;
         var mark = beforeFragment.IndexOf('?');
         var query = mark >= 0 ? beforeFragment[(mark + 1)..] : "";
+        // Uri.UserInfo normalizes escapes for unreserved characters, so also retain
+        // the original authority spelling for diagnostics that quote the input URL.
+        var start = url.IndexOf("://", StringComparison.Ordinal);
+        var rawUserInfo = "";
+        if (start >= 0)
+        {
+            start += 3;
+            var end = url.IndexOfAny(['/', '\\', '?', '#'], start);
+            if (end < 0)
+                end = url.Length;
+            if (end > start)
+            {
+                var at = url.LastIndexOf('@', end - 1, end - start);
+                if (at >= start)
+                    rawUserInfo = url[start..at];
+            }
+        }
+        static IEnumerable<string> UserInfoParts(string userInfo)
+        {
+            var separator = userInfo.IndexOf(':');
+            yield return userInfo;
+            if (separator >= 0 && separator < userInfo.Length - 1)
+                yield return userInfo[(separator + 1)..];
+            else if (separator >= 0)
+                yield return userInfo[..separator];
+        }
         var parts = query
             .Split('&', StringSplitOptions.RemoveEmptyEntries)
             .Select(part => part.IndexOf('=') is var equals and > 0 ? part[(equals + 1)..] : part)
-            .Append(uri.UserInfo)
+            .Concat(UserInfoParts(rawUserInfo))
+            .Concat(UserInfoParts(uri.UserInfo))
             .Append(fragment)
             .Where(part => part.Length > 0)
             .ToArray();

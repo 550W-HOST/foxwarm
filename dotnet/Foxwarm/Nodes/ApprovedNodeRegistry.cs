@@ -11,7 +11,7 @@ internal sealed partial class ApprovedNodeRegistry
 {
     internal const long PairingTtl = 60 * 60 * 1000;
     private readonly object gate = new();
-    private readonly LinuxAtomicJsonFile file;
+    private readonly AtomicJsonFile file;
     private JsonObject data;
     internal string PairingToken { get; }
     internal event Action<string>? Expired;
@@ -19,7 +19,19 @@ internal sealed partial class ApprovedNodeRegistry
 
     internal ApprovedNodeRegistry(string root)
     {
-        file = new(root, "state/nodes.json");
+        file = new(
+            root,
+            "state/nodes.json",
+            privateFile: true,
+            backups: new(
+                Rotate: 3,
+                IncludeLegacyBak: true,
+                OnError: error =>
+                    Console.Error.WriteLine(
+                        "[nodes] Failed to rotate Node registry backups: " + error.Message
+                    )
+            )
+        );
         data = Load();
         var tokenPath = Path.Combine(root, "state", "node_token");
         Directory.CreateDirectory(Path.GetDirectoryName(tokenPath)!);
@@ -37,60 +49,58 @@ internal sealed partial class ApprovedNodeRegistry
 
     private JsonObject Load()
     {
-        var candidates = new[]
+        JsonObject? loaded;
+        string? source;
+        try
         {
-            file.FilePath,
-            file.FilePath + ".1.bak",
-            file.FilePath + ".2.bak",
-            file.FilePath + ".3.bak",
-            file.FilePath + ".bak",
-        };
-        Exception? failure = null;
-        foreach (var path in candidates)
-        {
-            if (!File.Exists(path))
-                continue;
-            try
-            {
-                var loaded =
-                    JsonNode.Parse(File.ReadAllText(path)) as JsonObject
-                    ?? throw new InvalidDataException("Invalid Node registry.");
-                loaded["approvedNodes"] = loaded["approvedNodes"] is JsonObject approved
-                    ? approved.DeepClone()
-                    : new JsonObject();
-                loaded["providerNodes"] = loaded["providerNodes"] is JsonObject providerNodes
-                    ? providerNodes.DeepClone()
-                    : new JsonObject();
-                loaded["pendingPairings"] = loaded["pendingPairings"] is JsonObject pending
-                    ? pending.DeepClone()
-                    : new JsonObject();
-                foreach (
-                    var value in loaded["pendingPairings"]!
-                        .AsObject()
-                        .Select(pair => pair.Value)
-                        .OfType<JsonObject>()
-                )
-                    value.Remove("pairCode");
-                if (path != file.FilePath)
-                    file.WritePayload(loaded);
-                return loaded;
-            }
-            catch (Exception error) when (error is IOException or System.Text.Json.JsonException)
-            {
-                failure = error;
-            }
+            loaded = file.LoadFirstAvailable(ReadCandidate, out source);
         }
-        if (failure is not null)
+        catch (Exception error) when (error is IOException or System.Text.Json.JsonException)
+        {
             throw new InvalidDataException(
                 "Node registry and its backups cannot be read.",
-                failure
+                error
             );
-        return new()
+        }
+        if (loaded is null)
+            return new()
+            {
+                ["approvedNodes"] = new JsonObject(),
+                ["providerNodes"] = new JsonObject(),
+                ["pendingPairings"] = new JsonObject(),
+            };
+        if (source != file.FilePath)
         {
-            ["approvedNodes"] = new JsonObject(),
-            ["providerNodes"] = new JsonObject(),
-            ["pendingPairings"] = new JsonObject(),
-        };
+            Console.Error.WriteLine(
+                "[nodes] Recovering the Node registry from " + Path.GetFileName(source)
+            );
+            file.WritePayload(loaded);
+        }
+        return loaded;
+    }
+
+    private static JsonObject ReadCandidate(string path)
+    {
+        var loaded =
+            JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+            ?? throw new InvalidDataException("Invalid Node registry.");
+        loaded["approvedNodes"] = loaded["approvedNodes"] is JsonObject approved
+            ? approved.DeepClone()
+            : new JsonObject();
+        loaded["providerNodes"] = loaded["providerNodes"] is JsonObject providerNodes
+            ? providerNodes.DeepClone()
+            : new JsonObject();
+        loaded["pendingPairings"] = loaded["pendingPairings"] is JsonObject pending
+            ? pending.DeepClone()
+            : new JsonObject();
+        foreach (
+            var value in loaded["pendingPairings"]!
+                .AsObject()
+                .Select(pair => pair.Value)
+                .OfType<JsonObject>()
+        )
+            value.Remove("pairCode");
+        return loaded;
     }
 
     private T Change<T>(Func<JsonObject, T> apply, Mutation? mutation = null, bool topology = true)
@@ -114,8 +124,6 @@ internal sealed partial class ApprovedNodeRegistry
                 throw;
             }
             data = next;
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(file.FilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             return result;
         }
     }
@@ -233,6 +241,21 @@ internal sealed partial class ApprovedNodeRegistry
         );
     }
 
+    internal JsonObject Reissue(string id, Mutation mutation) =>
+        Change(next =>
+        {
+            var record = Approved(next)[ValidateId(id)] as JsonObject
+                ?? throw new InvalidDataException("Approved Node not found.");
+            var auth = Token();
+            record["tokenHash"] = Hash(auth);
+            record["updatedAt"] = Now;
+            // An old, unclaimed pairing must never deliver the superseded credential.
+            foreach (var pair in Pending(next).ToArray())
+                if (SessionWait.Text(pair.Value?["approvedNodeId"]) == id)
+                    Pending(next).Remove(pair.Key);
+            return new JsonObject { ["nodeId"] = id, ["authToken"] = auth };
+        }, mutation);
+
     internal JsonObject Request(JsonObject input, JsonObject protocol)
     {
         Cleanup();
@@ -261,6 +284,46 @@ internal sealed partial class ApprovedNodeRegistry
         );
     }
 
+    // The Node ID an approval assigns: the requested ID, else one derived from the pending
+    // request's name with the first free suffix. Approval and its authorization facts
+    // (PreviewApprovalId) both use it.
+    private static string ApprovalId(JsonObject document, JsonObject pending, string? id)
+    {
+        if (!string.IsNullOrWhiteSpace(id))
+            return ValidateId(id);
+        var basis = Slug(
+            SessionWait.Text(pending["requestedName"])
+                ?? SessionWait.Text(pending["nodeType"])
+                ?? "node"
+        );
+        if (basis == "master")
+            basis = "master-node";
+        var allocated = basis;
+        for (var suffix = 2; Reserved(document, allocated); suffix++)
+            allocated = basis + "-" + suffix;
+        return allocated;
+    }
+
+    // The Node ID approving this pending request would assign now; null when the request is
+    // unknown or already approved, or the requested ID is invalid.
+    internal string? PreviewApprovalId(string pendingId, string? id)
+    {
+        Cleanup();
+        lock (gate)
+        {
+            if (Pending(data)[pendingId] is not JsonObject pending || pending["approvedNodeId"] is not null)
+                return null;
+            try
+            {
+                return ApprovalId(data, pending, id);
+            }
+            catch (InvalidDataException)
+            {
+                return null;
+            }
+        }
+    }
+
     internal JsonObject Approve(string pendingId, string? id, Action? beforeMutation = null)
     {
         Cleanup();
@@ -271,21 +334,7 @@ internal sealed partial class ApprovedNodeRegistry
                 ?? throw new InvalidDataException("Pending pairing not found.");
             if (pending["approvedNodeId"] is not null)
                 throw new InvalidDataException("Pairing is no longer awaiting approval.");
-            if (!string.IsNullOrWhiteSpace(id))
-                id = ValidateId(id);
-            else
-            {
-                var basis = Slug(
-                    SessionWait.Text(pending["requestedName"])
-                        ?? SessionWait.Text(pending["nodeType"])
-                        ?? "node"
-                );
-                if (basis == "master")
-                    basis = "master-node";
-                id = basis;
-                for (var suffix = 2; Reserved(next, id); suffix++)
-                    id = basis + "-" + suffix;
-            }
+            id = ApprovalId(next, pending, id);
             RequireFresh(next, id);
             RequireAdmission(next, id, null);
             beforeMutation?.Invoke();
@@ -440,6 +489,8 @@ internal sealed partial class ApprovedNodeRegistry
                 record["capabilities"] = input["capabilities"]!.DeepClone();
                 record["nodeProtocol"] = compatibility["client"]!.DeepClone();
                 record["protocolCompatibility"] = compatibility.DeepClone();
+                if (NodeBootstrap.LaunchInfo(input["launchInfo"]) is { } launch)
+                    record["launchInfo"] = launch;
                 record["lastSeenAt"] = Now;
                 record["updatedAt"] = Now;
                 return true;

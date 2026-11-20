@@ -21,7 +21,7 @@ public sealed partial class NodeFileTransferTests
             ["targetPath"] = "nested/destination.bin",
         };
         var result = await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
-        Assert.Equal(bytes.Length, result["sizeBytes"]!.GetValue<int>());
+        Assert.Equal(bytes.LongLength, result["sizeBytes"]!.GetValue<long>());
         Assert.Equal(
             bytes,
             await File.ReadAllBytesAsync(Path.Combine(f.Work, "nested/destination.bin"))
@@ -80,11 +80,11 @@ public sealed partial class NodeFileTransferTests
                 ["sourceNode"] = "master",
                 ["sourcePath"] = "resident-source.bin",
                 ["targetNode"] = "resident-cli",
-                ["targetPath"] = "nested/resident.bin",
+                ["targetPath"] = Path.Combine(target, "nested", "resident.bin"),
             };
             await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
             args["sourceNode"] = "resident-cli";
-            args["sourcePath"] = "nested/resident.bin";
+            args["sourcePath"] = Path.Combine(target, "nested", "resident.bin");
             args["targetNode"] = "master";
             args["targetPath"] = "roundtrip.bin";
             await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);

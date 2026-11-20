@@ -52,6 +52,28 @@ public sealed class ToolActivityPreviewTests
         );
 
     [Fact]
+    public void Ctl_calls_are_named_by_command_path_without_restating_fixed_arguments()
+    {
+        JsonObject Ctl(string command) => new() { ["command"] = command };
+        var rows = new[]
+        {
+            Call(1, "timers", "ctl", Ctl("timer list")),
+            Call(2, "view", "ctl", Ctl("session view main/other --count 2")),
+            Call(3, "rename", "ctl", Ctl("session rename \"Release notes\"")),
+            Call(4, "recall", "ctl", Ctl("history recall msg#1-2")),
+            Call(5, "help", "ctl", Ctl("node --help")),
+        };
+        var text = Preview(rows);
+        Assert.Contains("timer list (#1)", text);
+        Assert.Contains("session view — main/other (#2)", text);
+        Assert.Contains("session rename (#3)", text);
+        Assert.Contains("history recall — msg#1-2 (#4)", text);
+        Assert.Contains("ctl (#5)", text);
+        foreach (var concrete in new[] { "list_timers", "view_session", "update-display-name", "Z recall" })
+            Assert.DoesNotContain(concrete, text);
+    }
+
+    [Fact]
     public void Names_preserve_distinct_purposes_pair_by_id_and_keep_output_out_of_activity()
     {
         var rows = new[]
@@ -104,7 +126,7 @@ public sealed class ToolActivityPreviewTests
         Assert.DoesNotContain("×", text);
         Assert.DoesNotContain("call_tool", text);
         Assert.Equal(3, text.Split('\n').Count(line => line.Contains("exec —")));
-        Assert.Equal(1, text.Split("recall(").Length - 1);
+        Assert.Equal(1, text.Split("ctl history recall ").Length - 1);
         Assert.Contains("(#2/#3)", text);
         Assert.Equal(original, rows.Select(row => row.ToJsonString()));
 
@@ -211,7 +233,7 @@ public sealed class ToolActivityPreviewTests
         Assert.True(text.Length <= 1000);
         Assert.Contains("Inspect source 1", text);
         Assert.Contains("not displayed", text);
-        Assert.Equal(1, text.Split("recall(").Length - 1);
+        Assert.Equal(1, text.Split("ctl history recall ").Length - 1);
     }
 
     [Fact]
@@ -242,13 +264,15 @@ public sealed class ToolActivityPreviewTests
             foreach (var unified in new[] { false, true })
             {
                 var response = await f.Call(
-                    unified ? "call_tool" : "exec",
+                    unified ? "ctl" : "exec",
                     unified
-                        ? new JsonObject
-                        {
-                            ["toolId"] = "node:master/exec",
-                            ["args"] = args.DeepClone(),
-                        }
+                        ? CtlTestArgs.Unified(
+                            new JsonObject
+                            {
+                                ["toolId"] = "node:master/exec",
+                                ["args"] = args.DeepClone(),
+                            }
+                        )
                         : args
                 );
                 Assert.Null(response["error"]);
@@ -281,6 +305,19 @@ public sealed class ToolActivityPreviewTests
                     ["toolId"] = "node:master/exec",
                     ["args"] = new JsonObject { ["summary"] = "Inspect source" },
                 }
+            )
+        );
+        Assert.Equal(
+            "Inspect source",
+            SessionToolExecutor.ToolArgsPreview(
+                "ctl",
+                CtlTestArgs.Unified(
+                    new()
+                    {
+                        ["toolId"] = "node:master/exec",
+                        ["args"] = new JsonObject { ["summary"] = "Inspect source" },
+                    }
+                )
             )
         );
     }

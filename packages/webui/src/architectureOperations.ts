@@ -1,7 +1,7 @@
 import { getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from './sessionRuntimeState'
 import { getResolvedSessionNodeId } from './sessionNode'
 
-export type ArchitectureStatusFilter = 'all' | 'active' | 'waiting' | 'queued' | 'isolated'
+export type ArchitectureStatusFilter = 'all' | 'active' | 'waiting' | 'queued'
 
 export interface ArchitectureSessionLike {
   id: string
@@ -11,7 +11,6 @@ export interface ArchitectureSessionLike {
   model?: string | null
   modelKey?: string
   defaultModelKey?: string
-  isolated?: boolean
   archived?: boolean
   busy?: boolean
   queueLength?: number
@@ -39,8 +38,7 @@ export const matchesArchitectureStatus = (session: ArchitectureSessionLike, filt
   if (filter === 'all') return true
   if (filter === 'active') return isSessionRuntimeActive(session)
   if (filter === 'waiting') return getSessionRuntimeStateName(session) === 'waiting'
-  if (filter === 'queued') return Number(session.runtimeState?.queueLength ?? session.queueLength ?? 0) > 0
-  return session.isolated === true
+  return Number(session.runtimeState?.queueLength ?? session.queueLength ?? 0) > 0
 }
 
 /** Model the Session is using now, otherwise its configured model. */

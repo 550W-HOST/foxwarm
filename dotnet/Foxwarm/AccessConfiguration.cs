@@ -10,8 +10,43 @@ internal sealed record AccessIdentity(
     string Token,
     ImmutableArray<string> Sessions,
     bool WebUi,
-    bool Mcp
+    bool Mcp,
+    WebhookSurface? Webhook = null
 );
+
+internal enum WebhookVerification
+{
+    GitHub,
+    Header,
+    Bearer,
+}
+
+internal enum WebhookAction
+{
+    Message,
+    ToolScript,
+}
+
+// An entry capability only: a verified delivery reaches one fixed Session and grants no tool authority.
+internal sealed record WebhookSurface(
+    string Session,
+    WebhookVerification Verify,
+    string? Header,
+    ImmutableArray<string> Events,
+    WebhookAction Action = WebhookAction.Message,
+    JsonObject? Script = null,
+    bool Wake = true
+)
+{
+    internal bool SameAs(WebhookSurface other) =>
+        Session == other.Session
+        && Verify == other.Verify
+        && string.Equals(Header, other.Header, StringComparison.OrdinalIgnoreCase)
+        && Events.SequenceEqual(other.Events, StringComparer.Ordinal)
+        && Action == other.Action
+        && Wake == other.Wake
+        && JsonNode.DeepEquals(Script, other.Script);
+}
 
 internal sealed record AccessChange(
     ImmutableDictionary<string, AccessIdentity> Previous,
@@ -28,6 +63,8 @@ internal sealed class AccessConfiguration
     internal ImmutableDictionary<string, AccessIdentity> Snapshot => Volatile.Read(ref snapshot);
     internal event Func<AccessChange, Task>? Changed;
     internal bool McpRuntimeAvailable { get; set; }
+    internal bool WebhookRuntimeAvailable { get; set; }
+    internal string ReservedInstanceToken => Volatile.Read(ref reservedToken);
 
     internal AccessConfiguration(JsonObject app) =>
         snapshot = Normalize(app["access"], app.ContainsKey("access"));
@@ -74,9 +111,19 @@ internal sealed class AccessConfiguration
                 throw new InvalidDataException("access identities must use distinct tokens.");
             if (identity["surfaces"] is not JsonObject surfaces)
                 throw new InvalidDataException("access identity surfaces must be a YAML object.");
-            Keys(surfaces, "access identity surfaces", "webui", "mcp");
+            Keys(surfaces, "access identity surfaces", "webui", "mcp", "webhook");
             if (surfaces.Count == 0)
                 throw new InvalidDataException("access identity must enable at least one surface.");
+            WebhookSurface? webhook = null;
+            if (surfaces.ContainsKey("webhook"))
+            {
+                // The secret is shared with a third party, so it must not also open WebUI or MCP.
+                if (surfaces.Count != 1)
+                    throw new InvalidDataException(
+                        "access identity surfaces.webhook cannot be combined with other surfaces."
+                    );
+                webhook = Webhook(surfaces["webhook"]);
+            }
             var sessions = ImmutableArray<string>.Empty;
             if (surfaces.ContainsKey("webui"))
             {
@@ -120,11 +167,166 @@ internal sealed class AccessConfiguration
                 token,
                 sessions,
                 surfaces.ContainsKey("webui"),
-                surfaces.ContainsKey("mcp")
+                surfaces.ContainsKey("mcp"),
+                webhook
             );
         }
         return result.ToImmutable();
     }
+
+    private static readonly string[] ReservedWebhookHeaders =
+    [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "host",
+        "content-type",
+        "content-length",
+        "transfer-encoding",
+    ];
+
+    private static WebhookSurface Webhook(JsonNode? value)
+    {
+        if (value is not JsonObject hook)
+            throw new InvalidDataException(
+                "access identity surfaces.webhook must be a YAML object."
+            );
+        Keys(
+            hook,
+            "access identity surfaces.webhook",
+            "session",
+            "verify",
+            "events",
+            "action",
+            "script",
+            "wake"
+        );
+        var session = Text(hook["session"]);
+        if (string.IsNullOrWhiteSpace(session) || session.Length > 512 || session.Contains('*'))
+            throw new InvalidDataException(
+                "access identity webhook.session must be one Session ID."
+            );
+        WebhookVerification verify;
+        string? header = null;
+        switch (hook["verify"])
+        {
+            case JsonValue scalar when Text(scalar) == "github":
+                verify = WebhookVerification.GitHub;
+                break;
+            case JsonValue scalar when Text(scalar) == "bearer":
+                verify = WebhookVerification.Bearer;
+                break;
+            case JsonObject named:
+                Keys(named, "access identity webhook.verify", "header");
+                header = Text(named["header"]);
+                if (
+                    header is null
+                    || !Regex.IsMatch(header, "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$")
+                    || ReservedWebhookHeaders.Contains(header, StringComparer.OrdinalIgnoreCase)
+                )
+                    throw new InvalidDataException(
+                        "access identity webhook.verify.header must name a non-reserved HTTP header."
+                    );
+                verify = WebhookVerification.Header;
+                break;
+            default:
+                throw new InvalidDataException(
+                    "access identity webhook.verify must be github, bearer, or {header: <name>}."
+                );
+        }
+        var events = ImmutableArray<string>.Empty;
+        if (hook.ContainsKey("events"))
+        {
+            if (verify != WebhookVerification.GitHub)
+                throw new InvalidDataException(
+                    "access identity webhook.events requires verify: github."
+                );
+            if (hook["events"] is not JsonArray list || list.Count is < 1 or > 64)
+                throw new InvalidDataException(
+                    "access identity webhook.events must be a non-empty array of event names."
+                );
+            var names = new List<string>();
+            foreach (var item in list)
+            {
+                var name = Text(item);
+                if (name is null || !WebhookEventName(name))
+                    throw new InvalidDataException(
+                        "access identity webhook.events contains an invalid event name."
+                    );
+                if (names.Contains(name, StringComparer.Ordinal))
+                    throw new InvalidDataException(
+                        "access identity webhook.events must contain distinct event names."
+                    );
+                names.Add(name);
+            }
+            events = names.ToImmutableArray();
+        }
+        var action = Text(hook["action"]) switch
+        {
+            null when !hook.ContainsKey("action") => WebhookAction.Message,
+            "message" => WebhookAction.Message,
+            "toolscript" => WebhookAction.ToolScript,
+            _ => throw new InvalidDataException(
+                "access identity webhook.action must be message or toolscript."
+            ),
+        };
+        JsonObject? script = null;
+        if (action == WebhookAction.ToolScript)
+            script = WebhookScript(hook["script"]);
+        else if (hook.ContainsKey("script"))
+            throw new InvalidDataException(
+                "access identity webhook.script requires action: toolscript."
+            );
+        var wake = true;
+        if (hook.ContainsKey("wake"))
+        {
+            if (action != WebhookAction.Message)
+                throw new InvalidDataException(
+                    "access identity webhook.wake requires action: message."
+                );
+            if (hook["wake"] is not JsonValue flag || !flag.TryGetValue<bool>(out wake))
+                throw new InvalidDataException(
+                    "access identity webhook.wake must be true or false."
+                );
+        }
+        return new(session, verify, header, events, action, script, wake);
+    }
+
+    // The same specification as a ToolScript timer, always run in the foreground so one
+    // identity's handlers stay serialized. `args.webhook` carries the delivery.
+    private static JsonObject WebhookScript(JsonNode? value)
+    {
+        if (value is not JsonObject script)
+            throw new InvalidDataException(
+                "access identity webhook.script must be a ToolScript specification."
+            );
+        Keys(
+            script,
+            "access identity webhook.script",
+            "code",
+            "filePath",
+            "node",
+            "args",
+            "timeoutSecs"
+        );
+        if (script["args"] is JsonObject args && args.ContainsKey("webhook"))
+            throw new InvalidDataException(
+                "access identity webhook.script.args.webhook is reserved for the delivery."
+            );
+        try
+        {
+            return Foxwarm.ToolScript.MainToolScript.NormalizeStartArgs(
+                (JsonObject)script.DeepClone()
+            );
+        }
+        catch (InvalidDataException error)
+        {
+            throw new InvalidDataException("access identity webhook.script: " + error.Message);
+        }
+    }
+
+    internal static bool WebhookEventName(string name) =>
+        Regex.IsMatch(name, "^[A-Za-z0-9_.:-]{1,128}$");
 
     private static void Keys(JsonObject value, string name, params string[] keys)
     {

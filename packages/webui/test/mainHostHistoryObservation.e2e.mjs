@@ -132,7 +132,7 @@ try {
     Array.from({ length: 45 }, (_, index) => index + 1),
   )
 
-  const moved = await fixture.api('POST', `/api/sessions/${parentId}/message`, { text: `/session move ${movedId}` })
+  const moved = await fixture.api('POST', `/api/sessions/${parentId}/message`, { text: `/session move --new-session-id ${movedId}` })
   assert.equal(moved.status, 200, JSON.stringify(moved))
   const aliasWindow = await fixture.api('GET', `/api/history/window?sessionId=${parentId}&target=msg%231`)
   assert.equal(aliasWindow.status, 200, JSON.stringify(aliasWindow))

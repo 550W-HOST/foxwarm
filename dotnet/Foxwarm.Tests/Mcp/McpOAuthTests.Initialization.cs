@@ -30,9 +30,7 @@ public sealed partial class McpOAuthTests
             stop.Cancel();
             Assert.Equal(
                 "tool_call_cancelled",
-                (await first.WaitAsync(TimeSpan.FromSeconds(5)))!["error"]![
-                    "type"
-                ]!.GetValue<string>()
+                (await first.WaitAsync(TimeSpan.FromSeconds(5))).FailureCode()
             );
         }
         Assert.False(surviving.IsCompleted);
@@ -56,7 +54,7 @@ public sealed partial class McpOAuthTests
         var response = await surviving.WaitAsync(TimeSpan.FromSeconds(5));
         if (failInitialization)
         {
-            Assert.Equal("tool_error", response!["error"]!["type"]!.GetValue<string>());
+            Assert.NotNull(response!.FailureMessage());
             Assert.DoesNotContain(intermediate, response.ToJsonString());
             if (!cancelFirst)
             {

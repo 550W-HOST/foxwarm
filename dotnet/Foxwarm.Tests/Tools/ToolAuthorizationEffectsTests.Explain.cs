@@ -28,11 +28,12 @@ public sealed partial class ToolAuthorizationEffectsTests
     {
         var response = await Call(tools, "explain_tool_authorization", args);
         Assert.Null(response["error"]);
-        return JsonNode.Parse(response["output"]!.GetValue<string>())!.AsObject();
+        Assert.Null(response["output"]);
+        return response;
     }
 
     [Fact]
-    public async Task Explain_reports_shared_layer_decisions_facts_isolation_and_probe_errors()
+    public async Task Explain_reports_shared_layer_decisions_facts_migrated_layer_and_probe_errors()
     {
         using var temp = new TempDirectory();
         await Seed(temp.Path, Obj("""{"isolated":true}"""));
@@ -74,7 +75,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal("no exec for beta", rule["reason"]!.GetValue<string>());
         Assert.Equal("beta", exec["facts"]!["agent"]!.GetValue<string>());
         Assert.Equal("master", exec["facts"]!["currentNode"]!.GetValue<string>());
-        Assert.False(exec["isolation"]!["isolated"]!.GetValue<bool>());
+        Assert.Null(exec["isolation"]);
 
         var read = probes[1]!["active"]!;
         Assert.True(read["allowed"]!.GetValue<bool>());
@@ -88,18 +89,264 @@ public sealed partial class ToolAuthorizationEffectsTests
             path["resolved"]!.GetValue<string>()
         );
 
-        // Generic default allow passes; the isolated Agent's legacy check still denies master exec.
+        // Generic default allow passes; the migrated Agent's generated layer denies master exec.
         var isolated = probes[2]!["active"]!;
         Assert.Equal("opaque", probes[2]!["sessionId"]!.GetValue<string>());
         Assert.Null(isolated["layers"]![0]!["rule"]);
         Assert.Equal("allow", isolated["layers"]![0]!["default"]!.GetValue<string>());
-        Assert.True(isolated["isolation"]!["isolated"]!.GetValue<bool>());
-        Assert.False(isolated["isolation"]!["allowed"]!.GetValue<bool>());
-        Assert.Equal("isolation", isolated["deniedBy"]!.GetValue<string>());
+        Assert.Equal("agent:alpha", isolated["layers"]![1]!["layer"]!.GetValue<string>());
+        Assert.Equal(
+            "isolation-master-exec",
+            isolated["layers"]![1]!["rule"]!["id"]!.GetValue<string>()
+        );
+        Assert.Null(isolated["isolation"]);
+        Assert.Equal("policy", isolated["deniedBy"]!.GetValue<string>());
         Assert.False(isolated["allowed"]!.GetValue<bool>());
 
         Assert.Contains("not found", probes[3]!["error"]!.GetValue<string>());
         Assert.Null(probes[3]!["active"]);
+    }
+
+    [Fact]
+    public async Task Explain_requires_view_authority_for_other_sessions_without_disclosing_existence()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        var catalogPath = Path.Combine(temp.Path, "data", "state", "agents.json");
+        var catalog = JsonNode.Parse(await File.ReadAllTextAsync(catalogPath))!.AsObject();
+        catalog["metadata"]!["beta"] = Obj(
+            """{"rules":[{"id":"private-beta","tool":{"source":"node","name":"read"},"action":"deny","reason":"private-beta-reason"}]}"""
+        );
+        await File.WriteAllTextAsync(catalogPath, catalog.ToJsonString());
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            """
+            version: 1
+            rules:
+              - id: allow-child-view
+                action: allow
+                tool: {source: builtin, name: view_session}
+                args: {sessionId: {session: {sameAgent: true, relation: child}}}
+              - id: deny-other-view
+                action: deny
+                tool: {source: builtin, name: view_session}
+            """
+        );
+        Assert.Equal(
+            "tool_authorization_denied",
+            Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"outside"}""")))
+        );
+        Assert.Null(
+            Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"kid"}""")))
+        );
+        Assert.Equal(
+            "tool_authorization_denied",
+            Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"self"}""")))
+        );
+        var result = await Explain(
+            execution.Tools,
+            Obj(
+                """
+                {"probes":[
+                  {"sessionId":"outside","toolId":"node:master/read","args":{"filePath":"notes.txt"}},
+                  {"sessionId":"missing","toolId":"node:master/read","args":{"filePath":"notes.txt"}},
+                  {"sessionId":"kid","toolId":"builtin:wait"},
+                  {"sessionId":"self","toolId":"builtin:wait"}
+                ]}
+                """
+            )
+        );
+        var probes = result["probes"]!.AsArray();
+        Assert.Equal(
+            probes[1]!["error"]!.GetValue<string>(),
+            probes[0]!["error"]!.GetValue<string>()
+        );
+        Assert.DoesNotContain("private-beta", result.ToJsonString());
+        Assert.Null(probes[0]!["active"]);
+        Assert.Equal("direct", probes[2]!["sessionId"]!.GetValue<string>());
+        Assert.NotNull(probes[2]!["active"]);
+        Assert.Equal("opaque", probes[3]!["sessionId"]!.GetValue<string>());
+        Assert.NotNull(probes[3]!["active"]);
+    }
+
+    [Fact]
+    public async Task Explain_hides_unavailable_foreign_session_in_all_policy_modes()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        _ = await manager.RequiredAsync("foreign");
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            "version: 1\nrules: [{id: no-view, tool: {source: builtin, name: view_session}, action: deny}]"
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(temp.Path, "workspace", "agents", "alpha", "candidate.yaml"),
+            "version: 1\n"
+        );
+        manager.BeforeDeleteStage = (stage, id) =>
+            stage == "json-unlink" && id == "foreign"
+                ? throw new IOException("synthetic deletion failure")
+                : Task.CompletedTask;
+        await Assert.ThrowsAsync<SessionDeletionException>(() => manager.DeleteAsync("foreign"));
+
+        foreach (var mode in new[] { "active", "candidate", "compare" })
+        {
+            var args = Obj(
+                """{"probes":[{"sessionId":"foreign","toolId":"builtin:wait"},{"sessionId":"missing","toolId":"builtin:wait"}]}"""
+            );
+            if (mode != "active")
+                args["policyFilePath"] = "candidate.yaml";
+            if (mode == "compare")
+                args["compare"] = true;
+            var result = await Explain(execution.Tools, args);
+            var probes = result["probes"]!.AsArray();
+            Assert.Equal(
+                "Session not found or unavailable.",
+                probes[0]!["error"]!.GetValue<string>()
+            );
+            Assert.Equal(
+                probes[0]!["error"]!.GetValue<string>(),
+                probes[1]!["error"]!.GetValue<string>()
+            );
+            Assert.Null(probes[0]!["active"]);
+            Assert.Null(probes[0]!["candidate"]);
+        }
+    }
+
+    [Fact]
+    public async Task Explain_hides_cold_session_admission_failure()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            "version: 1\nrules: [{id: no-view, tool: {source: builtin, name: view_session}, action: deny}]"
+        );
+        manager.BeforeAdmissionRead = (id, _) =>
+            id == "foreign"
+                ? throw new InvalidDataException("synthetic admission detail")
+                : Task.CompletedTask;
+        var result = await Explain(
+            execution.Tools,
+            Obj(
+                """{"probes":[{"sessionId":"foreign","toolId":"builtin:wait"},{"sessionId":"missing","toolId":"builtin:wait"}]}"""
+            )
+        );
+        var probes = result["probes"]!.AsArray();
+        Assert.Equal(
+            "Session not found or unavailable.",
+            probes[0]!["error"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            probes[0]!["error"]!.GetValue<string>(),
+            probes[1]!["error"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
+    public async Task Explain_resolves_exact_id_before_self_alias_for_unavailable_target()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        _ = await manager.RequiredAsync("foreign");
+        var row = manager.Catalog.Get(caller.Id)!;
+        row["aliases"]!.AsArray().Add("foreign");
+        manager.Catalog.Upsert([row]);
+        Assert.Equal(
+            "foreign",
+            manager.Catalog.Resolve("foreign")["sessionId"]!.GetValue<string>()
+        );
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            "version: 1\nrules: [{id: no-view, tool: {source: builtin, name: view_session}, action: deny}]"
+        );
+        manager.BeforeDeleteStage = (stage, id) =>
+            stage == "json-unlink" && id == "foreign"
+                ? throw new IOException("synthetic deletion failure")
+                : Task.CompletedTask;
+        await Assert.ThrowsAsync<SessionDeletionException>(() => manager.DeleteAsync("foreign"));
+        var result = await Explain(
+            execution.Tools,
+            Obj(
+                """{"probes":[{"sessionId":"foreign","toolId":"builtin:wait"},{"sessionId":"missing","toolId":"builtin:wait"},{"sessionId":"self","toolId":"builtin:wait"}]}"""
+            )
+        );
+        var probes = result["probes"]!.AsArray();
+        Assert.Equal(
+            "Session not found or unavailable.",
+            probes[0]!["error"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            probes[0]!["error"]!.GetValue<string>(),
+            probes[1]!["error"]!.GetValue<string>()
+        );
+        Assert.Equal("opaque", probes[2]!["sessionId"]!.GetValue<string>());
+        Assert.NotNull(probes[2]!["active"]);
+    }
+
+    [Theory]
+    [InlineData("foreign")]
+    [InlineData("missing")]
+    public async Task Explain_hides_policy_unavailability_during_foreign_view_check(string target)
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        _ = await manager.RequiredAsync("foreign");
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            "version: 1\nrules: [{id: no-view, tool: {source: builtin, name: view_session}, action: deny}]"
+        );
+        manager.BeforeAdmissionRead = (id, _) =>
+        {
+            if (id == "direct")
+            {
+                File.WriteAllText(manager.Authorization.PolicyPath, "version: [broken");
+                manager.Authorization.Invalidate();
+                throw new IOException("synthetic admission failure");
+            }
+            return Task.CompletedTask;
+        };
+        var result = await Explain(
+            execution.Tools,
+            Obj(
+                $$"""{"probes":[{"sessionId":"direct","toolId":"builtin:wait"},{"sessionId":"{{target}}","toolId":"builtin:wait"}]}"""
+            )
+        );
+        var probes = result["probes"]!.AsArray();
+        Assert.Equal(
+            "Session not found or unavailable.",
+            probes[0]!["error"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            probes[0]!["error"]!.GetValue<string>(),
+            probes[1]!["error"]!.GetValue<string>()
+        );
+        Assert.Null(probes[1]!["active"]);
     }
 
     [Fact]
@@ -123,7 +370,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             rules:
             - {"id":"beta-read","agent":"beta","tool":{"source":"node","name":"read"},"action":"allow","reason":"now explained"}
             - {"id":"beta-no-exec","agent":"beta","tool":{"source":"node","name":"exec"},"action":"deny","reason":"no exec for beta"}
-            - {"id":"alpha-no-wait","agent":"alpha","tool":{"source":"builtin","name":"wait"},"action":"deny"}
+            - {"id":"alpha-no-list","agent":"alpha","tool":{"source":"builtin","name":"list_agents"},"action":"deny"}
             - {"id":"alpha-rest","agent":"alpha","action":"allow"}
             """
         );
@@ -132,21 +379,21 @@ public sealed partial class ToolAuthorizationEffectsTests
             Obj(
                 """
                 {"policyFilePath":"candidate.yaml","compare":true,"probes":[
-                  {"sessionId":"opaque","toolId":"builtin:wait","args":{}},
+                  {"sessionId":"opaque","toolId":"builtin:list_agents","args":{}},
                   {"sessionId":"foreign","toolId":"node:master/exec","args":{"command":"true"}}
                 ]}
                 """
             )
         );
         Assert.Equal("compare", result["policy"]!.GetValue<string>());
-        var wait = result["probes"]![0]!;
-        Assert.True(wait["active"]!["allowed"]!.GetValue<bool>());
-        Assert.False(wait["candidate"]!["allowed"]!.GetValue<bool>());
+        var listed = result["probes"]![0]!;
+        Assert.True(listed["active"]!["allowed"]!.GetValue<bool>());
+        Assert.False(listed["candidate"]!["allowed"]!.GetValue<bool>());
         Assert.Equal(
-            "alpha-no-wait",
-            wait["candidate"]!["layers"]![0]!["rule"]!["id"]!.GetValue<string>()
+            "alpha-no-list",
+            listed["candidate"]!["layers"]![0]!["rule"]!["id"]!.GetValue<string>()
         );
-        Assert.True(wait["changed"]!.GetValue<bool>());
+        Assert.True(listed["changed"]!.GetValue<bool>());
         var exec = result["probes"]![1]!;
         Assert.False(exec["changed"]!.GetValue<bool>());
         Assert.Equal(2, exec["candidate"]!["layers"]![0]!["rule"]!["index"]!.GetValue<int>());
@@ -154,7 +401,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var diff = result["ruleDiff"]!;
         Assert.Equal("deny", diff["defaultAction"]!["candidate"]!.GetValue<string>());
         Assert.Equal(
-            ["alpha-no-wait", "alpha-rest"],
+            ["alpha-no-list", "alpha-rest"],
             diff["added"]!.AsArray().Select(item => item!["id"]!.GetValue<string>())
         );
         Assert.Equal("obsolete", diff["removed"]![0]!["id"]!.GetValue<string>());
@@ -168,7 +415,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var candidateOnly = await Explain(
             execution.Tools,
             Obj(
-                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:wait"}]}"""
+                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:list_agents"}]}"""
             )
         );
         Assert.Equal("candidate", candidateOnly["policy"]!.GetValue<string>());
@@ -183,12 +430,12 @@ public sealed partial class ToolAuthorizationEffectsTests
             execution.Tools,
             "explain_tool_authorization",
             Obj(
-                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:wait"}]}"""
+                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:list_agents"}]}"""
             )
         );
         Assert.Contains(
             "Invalid tool-rules candidate",
-            invalid["error"]!["message"]!.GetValue<string>()
+            invalid.FailureMessage()!
         );
         Assert.NotNull(
             Error(
@@ -196,7 +443,7 @@ public sealed partial class ToolAuthorizationEffectsTests
                     execution.Tools,
                     "explain_tool_authorization",
                     Obj(
-                        """{"compare":true,"probes":[{"sessionId":"opaque","toolId":"builtin:wait"}]}"""
+                        """{"compare":true,"probes":[{"sessionId":"opaque","toolId":"builtin:list_agents"}]}"""
                     )
                 )
             )

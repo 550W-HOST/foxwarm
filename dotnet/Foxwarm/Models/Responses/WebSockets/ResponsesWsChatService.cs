@@ -48,7 +48,7 @@ internal sealed class ResponsesWsChatService(
         if (options.Token.Length > 0)
             headers["Authorization"] = "Bearer " + options.Token;
         foreach (var (key, value) in options.ExtraHeaders ?? new JsonObject())
-            headers[key] = SessionWait.Text(value) ?? (value?.ToJsonString() ?? "");
+            headers[key] = SessionWait.Text(value) ?? (value?.ToJsonText() ?? "");
         var started = Stopwatch.GetTimestamp();
         WsPendingCompletion? pending = null;
         using var attempt = new ResponsesAttempt(
@@ -121,11 +121,19 @@ internal sealed class ResponsesWsChatService(
             var hostedSearch = (pending.Response["output"] as JsonArray ?? [])
                 .OfType<JsonObject>()
                 .Any(item => SessionWait.Text(item["type"]) == "web_search_call");
+            // Failure evidence is local explanatory text, not provider-cached output.
+            var hostedImageFailure = attempt
+                .Committed.Append(assistant)
+                .Where(row => row is not null)
+                .SelectMany(row => row!["parts"] as JsonArray ?? [])
+                .Any(part =>
+                    part?["providerMeta"]?["openaiResponses"]?["imageGenerationFailure"] is not null
+                );
             var finalizer = new HistoryAppendFinalizer(rows =>
             {
                 try
                 {
-                    if (rows is null || unsafeReplay || hostedSearch)
+                    if (rows is null || unsafeReplay || hostedSearch || hostedImageFailure)
                     {
                         captured.Finalize(null);
                         return;

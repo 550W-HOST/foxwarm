@@ -495,6 +495,74 @@ public sealed class SessionSequenceProjectionTests
         Assert.Equal("Please review the patch", Text(input["preview"]));
     }
 
+    // A ctl call keeps its concrete tool name and preview and is labelled by its command path.
+    [Fact]
+    public async Task Ctl_tool_events_carry_the_command_path_as_label()
+    {
+        await using var f = await ScriptFixture.Create();
+        var t0 = (long)Now - 60_000;
+        JsonObject Call(string id, string command) =>
+            new()
+            {
+                ["functionCall"] = new JsonObject
+                {
+                    ["id"] = id,
+                    ["name"] = "ctl",
+                    ["args"] = new JsonObject { ["command"] = command },
+                },
+            };
+        JsonObject Response(string id) =>
+            new()
+            {
+                ["functionResponse"] = new JsonObject
+                {
+                    ["tool_use_id"] = id,
+                    ["name"] = "ctl",
+                    ["response"] = new JsonObject { ["output"] = "ok" },
+                },
+            };
+        await Append(
+            f.Owner,
+            new JsonObject
+            {
+                ["role"] = "model",
+                ["parts"] = new JsonArray(
+                    Call("c1", "memory edit MEMORY.md --old-text a --new-text b"),
+                    Call("c2", "tool search memory"),
+                    Call("c3", "tool call node:master/read --args '{\"filePath\":\"x.txt\"}'")
+                ),
+                ["__meta"] = new JsonObject
+                {
+                    ["timestamp"] = t0,
+                    ["llmRequestTiming"] = new JsonObject { ["startedAt"] = t0 - 100, ["completedAt"] = t0 },
+                },
+            },
+            new JsonObject
+            {
+                ["role"] = "tool",
+                ["parts"] = new JsonArray(Response("c1"), Response("c2"), Response("c3")),
+                ["__meta"] = new JsonObject { ["timestamp"] = t0 + 100 },
+            }
+        );
+        var result = new SessionSequenceProjection(
+            new SessionRuntime(f.Manager),
+            f.Manager.ArchiveDatabase
+        ).BuildPage(new(), null);
+        var tools = Objects(result["events"])
+            .Where(item => Text(item["kind"]) == "tool")
+            .Select(item => (Text(item["name"]), Text(item["label"]), Text(item["preview"])))
+            .ToArray();
+        Assert.Equal(
+            new (string?, string?, string?)[]
+            {
+                ("edit_memory", "memory edit", "MEMORY.md"),
+                ("ctl", null, "tool search memory"),
+                ("read", null, "x.txt"),
+            },
+            tools
+        );
+    }
+
     internal static Task Append(SessionOwner owner, params JsonObject[] messages) =>
         owner.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
             LocalSessionTurnHost.PrepareCanonicalAppend(

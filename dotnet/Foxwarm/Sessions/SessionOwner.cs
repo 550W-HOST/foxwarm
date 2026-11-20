@@ -20,6 +20,14 @@ internal sealed partial class SessionOwner
     internal Func<string, SessionMetadata?>? ResolveAncestry { get; set; }
     internal string? SnapshotRefreshWarning { get; set; }
 
+    internal sealed record ToolModelSelection(
+        HostModels Catalog,
+        ConcreteHostModel Model,
+        string? RawModel
+    );
+
+    internal ToolModelSelection? ToolModel { get; set; }
+
     private sealed record OwnerIdentity(string Id, string Agent);
 
     private long mcpGeneration;
@@ -50,6 +58,7 @@ internal sealed partial class SessionOwner
     public SessionCompactor Compactor { get; set; } = null!;
     internal SessionAutoTitle.OwnerState AutoTitle { get; } = new();
     internal RecallWindowStore RecallWindows { get; } = new();
+    internal Foxwarm.Tools.ToolApprovalWaiters ApprovalWaiters { get; } = new();
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
     public LocalExecManager Executor { get; set; } = null!;
     internal PersistentSessionAuthorityStore AuthorityStore { get; set; } = null!;
@@ -78,21 +87,21 @@ internal sealed partial class SessionOwner
     public object State()
     {
         var state = Metadata();
-        return new
+        return new JsonObject
         {
-            id = Id,
-            agent = Agent,
-            parentSessionId = state.ParentSessionId,
-            displayName = state.DisplayName,
-            busy = state.Busy,
-            stopping = state.Stopping,
-            queueCount = state.QueueLength,
-            messageCount = state.MessageCount,
-            nextMessageSeq = state.NextMessageSeq,
-            failureCount = Entry.BackgroundProcessorFailureCount,
-            bestEffortFailureCount = Entry.BestEffortFailureCount,
-            snapshotRefreshWarning = SnapshotRefreshWarning,
-            lastError = Entry.LastBackgroundProcessorFailure?.Message,
+            ["id"] = Id,
+            ["agent"] = Agent,
+            ["parentSessionId"] = state.ParentSessionId,
+            ["displayName"] = state.DisplayName,
+            ["busy"] = state.Busy,
+            ["stopping"] = state.Stopping,
+            ["queueCount"] = state.QueueLength,
+            ["messageCount"] = state.MessageCount,
+            ["nextMessageSeq"] = state.NextMessageSeq,
+            ["failureCount"] = Entry.BackgroundProcessorFailureCount,
+            ["bestEffortFailureCount"] = Entry.BestEffortFailureCount,
+            ["snapshotRefreshWarning"] = SnapshotRefreshWarning,
+            ["lastError"] = Entry.LastBackgroundProcessorFailure?.Message,
         };
     }
 
@@ -101,6 +110,7 @@ internal sealed partial class SessionOwner
 
     public void EnableCommittedNotifications()
     {
+        Compactor?.AttachIdleScheduling();
         Entry.CaptureForegroundRelease = CaptureForegroundRelease;
         Entry.HistoryAppended = messages =>
         {
@@ -118,9 +128,13 @@ internal sealed partial class SessionOwner
                     ClearCommittedDraft(message);
                 }
             }
+            // Committed reasoning, calls and inputs change the live activity without a runtime transition.
+            if (messages.Count > 0)
+                PublishActivityIfChanged();
         };
         Entry.QueueHistoryAppended = (snapshot, messages) =>
         {
+            Compactor?.RefreshIdleSchedule();
             Emit(SessionEventKind.StateChanged);
             if (messages.Count > 0)
             {
@@ -133,13 +147,17 @@ internal sealed partial class SessionOwner
                 );
                 foreach (var message in messages)
                     ClearCommittedDraft(message);
+                PublishActivityIfChanged();
             }
         };
-        Entry.Committed = _ => Emit(SessionEventKind.StateChanged);
+        Entry.Committed = _ =>
+        {
+            Compactor?.RefreshIdleSchedule();
+            Emit(SessionEventKind.StateChanged);
+        };
     }
 
-    private static JsonNode JsonSerializerNode(object value) =>
-        System.Text.Json.JsonSerializer.SerializeToNode(value)!;
+    private static JsonNode JsonSerializerNode(object value) => JsonData.SerializeToNode(value)!;
 
     public Task StartProcessing(bool retry = false, Action? admitted = null)
     {
@@ -188,6 +206,8 @@ internal sealed partial class SessionOwner
                 finally
                 {
                     running.TryRemove(index, out _);
+                    if (running.IsEmpty)
+                        EndLiveActivity();
                     Emit(SessionEventKind.StateChanged);
                 }
             }

@@ -22,15 +22,15 @@ public sealed class ToolScriptImageReturnTests
         await File.WriteAllBytesAsync(Path.Combine(f.Work, "image.dat"), bytes);
         var read = await f.Call("read", new JsonObject { ["filePath"] = "image.dat" });
         Assert.Equal("image/png", SessionWait.Text(read["mimeType"]));
-        var reference = await f.Manager.Images.PutAsync(bytes, "image/png", "canonical");
         var code = carrier switch
         {
             "inlineData" =>
                 "image=args['image']\nreturn {'inlineData':image, 'business':args['business'], 'nested':{'inlineData':image}}",
             "inlineDataItems" =>
                 "image=args['image']\nreturn {'inlineDataItems':[image,image], 'business':args['business']}",
+            // A script may return an image reference produced by its own nested call.
             _ =>
-                "return {'parts':[{'text':'caption'}, {'inlineDataRef':args['reference'], 'text':'retained'}], 'business':args['business']}",
+                "read = call_tool('read', {'filePath':'image.dat'})\nref = None\nfor part in read['parts']:\n    if 'inlineDataRef' in part:\n        ref = part['inlineDataRef']\nreturn {'parts':[{'text':'caption'}, {'inlineDataRef':ref, 'text':'retained'}], 'business':args['business']}",
         };
         var business = new JsonObject
         {
@@ -45,7 +45,6 @@ public sealed class ToolScriptImageReturnTests
                 ["args"] = new JsonObject
                 {
                     ["business"] = business.DeepClone(),
-                    ["reference"] = reference,
                     ["image"] = read["inlineData"]!.DeepClone(),
                 },
             }

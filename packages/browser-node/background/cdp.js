@@ -1,6 +1,7 @@
 // One attached, top-document CDP adapter. No tab activation or alternate page driver.
 import { readPage, elementAction, pageCondition } from './pageFunctions.js';
 import { buildBrowserScreenshotResult } from './toolResults.js';
+import { evaluateBounded, pressKey, typeText } from './cdpOps.js';
 const pages = new Map();
 let onUnexpectedDetach = () => {};
 export function setDetachHandler(handler) {
@@ -158,62 +159,60 @@ export async function screenshot(tabId, expected, signal) {
     },
   });
 }
-export async function action(tabId, expected, tool, args, signal, beginNavigation = () => {}) {
-  if (tool === 'execute_js') {
-    await assertPage(tabId, expected, signal);
-    const response = await command(
-      tabId,
-      'Runtime.evaluate',
-      {
-        expression: args.code,
-        uniqueContextId: expected.mainUniqueContextId,
-        awaitPromise: true,
-        returnByValue: false,
-        allowUnsafeEvalBlockedByCSP: true,
-      },
-      signal,
-    );
-    if (response.exceptionDetails) throw new Error('JavaScript evaluation failed.');
-    const value = response.result;
-    if (!value.objectId) {
-      const primitive = value.value ?? value.unserializableValue ?? null;
-      return {
-        result: typeof primitive === 'string' ? primitive.slice(0, 100000) : primitive,
-        truncated: typeof primitive === 'string' && primitive.length > 100000,
-      };
-    }
-    try {
-      const bounded = await command(
-        tabId,
-        'Runtime.callFunctionOn',
-        {
-          objectId: value.objectId,
-          functionDeclaration:
-            'function() { try { const text = JSON.stringify(this); return { text: String(text).slice(0, 100000), truncated: String(text).length > 100000 }; } catch { return { text: "[Unserializable result]", truncated: false }; } }',
-          returnByValue: true,
-        },
-        signal,
-      );
-      const result = bounded.result.value;
-      return {
-        result: result.truncated
-          ? result.text
-          : (() => {
-              try {
-                return JSON.parse(result.text);
-              } catch {
-                return result.text;
-              }
-            })(),
-        truncated: result.truncated,
-      };
-    } finally {
-      chrome.debugger
-        .sendCommand({ tabId }, 'Runtime.releaseObject', { objectId: value.objectId })
-        .catch(() => {});
-    }
+const sendFor = (tabId, signal) => (method, params) => command(tabId, method, params, signal);
+
+async function committedFrame(tabId, signal) {
+  const { frameTree } = await command(tabId, 'Page.getFrameTree', {}, signal);
+  return frameTree.frame;
+}
+
+// Resolves once the main frame shows a different document or URL than `before`, bounded.
+async function awaitFrameChange(tabId, before, signal, limitMs = 15000) {
+  const end = Date.now() + limitMs;
+  while (Date.now() < end) {
+    const frame = await committedFrame(tabId, signal);
+    if (frame.loaderId !== before.loaderId || frame.url !== before.url) return frame;
+    await abortable(new Promise((resolve) => setTimeout(resolve, 50)), signal);
   }
-  if (tool === 'click') {
+  throw new Error('Navigation did not start.');
+}
+
+async function navigate(tabId, expected, args, signal, beginNavigation) {
+  await assertPage(tabId, expected, signal);
+  if (args.url) {
+    beginNavigation();
+    const response = await command(tabId, 'Page.navigate', { url: args.url }, signal);
+    if (response.errorText) throw new Error('Navigation failed: ' + response.errorText);
+    while (true) {
+      const frame = await committedFrame(tabId, signal);
+      if (response.loaderId ? frame.loaderId === response.loaderId : frame.url === args.url) break;
+      await abortable(new Promise((resolve) => setTimeout(resolve, 50)), signal);
+    }
+    return { navigated: true };
+  }
+  const before = await committedFrame(tabId, signal);
+  if (args.history === 'reload') {
+    beginNavigation();
+    await command(tabId, 'Page.reload', {}, signal);
+  } else {
+    const { currentIndex, entries } = await command(tabId, 'Page.getNavigationHistory', {}, signal);
+    const entry = entries[currentIndex + (args.history === 'back' ? -1 : 1)];
+    if (!entry) throw new Error(`There is no ${args.history} entry in this tab's history.`);
+    beginNavigation();
+    await command(tabId, 'Page.navigateToHistoryEntry', { entryId: entry.id }, signal);
+  }
+  await awaitFrameChange(tabId, before, signal);
+  return { navigated: true };
+}
+
+export async function action(tabId, expected, tool, args, signal, beginNavigation = () => {}) {
+  if (tool === 'browser_evaluate') {
+    await assertPage(tabId, expected, signal);
+    return evaluateBounded(sendFor(tabId, signal), args.code, {
+      uniqueContextId: expected.mainUniqueContextId,
+    });
+  }
+  if (tool === 'browser_click') {
     let point;
     if (args.ref || args.selector)
       point = await invoke(tabId, expected, elementAction, [args, 'point'], signal);
@@ -247,77 +246,32 @@ export async function action(tabId, expected, tool, args, signal, beginNavigatio
     );
     return { clicked: true };
   }
-  if (tool === 'fill') {
-    await invoke(tabId, expected, elementAction, [args, 'fill'], signal);
-    await assertPage(tabId, expected, signal);
-    await command(tabId, 'Input.insertText', { text: args.text }, signal);
+  if (tool === 'browser_fill') {
+    // Native value setter plus input and change events, so framework-controlled inputs update.
+    await invoke(tabId, expected, elementAction, [args, 'replace'], signal);
     return { filled: true }; // Never echo entered values, including passwords.
   }
-  if (tool === 'select_option' || tool === 'scroll')
+  if (tool === 'browser_select' || tool === 'browser_scroll')
     return invoke(
       tabId,
       expected,
       elementAction,
-      [args, tool === 'scroll' ? 'scroll' : 'select'],
+      [args, tool === 'browser_scroll' ? 'scroll' : 'select'],
       signal,
     );
-  if (tool === 'press_key') {
+  if (tool === 'browser_type' || tool === 'browser_press') {
     if (args.ref || args.selector)
       await invoke(tabId, expected, elementAction, [args, 'focus'], signal);
-    const keys = {
-      Enter: ['Enter', 13],
-      Tab: ['Tab', 9],
-      Escape: ['Escape', 27],
-      Backspace: ['Backspace', 8],
-      Delete: ['Delete', 46],
-      ArrowLeft: ['ArrowLeft', 37],
-      ArrowUp: ['ArrowUp', 38],
-      ArrowRight: ['ArrowRight', 39],
-      ArrowDown: ['ArrowDown', 40],
-      Home: ['Home', 36],
-      End: ['End', 35],
-    };
-    const key = keys[args.key];
-    if (!key) throw new Error('Unsupported editing key.');
     await assertPage(tabId, expected, signal);
+    if (tool === 'browser_type') {
+      await typeText(sendFor(tabId, signal), args.text);
+      return { typed: true };
+    }
     beginNavigation();
-    await command(
-      tabId,
-      'Input.dispatchKeyEvent',
-      {
-        type: 'keyDown',
-        key: key[0],
-        code: key[0],
-        windowsVirtualKeyCode: key[1],
-        ...(args.key === 'Enter' ? { text: '\r' } : {}),
-      },
-      signal,
-    );
-    await command(
-      tabId,
-      'Input.dispatchKeyEvent',
-      { type: 'keyUp', key: key[0], code: key[0], windowsVirtualKeyCode: key[1] },
-      signal,
-    );
+    await pressKey(sendFor(tabId, signal), args.key);
     return { pressed: args.key };
   }
-  if (tool === 'navigate') {
-    await assertPage(tabId, expected, signal);
-    beginNavigation();
-    const response = await command(tabId, 'Page.navigate', { url: args.url }, signal);
-    if (response.errorText) throw new Error('Navigation failed: ' + response.errorText);
-    while (true) {
-      const { frameTree } = await command(tabId, 'Page.getFrameTree', {}, signal);
-      if (
-        response.loaderId
-          ? frameTree.frame.loaderId === response.loaderId
-          : frameTree.frame.url === args.url
-      )
-        break;
-      await abortable(new Promise((resolve) => setTimeout(resolve, 50)), signal);
-    }
-    return { navigated: true };
-  }
-  if (tool === 'wait_for') return invoke(tabId, expected, pageCondition, [args], signal);
+  if (tool === 'browser_navigate') return navigate(tabId, expected, args, signal, beginNavigation);
+  if (tool === 'browser_wait') return invoke(tabId, expected, pageCondition, [args], signal);
   throw new Error('Unknown page operation.');
 }

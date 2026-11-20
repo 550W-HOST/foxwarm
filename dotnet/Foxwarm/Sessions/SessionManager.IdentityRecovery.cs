@@ -110,7 +110,7 @@ internal sealed partial class SessionManager
                 raw["aliases"] = new JsonArray(
                     aliases.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
                 );
-                new LinuxAtomicJsonFile(root, $"state/sessions/{to}.json").WritePayload(raw);
+                new AtomicJsonFile(root, $"state/sessions/{to}.json").WritePayload(raw);
                 metadata.Rewrite(from, to, agent, aliases, requireSource: source is not null);
                 deletionChannels.RewriteIdentity(from, to);
                 if (!backward)

@@ -160,7 +160,8 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
         await rm(path.join(downloads,'Image 1'))
         assert.ok(signRequests.at(-1).cookie.includes('foxwarm_token='+token))
         const downloaded=requests.findLast(request=>request.url.includes('signature='))
-        assert.ok(downloaded);assert.equal(downloaded.cookie,'')
+        // The non-secret theme cookie is path-scoped and may accompany any same-path request; no other cookie, in particular no login token, may.
+        assert.ok(downloaded);assert.deepEqual(downloaded.cookie.split(';').map(part=>part.split('=')[0].trim()).filter(name=>name&&name!=='foxwarm_canvas'),[])
         if(id==='scoped'){
           assert.ok(downloaded.url.startsWith('/nested/api/sessions/reader%2Fmain/blobs/'))
           assert.ok(requests.some(request=>request.url.includes('/sessions/reader%2Fmain/blobs/')&&request.url.includes('archiveSeq=2')))

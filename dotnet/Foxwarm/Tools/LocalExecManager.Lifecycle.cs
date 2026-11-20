@@ -95,6 +95,15 @@ internal sealed partial class LocalExecManager
         await reconciliation.WaitAsync();
         try
         {
+            if (!closing && savePending)
+                try
+                {
+                    await MutateAsync(() => { });
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    // Still blocked; the next reconciliation writes it again.
+                }
             if (!closing)
                 await Task.WhenAll(
                     pending.Values.Where(record => record.Notify).Select(ReconcileRecordAsync)
@@ -128,7 +137,7 @@ internal sealed partial class LocalExecManager
                     await notify(
                         record.SessionId,
                         record.Id,
-                        ExecOutput.Completion(record.ToJson(), status!)
+                        await CompletionMessageAsync(record, status!)
                     );
                 await MutateAsync(() => Remove(record));
             }
@@ -136,6 +145,8 @@ internal sealed partial class LocalExecManager
             {
                 gate.Release();
             }
+            if (record.Notify)
+                Untracked?.Invoke(resolveLifetime(record.SessionId));
         }
         catch (Exception)
         {

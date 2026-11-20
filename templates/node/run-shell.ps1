@@ -2,7 +2,7 @@
 .SYNOPSIS
   Exec-only Windows Shell Node. Requires Windows PowerShell 5.1 and inbox .NET.
 .DESCRIPTION
-  Use a per-node token from /node create, not the shared pairing token.
+  Use a per-node token from /node token, not the shared pairing token.
   Run from the desired default command directory. No Node.js installation is needed.
   Commands use fresh Windows PowerShell processes with bounded output, not full logs.
 #>
@@ -20,8 +20,8 @@ if (-not [Uri]::TryCreate($HostUrl, [UriKind]::Absolute, [ref]$uri) -or
     $uri.Scheme -notin @('http', 'https') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) {
     throw 'An HTTP(S) HostUrl without credentials, query or fragment is required.'
 }
-if ($NodeId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'A NodeId from /node create is required.' }
-if ($AuthToken -notmatch '^[a-fA-F0-9]{64}$') { throw 'A per-node token from /node create is required.' }
+if ($NodeId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'A NodeId from /node token is required.' }
+if ($AuthToken -notmatch '^[a-fA-F0-9]{64}$') { throw 'A per-node token from /node token is required.' }
 $startup = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Get-Location).Path)
 # Do not pass the token to child processes through their inherited environment.
 Remove-Item Env:NODE_AUTH_TOKEN -ErrorAction SilentlyContinue

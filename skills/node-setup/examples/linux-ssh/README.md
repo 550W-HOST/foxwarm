@@ -4,7 +4,7 @@ This independently runnable reference adapter exposes existing Linux machines th
 
 The local adapter requires Python 3 and an OpenSSH client as optional administrator-provided prerequisites; they are not installed by loading this skill. Each target requires Python 3, Bash and Linux `/proc`. It does not require the Foxwarm CLI, pairing credentials or a resident Foxwarm daemon. Commands run as the configured SSH account with that account's filesystem and network permissions. **This is not an OS, VM or network sandbox.**
 
-The adapter and adjacent `target.py` are resources of `node-setup`. Copy this whole directory or use the absolute skill directory returned by `skill({action:"load",skillName:"node-setup"})`. No source checkout or protocol-document file is needed to run it. The linked protocol is optional deeper reading. Registration below is administrator opt-in; loading the skill registers nothing.
+The adapter and adjacent `target.py` are resources of `node-setup`. Copy this whole directory or use the absolute skill directory returned by `ctl skill load`. No source checkout or protocol-document file is needed to run it. The linked protocol is optional deeper reading. Registration below is administrator opt-in; loading the skill registers nothing.
 
 ## Private configuration
 
@@ -78,7 +78,7 @@ File paths, home expansion, relative cwd, symlinks and file permissions use the 
 
 Start creates a UUID-named execution directory on the target, containing a command script, a detached Python supervisor, merged raw output, process identity, cwd and completion status. The supervisor and Bash command survive the initiating SSH and adapter processes exiting. Poll uses that UUID plus Linux process-start identity and boot identity rather than treating a reused PID as the same execution.
 
-Core persists the provider reference in its existing exec registry. Foreground timeout or Stop ends waiting, not the command. Background completion and wait use Core's existing tracking path. A fresh Core process can query the same target records without starting the command again. Lost records or a missing original process produce `lost`, not a successful exit. Query connection failures are errors and retain tracking.
+Core persists the provider reference in its existing exec registry. Foreground timeout or Stop ends waiting, not the command. The Nodes declare `execStop`: the Bash command leads its own process group, so an explicit stop of a background command (`ctl exec stop` or the WebUI) sends that group TERM, then KILL after the grace period, and the supervisor still records the real exit status. Background completion and wait use Core's existing tracking path. A fresh Core process can query the same target records without starting the command again. Lost records or a missing original process produce `lost`, not a successful exit. Query connection failures are errors and retain tracking.
 
 Output and status remain in `stateDir` until an administrator removes them. There is no automatic machine cleanup, log-retention daemon, transaction or exactly-once launch promise. Core's normal 24-hour notification-tracking expiration does not delete target artifacts or stop commands. Removing active records can lose tracking; remove them only according to your own retention policy. One `stateDir` belongs to one configured target execution namespace, not a shared directory across unrelated machines.
 

@@ -6,7 +6,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
-import { createHostFixture, saveModelsInOriginalApp, until, sleep } from './mainHostFixture.mjs'
+import { createHostFixture, requiredCompactOperations, saveModelsInOriginalApp, until, sleep } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('async-compact'), records = [], errors = [], held = new Map(), connections = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -16,7 +17,7 @@ const textOf = item => (item.content || []).map(part => part.text || '').join(''
 const inputText = input => input.filter(item => item.role === 'user').map(textOf).join('\n')
 const isInput = (row, text) => row.role === 'user' && row.parts?.some(part => part.text === text || part.system?.split('\n').includes(text))
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-const tool = (id, name, args) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: JSON.stringify(args) })
+const tool = (id, name, args) => ({ ...functionCall(id, name, args), id: 'output-' + id })
 const replay = output => output.map(item => { const value = { ...item }; delete value.id; delete value.status; return value })
 const sha = value => createHash('sha256').update(value).digest('hex')
 let responseSequence = 0, plans = 0, mode = 'hold', crossTarget
@@ -24,10 +25,10 @@ function record(body, full, kind, headers, complete) {
   const input = inputText(full), planning = input.includes('COMPACTION STARTED:'), scenario = [...input.matchAll(/CASE:([a-z0-9-]+)/g)].at(-1)?.[1] || 'unknown'
   const value = { body, full, kind, headers, planning, scenario, complete }; records.push(value)
   if (planning) {
-    value.ranges = [...input.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
-    assert(value.ranges.length, 'genuine frozen candidates'); value.valid = () => complete([tool('valid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: value.ranges[0][0], sourceEnd: value.ranges.at(-1)[1], summary: 'Exact ordered prior dialogue and paired effects.' }] })])
+    value.operations = requiredCompactOperations(input, 'Exact ordered prior dialogue and paired effects.')
+    assert(value.operations.length, 'required retention operations'); value.valid = () => complete([tool('valid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: value.operations })])
     value.invalid = () => complete([tool('invalid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid range.' }] })])
-    if (JSON.stringify(full).includes('compact_plan_invalid')) {
+    if (input.includes('Compact plan rejected') && input.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=999999, sourceEnd=1000000) is not a required operation')) {
       if (mode === 'reload') { assert(!body.previous_response_id); assert.equal(headers['x-generation'], 'two') }
       else assert(body.previous_response_id, 'real background transient suffix')
       value.valid(); return value
@@ -114,7 +115,7 @@ try {
   assert.equal(background.body.prompt_cache_key, sha(stopped + '--compact-plan')); assert.notEqual(background.connection.id, held.get('held-foreground').connection.id)
   const time = Date.now(); assert.equal((await fixture.api('POST', route(stopped) + '/stop')).status, 200); assert(Date.now() - time < 2500, 'Stop does not wait for held background')
   assert(!background.connection.closed); assert(!(await history(stopped)).session.busy)
-  assert.equal((await command(stopped, '/stop compact')).body.success, true); await until(() => background.connection.closed, 'compact-only provider cancellation'); assert.deepEqual((await history(stopped)).messages, beforeStop)
+  assert.equal((await command(stopped, '/stop --compaction')).body.success, true); await until(() => background.connection.closed, 'compact-only provider cancellation'); assert.deepEqual((await history(stopped)).messages, beforeStop)
   held.delete('plan'); const beforeControl = records.length; await command(stopped, '/compact'); await until(() => held.has('plan'), 'new idle background'); held.get('plan').valid()
   await until(async () => (await history(stopped)).messages.some(row => row.__meta?.contextBlock) && !(await history(stopped)).session.busy, 'control-only apply')
   assert.equal(records.slice(beforeControl).filter(row => !row.planning).length, 0)
@@ -128,9 +129,9 @@ try {
   awaited.valid(); await until(async () => !(await history(synced)).session.busy && (await history(synced)).messages.some(row => row.__meta?.contextBlock), 'awaited owned release')
 
   const target = await create(); await seed(target, 'target'); const caller = await create(); crossTarget = target
-  held.delete('plan'); await send(caller, 'cross-tool'); await until(() => held.has('plan'), 'cross idle existing target'); assert.equal(held.get('plan').body.prompt_cache_key, sha(target + '--compact-plan')); await command(target, '/stop compact')
+  held.delete('plan'); await send(caller, 'cross-tool'); await until(() => held.has('plan'), 'cross idle existing target'); assert.equal(held.get('plan').body.prompt_cache_key, sha(target + '--compact-plan')); await command(target, '/stop --compaction')
   await command(target, 'CASE:held-target'); await until(() => held.has('held-target'), 'busy cross target'); const crossBefore = records.filter(row => row.planning).length
-  const rejectedCaller = await create(); await send(rejectedCaller, 'cross-tool'); assert.equal(records.filter(row => row.planning).length, crossBefore); assert((await history(rejectedCaller)).messages.some(row => row.parts?.some(part => part.functionResponse?.response?.error?.message?.includes('must be idle')))); await fixture.api('POST', route(target) + '/stop')
+  const rejectedCaller = await create(); await send(rejectedCaller, 'cross-tool'); assert.equal(records.filter(row => row.planning).length, crossBefore); assert((await history(rejectedCaller)).messages.some(row => row.parts?.some(part => part.functionResponse?.response?.error?.includes?.('must be idle')))); await fixture.api('POST', route(target) + '/stop')
   const countBeforeMissing = (await fixture.api('GET', '/api/sessions')).body.sessions.length; await send(caller, 'missing-tool'); assert.equal((await fixture.api('GET', '/api/sessions')).body.sessions.length, countBeforeMissing)
 
   const queued = await create(); await seed(queued, 'dequeue'); await selectSession(page, queued); await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:held-dequeue'))
@@ -158,7 +159,7 @@ try {
   const wsAwaited = await create(); await seed(wsAwaited, 'ws-awaited'); held.delete('plan'); await command(wsAwaited, '/compact'); await until(() => held.has('plan'), 'actual awaited WS operation')
   const awaitedWsPlan = held.get('plan'); assert.equal(awaitedWsPlan.body.prompt_cache_key, sha(wsAwaited)); assert.notEqual(awaitedWsPlan.body.prompt_cache_key, sha(wsAwaited + '--compact-plan')); assert((await history(wsAwaited)).session.busy)
   assert.equal((await fixture.api('POST', route(wsAwaited) + '/stop')).body.stoppedCurrent, false); assert(!awaitedWsPlan.connection.closed)
-  assert.equal((await command(wsAwaited, '/stop compact')).body.success, true); await until(() => awaitedWsPlan.connection.closed, 'awaited compact-only cancellation'); assert(!(await history(wsAwaited)).session.busy)
+  assert.equal((await command(wsAwaited, '/stop --compaction')).body.success, true); await until(() => awaitedWsPlan.connection.closed, 'awaited compact-only cancellation'); assert(!(await history(wsAwaited)).session.busy)
   await fixture.save(config())
 
   const autoBackground = await create(); await seed(autoBackground, 'auto-background'); held.delete('plan'); await send(autoBackground, 'auto-tool'); await until(() => held.has('plan'), 'real usage-triggered tool-loop background planner')

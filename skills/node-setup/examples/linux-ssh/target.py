@@ -1,4 +1,4 @@
-"""Target-side helper sent over SSH; no Foxwarm installation or daemon required."""
+"""Target-side helper sent over SSH or a container engine's exec; no Foxwarm installation or daemon required."""
 import base64
 from datetime import datetime, timezone
 import errno
@@ -7,9 +7,11 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import time
 import uuid
 
 
@@ -84,7 +86,7 @@ def filesystem(request, default_cwd):
 
 
 def run_command(directory):
-    """A detached supervisor records shell completion after the SSH request exits."""
+    """A detached supervisor records shell completion after the transport request exits."""
     directory = Path(directory)
     metadata = json.loads((directory / "launch.json").read_text())
     try:
@@ -92,7 +94,8 @@ def run_command(directory):
             environment = dict(os.environ)
             environment.pop("fw_agentdir", None)
             environment.pop("fw_tmp", None)
-            process = subprocess.Popen(["/bin/bash", str(directory / "command.sh")], cwd=metadata["cwd"],
+            # The shell leads its own process group, so exec-stop can end the command without this supervisor.
+            process = subprocess.Popen(["/bin/bash", str(directory / "command.sh")], cwd=metadata["cwd"], start_new_session=True,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, env=environment)
             atomic_json(directory / "shell.json", {"pid": process.pid, "identity": identity(process.pid)})
             code = process.wait()
@@ -114,11 +117,15 @@ def start(request, cwd, state_dir):
         raise NotADirectoryError(errno.ENOTDIR, "Command working directory does not exist.")
     if not isinstance(request.get("command"), str) or not request["command"].strip():
         raise ValueError("Command must be a non-empty string.")
+    # Foxwarm sends env only to Nodes that declare execEnv: stored secret values for this command.
+    variables = request.get("env", {})
+    if not isinstance(variables, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in variables.items()):
+        raise ValueError("Command environment must map names to text.")
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     ref = str(uuid.uuid4())
     directory = state_dir / ref
     directory.mkdir(mode=0o700)
-    # The supervisor is independent of this request's Python and SSH processes.
+    # The supervisor is independent of this request's Python and transport processes.
     (directory / "runner.py").write_text(SOURCE, encoding="utf-8")
     cwd_path = shlex.quote(str(directory / "cwd.txt"))
     # Use a separately quoted trap body so target paths are shell data, never code.
@@ -129,14 +136,16 @@ def start(request, cwd, state_dir):
     (directory / "command.sh").write_text(script, encoding="utf-8")
     (directory / "output.log").touch(mode=0o600)
     atomic_json(directory / "launch.json", {"cwd": cwd})
+    # The values pass only through the supervisor's environment to the command, never to a file.
     process = subprocess.Popen([sys.executable, str(directory / "runner.py"), "--run", str(directory)],
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                               env=dict(os.environ, **variables))
     started = timestamp()
     atomic_json(directory / "process.json", {"pid": process.pid, "identity": identity(process.pid)})
     return {"ref": "process:" + ref, "outputPath": str(directory / "output.log"), "cwd": cwd, "startedAt": started, "pid": process.pid}
 
 
-def poll(request, state_dir):
+def job_directory(request, state_dir):
     reference = request["ref"]
     if not isinstance(reference, str) or not reference.startswith("process:"):
         raise ValueError("Invalid execution reference.")
@@ -146,7 +155,11 @@ def poll(request, state_dir):
             raise ValueError()
     except (ValueError, AttributeError):
         raise ValueError("Invalid execution reference.")
-    directory = state_dir / ref
+    return state_dir / ref
+
+
+def poll(request, state_dir):
+    directory = job_directory(request, state_dir)
     try:
         if (directory / "status.json").exists():
             return json.loads((directory / "status.json").read_text())
@@ -168,6 +181,38 @@ def poll(request, state_dir):
         return {"state": "lost", "reason": "Execution records are no longer available."}
 
 
+def stop(request, state_dir):
+    """Ends the command's process group: TERM, then KILL after graceMs. The supervisor still records its status."""
+    directory = job_directory(request, state_dir)
+    grace = request.get("graceMs", 5000)
+    if not isinstance(grace, int) or not 0 <= grace <= 60000:
+        raise ValueError("graceMs must be an integer from 0 to 60000.")
+    if (directory / "status.json").exists():
+        return {"state": "finished"}
+    try:
+        shell = json.loads((directory / "shell.json").read_text())
+    except FileNotFoundError:
+        if not (directory / "process.json").exists():
+            return {"state": "lost"}
+        raise ProcessLookupError(errno.ESRCH, "The command has not started yet.")
+    if not shell["identity"] or identity(shell["pid"]) != shell["identity"]:
+        return {"state": "finished"}
+    try:
+        os.killpg(shell["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        return {"state": "finished"}
+    deadline = time.monotonic() + grace / 1000
+    while time.monotonic() < deadline:
+        if (directory / "status.json").exists():
+            return {"state": "stopped"}
+        time.sleep(0.05)
+    try:
+        os.killpg(shell["pid"], signal.SIGKILL)
+    except ProcessLookupError:
+        return {"state": "stopped"}
+    return {"state": "killed"}
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "--run":
         run_command(sys.argv[2])
@@ -180,11 +225,20 @@ def main():
         if operation == "probe":
             if not os.path.isdir(cwd):
                 raise NotADirectoryError(errno.ENOTDIR, "Default working directory does not exist.")
+            if request.get("requireExec"):
+                # A newly created environment must be able to keep files and run commands.
+                state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if not os.access(cwd, os.W_OK) or not os.access(state_dir, os.W_OK):
+                    raise PermissionError(errno.EACCES, "Working or state directory is not writable.")
+                if not os.access("/bin/bash", os.X_OK):
+                    raise FileNotFoundError(errno.ENOENT, "/bin/bash is not available.")
             result = {"cwd": cwd}
         elif operation == "filesystem":
             result = filesystem(request, cwd)
         elif operation == "exec-start":
             result = start(request, cwd, state_dir)
+        elif operation == "exec-stop":
+            result = stop(request, state_dir)
         elif operation == "exec-poll":
             result = poll(request, state_dir)
         else:

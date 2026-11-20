@@ -199,12 +199,8 @@ internal sealed partial class SessionManager
         if (agentName is not null)
             AgentCatalog.ValidateName(agentName);
         var targetAgent =
-            create || !string.IsNullOrEmpty(agentName)
-                ? agentName
-                    ?? throw new InvalidDataException(
-                        "newAgentName is required when creating an Agent."
-                    )
-                : owner.Agent;
+            SessionCreationDefaults.MoveTargetAgent(agentName, create, owner.Agent)
+            ?? throw new InvalidDataException("newAgentName is required when creating an Agent.");
         if (purpose == IdentityMovePurpose.MoveSession && creator is not null)
             agents.RequireSessionTarget(creator.Agent, owner.Agent);
         if (
@@ -246,14 +242,6 @@ internal sealed partial class SessionManager
         )
             throw new InvalidDataException(
                 "Destination Agent already exists or its directory is reserved."
-            );
-        if (
-            purpose == IdentityMovePurpose.MoveSession
-            && owner.Agent != targetAgent
-            && (Isolation(owner.Agent).Isolated || !create && Isolation(targetAgent).Isolated)
-        )
-            throw new InvalidDataException(
-                "Isolated Agents cannot move sessions across Agent boundaries."
             );
         ValidateExecutionEnvironment(
             owner.Entry.Snapshot().AuthorityEnvelope,

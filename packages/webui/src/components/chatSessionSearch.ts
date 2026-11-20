@@ -1,4 +1,4 @@
-import { getSessionNotice } from '../sessionNotices'
+import { getImageGenerationNotice, getSessionNotice } from '../sessionNotices'
 import type { TimelineView } from '../chatPreferences'
 import type { Message } from './chatShared'
 import { formatStructuredSystemText, isInternalTimelineMessage, getLlmErrorMessageDetails, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
@@ -65,7 +65,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
   })
   const input = { ...display, messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, historyMessages: messages, currentHistoryMessages, expandedGroupKeys: new Set<string>() }
   const initial = buildTimelineRows(input, null)
-  // The normal collapsed render omits whole Event/Goal reminder rows inside groups.
+  // The normal collapsed render omits whole Event/Goal/Task reminder rows inside groups.
   // Reuse the same row builder in data-only expanded mode so their own row/group keys survive.
   const groupKeys = new Set(initial.rows.filter(row => row.group?.summaryItems.length && !row.group.keepExpanded).map(row => row.group!.key))
   const rows = timelineView !== 'conversation' && groupKeys.size
@@ -121,6 +121,11 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
       ? msg.parts.findIndex(part => typeof part.text === 'string' && part.text.trim()) : -1
     msg.parts.forEach((part, index) => {
       if (row.conversationPartIndex !== undefined && index !== row.conversationPartIndex) return
+      const imageFailure = msg.role === 'model' ? getImageGenerationNotice(part) : null
+      if (imageFailure) {
+        add('model', index, [imageFailure.title + ': ' + imageFailure.summary, imageFailure.details || ''].join('\u0000'))
+        return
+      }
       if (timelineView !== 'conversation' && isReasoningPart(part)) add('reasoning', index, markdownText(getReasoningText(part), false))
       if (!row.conversationImageOnly && msg.role === 'model' && part.text && (timelineView !== 'conversation' || (!part.toolUseId && !part.functionResponse))) {
         add(index === ctxIndex ? 'ctx' : 'model', index,
@@ -131,7 +136,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     if (row.pairedToolResponse) {
       getGroupedToolEntries(msg, row.pairedToolResponse, rowKey).forEach((entry, toolIndex) => {
         if (entry.call) add('call', toolIndex, getToolCallSearchText(entry.call), toolIndex)
-        entry.responses.forEach((response, responseIndex) => add('response', responseIndex, getToolResponseSearchText(response), toolIndex, responseIndex))
+        entry.responses.forEach((response, responseIndex) => add('response', responseIndex, getToolResponseSearchText(response, entry.call), toolIndex, responseIndex))
       })
     } else {
       msg.parts.flatMap(part => part.functionCall ? [part.functionCall] : []).forEach((call, index) => {

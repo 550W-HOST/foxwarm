@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
-using YamlDotNet.Serialization;
 
 namespace Foxwarm;
 
@@ -25,6 +24,11 @@ internal sealed record SkillInfo(
 // Knowledge discovery only: entry documents are loaded on demand, never executable tool registration.
 internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
 {
+    // The Agent whose skills the skill tool reads: agentName, trimmed, else the caller's. The
+    // handler and the operation plan (`skill-agent`) both use it.
+    internal static string RequestedAgent(string? agentName, string callerAgent) =>
+        string.IsNullOrWhiteSpace(agentName) ? callerAgent : agentName.Trim();
+
     private static readonly HashSet<string> Skip = new(StringComparer.Ordinal)
     {
         ".git",
@@ -232,7 +236,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         var match = FrontMatter().Match(content);
         if (match.Success)
         {
-            var data = new DeserializerBuilder().Build().Deserialize<object>(match.Groups[1].Value);
+            var data = FrontMatterYaml.Parse(match.Groups[1].Value);
             if (
                 data is IDictionary map
                 && map["description"] is string description

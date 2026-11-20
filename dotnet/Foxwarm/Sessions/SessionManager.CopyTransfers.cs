@@ -1,0 +1,471 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
+using Foxwarm.Nodes;
+using Foxwarm.Tools;
+
+namespace Foxwarm.Sessions;
+
+internal sealed partial class SessionManager
+{
+    private sealed class CopyTransfer(
+        SessionOwner owner,
+        string source,
+        string sourcePath,
+        string target,
+        string targetPath,
+        bool overwrite,
+        ToolApprovalScope? approval,
+        CancellationToken shutdown,
+        string currentNode,
+        string? currentCwd
+    )
+    {
+        internal readonly string Id = "transfer_" + Guid.NewGuid().ToString("N");
+        internal readonly SessionOwner Owner = owner;
+        internal readonly string Source = source;
+        internal readonly string SourcePath = sourcePath;
+        internal readonly string Target = target;
+        internal readonly string TargetPath = targetPath;
+        internal readonly bool Overwrite = overwrite;
+
+        // The invocation's Node and Session working directory. A relative path on this Node
+        // resolves against the working directory; on any other Node, against its default.
+        internal readonly string CurrentNode = currentNode;
+        internal readonly string? CurrentCwd = currentCwd;
+
+        // The approved invocation's grant; the transfer task does not inherit the caller's flow.
+        internal readonly ToolApprovalScope? Approval = approval;
+        internal readonly CancellationTokenSource Stop =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                owner.Entry.IdentityLossToken,
+                shutdown
+            );
+        internal readonly TaskCompletionSource<bool> Background = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        internal readonly Stopwatch Clock = Stopwatch.StartNew();
+        internal long Size = -1;
+        internal long Copied;
+        internal Task<JsonObject> Work = null!;
+        internal Task Observer = null!;
+        internal bool HandedOff;
+    }
+
+    private sealed record CompletedCopy(string Id, string Status, long? Size, string? Sha256);
+
+    private readonly object copyGate = new();
+    private readonly Dictionary<string, CopyTransfer> copies = new(StringComparer.Ordinal);
+    private readonly ConditionalWeakTable<SessionOwner, Queue<CompletedCopy>> recentCopies = new();
+
+    internal async Task<JsonObject> CopyBetweenNodesAsync(
+        SessionOwner owner,
+        JsonObject args,
+        CancellationToken token,
+        string? currentNode = null,
+        string? currentCwd = null
+    )
+    {
+        ToolRegistry.Keys(
+            args,
+            ["sourceNode", "sourcePath", "targetNode", "targetPath", "overwrite", "timeout"]
+        );
+        string Required(string key) =>
+            ToolRegistry.Text(args, key) is { } value && !string.IsNullOrWhiteSpace(value)
+                ? value
+                : throw new InvalidDataException("copy_between_nodes requires " + key + ".");
+        var source = Required("sourceNode").Trim();
+        var target = Required("targetNode").Trim();
+        var sourcePath = Required("sourcePath");
+        var targetPath = Required("targetPath");
+        var overwrite = OptionalBool(args, "overwrite") ?? false;
+        var (seconds, warning) = ExecOutput.Timeout(args["timeout"]);
+        token.ThrowIfCancellationRequested();
+        // The tool executor supplies the invocation's captured placement; a direct caller
+        // gets the Session's live one.
+        var live = ExecutionPlacement(owner);
+        var transfer = new CopyTransfer(
+            owner,
+            source,
+            sourcePath,
+            target,
+            targetPath,
+            overwrite,
+            ToolApprovalScope.Detach(owner),
+            admissionStop.Token,
+            currentNode ?? live.Node,
+            currentNode is null ? live.Cwd : currentCwd
+        );
+        var copiedArgs = (JsonObject)args.DeepClone();
+        lock (copyGate)
+        {
+            copies.Add(transfer.Id, transfer);
+            using (ExecutionContext.SuppressFlow())
+                transfer.Work = Task.Run(() => CopyTransferCoreAsync(transfer, copiedArgs));
+            transfer.Observer = ObserveCopyTransferAsync(transfer);
+        }
+        using var delayStop = new CancellationTokenSource();
+        var delay = Task.Delay(TimeSpan.FromSeconds(seconds), delayStop.Token);
+        var interrupted = Task.Delay(Timeout.InfiniteTimeSpan, token);
+        await Task.WhenAny(transfer.Work, delay, interrupted);
+        bool background;
+        lock (copyGate)
+        {
+            background = !transfer.Work.IsCompleted;
+            transfer.HandedOff = background;
+            transfer.Background.TrySetResult(background);
+        }
+        delayStop.Cancel();
+        if (!background)
+        {
+            var result = (JsonObject)(await transfer.Work).DeepClone();
+            if (warning is not null)
+                result["warning"] = warning;
+            return result;
+        }
+        var copied = Interlocked.Read(ref transfer.Copied);
+        var size = Interlocked.Read(ref transfer.Size);
+        var running = new JsonObject
+        {
+            ["transferId"] = transfer.Id,
+            ["bytesCopied"] = copied,
+            ["sizeBytes"] = size < 0 ? null : JsonValue.Create(size),
+            ["elapsed"] = transfer.Clock.Elapsed.TotalSeconds,
+            ["note"] = "Copy continues in the background; its completion is reported as an event.",
+        };
+        if (warning is not null)
+            running["warning"] = warning;
+        return running;
+    }
+
+    private async Task<JsonObject> CopyTransferCoreAsync(CopyTransfer transfer, JsonObject args)
+    {
+        var owner = transfer.Owner;
+        var token = transfer.Stop.Token;
+        TransferSource? source = null;
+        TransferStartStream? start = null;
+        Task<(string Path, string Sha256)>? writing = null;
+        using var approval = ToolApprovalScope.Enter(transfer.Approval);
+        try
+        {
+            using (BeginOwnerMutation(owner))
+            {
+                var files = IdentityWorkspace(
+                    owner,
+                    transfer.CurrentCwd,
+                    transfer.CurrentNode,
+                    useLiveCwd: false
+                );
+                string? CwdOn(string node) =>
+                    node == transfer.CurrentNode ? transfer.CurrentCwd : null;
+                await AuthorizeToolAsync(
+                    owner,
+                    new("copy_between_nodes", "builtin", "copy_between_nodes", args),
+                    files,
+                    token
+                );
+                source = await OpenNodeReadAsync(
+                    owner,
+                    transfer.Source,
+                    transfer.SourcePath,
+                    files,
+                    token,
+                    CwdOn(transfer.Source)
+                );
+                Interlocked.Exchange(ref transfer.Size, source.Length);
+                start = new TransferStartStream(source.Stream);
+                writing = WriteNodeStreamAsync(
+                    owner,
+                    transfer.Target,
+                    transfer.TargetPath,
+                    start,
+                    source.Length,
+                    transfer.Overwrite,
+                    files,
+                    token,
+                    value => Interlocked.Exchange(ref transfer.Copied, value),
+                    CwdOn(transfer.Target)
+                );
+                var first = await Task.WhenAny(start.Ready.Task, writing);
+                if (ReferenceEquals(first, writing))
+                    await writing;
+            }
+            start.Release();
+            var result = await writing!;
+            return new JsonObject
+            {
+                ["sourceNode"] = transfer.Source,
+                ["sourcePath"] = transfer.SourcePath,
+                ["targetNode"] = transfer.Target,
+                ["fullPath"] = result.Path,
+                ["sizeBytes"] = source.Length,
+                ["sha256"] = result.Sha256,
+            };
+        }
+        finally
+        {
+            start?.Release();
+            if (source is not null)
+                await source.DisposeAsync();
+        }
+    }
+
+    private async Task ObserveCopyTransferAsync(CopyTransfer transfer)
+    {
+        JsonObject? result = null;
+        Exception? failure = null;
+        try
+        {
+            result = await transfer.Work;
+        }
+        catch (Exception error)
+        {
+            failure = error;
+        }
+        var background = await transfer.Background.Task;
+        if (background && Accepting && !IsDeletionClaimed(transfer.Owner.Id))
+        {
+            var details = new JsonObject
+            {
+                ["transferId"] = transfer.Id,
+                ["sourceNode"] = transfer.Source,
+                ["sourcePath"] = transfer.SourcePath,
+                ["targetNode"] = transfer.Target,
+                ["targetPath"] = transfer.TargetPath,
+                ["sizeBytes"] =
+                    Interlocked.Read(ref transfer.Size) < 0
+                        ? null
+                        : JsonValue.Create(Interlocked.Read(ref transfer.Size)),
+                ["bytesCopied"] = Interlocked.Read(ref transfer.Copied),
+                ["status"] =
+                    failure is null ? "completed"
+                    : transfer.Stop.IsCancellationRequested ? "cancelled"
+                    : "failed",
+                ["sha256"] = result?["sha256"]?.DeepClone(),
+                ["error"] = failure?.Message,
+            };
+            if (failure is not null)
+                details["targetEffect"] = NodeProviders.IsProviderNode(transfer.Target)
+                    ? "The destination may retain a partial file."
+                    : "An incomplete body is not published; a completed body may already have been published.";
+            var message =
+                "<foxwarm-system kind=\"event\" type=\"background-transfer-finished\">\n"
+                + details.ToJsonText()
+                + "\n</foxwarm-system>";
+            await CommitBackgroundEventAsync(transfer.Owner, transfer.Id, message);
+        }
+        lock (copyGate)
+        {
+            copies.Remove(transfer.Id);
+            if (background && Accepting && !transfer.Owner.Entry.Retired)
+            {
+                var recent = recentCopies.GetOrCreateValue(transfer.Owner);
+                var status =
+                    failure is null ? "completed"
+                    : transfer.Stop.IsCancellationRequested ? "cancelled"
+                    : "failed";
+                var size = Interlocked.Read(ref transfer.Size);
+                recent.Enqueue(
+                    new CompletedCopy(
+                        transfer.Id,
+                        status,
+                        size < 0 ? null : size,
+                        SessionWait.Text(result?["sha256"])
+                    )
+                );
+                if (recent.Count > 32)
+                    recent.Dequeue();
+            }
+        }
+        transfer.Stop.Dispose();
+    }
+
+    /// <summary>
+    /// Queues the completion event of Main-owned background work (a copy or a detached
+    /// ToolScript run) for its owner, keyed by its wait ID, and wakes an idle owner. Nothing is
+    /// queued during shutdown or deletion; an identity move in progress is waited out.
+    /// </summary>
+    private async Task CommitBackgroundEventAsync(
+        SessionOwner owner,
+        string id,
+        string message,
+        string? eventId = null
+    )
+    {
+        try
+        {
+            while (Accepting && !IsDeletionClaimed(owner.Id))
+            {
+                await WaitForIdentityMutationAsync(owner.Id);
+                try
+                {
+                    using var admission = BeginOwnerMutation(owner);
+                    var admitted = eventId is null
+                        ? await owner.Entry.SaveLane.CommitBackgroundExecCompletionAsync(
+                            id,
+                            message
+                        )
+                        : await owner.Entry.SaveLane.CommitRemoteExecCompletionAsync(
+                            id,
+                            message,
+                            eventId
+                        );
+                    if (admitted)
+                        WakeNodeEventOwner(owner);
+                    break;
+                }
+                catch (InvalidOperationException) when (IdentityMovePending(owner.Id)) { }
+            }
+        }
+        catch (Exception error)
+        {
+            owner.Entry.RecordBackgroundProcessorFailure(error);
+        }
+    }
+
+    private bool IdentityMovePending(string id)
+    {
+        lock (lifecycle)
+            return identityMoveClaims.ContainsKey(id);
+    }
+
+    internal async Task<JsonObject> CancelCopyTransferAsync(
+        SessionOwner owner,
+        JsonObject args,
+        CancellationToken token
+    )
+    {
+        ToolRegistry.Keys(args, ["transferId"]);
+        var id = ToolRegistry.Text(args, "transferId");
+        if (string.IsNullOrWhiteSpace(id))
+            throw new InvalidDataException("cancel_transfer requires transferId.");
+        token.ThrowIfCancellationRequested();
+        CopyTransfer? transfer;
+        lock (copyGate)
+        {
+            transfer = copies.GetValueOrDefault(id);
+            if (transfer is null && recentCopies.TryGetValue(owner, out var recent))
+            {
+                var completed = recent.FirstOrDefault(item => item.Id == id);
+                if (completed is not null)
+                    return new JsonObject
+                    {
+                        ["transferId"] = completed.Id,
+                        ["status"] = completed.Status,
+                        ["sizeBytes"] = completed.Size,
+                        ["sha256"] = completed.Sha256,
+                    };
+            }
+            if (transfer is null || !ReferenceEquals(transfer.Owner, owner) || !transfer.HandedOff)
+                throw new InvalidDataException(
+                    "No background copy with that transfer ID belongs to this Session, or it has already finished."
+                );
+        }
+        if (transfer.Work.IsCompleted)
+            return await CompletedCopyReceiptAsync(transfer);
+        try
+        {
+            transfer.Stop.Cancel();
+        }
+        catch (ObjectDisposedException) { }
+        if (transfer.Work.IsCompleted)
+            return await CompletedCopyReceiptAsync(transfer);
+        return new JsonObject { ["transferId"] = id, ["status"] = "cancelling" };
+    }
+
+    private static async Task<JsonObject> CompletedCopyReceiptAsync(CopyTransfer transfer)
+    {
+        try
+        {
+            return (JsonObject)(await transfer.Work).DeepClone();
+        }
+        catch (Exception error)
+        {
+            return new JsonObject
+            {
+                ["transferId"] = transfer.Id,
+                ["status"] = transfer.Stop.IsCancellationRequested ? "cancelled" : "failed",
+                ["reason"] = error.Message,
+            };
+        }
+    }
+
+    private async Task RetireCopyTransfersAsync(SessionOwner owner)
+    {
+        CopyTransfer[] active;
+        lock (copyGate)
+            active = copies.Values.Where(item => ReferenceEquals(item.Owner, owner)).ToArray();
+        foreach (var transfer in active)
+        {
+            try
+            {
+                transfer.Stop.Cancel();
+            }
+            catch (ObjectDisposedException) { }
+        }
+        await Task.WhenAll(active.Select(item => item.Observer));
+        lock (copyGate)
+            recentCopies.Remove(owner);
+    }
+
+    private async Task DrainCopyTransfersAsync()
+    {
+        CopyTransfer[] active;
+        lock (copyGate)
+            active = copies.Values.ToArray();
+        await Task.WhenAll(active.Select(item => item.Observer));
+    }
+
+    private bool HasCopyTransfer(SessionOwner owner, string id)
+    {
+        lock (copyGate)
+            return copies.TryGetValue(id, out var transfer)
+                && transfer.HandedOff
+                && ReferenceEquals(owner, transfer.Owner);
+    }
+
+    private sealed class TransferStartStream(Stream inner) : Stream
+    {
+        internal readonly TaskCompletionSource Ready = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly TaskCompletionSource release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal void Release() => release.TrySetResult();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken token = default
+        )
+        {
+            Ready.TrySetResult();
+            await release.Task.WaitAsync(token);
+            return await inner.ReadAsync(buffer, token);
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override void Flush() { }
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+    }
+}

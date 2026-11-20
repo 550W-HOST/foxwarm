@@ -68,7 +68,7 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                 body.Write(bytes, 0, count);
             }
             var message =
-                JsonSerializer.Deserialize<JsonRpcMessage>(
+                JsonData.Deserialize<JsonRpcMessage>(
                     body.ToArray(),
                     McpJsonUtilities.DefaultOptions
                 ) ?? throw new JsonException();
@@ -111,8 +111,8 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                                 .ToArray()
                         );
                         return ValueTask.FromResult(
-                            JsonSerializer.Deserialize<ListToolsResult>(
-                                new JsonObject { ["tools"] = declarations }.ToJsonString(),
+                            JsonData.Deserialize<ListToolsResult>(
+                                new JsonObject { ["tools"] = declarations }.ToJsonText(),
                                 McpJsonUtilities.DefaultOptions
                             )!
                         );
@@ -139,7 +139,7 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                             )
                         )(name, args, operation.Token);
                         if (
-                            System.Text.Encoding.UTF8.GetByteCount(rawResult.ToJsonString())
+                            System.Text.Encoding.UTF8.GetByteCount(rawResult.ToJsonText())
                             > McpInboundHttp.MaxResultBytes
                         )
                             rawResult = McpInboundCatalog.Error(
@@ -217,6 +217,9 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
             .Select(p => p["functionResponse"]?["response"])
             .FirstOrDefault(p => p is not null);
         var result = McpInboundCatalog.Result(response?.DeepClone());
+        // The CLI's model reads the text block: the same text other providers and the WebUI show.
+        if (response is not JsonObject { } raw || raw["content"] is not JsonArray)
+            result["content"]![0]!["text"] = Foxwarm.Tools.ToolResponseFormatting.Format(response);
         if (response is JsonObject value && value["error"] is not null)
             result["isError"] = true;
         var content = result["content"]!.AsArray();

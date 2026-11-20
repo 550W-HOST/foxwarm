@@ -76,6 +76,29 @@ internal static class AskUserToolDefinitions
                                     ["description"] =
                                         "Allow the user to choose more than one option.",
                                 },
+                                ["secret"] = new JsonObject
+                                {
+                                    ["type"] = "object",
+                                    ["description"] =
+                                        "Ask the user for a credential instead of offering options. The user enters it in the WebUI, where it is stored under this new secret name, owned by your Agent; you receive only confirmation that it was stored. Configuration can then refer to it as `${secret:NAME}`. Questions in the same call that include a secret question can be answered only in the WebUI, not from a channel.",
+                                    ["additionalProperties"] = false,
+                                    ["required"] = new JsonArray("name"),
+                                    ["properties"] = new JsonObject
+                                    {
+                                        ["name"] = new JsonObject
+                                        {
+                                            ["type"] = "string",
+                                            ["description"] =
+                                                "New secret name: 1-64 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit.",
+                                        },
+                                        ["description"] = new JsonObject
+                                        {
+                                            ["type"] = "string",
+                                            ["description"] =
+                                                "Optional one-line description shown in Setup and `list_secrets`.",
+                                        },
+                                    },
+                                },
                             },
                         },
                     },

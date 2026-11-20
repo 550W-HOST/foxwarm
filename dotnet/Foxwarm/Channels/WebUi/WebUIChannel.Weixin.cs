@@ -34,11 +34,13 @@ internal sealed partial class WebUIChannel
                     result["baseUrl"] = settings.BaseUrl;
                     result["routeTag"] = settings.RouteTag;
                     result["botType"] = settings.BotType;
-                    return Results.Ok(result);
+                    return Results.Ok(JsonData.WebNode(result));
                 }
                 catch (Exception error)
                 {
-                    return Results.BadRequest(new { error = configuration.SafeAppError(error) });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = configuration.SafeAppError(error) }
+                    );
                 }
             }
         );
@@ -73,11 +75,13 @@ internal sealed partial class WebUIChannel
                     result["message"] = login.Message;
                     if (login.Connected)
                         result["userId"] = login.UserId;
-                    return Results.Ok(result);
+                    return Results.Ok(JsonData.WebNode(result));
                 }
                 catch (Exception error)
                 {
-                    return Results.BadRequest(new { error = configuration.SafeAppError(error) });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = configuration.SafeAppError(error) }
+                    );
                 }
             }
         );

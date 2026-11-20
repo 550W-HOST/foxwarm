@@ -24,11 +24,16 @@ if [ "$1" = --inspect-upgrade ]; then
   exit
 fi
 data="$(cat "$root/data_dir")"
+if [ -e "$root/fake-bind-failure" ]; then
+  echo "Main fatal startup failure at host start: IOException / AddressInUseException / AddressAlreadyInUse" >&2
+  exit 1
+fi
 mkdir -p "$data/state"
 printf fixture-token > "$data/state/token"
 echo $$ > "$root/main.pid"
 echo "fixture stdout $$"
 echo "fixture stderr $$" >&2
+echo "Main HTTP listening: http://0.0.0.0:3001"
 [ -e "$root/fake-ignore-term" ] && trap '' TERM || trap 'exit 0' TERM
 while :; do sleep 0.1; done
 `;
@@ -47,8 +52,11 @@ function fixture(t) {
   delete env.TMUX;
   delete env.FOXWARM_DATA_DIR;
   delete env.FOXWARM_DIR;
-  function makePackage(version, { stopSeconds } = {}) {
-    const work = path.join(root, `package-${version}`);
+  // Native is the current Linux package; self-contained is the retired one older
+  // installations still use.
+  function makePackage(version, { stopSeconds, variant = 'native' } = {}) {
+    const suffix = variant === 'native' ? '-native' : '-self-contained';
+    const work = path.join(root, `package-${version}${suffix}`);
     const payload = path.join(work, `foxwarm-${version}-linux-x64`);
     fs.mkdirSync(payload, { recursive: true });
     fs.writeFileSync(path.join(payload, 'Foxwarm'), fakeMain, { mode: 0o755 });
@@ -56,10 +64,10 @@ function fixture(t) {
     if (stopSeconds) control = control.replace('STOP_SECONDS=60', `STOP_SECONDS=${stopSeconds}`);
     fs.writeFileSync(path.join(payload, 'foxwarmctl'), control, { mode: 0o755 });
     fs.writeFileSync(path.join(payload, 'release.json'), JSON.stringify({
-      version, target: 'linux-x64-self-contained', kind: 'server', rid: 'linux-x64', selfContained: true,
-      asset: 'foxwarm-linux-x64-self-contained.tar.gz',
+      version, target: `linux-x64${suffix}`, kind: 'server', rid: 'linux-x64', selfContained: true,
+      ...(variant === 'native' ? { native: true } : {}), asset: `foxwarm-linux-x64${suffix}.tar.gz`,
     }, null, 2) + '\n');
-    const file = path.join(root, `foxwarm-${version}.tar.gz`);
+    const file = path.join(root, `foxwarm-${version}${variant === 'native' ? '' : suffix}.tar.gz`);
     const tar = spawnSync('tar', ['-czf', file, '-C', work, path.basename(payload)]);
     assert.equal(tar.status, 0, String(tar.stderr));
     return file;
@@ -84,7 +92,7 @@ function fixture(t) {
     fs.mkdirSync(bin);
     // Only the tools used by the control script and fixture Main, deliberately no tmux.
     for (const name of ['awk', 'bash', 'basename', 'cat', 'cp', 'date', 'dirname', 'env',
-      'gzip', 'ln', 'mkdir', 'mktemp', 'mv', 'nohup', 'ps', 'rm', 'sed', 'sleep', 'tar', 'uname', checksum]) {
+      'gzip', 'ln', 'mkdir', 'mktemp', 'mv', 'nohup', 'ps', 'rm', 'sed', 'sleep', 'tail', 'tar', 'uname', 'wc', checksum]) {
       const executable = spawnSync('/bin/bash', ['-c', 'command -v "$1"', 'bash', name], { encoding: 'utf8' }).stdout.trim();
       assert(executable, `${name} must be available for the fixture`);
       fs.symlinkSync(executable, path.join(bin, name));
@@ -114,6 +122,9 @@ function mainWindow(f) {
 }
 
 const panePids = f => mainWindow(f).map(pane => Number(pane.split(' ')[1]));
+
+// PID of the fixture's private tmux server.
+const tmuxServerPid = f => Number(f.tmux('display-message', '-p', '#{pid}'));
 
 function ok(result) {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -286,34 +297,18 @@ test('an exited Main pane is restarted in place or removed', linux, t => {
   const dir = path.join(f.root, 'foxwarm');
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
   ok(f.control(dir, 'start'));
-  const initialPane = mainWindow(f)[0];
-  const [pane, panePid] = initialPane.split(' ');
-  const killedPid = mainPid(dir);
-  process.kill(killedPid, 'SIGKILL');
-  // tmux can mark the pane dead when its terminal closes, before it reaps the process and
-  // records how it ended. Wait for that record, which the status line reports.
-  let lastSignal;
-  try {
-    waitFor(() => {
-      lastSignal = f.tmux('display-message', '-p', '-t', pane, '#{pane_dead_signal}');
-      return lastSignal === '9';
-    });
-  } catch (error) {
-    // Capture the failed condition before fixture cleanup destroys the pane. Keep
-    // command failures as evidence rather than masking the original assertion.
-    const output = result => ({ status: result.status, signal: result.signal,
-      error: result.error?.message, stdout: result.stdout, stderr: result.stderr });
-    t.diagnostic(JSON.stringify({
-      initialPane, killedPid, killedProcessState: processState(killedPid), lastSignal,
-      tmuxVersion: output(f.run('tmux', ['-V'])),
-      panes: output(f.run('tmux', ['list-panes', '-a', '-F',
-        '#{pane_id}|#{pane_pid}|#{pane_dead}|#{pane_dead_signal}|#{pane_dead_status}|#{pane_current_command}|#{pane_current_path}'])),
-      processes: output(f.run('ps', ['-ww', '-o', 'pid,ppid,pgid,sid,stat,args', '-p', `${killedPid},${panePid}`])),
-      status: output(f.control(dir, 'status')),
-      terminal: output(f.run('tmux', ['capture-pane', '-p', '-t', pane])),
-    }, null, 2));
-    throw error;
-  }
+  const [pane] = mainWindow(f)[0].split(' ');
+  const killed = mainPid(dir);
+  process.kill(killed, 'SIGKILL');
+  // tmux records how a pane ended only when SIGCHLD makes it reap the process. tmux 3.4 and
+  // 3.5 built with utempter (as packaged by Ubuntu) can lose that signal: the terminal closes
+  // first, and the process exits while tmux runs the utempter helper with default SIGCHLD
+  // handling, leaving a dead pane over an unreaped zombie. tmux 3.6 then signals itself; do
+  // the same for this private server once the pane is dead and the process has exited. The
+  // unreaped case itself is covered by the next test.
+  waitFor(() => !alive(killed) && f.tmux('display-message', '-p', '-t', pane, '#{pane_dead}') === '1');
+  process.kill(tmuxServerPid(f), 'SIGCHLD');
+  waitFor(() => f.tmux('display-message', '-p', '-t', pane, '#{pane_dead_signal}') === '9');
   const exited = f.control(dir, 'status');
   assert.equal(exited.status, 3);
   assert.match(exited.stdout, /Exited with signal 9/);
@@ -327,6 +322,48 @@ test('an exited Main pane is restarted in place or removed', linux, t => {
   ok(f.control(dir, 'stop'));
   assert.equal(f.run('tmux', ['has-session', '-t', '=release-fixture']).status, 1);
   assert.equal(f.control(dir, 'status').status, 3);
+});
+
+test('a crashed Main that tmux has not reaped is reported exited, then restarted or removed', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  // A tmux server keeps the signal mask of the client that starts it (Node children get an
+  // empty one). With SIGCHLD blocked it never reaps, so a crash stays a dead pane over a
+  // zombie with no exit record, the state a lost SIGCHLD leaves on a real server.
+  ok(f.run('/usr/bin/python3', ['-c', `
+import os, signal, sys
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCHLD})
+os.execvp(sys.argv[1], sys.argv[1:])
+`, 'tmux', 'new-session', '-d', '-s', 'user', '-c', f.root, 'sleep 600']));
+  const blocked = fs.readFileSync(`/proc/${tmuxServerPid(f)}/status`, 'utf8').match(/^SigBlk:\s*([0-9a-f]+)$/m);
+  assert(blocked && (BigInt(`0x${blocked[1]}`) >> BigInt(os.constants.signals.SIGCHLD - 1)) & 1n,
+    'The fixture tmux server must block SIGCHLD.');
+
+  ok(f.control(dir, 'start'));
+  const [pane] = mainWindow(f)[0].split(' ');
+  const crashed = mainPid(dir);
+  process.kill(crashed, 'SIGKILL');
+  const unreaped = pid => processState(pid) === 'Z'
+    && f.tmux('display-message', '-p', '-t', pane, '#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}') === '1||';
+  waitFor(() => unreaped(crashed));
+  const exited = f.control(dir, 'status');
+  assert.equal(exited.status, 3);
+  assert.match(exited.stdout, /^\[foxwarm\] Exited\. Inspect it with/);
+
+  ok(f.control(dir, 'restart'));
+  const restarted = mainPid(dir);
+  assert(alive(restarted));
+  assert.deepEqual(mainWindow(f), [`${pane} ${restarted}`], 'Main restarts in its own pane.');
+  assert.equal(processState(crashed), 'Z', 'The crashed Main is still unreaped.');
+
+  process.kill(restarted, 'SIGKILL');
+  waitFor(() => unreaped(restarted));
+  ok(f.control(dir, 'stop'));
+  assert.deepEqual(mainWindow(f), []);
+  const stopped = f.control(dir, 'status');
+  assert.equal(stopped.status, 3);
+  assert.match(stopped.stdout, /Not running/);
 });
 
 test('an installation reached through a symlink recognizes its Main', linux, t => {
@@ -480,15 +517,17 @@ test('downloaded updates verify checksums with shasum when sha256sum is unavaila
   const dir = path.join(f.root, 'foxwarm');
   const next = f.makePackage('0.9.1');
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
-  const asset = 'foxwarm-linux-x64-self-contained.tar.gz';
+  const asset = 'foxwarm-linux-x64-native.tar.gz';
   const sum = require('node:crypto').createHash('sha256').update(fs.readFileSync(next)).digest('hex');
   fs.writeFileSync(path.join(f.root, 'SHA256SUMS'), `${sum}  ${asset}\n`);
   const bin = f.withoutTmux({ checksum: 'shasum' });
   // Replace network transport only; the control script runs the real checksum tools.
   fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/bash
-case "$6" in
-  */SHA256SUMS) cp '${f.root}/SHA256SUMS' "$5" ;;
-  *) cp '${next}' "$5" ;;
+url="\${@: -1}"; out=""
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+case "$url" in
+  */SHA256SUMS) cp '${f.root}/SHA256SUMS' "$out" ;;
+  *) cp '${next}' "$out" ;;
 esac
 `, { mode: 0o755 });
   ok(f.control(dir, 'update'));
@@ -498,4 +537,151 @@ esac
   assert.equal(invalid.status, 1);
   assert.match(invalid.stderr, /Checksum verification failed/);
   assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
+});
+
+test('start reports a port conflict and leaves nothing running when Main cannot bind', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  fs.writeFileSync(path.join(dir, 'fake-bind-failure'), '');
+  fs.mkdirSync(path.join(f.root, 'foxwarm-data/state'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'bot:\n  httpPort: 3456\n');
+  const tmux = f.control(dir, 'start');
+  assert.equal(tmux.status, 1);
+  assert.match(tmux.stderr, /port 3456 is already in use/);
+  assert.doesNotMatch(tmux.stdout, /Started/);
+
+  f.withoutTmux();
+  const background = f.control(dir, 'start');
+  assert.equal(background.status, 1);
+  assert.match(background.stderr, /port 3456 is already in use/);
+  assert.doesNotMatch(background.stdout, /Started/);
+});
+
+test('restart checks that Main can be launched before stopping the running one', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  ok(f.control(dir, 'start'));
+  const running = mainPid(dir);
+  const release = path.join(dir, 'runtime/current/release.json');
+  fs.writeFileSync(release, fs.readFileSync(release, 'utf8').replace('"selfContained": true', '"selfContained": false'));
+  f.withoutTmux();
+  const restarted = f.control(dir, 'restart');
+  assert.equal(restarted.status, 1);
+  assert.match(restarted.stderr, /dotnet on PATH/);
+  assert(alive(running), 'The running Main must not be stopped when it could not be started again.');
+  fs.writeFileSync(release, fs.readFileSync(release, 'utf8').replace('"selfContained": false', '"selfContained": true'));
+  ok(f.control(dir, 'stop'));
+});
+
+test('rerunning the installer on a stopped installation prints the sign-in link', linux, t => {
+  const f = fixture(t);
+  const pkg = f.makePackage('0.9.0');
+  ok(f.install(['--package', pkg]));
+  ok(f.control(path.join(f.root, 'foxwarm'), 'stop'));
+  const rerun = ok(f.install(['--package', pkg]));
+  assert.match(rerun.stdout, /already installed/);
+  assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  // A specific listen address is the only one Main answers on.
+  for (const [host, shown] of [['127.0.0.1', '127.0.0.1'], ["'::1'", '[::1]'], ['0.0.0.0', 'localhost']]) {
+    fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), `bot:\n  httpPort: 3005\n  httpHost: ${host}\n`);
+    assert.match(ok(f.install(['--package', pkg])).stdout, new RegExp(`WebUI: http://${shown.replace(/[[\].]/g, '\\$&')}:3005/#token=fixture-token`));
+  }
+});
+
+// Serves release downloads from a directory of named assets and records each request.
+function releaseServer(f, assets) {
+  const bin = path.join(f.root, 'release-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/bash
+url="\${@: -1}"; out=""
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+echo "$url" >> '${f.root}/downloads'
+if [ -f '${assets}'/"\${url##*/}" ]; then cp '${assets}'/"\${url##*/}" "$out"; printf 200; else printf 404; fi
+`, { mode: 0o755 });
+  const sums = fs.readdirSync(assets).filter(name => name.endsWith('.tar.gz')).map(name =>
+    `${require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(assets, name))).digest('hex')}  ${name}`);
+  fs.writeFileSync(path.join(assets, 'SHA256SUMS'), sums.join('\n') + '\n');
+  return { env: { PATH: `${bin}:${process.env.PATH}` }, downloads: () => fs.readFileSync(path.join(f.root, 'downloads'), 'utf8').trim().split('\n') };
+}
+
+function publishedAssets(f, version) {
+  const assets = path.join(f.root, `release-${version}`);
+  fs.mkdirSync(assets);
+  fs.copyFileSync(f.makePackage(version), path.join(assets, 'foxwarm-linux-x64-native.tar.gz'));
+  return assets;
+}
+
+const installedAsset = dir => JSON.parse(fs.readFileSync(path.join(dir, 'runtime/current/release.json'), 'utf8')).asset;
+
+test('a fresh Linux install downloads the native package', linux, t => {
+  const f = fixture(t);
+  const server = releaseServer(f, publishedAssets(f, '0.9.4'));
+  const result = ok(f.install(['--no-start'], server));
+  assert.match(result.stdout, /native package/);
+  assert.deepEqual(server.downloads().map(url => url.split('/').slice(-2).join('/')),
+    ['download/foxwarm-linux-x64-native.tar.gz', 'download/SHA256SUMS']);
+  assert.equal(installedAsset(path.join(f.root, 'foxwarm')), 'foxwarm-linux-x64-native.tar.gz');
+  const legacyOption = ok(f.install(['--no-start', '--dir', 'other', '--self-contained'], server));
+  assert.match(legacyOption.stdout, /replaced by the native package/);
+  assert.equal(installedAsset(path.join(f.root, 'other')), 'foxwarm-linux-x64-native.tar.gz');
+});
+
+test('rerunning the installer moves a self-contained installation to the native package and keeps its data', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.3', { variant: 'self-contained' }), '--no-start']));
+  ok(f.control(dir, 'start'));
+  const first = mainPid(dir);
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'retained: true\n');
+  const server = releaseServer(f, publishedAssets(f, '0.9.4'));
+  const result = ok(f.install([], server));
+  assert.match(result.stdout, /Switching .* from foxwarm-linux-x64-self-contained\.tar\.gz to foxwarm-linux-x64-native\.tar\.gz/);
+  assert.deepEqual(server.downloads().map(url => url.split('/').pop()), ['foxwarm-linux-x64-native.tar.gz', 'SHA256SUMS']);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.4');
+  assert.equal(installedAsset(dir), 'foxwarm-linux-x64-native.tar.gz');
+  assert(!alive(first));
+  assert(alive(mainPid(dir)));
+  assert.equal(fs.readFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'utf8'), 'retained: true\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'data_dir'), 'utf8').trim(), fs.realpathSync(path.join(f.root, 'foxwarm-data')));
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'runtime')).filter(name => !name.startsWith('.')).sort(), ['0.9.4', 'current']);
+  // Later updates stay on the native package.
+  ok(f.control(dir, 'stop'));
+  const later = releaseServer(f, publishedAssets(f, '0.9.5'));
+  fs.rmSync(path.join(f.root, 'downloads'));
+  ok(f.run(path.join(dir, 'foxwarmctl'), ['update'], later));
+  assert.deepEqual(later.downloads().map(url => url.split('/').pop()), ['foxwarm-linux-x64-native.tar.gz', 'SHA256SUMS']);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.5');
+});
+
+test('choosing a package for an existing installation switches it even within one version', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.4', { variant: 'self-contained' }), '--no-start']));
+  ok(f.install(['--package', f.makePackage('0.9.4'), '--native', '--no-start']));
+  assert.equal(installedAsset(dir), 'foxwarm-linux-x64-native.tar.gz');
+  assert.match(fs.readlinkSync(path.join(dir, 'runtime/current')), /^0\.9\.4-\d+$/);
+  // Without a choice, an installation keeps its package type.
+  assert.match(ok(f.install(['--package', f.makePackage('0.9.4'), '--no-start'])).stdout, /already installed/);
+  // A package file of the other type is that choice.
+  const back = ok(f.install(['--package', f.makePackage('0.9.4', { variant: 'self-contained' }), '--no-start']));
+  assert.match(back.stdout, /Switching .* to foxwarm-linux-x64-self-contained\.tar\.gz/);
+  assert.equal(installedAsset(dir), 'foxwarm-linux-x64-self-contained.tar.gz');
+});
+
+test('a release without the recorded asset fails with that reason and leaves the installation unchanged', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.4'), '--no-start']));
+  const empty = path.join(f.root, 'release-empty');
+  fs.mkdirSync(empty);
+  const server = releaseServer(f, empty);
+  const update = f.run(path.join(dir, 'foxwarmctl'), ['update'], server);
+  assert.equal(update.status, 1);
+  assert.match(update.stderr, /The latest release has no foxwarm-linux-x64-native\.tar\.gz\. .*rerun the installer: .*--dir '/);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.4');
+  const fresh = f.install(['--no-start', '--dir', 'other', '--version', '0.9.9'], server);
+  assert.equal(fresh.status, 1);
+  assert.match(fresh.stderr, /Release 0\.9\.9 has no foxwarm-linux-x64-native\.tar\.gz\./);
 });

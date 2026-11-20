@@ -17,6 +17,20 @@ namespace Foxwarm.Tests;
 
 internal sealed class InboundMcpFixture : IAsyncDisposable
 {
+    // The tools every inbound MCP connection lists, in declaration order.
+    internal static readonly string[] ToolNames =
+    [
+        "foxwarm_discover",
+        "foxwarm_call",
+        "foxwarm_node",
+        "foxwarm_exec_result",
+        "foxwarm_session",
+        "ctl",
+    ];
+
+    internal static string[] Names(ListToolsResult tools) =>
+        tools.Tools.Select(tool => tool.Name).ToArray();
+
     internal readonly TempDirectory Temp = new();
     internal string Data => Path.Combine(Temp.Path, "data");
     internal string Work => Path.Combine(Temp.Path, "work");

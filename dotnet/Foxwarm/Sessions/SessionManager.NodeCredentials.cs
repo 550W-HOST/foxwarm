@@ -16,7 +16,10 @@ internal sealed partial class SessionManager
         var id = (ToolRegistry.Text(args, "nodeId") ?? "").Trim();
         if (id.Length == 0)
             throw new InvalidDataException("node_create_auth_token nodeId is required.");
-        var path = WorkspaceTools.PrivateNodeTokenPath(ToolRegistry.Text(args, "filePath") ?? "");
+        var path = WorkspaceTools.PrivateNodeTokenPath(
+            ToolRegistry.Text(args, "filePath") ?? "",
+            "node_create_auth_token"
+        );
         var parent = ToolRegistry.Text(args, "parentNode");
         if (parent is not null && (parent.Length == 0 || parent != parent.Trim()))
             throw new InvalidDataException("parentNode must be an exact Node ID.");

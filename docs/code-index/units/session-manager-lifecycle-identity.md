@@ -24,7 +24,7 @@ Completed deletion removes every resident identity-slot key for the exact delete
 
 ### Agent conversion and compensation invariants
 
-- `MoveIdentityAsync` retains ordinary cross-Agent isolation checks. Authorized `create_agent(convertSession=true)` uses the same private `RenameIdentityAsync` owner with conversion purpose: the caller remains nonisolated, while an explicitly selected isolated source is permitted. The purpose is not a tool argument.
+- `MoveIdentityAsync` leaves cross-Agent moves to policy. Authorized `create_agent(convertSession=true)` uses the same private `RenameIdentityAsync` owner with conversion purpose. The purpose is not a tool argument.
 - Both paths preserve identity/Agent admission, target reservation, save-lane/journal ordering, aliases, child/channel rewrites, settings and committed/rollback failure classification.
 - Before identity commit, conversion compensates only Agent/preparation effects owned by its move intent, including initial Agent-catalog committed errors. The intent retains the exact preparation leaf, diagnostic publication status and prior single metadata row; absent and empty remain distinct.
 - Preparation writes an ownership marker bound to that unique leaf. Rollback requires matching proof regardless of publication status; missing preparation is not proof of ownership.
@@ -32,7 +32,7 @@ Completed deletion removes every resident identity-slot key for the exact delete
 - Verified cleanup restores only the prior metadata row and preserves unrelated catalog changes. Complete rollback is reported only after every owned cleanup succeeds.
 - Normal proof removal follows identity commit. Finishing recovery never uses that proof to authorize directory deletion, and fresh-Agent postcommit retention remains a separate contract.
 
-Optional target isolation runs afterward through the existing Agent settings owner; conversion alone preserves the source's raw current Node, not its old Agent's isolation metadata.
+Optional target rules and placement are set through the existing Agent settings owner; conversion alone preserves the source's raw current Node.
 
 ### Fork behavior
 
@@ -62,7 +62,7 @@ Removal owns only the named Agent's process-local membership admission. Create/c
 
 **Review-selected correction, subject to later user revision.** The existing trusted administrator Agent routes expose two explicit modes; model tools gain no restoration or cleanup mode.
 
-- `POST /api/agents` with `{"agentId":"name","restore":true}` restores directory membership from the exact retained metadata, including creator, rules, placement, isolation, inheritance and unknown fields. It rejects metadata overrides, missing records, existing directories and invalid/missing creator ancestors. Creation admission limits still apply. Success is 201 with `sessionId:null` and `restored:true`: an empty memory directory is created, and no deleted Session, retired ID, history or memory is restored. New nonretired Session IDs can subsequently be created normally. Committed publication failures retain the ordinary committed/partial receipt.
+- `POST /api/agents` with `{"agentId":"name","restore":true}` restores directory membership from the exact retained metadata, including creator, rules, placement, retained legacy isolation fields, inheritance and unknown fields. It rejects metadata overrides, missing records, existing directories and invalid/missing creator ancestors. Creation admission limits still apply. Success is 201 with `sessionId:null` and `restored:true`: an empty memory directory is created, and no deleted Session, retired ID, history or memory is restored. New nonretired Session IDs can subsequently be created normally. Committed publication failures retain the ordinary committed/partial receipt.
 - `DELETE /api/agents/{name}` with matching `confirmAgentId` and `retainedOnly:true` removes only an absent Agent's retained record. It waits for accepted membership work and rejects remaining Session ownership, incoming inheritance or creator references before metadata effects. It never deletes preparation, memory, Archive or unowned filesystem blockers. Success is 200 with `retainedRecordRemoved:true` and an empty `deletedSessions` array. Explicit cleanup permits later fresh creation under new authority; it does not release historical Session IDs.
 
 Ordinary POST/DELETE behavior and command deletion's metadata retention remain unchanged. These modes use existing administrator access checks; scoped WebUI credentials remain denied. Creator references intentionally continue to protect ancestors until the administrator restores or explicitly cleans retained descendants.

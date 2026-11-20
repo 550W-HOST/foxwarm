@@ -14,7 +14,8 @@ internal sealed class HttpResponseCompressionProvider(
         // Decide at the first body write, after routing and response headers are available.
         // Raw transfers retain their original bytes and any known length for download progress.
         if (
-            context.GetEndpoint()?.Metadata.GetMetadata<WebUiDownloadResource>() is not null
+            context.Features.Get<HttpAsset>() is not null
+            || context.GetEndpoint()?.Metadata.GetMetadata<WebUiDownloadResource>() is not null
             || context.Response.Headers.ContainsKey("Content-Disposition")
             || Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
             || context.Request.Path == "/mcp"

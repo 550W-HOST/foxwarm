@@ -9,8 +9,9 @@ export type AgentRegistryEntry = {
   id: string
   inherit: string | null
   inheritanceChain: string[]
-  isolated: boolean
-  isolatedNode: string | null
+  inheritable: boolean
+  restricted: boolean
+  isolationMigration: { migratedAt: number | null; automatic: boolean; node: string | null; failClosed?: string } | null
   defaultNode: string | null
   defaultCwd: string | null
   sessionCount: number
@@ -30,6 +31,12 @@ const formatBytes = (size: number) => {
   if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${size} B`
 }
+
+const agentPolicyBadge = (agent: AgentRegistryEntry) => (
+  agent.isolationMigration?.failClosed ? renderMetaBadge('blocked', 'warning')
+    : agent.restricted ? renderMetaBadge('restricted', 'warning')
+    : null
+)
 
 export function AgentRegistryCard({ agent, usage, selected, onSelect }: { agent: AgentRegistryEntry; usage?: LoadedUsage; selected: boolean; onSelect: () => void }) {
   return (
@@ -53,7 +60,7 @@ export function AgentRegistryCard({ agent, usage, selected, onSelect }: { agent:
           </div>
         </div>
         <UsagePie usage={usage?.count ? usage : undefined} loaded />
-        {agent.isolated ? renderMetaBadge(agent.isolatedNode ? `isolated · ${agent.isolatedNode}` : 'isolated', 'warning') : null}
+        {agentPolicyBadge(agent)}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
         <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.sessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">sessions</div></div>
@@ -92,10 +99,10 @@ export function AgentRegistryInspector({ agent, allAgents, nodes, installDefault
     setDeleteOpen(false)
     setDeleteConfirm('')
     setError('')
-  }, [agent?.id, agent?.inherit, agent?.isolatedNode, agent?.defaultNode, agent?.defaultCwd])
+  }, [agent?.id, agent?.inherit, agent?.defaultNode, agent?.defaultCwd])
 
   if (!agent) {
-    return <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50"><Bot className="mx-auto h-6 w-6 text-fw-text" /><h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select an agent</h3><p className="mt-1 text-xs text-fw-text-muted">Inspect memory, inheritance, isolation, and lifecycle controls.</p></aside>
+    return <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50"><Bot className="mx-auto h-6 w-6 text-fw-text" /><h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select an agent</h3><p className="mt-1 text-xs text-fw-text-muted">Inspect memory, inheritance, placement, and lifecycle controls.</p></aside>
   }
 
   const dirty = agentSettingsDirty(draft, agent)
@@ -118,7 +125,9 @@ export function AgentRegistryInspector({ agent, allAgents, nodes, installDefault
           <div><h2 className="text-base font-semibold text-fw-text-strong">{agent.id}</h2><p className="mt-1 text-xs text-fw-text-muted">Persistent workspace and memory owner</p></div>
           <button type="button" onClick={() => onOpenMemory(agent.memoryRoot)} className="inline-flex items-center gap-1.5 rounded-lg bg-fw-text-strong px-2.5 py-1.5 text-xs font-medium text-fw-surface hover:bg-fw-text"><FolderOpen className="h-3.5 w-3.5" /> Memory</button>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">{renderMetaBadge(`${agent.sessionCount} sessions`)}{agent.activeSessionCount ? renderMetaBadge(`${agent.activeSessionCount} active`, 'active') : null}{agent.isolated ? renderMetaBadge('isolated', 'warning') : renderMetaBadge('shared runtime', 'muted')}</div>
+        <div className="mt-3 flex flex-wrap gap-2">{renderMetaBadge(`${agent.sessionCount} sessions`)}{agent.activeSessionCount ? renderMetaBadge(`${agent.activeSessionCount} active`, 'active') : null}{agentPolicyBadge(agent) ?? renderMetaBadge('unrestricted', 'muted')}</div>
+        {agent.isolationMigration?.failClosed ? <p data-agent-migration-blocked className="mt-3 rounded-lg bg-fw-warning-surface px-3 py-2 text-xs leading-5 text-fw-warning dark:bg-fw-warning-surface-strong/40">Every tool call of this agent is blocked: {agent.isolationMigration.failClosed} Replace its rules to restore access.</p>
+          : agent.isolationMigration ? <p data-agent-migration className="mt-3 text-xs leading-5 text-fw-text-muted">Rules generated from legacy isolation{agent.isolationMigration.automatic ? ' at startup' : ''}.</p> : null}
       </header>
 
       <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-4">

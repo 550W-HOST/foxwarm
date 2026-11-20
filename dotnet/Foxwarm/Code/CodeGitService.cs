@@ -13,7 +13,7 @@ internal static class CodeGitService
     ) =>
         Local(() =>
             CodeGitOperations.RunAsync(
-                CodeNativePaths.Native(workspace),
+                CodeNativePaths.NativeDirectory(workspace),
                 args,
                 token,
                 limit,
@@ -24,7 +24,7 @@ internal static class CodeGitService
     internal static async Task<JsonObject> StatusAsync(string workspace, CancellationToken token) =>
         Present(
             await Local(() =>
-                CodeGitOperations.StatusAsync(CodeNativePaths.Native(workspace), token)
+                CodeGitOperations.StatusAsync(CodeNativePaths.NativeDirectory(workspace), token)
             )
         );
 
@@ -35,7 +35,7 @@ internal static class CodeGitService
     ) =>
         Present(
             await Local(() =>
-                CodeGitOperations.CommitAsync(CodeNativePaths.Native(workspace), id, token)
+                CodeGitOperations.CommitAsync(CodeNativePaths.NativeDirectory(workspace), id, token)
             )
         );
 
@@ -47,7 +47,7 @@ internal static class CodeGitService
         CancellationToken token
     )
     {
-        workspace = CodeNativePaths.Native(workspace);
+        workspace = CodeNativePaths.NativeDirectory(workspace);
         var normalized = CodeGitOperations.RelativePath(relative);
         _ = CodeGitOperations.WorkspaceChild(workspace, normalized);
         var chosen = CodeGitOperations.ContentRef(JsonValue.Create(reference));
@@ -81,9 +81,7 @@ internal static class CodeGitService
     private static JsonObject Present(JsonObject value)
     {
         value["nodeId"] = "master";
-        value["workspace"] = CodeNativePaths.Transport(value["workspace"]!.GetValue<string>());
-        if (value.ContainsKey("topLevel"))
-            value["topLevel"] = CodeNativePaths.Transport(value["topLevel"]!.GetValue<string>());
+        CodeNativePaths.TransportWorkspace(value);
         return value;
     }
 }

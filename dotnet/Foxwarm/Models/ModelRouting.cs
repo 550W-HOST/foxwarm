@@ -34,7 +34,13 @@ internal sealed class ModelRouting(Func<long>? clock = null)
     private long nextGeneration = 1;
     private long Now => clock?.Invoke() ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    internal Request Begin(string virtualKey, ConcreteHostModel model)
+    internal Request Begin(string virtualKey, ConcreteHostModel model) =>
+        Capture(virtualKey, model, activate: true);
+
+    internal Request Preview(string virtualKey, ConcreteHostModel model) =>
+        Capture(virtualKey, model, activate: false);
+
+    private Request Capture(string virtualKey, ConcreteHostModel model, bool activate)
     {
         if (!model.IsVirtual)
             throw new InvalidOperationException("Selected model is not virtual.");
@@ -44,7 +50,8 @@ internal sealed class ModelRouting(Func<long>? clock = null)
             Active route;
             if (model.ProviderType == "session-hash")
             {
-                active.Remove(virtualKey);
+                if (activate)
+                    active.Remove(virtualKey);
                 route = new Active(fingerprint, 0, new(StringComparer.Ordinal));
             }
             else if (
@@ -52,8 +59,13 @@ internal sealed class ModelRouting(Func<long>? clock = null)
                 || route.Fingerprint != fingerprint
             )
             {
-                route = new Active(fingerprint, nextGeneration++, new(StringComparer.Ordinal));
-                active[virtualKey] = route;
+                route = new Active(
+                    fingerprint,
+                    activate ? nextGeneration++ : 0,
+                    new(StringComparer.Ordinal)
+                );
+                if (activate)
+                    active[virtualKey] = route;
             }
             return new Request(
                 virtualKey,
@@ -63,7 +75,9 @@ internal sealed class ModelRouting(Func<long>? clock = null)
                 HostModels.Positive(model.Configuration["failureThreshold"], 5, "failureThreshold"),
                 HostModels.Positive(model.Configuration["cooldownMs"], 600000, "cooldownMs"),
                 route.Generation,
-                route.Health
+                activate
+                    ? route.Health
+                    : new Dictionary<string, Health>(route.Health, StringComparer.Ordinal)
             );
         }
     }
@@ -103,7 +117,16 @@ internal sealed class ModelRouting(Func<long>? clock = null)
         return new Selection(targets[selected], selected, selected == targets.Count - 1);
     }
 
-    internal Selection Select(Request request, string routingKey)
+    /// <param name="eligible">
+    /// Failover targets this request may use. Ineligible targets are passed over like cooling
+    /// ones, including in the all-cooling fallback; only a route without any eligible target
+    /// returns an ineligible one, for the caller to refuse.
+    /// </param>
+    internal Selection Select(
+        Request request,
+        string routingKey,
+        Func<string, bool>? eligible = null
+    )
     {
         if (request.Strategy == "session-hash")
             return Hash(request.VirtualKey, routingKey, request.Targets);
@@ -119,9 +142,24 @@ internal sealed class ModelRouting(Func<long>? clock = null)
                         continue;
                     request.Health.Remove(target);
                 }
+                if (eligible?.Invoke(target) == false)
+                    continue;
                 return new Selection(target, index, index == request.Targets.Length - 1);
             }
-            return new Selection(request.Targets[^1], request.Targets.Length - 1, true);
+            // No ready target: keep the existing fallback to the last target even while it
+            // cools, counting only eligible targets. A route without any eligible target
+            // returns its last target, which the caller refuses.
+            var fallback = Array.FindLastIndex(
+                request.Targets,
+                target => eligible?.Invoke(target) != false
+            );
+            if (fallback < 0)
+                fallback = request.Targets.Length - 1;
+            return new Selection(
+                request.Targets[fallback],
+                fallback,
+                fallback == request.Targets.Length - 1
+            );
         }
     }
 

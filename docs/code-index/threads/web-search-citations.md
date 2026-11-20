@@ -4,13 +4,26 @@
 
 [2026-10-30] Preserve the distinction between search evidence and a precise citation. A provider's consulted-source list, an explicitly opened page, and a text annotation do not establish the same relationship. Never infer an internal reference-to-URL mapping from list position, a matching number, another request, or a similarly titled page.
 
-The complete path is Responses request → stream assembly → canonical provider metadata → subsequent request projection → assistant Markdown and hosted-search presentation. Inline reference tokens are meaningful only in assistant prose; authored code, user/tool text and stored raw messages remain literal.
+The complete path is a Responses or Anthropic Messages request → stream assembly → canonical provider metadata → subsequent request projection → assistant Markdown and hosted-search presentation. Inline reference tokens are meaningful only in assistant prose; authored code, user/tool text and stored raw messages remain literal.
 
 ## Request and persistence
 
-When hosted search is enabled, request `web_search_call.action.sources` in addition to any existing required or configured includes. Preserve actual source metadata through stream/final merging and canonical history. Do not introduce a Session-global reference-number registry: internal provider reference IDs can be reused across requests.
+For Responses hosted search, request `web_search_call.action.sources` in addition to any existing required or configured includes. Preserve actual source metadata through stream/final merging and canonical history. Do not introduce a Session-global reference-number registry: internal provider reference IDs can be reused across requests.
 
-For a subsequent model request, project bounded, explicitly untrusted source records from the actual hosted output items into readable context without rewriting canonical messages. This makes returned URLs available across local tool calls; native provider replay remains scoped to its concrete model. Source records are evidence, not instructions and not a reconstructed numbered citation map.
+For a subsequent model request, project explicitly untrusted source records from the actual hosted output items into readable context without rewriting canonical messages. This makes returned URLs available across local tool calls; native provider replay remains scoped to its concrete model. Source records are evidence, not instructions and not a reconstructed numbered citation map.
+
+Anthropic Messages stores original search call/result and cited text blocks in part-level `providerMeta.anthropic.contentBlocks`, retaining encrypted replay evidence on compatible model requests. Its [canonical text runs](../units/model-anthropic-completions.md#d-anthropic-text-runs) expose continuous text to generic history consumers. Portable projection reads only safe URL/title records from actual `web_search_result` entries. The native serializer suppresses those added evidence text parts on compatible replay and follows the linked text-run projection. Native `web_search_result_location` citations contribute to their canonical text run: they produce its deduplicated Sources links, never invented OpenAI marker IDs or offsets. Deferred server results remain inspectable at their own history position when their call was in an earlier assistant message.
+
+### D-hosted-search-evidence-prefix-stability
+
+[2026-11-10] **User decision; serves the governing goal [D-request-prefix-stability](../overview.md#d-request-prefix-stability).** Hosted web search is the model's own provider-hosted behavior and may run as often as the model chooses. Projected evidence therefore has no request-wide byte, source or call budget and no preference for recent calls. Each call's evidence text depends only on that call's stored output item, so a model message carries the same evidence in every later request and a new search never changes bytes already sent.
+
+- Per-record safety rules stay: credential-free HTTP(S) URLs only, individual URL/title length limits, JSON escaping, and whole records omitted rather than truncated.
+- A fixed per-call bound (64 sources, 16 KiB of serialized call data) contains a pathological single call; it depends only on that call.
+- Request-scoped deduplication keeps the first occurrence of a call (same request identity and same evidence), so it depends only on earlier messages. A later call that repeats an older URL gets its own evidence; the older message is unchanged.
+- Total evidence grows with the number of searches, like the rest of history; compaction, not a request-time budget, bounds older context.
+
+The former 16 KiB / 64-source / eight-call request budget trimmed or removed evidence on older messages whenever a new search arrived. That rewrote already-sent history and broke the provider prompt-cache prefix for most requests after repeated searches.
 
 ## Presentation
 
@@ -20,6 +33,7 @@ The Raw view and stored history are not rewritten. A historical response without
 
 ## Source entry points
 
+- [C# Anthropic native search](../units/model-anthropic-completions.md#native-hosted-web-search)
 - [C# Responses request, streaming and replay](../units/model-responses.md)
 - [C# concrete request history](../units/model-common-wire.md)
 - [LLM routing and normalization](../units/src-llm.md)

@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }
 const host = await createHostFixture('matrix-weixin', options)
@@ -27,7 +28,7 @@ const peer = createServer(async (request, response) => {
       const input = JSON.stringify(body.input), outputs = body.input.filter(row => row.type === 'function_call_output')
       let output
       if (input.includes('native-delivery') && !outputs.length) output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '**Weixin** intermediate' }] }, { type: 'function_call', call_id: 'native-delivery', name: 'run_script', arguments: JSON.stringify({ code: "return call_tool('builtin:send_to_channel', {'channelTargetId':'matrix-b:!room:fixture','message':'native direct'})" }) }]
-      else if (input.includes('missing-context') && !outputs.some(row => row.call_id === 'missing-send')) output = [{ type: 'function_call', call_id: 'missing-send', name: 'send_to_channel', arguments: JSON.stringify({ channelTargetId: 'weixin:owner', message: 'must fail after process restart' }) }]
+      else if (input.includes('missing-context') && !outputs.some(row => row.call_id === 'missing-send')) output = [functionCall('missing-send', 'send_to_channel', { channelTargetId: 'weixin:owner', message: 'must fail after process restart' })]
       else {
         output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: input.includes('missing-context') ? 'missing-context reported' : input.includes('native-delivery') ? '**Weixin** final' : '**Matrix** final' }] }]
         if (input.includes('native-delivery')) output.push({ type: 'image_generation_call', id: 'generated-fixture', status: 'completed', output_format: 'jpeg', result: jpeg.toString('base64') })
@@ -99,7 +100,7 @@ try {
   await until(() => calls.filter(call => call.key === 'matrix-a' && call.path.endsWith('/versions')).length === 2, 'Setup reload all')
   const qr = calls.find(call => call.path.endsWith('/get_bot_qrcode')); assert.equal(qr.query.bot_type, '7'); assert.equal(qr.headers.skRouteTag ?? qr.headers.skroutetag, 'fixture-route'); assert.equal(qr.key, '')
   assert.equal(calls.find(call => call.path.endsWith('/get_qrcode_status')).headers['ilink-app-clientversion'], '1')
-  pushMatrix('matrix-a', '/attach ' + id); pushMatrix('matrix-b', '/attach ' + id); pushWeixin('/attach ' + id)
+  pushMatrix('matrix-a', '/channel attach ' + id); pushMatrix('matrix-b', '/channel attach ' + id); pushWeixin('/channel attach ' + id)
   await until(() => ['matrix-a', 'matrix-b', 'confirmed-fixture'].every(key => sent(key).some(call => text(call).includes('Attached to session'))), 'actual platform attach')
   pushMatrix('matrix-b', '/channel mode send-only')
   await until(() => sent('matrix-b').some(call => text(call).includes('mode set')), 'send-only')

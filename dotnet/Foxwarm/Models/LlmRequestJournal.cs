@@ -28,7 +28,7 @@ internal sealed record LlmJournalRequest(
 
 internal readonly record struct JournalRequestAdmission(string RequestId, Task Completion);
 
-public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
+public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposable
 {
     internal const string MigrationId = "sqlite-only-large-archives-v1";
     private const int MaxDeltaDepth = 8;
@@ -183,12 +183,10 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                             deltaDepth = prior.Value.Depth + 1;
                         }
                     }
-                    var checkpoint = baseRequest is null
-                        ? JsonSerializer.Serialize(messageIds)
-                        : null;
+                    var checkpoint = baseRequest is null ? JsonData.Serialize(messageIds) : null;
                     var appended = baseRequest is null
                         ? null
-                        : JsonSerializer.Serialize(messageIds[(commonPrefix ?? 0)..]);
+                        : JsonData.Serialize(messageIds[(commonPrefix ?? 0)..]);
                     using var command = connection.CreateCommand();
                     command.Transaction = transaction;
                     command.CommandText = """
@@ -332,7 +330,9 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         string outcome,
         JsonNode? result,
         JsonObject? error,
-        CancellationToken token = default
+        CancellationToken token = default,
+        UsageRow? ledger = null,
+        LlmRedactionRecord? redaction = null
     )
     {
         CheckOpen();
@@ -343,19 +343,25 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             .EnqueueAsync(
                 (connection, transaction) =>
                 {
-                    if (
-                        ReadScalar(
-                            connection,
-                            transaction,
-                            "SELECT 1 FROM llm_journal_attempt_starts WHERE request_id=$id AND attempt=$attempt ORDER BY rowid DESC LIMIT 1",
-                            ("$id", requestId),
-                            ("$attempt", attempt)
-                        )
-                        is null
-                    )
-                        throw new InvalidDataException(
-                            "LLM journal attempt is missing before its result."
+                    (string Model, string? Virtual, string Type) start;
+                    using (var lookup = connection.CreateCommand())
+                    {
+                        lookup.Transaction = transaction;
+                        lookup.CommandText =
+                            "SELECT concrete_model_id,virtual_model_key,provider_type FROM llm_journal_attempt_starts WHERE request_id=$id AND attempt=$attempt ORDER BY rowid DESC LIMIT 1";
+                        Add(lookup, "$id", requestId);
+                        Add(lookup, "$attempt", attempt);
+                        using var found = lookup.ExecuteReader();
+                        if (!found.Read())
+                            throw new InvalidDataException(
+                                "LLM journal attempt is missing before its result."
+                            );
+                        start = (
+                            found.GetString(0),
+                            found.IsDBNull(1) ? null : found.GetString(1),
+                            found.GetString(2)
                         );
+                    }
                     using var command = connection.CreateCommand();
                     command.Transaction = transaction;
                     command.CommandText =
@@ -363,32 +369,78 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                     Add(command, "$event", Guid.NewGuid().ToString());
                     Add(command, "$request", requestId);
                     Add(command, "$attempt", attempt);
-                    Add(command, "$completed", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    Add(command, "$completed", completedAt);
                     Add(command, "$outcome", outcome);
                     Add(command, "$result", resultJson);
                     Add(command, "$error", errorJson);
                     command.ExecuteNonQuery();
-                    return true;
+                    var rowid = Convert.ToInt64(
+                        ReadScalar(connection, transaction, "SELECT last_insert_rowid()"),
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
+                    // A success written without its ledger row stays outside the covered range
+                    // so the backfill adds it; anything else is covered as soon as it commits.
+                    var recorded = ledger is null
+                        ? outcome != "success"
+                        : TryRecordLiveUsage(
+                            connection,
+                            transaction,
+                            requestId,
+                            attempt,
+                            completedAt,
+                            start,
+                            ledger
+                        );
+                    if (recorded)
+                        AdvanceUsageHigh(connection, transaction, rowid);
+                    if (redaction is not null)
+                        TryRecordRedaction(
+                            connection,
+                            transaction,
+                            requestId,
+                            attempt,
+                            completedAt,
+                            redaction
+                        );
+                    return ledger is null || recorded;
                 },
                 token
             )
             .ConfigureAwait(false);
     }
 
-    public Task AppendChatResultAsync(
+    /// <summary>
+    /// Records a successful attempt and its usage ledger row in one journal command, so the
+    /// installation usage overview is exactly as durable as the result it projects. A ledger
+    /// failure never fails the result; it is reported for the backfill to repair.
+    /// </summary>
+    internal async Task AppendChatResultAsync(
         string requestId,
         int attempt,
         ChatResult result,
-        CancellationToken token = default
-    ) =>
-        AppendAttemptResultAsync(
-            requestId,
-            attempt,
-            "success",
-            ToSourceResult(result),
-            null,
-            token
-        );
+        CancellationToken token = default,
+        LlmUsageAttribution? attribution = null,
+        LlmRedactionRecord? redaction = null
+    )
+    {
+        var ledger = PrepareUsageRow(result, attribution);
+        var receipt = await EnqueueAttemptResultAsync(
+                requestId,
+                attempt,
+                "success",
+                ToSourceResult(result),
+                null,
+                token,
+                ledger,
+                redaction
+            )
+            .ConfigureAwait(false);
+        if (await receipt.Completion.ConfigureAwait(false))
+            NotifyUsageRecorded();
+        else
+            NotifyUsageLedgerFailed();
+    }
 
     public async Task<JsonObject> ReconstructAsync(
         string requestId,
@@ -1440,15 +1492,18 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         using var schema = connection.BeginTransaction(deferred: false);
         using var command = connection.CreateCommand();
         command.Transaction = schema;
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS llm_journal_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS llm_journal_objects(object_id TEXT PRIMARY KEY,object_kind TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS llm_journal_requests(request_id TEXT PRIMARY KEY,session_id TEXT,purpose TEXT NOT NULL,iteration INTEGER NOT NULL,created_at INTEGER NOT NULL,prompt_object_id TEXT NOT NULL,tool_schema_object_id TEXT NOT NULL,requested_model_key TEXT NOT NULL,prompt_cache_key_hash TEXT NOT NULL,message_count INTEGER NOT NULL,checkpoint_message_ids_json TEXT,base_request_id TEXT,common_prefix_length INTEGER,appended_message_ids_json TEXT,delta_depth INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS idx_llm_journal_requests_session_created ON llm_journal_requests(session_id,created_at,request_id);
-            CREATE TABLE IF NOT EXISTS llm_journal_attempt_starts(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,started_at INTEGER NOT NULL,concrete_model_id TEXT NOT NULL,virtual_model_key TEXT,provider_type TEXT NOT NULL,semantic_payload_sha256 TEXT NOT NULL,prompt_object_id TEXT);
-            CREATE TABLE IF NOT EXISTS llm_journal_attempt_results(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,completed_at INTEGER NOT NULL,outcome TEXT NOT NULL,result_json TEXT,error_json TEXT);
-            CREATE TABLE IF NOT EXISTS llm_journal_import_state(source_path TEXT PRIMARY KEY,imported_size INTEGER NOT NULL,updated_at INTEGER NOT NULL);
-            """;
+        command.CommandText =
+            """
+                CREATE TABLE IF NOT EXISTS llm_journal_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS llm_journal_objects(object_id TEXT PRIMARY KEY,object_kind TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS llm_journal_requests(request_id TEXT PRIMARY KEY,session_id TEXT,purpose TEXT NOT NULL,iteration INTEGER NOT NULL,created_at INTEGER NOT NULL,prompt_object_id TEXT NOT NULL,tool_schema_object_id TEXT NOT NULL,requested_model_key TEXT NOT NULL,prompt_cache_key_hash TEXT NOT NULL,message_count INTEGER NOT NULL,checkpoint_message_ids_json TEXT,base_request_id TEXT,common_prefix_length INTEGER,appended_message_ids_json TEXT,delta_depth INTEGER NOT NULL);
+                CREATE INDEX IF NOT EXISTS idx_llm_journal_requests_session_created ON llm_journal_requests(session_id,created_at,request_id);
+                CREATE TABLE IF NOT EXISTS llm_journal_attempt_starts(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,started_at INTEGER NOT NULL,concrete_model_id TEXT NOT NULL,virtual_model_key TEXT,provider_type TEXT NOT NULL,semantic_payload_sha256 TEXT NOT NULL,prompt_object_id TEXT);
+                CREATE TABLE IF NOT EXISTS llm_journal_attempt_results(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,completed_at INTEGER NOT NULL,outcome TEXT NOT NULL,result_json TEXT,error_json TEXT);
+                CREATE TABLE IF NOT EXISTS llm_journal_import_state(source_path TEXT PRIMARY KEY,imported_size INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+                """
+            + UsageSchemaSql
+            + RedactionSchemaSql;
         command.ExecuteNonQuery();
         using var columns = connection.CreateCommand();
         columns.Transaction = schema;
@@ -1550,7 +1605,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             throw new InvalidDataException("Missing journal request.");
         var checkpoint = reader.IsDBNull(0)
             ? null
-            : JsonSerializer.Deserialize<string[]>(reader.GetString(0));
+            : JsonData.Deserialize<string[]>(reader.GetString(0));
         var depth = reader.GetInt32(4);
         if (depth < 0 || depth > MaxDeltaDepth)
             throw new InvalidDataException("Invalid journal delta depth.");
@@ -1566,7 +1621,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         var prefix = reader.IsDBNull(2) ? -1 : reader.GetInt32(2);
         var appended = reader.IsDBNull(3)
             ? throw new InvalidDataException("Journal delta is missing appended messages.")
-            : JsonSerializer.Deserialize<string[]>(reader.GetString(3)) ?? [];
+            : JsonData.Deserialize<string[]>(reader.GetString(3)) ?? [];
         var baseDepth = ReadScalar(
             connection,
             transaction,
@@ -1959,7 +2014,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                 builder.Append(']');
                 return;
             }
-            var json = value.ToJsonString();
+            var json = value.ToJsonText();
             if (value is JsonValue scalar && scalar.TryGetValue<string>(out var text))
             {
                 JsonStringQuoting.Append(builder, text);

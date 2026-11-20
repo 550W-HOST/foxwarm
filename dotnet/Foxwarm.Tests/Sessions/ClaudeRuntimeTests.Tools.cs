@@ -16,7 +16,11 @@ public sealed partial class ClaudeRuntimeTests
             Call("wait", new JsonObject { ["waitForInput"] = true }),
             Call(
                 "create_child_session",
-                new JsonObject { ["suffix"] = "forbidden", ["afterSend"] = "finish" }
+                new JsonObject
+                {
+                    ["suffix"] = "forbidden",
+                    ["currentSessionTurnAction"] = "end_turn",
+                }
             ),
             new JsonObject
             {
@@ -28,7 +32,7 @@ public sealed partial class ClaudeRuntimeTests
                     {
                         ["sessionId"] = "target",
                         ["message"] = "must not send",
-                        ["afterSend"] = "wait",
+                        ["currentSessionTurnAction"] = "wait",
                     }.ToJsonString(),
                 },
             },
@@ -53,13 +57,13 @@ public sealed partial class ClaudeRuntimeTests
             ),
             new JsonObject
             {
-                ["name"] = "search_tools",
-                ["args"] = new JsonObject
+                ["name"] = "ctl",
+                ["args"] = CtlTestArgs.Search(new JsonObject
                 {
                     ["sources"] = new JsonArray("builtin"),
                     ["limit"] = 200,
                     ["includeSchema"] = false,
-                },
+                }),
             },
         };
         await f.PeerAsync(new JsonObject { ["calls"] = operations });
@@ -75,10 +79,13 @@ public sealed partial class ClaudeRuntimeTests
         Assert.Throws<InvalidDataException>(() => f.Main.Manager.AgentDirectory("forbidden-agent"));
         Assert.Empty(f.Main.Target.Entry.Snapshot().Queue);
         Assert.Null(f.Owner.Entry.Snapshot().Meta["wait"]);
-        var discovery = results[^1].ToJsonString();
-        Assert.DoesNotContain("builtin:wait", discovery);
-        Assert.DoesNotContain("builtin:run_script", discovery);
-        Assert.DoesNotContain("builtin:submit_compact_plan", discovery);
+        var discovery = string.Concat(
+            results[^1]["result"]!["content"]!.AsArray().Select(part => SessionWait.Text(part?["text"]))
+        );
+        Assert.Contains("match(es)", discovery);
+        Assert.False(CtlTestArgs.ListsBuiltin(discovery, "wait"), discovery);
+        Assert.False(CtlTestArgs.ListsBuiltin(discovery, "run_script"), discovery);
+        Assert.False(CtlTestArgs.ListsBuiltin(discovery, "submit_compact_plan"), discovery);
         Assert.Equal(
             "complete",
             f.Owner.Entry.Snapshot().AuthorityEnvelope["externalRuntime"]![
@@ -128,7 +135,7 @@ public sealed partial class ClaudeRuntimeTests
             .ToHashSet();
         Assert.Equal(expected, names);
         Assert.Contains("write", names);
-        Assert.Contains("call_tool", names);
+        Assert.Contains("ctl", names);
         Assert.Contains("exec", names);
         Assert.DoesNotContain("wait", names);
         var schemas = new JsonArray(
@@ -140,7 +147,9 @@ public sealed partial class ClaudeRuntimeTests
         if (send is not null)
             Assert.Equal(
                 "[\"continue\"]",
-                send["inputSchema"]!["properties"]!["afterSend"]!["enum"]!.ToJsonString()
+                send["inputSchema"]!["properties"]!["currentSessionTurnAction"]![
+                    "enum"
+                ]!.ToJsonString()
             );
         var results = f.Lines("results.jsonl");
         Assert.NotEqual(true, results[0]["result"]!["isError"]?.GetValue<bool>());
@@ -181,26 +190,26 @@ public sealed partial class ClaudeRuntimeTests
         var path = Path.Combine(f.Main.Manager.AgentDirectory("main"), "denied.txt");
         var denied = await InboundMcpFixture.CallAsync(
             sdk,
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "node:master/write",
                 ["args"] = new JsonObject { ["filePath"] = path, ["content"] = "no" },
-            }
+            })
         );
         Assert.True(denied["isError"]!.GetValue<bool>());
         Assert.Contains("tool_authorization_denied", denied.ToJsonString());
         Assert.False(File.Exists(path));
         var impersonation = await InboundMcpFixture.CallAsync(
             sdk,
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["sessionId"] = "target",
                 ["agentName"] = "other",
                 ["toolId"] = "builtin:write_memory",
                 ["args"] = new JsonObject { ["filePath"] = "no.md", ["content"] = "no" },
-            }
+            })
         );
         Assert.True(impersonation["isError"]!.GetValue<bool>());
         Assert.False(
@@ -238,7 +247,7 @@ public sealed partial class ClaudeRuntimeTests
                         {
                             ["sessionId"] = "<parent>",
                             ["message"] = "completed",
-                            ["afterSend"] = "continue",
+                            ["currentSessionTurnAction"] = "continue",
                         }
                     )
                 ),

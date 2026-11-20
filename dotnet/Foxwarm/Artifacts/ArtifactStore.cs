@@ -233,7 +233,7 @@ internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = nu
             // Resources are complete before the exclusively-created revision becomes visible.
             await PublishFile(
                 target,
-                System.Text.Encoding.UTF8.GetBytes(record.ToJsonString()),
+                System.Text.Encoding.UTF8.GetBytes(record.ToJsonText()),
                 allowExisting: false,
                 token
             );

@@ -51,6 +51,52 @@ public sealed partial class RuntimePresentationTests
     }
 
     [Fact]
+    public async Task Busy_claim_is_published_before_turn_start_appends_the_input()
+    {
+        using var temp = new TempDirectory();
+        var store = new PersistentSessionAuthorityStore(temp.Path, "s");
+        using var fixture = new ProviderFixture(temp.Path, store);
+        var owner = fixture.Owner;
+        var starting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var published = new ConcurrentQueue<(bool Busy, int Queue, int History)>();
+        owner.Changed += value =>
+        {
+            if (value.Kind != SessionEventKind.StateChanged)
+                return;
+            var snapshot = owner.Entry.Snapshot();
+            published.Enqueue((snapshot.Busy, snapshot.Queue.Count, snapshot.History.Count));
+        };
+        owner.Registry.OnTurnStarting = async _ =>
+        {
+            starting.TrySetResult();
+            await release.Task;
+        };
+        await owner.Registry.Ingress.EnqueueAsync(
+            owner.Id,
+            new QueueItem(
+                QueueItemType.User,
+                [new JsonObject { ["text"] = "slow start" }],
+                ClientMessageId: "browser-send"
+            )
+        );
+        try
+        {
+            await starting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Contains(published, state => state is { Busy: true, Queue: 1, History: 0 });
+            Assert.Equal(
+                "requesting-model",
+                owner.BuildDto()["runtimeState"]!["state"]!.GetValue<string>()
+            );
+        }
+        finally
+        {
+            release.TrySetResult();
+            await owner.DrainForegroundAsync();
+        }
+    }
+
+    [Fact]
     public async Task Prior_owner_exit_keeps_a_queued_successors_processing_and_draft()
     {
         using var temp = new TempDirectory();

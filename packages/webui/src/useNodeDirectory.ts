@@ -2,11 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE_PATH } from './config'
 import { parseAgentDefaultNode, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 
-/** Directory/status only; pending approvals and setup credentials have separate owners. */
-export function useNodeDirectory() {
+/**
+ * Directory/status only; pending approvals and setup credentials have separate owners.
+ * `enabled: false` performs no reads and keeps the last published result.
+ */
+export function useNodeDirectory({ enabled = true }: { enabled?: boolean } = {}) {
   const [nodes, setNodes] = useState<WebUiNodeTarget[]>(() => parseWebUiNodeTargets({ nodes: [] }))
   const [agentDefaultNode, setAgentDefaultNode] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [loaded, setLoaded] = useState(false)
   const requestRef = useRef<AbortController | null>(null)
   const reload = useCallback(async () => {
     if (document.hidden) return
@@ -21,6 +25,7 @@ export function useNodeDirectory() {
         setNodes(parseWebUiNodeTargets(payload))
         setAgentDefaultNode(parseAgentDefaultNode(payload))
         setError('')
+        setLoaded(true)
       }
     } catch (error) {
       if (requestRef.current === request && !request.signal.aborted) setError(error instanceof Error ? error.message : 'Could not load Nodes.')
@@ -30,6 +35,7 @@ export function useNodeDirectory() {
   }, [])
 
   useEffect(() => {
+    if (!enabled) return undefined
     void reload()
     const timer = window.setInterval(() => { if (!requestRef.current) void reload() }, 30_000)
     const visibility = () => {
@@ -45,7 +51,7 @@ export function useNodeDirectory() {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', visibility)
     }
-  }, [reload])
+  }, [enabled, reload])
 
-  return { nodes, agentDefaultNode, error, reload }
+  return { nodes, agentDefaultNode, error, loaded, reload }
 }

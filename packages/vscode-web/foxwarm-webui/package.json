@@ -13,6 +13,11 @@
         "command": "foxwarm-webui.openSession",
         "title": "Open Session",
         "category": "Foxwarm"
+      },
+      {
+        "command": "foxwarm-webui.waitForEditorRestore",
+        "title": "Wait for Editor Restoration",
+        "category": "Foxwarm"
       }
     ],
     "viewsContainers": {
@@ -57,6 +62,10 @@
       "commandPalette": [
         {
           "command": "foxwarm-webui.openSession",
+          "when": "false"
+        },
+        {
+          "command": "foxwarm-webui.waitForEditorRestore",
           "when": "false"
         }
       ]

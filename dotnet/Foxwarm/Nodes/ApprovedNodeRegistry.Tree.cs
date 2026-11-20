@@ -64,6 +64,17 @@ internal sealed partial class ApprovedNodeRegistry
         return result;
     }
 
+    internal IReadOnlyList<string> NativeRemovalNodes(string id, bool cascade, Mutation mutation)
+    {
+        mutation.Require(this);
+        var subtree = Forest().Subtree(id);
+        if (!cascade && subtree.Count > 1)
+            throw new InvalidDataException("Node has descendants; cascade is required.");
+        if (subtree.Any(node => node == "master" || node.Contains('/')))
+            throw new InvalidDataException("Native credential cascade cannot contain executable-provider Nodes.");
+        return subtree;
+    }
+
     internal NodeAuthorizationForest Forest()
     {
         lock (gate)

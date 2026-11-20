@@ -156,6 +156,8 @@ public sealed class ResponsesEventAccumulator
             case "response.image_generation_call.generating":
             case "response.image_generation_call.completed":
             case "response.image_generation_call.partial_image":
+            case "response.image_generation_call.failed":
+            case "response.image_generation_call.incomplete":
                 callbacks?.OnImageGenerationActivity?.Invoke();
                 if (
                     outputIndex is not null
@@ -165,10 +167,11 @@ public sealed class ResponsesEventAccumulator
                 {
                     var previousStatus = String(imageItem, "status");
                     var status =
-                        type == "response.image_generation_call.completed"
-                        || previousStatus == "completed"
-                            ? "completed"
-                            : "in_progress";
+                        type == "response.image_generation_call.failed" ? "failed"
+                        : type == "response.image_generation_call.incomplete" ? "incomplete"
+                        : previousStatus is "failed" or "incomplete" or "completed" ? previousStatus
+                        : type == "response.image_generation_call.completed" ? "completed"
+                        : "in_progress";
                     if (status != previousStatus)
                     {
                         EnsureOutputItem(
@@ -797,7 +800,7 @@ public sealed class ResponsesEventAccumulator
     private static string? Scalar(JsonNode? node) =>
         node is null ? null
         : node is JsonValue v && v.TryGetValue<string>(out var s) ? s
-        : node.ToJsonString();
+        : node.ToJsonText();
 
     private static string? String(JsonObject? obj, string name) =>
         obj?[name] is JsonValue v && v.TryGetValue<string>(out var value) ? value : null;

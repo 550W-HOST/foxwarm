@@ -9,6 +9,46 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
 {
     internal const int MaxBytes = 256 * 1024;
 
+    private bool? operationRules;
+
+    // Whether the policy contains an operation rule (a rule with `op`). Only such a policy is
+    // evaluated by the two-domain evaluator; a version-1-only policy decides as before.
+    internal bool HasOperationRules => operationRules ??= OperationRules.HasOperationRules(this);
+
+    // Load-time notes about rules that can never match, such as rules naming a removed
+    // discovery builtin. They never make a policy unavailable.
+    internal IReadOnlyList<string> Warnings { get; init; } = [];
+
+    // Builtin names that are not concrete capabilities. search_tools only gated discovery,
+    // which is now filtered by each target's own policy; ctl and the former call_tool are
+    // permission-neutral front ends. A rule naming one is accepted and has no effect.
+    internal static readonly IReadOnlyList<string> NonCapabilityBuiltins =
+    [
+        "search_tools",
+        "call_tool",
+        "ctl",
+    ];
+
+    [ThreadStatic]
+    private static List<string>? warnings;
+
+    private static readonly HashSet<string> reported = new(StringComparer.Ordinal);
+
+    // Logs each distinct warning of a loaded policy once per process.
+    internal static void Report(string scope, ToolAuthorizationPolicy policy)
+    {
+        foreach (var warning in policy.Warnings)
+        {
+            var line = $"Tool authorization {scope}: {warning}";
+            lock (reported)
+            {
+                if (reported.Count >= 1024 || !reported.Add(line))
+                    continue;
+            }
+            MainLog.Diagnostic(line);
+        }
+    }
+
     internal static ToolAuthorizationPolicy Compatibility() =>
         Normalize(new JsonObject { ["version"] = 1 });
 
@@ -17,6 +57,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         {
             ["send_to_session"] = ("sessionId", "send"),
             ["send_file"] = ("sessionId", "file"),
+            // Every `session` action treats an omitted or blank sessionId as the caller.
+            ["session"] = ("sessionId", "session"),
             ["recall"] = ("sessionId", "recall"),
             ["view_session"] = ("sessionId", "required"),
             ["get_session_messages"] = ("sessionId", "required"), // Persisted Session-target selectors.
@@ -60,7 +102,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return
             node?.GetValueKind() == System.Text.Json.JsonValueKind.Number
             && double.TryParse(
-                node.ToJsonString(),
+                node.ToJsonText(),
                 System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture,
                 out var number
@@ -165,6 +207,14 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                         SessionWait.Text(value) == name
                     )
                 );
+        foreach (var retired in NonCapabilityBuiltins)
+            if (
+                Explicit(retired)
+                && ToolAuthorizationEvaluation.ToolMatches(result, "builtin", retired, null)
+            )
+                warnings?.Add(
+                    $"builtin {retired} is not a capability and is ignored; access to tools through ctl is decided by each target's own rules."
+                );
         if (
             Explicit("update_session_snapshot")
             && ToolAuthorizationEvaluation.ToolMatches(
@@ -185,6 +235,35 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 "Obsolete builtin set_tool_rules; migrate to set_config with an explicit target constraint (tool-rules for the former policy setter)."
             );
         return result;
+    }
+
+    // Selector parsers shared with operation rules (OperationRules.Normalize).
+    internal static JsonNode? CallerMatcher(JsonNode? node) => Matcher(node);
+
+    internal static JsonNode? ValueMatcher(JsonNode? node) => Matcher(node);
+
+    internal static JsonNode Identities(JsonNode? node) => IdentityPattern(node);
+
+    internal static JsonNode NodeSelector(JsonNode? node) => NodeMatcher(node);
+
+    internal static JsonObject SecretSelector(JsonNode? node) => SecretsMatcher(node);
+
+    internal static JsonObject SessionCondition(JsonNode? node) =>
+        Argument(node) as JsonObject
+        ?? throw new InvalidDataException("Invalid Session-target matcher.");
+
+    internal static string PathRoot(JsonNode? node)
+    {
+        var text = String(node);
+        if (
+            Regex
+                .Matches(text, @"\$\{[^}]+\}")
+                .Any(match =>
+                    match.Value is not ("${agent.dir}" or "${agent.memoryDir}" or "${workspace}")
+                )
+        )
+            throw new InvalidDataException("Unsupported policy path variable.");
+        return text;
     }
 
     private static JsonObject PathMatcher(JsonNode? node)
@@ -265,6 +344,48 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return new JsonObject { ["provider"] = provider };
     }
 
+    // `secrets: {anyOf: [...], owned: true}` selects calls by the stored secrets they would send
+    // somewhere. Patterns use secret-name characters and `*`; `owned` selects secrets the
+    // caller's Agent owns. Both conditions apply to each name.
+    private static JsonObject SecretsMatcher(JsonNode? node)
+    {
+        if (node is not JsonObject map || !map.ContainsKey("anyOf") && !map.ContainsKey("owned"))
+            throw new InvalidDataException(
+                "`secrets` requires `anyOf` names, `owned: true`, or both."
+            );
+        Fields(map, "anyOf", "owned");
+        var result = new JsonObject();
+        if (map.ContainsKey("anyOf"))
+        {
+            var values = map["anyOf"] is JsonArray list ? list.ToArray() : [map["anyOf"]];
+            if (values.Length is < 1 or > 64)
+                throw new InvalidDataException("Secrets matcher requires 1-64 names.");
+            var patterns = values.Select(value => String(value, 128)).ToArray();
+            if (
+                patterns.Any(value =>
+                    !Regex.IsMatch(value, @"^[a-z0-9._*-]+$", RegexOptions.CultureInvariant)
+                )
+            )
+                throw new InvalidDataException(
+                    "Secret name pattern supports secret name characters and '*' only."
+                );
+            result["anyOf"] = new JsonArray(
+                patterns.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+            );
+        }
+        if (map.ContainsKey("owned"))
+        {
+            if (
+                map["owned"] is not JsonValue owned
+                || !owned.TryGetValue<bool>(out var value)
+                || !value
+            )
+                throw new InvalidDataException("`secrets.owned` accepts only true.");
+            result["owned"] = true;
+        }
+        return result;
+    }
+
     private static JsonNode? Argument(JsonNode? node)
     {
         if (node is JsonObject agentWrapper && agentWrapper.ContainsKey("agent"))
@@ -324,7 +445,146 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return new JsonObject { ["session"] = result };
     }
 
+    internal const int MinApprovalTimeoutSeconds = 30;
+    internal const int MaxApprovalTimeoutSeconds = 7 * 24 * 60 * 60;
+
+    // Approval options of an ask rule: an optional deadline and the scoped WebUI identities that
+    // may decide in addition to the administrator.
+    private static JsonObject Approval(JsonNode? value)
+    {
+        if (value is not JsonObject approval)
+            throw new InvalidDataException("Policy approval must be an object.");
+        Fields(approval, "timeoutSeconds", "approvers");
+        var result = new JsonObject();
+        if (approval.ContainsKey("timeoutSeconds"))
+        {
+            var seconds = Number(approval["timeoutSeconds"]);
+            if (
+                seconds is not double number
+                || number != Math.Floor(number)
+                || number < MinApprovalTimeoutSeconds
+                || number > MaxApprovalTimeoutSeconds
+            )
+                throw new InvalidDataException(
+                    $"Policy approval timeoutSeconds must be an integer from {MinApprovalTimeoutSeconds} to {MaxApprovalTimeoutSeconds}."
+                );
+            result["timeoutSeconds"] = (long)number;
+        }
+        if (approval.ContainsKey("approvers"))
+        {
+            if (approval["approvers"] is not JsonArray list || list.Count is < 1 or > 64)
+                throw new InvalidDataException(
+                    "Policy approval approvers must list 1 to 64 identity IDs."
+                );
+            var approvers = new JsonArray();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in list)
+            {
+                if (
+                    SessionWait.Text(item) is not string identity
+                    || !Regex.IsMatch(identity, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+                )
+                    throw new InvalidDataException("Policy approver must be an identity ID.");
+                if (seen.Add(identity))
+                    approvers.Add((JsonNode?)identity);
+            }
+            result["approvers"] = approvers;
+        }
+        return result;
+    }
+
+    // Builtins a normalized tool selector names explicitly whose every branch is self-scoped
+    // (D-auth-operation-self-exempt). Since operation authorization phase 3 no rule decides them,
+    // so a deny or ask naming one silently stopped applying; the load warning reports it.
+    private static IEnumerable<string> SelfScopedNames(JsonNode tool)
+    {
+        var requested = tool is JsonObject selected ? selected["name"] : tool;
+        var names = requested switch
+        {
+            JsonArray list => list.Select(SessionWait.Text),
+            JsonObject map => (map["oneOf"] as JsonArray ?? [])
+                .Select(SessionWait.Text)
+                .Prepend(SessionWait.Text(map["equals"])),
+            _ => [SessionWait.Text(requested)],
+        };
+        foreach (var name in names.OfType<string>().Distinct(StringComparer.Ordinal))
+        {
+            var declaration = OperationDeclarations.Find("builtin", name);
+            if (
+                declaration is { Opaque: false, Prefix: false, Branches.Count: > 0 }
+                && declaration.Name == name
+                && declaration.Branches.All(branch => branch.Self is not null)
+                && ToolAuthorizationEvaluation.ToolMatches(tool, "builtin", name, null)
+            )
+                yield return name;
+        }
+    }
+
     internal static ToolAuthorizationPolicy Normalize(JsonObject root)
+    {
+        var previous = warnings;
+        warnings = [];
+        try
+        {
+            var policy = NormalizeCore(root);
+            return warnings.Count == 0
+                ? policy
+                : policy with
+                {
+                    Warnings = warnings.Distinct(StringComparer.Ordinal).ToArray(),
+                };
+        }
+        finally
+        {
+            warnings = previous;
+        }
+    }
+
+    // The approval options and reason of a rule of either kind.
+    private static void Options(JsonObject rule, JsonObject normalized)
+    {
+        if (rule.ContainsKey("approval"))
+            normalized["approval"] = Approval(rule["approval"]);
+        if (rule.ContainsKey("reason"))
+        {
+            var reason =
+                SessionWait.Text(rule["reason"])
+                ?? throw new InvalidDataException("Policy reason must be a string.");
+            if (Encoding.UTF8.GetByteCount(reason) > 1024)
+                throw new InvalidDataException("Policy reason exceeds 1024 bytes.");
+            if (reason.Length > 0)
+                normalized["reason"] = reason;
+        }
+    }
+
+    // An operation rule (a rule with `op`): the same id, enabled, action, approval and reason as
+    // a version-1 rule, with operation selectors instead of tool, args and match.
+    private static JsonObject OperationRule(JsonObject rule, int position, HashSet<string> ids)
+    {
+        var id = rule.ContainsKey("id") ? String(rule["id"], 128) : $"rule-{position + 1}";
+        if (!ids.Add(id))
+            throw new InvalidDataException("Duplicate policy rule ID.");
+        var enabled = !rule.ContainsKey("enabled") || Boolean(rule["enabled"]);
+        var effect = SessionWait.Text(rule["action"]);
+        if (effect is not ("allow" or "ask" or "deny"))
+            throw new InvalidDataException("Invalid policy action.");
+        if (rule.ContainsKey("approval") && effect != "ask")
+            throw new InvalidDataException("Policy approval options require action ask.");
+        var normalized = new JsonObject { ["id"] = id, ["enabled"] = enabled };
+        OperationRules.Normalize(rule, id, normalized);
+        normalized["action"] = effect;
+        var match = normalized["match"]!.AsObject();
+        if (effect == "ask" && match.ContainsKey("externalId"))
+            throw new InvalidDataException(
+                "Action ask cannot select external callers; they cannot wait for approval."
+            );
+        if (OperationRules.NamesSecretUse(normalized) && match.ContainsKey("externalId"))
+            throw new InvalidDataException("Secrets selectors cannot select external callers.");
+        Options(rule, normalized);
+        return normalized;
+    }
+
+    private static ToolAuthorizationPolicy NormalizeCore(JsonObject root)
     {
         Fields(root, "version", "defaultAction", "rules");
         if (Number(root["version"]) != 1)
@@ -332,7 +592,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         var action = root.ContainsKey("defaultAction")
             ? SessionWait.Text(root["defaultAction"])
             : "allow";
-        if (action is not ("allow" or "deny"))
+        if (action is not ("allow" or "ask" or "deny"))
             throw new InvalidDataException("Invalid policy defaultAction.");
         var raw = root.ContainsKey("rules")
             ? root["rules"] as JsonArray
@@ -346,6 +606,11 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         {
             if (node is not JsonObject rule)
                 throw new InvalidDataException("Policy rule must be an object.");
+            if (rule.ContainsKey("op"))
+            {
+                rules.Add(OperationRule(rule, rules.Count, ids));
+                continue;
+            }
             Fields(
                 rule,
                 "id",
@@ -353,11 +618,13 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 "match",
                 "action",
                 "reason",
+                "approval",
                 "agent",
                 "session",
                 "externalId",
                 "tool",
                 "node",
+                "secrets",
                 "args",
                 "path"
             );
@@ -368,6 +635,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 "externalId",
                 "tool",
                 "node",
+                "secrets",
                 "args",
                 "path",
             };
@@ -379,8 +647,10 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 throw new InvalidDataException("Duplicate policy rule ID.");
             var enabled = !rule.ContainsKey("enabled") || Boolean(rule["enabled"]);
             var effect = SessionWait.Text(rule["action"]);
-            if (effect is not ("allow" or "deny"))
+            if (effect is not ("allow" or "ask" or "deny"))
                 throw new InvalidDataException("Invalid policy action.");
+            if (rule.ContainsKey("approval") && effect != "ask")
+                throw new InvalidDataException("Policy approval options require action ask.");
             var match = new JsonObject();
             if (shorthand || rule.ContainsKey("match"))
             {
@@ -404,7 +674,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     "targetNode",
                     "args",
                     "path",
-                    shorthand ? "node" : "targetNode"
+                    shorthand ? "node" : "targetNode",
+                    shorthand ? "secrets" : "targetNode"
                 );
                 foreach (var key in new[] { "agent", "externalId", "targetNode" })
                     if (source.ContainsKey(key))
@@ -415,6 +686,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                         : Matcher(source["session"]);
                 if (shorthand && source.ContainsKey("node"))
                     match["node"] = NodeMatcher(source["node"]);
+                if (shorthand && source.ContainsKey("secrets"))
+                    match["secrets"] = SecretsMatcher(source["secrets"]);
                 if (source.ContainsKey("tool"))
                     match["tool"] = Tool(source["tool"]);
                 if (source.ContainsKey("path"))
@@ -505,6 +778,20 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     match["args"] = arguments;
                 }
             }
+            if (effect is "deny" or "ask" && match["tool"] is { } named)
+                foreach (var self in SelfScopedNames(named))
+                    warnings?.Add(
+                        $"rule `{id}` names builtin `{self}`, which acts only on the caller's own turn, runs or history. Rules don't apply to it, so the rule has no effect on it."
+                    );
+            // An inbound external principal has no Session or approver; an ask rule naming one
+            // could never be satisfied.
+            if (effect == "ask" && match.ContainsKey("externalId"))
+                throw new InvalidDataException(
+                    "Action ask cannot select external callers; they cannot wait for approval."
+                );
+            // External callers never send stored secrets, so such a rule could never match.
+            if (match.ContainsKey("secrets") && match.ContainsKey("externalId"))
+                throw new InvalidDataException("Secrets selectors cannot select external callers.");
             var normalized = new JsonObject
             {
                 ["id"] = id,
@@ -512,16 +799,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 ["match"] = match,
                 ["action"] = effect,
             };
-            if (rule.ContainsKey("reason"))
-            {
-                var reason =
-                    SessionWait.Text(rule["reason"])
-                    ?? throw new InvalidDataException("Policy reason must be a string.");
-                if (Encoding.UTF8.GetByteCount(reason) > 1024)
-                    throw new InvalidDataException("Policy reason exceeds 1024 bytes.");
-                if (reason.Length > 0)
-                    normalized["reason"] = reason;
-            }
+            Options(rule, normalized);
             rules.Add(normalized);
         }
         return new(

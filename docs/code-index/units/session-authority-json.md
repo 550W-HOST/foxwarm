@@ -1,12 +1,13 @@
 # Unit: Session authority JSON and atomic file writes
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityDocument.cs`, `dotnet/Foxwarm/Sessions/Storage/LinuxAtomicJsonFile.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityReader.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityErrors.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityDocument.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityFile.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityReader.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityErrors.cs`
+Secondary files: `dotnet/Foxwarm.NodePrimitives/AtomicJsonFile.cs`
 
 ## Purpose
 
 **Implementation owner.** Implements the selected [per-Session JSON authority](../threads/session-ownership-and-persistence.md#active-json-authority) and its real persisted-format compatibility. DTO fields and streaming writer structure below describe the mechanism, not independent product requirements.
 
-Defines and durably writes the active per-Session JSON authority. `SessionAuthorityDocument` validates the supported semantic shape before any write; `LinuxAtomicJsonFile` performs temp-file write, file fsync, rename, and directory-sync classification.
+Defines and durably writes the active per-Session JSON authority. `SessionAuthorityDocument` validates the supported semantic shape before any write; the shared [`AtomicJsonFile`](./dotnet-node-primitives.md#durable-state-files) performs temp-file write, file fsync, rename, and directory-sync classification.
 
 [Claude Code Sessions](./session-claude-runtime.md) use version 2 with a validated external checkpoint; Foxwarm authority remains version 1. Normalization preserves the supported version/runtime combination rather than coercing an external Session into the provider loop. The external unit owns its checkpoint and compatibility rationale.
 
@@ -16,7 +17,7 @@ Defines and durably writes the active per-Session JSON authority. `SessionAuthor
 - `ValidateMessageContent` shares role/parts content checks with historical Archive readers and queued messages. Its shared part validator also checks direct queued `parts`, including object-shaped image, function-call and function-response carriers, before image materialization or owner activation. Queue content does not require already allocated message metadata. `ValidateMessage` distinguishes retained active history from new Archive admission: active rows may lack metadata, sequence or timestamp; new Archive rows require a matching positive sequence and finite timestamp, with separate row/inner timestamp equality checks.
 - `EcmaJson` keeps Archive finite/exact-integer admission, CLR decimal rejection, property normalization and writer failure contracts here; only pure finite binary64 formatting is shared through [NodePrimitives](./dotnet-node-primitives.md).
 - `SessionAuthorityDocument.ValidateState` shares envelope/queue/meta validation between full-document ingress and immutable-history streaming saves; `WriteTo` writes complete UTF-8 JSON while validating each immutable record with the existing message schema.
-- `LinuxAtomicJsonFile.Write`, `WritePayload`, and the internal stream writers share one atomic-file publication path. `WriteStreamPayloadAsync` can await an Archive receipt after temporary-file preparation but before rename. `AtomicJsonWriteStage` is the testable boundary for pre-rename versus post-rename failure classification.
+- `SessionAuthorityFile.Write`/`Read` bind a whole `SessionAuthorityDocument` to `AtomicJsonFile`; the authority store streams through `WriteStreamPayload`/`WriteStreamPayloadAsync`. All share one atomic-file publication path. `WriteStreamPayloadAsync` can await an Archive receipt after temporary-file preparation but before rename. `AtomicJsonWriteStage` is the testable boundary for pre-rename versus post-rename failure classification.
 - `AuthorityCommittedException.AuthorityCommitted` tells callers that the rename happened even if directory sync or a later projection step failed.
 
 Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `SessionSaveLane` supplies ordered snapshots; startup loads through the store. Catalog-only `lastChannel`, `archived`, `pinned`, and sidebar fields are removed or kept outside this authority.
@@ -33,7 +34,7 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 - Streaming writes flush bounded batches at record/property boundaries rather than accumulating the complete UTF-8 document. A single large record or state property can exceed that batch size. The temporary file uses ordinary buffered writes followed by one `Flush(flushToDisk:true)` before rename; this retains the complete-file durability boundary without synchronous disk work for every serialization chunk.
 - A failure before rename leaves the previous authority and removes the temp file. A failure after rename raises `AuthorityCommittedException`; reading the file returns the newly published document.
 - Directory sync may be unsupported on a platform, but the result is recorded; the host still distinguishes publication from durability-finalization failure.
-- The optional `privateFile` creation mode supplies owner-only temporary files for MCP configuration and OAuth credentials. The same write/fsync/rename/directory-sync primitive remains canonical; ordinary Session authority callers keep their existing defaults.
+- Session authority uses the helper's defaults: no owner-only creation mode and no backups. The helper's own contract, its other callers and its platform behavior are owned by [NodePrimitives](./dotnet-node-primitives.md#durable-state-files).
 
 ## Tests
 

@@ -80,14 +80,75 @@ internal sealed partial class NodeClient
         await connection.Request(frame);
     }
 
+    // Main's request to stop a tracked Session command (negotiated as features.execControl).
+    // The reply goes back on the originating connection; a lost reply is not retried by Main.
+    private void ScheduleExecControl(Connection connection, JsonObject frame)
+    {
+        var sequence = Interlocked.Increment(ref dispatchSequence);
+        var task = Task.Run(() => ExecControl(connection, frame));
+        dispatches[sequence] = (task, true);
+        _ = task.ContinueWith(
+            _ =>
+            {
+                dispatches.TryRemove(sequence, out var removed);
+            },
+            TaskScheduler.Default
+        );
+    }
+
+    private async Task ExecControl(Connection connection, JsonObject frame)
+    {
+        var response = new JsonObject
+        {
+            ["type"] = "exec_control_response",
+            ["requestId"] = frame["requestId"]?.DeepClone(),
+        };
+        try
+        {
+            if (!ExecNative.Supported || Text(frame, "action") != "stop")
+                throw new InvalidDataException("Unsupported exec control request.");
+            var agent =
+                Text(frame, "agentName") is { } value && !string.IsNullOrWhiteSpace(value)
+                    ? value
+                    : "main";
+            var manager = Manager(agent);
+            await manager.Initialize();
+            response["result"] = new JsonObject
+            {
+                ["outcome"] = await manager.Stop(
+                    Text(frame, "sessionId") ?? "",
+                    Text(frame, "execId") ?? "",
+                    Text(frame, "completionCapability") ?? ""
+                ),
+            };
+        }
+        catch (Exception error)
+        {
+            response["error"] = error is InvalidDataException
+                ? error.Message
+                : "Exec stop failed: " + error.GetType().Name;
+        }
+        try
+        {
+            await connection.Send(response);
+        }
+        catch (Exception error)
+        {
+            Log("exec_control_reply", error.GetType().Name);
+        }
+    }
+
     private void ScheduleDispatch(Connection connection, JsonObject frame)
     {
         var call = Text(frame, "callId") ?? "";
         CancellationTokenSource? cancellation = null;
         if (
             Text(frame, "type") == "tool_call"
-            && Text(frame, "tool") == "exec"
             && !frame.ContainsKey("owner")
+            && (
+                Text(frame, "tool") == "exec"
+                || Text(frame, "tool")?.StartsWith("browser_", StringComparison.Ordinal) == true
+            )
         )
         {
             cancellation = new();

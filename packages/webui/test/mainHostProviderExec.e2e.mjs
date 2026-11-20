@@ -5,6 +5,7 @@ import { once } from 'node:events'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { receiptExecId } from './execReceipt.mjs'
 
 const env = {}, options = { env, }
 const fixture = await createHostFixture('provider-exec', options)
@@ -28,8 +29,8 @@ const model = createServer(async (request, response) => {
       const command = phase === 'stop' ? 'sleep 2; printf x >> stop-effect' : 'sleep 10; printf x >> restart-effect'
       output = [{ type: 'function_call', call_id: callId, name: 'exec', arguments: JSON.stringify({ command, timeout: phase === 'stop' ? 15 : 1 }) }]
     } else if (phase === 'restart') {
-      const text = typeof result.output === 'string' ? result.output : JSON.stringify(result.output)
-      restartId = /execId: ([a-z]+-[a-z]+)/.exec(text)?.[1]
+      const text = typeof result.output === 'string' ? result.output : result.output.map(part => part.text).join('\n')
+      restartId = receiptExecId(text)
       assert(restartId, text)
       const event = body.input.some(row => JSON.stringify(row).includes('background-process-finished') && JSON.stringify(row).includes(restartId))
       output = event

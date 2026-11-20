@@ -32,7 +32,7 @@ internal static class MemoryTools
         JsonObject args
     )
     {
-        var agent = owner.Agent;
+        var agent = TargetAgent(manager, owner, args);
         if (name == "apply_patch_memory")
         {
             var input = Text(args, "input");
@@ -42,7 +42,6 @@ internal static class MemoryTools
                 {
                     var path = PathOf(
                         manager,
-                        owner,
                         new JsonObject { ["filePath"] = operation.Path },
                         agent,
                         false
@@ -56,18 +55,36 @@ internal static class MemoryTools
                 .ToArray();
         }
         var raw = Text(args, "filePath");
-        var resolved = PathOf(manager, owner, args, agent);
+        var resolved = PathOf(manager, args, agent);
         return
         [
             new AuthorizationPath("filePath", raw, AuthorizationPaths.CanonicalPotential(resolved)),
         ];
     }
 
+    // The Agent whose memory a memory tool reads or writes: the optional agentName, verbatim (a
+    // padded or non-canonical name is rejected, as for create_child_session), else the caller's
+    // Agent. The handler and the authorization facts both call it, so the path a rule decides is
+    // the path the handler touches.
+    internal static string TargetAgent(SessionManager manager, SessionOwner owner, JsonObject args)
+    {
+        if (args["agentName"] is null)
+            return owner.Agent;
+        var name = Text(args, "agentName");
+        AgentCatalog.ValidateName(name);
+        // Throws when the Agent does not exist.
+        manager.MemoryDirectory(name);
+        return name;
+    }
+
+    // " (Agent name)" for a call that named its Agent, so the reply says whose file changed.
+    private static string Named(JsonObject args, string agent) =>
+        args["agentName"] is null ? "" : $" (Agent {agent})";
+
     private static string PathOf(
         SessionManager manager,
-        SessionOwner owner,
         JsonObject args,
-        string? agent = null,
+        string agent,
         bool normalizeLeadingSlash = true
     )
     {
@@ -78,12 +95,12 @@ internal static class MemoryTools
             && (trimmed.StartsWith("/", StringComparison.Ordinal) || Path.IsPathRooted(trimmed))
         )
             throw new InvalidDataException(
-                "Patch file paths must be relative to the current agent memory directory."
+                "Patch file paths must be relative to the Agent's memory directory."
             );
         var relative = normalizeLeadingSlash ? trimmed.TrimStart('/', '\\') : trimmed;
         if (relative.Equals("memory", StringComparison.Ordinal))
             throw new InvalidDataException(
-                "filePath must include a path below the current agent memory directory."
+                "filePath must include a path below the Agent's memory directory."
             );
         if (
             relative.StartsWith("memory/", StringComparison.Ordinal)
@@ -92,18 +109,16 @@ internal static class MemoryTools
             relative = relative[7..].TrimStart('/', '\\');
         if (relative.Length == 0 || relative == "." || relative == "..")
             throw new InvalidDataException(
-                "filePath must point to a file inside the current agent memory directory."
+                "filePath must point to a file inside the Agent's memory directory."
             );
-        var root = AuthorizationPaths.CanonicalPotential(
-            manager.MemoryDirectory(agent ?? owner.Agent)
-        );
+        var root = AuthorizationPaths.CanonicalPotential(manager.MemoryDirectory(agent));
         var path = Path.GetFullPath(Path.Combine(root, relative));
         if (
             path != root
             && !path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
         )
             throw new InvalidDataException(
-                "Path traversal detected: cannot access files outside the current agent memory directory."
+                "Path traversal detected: cannot access files outside the Agent's memory directory."
             );
         if (File.Exists(path) || Directory.Exists(path))
         {
@@ -123,8 +138,8 @@ internal static class MemoryTools
         CancellationToken token
     )
     {
-        var agent = owner.Agent;
-        var path = PathOf(manager, owner, args, agent);
+        var agent = TargetAgent(manager, owner, args);
+        var path = PathOf(manager, args, agent);
         if (!File.Exists(path) && !Directory.Exists(path))
             throw new FileNotFoundException("Memory file or directory not found.", path);
         double? Number(string key) =>
@@ -151,11 +166,11 @@ internal static class MemoryTools
         CancellationToken token
     )
     {
-        var agent = owner.Agent;
-        var path = PathOf(manager, owner, args, agent);
+        var agent = TargetAgent(manager, owner, args);
+        var path = PathOf(manager, args, agent);
         if (File.Exists(path) || Directory.Exists(path))
             throw new InvalidDataException(
-                $"Memory file already exists: {Display(manager, agent, path)}. write_memory only creates new files; use edit_memory to modify an existing memory file."
+                $"Memory file already exists: {Display(manager, agent, path)}. `ctl memory write` only creates new files; use `ctl memory edit` to modify an existing memory file."
             );
         var content = Text(args, "content");
         var parent = Path.GetDirectoryName(path)!;
@@ -165,7 +180,8 @@ internal static class MemoryTools
         await FileToolWrite.WriteAtomic(path, content, false, () => EnsureParents(parent), token);
         return new JsonObject
         {
-            ["output"] = "Memory file created: " + Display(manager, agent, path),
+            ["output"] =
+                "Memory file created: " + Display(manager, agent, path) + Named(args, agent),
         };
     }
 
@@ -176,8 +192,8 @@ internal static class MemoryTools
         CancellationToken token
     )
     {
-        var agent = owner.Agent;
-        var path = PathOf(manager, owner, args, agent);
+        var agent = TargetAgent(manager, owner, args);
+        var path = PathOf(manager, args, agent);
         var oldText = Text(args, "oldText");
         var newText = Text(args, "newText");
         var current = await ReadText(path, token);
@@ -197,7 +213,8 @@ internal static class MemoryTools
         await WriteAtomic(path, updated, token);
         return new JsonObject
         {
-            ["output"] = "Memory file edited: " + Display(manager, agent, path),
+            ["output"] =
+                "Memory file edited: " + Display(manager, agent, path) + Named(args, agent),
         };
     }
 
@@ -208,8 +225,8 @@ internal static class MemoryTools
         CancellationToken token
     )
     {
-        var agent = owner.Agent;
-        var path = PathOf(manager, owner, args, agent);
+        var agent = TargetAgent(manager, owner, args);
+        var path = PathOf(manager, args, agent);
         token.ThrowIfCancellationRequested();
         if (!File.Exists(path) && !Directory.Exists(path))
             throw new FileNotFoundException("Memory file not found.", path);
@@ -221,7 +238,11 @@ internal static class MemoryTools
         return Task.FromResult(
             new JsonObject
             {
-                ["output"] = "Deleted memory file `" + Display(manager, agent, path) + "`",
+                ["output"] =
+                    "Deleted memory file `"
+                    + Display(manager, agent, path)
+                    + "`"
+                    + Named(args, agent),
             }
         );
     }
@@ -233,7 +254,7 @@ internal static class MemoryTools
         CancellationToken token
     )
     {
-        var agent = owner.Agent;
+        var agent = TargetAgent(manager, owner, args);
         var input = Text(args, "input");
         var operations = WorkspacePatch.Parse(input);
         var summaries = new List<string>();
@@ -242,7 +263,7 @@ internal static class MemoryTools
             foreach (var operation in operations)
             {
                 var patchArgs = new JsonObject { ["filePath"] = operation.Path };
-                var path = PathOf(manager, owner, patchArgs, agent, false);
+                var path = PathOf(manager, patchArgs, agent, false);
                 if (operation.Action == "add")
                 {
                     if (File.Exists(path) || Directory.Exists(path))
@@ -277,7 +298,9 @@ internal static class MemoryTools
             return new JsonObject
             {
                 ["output"] =
-                    "Patch applied successfully.\n"
+                    "Patch applied successfully"
+                    + Named(args, agent)
+                    + ".\n"
                     + string.Join('\n', summaries.Select(item => "- " + item)),
             };
         }

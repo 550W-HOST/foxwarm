@@ -10,25 +10,11 @@ internal sealed partial class SessionToolExecutor
         var name = SessionWait.Text(call["name"]);
         if (name == "submit_compact_plan")
             return (JsonObject)call.DeepClone();
-        if (name != "call_tool" || call["args"] is not JsonObject wrapper)
+        if (name != "ctl" || call["args"] is not JsonObject wrapper)
             return null;
-        var toolId = SessionWait.Text(wrapper["toolId"]);
-        var compactTarget = toolId is { Length: > 0 }
-            ? toolId.StartsWith("builtin:", StringComparison.Ordinal)
-                && toolId[8..].Trim() == "submit_compact_plan"
-            : SessionWait.Text(wrapper["source"])?.Trim() == "builtin"
-                && SessionWait.Text(wrapper["name"]) == "submit_compact_plan";
-        if (!compactTarget)
-            return null;
-        if (wrapper.ContainsKey("args") && wrapper.ContainsKey("argsJson"))
-            return null; // The dispatcher owns malformed wrapper arguments.
-        var parsed = FunctionCallArguments.Parse(wrapper["argsJson"] ?? wrapper["args"]);
-        var result = new JsonObject { ["args"] = parsed.Args };
-        if (parsed.RawArgsText is not null)
-            result["rawArgsText"] = parsed.RawArgsText;
-        if (parsed.ArgsParseError is not null)
-            result["argsParseError"] = parsed.ArgsParseError;
-        return result;
+        return CtlParser.Describe(wrapper) is { Source: "builtin", Name: "submit_compact_plan" } described
+            ? new JsonObject { ["args"] = described.Args.DeepClone() }
+            : null;
     }
 
     private async Task<JsonObject> SubmitCompactPlanAsync(JsonObject args, CancellationToken token)
@@ -36,9 +22,8 @@ internal sealed partial class SessionToolExecutor
         var call = invocation.Value?.CompactCall ?? new JsonObject { ["args"] = args.DeepClone() };
         var malformed = call["argsParseError"] is not null;
         if (!malformed && !args.ContainsKey("inContext"))
-            return UnsupportedTurnToolExecutor.ToolError(
-                "unknown_tool",
-                "submit_compact_plan is available only to the dedicated compactor."
+            return ToolFailure.Result(
+                "submit_compact_plan can be used only in a compaction request, or as the in-context-compaction skill describes."
             );
         if (
             !malformed
@@ -46,9 +31,8 @@ internal sealed partial class SessionToolExecutor
             && flag.TryGetValue<bool>(out var enabled)
             && !enabled
         )
-            return UnsupportedTurnToolExecutor.ToolError(
-                "unknown_tool",
-                "submit_compact_plan is available only to the dedicated compactor."
+            return ToolFailure.Result(
+                "submit_compact_plan can be used only in a compaction request, or as the in-context-compaction skill describes."
             );
         if (
             unattended
@@ -56,8 +40,7 @@ internal sealed partial class SessionToolExecutor
             || foregroundBatch is not long seq
             || CurrentCallId.Length == 0
         )
-            return UnsupportedTurnToolExecutor.ToolError(
-                "compact_plan_invalid",
+            return ToolFailure.Result(
                 "In-context submission requires an ordinary foreground tool batch; nested ToolScript and unattended calls are not supported."
             );
 
@@ -91,10 +74,7 @@ internal sealed partial class SessionToolExecutor
         }
         catch (CompactPlanInvalidException error)
         {
-            var result = UnsupportedTurnToolExecutor.ToolError(
-                "compact_plan_invalid",
-                error.Message
-            );
+            var result = ToolFailure.Result(error.Message);
             try
             {
                 var path =
@@ -104,7 +84,8 @@ internal sealed partial class SessionToolExecutor
                 result["nodeId"] = ExecutionNode;
                 if (ExecutionCwd is not null)
                     result["cwd"] = ExecutionCwd;
-                result["output"] = CompactPlanInput.RepairGuidance + "\n" + path;
+                result["note"] =
+                    "Plan validation failed. The submitted plan was saved to argsFilePath. Correct the reported error with edit, then resubmit using argsFilePath.";
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -131,10 +112,9 @@ internal sealed partial class SessionToolExecutor
             {
                 result["stagingError"] = new JsonObject
                 {
-                    ["type"] =
-                        saveError is ToolAuthorizationDeniedException
-                            ? "tool_authorization_denied"
-                            : "tool_io_error",
+                    ["type"] = saveError is ToolAuthorizationDeniedException denied
+                        ? denied.ErrorType
+                        : "tool_io_error",
                     ["message"] = saveError.Message,
                 };
             }

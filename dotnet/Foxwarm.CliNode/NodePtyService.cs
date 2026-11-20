@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Code;
 using Foxwarm.Terminal;
 
 namespace Foxwarm.CliNode;
@@ -145,7 +146,7 @@ internal sealed class NodePtyService : IAsyncDisposable
                     {
                         pending.Remove(requestId);
                         callback.Completion.TrySetResult(
-                            args["ok"]?.ToJsonString() == "true"
+                            args["ok"]?.ToJsonText() == "true"
                                 ? new(true, NodeFileTools.Text(args["message"]), null)
                                 : new(
                                     false,
@@ -191,7 +192,7 @@ internal sealed class NodePtyService : IAsyncDisposable
         {
             var text =
                 NodeFileTools.Text(value)
-                ?? (value is JsonArray array ? ArrayString(array) : value.ToJsonString());
+                ?? (value is JsonArray array ? ArrayString(array) : value.ToJsonText());
             text = NodePaths.TrimSpace(text);
             if (text.Length == 0)
                 number = 0;
@@ -243,7 +244,7 @@ internal sealed class NodePtyService : IAsyncDisposable
             array.Select(item =>
                 item is JsonArray nested
                     ? ArrayString(nested)
-                    : NodeFileTools.Text(item) ?? item?.ToJsonString() ?? ""
+                    : NodeFileTools.Text(item) ?? item?.ToJsonText() ?? ""
             )
         );
 
@@ -255,7 +256,11 @@ internal sealed class NodePtyService : IAsyncDisposable
 
     private async Task<JsonObject> Create(JsonObject args)
     {
-        var cwd = Path.GetFullPath(Required(args, "cwd"));
+        var requested = Required(args, "cwd");
+        // Code sends Windows drive folders as /C:/...; other forms, including a plain "/",
+        // keep native resolution like Main's terminals.
+        var mapped = CodeNativePaths.IsMapped(requested) && requested != CodeNativePaths.VirtualRoot;
+        var cwd = Path.GetFullPath(mapped ? CodeNativePaths.Native(requested) : requested);
         if (!NodeFileTools.Exists(cwd))
             throw new InvalidOperationException("Directory does not exist: " + cwd);
         if (!Directory.Exists(cwd))
@@ -326,7 +331,8 @@ internal sealed class NodePtyService : IAsyncDisposable
                 native,
                 code.Capability,
                 rc,
-                cwdFile
+                cwdFile,
+                mapped
             );
             lock (gate)
                 terminals.Add(id, record);
@@ -457,7 +463,8 @@ internal sealed class NodePtyService : IAsyncDisposable
         TerminalNative.Handle native,
         string capability,
         string? rcFile,
-        string? cwdFile
+        string? cwdFile,
+        bool mappedCwd
     )
     {
         internal readonly string Id = id,
@@ -494,7 +501,7 @@ internal sealed class NodePtyService : IAsyncDisposable
                 ["id"] = Id,
                 ["nodeId"] = "",
                 ["shell"] = shell,
-                ["cwd"] = cwd,
+                ["cwd"] = mappedCwd ? CodeNativePaths.Transport(cwd) : cwd,
                 ["cols"] = Cols,
                 ["rows"] = Rows,
                 ["createdAt"] = CreatedAt,

@@ -26,7 +26,11 @@ internal sealed partial class SessionCompactor
         var plannerHistoryStart = detached.Count;
         var plannerToolCalls = new List<string>();
         JsonObject? plannerUsage = null;
-        var prompt = CompactPrompt.Build(candidates, guidance);
+        var taskSource = sessions;
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, string>>? taskStatuses = null;
+        if (taskSource is not null)
+            taskStatuses = ids => taskSource.Tasks.Statuses(ids);
+        var prompt = CompactPrompt.Build(candidates, guidance, taskStatuses);
         var promptSnapshot =
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? capturedDefault;
@@ -48,18 +52,23 @@ internal sealed partial class SessionCompactor
                 ? promptSnapshot
                 : baseOptions.Instructions + "\n\n" + promptSnapshot;
         }
+        // A plan rejected only for over-budget summaries is accepted, and the overrun recorded,
+        // after this many budget repair rounds.
+        var budgetRejections = 0;
+        var continuing = false;
         try
         {
             for (var round = 0; round < 15; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                detached.Add(
-                    new JsonObject
-                    {
-                        ["role"] = "user",
-                        ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }),
-                    }
-                );
+                if (!continuing)
+                    detached.Add(
+                        new JsonObject
+                        {
+                            ["role"] = "user",
+                            ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }),
+                        }
+                    );
                 var catalog = models.Capture();
                 ChatResult result;
                 try
@@ -146,6 +155,9 @@ internal sealed partial class SessionCompactor
                 var usage = result.Usage ?? assistant?["__meta"]?["usage"] as JsonObject;
                 if (usage is not null)
                     plannerUsage = CompactionPlannerDebug.AddUsage(plannerUsage, usage);
+                continuing = result.ProviderContinuationPending;
+                if (result.ContinueTurn)
+                    continue;
                 var wrongName = calls
                     .FirstOrDefault(call =>
                         call?["name"]?.GetValue<string>() != "submit_compact_plan"
@@ -163,16 +175,15 @@ internal sealed partial class SessionCompactor
                         if (controlled.Preset is not null)
                         {
                             var canceled = controlled.Preset["canceled"]?.GetValue<bool>() == true;
-                            var presetType = SessionWait.Text(controlled.Preset["error"]?["type"]);
                             var presetMessage =
                                 SessionWait.Text(controlled.Preset["message"])
-                                ?? SessionWait.Text(controlled.Preset["error"]?["message"]);
+                                ?? ToolFailure.Message(controlled.Preset);
                             AppendToolFeedback(
                                 detached,
                                 calls[0]!,
                                 canceled
                                     ? "Compact repair canceled."
-                                    : $"Compact repair failed [{presetType}]: {presetMessage}"
+                                    : $"Compact repair failed: {presetMessage}"
                             );
                         }
                         else
@@ -217,7 +228,7 @@ internal sealed partial class SessionCompactor
                 var controlledPlan = ToolCallControls.Plan([submitted])[0];
                 if (controlledPlan.Preset is not null)
                 {
-                    AppendToolFeedback(detached, submitted, controlledPlan.Preset.ToJsonString());
+                    AppendToolFeedback(detached, submitted, controlledPlan.Preset.ToJsonText());
                     continue;
                 }
                 JsonObject repairInput = submitted;
@@ -253,7 +264,11 @@ internal sealed partial class SessionCompactor
                         repairInput = new JsonObject { ["rawArgsText"] = text };
                         args = CompactPlanInput.ParseFile(text);
                     }
-                    var plan = CompactPlanValidator.Validate(args, candidates);
+                    var plan = CompactPlanValidator.Validate(
+                        args,
+                        candidates,
+                        acceptOverBudget: budgetRejections >= 2
+                    );
                     var messages = new JsonArray();
                     foreach (var message in detached.Skip(plannerHistoryStart))
                     {
@@ -265,12 +280,15 @@ internal sealed partial class SessionCompactor
                             round + 1,
                             plannerToolCalls.ToArray(),
                             plannerUsage,
-                            messages
+                            messages,
+                            plan.OverBudget
                         ),
                     };
                 }
                 catch (CompactPlanInvalidException error)
                 {
+                    if (error is CompactPlanBudgetException)
+                        budgetRejections++;
                     prompt = PlanRejected(error.Message, repairFile);
                     if (!submittedPendingFile)
                     {
@@ -323,9 +341,7 @@ internal sealed partial class SessionCompactor
                         detached,
                         calls,
                         prompt,
-                        error is ToolAuthorizationDeniedException
-                            ? "tool_authorization_denied"
-                            : "tool_io_error"
+                        error is ToolAuthorizationDeniedException denied ? denied.ErrorType : null
                     );
                 }
             }
@@ -343,12 +359,12 @@ internal sealed partial class SessionCompactor
     private static string RepairInstructions(CompactPlanRepairFile? repairFile) =>
         repairFile is null
             ? "Submit corrected direct plan fields with submit_compact_plan."
-            : $"{CompactPlanInput.RepairGuidance} Repair the JSON arguments in {JsonSerializer.Serialize(repairFile.FilePath)} (nodeId={JsonSerializer.Serialize(repairFile.Node)}, cwd={JsonSerializer.Serialize(repairFile.Cwd)}) using edit (patches must contain one update only). Then call submit_compact_plan by itself with {{\"argsFilePath\":{JsonSerializer.Serialize(repairFile.FilePath)}}}. Only this exact file is available for repair; ordinary tool permissions still apply. Current file preview (beginning/end):\n{repairFile.Preview()}\n{(repairFile.StructuredFallback ? "This file was saved by serializing the provider's structured arguments." : "This file was saved from the original provider arguments.")}";
+            : $"{CompactPlanInput.RepairGuidance} Repair the JSON arguments in {JsonData.Serialize(repairFile.FilePath)} (nodeId={JsonData.Serialize(repairFile.Node)}, cwd={JsonData.Serialize(repairFile.Cwd)}) using edit (patches must contain one update only). Then call submit_compact_plan by itself with {{\"argsFilePath\":{JsonData.Serialize(repairFile.FilePath)}}}. Only this exact file is available for repair; ordinary tool permissions still apply. Current file preview (beginning/end):\n{repairFile.Preview()}\n{(repairFile.StructuredFallback ? "This file was saved by serializing the provider's structured arguments." : "This file was saved from the original provider arguments.")}";
 
     private static string PlanRejected(string reason, CompactPlanRepairFile? repairFile) =>
         repairFile is null
             ? $"Compact plan rejected; submit corrected direct plan fields. {reason}"
-            : $"Compact plan rejected. Repair file: {JsonSerializer.Serialize(repairFile.FilePath)}. {reason} {RepairInstructions(repairFile)}";
+            : $"Compact plan rejected. Repair file: {JsonData.Serialize(repairFile.FilePath)}. {reason} {RepairInstructions(repairFile)}";
 
     private static void AppendToolFeedback(
         List<JsonObject> history,
@@ -382,7 +398,7 @@ internal sealed partial class SessionCompactor
         List<JsonObject> history,
         IEnumerable<JsonObject?> calls,
         string feedback,
-        string errorType = "compact_plan_invalid"
+        string? code = null
     )
     {
         var parts = new JsonArray();
@@ -398,14 +414,9 @@ internal sealed partial class SessionCompactor
                     {
                         ["tool_use_id"] = id,
                         ["name"] = call?["name"]?.GetValue<string>() ?? "submit_compact_plan",
-                        ["response"] = new JsonObject
-                        {
-                            ["error"] = new JsonObject
-                            {
-                                ["type"] = errorType,
-                                ["message"] = feedback,
-                            },
-                        },
+                        ["response"] = code is null
+                            ? ToolFailure.Result(feedback)
+                            : ToolFailure.Result(feedback, code),
                     },
                 }
             );

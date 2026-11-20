@@ -51,10 +51,10 @@ public sealed partial class NodeAuthorizationTreeTests
                 .WaitAsync(TimeSpan.FromSeconds(2));
             Success(inspected);
             Assert.Empty(inspected!["node"]!["tools"]!.AsArray());
-            var deniedRead = await f.Call("call_tool", read, reader);
+            var deniedRead = await f.Call("ctl", CtlTestArgs.Unified(read), reader);
             Denied(deniedRead);
             Assert.DoesNotContain("subtree-protected-content", deniedRead!.ToJsonString());
-            var deniedExec = await f.Call("call_tool", exec, reader);
+            var deniedExec = await f.Call("ctl", CtlTestArgs.Unified(exec), reader);
             Denied(deniedExec);
             Assert.DoesNotContain("subtree-exec-proof", deniedExec!.ToJsonString());
             Assert.False(File.Exists(Path.Combine(root, "race-exec.txt")));
@@ -71,18 +71,18 @@ public sealed partial class NodeAuthorizationTreeTests
             // Both actual file contents and an actual command effect remain available on a known,
             // independently permitted endpoint while the other identity's receipt is blocked.
             var knownRead = await f.Call(
-                "call_tool",
-                Obj("""{"toolId":"node:fixture/target/read","args":{"filePath":"secret.txt"}}"""),
+                "ctl",
+                CtlTestArgs.Unified(Obj("""{"toolId":"node:fixture/target/read","args":{"filePath":"secret.txt"}}""")),
                 reader
             );
             Success(knownRead);
             Assert.Contains("subtree-protected-content", knownRead!.ToJsonString());
             Success(
                 await f.Call(
-                    "call_tool",
-                    Obj(
+                    "ctl",
+                    CtlTestArgs.Unified(Obj(
                         """{"toolId":"node:fixture/target/exec","args":{"command":"printf permitted > admitted-control.txt","timeout":1}}"""
-                    ),
+                    )),
                     reader
                 )
             );
@@ -98,16 +98,16 @@ public sealed partial class NodeAuthorizationTreeTests
         }
         Success(await creation);
         Assert.Equal("parent", f.Manager.Nodes.Registry.Forest().Parent("fixture/newcomer"));
-        var afterRead = await f.Call("call_tool", read, reader);
+        var afterRead = await f.Call("ctl", CtlTestArgs.Unified(read), reader);
         Denied(afterRead);
         Assert.DoesNotContain("subtree-protected-content", afterRead!.ToJsonString());
-        Denied(await f.Call("call_tool", exec, reader));
+        Denied(await f.Call("ctl", CtlTestArgs.Unified(exec), reader));
         Assert.False(File.Exists(Path.Combine(root, "race-exec.txt")));
         await f.Policy("version: 1\nrules: []\n");
-        var permittedRead = await f.Call("call_tool", read, reader);
+        var permittedRead = await f.Call("ctl", CtlTestArgs.Unified(read), reader);
         Success(permittedRead);
         Assert.Contains("subtree-protected-content", permittedRead!.ToJsonString());
-        var permittedExec = await f.Call("call_tool", exec, reader);
+        var permittedExec = await f.Call("ctl", CtlTestArgs.Unified(exec), reader);
         Success(permittedExec);
         Assert.Contains("subtree-exec-proof", permittedExec!.ToJsonString());
         Assert.Equal("ran", await File.ReadAllTextAsync(Path.Combine(root, "race-exec.txt")));
@@ -137,8 +137,8 @@ public sealed partial class NodeAuthorizationTreeTests
         var ensure = Lifecycle("ensure", "fixture/target");
         var result = unified
             ? await f.Call(
-                "call_tool",
-                new JsonObject { ["toolId"] = "builtin:node", ["args"] = ensure },
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:node", ["args"] = ensure }),
                 delegated
             )
             : await f.Call("node", ensure, delegated);

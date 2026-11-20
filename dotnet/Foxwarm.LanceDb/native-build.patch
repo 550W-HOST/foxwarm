@@ -1,0 +1,28 @@
+Foxwarm build configuration for the LanceDB native library (pinvoke/ of lennylxx/lancedb-csharp,
+Apache License 2.0; LanceDB and Lance are Apache License 2.0 as well). This patch changes only the
+build configuration of the pinned source: Foxwarm opens local-directory tables only, so the
+object-store back ends (S3, Azure, GCS, OSS, DynamoDB, Hugging Face) are not compiled in, and the
+library is optimized for size instead of speed. No source code is modified.
+Applied by scripts/release/native-source.py (git apply) before scripts/release/build-lancedb.sh builds.
+
+diff --git a/pinvoke/Cargo.toml b/pinvoke/Cargo.toml
+--- a/pinvoke/Cargo.toml
++++ b/pinvoke/Cargo.toml
+@@ -9,7 +9,7 @@
+ crate-type = ["cdylib", "rlib"]
+ 
+ [dependencies]
+-lancedb = { version = "0.31.0", features = ["aws", "azure", "gcs", "oss", "dynamodb", "huggingface"] }
++lancedb = { version = "0.31.0", features = [] }
+ lance-namespace = "=8.0.0"
+ tokio = { version = "1", features = ["rt-multi-thread"] }
+ libc = "0.2"
+@@ -24,7 +24,7 @@
+ num_cpus = "1"
+ 
+ [profile.release]
+-opt-level = 3
++opt-level = "s"
+ strip = true
+ lto = true
+ codegen-units = 1

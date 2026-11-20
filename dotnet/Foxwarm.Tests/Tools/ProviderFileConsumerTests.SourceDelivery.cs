@@ -162,13 +162,13 @@ public sealed partial class ProviderFileConsumerTests
         await f.Manager.SelectNodeAsync(f.Owner, f.Node);
         var before = (await f.Requests()).Length;
         var result = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "builtin:run_script",
                 ["source"] = "node",
                 ["args"] = new JsonObject { ["code"] = "return 7" },
-            }
+            })
         );
         Success(result);
         Assert.Equal(7, result["result"]!.GetValue<int>());
@@ -270,7 +270,7 @@ public sealed partial class ProviderFileConsumerTests
         {
             f.Manager.BeforeFileStage = null;
         }
-        Assert.Equal("image_export_partial", SessionWait.Text(partial["error"]?["type"]));
+        Assert.NotNull(partial.FailureMessage());
         Assert.True(partial["fileWritten"]!.GetValue<bool>());
         Assert.False(string.IsNullOrEmpty(SessionWait.Text(partial["fullPath"])));
         Assert.Equal(bytes, await File.ReadAllBytesAsync(f.FilePath("images/partial.png")));
@@ -347,18 +347,18 @@ public sealed partial class ProviderFileConsumerTests
         );
         Success(await f.Call("read", Args("source")));
         var explicitMain = await f.Call(
-            "call_tool",
-            new JsonObject { ["toolId"] = "node:master/read", ["args"] = Args("source") }
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:master/read", ["args"] = Args("source") })
         );
         Assert.NotNull(explicitMain["error"]);
         Success(await f.Call("exec", Exec("printf allowed")));
         var deniedExec = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "node:other/target/exec",
                 ["args"] = Exec("printf forbidden"),
-            }
+            })
         );
         Assert.NotNull(deniedExec["error"]);
         var otherRequests = await File.ReadAllLinesAsync(
@@ -386,8 +386,6 @@ public sealed partial class ProviderFileConsumerTests
             "currentNode"
         ]!.GetValue<string>();
         Assert.Equal(f.Node, selected);
-        await f.Manager.SetAgentNodeAsync("main", f.Node);
-        Assert.Equal(f.Node, f.Manager.BoundNode("main"));
         f.Manager.RequireFileIngressOwner(f.Owner);
         f.Manager.AttachConfiguredChannel("fixture:inbound", f.Owner.Id);
         var parts = await f.Manager.SaveInboundChannelFileAsync(
@@ -399,19 +397,17 @@ public sealed partial class ProviderFileConsumerTests
             "",
             default
         );
-        Assert.Contains(f.Node, parts[0]["text"]!.GetValue<string>());
-        var writes = (await f.Requests())
-            .Where(call => call["request"]?["flag"]?.GetValue<string>() == "wx")
-            .ToArray();
-        Assert.Single(writes);
-        var body = writes[0]["request"]!;
-        Assert.StartsWith(".temp/channel-files/fixture/", body["path"]!.GetValue<string>());
-        Assert.Empty(body["context"]!.AsObject());
-        Assert.DoesNotContain("agent", body.ToJsonString());
+        // Inbound channel files are stored on master even when the Session runs elsewhere.
+        var text = parts[0]["text"]!.GetValue<string>();
+        Assert.Contains(f.Manager.AgentDirectory("main"), text);
+        Assert.DoesNotContain(
+            await f.Requests(),
+            call => call["request"]?["flag"]?.GetValue<string>() == "wx"
+        );
     }
 
     [Fact]
-    public async Task Oversized_WebUI_originals_keep_Main_for_selection_only_and_use_existing_bound_provider_file_transport()
+    public async Task Oversized_WebUI_originals_keep_Main_for_selection_only_and_are_stored_on_master()
     {
         if (!OperatingSystem.IsLinux())
             return;
@@ -424,10 +420,9 @@ public sealed partial class ProviderFileConsumerTests
         try
         {
             await f.Manager.SelectNodeAsync(f.Owner, f.Node);
-            foreach (var bound in new[] { false, true })
+            // Uploads are stored on master even while the Session runs on another Node.
+            foreach (var bound in new[] { false })
             {
-                if (bound)
-                    await f.Manager.SetAgentNodeAsync("main", f.Node);
                 var input = Path.Combine(staging, "original.png");
                 await File.WriteAllBytesAsync(input, bytes);
                 using var admission = f.Manager.BeginFileIngress(f.Owner);

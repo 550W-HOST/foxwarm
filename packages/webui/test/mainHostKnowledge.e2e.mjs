@@ -11,19 +11,19 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main'); const globalRoot = join(root, 'global-skills')
 const modelsFile = join(root, 'models.json')
 const token = 'synthetic-wait-api-token'; const providerToken = 'synthetic-wait-provider-token'
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const plans = new Map(); const requests = []; const errors = []; const counts = new Map(); const holds = []
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const signal = () => { let release; const promise = new Promise(done => { release = done }); return { promise, release } }
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const messageText = body => body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').join('\n')
 let host, browser, provider, port, firstPid, secondPid
 async function until(fn, label, timeout = 20000) {
@@ -59,13 +59,13 @@ async function final(id, marker) {
 }
 async function deliver(source, target, label, extra = []) {
   const id = `${label}-send`
-  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, afterSend: 'finish' }), ...extra])
+  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, currentSessionTurnAction: 'end_turn' }), ...extra])
   await send(source, label); await idle(source)
   await until(async () => (await history(source)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === id)), `${label} paired`)
 }
 async function startHost() {
   await migrateModelFixture(dataRoot, modelsFile, { KNOWLEDGE_TOKEN: providerToken })
-  const child = spawn(dotnet, [process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+  const child = spawn(...mainHostLaunch(process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')), {
     stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-14000) })
   const owned = { child, get output() { return output } }; host = owned
@@ -90,7 +90,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert(body.tools.some(tool => tool.name === 'skill'))
+      assert(body.tools.some(tool => tool.name === 'ctl')); assert(!body.tools.some(tool => tool.name === 'skill'))
       const id = /currentSessionId="([^"]+)"/.exec(messageText(body))?.[1]
       assert(id, 'Real snapshot Session identity'); const n = counts.get(id) || 0; counts.set(id, n + 1)
       requests.push({ id, n, body })
@@ -179,11 +179,11 @@ try {
   assert(!initial.includes('LOCAL-FULL-ENTRY') && !initial.includes('INHERITED-FULL-ENTRY') && !initial.includes('RESOURCE-NOT-EAGER'))
   assert.deepEqual((await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf').inheritanceChain, ['base', 'middle', 'leaf'])
   assert.deepEqual((await request('GET', '/api/agents/leaf/memory')).body.files.map(file => file.path), ['MEMORY.md', 'SOUL.md', 'archive/note.md'])
-  assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: 'leaf', isolatedNode: null })).status, 400)
-  assert.equal((await request('PUT', '/api/agents/leaf', { inheritAgent: 'missing', isolatedNode: null })).status, 400)
-  assert.equal((await request('PUT', '/api/agents/leaf', { inheritAgent: 'leaf', isolatedNode: null })).status, 400)
-  const missingBinding = await request('PUT', '/api/agents/leaf', { inheritAgent: 'base', isolatedNode: 'unsupported-node' })
-  assert.equal(missingBinding.status, 400); assert.equal(missingBinding.body.error, 'Node not found.')
+  assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: 'leaf' })).status, 400)
+  assert.equal((await request('PUT', '/api/agents/leaf', { inheritAgent: 'missing' })).status, 400)
+  assert.equal((await request('PUT', '/api/agents/leaf', { inheritAgent: 'leaf' })).status, 400)
+  const retiredBinding = await request('PUT', '/api/agents/leaf', { inheritAgent: 'base', isolatedNode: 'unsupported-node' })
+  assert.equal(retiredBinding.status, 400); assert.equal(retiredBinding.body.error, 'Provide inheritAgent, rules, defaultNode, defaultCwd or inheritable.')
   assert.equal((await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf').inherit, 'middle')
 
   await writeFile(join(globalRoot, 'oversized.txt'), 'x'.repeat(1024 * 1024 + 1))
@@ -227,15 +227,15 @@ try {
   await until(async () => { const leaf = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf'); return !leaf.defaultNode && leaf.defaultCwd === agentDir('leaf') }, 'Architecture default placement PUT')
   assert.equal(await snapshot('leaf/main'), initial); heldKnowledge.release(); await final('leaf/main', 'FROZEN-DONE')
   await turn('leaf/main', 'REUSE', body => { assert.equal(prompt(body), initial); return [call('live-list', 'skill', { action: 'list' })] })
-  assert(toolValue(await history('leaf/main'), 'live-list').output.includes('LEAF-SHARED-V2'))
+  assert(JSON.stringify(toolValue(await history('leaf/main'), 'live-list').skills).includes('LEAF-SHARED-V2'))
   assert.equal(await snapshot('leaf/main'), initial)
 
   // Fresh children use their owning Agent's current graph, not the parent's captured old prefix.
   plans.set('leaf/kid', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('MIDDLE-V1')); assert(messageText(body).includes(`currentSessionId="leaf/kid" currentNode="master" cwd="${agentDir('leaf')}"`), messageText(body)); return [text('CHILD-LEAF-DONE'), text('[NO_ACTION]')] }])
-  plans.get('leaf/main').push([call('child-leaf', 'create_child_session', { suffix: 'kid', message: 'OWNING-KNOWLEDGE', afterSend: 'finish' })])
+  plans.get('leaf/main').push([call('child-leaf', 'create_child_session', { suffix: 'kid', message: 'OWNING-KNOWLEDGE', currentSessionTurnAction: 'end_turn' })])
   await send('leaf/main', 'CHILD-LEAF'); await final('leaf/kid', 'CHILD-LEAF-DONE'); await idle('leaf/main')
   plans.set('base/cross', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('LEAF-V1') && !prompt(body).includes('TARGET-LEAF-ONLY')); return [text('CHILD-BASE-DONE'), text('[NO_ACTION]')] }])
-  plans.get('leaf/main').push([call('child-base', 'create_child_session', { agentName: 'base', suffix: 'cross', message: 'CROSS-KNOWLEDGE', afterSend: 'finish' })])
+  plans.get('leaf/main').push([call('child-base', 'create_child_session', { agentName: 'base', suffix: 'cross', message: 'CROSS-KNOWLEDGE', currentSessionTurnAction: 'end_turn' })])
   await send('leaf/main', 'CHILD-BASE'); await final('base/cross', 'CHILD-BASE-DONE'); await idle('leaf/main')
   // Browser-created leaf is top-level in the creator tree, even though its memory inherits base.
   // A model-created child may inherit leaf; that memory graph does not make base its creator ancestor.
@@ -246,7 +246,7 @@ try {
   await turn('leaf/main', 'UNRELATED-AGENT', [call('unrelated-agent', 'create_agent', { agentName: 'model-unrelated', inherit: 'base', createMainSession: false })])
   const rejectedAgent = toolValue(await history('leaf/main'), 'unrelated-agent')
   assert(rejectedAgent.error, JSON.stringify(rejectedAgent))
-  assert.equal(rejectedAgent.error.type, 'agent_tool_error'); assert.match(rejectedAgent.error.message, /strict creator ancestors/)
+  assert.match(rejectedAgent.error, /strict creator ancestors/)
   const creatorMetadata = JSON.parse(await readFile(join(dataRoot, 'state', 'agents.json'), 'utf8'))
   assert.equal(creatorMetadata.leaf.createdBy, undefined)
   assert.equal(creatorMetadata['model-made'].createdBy, 'leaf'); assert.equal(creatorMetadata['model-made'].inherit, 'leaf')
@@ -283,10 +283,10 @@ try {
   const readOld = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf')
   assert.deepEqual(readOld.inheritanceChain, ['ghost', 'base', 'leaf'])
   await turn('leaf/main', 'RESTART-REUSE', body => { assert.equal(prompt(body), unchangedBeforeRestart); return [text('UNCHANGED-RESTART')] })
-  assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: null, isolatedNode: '' })).status, 200)
-  assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: 'missing', isolatedNode: null })).status, 400)
+  assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: null })).status, 200)
+  assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: 'missing' })).status, 400)
   await turn(control, 'REFRESH-RECENT', [call('refresh-chain', 'set_agent_inherit', { agentName: 'base', inheritAgentName: 'main', refreshSnapshots: true })])
-  const result = JSON.parse(toolValue(await history(control), 'refresh-chain').output)
+  const result = toolValue(await history(control), 'refresh-chain')
   assert(result.affectedSessions.includes('leaf/main') && result.affectedSessions.includes(unrelated)); assert(!result.affectedSessions.includes(old) && !result.affectedSessions.includes(oldSuccess) && !result.affectedSessions.includes('outside/main'))
   assert.equal(await snapshot(old), oldBefore); assert.equal(await snapshot('outside/main'), outsideBefore)
   assert((await snapshot('leaf/main')).includes('MAIN-KNOWLEDGE')); assert((await snapshot('leaf/main')).includes('ONLY-B'), 'Recent refresh uses recorded B')
@@ -301,8 +301,8 @@ try {
 
   // Live foreign-Agent skill view is knowledge selection, not inherited workspace/tool access.
   await turn('leaf/main', 'FOREIGN-SKILLS', [call('foreign-list', 'skill', { action: 'list', agentName: 'base' })])
-  assert(toolValue(await history('leaf/main'), 'foreign-list').output.includes('BASE-SHARED'))
-  assert(!toolValue(await history('leaf/main'), 'foreign-list').output.includes('LEAF-SHARED'))
+  assert(JSON.stringify(toolValue(await history('leaf/main'), 'foreign-list').skills).includes('BASE-SHARED'))
+  assert(!JSON.stringify(toolValue(await history('leaf/main'), 'foreign-list').skills).includes('LEAF-SHARED'))
   assert.equal(errors.length, 0, errors.join('\n'))
   const archived = JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps(c.execute("select session_id,count(*) from archive_messages group by session_id").fetchall()))', join(dataRoot, 'state', 'archive-store.sqlite')], { encoding: 'utf8' }))
   for (const [id, count] of archived) assert.equal((await history(id)).length, count, id)

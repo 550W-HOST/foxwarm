@@ -1,8 +1,8 @@
 // Only the four scripted qualification calls may contribute tool diagnostics.
 const calls = [
   ['packaged-toolscript', 'run_script'],
-  ['packaged-browser-open', 'browse_open'],
-  ['packaged-browser-image', 'browse_get'],
+  ['packaged-browser-open', 'browser_open'],
+  ['packaged-browser-image', 'browser_screenshot'],
   ['packaged-react-artifact', 'artifact'],
 ]
 

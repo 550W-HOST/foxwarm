@@ -73,7 +73,7 @@ function peer(id, authorization = "", transport, notifications = false, delayedL
     await record({ kind: 'call', id, name, tag: args.tag });
     if (name === 'fail') {
       await record({ kind: 'effect', id, tag: args.tag });
-      throw new Error('Synthetic completed effect followed by an error');
+      throw new Error(args.errorMessage ?? 'Synthetic completed effect followed by an error');
     }
     if (name === 'result') {
       if (Object.hasOwn(args, 'rawResult')) {

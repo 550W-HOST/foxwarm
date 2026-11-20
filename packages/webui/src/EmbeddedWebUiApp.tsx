@@ -36,7 +36,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
   const [activeTarget, setActiveTarget] = useState<FoxwarmActiveTarget | null>(null)
   const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([])
   const currentSession = activeTarget?.kind === 'session' ? activeTarget.sessionId : ''
-  const boundedSessions = useBoundedSessionList({ focusIds: currentSession ? [currentSession] : [], exactIds: currentSession ? [currentSession] : [], groupable: true })
+  const boundedSessions = useBoundedSessionList({ focusIds: currentSession ? [currentSession] : [], exactIds: currentSession ? [currentSession] : [], groupable: true, childWindow: 'recent' })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
   const fetchSessions = boundedSessions.refresh

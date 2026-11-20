@@ -1,12 +1,48 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
 internal static class SessionBoundary
 {
+    // The "<" of anything that reads as a Foxwarm framing tag, in any letter case and spacing.
+    private static readonly Regex FramingLookAlike = new(
+        @"<(?=\s*/?\s*foxwarm-)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+    );
+
+    /// <summary>
+    /// Escapes the opening bracket of text that imitates a Foxwarm framing tag, such as
+    /// <c>&lt;foxwarm-system&gt;</c> or <c>&lt;/foxwarm-message&gt;</c>, so external content
+    /// cannot close its frame or forge framework metadata. Everything else is left as sent.
+    /// </summary>
+    internal static string NeutralizeFraming(string text) => FramingLookAlike.Replace(text, "&lt;");
+
+    // Neutralizes the text of one external content part; other part kinds pass unchanged.
+    private static JsonObject ExternalPart(JsonObject part)
+    {
+        var clone = (JsonObject)part.DeepClone();
+        if (SessionWait.Text(clone["text"]) is { } text)
+            clone["text"] = NeutralizeFraming(text);
+        return clone;
+    }
+
+    /// <summary>
+    /// Frames external input: the server-owned <paramref name="opening"/>
+    /// <c>foxwarm-system kind="external-input"</c> tag, the external content with framing
+    /// look-alikes neutralized, and the closing tag. Server-owned notices in
+    /// <paramref name="content"/> are <c>system</c> parts and pass unchanged.
+    /// </summary>
+    internal static JsonObject[] ExternalInput(string opening, IEnumerable<JsonObject> content) =>
+        [
+            new JsonObject { ["system"] = opening },
+            .. content.Select(ExternalPart),
+            new JsonObject { ["system"] = "</foxwarm-system>" },
+        ];
+
     internal static bool ApplyChildHandoff(JsonObject envelope, QueueItem item)
     {
         if (item.Type == QueueItemType.User)
@@ -67,13 +103,13 @@ internal static class SessionBoundary
         var args = handoffConfirmation
             ? HandoffConfirmation.GuidanceArgument(
                 parentSessionId,
-                externalRuntime ? "continue" : "finish"
+                externalRuntime ? "continue" : "end_turn"
             )
-            : $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", afterSend: \"{(externalRuntime ? "continue" : "finish")}\"";
+            : $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
         var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
         if (externalRuntime)
-            return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} Use afterSend: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
-        return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} This reports so the Session becomes idle without a wait. Use afterSend: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
+            return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
+        return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} This reports so the Session becomes idle without a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
     }
 
     private static string Escape(string value) =>
@@ -123,9 +159,11 @@ internal static class SessionBoundary
     )
     {
         static string Attribute(string value) => LocalSessionTurnHost.EscapeFoxwarmAttribute(value);
+        // Channel senders are outside parties; their text must not forge framing.
+        parts = parts.Select(ExternalPart).ToArray();
         var hint = sendOnly
             ? "direct user message via channel"
-            : "direct user message via channel; This channel is in normal mode. Assistant text from this session is automatically delivered to this channel, so you do not need to call send_to_channel to reply here.";
+            : "direct user message via channel; This channel is in normal mode. Assistant text from this session is automatically delivered to this channel, so you do not need `ctl channel send` to reply here.";
         var opening =
             "<foxwarm-message type=\"channel\" channelInstanceId=\""
             + Attribute(source.Instance)
@@ -146,9 +184,12 @@ internal static class SessionBoundary
         if (sendOnly)
         {
             var notice =
-                "Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: \""
-                + source.Target
-                + "\", message: \"...\"}).";
+                "Channel is in send-only mode. If you need to reply, run `"
+                + CtlCommandText.For(
+                    "send_to_channel",
+                    new JsonObject { ["channelTargetId"] = source.Target, ["message"] = "..." }
+                )
+                + "`.";
             result.Add(
                 new JsonObject
                 {
@@ -259,12 +300,15 @@ internal static class SessionBoundary
         if (taskId is not null)
             return $"This Session is linked to task {Escape(taskId)}. When the work is complete, complete the task with the task tool; completion automatically notifies the task creator. Do not send a separate routine completion message.";
         var args = handoffConfirmation
-            ? HandoffConfirmation.GuidanceArgument(parent, externalRuntime ? "continue" : "finish")
-            : $"sessionId: `{parent}`, message: \"...\", afterSend: \"{(externalRuntime ? "continue" : "finish")}\"";
+            ? HandoffConfirmation.GuidanceArgument(
+                parent,
+                externalRuntime ? "continue" : "end_turn"
+            )
+            : $"sessionId: `{parent}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
         var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
         if (externalRuntime)
-            return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} Use afterSend: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
-        return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
+            return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
+        return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
     }
 
     // The forked child's own result for the creating call; the parent receives a separate result.
@@ -276,7 +320,7 @@ internal static class SessionBoundary
     )
     {
         var text =
-            $"Fork complete: you are the child session `{child}`, now running separately from the parent session `{parent}`, which received its own result for this call. This call's afterSend applies only to the parent.";
+            $"Fork complete: you are the child session `{child}`, now running separately from the parent session `{parent}`, which received its own result for this call. This call's currentSessionTurnAction applies only to the parent.";
         if (taskId is not null)
             return text
                 + $" Task {taskId} is assigned to you; its assignment follows."

@@ -13,7 +13,7 @@ public sealed class CliNodeInteractiveTests
     [Theory]
     [InlineData("^(READ|write|apply_patch)$", "read", true)]
     [InlineData("^(READ|write|apply_patch)$", "exec", false)]
-    [InlineData("^browse_.*$", "browse_screenshot", true)]
+    [InlineData("^browser_.*$", "browser_screenshot", true)]
     [InlineData("^get_default_cwd$", "get_default_cwd", true)]
     [InlineData("\\bexec\\b", "exec", true)]
     [InlineData("^read\\.json$", "read", false)]

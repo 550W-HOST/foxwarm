@@ -8,7 +8,8 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import WebSocket from 'ws'
 import sharp from 'sharp'
-import { createHostFixture, until } from './mainHostFixture.mjs'
+import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
 options.cwd = host.root
@@ -21,7 +22,7 @@ let candidatePath = join(host.work, 'candidate.yaml')
 const admitted = new Promise(done => { enteredAdmitted = done })
 const release = new Promise(done => { releaseAdmitted = done })
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
@@ -29,12 +30,7 @@ const peer = createServer(async (request, response) => {
     let output
     if (text.includes('COMPACTION STARTED:')) {
       const prompt = body.input.filter(row => row.role === 'user').flatMap(row => row.content || []).map(part => part.text || '').join('\n')
-      const segments = [...prompt.matchAll(/^Segment \d+: raw message candidates[^\n]*\n([\s\S]*?)(?=^Segment \d+:|^Review the older candidate items)/gm)]
-      const blocks = segments.map(segment => {
-        const ranges = [...segment[1].matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
-        assert(ranges.length)
-        return { level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Original records remain in effective Archive.' }
-      })
+      const blocks = requiredCompactOperations(prompt, 'Original records remain in effective Archive.')
       assert(blocks.length); output = [call('compact-plan', 'submit_compact_plan', { replaceAsBlocks: blocks })]
     } else if (text.includes('INSTALL-ACCESS') && !body.input.some(row => row.type === 'function_call_output')) {
       output = [call('install-access', 'set_config', { target: 'config', filePath: candidatePath })]
@@ -166,7 +162,7 @@ try {
   // Exact aliases follow moves; Agent scopes follow actual membership and close stale streams.
   const movingSse = await sse('synthetic-bob', seed.parent)
   assert.equal((await admin('POST', '/api/agents', { agentId: 'team' })).status, 201)
-  assert.equal((await admin('POST', route(seed.parent) + '/message', { text: '/session move team/moved' })).status, 200)
+  assert.equal((await admin('POST', route(seed.parent) + '/message', { text: '/session move --new-agent-name team --new-session-id moved' })).status, 200)
   await until(() => movingSse.closed, 'stale canonical SSE closes after move')
   assert.equal((await alice('GET', route('continuous-alias') + '/history')).status, 200)
   assert.equal((await bob('GET', route('team/moved') + '/history')).status, 403)

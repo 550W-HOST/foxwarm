@@ -85,6 +85,7 @@ internal sealed partial class AgentCatalog
             && (File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0
         )
             throw new InvalidDataException("Agent directory root cannot be a symbolic link.");
+        RequireReaderVersion();
         foreach (var row in metadata)
             _ = Foxwarm.Tools.IsolatedToolCompatibility.Metadata(row.Value);
         if (!canonicalLayout)
@@ -196,7 +197,8 @@ internal sealed partial class AgentCatalog
         string? defaultCwd = null,
         string? preparationName = null,
         bool restoreRetained = false,
-        Action<bool>? publication = null
+        Action<bool>? publication = null,
+        bool unlimitedChildren = false
     )
     {
         ValidateName(name);
@@ -256,7 +258,7 @@ internal sealed partial class AgentCatalog
                 throw new InvalidDataException(
                     "This name has retained Agent authority. Use administrator restoration or explicit retained-record cleanup."
                 );
-            ValidateCreatorAdmission(createdBy, MetadataSnapshot());
+            ValidateCreatorAdmission(createdBy, MetadataSnapshot(), unlimitedChildren);
             _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
             ValidateDefaultNode(defaultNode ?? DefaultNode(name));
             ValidateDefaultCwd(defaultCwd ?? DefaultCwd(name));
@@ -304,7 +306,7 @@ internal sealed partial class AgentCatalog
             AuthorityCommittedException? durabilityFailure = null;
             try
             {
-                AtomicIndexWrite(indexPath, payload.ToJsonString());
+                AtomicIndexWrite(indexPath, payload.ToJsonText());
             }
             catch (AuthorityCommittedException error)
             {
@@ -391,9 +393,13 @@ internal sealed partial class AgentCatalog
 
     private void AtomicIndexWrite(string path, string text)
     {
+        var written = JsonNode.Parse(text) as JsonObject;
+        EnsureReaderVersion(
+            (canonicalLayout ? written : written?["metadata"] as JsonObject) ?? new JsonObject()
+        );
         try
         {
-            new LinuxAtomicJsonFile(
+            new AtomicJsonFile(
                 Path.GetDirectoryName(path)!,
                 Path.GetFileName(path),
                 metadataWriteStage

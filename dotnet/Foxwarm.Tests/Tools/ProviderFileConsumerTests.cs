@@ -83,6 +83,7 @@ public sealed partial class ProviderFileConsumerTests
         internal SessionOwner Owner = null!;
         internal SessionToolExecutor Tools = null!;
         internal ToolRegistry Registry = null!;
+        internal ModelConfiguration Configuration = null!;
         private Foxwarm.McpClient mcp = null!;
         internal string Provider = "fixture";
         internal string Local = "target";
@@ -119,6 +120,7 @@ public sealed partial class ProviderFileConsumerTests
             var configuration = new ModelConfiguration(
                 HostPaths.ForDataRoot(f.Data, f.Temp.Path, environment: _ => null)
             );
+            f.Configuration = configuration;
             var models = new HostModels(configuration);
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
@@ -235,8 +237,8 @@ public sealed partial class ProviderFileConsumerTests
         Assert.StartsWith("βeta\r\n", read["output"]!.GetValue<string>());
         Success(
             await f.Call(
-                "call_tool",
-                new JsonObject
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject
                 {
                     ["toolId"] = "node:" + f.Node + "/edit",
                     ["args"] = new JsonObject
@@ -245,7 +247,7 @@ public sealed partial class ProviderFileConsumerTests
                         ["oldText"] = "βeta",
                         ["newText"] = "δelta",
                     },
-                }
+                })
             )
         );
         Assert.Contains("δelta", await File.ReadAllTextAsync(f.FilePath("nested/text.txt")));
@@ -269,11 +271,17 @@ public sealed partial class ProviderFileConsumerTests
         Success(native);
         Assert.Contains("δelta", native["result"]!.GetValue<string>());
         var search = await f.Call(
-            "search_tools",
-            new JsonObject { ["sources"] = new JsonArray("node"), ["nodeId"] = f.Node }
+            "ctl",
+            CtlTestArgs.Search(new JsonObject { ["sources"] = new JsonArray("node"), ["nodeId"] = f.Node })
         );
         Success(search);
-        Assert.Contains(f.Node, search["output"]!.GetValue<string>());
+        // The selected Node's tools are the declared read, write, edit and exec, listed once as
+        // declared tools rather than again under the Node's tool IDs.
+        var nodeTools = search["output"]!.GetValue<string>();
+        foreach (var name in new[] { "read", "write", "edit", "exec" })
+            Assert.Contains("\n" + name + " (declared tool)", nodeTools);
+        Assert.DoesNotContain("node:" + f.Node + "/", nodeTools);
+        Assert.DoesNotContain("Warning:", nodeTools);
         Success(
             await f.Call(
                 "write",
@@ -330,8 +338,8 @@ public sealed partial class ProviderFileConsumerTests
             Assert.Equal(0, process.ExitCode);
         }
         var result = await f.Call(
-            "call_tool",
-            new JsonObject { ["toolId"] = "node:" + f.Node + "/read", ["args"] = Args("directory") }
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:" + f.Node + "/read", ["args"] = Args("directory") })
         );
         Success(result);
         var output = result["output"]!.GetValue<string>();
@@ -411,12 +419,12 @@ public sealed partial class ProviderFileConsumerTests
                 && call["request"]?["path"]?.GetValue<string>() == "absent.txt"
         );
         var readonlyCall = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "node:fixture/readonly/write",
                 ["args"] = new JsonObject { ["filePath"] = "no.txt", ["content"] = "no" },
-            }
+            })
         );
         Assert.NotNull(readonlyCall["error"]);
         Assert.False(File.Exists(Path.Combine(f.Work, "no.txt")));

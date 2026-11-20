@@ -10,12 +10,85 @@ internal sealed partial class SessionToolExecutor
         string LiteralOwner,
         ToolScriptDataBudget Budget,
         ToolScriptWaitScope WaitScope,
-        string? RunId
+        string? RunId,
+        ToolScriptDetach? Detach = null
     );
 
     private readonly AsyncLocal<ScriptScope?> scriptScope = new();
+
+    private static JsonObject ConcreteDescriptor(ResolvedTool resolved)
+    {
+        var descriptor = new JsonObject { ["source"] = resolved.Source, ["name"] = resolved.Name };
+        if (resolved.Source == "mcp")
+            descriptor["server"] = resolved.Server;
+        else if (resolved.Source == "node")
+            descriptor["nodeId"] = resolved.ExecutionNode;
+        return descriptor;
+    }
     internal bool Programmatic => scriptScope.Value is not null;
+
+    // The gate of a ToolScript model request, in its own approval scope like a nested call: an
+    // outer approval never covers it, and a wait keeps the slice's deadline and wait accounting.
+    // Version-1 asks on the slice's invocation ask once per slice: an approval of the slice, or
+    // of an earlier model request of the slice, answers them. A deny always applies.
+    private async Task AuthorizeModelRequestAsync(
+        ResolvedTool slice,
+        ToolApprovalScope? sliceScope,
+        WorkspaceTools? files,
+        string model,
+        CancellationToken token
+    )
+    {
+        var scope = new ToolApprovalScope(hosted) { Primary = slice };
+        using var entered = ToolApprovalScope.Enter(scope);
+        while (true)
+        {
+            var check = await sessions.AssessToolScriptModelAsync(hosted, slice, files, model, token);
+            var assessment = check.Assessment;
+            if (assessment.Denied is not null)
+            {
+                var lead = $"Model request `{model}` was not sent.";
+                var denial = SessionManager.Denial(hosted, slice, assessment, lead);
+                if (denial is ToolAuthorizationUnresolvedException)
+                    throw new ToolAuthorizationUnresolvedException(lead + " " + denial.Message);
+                // A rule's own reason leads; the model request is named before it.
+                throw denial.Message.StartsWith(lead, StringComparison.Ordinal)
+                    ? denial
+                    : new ToolAuthorizationDeniedException($"Model request `{model}` was not sent: {denial.Message}");
+            }
+            if (
+                assessment.Effect != ToolAuthorizationEffect.Ask
+                || scope.Covers(hosted, check.Fingerprint)
+                || check.SliceAsk && sliceScope?.Covers(hosted, check.SliceFingerprint) == true
+            )
+                return;
+            var required = new ToolApprovalRequiredException(assessment, slice, check.Fingerprint);
+            if (scope.Grants.Count > 0)
+                throw required.ChangedAfterApproval();
+            var pending = await sessions.BeginToolApprovalAsync(
+                hosted,
+                required,
+                ApprovalOrigin(),
+                unattended
+            );
+            var record = await AwaitApprovalAsync(pending, token);
+            var grant = SessionManager.ApprovalOutcome(pending, record);
+            scope.Add(grant);
+            scope.Dispatched = true;
+            if (check.SliceAsk)
+                sliceScope?.Add(
+                    new ToolApprovalGrant(
+                        grant.ApprovalId,
+                        new HashSet<string>(StringComparer.Ordinal) { check.SliceFingerprint },
+                        grant.Note
+                    )
+                );
+        }
+    }
     internal ToolScriptDataBudget? ScriptBudget => scriptScope.Value?.Budget;
+
+    // A detached run's calls no longer belong to the turn that started it.
+    private bool ScriptDetached => scriptScope.Value?.Detach?.Detached == true;
 
     private async Task<JsonObject> ExecuteToolScriptAsync(
         string name,
@@ -24,9 +97,34 @@ internal sealed partial class SessionToolExecutor
     )
     {
         var rootCall = invocation.Value;
+        // The slice's own invocation and approval scope: model requests are assessed as it.
+        var slice = rootCall?.Resolved ?? new ResolvedTool(name, "builtin", name, args);
+        var sliceScope =
+            ToolApprovalScope.Current is { } owned && ReferenceEquals(owned.Owner, hosted)
+                ? owned
+                : null;
+        var sliceFiles = rootCall?.ScriptSource?.Files ?? Files;
         var nested = Programmatic;
         var literal = scriptScope.Value?.LiteralOwner ?? hosted.Id;
         var waitScope = scriptScope.Value?.WaitScope ?? new ToolScriptWaitScope();
+        // Only an attended top-level call can hand a background run off; timer, webhook and
+        // nested runs keep the slice contract.
+        var detach =
+            !nested && !unattended && name is "run_script" or "continue_script"
+                ? new ToolScriptDetach
+                {
+                    // One event identity per detached segment; a run can detach again after
+                    // an ask_agent continuation.
+                    Finished = outcome =>
+                        sessions.DeliverToolScriptRunEventAsync(
+                            hosted,
+                            outcome,
+                            Guid.NewGuid().ToString("N")
+                        ),
+                }
+                : null;
+        // A run nested in a detached run is detached from the turn as well.
+        var effectiveDetach = detach ?? scriptScope.Value?.Detach;
         ToolScriptContext context = null!;
         context = new ToolScriptContext(
             hosted,
@@ -34,15 +132,23 @@ internal sealed partial class SessionToolExecutor
             async (wrapper, budget, currentToken) =>
             {
                 // seq.k.n below a model call (each slice has its own anchor); ts:runId.n for
-                // slices without one (for example a timer), numbered across the whole run.
-                var parentDelivery = rootCall?.DeliverySeq(script: true);
+                // slices without one (for example a timer or a detached run), numbered across
+                // the whole run.
+                var detached = effectiveDetach?.Detached == true;
+                var parentDelivery = detached ? null : rootCall?.DeliverySeq(script: true);
                 var subCallDelivery = SessionManager.SubCallDeliverySeq(
                     parentDelivery,
                     context.ToolScriptRunId,
                     parentDelivery is null ? context.RunSubCallOrdinal : context.SubCallOrdinal
                 );
                 var previous = scriptScope.Value;
-                scriptScope.Value = new(literal, budget, waitScope, context.ToolScriptRunId);
+                scriptScope.Value = new(
+                    literal,
+                    budget,
+                    waitScope,
+                    context.ToolScriptRunId,
+                    effectiveDetach
+                );
                 try
                 {
                     var resolved = await registry.ResolveAsync(
@@ -60,7 +166,15 @@ internal sealed partial class SessionToolExecutor
                     if (planned.Preset is not null)
                         return planned.Preset;
                     var request = (JsonObject)wrapper.DeepClone();
+                    string? command = null;
+                    // A ctl command naming a capability runs as that capability.
+                    if (resolved.InvocationName == "ctl" && !IsCtlFrontEnd(resolved))
+                    {
+                        request = ConcreteDescriptor(resolved);
+                        command = resolved.Command;
+                    }
                     request["args"] = planned.Call["args"]!.DeepClone();
+                    var effectStarted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     var execution = await ExecuteAttributedAsync(
                         new JsonObject
                         {
@@ -69,13 +183,40 @@ internal sealed partial class SessionToolExecutor
                             ["args"] = request,
                         },
                         currentToken,
-                        scriptDelivery: subCallDelivery
+                        scriptDelivery: subCallDelivery,
+                        command: command
                     );
                     if (execution.SessionMessages is { Count: > 0 } deliveries)
                         foreach (var delivery in deliveries.OfType<JsonObject>())
                             context.SessionMessageDelivered?.Invoke(delivery);
                     if (execution.ExecPlacement is { } placement)
                         context.ExecPlacementObserved?.Invoke(placement);
+                    if (execution.Target is { } target)
+                        context.TargetObserved?.Invoke(target);
+                    // Unattended and detached calls have no Session tool row; they are recorded directly.
+                    if (unattended || detached)
+                        sessions.Activity.RecordDirect(() =>
+                            ArchiveToolEffects.FromDirectCall(
+                                hosted.Id,
+                                hosted.Agent,
+                                unattended ? unattendedOrigin + "-script" : "model",
+                                effectStarted,
+                                execution.Target,
+                                resolved.Name,
+                                execution.ExecPlacement,
+                                execution.Response,
+                                SessionWait.Text(execution.Target?["summary"])
+                                    ?? ActivitySummary(
+                                        sessions,
+                                        resolved.Name,
+                                        resolved.Args,
+                                        hosted.Id
+                                    ),
+                                unattended ? new(0, unattendedOrigin, unattendedOriginId) : null,
+                                context.ToolScriptRunId,
+                                execution.SessionMessages?.OfType<JsonObject>().FirstOrDefault()
+                            )
+                        );
                     if (
                         execution.Receipt is not null
                         && (
@@ -84,6 +225,7 @@ internal sealed partial class SessionToolExecutor
                             || execution.Receipt.CompletedTaskId is not null
                         )
                         && rootCall is not null
+                        && effectiveDetach?.Detached != true
                     )
                         rootCall.Receipt = execution.Receipt;
                     if (PolicyUnavailable)
@@ -94,7 +236,8 @@ internal sealed partial class SessionToolExecutor
                     return await sessions.NormalizeToolScriptResultAsync(
                         execution.Response,
                         resolved.Name,
-                        budget
+                        budget,
+                        MainToolScript.ProducesImages(resolved) ? context.ImageProduced : null
                     );
                 }
                 catch (SessionIdentityUnavailableException error)
@@ -106,8 +249,32 @@ internal sealed partial class SessionToolExecutor
                     scriptScope.Value = previous;
                 }
             },
-            (prompt, model, budget, currentToken) =>
-                sessions.RequestToolScriptModelAsync(hosted, prompt, model, budget, currentToken),
+            async (prompt, model, budget, currentToken) =>
+            {
+                // An unknown model is still authorized first, under the name the script gave, so
+                // a denied slice reports its denial rather than the model error.
+                string key;
+                InvalidDataException? unknown = null;
+                try
+                {
+                    key = sessions.ToolScriptModelKey(hosted, model);
+                }
+                catch (InvalidDataException error) when (model is { Length: > 0 })
+                {
+                    key = model;
+                    unknown = error;
+                }
+                await AuthorizeModelRequestAsync(slice, sliceScope, sliceFiles, key, currentToken);
+                if (unknown is not null)
+                    throw unknown;
+                return await sessions.RequestToolScriptModelAsync(
+                    hosted,
+                    prompt,
+                    key,
+                    budget,
+                    currentToken
+                );
+            },
             async (file, budget, currentToken) =>
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, currentToken);
@@ -169,10 +336,8 @@ internal sealed partial class SessionToolExecutor
                         new JsonObject { ["filePath"] = file }
                     ),
                     files,
-                    currentToken,
-                    toolScriptSourceRead: true
+                    currentToken
                 );
-                sessions.RequireMainFileSourcePath(hosted, actual);
                 if (!WorkspaceTools.RegularFile(actual))
                     throw new FileNotFoundException(
                         "ToolScript source must be a regular file.",
@@ -200,22 +365,35 @@ internal sealed partial class SessionToolExecutor
                 ? null
                 : calls =>
                 {
-                    if (rootCall is not null)
-                        rootCall.ToolScriptSubCalls = (JsonArray)calls.DeepClone();
-                    hosted.Emit(
-                        SessionEventKind.ModelStream,
-                        new JsonObject
-                        {
-                            ["type"] = "toolscript-progress",
-                            ["toolUseId"] = rootCall?.CallId,
-                            ["subCalls"] = calls.DeepClone(),
-                        }
-                    );
+                    void Present()
+                    {
+                        if (rootCall is not null)
+                            rootCall.ToolScriptSubCalls = (JsonArray)calls.DeepClone();
+                        hosted.Emit(
+                            SessionEventKind.ModelStream,
+                            new JsonObject
+                            {
+                                ["type"] = "toolscript-progress",
+                                ["toolUseId"] = rootCall?.CallId,
+                                ["subCalls"] = calls.DeepClone(),
+                            }
+                        );
+                    }
+                    if (detach is null)
+                    {
+                        Present();
+                        return;
+                    }
+                    // The tool row keeps the calls made before the run detached.
+                    lock (detach.Gate)
+                        if (!detach.Detached)
+                            Present();
                 },
             rootCall?.ScriptSource?.Node
         )
         {
             WaitScope = waitScope,
+            Detach = detach,
         };
         try
         {
@@ -230,12 +408,8 @@ internal sealed partial class SessionToolExecutor
                     new JsonObject
                     {
                         ["id"] = rootCall?.CallId ?? "",
-                        ["name"] = "call_tool",
-                        ["args"] = new JsonObject
-                        {
-                            ["toolId"] = "builtin:wait",
-                            ["args"] = pending,
-                        },
+                        ["name"] = "wait",
+                        ["args"] = pending,
                     },
                     token
                 );

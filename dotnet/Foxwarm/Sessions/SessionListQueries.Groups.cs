@@ -103,7 +103,8 @@ internal sealed partial class SessionListQueries
         var reset = decoded.Any(cursor =>
             cursor is not null && SessionCatalog.Text(cursor["revision"]) != Revision
         );
-        var counts = Catalog.GroupCounts(by, mode != "flat-time");
+        var tree = mode != "flat-time";
+        var counts = Catalog.GroupCounts(by, tree);
         var reads = requests
             .Select(
                 (request, index) =>
@@ -134,8 +135,10 @@ internal sealed partial class SessionListQueries
             var excluded = by == "agent" ? SessionCatalog.AgentMainId(read.Key) : null;
             var others = members
                 .Where(row => Id(row) != excluded)
-                .Where(row => read.After is null || Compare(Key(row, mode, true), read.After) > 0)
-                .OrderBy(row => Key(row, mode, true), Comparer<JsonArray>.Create(Compare))
+                .Where(row =>
+                    read.After is null || Compare(Key(row, mode, true, tree), read.After) > 0
+                )
+                .OrderBy(row => Key(row, mode, true, tree), Comparer<JsonArray>.Create(Compare))
                 .ToArray();
             var room = limit - (main is null ? 0 : 1);
             var selected = others.Take(room).ToArray();
@@ -157,7 +160,7 @@ internal sealed partial class SessionListQueries
                                 ["revision"] = Revision,
                                 ["key"] =
                                     selected.Length > 0
-                                        ? Key(selected[^1], mode, true)
+                                        ? Key(selected[^1], mode, true, tree)
                                         : StartKey(mode),
                             }
                         )

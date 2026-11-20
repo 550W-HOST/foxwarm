@@ -101,7 +101,7 @@ public sealed partial class SessionCommandEffectsTests
         f.Manager.AttachChannel("webui:c", f.Owner);
         try
         {
-            await CommandAsync(f, "/verbose on");
+            await CommandAsync(f, "/session verbose on");
             Assert.True(f.Owner.Entry.Snapshot().AuthorityEnvelope["verbose"]!.GetValue<bool>());
             Assert.Empty(delivered);
             var saved = await f.Owner.AuthorityStore.LoadAsync(f.Owner.Id);
@@ -179,7 +179,7 @@ public sealed partial class SessionCommandEffectsTests
             }
             Assert.Equal(
                 "tool_authorization_denied",
-                ResponseFor("denied")["response"]?["error"]?["type"]?.ToString()
+                ResponseFor("denied")["response"]?.FailureCode()
             );
             Assert.True(ResponseFor("cancelled")["response"]?["canceled"]?.GetValue<bool>());
             var malformedCall = calls.Single(item =>
@@ -187,13 +187,10 @@ public sealed partial class SessionCommandEffectsTests
             )!["functionCall"]!;
             var malformedResponse = ResponseFor("malformed");
             Assert.Equal(rawArguments, malformedCall["rawArgsText"]?.ToString());
-            Assert.Equal(
-                "invalid_tool_arguments",
-                malformedResponse["response"]?["error"]?["type"]?.ToString()
-            );
+            Assert.NotNull(malformedResponse["response"]?.FailureMessage());
             Assert.Equal(
                 malformedCall["argsParseError"]?.ToString(),
-                malformedResponse["response"]?["error"]?["message"]?.ToString()
+                malformedResponse["response"]?.FailureMessage()
             );
             Assert.Null(malformedResponse["executionTiming"]);
             Assert.Equal(
@@ -229,8 +226,8 @@ public sealed partial class SessionCommandEffectsTests
                 malformedPreview["preview"]!.GetValue<string>().Length
             );
             delivered.Clear();
-            await CommandAsync(f, "/verbose off");
-            await CommandAsync(f, "/verbose");
+            await CommandAsync(f, "/session verbose off");
+            await CommandAsync(f, "/session verbose");
             await f.ToolAsync(
                 "write",
                 new JsonObject { ["filePath"] = "off.txt", ["content"] = "off" }

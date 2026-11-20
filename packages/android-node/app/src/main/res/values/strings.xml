@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Foxwarm Node</string>
+    <string name="accessibility_description">Allow your paired Foxwarm Main server to read the screen, capture images and control this phone. Connect only to a server you trust. Stop the connection in Foxwarm Node or its notification at any time.</string>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#B54812</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">#FAF8F4</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <style name="WakeTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+</resources>

@@ -51,6 +51,7 @@ internal sealed partial class SessionCompactor
         internal readonly string OperationId = Guid.NewGuid().ToString("N");
         internal string Phase = "planning";
         internal JsonObject? Retry;
+        internal bool PruneTools;
         internal bool Committed,
             Applying,
             Ready,
@@ -72,7 +73,8 @@ internal sealed partial class SessionCompactor
         ResponsesClientOptions baseOptions,
         ModelRequestOwner requests,
         AgentMemory memory,
-        Func<JsonArray>? definitions = null
+        Func<JsonArray>? definitions = null,
+        TimeProvider? timeProvider = null
     )
     {
         this.hosted = hosted;
@@ -83,6 +85,7 @@ internal sealed partial class SessionCompactor
         this.requests = requests;
         this.memory = memory;
         this.definitions = definitions;
+        idleClock = timeProvider ?? TimeProvider.System;
     }
 
     public bool Active
@@ -122,6 +125,7 @@ internal sealed partial class SessionCompactor
 
     public async Task DrainAsync()
     {
+        await DrainIdleAsync();
         while (!lifetimes.IsEmpty)
             await Task.WhenAll(lifetimes.Values.ToArray());
     }
@@ -143,6 +147,7 @@ internal sealed partial class SessionCompactor
                 return null;
             var run = new CompactRun(snapshot, catalog, keep, background, standalone);
             active = run;
+            CancelIdleSchedule();
             lifetimes[run] = run.Completion.Task;
             PublishRuntime(run);
             return run;
@@ -217,17 +222,19 @@ internal sealed partial class SessionCompactor
         return run.Committed ? (false, true) : (true, false);
     }
 
-    public async Task<CompactAdmission> StartManualAsync(
+    public Task<CompactAdmission> StartManualAsync(
         string? guidance = null,
         double? keepPercent = null
-    )
+    ) => StartAsync(guidance, keepPercent, idle: false);
+
+    private async Task<CompactAdmission> StartAsync(string? guidance, double? keepPercent, bool idle)
     {
         ClaudeRuntimeState.RequireFoxwarm(hosted, "Foxwarm context compaction");
         if (hosted.Entry.HistoryMutation)
             throw new InvalidOperationException("Session history change is in progress.");
         using var admission = hosted.Entry.AdmitMutation();
-        var snapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
+        var snapshot = hosted.Entry.Snapshot();
         var background = SupportsBackground(snapshot, catalog);
         lock (gate)
         {
@@ -236,13 +243,34 @@ internal sealed partial class SessionCompactor
         }
         if (!background && (snapshot.Busy || snapshot.Stopping || snapshot.Queue.Any(Ordinary)))
             return new(false, false, false, true);
-        var run = Begin(
-            snapshot,
-            catalog,
-            keepPercent ?? catalog.CompactKeepFraction,
-            background,
-            !background
-        );
+        CompactRun? run;
+        // Runtime publication reads Session state while holding the compact registry gate.
+        // Admission takes those gates in the same order.
+        lock (gate)
+            run = hosted.Entry.WithState(state =>
+            {
+                snapshot = state.Snapshot();
+                var idleDue = idle ? IdleCandidate(snapshot, catalog, LastIdleRequest(snapshot)) : null;
+                if (
+                    idle
+                    && (idleDue is null || idleDue.At > idleClock.GetUtcNow().ToUnixTimeMilliseconds())
+                )
+                    return null;
+                var started = Begin(
+                    snapshot,
+                    catalog,
+                    keepPercent ?? catalog.CompactKeepFraction,
+                    background,
+                    !background
+                );
+                if (started is not null && idleDue is not null)
+                {
+                    started.PruneTools = true;
+                    lock (idleGate)
+                        idleConsumedThrough = Math.Max(idleConsumedThrough, idleDue.Request.StartedAt);
+                }
+                return started;
+            });
         if (run is null)
             return new(true, false, background, false);
         if (background)
@@ -273,6 +301,7 @@ internal sealed partial class SessionCompactor
             if (!claimed)
             {
                 entry.ReleaseProcessor();
+                entry.NotifyProcessorReleased();
                 run.PipelineDone.TrySetResult();
                 await FinishAsync(run);
             }
@@ -303,6 +332,7 @@ internal sealed partial class SessionCompactor
                 Report(error);
             }
             hosted.Entry.ReleaseProcessor();
+            hosted.Entry.NotifyProcessorReleased();
             run.PipelineDone.TrySetResult();
             await FinishAsync(run);
             hosted.PublishStateChanged();
@@ -378,6 +408,8 @@ internal sealed partial class SessionCompactor
     private static double UsageTotal(ChatResult result)
     {
         var usage = result.Usage ?? result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
+        if (CompactCandidateBuilder.Finite(usage?["contextTokens"]) is double context)
+            return context;
         return (CompactCandidateBuilder.Finite(usage?["cachedTokens"]) ?? 0)
             + (CompactCandidateBuilder.Finite(usage?["inputTokens"]) ?? 0)
             + (CompactCandidateBuilder.Finite(usage?["outputTokens"]) ?? 0);
@@ -478,6 +510,18 @@ internal sealed partial class SessionCompactor
         }
     }
 
+    private static double KeepTokens(
+        SessionSnapshot snapshot,
+        IReadOnlyList<JsonObject> history,
+        HostModels catalog,
+        double keepFraction
+    ) =>
+        CompactCandidateBuilder.KeepTokens(
+            keepFraction,
+            SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog),
+            history
+        );
+
     private static bool SupportsBackground(SessionSnapshot snapshot, HostModels catalog) =>
         !ModelRoutingFingerprint.False(
             catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).Configuration[
@@ -493,14 +537,31 @@ internal sealed partial class SessionCompactor
         token.ThrowIfCancellationRequested();
         run.CacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
         token.ThrowIfCancellationRequested();
+        if (run.PruneTools)
+        {
+            try
+            {
+                if (await TryPruneToolsAsync(run.Snapshot, token, run.Keep, run.Catalog))
+                {
+                    run.Committed = true;
+                    return;
+                }
+            }
+            catch (AuthorityCommittedException)
+            {
+                run.Committed = true;
+                throw;
+            }
+        }
+        var rows = run.Snapshot.History.Materialize();
         var candidates = CompactCandidateBuilder.Build(
-            run.Snapshot.History.Materialize(),
-            run.Keep
+            rows,
+            KeepTokens(run.Snapshot, rows, run.Catalog, run.Keep)
         );
         run.Candidates = candidates;
         if (
             candidates.Split <= 0
-            || candidates.Items.Count == 0
+            || !candidates.HasWork
                 && candidates.Preserved.Count == 0
                 && !candidates
                     .History.Take(candidates.Split)
@@ -512,7 +573,7 @@ internal sealed partial class SessionCompactor
         )
             return;
         run.Plan =
-            candidates.Items.Count == 0 && candidates.Preserved.Count == 0
+            !candidates.HasWork && candidates.Preserved.Count == 0
                 ? new CompactPlan([], new HashSet<long>(), new HashSet<long>())
                 : await PlanAsync(
                     run.Snapshot,
@@ -536,6 +597,13 @@ internal sealed partial class SessionCompactor
             try
             {
                 await PreparePlanAsync(run, guidance);
+                if (run.Committed)
+                    return;
+            }
+            catch (AuthorityCommittedException error) when (run.Committed)
+            {
+                Report(error);
+                return;
             }
             catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
             {
@@ -669,7 +737,7 @@ internal sealed partial class SessionCompactor
         if (sessions is null)
             return;
         var sequences = OrdinaryVisibleSequences(snapshot);
-        sessions.Tasks.TaskContext(snapshot.Id, sequences, false, []);
+        sessions.Tasks.TaskContext(snapshot.Id, sequences, false);
     }
 
     private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)
@@ -677,6 +745,10 @@ internal sealed partial class SessionCompactor
         try
         {
             await PreparePlanAsync(run, guidance);
+        }
+        catch (AuthorityCommittedException) when (run.Committed)
+        {
+            throw;
         }
         catch (Exception error)
             when (error
@@ -744,11 +816,13 @@ internal sealed partial class SessionCompactor
                 }
             );
             run.Committed = true;
+            IdleCompactionCommitted();
             hosted.PublishStateChanged();
         }
         catch (AuthorityCommittedException)
         {
             run.Committed = true;
+            IdleCompactionCommitted();
             hosted.PublishStateChanged();
             throw;
         }

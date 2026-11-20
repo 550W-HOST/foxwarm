@@ -25,7 +25,7 @@ Foxwarm 是一个常驻运行的服务器。对话会持久保存，可以持续
 
 ### 能在 macOS 上运行吗？
 
-可以，支持 macOS 15 或更新版本的 Apple Silicon Mac，安装命令和 Linux 相同。Intel Mac 不能作为服务器运行，也没有 macOS 桌面版。任何 Mac 都可以作为[节点](/zh/docs/nodes/)接入其他服务器。见 [macOS（Apple Silicon）](/zh/docs/installing/#macosapple-silicon)。
+可以，支持 macOS 15 或更新版本的 Apple Silicon Mac：可以用和 Linux 相同的安装命令安装服务器，也可以使用 [macOS 桌面版](/zh/docs/installing/#macos-桌面版)。两者都不支持 Intel Mac，但任何 Mac 都可以作为[节点](/zh/docs/nodes/)接入其他服务器。见 [macOS（Apple Silicon）](/zh/docs/installing/#macosapple-silicon)。
 
 ### 在哪里登录？
 
@@ -35,7 +35,7 @@ WebUI 令牌、节点配对令牌和外部 MCP 身份令牌是不同的凭据，
 
 ### 能用手机访问吗？
 
-可以。WebUI 支持手机浏览器；如果手机访问不到你的服务器，可以通过你常用的 VPN 或反向代理接入。也可以通过[渠道](/zh/docs/channels/)在聊天软件里和会话对话。
+可以。WebUI 支持手机浏览器；如果手机访问不到你的服务器，可以通过你常用的 VPN 或反向代理接入。也可以通过[渠道](/zh/docs/channels/)在聊天软件里和会话对话。如果想让 Agent 直接操作手机，可以安装 [Android Node 应用](/zh/docs/installing/#android-node)：它把手机作为节点接入你的服务器，Agent 可以读取屏幕、点按、输入和打开应用。
 
 ### 能让别人使用我的实例吗？
 

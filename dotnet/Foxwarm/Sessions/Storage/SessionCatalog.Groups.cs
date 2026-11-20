@@ -9,7 +9,8 @@ internal sealed partial class SessionCatalog
 {
     // Objects of an earlier Sidebar design that grouped rows under their Agent's main
     // Session. They are retired: dropped on open, while their unused `sidebar_parent`
-    // column stays so the schema version is unchanged.
+    // column stays so the schema version is unchanged. The recency-ordered tree-mode group
+    // indexes are retired with them; tree-mode group pages use the subtree activity indexes.
     private const string RetiredSidebarSql = """
     DROP TRIGGER IF EXISTS session_catalog_sidebar_insert;
     DROP TRIGGER IF EXISTS session_catalog_sidebar_delete;
@@ -21,15 +22,15 @@ internal sealed partial class SessionCatalog
     DROP TABLE IF EXISTS catalog_sidebar_agent;
     DROP TABLE IF EXISTS catalog_sidebar_host;
     DROP TABLE IF EXISTS catalog_sidebar_dirty;
+    DROP INDEX IF EXISTS idx_session_catalog_agent_root_default;
+    DROP INDEX IF EXISTS idx_session_catalog_node_root_default;
+    DROP INDEX IF EXISTS idx_session_catalog_node_root_time;
 """;
 
     // Additive objects on the version-3 catalog. Older Mains ignore them, and their row
     // writes still fire the count triggers, so the maintained Node counts stay exact.
-    // Group root pages use partial indexes over unpinned top-level rows.
+    // Flat group pages use the node recency index; tree-mode group pages use the activity indexes.
     private const string GroupObjectsSql = """
-    CREATE INDEX IF NOT EXISTS idx_session_catalog_agent_root_default ON session_catalog(agent,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id) WHERE parent_session_id IS NULL AND pinned=0;
-    CREATE INDEX IF NOT EXISTS idx_session_catalog_node_root_default ON session_catalog(current_node,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id) WHERE parent_session_id IS NULL AND pinned=0;
-    CREATE INDEX IF NOT EXISTS idx_session_catalog_node_root_time ON session_catalog(current_node,archived,recent_rank,session_id) WHERE parent_session_id IS NULL AND pinned=0;
     CREATE INDEX IF NOT EXISTS idx_session_catalog_node_time ON session_catalog(current_node,archived,recent_rank,session_id) WHERE pinned=0;
     CREATE TABLE IF NOT EXISTS catalog_node_count (current_node TEXT PRIMARY KEY, session_count INTEGER NOT NULL, root_count INTEGER NOT NULL) STRICT;
     CREATE TRIGGER IF NOT EXISTS session_catalog_node_count_insert AFTER INSERT ON session_catalog BEGIN
@@ -171,7 +172,8 @@ internal sealed partial class SessionCatalog
         var tree = mode != "flat-time";
         lock (gate)
         {
-            var columns = OrderColumns(mode, true);
+            // Tree modes order members by subtree activity, Flat by each Session's own time.
+            var columns = OrderColumns(mode, true, tree);
             var args = new List<object?>();
             string Param(object? value)
             {
@@ -180,11 +182,11 @@ internal sealed partial class SessionCatalog
             }
             var index = (by, mode) switch
             {
-                ("agent", "default") => "idx_session_catalog_agent_root_default",
-                ("agent", "time") => "idx_session_catalog_agent_root_time",
+                ("agent", "default") => "idx_session_catalog_agent_root_activity_default",
+                ("agent", "time") => "idx_session_catalog_agent_root_activity",
                 ("agent", _) => "idx_session_catalog_agent_time",
-                ("node", "default") => "idx_session_catalog_node_root_default",
-                ("node", "time") => "idx_session_catalog_node_root_time",
+                ("node", "default") => "idx_session_catalog_node_root_activity_default",
+                ("node", "time") => "idx_session_catalog_node_root_activity",
                 _ => "idx_session_catalog_node_time",
             };
             // Both term forms are stated so either the partial or the generated-column index applies.

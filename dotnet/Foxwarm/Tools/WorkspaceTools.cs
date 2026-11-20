@@ -39,7 +39,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "File or directory path on the current Node. Relative paths follow that Node's working-directory rules. On master, they use the Session working directory or the Agent directory when unset. On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are supported; other Nodes use their own path syntax.",
+                                "File or directory path on the current Node. A relative path uses the Session working directory, or the Node's default directory when none is set (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected.",
                         },
                         ["startLine"] = new JsonObject
                         {
@@ -74,7 +74,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Destination path on the current Node. Relative paths follow that Node's working-directory rules. On master, they use the Session working directory or the Agent directory when unset. On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are supported; other Nodes use their own path syntax.",
+                                "Destination path on the current Node. A relative path uses the Session working directory, or the Node's default directory when none is set (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected.",
                         },
                         ["content"] = new JsonObject
                         {
@@ -92,7 +92,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same session and agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived.",
+                                "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same Session and Agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived.",
                         },
                         ["createDirs"] = new JsonObject
                         {
@@ -191,13 +191,13 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         if (name == "edit")
             return await ExecuteEditPatchAsync(args, cancellationToken);
         if (name is not ("read" or "write"))
-            return Error("unknown_tool", "Unsupported workspace tool.");
+            return Error("Unsupported workspace tool.");
         if (
             args is null
             || args["filePath"] is not JsonValue pathValue
             || !pathValue.TryGetValue<string>(out var pathText)
         )
-            return Error("invalid_tool_arguments", "Invalid workspace tool arguments.");
+            return Error("Invalid workspace tool arguments.");
         try
         {
             var allowed =
@@ -205,7 +205,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                     ? new[] { "filePath", "startLine", "endLine" }
                     : ["filePath", "content", "contentRef", "overwrite", "createDirs"];
             if (args.Any(item => !allowed.Contains(item.Key)))
-                return Error("invalid_tool_arguments", "Unsupported file tool argument.");
+                return Error("Unsupported file tool argument.");
             if (name == "read")
             {
                 double? Bound(string key)
@@ -228,7 +228,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                             "Regular file or directory not found.",
                             path
                         );
-                    return Error("not_file", "Regular file or directory not found.");
+                    return Error("Regular file or directory not found.");
                 }
                 var directory = await DirectoryExistsAsync(path, cancellationToken);
                 var mime = directory
@@ -311,7 +311,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 if (id is null)
                     return " The attempted content was too large to cache for contentRef retry; call write again with content and "
                         + (parents ? "createDirs=true." : "overwrite=true.");
-                return $" The attempted content is cached. Retry write({{ filePath: {System.Text.Json.JsonSerializer.Serialize(pathText)}, contentRef: {System.Text.Json.JsonSerializer.Serialize(id)}, overwrite: true{(parents ? ", createDirs: true" : "")} }}). Use contentRef without content, or supply new content to replace it. The same cached text may be written to another permitted path in this session and agent. The contentRef expires in 15 minutes.";
+                return $" The attempted content is cached. Retry write({{ filePath: {JsonData.Serialize(pathText)}, contentRef: {JsonData.Serialize(id)}, overwrite: true{(parents ? ", createDirs: true" : "")} }}). Use contentRef without content, or supply new content to replace it. The same cached text may be written to another permitted path in this session and agent. The contentRef expires in 15 minutes.";
             }
             if (targetFiles is not null)
             {
@@ -336,17 +336,13 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                     while (!Directory.Exists(current))
                     {
                         if (File.Exists(current))
-                            return Error(
-                                "not_directory",
-                                $"Parent path is not a directory: {current}."
-                            );
+                            return Error($"Parent path is not a directory: {current}.");
                         current =
                             Path.GetDirectoryName(current)
                             ?? throw new IOException("Missing filesystem root.");
                     }
                     if (!createDirs)
                         return Error(
-                            "missing_parent",
                             $"Parent directory does not exist: {parent}. write does not create parent directories by default. Retry with createDirs=true."
                                 + Hint(true)
                         );
@@ -354,12 +350,11 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 }
                 if (Directory.Exists(destination) || File.Exists(destination) && !overwrite)
                     return Error(
-                        "file_exists",
                         $"File already exists: {pathText}. Use overwrite=true to overwrite, or use edit to modify it."
                             + Hint(false)
                     );
                 if (File.Exists(destination) && !RegularFile(destination))
-                    return Error("not_file", "Write target must be a regular file.");
+                    return Error("Write target must be a regular file.");
                 var written = await FileToolCore.WriteBytes(
                     destination,
                     Encoding.UTF8.GetBytes(content),
@@ -367,7 +362,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                     cancellationToken
                 );
                 if (!written)
-                    return Error("file_exists", $"File already exists: {pathText}." + Hint(false));
+                    return Error($"File already exists: {pathText}." + Hint(false));
             }
             if (reference.Length > 0)
                 pending.Consume(reference);
@@ -382,25 +377,25 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         {
             if (Programmatic)
                 throw;
-            return Error("invalid_tool_arguments", error.Message);
+            return Error(error.Message);
         }
         catch (ArgumentException)
         {
             if (Programmatic)
                 throw;
-            return Error("invalid_path", "Invalid path.");
+            return Error("Invalid path.");
         }
         catch (IOException error)
         {
             if (Programmatic)
                 throw;
-            return Error("tool_io_error", error.Message);
+            return Error(error.Message);
         }
         catch (UnauthorizedAccessException)
         {
             if (Programmatic)
                 throw;
-            return Error("tool_io_error", "Workspace access denied.");
+            return Error("Workspace access denied.");
         }
     }
 
@@ -428,6 +423,5 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         return NativeFileKind.TryReadLinux(-100, path, 0, out var kind, out _) && kind == "file";
     }
 
-    private static JsonObject Error(string kind, string message) =>
-        UnsupportedTurnToolExecutor.ToolError(kind, message);
+    private static JsonObject Error(string message) => ToolFailure.Result(message);
 }

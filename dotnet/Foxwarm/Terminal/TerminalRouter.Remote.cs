@@ -20,29 +20,32 @@ internal sealed partial class TerminalRouter
 
         private sealed record PendingControl(
             TerminalClient Owner,
-            NodeConnectionHub.ServiceTarget Target,
+            NodeServiceTarget Target,
             Timer Timeout
         );
 
-        private NodeConnectionHub.ServiceTarget target;
+        private NodeServiceTarget target;
         private JsonObject descriptor;
         private string backlog = "";
         private bool attached;
         private bool connectionLost;
         private TerminalClient? controlOwner;
         internal string Id { get; }
+        internal string RemoteId { get; }
         internal string NodeId { get; }
 
         internal RemoteTerminal(
             TerminalRouter router,
-            NodeConnectionHub.ServiceTarget target,
-            JsonObject descriptor
+            NodeServiceTarget target,
+            JsonObject descriptor,
+            string remoteId
         )
         {
             this.router = router;
             this.target = target;
             this.descriptor = descriptor;
             Id = descriptor["id"]!.GetValue<string>();
+            RemoteId = remoteId;
             NodeId = target.NodeId;
         }
 
@@ -52,7 +55,7 @@ internal sealed partial class TerminalRouter
                 return (JsonObject)descriptor.DeepClone();
         }
 
-        internal void Refresh(NodeConnectionHub.ServiceTarget newTarget, JsonObject value)
+        internal void Refresh(NodeServiceTarget newTarget, JsonObject value)
         {
             if (newTarget.NodeId != NodeId || SessionWait.Text(value["id"]) != Id)
                 throw new CodeServiceException(
@@ -90,7 +93,12 @@ internal sealed partial class TerminalRouter
                         needsAttach = !attached;
                     if (needsAttach)
                     {
-                        var endpoint = router.nodes.Service(NodeId, "vscode-pty");
+                        var endpoint = await router.nodes.ServiceAsync(
+                            NodeId,
+                            "vscode-pty",
+                            1,
+                            token
+                        );
                         lock (gate)
                         {
                             target = endpoint;
@@ -99,11 +107,11 @@ internal sealed partial class TerminalRouter
                         await router.nodes.RequestServiceAsync(
                             endpoint,
                             "attach",
-                            new() { ["terminalId"] = Id },
+                            new() { ["terminalId"] = RemoteId },
                             token,
                             response =>
                             {
-                                var value = DescribeRemote(NodeId, response["terminal"]);
+                                var value = DescribeRemote(NodeId, response["terminal"], out _);
                                 if (SessionWait.Text(value["id"]) != Id)
                                     throw new CodeServiceException(
                                         "NodeServiceError",
@@ -159,11 +167,11 @@ internal sealed partial class TerminalRouter
         private void AddClientLocked(TerminalClient client, bool codeControl)
         {
             client.Enqueue(
-                new
+                new JsonObject
                 {
-                    type = "ready",
-                    terminal = descriptor.DeepClone(),
-                    backlog,
+                    ["type"] = "ready",
+                    ["terminal"] = JsonData.Node(descriptor.DeepClone()),
+                    ["backlog"] = backlog,
                 }
             );
             clients.Add(client);
@@ -181,7 +189,7 @@ internal sealed partial class TerminalRouter
             {
                 List<(string Id, PendingControl Pending)> rejected;
                 bool detach;
-                NodeConnectionHub.ServiceTarget endpoint;
+                NodeServiceTarget endpoint;
                 lock (gate)
                 {
                     if (!clients.Remove(client))
@@ -214,7 +222,7 @@ internal sealed partial class TerminalRouter
                         }
                     );
                 if (detach)
-                    await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = Id });
+                    await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = RemoteId });
             }
             finally
             {
@@ -223,7 +231,7 @@ internal sealed partial class TerminalRouter
         }
 
         private async Task TryCommandAsync(
-            NodeConnectionHub.ServiceTarget endpoint,
+            NodeServiceTarget endpoint,
             string operation,
             JsonObject args
         )
@@ -245,13 +253,13 @@ internal sealed partial class TerminalRouter
         {
             if (Encoding.UTF8.GetByteCount(text) > 64 * 1024)
                 throw new InvalidDataException("Terminal input is too large.");
-            NodeConnectionHub.ServiceTarget endpoint;
+            NodeServiceTarget endpoint;
             lock (gate)
                 endpoint = target;
             return router.nodes.CommandServiceAsync(
                 endpoint,
                 "input",
-                new() { ["terminalId"] = Id, ["data"] = text },
+                new() { ["terminalId"] = RemoteId, ["data"] = text },
                 router.lifetime
             );
         }
@@ -260,7 +268,7 @@ internal sealed partial class TerminalRouter
         {
             cols = Math.Max(20, cols);
             rows = Math.Max(5, rows);
-            NodeConnectionHub.ServiceTarget endpoint;
+            NodeServiceTarget endpoint;
             lock (gate)
                 endpoint = target;
             await router.nodes.CommandServiceAsync(
@@ -268,7 +276,7 @@ internal sealed partial class TerminalRouter
                 "resize",
                 new()
                 {
-                    ["terminalId"] = Id,
+                    ["terminalId"] = RemoteId,
                     ["cols"] = cols,
                     ["rows"] = rows,
                 },
@@ -318,7 +326,7 @@ internal sealed partial class TerminalRouter
             );
         }
 
-        internal void Receive(NodeConnectionHub.ServiceEvent value)
+        internal void Receive(NodeServiceEvent value)
         {
             // Hub admission already binds the authenticated connection. Never copy peer-supplied identity or arbitrary fields.
             string? rejectId = null;
@@ -343,7 +351,7 @@ internal sealed partial class TerminalRouter
                         || path is null
                         || !path.StartsWith('/')
                         || path.Contains('\0')
-                        || Encoding.UTF8.GetByteCount(request!.ToJsonString()) > 64 * 1024
+                        || Encoding.UTF8.GetByteCount(request!.ToJsonText()) > 64 * 1024
                     )
                         rejectId = id;
                     else
@@ -384,12 +392,12 @@ internal sealed partial class TerminalRouter
                             );
                             controls[id] = new(controlOwner, target, timeout);
                             controlOwner.Enqueue(
-                                new
+                                new JsonObject
                                 {
-                                    type = "control",
-                                    requestId = id,
-                                    command = "open",
-                                    request = forwarded,
+                                    ["type"] = "control",
+                                    ["requestId"] = id,
+                                    ["command"] = "open",
+                                    ["request"] = JsonData.Node(forwarded),
                                 }
                             );
                         }
@@ -402,7 +410,7 @@ internal sealed partial class TerminalRouter
                     if (backlog.Length > TerminalRegistry.BacklogLimit)
                         backlog = backlog[^TerminalRegistry.BacklogLimit..];
                     foreach (var client in clients)
-                        client.Enqueue(new { type = "output", data = text });
+                        client.Enqueue(new JsonObject { ["type"] = "output", ["data"] = text });
                 }
                 else if (type == "exit")
                 {
@@ -411,12 +419,12 @@ internal sealed partial class TerminalRouter
                         return;
                     foreach (var client in clients)
                         client.Enqueue(
-                            new
+                            new JsonObject
                             {
-                                type = "exit",
-                                exitCode = exit.Value,
-                                signal = payload["signal"]?.DeepClone(),
-                                cwd = SessionWait.Text(payload["cwd"]),
+                                ["type"] = "exit",
+                                ["exitCode"] = exit.Value,
+                                ["signal"] = JsonData.Node(payload["signal"]?.DeepClone()),
+                                ["cwd"] = SessionWait.Text(payload["cwd"]),
                             }
                         );
                     _ = Task.Run(() => router.ForgetAsync(this, null));
@@ -424,10 +432,11 @@ internal sealed partial class TerminalRouter
                 else if (type == "error")
                     foreach (var client in clients)
                         client.Enqueue(
-                            new
+                            new JsonObject
                             {
-                                type = "error",
-                                message = SessionWait.Text(payload["error"]?["message"])
+                                ["type"] = "error",
+                                ["message"] =
+                                    SessionWait.Text(payload["error"]?["message"])
                                     ?? "Remote terminal operation failed.",
                             }
                         );
@@ -457,7 +466,7 @@ internal sealed partial class TerminalRouter
                 connectionLost = true;
                 snapshot = ResetLocked();
                 foreach (var client in snapshot)
-                    client.Enqueue(new { type = "error", message = reason });
+                    client.Enqueue(new JsonObject { ["type"] = "error", ["message"] = reason });
             }
             foreach (var client in snapshot)
                 _ = client.FinishAsync();
@@ -483,14 +492,14 @@ internal sealed partial class TerminalRouter
                 snapshot = ResetLocked();
                 if (error is not null)
                     foreach (var client in snapshot)
-                        client.Enqueue(new { type = "error", message = error });
+                        client.Enqueue(new JsonObject { ["type"] = "error", ["message"] = error });
             }
             await Task.WhenAll(snapshot.Select(c => c.FinishAsync()));
         }
 
         internal async Task ShutdownAsync()
         {
-            NodeConnectionHub.ServiceTarget endpoint;
+            NodeServiceTarget endpoint;
             bool detach;
             lock (gate)
             {
@@ -498,7 +507,7 @@ internal sealed partial class TerminalRouter
                 detach = attached;
             }
             if (detach)
-                await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = Id });
+                await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = RemoteId });
             await DisconnectAsync("Terminal transport closed.");
         }
     }

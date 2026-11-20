@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import WebSocket from 'ws'
 import Ajv from 'ajv'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const env = {  }
 const fixture = await createHostFixture('shell-http', { env })
@@ -20,7 +21,7 @@ const ajv = new Ajv({ strict: false })
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const exists = path => access(path).then(() => true, () => false)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'SHELL-DONE-' + key }] }]
 const model = createServer(async (request, response) => {
@@ -202,7 +203,7 @@ try {
   for (const endpoint of ['register', 'poll', 'report']) assert.equal((await fetch(fixture.origin + prefix + '/node/shell/' + endpoint, { method: endpoint === 'poll' ? 'GET' : 'POST', headers: directHeaders(credential), ...(endpoint === 'poll' ? {} : { body: startup }) })).status, 401)
   assert.equal((await fetch(fixture.origin + prefix + '/node/shell/register', { method: 'POST', headers: { ...directHeaders(credential), Authorization: 'Bearer ' + fixture.token }, body: startup })).status, 401)
   assert(!fixture.output.includes(token)); assert(clients.every(client => !client.output.includes(token) && !client.output.includes(expiryToken)))
-  assert(requests.some(request => Object.keys(request.tools.find(tool => tool.name === 'exec')?.parameters.properties || {}).filter(key => !key.startsWith('__')).join(',') === 'summary,command,cwd,timeout'))
+  assert(requests.some(request => Object.keys(request.tools.find(tool => tool.name === 'exec')?.parameters.properties || {}).filter(key => !key.startsWith('__')).join(',') === 'summary,command,cwd,secretEnv,timeout'))
   console.log(JSON.stringify({ result: 'passed', busybox, deliveredTasks: tasks.length, reportRequests: reports.length, largestSampleFile: largest, longBoundaryMilliseconds: Date.now() - longStart, ownedHostStarts: fixture.hostPids.length, nativeMonty: true, schemaCheckedModelRequests: requests.length }))
   await fixture.stop()
 } finally {

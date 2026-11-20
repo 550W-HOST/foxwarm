@@ -1,4 +1,5 @@
 import { toolActivitySummary } from '../packages/shared/dist/toolActivity';
+import { formatToolArguments } from '../packages/shared/dist/toolResponseFormatting';
 import type { FunctionResponse } from './types';
 import * as tools from './tools';
 import { logger } from './common';
@@ -125,12 +126,7 @@ function buildToolArgsPreview(call: FunctionCall): string {
         const { filePath, startLine, endLine } = call.args || {};
         argValue = (filePath ?? '') + (startLine ? ` (lines ${startLine}-${endLine})` : '');
     } else if (call.args) {
-        const keys = Object.keys(call.args);
-        if (keys.length === 1) {
-            argValue = call.args[keys[0]];
-        } else {
-            argValue = keys.map(key => `${key}: ${formatToolArgPreviewValue(call.args[key])}`).join('\n');
-        }
+        argValue = formatToolArguments(call.args, { singleLine: true });
     }
     const argStr = formatToolArgPreviewValue(argValue);
     return argStr.length > 200 ? `${argStr.substring(0, 197)}...` : argStr;

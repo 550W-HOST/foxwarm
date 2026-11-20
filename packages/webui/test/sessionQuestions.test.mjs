@@ -13,6 +13,7 @@ const questions = await load('../src/sessionQuestions.ts')
 const presentation = await load('../src/sessionListPresentation.ts')
 const runtime = await load('../src/runtimeStatus.ts')
 const notifications = await load('../src/sessionIdleNotifications.ts')
+const approvals = await load('../src/sessionApprovals.ts')
 
 const single = { question: 'Database?', options: [{ label: 'PostgreSQL', recommended: true }, { label: 'SQLite' }] }
 const multi = { ...single, multiSelect: true }
@@ -38,6 +39,20 @@ test('answer bodies pair entries with questions and trim free text and notes', (
   assert.deepEqual(questions.buildQuestionAnswerBody(draft, ''), { answers: [{ selected: ['SQLite'] }, { text: 'svc-data' }] })
   assert.deepEqual(questions.buildQuestionSkipBody(''), { skip: true })
   assert.deepEqual(questions.buildQuestionSkipBody('later'), { skip: true, note: 'later' })
+})
+
+test('secret questions send their typed value and never the shared draft text', () => {
+  const secret = { question: 'GitHub token?', secret: { name: 'github-token' } }
+  const asked = [secret, { question: 'Repository?' }]
+  const draft = [{ selected: [], text: 'ignored draft text' }, { selected: [], text: '' }]
+  assert.equal(questions.canSubmitQuestionDraft([{ selected: [], text: '' }, { selected: [], text: '' }], asked, {}), false)
+  assert.equal(questions.canSubmitQuestionDraft([{ selected: [], text: '' }, { selected: [], text: '' }], asked, { 0: 'ghp-synthetic' }), true)
+  assert.equal(questions.isQuestionAnswered(secret, draft[0], undefined), false)
+  assert.deepEqual(questions.buildQuestionAnswerBody(draft, '', asked, { 0: ' ghp-synthetic ' }), { answers: [{ value: ' ghp-synthetic ' }, {}] })
+  assert.deepEqual(questions.buildQuestionAnswerBody(draft, '', asked, {}), { answers: [{}, {}] })
+  const record = { id: 'q-3', status: 'answered', questions: asked, answer: { answers: [{ secret: 'github-token', stored: true }, { text: 'foxwarm' }] } }
+  assert.equal(questions.describeQuestionAnswer(record, 0), 'Stored as secret github-token')
+  assert.equal(questions.describeQuestionAnswer(record, 1), 'foxwarm')
 })
 
 test('resolved outcomes read the structured answer or the answering message', () => {
@@ -115,4 +130,55 @@ test('question notification mode is stored per browser with All sessions as the 
   assert.equal(store.has(notifications.QUESTION_NOTIFICATIONS_STORAGE_KEY), false)
   assert.equal(notifications.readQuestionNotificationMode({ getItem: () => 'garbage' }), 'all')
   assert.equal(notifications.readQuestionNotificationMode({ getItem() { throw new Error('blocked') } }), 'all')
+})
+
+test('approval decisions trim notes and outcomes name who settled them', () => {
+  assert.deepEqual(approvals.buildApprovalDecisionBody('approve', '  '), { decision: 'approve' })
+  assert.deepEqual(approvals.buildApprovalDecisionBody('reject', ' use the staging host '), { decision: 'reject', note: 'use the staging host' })
+  assert.equal(approvals.describeApprovalOutcome({ status: 'approved', decidedBy: { kind: 'identity', id: 'reviewer' } }), 'Approved by reviewer')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'rejected', decidedBy: { kind: 'administrator' } }), 'Rejected')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'expired', decidedBy: { kind: 'system', reason: 'restart' } }), 'Expired at restart')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'pending' }), 'Waiting for approval')
+  // An approved call that did not start ends cancelled and keeps its approval.
+  assert.equal(approvals.describeApprovalOutcome({ status: 'cancelled', decidedBy: { kind: 'system', reason: 'stop' }, approvedBy: { kind: 'identity', id: 'reviewer' } }), 'Approved by reviewer · cancelled by Stop')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'cancelled', decidedBy: { kind: 'system', reason: 'notStarted' }, approvedBy: { kind: 'administrator' } }), 'Approved · not run')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'cancelled', decidedBy: { kind: 'system', reason: 'stop' } }), 'Cancelled by Stop')
+  assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'exec' }, workingDirectory: '/srv/app' }), 'in /srv/app')
+  assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'exec' } }), "in the Node's default directory")
+  assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'write' } }), '')
+  assert.equal(approvals.approvalOriginLabel('webhook'), 'From a webhook')
+  assert.equal(approvals.approvalOriginLabel('timer'), 'From a scheduled run')
+})
+
+test('approval review text: tool identity, targets, deadline and shortened arguments', () => {
+  assert.equal(approvals.approvalToolLabel({ source: 'mcp', server: 'tracker', name: 'close_issue' }), 'tracker · close_issue')
+  assert.equal(approvals.approvalToolLabel({ source: 'node', name: 'exec' }), 'exec')
+  assert.deepEqual(approvals.approvalTargets({ tool: { name: 'copy_between_nodes' }, facts: { paths: [{ raw: 'a.txt', resolved: '/w/a.txt', node: 'dev' }], nodeTargets: ['dev'], sessionTarget: { id: 'peer' } } }), ['dev:/w/a.txt', 'Node dev', 'Session peer'])
+  assert.deepEqual(approvals.approvalTargets({ tool: { name: 'exec', executionNode: 'dev' }, facts: { nodeTargets: ['dev', 'other'] } }), ['Node other'])
+  assert.deepEqual(approvals.approvalTargets({ tool: { name: 'set_config' }, facts: { paths: [{ raw: 'models.yaml' }], secrets: ['a-key', 'b-key'] } }), ['models.yaml', 'Secret a-key', 'Secret b-key'])
+  assert.deepEqual(approvals.approvalCheckLines({}), [])
+  assert.deepEqual(approvals.approvalCheckLines({ checks: [
+    { id: 'source-read', tool: { source: 'node', name: 'read', executionNode: 'master' }, facts: { paths: [{ raw: 'job.py', resolved: '/w/job.py', node: 'master' }] } },
+    { id: 'member:child', tool: { source: 'builtin', name: 'node_remove', executionNode: 'master' }, facts: { nodeTargets: ['child'] } },
+    { id: 'default-cwd', tool: { source: 'node', name: 'get_default_cwd', executionNode: 'dev' }, facts: {} },
+  ] }), ['read master:/w/job.py', 'node_remove Node child', 'get_default_cwd on dev'])
+  assert.equal(approvals.approvalTimeLeft(undefined), '')
+  assert.equal(approvals.approvalTimeLeft(1_000 + 45_000, 1_000), '45s left')
+  assert.equal(approvals.approvalTimeLeft(1_000 + 4 * 60_000, 1_000), '4m left')
+  assert.equal(approvals.approvalTimeLeft(1_000 + 5 * 3_600_000, 1_000), '5h left')
+  assert.equal(approvals.approvalTimeLeft(0, 1_000), '')
+  assert.equal(approvals.approvalArgsText({ args: { command: 'ls' } }), '{\n  "command": "ls"\n}')
+  assert.equal(approvals.approvalArgsText({ argsPreview: '{"command":"xx', argsTruncated: true }), '{"command":"xx…')
+})
+
+test('pending approvals read as waiting in the Session list and runtime status', () => {
+  const row = { id: 'a', questions: { open: 2, approvals: 1, waiting: true } }
+  assert.equal(questions.getSessionQuestionAttention(row), 'waiting')
+  assert.equal(questions.questionAttentionLabel('waiting', 2, 1), 'Tool call waiting for approval')
+  assert.equal(questions.questionAttentionLabel('waiting', 3, 3), '3 tool calls waiting for approval')
+  assert.equal(questions.questionAttentionLabel('waiting', 1, 0), 'Waiting for your answer')
+  const view = runtime.getRuntimeStatusView({ state: 'running-tool', queueLength: 0, busy: true, tool: { name: 'exec', source: 'node', startedAt: 1, approval: { id: 'ap-1', status: 'pending' } } })
+  assert.equal(view.label, 'Waiting for approval · exec')
+  assert.equal(view.tone, 'warning')
+  assert.equal(runtime.getRuntimeStatusView({ state: 'running-tool', queueLength: 0, busy: true, tool: { name: 'exec', source: 'node', startedAt: 1 } }).label, 'Executing exec')
 })

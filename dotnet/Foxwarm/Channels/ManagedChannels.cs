@@ -38,7 +38,19 @@ internal sealed class ManagedChannels(
 
     // Only initial-start intent: reload and successful explicit stop take over this policy.
     private readonly HashSet<string> initialStarts = new(StringComparer.Ordinal);
+
+    // Start/stop/reload failures: kept until the channel next starts successfully.
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
+
+    // Runtime failures of a running channel, one entry per failing path (latest last): an adapter
+    // adds one with Fail and removes it with Recover once the same path succeeds again.
+    private readonly Dictionary<string, List<(string Path, string Text)>> runtimeErrors = new(
+        StringComparer.Ordinal
+    );
+
+    // The report handle of each channel instance that may still publish runtime status; a
+    // stopped or replaced instance cannot touch the status of its successor.
+    private readonly Dictionary<string, ChannelHealth> reporting = new(StringComparer.Ordinal);
     private readonly object gate = new();
     private volatile bool closed;
     private Task? ingressStop;
@@ -50,7 +62,7 @@ internal sealed class ManagedChannels(
 
     private JsonObject Config(string id) =>
         configuration.CurrentChannels()[id] as JsonObject
-        ?? throw new InvalidDataException("Channel is not configured: " + id);
+        ?? throw new ChannelRequestException("Channel is not configured: " + id);
 
     internal JsonArray Statuses(bool webUiRunning = false)
     {
@@ -93,6 +105,11 @@ internal sealed class ManagedChannels(
                         ),
                         ["lastError"] =
                             errors.GetValueOrDefault(id)
+                            ?? (
+                                runtimeErrors.GetValueOrDefault(id) is { Count: > 0 } runtime
+                                    ? runtime[^1].Text
+                                    : null
+                            )
                             ?? (
                                 !implemented && registered is null && enabled
                                     ? "Adapter is not implemented on this server."
@@ -178,7 +195,7 @@ internal sealed class ManagedChannels(
                 {
                     if (closed)
                         return false;
-                    RecordError(id, error);
+                    RecordError(id, error, "start");
                     if (attempt == attempts)
                         break;
                     try
@@ -220,11 +237,11 @@ internal sealed class ManagedChannels(
             try
             {
                 if (await StopCoreAsync(id))
-                    stopped.Add(id);
+                    stopped.Add((System.Text.Json.Nodes.JsonNode?)(id));
             }
             catch (Exception error)
             {
-                RecordError(id, error);
+                RecordError(id, error, "stop");
             }
         var started = new JsonArray();
         foreach (
@@ -239,7 +256,7 @@ internal sealed class ManagedChannels(
             try
             {
                 if (await StartCoreAsync(id))
-                    started.Add(id);
+                    started.Add((System.Text.Json.Nodes.JsonNode?)(id));
             }
             catch (OperationCanceledException) when (closed)
             {
@@ -247,7 +264,7 @@ internal sealed class ManagedChannels(
             }
             catch (Exception error)
             {
-                RecordError(id, error);
+                RecordError(id, error, "start");
             }
         }
         return new JsonObject
@@ -261,26 +278,39 @@ internal sealed class ManagedChannels(
 
     internal async Task ChangeAsync(string action, string id)
     {
+        var stage = action == "stop" ? "stop" : "start";
+        InvalidOperationException? refused = null;
         try
         {
             if (closed)
-                throw new InvalidOperationException("Channel runtime is shutting down.");
+                throw new ChannelRequestException("Channel runtime is shutting down.");
             if (!Implemented(Type(id, Config(id))) || id is "webui" or "tui")
-                throw new InvalidOperationException(
+                throw refused = new InvalidOperationException(
                     "Adapter is not implemented on this server: " + id
                 );
             if (action is "stop" or "restart")
             {
+                stage = "stop";
                 await StopCoreAsync(id);
                 lock (gate)
                     initialStarts.Remove(id);
             }
             if (action is "start" or "restart")
+            {
+                stage = "start";
                 await StartCoreAsync(id);
+            }
         }
         catch (Exception error)
         {
-            RecordError(id, error);
+            // The refusal keeps its exception type for callers; its message is a complete sentence.
+            RecordError(
+                id,
+                ReferenceEquals(error, refused)
+                    ? new ChannelRequestException(error.Message)
+                    : error,
+                stage
+            );
             throw;
         }
     }
@@ -296,53 +326,21 @@ internal sealed class ManagedChannels(
             )
                 return false;
         if (sessions.ChannelRegistry.Get(id) is not null)
-            throw new InvalidOperationException("Channel ID is already registered: " + id);
+            throw new ChannelRequestException("Channel ID is already registered: " + id);
         var config = configuration.CurrentChannels()[id] as JsonObject;
         if (initial && (config is null || !Eligible(id, config)))
             return false;
         config ??= Config(id);
+        config = ResolveSecrets(id, config);
+        var health = Health(id);
         IManagedChannel channel = Type(id, config) switch
         {
-            "telegram" => new TelegramChannel(
-                id,
-                config,
-                sessions,
-                router,
-                dependencies,
-                error => RecordError(id, error)
-            ),
-            "matrix" => new MatrixChannel(
-                id,
-                config,
-                sessions,
-                router,
-                dependencies,
-                error => RecordError(id, error)
-            ),
-            "qqbot" => new QQBotChannel(
-                id,
-                config,
-                sessions,
-                router,
-                dependencies,
-                error => RecordError(id, error)
-            ),
-            "wework" => new WeWorkChannel(
-                id,
-                config,
-                sessions,
-                router,
-                dependencies,
-                error => RecordError(id, error)
-            ),
-            "weixin" => new WeixinChannel(
-                id,
-                config,
-                router,
-                Weixin,
-                error => RecordError(id, error)
-            ),
-            _ => throw new InvalidOperationException(
+            "telegram" => new TelegramChannel(id, config, sessions, router, dependencies, health),
+            "matrix" => new MatrixChannel(id, config, sessions, router, dependencies, health),
+            "qqbot" => new QQBotChannel(id, config, sessions, router, dependencies, health),
+            "wework" => new WeWorkChannel(id, config, sessions, router, dependencies, health),
+            "weixin" => new WeixinChannel(id, config, router, Weixin, health),
+            _ => throw new ChannelRequestException(
                 "Adapter is not implemented on this server: " + id
             ),
         };
@@ -362,6 +360,8 @@ internal sealed class ManagedChannels(
                 )
                     return false;
                 errors.Remove(id);
+                runtimeErrors.Remove(id);
+                reporting[id] = health;
                 starting.Add(id, (channel, settled));
                 initializing = true;
                 // Stop cannot precede an adapter's synchronous start admission.
@@ -397,8 +397,15 @@ internal sealed class ManagedChannels(
             finally
             {
                 lock (gate)
+                {
                     if (initializing)
                         starting.Remove(id);
+                    if (!published && reporting.GetValueOrDefault(id) == health)
+                    {
+                        reporting.Remove(id);
+                        runtimeErrors.Remove(id);
+                    }
+                }
                 settled.TrySetResult();
             }
         }
@@ -411,20 +418,137 @@ internal sealed class ManagedChannels(
             channel = running.GetValueOrDefault(id);
         if (channel is null)
             return false;
+        lock (gate)
+            reporting.Remove(id);
         await channel.DisposeAsync();
         sessions.ChannelRegistry.Unregister(id);
         lock (gate)
+        {
             running.Remove(id);
+            runtimeErrors.Remove(id);
+        }
         return true;
     }
 
-    private void RecordError(string id, Exception error)
+    // Credentials resolve only here, at transport construction; statuses and Setup keep
+    // the reference text.
+    private JsonObject ResolveSecrets(string id, JsonObject config)
     {
-        var safe = ChannelFailure.Describe(error);
-        lock (gate)
-            errors[id] = safe;
-        Console.Error.WriteLine("Channel " + id + ": " + safe);
+        if (!Foxwarm.Secrets.SecretReferences.ReferencedNames(config).Any())
+            return config;
+        var missing = new List<string>();
+        var wrapped = new JsonObject
+        {
+            ["channels"] = new JsonObject { [id] = config.DeepClone() },
+        };
+        var resolved = configuration.Secrets.Resolve(
+            wrapped,
+            Foxwarm.Secrets.SecretSinks.App,
+            "Configuration",
+            missing
+        );
+        if (missing.Count > 0)
+            throw Foxwarm.Secrets.SecretUnavailableException.For("Channel " + id, missing);
+        return resolved["channels"]![id]!.AsObject();
     }
+
+    // Running channels that use a changed secret restart with the new value.
+    // A secret changed: restart running channels that reference it, and retry enabled
+    // channels that reference it but are not running (for example after a missing value).
+    internal async Task<IReadOnlyList<string>> RestartReferencingAsync(string name)
+    {
+        var channels = configuration.CurrentChannels();
+        var restarted = new List<string>();
+        foreach (var (id, node) in channels.ToArray())
+        {
+            if (
+                node is not JsonObject config
+                || !Foxwarm.Secrets.SecretReferences.ReferencedNames(config).Contains(name)
+            )
+                continue;
+            bool active;
+            lock (gate)
+                active = running.ContainsKey(id);
+            if (!active && !Eligible(id, config))
+                continue;
+            try
+            {
+                await ChangeAsync(active ? "restart" : "start", id);
+                restarted.Add(id);
+            }
+            catch (Exception)
+            {
+                // ChangeAsync records the safe failure for the channel status list.
+            }
+        }
+        return restarted;
+    }
+
+    // A start/stop/reload failure: shown until the channel next starts successfully.
+    private void RecordError(string id, Exception error, string stage)
+    {
+        var text = ChannelFailure.Describe(error, "Channel " + stage);
+        lock (gate)
+            errors[id] = text;
+        Console.Error.WriteLine("Channel " + id + ": " + text + Detail(error));
+    }
+
+    // The report handle for one channel instance. Log-only events never reach the status.
+    private ChannelHealth Health(string id)
+    {
+        ChannelHealth? health = null;
+        health = new ChannelHealth(
+            error =>
+                Console.Error.WriteLine("Channel " + id + ": " + ChannelFailure.Diagnostic(error)),
+            (path, error) => FailRuntime(id, health!, path, error),
+            path => RecoverRuntime(id, health!, path)
+        );
+        return health;
+    }
+
+    private void FailRuntime(string id, ChannelHealth health, string path, Exception error)
+    {
+        var text =
+            error is ChannelFailure
+                ? ChannelFailure.Describe(error)
+                : ChannelFailure.Sentence(path, error);
+        lock (gate)
+        {
+            if (!reporting.TryGetValue(id, out var current) || current != health)
+                return;
+            if (!runtimeErrors.TryGetValue(id, out var failing))
+                runtimeErrors[id] = failing = [];
+            failing.RemoveAll(entry => entry.Path == path);
+            failing.Add((path, text));
+        }
+        Console.Error.WriteLine("Channel " + id + ": " + text + Detail(error));
+    }
+
+    private void RecoverRuntime(string id, ChannelHealth health, string path)
+    {
+        lock (gate)
+        {
+            if (
+                !reporting.TryGetValue(id, out var current)
+                || current != health
+                || !runtimeErrors.TryGetValue(id, out var failing)
+            )
+                return;
+            if (failing.RemoveAll(entry => entry.Path == path) == 0)
+                return;
+            if (failing.Count == 0)
+                runtimeErrors.Remove(id);
+        }
+        Console.WriteLine("Channel " + id + ": " + path + " recovered.");
+    }
+
+    private static string Detail(Exception error) =>
+        error
+            is ChannelRequestException
+                or Foxwarm.Secrets.SecretUnavailableException
+                or Foxwarm.Secrets.SecretStoreLockedException
+            ? ""
+            : " [" + ChannelFailure.Diagnostic(error) + "]";
 
     internal Task StopIngressAsync()
     {

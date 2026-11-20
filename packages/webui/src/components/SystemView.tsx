@@ -6,6 +6,11 @@ import type { TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
 import SystemNodes from './SystemNodes'
 import SystemTimers, { SessionTimersSection } from './SystemTimers'
+import SystemWebhooks from './SystemWebhooks'
+import SystemUsage from './SystemUsage'
+import SystemActivity from './SystemActivity'
+import type { ActivityFilters } from '../activity'
+import type { UsagePeriod } from '../usageOverview'
 import { AgentRegistryCard, AgentRegistryInspector, type AgentMemoryFile, type AgentRegistryChanges, type AgentRegistryEntry } from './SystemAgents'
 import { SessionFilterBar, SessionInspector, SessionOperationRow } from './SystemSessions'
 import { addLoadedUsage, emptyLoadedUsage, renderMetaBadge, type LoadedUsage } from './SystemShared'
@@ -22,13 +27,16 @@ import { makeVscodeWebUrl } from '../vscodeWeb'
 // The Timeline shares Chat rendering pieces; load them only when it is opened.
 const SessionSequenceView = lazy(() => import('./SessionSequenceView'))
 
-export type SystemSection = 'agents' | 'sessions' | 'nodes' | 'timers'
+export type SystemSection = 'agents' | 'sessions' | 'nodes' | 'timers' | 'webhooks' | 'usage' | 'activity'
 
 export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
   { id: 'agents', label: 'Agents' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'timers', label: 'Timers' },
+  { id: 'webhooks', label: 'Webhooks' },
+  { id: 'usage', label: 'Usage' },
+  { id: 'activity', label: 'Activity' },
 ]
 
 const SECTION_SUBTITLES: Record<SystemSection, string> = {
@@ -36,6 +44,9 @@ const SECTION_SUBTITLES: Record<SystemSection, string> = {
   sessions: 'Session state, placement and usage, and how sessions work together.',
   nodes: 'Connected nodes, the sessions running on them, and new node setup.',
   timers: 'Scheduled messages and scripts, their next runs and recent results.',
+  webhooks: 'Events from outside services, where they go and what arrived recently.',
+  usage: 'Model requests, tokens and estimated cost across the installation.',
+  activity: 'Who ran which tools, on which Nodes, and what happened.',
 }
 
 interface SystemViewProps {
@@ -53,6 +64,8 @@ interface SystemViewProps {
   agentRequest?: { agent: string; nonce: number } | null
   /** Opens the Sessions list filtered by this state; a new nonce repeats the request. */
   sessionsRequest?: { status: ArchitectureStatusFilter; nonce: number } | null
+  /** Opens the Usage section for this period; a new nonce repeats the request. */
+  usageRequest?: { period: UsagePeriod; nonce: number } | null
 }
 
 export default function SystemView({
@@ -67,6 +80,7 @@ export default function SystemView({
   onOpenAgentMemory,
   agentRequest,
   sessionsRequest,
+  usageRequest,
 }: SystemViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -106,6 +120,11 @@ export default function SystemView({
     setStatusFilter(sessionsRequest.status)
   }, [sessionsRequest?.status, sessionsRequest?.nonce])
   const [timersSessionFilter, setTimersSessionFilter] = useState<string | null>(null)
+  const [activityRequest, setActivityRequest] = useState<{ filters: ActivityFilters; nonce: number } | null>(null)
+  const showActivity = useCallback((filters: ActivityFilters) => {
+    setActivityRequest(current => ({ filters, nonce: (current?.nonce || 0) + 1 }))
+    setSection('activity')
+  }, [setSection])
   const showSessionTimers = (sessionId: string) => {
     setTimersSessionFilter(sessionId)
     setSection('timers')
@@ -380,7 +399,6 @@ export default function SystemView({
     { id: 'active', label: 'Active', count: sessions.filter(isSessionRuntimeActive).length },
     { id: 'waiting', label: 'Waiting', count: summary.waitingCount },
     { id: 'queued', label: 'Queued', count: sessions.filter(session => Number(session.runtimeState?.queueLength ?? session.queueLength ?? 0) > 0).length },
-    { id: 'isolated', label: 'Isolated', count: sessions.filter(session => session.isolated).length },
   ]
 
   const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
@@ -547,7 +565,13 @@ export default function SystemView({
                   onInspect={inspectSession}
                   onOpen={onSelectSession}
                   onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
-                  extra={inspectedSession ? <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} /> : null}
+                  extra={inspectedSession ? <>
+                    <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} />
+                    <section className="mt-4 flex items-center justify-between gap-2 border-t border-fw-border-muted pt-4" data-session-activity={inspectedSession.id}>
+                      <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
+                      <button type="button" onClick={() => showActivity({ sessionId: inspectedSession.id, tree: true })} className="text-xs font-medium text-fw-accent hover:underline" data-session-activity-open>View activity</button>
+                    </section>
+                  </> : null}
                 />
               </div>
             </>}
@@ -567,6 +591,12 @@ export default function SystemView({
             </main>
             <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} installDefaultNode={agentDefaultNode} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
           </div>
+        ) : section === 'webhooks' ? (
+          <SystemWebhooks onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
+        ) : section === 'usage' ? (
+          <SystemUsage request={usageRequest} onOpenSession={onSelectSession} />
+        ) : section === 'activity' ? (
+          <SystemActivity request={activityRequest} onOpenSession={onSelectSession} />
         ) : section === 'timers' ? (
           <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
         ) : (

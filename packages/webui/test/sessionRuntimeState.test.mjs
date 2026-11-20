@@ -70,3 +70,22 @@ test('processing changes the idle summary without changing active or idle-notifi
   assert.equal(getRuntimeStateSummary(runtimeState('llm-failed', { processing: true })), 'Request failed')
   assert.equal(getRuntimeStateSummary(runtimeState('waiting', { processing: true })), 'Waiting')
 })
+
+test('the Session activity is the later reasoning heading or tool summary of an ordinary request or execution', async () => {
+  const { getSessionRuntimeActivity } = await import(pathToFileURL(bundledPath).href)
+  const activity = { reasoning: 'Planning', tool: 'Doing A', latest: 'reasoning' }
+  const activityOf = (state, extra = {}) => getSessionRuntimeActivity({ busy: true, runtimeState: runtimeState(state, { activity, ...extra }) })
+  assert.equal(activityOf('requesting-model', { active: { phase: 'normal-turn' } }), 'Planning')
+  assert.equal(activityOf('running-tool', { activity: { ...activity, latest: 'tool' }, tool: { name: 'exec', startedAt: 1 } }), 'Doing A')
+  assert.equal(activityOf('running-tool', { activity: { reasoning: 'Planning', latest: 'tool' }, tool: { name: 'exec', startedAt: 1 } }), 'Planning')
+  assert.equal(getSessionRuntimeActivity({ busy: true, runtimeState: runtimeState('requesting-model', { active: { phase: 'normal-turn' } }) }), undefined)
+  for (const [state, extra] of [
+    ['requesting-model', { active: { phase: 'compaction' } }],
+    ['requesting-model', { retry: { attempt: 1, maxAttempts: 3 } }],
+    ['requesting-model', { stopping: true }],
+    ['running-tool', { tool: { name: 'exec', approval: { id: 'a', status: 'pending' }, startedAt: 1 } }],
+    ['waiting', {}],
+    ['llm-failed', {}],
+    ['idle', {}],
+  ]) assert.equal(activityOf(state, extra), undefined, JSON.stringify({ state, extra }))
+})

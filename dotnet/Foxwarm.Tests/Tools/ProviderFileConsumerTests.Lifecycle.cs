@@ -31,7 +31,11 @@ public sealed partial class ProviderFileConsumerTests
         await using var f = await Fixture.Create("lifecycle");
         var list = await f.Call("node", Lifecycle("list"));
         Success(list);
-        Assert.Contains("fixture", list["output"]!.GetValue<string>());
+        Assert.Null(list["output"]);
+        Assert.Contains(
+            "fixture",
+            list["providers"]!.AsArray().Select(provider => provider!["id"]!.GetValue<string>())
+        );
         var structured = await f.Call(
             "run_script",
             new JsonObject { ["code"] = "return call_tool('node', {'action':'list'})" }
@@ -50,12 +54,12 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Equal(3, provider.Count);
         Assert.Equal(4, provider["lifecycle"]!.AsArray().Count);
         var full = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "builtin:node",
                 ["args"] = Lifecycle("inspect", provider: "fixture"),
-            }
+            })
         );
         Success(full);
         Assert.Equal("object", full["provider"]!["createParameters"]!["type"]!.GetValue<string>());
@@ -207,8 +211,8 @@ public sealed partial class ProviderFileConsumerTests
                 id
             );
             var result = await f.Call(
-                "call_tool",
-                new JsonObject { ["toolId"] = "builtin:node", ["args"] = Lifecycle("inspect", id) }
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:node", ["args"] = Lifecycle("inspect", id) })
             );
             Assert.True(result["error"] is null, result.ToJsonString());
             var node = result["node"]!;
@@ -263,7 +267,7 @@ public sealed partial class ProviderFileConsumerTests
         );
         f.Manager.Authorization.Invalidate();
         var denied = await f.Call("node", Lifecycle("inspect", "offline-cli-node"));
-        Assert.Equal("tool_authorization_denied", SessionWait.Text(denied["error"]?["type"]));
+        Assert.Equal("tool_authorization_denied", denied.FailureCode());
         Assert.Null(denied["node"]);
     }
 
@@ -411,15 +415,15 @@ public sealed partial class ProviderFileConsumerTests
     }
 
     [Fact]
-    public async Task Effectively_isolated_discovery_filters_actions_but_exact_allow_cannot_enable_mutations_or_foreign_inspection()
+    public async Task Migrated_isolation_layer_exact_allow_cannot_enable_lifecycle_mutations()
     {
         if (!OperatingSystem.IsLinux())
             return;
         await using var f = await Fixture.Create("lifecycle");
-        await f.Manager.SetAgentIsolationAsync(
+        await LegacyIsolationFixture.RestrictAsync(
+            f.Manager,
             "main",
             f.Node,
-            true,
             new JsonArray(
                 new JsonObject
                 {
@@ -434,22 +438,11 @@ public sealed partial class ProviderFileConsumerTests
             new JsonObject { ["code"] = "return call_tool('node', {'action':'list'})" }
         );
         Success(listed);
-        var nodes = listed["result"]!["nodes"]!.AsArray();
-        Assert.Equal(
-            new[] { "master", f.Node },
-            nodes.Select(node => node!["id"]!.GetValue<string>())
+        // Discovery is not filtered; the layer decides each lifecycle call.
+        Assert.Contains(
+            listed["result"]!["nodes"]!.AsArray(),
+            node => node!["id"]!.GetValue<string>() == f.Node
         );
-        Assert.Equal(
-            new[] { "inspect" },
-            listed["result"]!["providers"]!
-                .AsArray()
-                .Single(p => p!["id"]!.GetValue<string>() == "fixture")!["lifecycle"]!
-                .AsArray()
-                .Select(SessionWait.Text)
-        );
-        var full = await f.Call("node", Lifecycle("inspect", provider: "fixture"));
-        Success(full);
-        Assert.Single(full["provider"]!["lifecycle"]!.AsArray());
         Success(await f.Call("node", Lifecycle("inspect", f.Node)));
         foreach (
             var denied in new[]
@@ -457,12 +450,12 @@ public sealed partial class ProviderFileConsumerTests
                 Lifecycle("create", "fixture/denied", "fixture"),
                 Lifecycle("ensure", "fixture/denied", "fixture"),
                 Lifecycle("destroy", f.Node),
-                Lifecycle("inspect", "other/target"),
-                Lifecycle("inspect", "master"),
                 Lifecycle("select", "master"),
             }
         )
             Assert.NotNull((await f.Call("node", denied))["error"]);
+        // Inspection is read-only and not limited by the generated layer.
+        Success(await f.Call("node", Lifecycle("inspect", "master")));
         Assert.False(File.Exists(Path.Combine(f.Target, "effects.jsonl")));
     }
 

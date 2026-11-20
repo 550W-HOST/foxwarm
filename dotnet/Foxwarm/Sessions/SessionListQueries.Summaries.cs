@@ -106,32 +106,8 @@ internal sealed partial class SessionListQueries
     public JsonObject Search(string query, int limit)
     {
         // Source-defined explicit search is a metadata candidate scan, not a typed root-page seek.
-        var term = SourceStringLower.Lower(query);
         var candidates = runtime.ListSessions();
-        var matches = candidates
-            .Where(row =>
-                new[]
-                {
-                    "displayName",
-                    "id",
-                    "agent",
-                    "currentNode",
-                    "cwd",
-                    "model",
-                    "modelKey",
-                    "defaultModelKey",
-                    "childModelDefault",
-                    "effectiveChildModelKey",
-                }
-                    .Select(key => SessionCatalog.Text(row[key]))
-                    .Concat((row["aliases"] as JsonArray ?? []).Select(SessionCatalog.Text))
-                    .OfType<string>()
-                    .Any(text =>
-                        SessionCatalog.Trim(text).Length > 0
-                        && SourceStringLower.Lower(text).Contains(term, StringComparison.Ordinal)
-                    )
-            )
-            .ToArray();
+        var matches = candidates.Where(MetadataMatcher(query)).ToArray();
         return new JsonObject
         {
             ["version"] = 1,
@@ -140,5 +116,35 @@ internal sealed partial class SessionListQueries
             ["hasMore"] = matches.Length > limit,
             ["candidateCount"] = candidates.Length,
         };
+    }
+
+    private static readonly string[] SearchKeys =
+    [
+        "displayName",
+        "id",
+        "agent",
+        "currentNode",
+        "cwd",
+        "model",
+        "modelKey",
+        "defaultModelKey",
+        "childModelDefault",
+        "effectiveChildModelKey",
+    ];
+
+    // Shared by WebUI search and the session tool: case-insensitive literal substring over
+    // presentation metadata and aliases. The caller supplies an already trimmed query.
+    internal static Func<JsonObject, bool> MetadataMatcher(string query)
+    {
+        var term = SourceStringLower.Lower(query);
+        return row =>
+            SearchKeys
+                .Select(key => SessionCatalog.Text(row[key]))
+                .Concat((row["aliases"] as JsonArray ?? []).Select(SessionCatalog.Text))
+                .OfType<string>()
+                .Any(text =>
+                    SessionCatalog.Trim(text).Length > 0
+                    && SourceStringLower.Lower(text).Contains(term, StringComparison.Ordinal)
+                );
     }
 }

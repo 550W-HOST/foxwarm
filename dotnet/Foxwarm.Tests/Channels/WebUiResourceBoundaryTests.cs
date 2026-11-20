@@ -230,7 +230,7 @@ public sealed class WebUiResourceBoundaryTests
                     (
                         await f.Admin.PostAsJsonAsync(
                             "api/sessions/asset-owner/message",
-                            new { text = "/session move team/moved" }
+                            new { text = "/session move --new-agent-name team --new-session-id moved" }
                         )
                     ).StatusCode
                 );

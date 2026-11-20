@@ -93,6 +93,9 @@ Keep a trailing slash on the base URL, including any deployment prefix. Replace 
 | `foxwarm_node` | List, inspect the current selection, or select a Node |
 | `foxwarm_exec_result` | Read command status and bounded output for the current MCP context |
 | `foxwarm_session` | List internal Sessions, read a bounded preview, or queue a message |
+| `ctl` | Run the same operations as commands, such as `session view <id>`, `tool call <tool-id> --args @args` or `exec result <exec-id>`; `help` lists them |
+
+`ctl` takes `command` text and optional `values` for `@name` arguments. Each command runs the matching operation of the tools above, with the same permissions and results.
 
 `foxwarm_discover` accepts `sources: ['node']`, `['mcp']`, or `['builtin']`. The supported builtins are currently the two Node pairing actions.
 
@@ -190,7 +193,7 @@ bot:
   enableTrigger: false
 ```
 
-With an identity declaring the `mcp` surface, Foxwarm still starts its HTTP server and Node connections even when the WebUI is disabled. You can leave both settings enabled when MCP shares a normal WebUI installation. An identity that declares only `webui` cannot authenticate to `/mcp`.
+With an identity declaring the `mcp` or [`webhook`](/docs/webhooks/) surface, Foxwarm still starts its HTTP server and Node connections even when the WebUI is disabled. `enableTrigger` only decides whether the HTTP server starts without the WebUI or such an identity; set it to `false` to run with no HTTP server. You can leave both settings enabled when MCP shares a normal WebUI installation. An identity that declares only `webui` cannot authenticate to `/mcp`.
 
 To pair a CLI Node, an administrator supplies the existing token from the instance's private `state/node_token` file to that Node. An authorized MCP operator can then discover and call `node_pair_list` and `node_pair_approve`. The MCP endpoint never returns the bootstrap token. See [Nodes](/docs/nodes/) for client setup.
 

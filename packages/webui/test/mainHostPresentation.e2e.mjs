@@ -66,7 +66,7 @@ try {
   assert.equal(archived.matchedCount, 1004); assert.equal(archived.changedCount, 1002); assert(archived.matchedSessionIds.includes('grandchild'))
   const unarchived = await action('root', 'archive', { archived: false, includeDescendants: true }); assert.deepEqual(unarchived.matchedSessionIds, ['root']); assert.equal(unarchived.includeDescendants, false); assert.equal((await dto('child')).archived, true)
   await action('foreign', 'pin', { pinned: true }); await action('missing', 'archive', {})
-  await command('foreign', '/session unarchive missing'); await command('foreign', '/session parent target child'); await command('foreign', '/session unparent child')
+  await command('foreign', '/session unarchive missing'); await command('foreign', '/session set-parent target --session-id child'); await command('foreign', '/session clear-parent --session-id child')
   await action('child', 'move', { parentSessionId: 'root', position: 'last' }); assert.equal(sql("SELECT COUNT(*) n FROM session_catalog WHERE parent_reference='root' AND sidebar_order IS NOT NULL")[0].n, 1002)
   const ranksBefore = sql("SELECT session_id,sidebar_order FROM session_catalog WHERE parent_reference='root' ORDER BY session_id")
   await action('child', 'move', { parentSessionId: 'target', updateOrder: false }); assert.deepEqual(sql("SELECT session_id,sidebar_order FROM session_catalog WHERE parent_reference='root' ORDER BY session_id"), ranksBefore.filter(row => row.session_id !== 'child'))

@@ -1,0 +1,68 @@
+---
+// Page frame for the blog: the homepage header, footer, palette and type, with
+// canonical, language-alternate and sharing metadata for an indexable page.
+import '@fontsource-variable/ibm-plex-sans/wght.css';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
+import '../styles/home.css';
+import '../styles/blog.css';
+import SiteHeader from './SiteHeader.astro';
+import SiteFooter from './SiteFooter.astro';
+import ThemeInit from './ThemeInit.astro';
+import heroLight from '../assets/screens/hero-light.png';
+import { strings, siteUrl, blogPath, type Lang } from '../i18n/home';
+import { blogStrings } from '../i18n/blog';
+
+interface Props {
+  lang: Lang;
+  title: string;
+  description: string;
+  /** Site-relative path of this page. */
+  path: string;
+  /** This page in each language it exists in, including this one, when there is more than one. */
+  alternates?: Partial<Record<Lang, string>>;
+  /** Target of the header and footer language link. */
+  languageHref: string;
+  article?: { published: Date };
+}
+const { lang, title, description, path, alternates = {}, languageHref, article } = Astro.props;
+const t = strings[lang];
+const hreflang: Record<Lang, string> = { en: 'en', zh: 'zh-CN' };
+const alternateEntries = Object.entries(alternates) as [Lang, string][];
+const pageTitle = `${title} | Foxwarm`;
+---
+<!doctype html>
+<html lang={t.htmlLang} data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="canonical" href={siteUrl + path} />
+    {alternateEntries.length > 1 && alternateEntries.map(([altLang, altPath]) => (
+      <link rel="alternate" hreflang={hreflang[altLang]} href={siteUrl + altPath} />
+    ))}
+    {alternateEntries.length > 1 && alternates.en && <link rel="alternate" hreflang="x-default" href={siteUrl + alternates.en} />}
+    <link rel="alternate" type="application/rss+xml" title={blogStrings[lang].feedTitle} href={`${blogPath(lang)}rss.xml`} />
+    <meta property="og:site_name" content="Foxwarm" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content={article ? 'article' : 'website'} />
+    <meta property="og:url" content={siteUrl + path} />
+    <meta property="og:image" content={siteUrl + heroLight.src} />
+    <meta property="og:locale" content={lang === 'en' ? 'en_US' : 'zh_CN'} />
+    {article && <meta property="article:published_time" content={article.published.toISOString().slice(0, 10)} />}
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32x32.png" sizes="32x32" />
+    <ThemeInit />
+  </head>
+  <body>
+    <SiteHeader lang={lang} path={path} languageHref={languageHref} current="blog" />
+    <main id="main" class="blog-main">
+      <slot />
+    </main>
+    <SiteFooter lang={lang} languageHref={languageHref} />
+  </body>
+</html>

@@ -11,6 +11,8 @@ import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { until } from './mainHostFixture.mjs'
 import { publishedToolOutcomes } from './publishedToolOutcomes.mjs'
+import { browserEnvironment } from '../../browser-host/test/fixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const payload = process.env.FOXWARM_PUBLISHED_CORE
 assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
@@ -28,6 +30,12 @@ await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nvec
 const env = { ...process.env }
 for (const key of Object.keys(env)) if (key.startsWith('FOXWARM_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS'].includes(key)) delete env[key]
 env.NODE_OPTIONS = ''
+// Main launches the installed Chromium with its own sandbox. Where this machine cannot provide
+// one (for example restricted unprivileged user namespaces), the test selects its own launcher
+// through the standard executable variable, as an operator would.
+const chromium = await browserEnvironment()
+assert(chromium.available, 'A Chromium installation is required: ' + chromium.reason)
+if (chromium.wrapper) env.PUPPETEER_EXECUTABLE_PATH = chromium.wrapper
 let child, output = '', browser, token, qualificationHistory, lastProviderReply, mainBrowserReached = false, browserErrors = []
 function startHost() {
   output = ''
@@ -53,11 +61,11 @@ const peer = createServer(async (request, response) => {
         args: { resource: join(payload, 'skills/code-index/INITIALIZATION.md') },
       }) }]
       : requests.length === 2
-      ? [{ type: 'function_call', call_id: 'packaged-browser-open', name: 'browse_open', arguments: JSON.stringify({ url: `http://127.0.0.1:${peer.address().port}/browser-fixture` }) }]
+      ? [{ type: 'function_call', call_id: 'packaged-browser-open', name: 'browser_open', arguments: JSON.stringify({ url: `http://127.0.0.1:${peer.address().port}/browser-fixture` }) }]
       : requests.length === 3
-      ? [{ type: 'function_call', call_id: 'packaged-browser-image', name: 'browse_get', arguments: JSON.stringify({ tabId: 'tab1', screenshot: true }) }]
+      ? [{ type: 'function_call', call_id: 'packaged-browser-image', name: 'browser_screenshot', arguments: JSON.stringify({ tabId: 1 }) }]
       : requests.length === 4
-      ? [{ type: 'function_call', call_id: 'packaged-react-artifact', name: 'artifact', arguments: JSON.stringify({ action: 'publish', filePath: join(payload, 'skills/react-artifacts/examples/sorting.json') }) }]
+      ? [functionCall('packaged-react-artifact', 'artifact', { action: 'publish', filePath: join(payload, 'skills/react-artifacts/examples/sorting.json') })]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PACKAGED-NATIVE-DONE' }] }]
     lastProviderReply = outputRows[0].name || outputRows[0].type
     response.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -142,7 +150,7 @@ try {
     return JSON.stringify(qualificationHistory).includes('PACKAGED-NATIVE-DONE')
   }, 'packaged native/browser/image/artifact turn', 60_000)
   assert.equal(requests.length, 5)
-  assert.match(JSON.stringify(requests[2].input), /Tab opened: tab1/)
+  assert.match(JSON.stringify(requests[2].input), /Packaged browser/)
   assert.match(JSON.stringify(requests[3].input), /input_image/)
   const history = (await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body
   const artifactIds = [...new Set(JSON.stringify(history).match(/art_[a-f0-9]{32}/g) || [])]
@@ -189,7 +197,7 @@ try {
 } catch (error) {
   console.error('Published Core output:\n' + output)
   // Main's launch policy is independent of the browser used to drive the App.
-  const mainBrowserExecutable = { path: '/usr/bin/chromium' }
+  const mainBrowserExecutable = { path: env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium', testLauncher: Boolean(chromium.wrapper) }
   mainBrowserExecutable.present = await stat(mainBrowserExecutable.path).then(() => true, () => false)
   if (mainBrowserExecutable.present) {
     try {

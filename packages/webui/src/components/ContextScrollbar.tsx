@@ -361,6 +361,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ settings, messages, co
             <div>Agent memory: {(memorySize.bytes / 1024).toFixed(1)} KB · ~{memorySize.estimatedTokens.toLocaleString()} tokens</div>
             {memorySize.overThreshold && <div>Above the {(memorySize.thresholdFraction * 100).toLocaleString()}% memory limit</div>}
           </div>}
+          {effectiveContextUsage?.estimated && <div className="mb-2 text-xs">Estimated context</div>}
           {tooltipLegendStats.map(stat => (
             <div key={stat.category} className="foxwarm-context-scrollbar-legend-row">
               <span className={`foxwarm-context-scrollbar-legend-swatch foxwarm-context-scrollbar-category-${stat.category}`} />

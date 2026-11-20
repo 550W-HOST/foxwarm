@@ -46,6 +46,12 @@ internal static class NativeExecScripts
               mv "$status_tmp" "$FOXWARM_EXEC_STATUS_PATH"
             }
             trap foxwarm_exec_finalize EXIT
+            # Without these, a shell ended by a signal runs the EXIT trap with $? of 0 and the
+            # stopped command would be recorded as successful. The command runs in this same
+            # shell, so a trap it sets for one of these signals replaces this one.
+            trap 'exit 143' TERM
+            trap 'exit 130' INT
+            trap 'exit 129' HUP
             set +e
             """;
 

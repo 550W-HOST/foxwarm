@@ -30,7 +30,7 @@ label = ask_agent("Reply with a short label")
 return {"label": label, "listingPreview": listing[:200]}
 ```
 
-Run the bundled file using the absolute skill directory returned by `skill({action:"load"})` in place of `<skill-directory>`. This example assumes the session's current Node is Main, where the bundled resources live:
+Run the bundled file using the absolute skill directory returned by `ctl skill load` in place of `<skill-directory>`. This example assumes the session's current Node is Main, where the bundled resources live:
 
 ```text
 run_script({node: "master", filePath: "<skill-directory>/examples/automation_basic.py", args: {baseDir: "<skill-directory>/examples"}})
@@ -72,19 +72,22 @@ return {"content": content}
 
 ## Python subset
 
-ToolScript uses Monty rather than CPython. Use ordinary expressions, functions, loops, branching, f-strings, comprehensions, generator expressions, lambdas, `try`/`except`, simple classes, and synchronous `with` statements. Generator expressions currently materialize as lists rather than lazy generators.
+ToolScript uses Monty rather than CPython. Use ordinary expressions, functions, loops, branching, f-strings, `%` formatting, `str.format()` and `format()`, comprehensions, generator expressions, lambdas, `try`/`except`, simple classes, function decorators, `match`, and synchronous `with` statements. Generator expressions currently materialize as lists rather than lazy generators.
 
 Module support is deliberately limited:
 
-- `json`, `re`, `math`, `datetime`, and `unicodedata` support common pure operations.
+- `json`, `re`, `math`, `datetime`, `unicodedata`, `itertools`, `functools`, `hashlib`, `base64`, `copy`, `decimal`, `bisect`, and `csv` support common pure operations. `dataclasses` provides the `@dataclass` decorator only. `collections` is partial.
+- `random`, `time`, and `datetime` read the real clock and OS entropy. `time.sleep()` and `asyncio.sleep()` wait for real and count against the slice's time budget.
 - `pathlib` supports lexical path manipulation, but it does not grant host filesystem access.
 - Type annotations parse, but runtime `typing` objects are only partially supported.
-- `asyncio`, `os`, `pathlib`, and `sys` are partial; operations that ask the host for files, environment, working-directory, clock, or process state are rejected.
-- Common CPython modules including `shlex`, `collections`, `itertools`, `functools`, `random`, `time`, `subprocess`, and local or third-party modules are unavailable.
-- Simple classes work, but inheritance, metaclasses, function/method decorators, and most custom dunder protocols do not.
-- `match`, `yield`, `del`, async iteration, and async context managers are unavailable.
+- `asyncio`, `os`, and `sys` are partial. Operations that ask the host for files or the environment are rejected, `os.getcwd()` reports the sandbox root `/`, and process functions such as `os.getpid()`, `os.system()`, and `sys.exit()` do not exist.
+- `shlex`, `subprocess`, `io`, `string`, `heapq`, `operator`, `struct`, `urllib`, and local or third-party modules are unavailable.
+- Classes cannot inherit or use metaclasses, and methods cannot be decorated, so `@property`, `@staticmethod`, and `@classmethod` are unavailable. Common dunder methods such as `__eq__`, `__repr__`, `__iter__`, and `__getitem__` work, but `__lt__`, `__len__`, `__bool__`, and `__getattr__` are ignored.
+- `yield`, `del`, async iteration, and async context managers are unavailable.
 
-Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", ...)` for permitted host filesystem and process work. Normal session, node, and isolation permissions apply.
+A script's return value must be JSON-compatible. Convert class instances, dataclasses, and other objects to dicts, lists, strings, or numbers before returning them.
+
+Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", ...)` for permitted host filesystem and process work. Normal session, Node, and tool authorization apply.
 
 ## Script APIs
 
@@ -122,6 +125,12 @@ For a simple builtin call, the string form is supported:
 content = call_tool("read", {"filePath": "README.md"})
 ```
 
+`ctl(command, values=None)` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage. It is the same call as `call_tool("ctl", {"command": command, "values": values})`, with the same authorization, approvals and Node placement as the tool the command runs.
+
+```python
+ctl("memory edit MEMORY.md --old-text @old --new-text @new", {"old": old, "new": new})
+```
+
 ToolScript returns the concrete tool's direct result, normalized to Python-native strings, lists, dictionaries, and scalar values. It does not wrap every result in one common envelope.
 
 Common shapes:
@@ -134,26 +143,22 @@ Common shapes:
 | `exec` | dictionary with `output`, captured `content` when available, `truncated`, `status`, completion `exitCode`, `execId` and log metadata |
 | `write` / `edit` | success string; failure raises an exception |
 | `edit` with `apply_patch` | string summarizing changed files |
-| `search_tools` | dictionary with readable `output`, source-qualified `tools` descriptors, requested schemas and actual warnings when present |
+| `ctl` with `tool search` | dictionary with `tools` rows (`toolId`, `kind`, `summary`, `description`; `command` and `usage` for commands; `inputSchema` unless `--no-schema`) and actual warnings when present |
+| `ctl` with another command | the native value of the tool the command runs |
 | `request_model_without_context` | dictionary containing `text` and `parts` (text and stored-image references) |
 
-Use `search_tools` in the normal agent loop before scripting an unfamiliar tool. Tool discovery describes inputs; it does not guarantee a uniform output schema.
+Use `ctl tool search` in the normal agent loop before scripting an unfamiliar tool. Tool discovery describes inputs; it does not guarantee a uniform output schema.
 
 When discovery belongs inside a script, use the structured descriptors:
 
 ```python
-catalog = call_tool("search_tools", {
-    "query": args["query"],
-    "sources": ["builtin"],
-    "limit": 5,
-})
-print(catalog["output"])
-return {"toolIds": [tool["toolId"] for tool in catalog["tools"]]}
+catalog = ctl("tool search --source mcp --limit 5 @query", {"query": args["query"]})
+return [{"toolId": tool["toolId"], "summary": tool["summary"]} for tool in catalog["tools"]]
 ```
 
 ### Script-only text data
 
-Nested `read`, `exec` and `search_tools` calls opt into data fields automatically. Their `output` remains the ordinary readable display; other tools and MCP values keep their native shapes. There is no format argument and no common result envelope. Ordinary agent calls do not add these fields.
+Nested `read` and `exec` calls opt into data fields automatically, and a nested `tool search` returns its rows instead of the text. Their `output` remains the ordinary readable display; other tools and MCP values keep their native shapes. There is no format argument and no common result envelope. Ordinary agent calls do not add these fields.
 
 For retained text reads and command captures, full `content` is available up to **1,048,576 source bytes (1 MiB), inclusive**, without human-display line, character or token shortening. A small selected file range can fit even when its source is larger. `content` preserves existing UTF-8 decoding and recognized newlines, and excludes metadata footers, empty-output labels and synthetic separators. Empty content is `""`. Above the budget, `content` is omitted and `truncated` is true; use the real source path or log locator when supplied. Running exec content is a captured snapshot so far, not the command's future output. Nonzero exits remain results.
 
@@ -195,7 +200,7 @@ return {"inlineDataItems": [image["inlineData"] for image in images]}
 
 ### Explicit Session notifications
 
-A real script host call may use `send_to_session` to queue a message to its own canonical Session, as well as other permitted Sessions. This exception belongs to actual run/continue execution; direct model/tool self-send remains rejected. Existing generic/target permissions and configured handoff recall/confirmation fields still apply. Self-notifications identify script provenance without a reply route back to the same Session. Use `afterSend: "continue"` (or omit it) for notifications rather than assuming a nested send changes the calling turn.
+A real script host call may use `send_to_session` to queue a message to its own canonical Session, as well as other permitted Sessions. This exception belongs to actual run/continue execution; direct model/tool self-send remains rejected. Existing generic/target permissions and configured handoff recall/confirmation fields still apply. Self-notifications identify script provenance without a reply route back to the same Session. Use `currentSessionTurnAction: "continue"` (or omit it) for notifications rather than assuming a nested send changes the calling turn.
 
 To run periodic checks without first asking a model, load `timer-automation` and create an `action: "toolscript"` timer. Scheduled invocations keep ordinary explicit tools and model requests, but have no calling model turn: a terminal nested `wait` cannot arm the owner's Session wait, and returned send/task controls are not consumed as caller-turn actions. Source files are reauthorized and reread each tick; failures/pauses remain run diagnostics unless the script explicitly notifies a Session.
 
@@ -265,15 +270,23 @@ Returned images become tool-result images that the session can display and acces
 
 ### Foreground and background
 
-`run_script(...)` executes the first slice inside the initiating tool call in both modes. `mode:"background"` does not turn an ordinary script into a detached job.
+Foreground mode (the default) runs a slice inside the call and pauses at its time budget, described below.
 
-Use foreground mode for ordinary automation. Use `run_script({filePath, args, mode:"background"})` for managed-session controllers that wait on `wait_for_managed_event(...)`; those managed-event waits can wake automatically. Agent-input and timeout waits require `continue_script(...)` in either mode.
+`mode:"background"` waits like `exec`: the call waits up to `timeoutSecs` (default 15, at most 60). A run that finishes or pauses within that time returns its ordinary result. Otherwise the call returns `status: "running"` with the `runId`, and the run continues on its own without a time budget. Its outcome arrives later as a `background-script-finished` event, or `background-script-waiting` when it pauses at `ask_agent(...)`. Stop or Run queued ends only the call's wait.
+
+Follow-up tool calls after `status: "running"`:
+
+- `wait({"waitExecIds": [runId]})` to end the turn until the event arrives; the event also wakes an idle Session.
+- `get_toolscript_run({"runId": runId})` for the full output and result.
+- `cancel_toolscript_run({"runId": runId})` to stop a detached run.
+
+Background mode detaches only when a model turn calls `run_script` or `continue_script` itself. Timer and webhook scripts, scripts started from another script, and `start_toolscript_run` keep the foreground slice contract. Agent-input pauses require `continue_script(...)` in either mode.
 
 The managed controller APIs are documented in the `toolscript-managed-controller` skill.
 
 ### Safe-checkpoint timeout
 
-Each `run_script` or `continue_script` slice has a 30-second timeout budget unless `timeoutSecs` is provided. Foxwarm checks this budget at host-call boundaries:
+Each foreground `run_script` or `continue_script` slice has a 30-second timeout budget unless `timeoutSecs` is provided. Foxwarm checks this budget at host-call boundaries:
 
 - an in-progress tool or model call is not interrupted when the budget expires;
 - after that host call returns, the run pauses with `waitingReason: "timeout"`;
@@ -282,15 +295,16 @@ Each `run_script` or `continue_script` slice has a 30-second timeout budget unle
 
 A long host call can therefore take longer than `timeoutSecs` before the timeout wait is reported.
 
+A sleep is checked against the same budget. A sleep that would outlast it waits until the budget ends and pauses there with `waitingReason: "timeout"`; `continue_script(...)` then waits only for the rest of the sleep. Stop or Run queued interrupts a sleep with a `RuntimeError` in the script, and `cancel_toolscript_run` cancels a sleeping run.
+
 ### Run management
 
-Run management tools are discoverable rather than injected into the default tool list:
+Run management uses the `ctl script` commands:
 
-- `list_toolscript_runs`
-- `get_toolscript_run`
-- `cancel_toolscript_run`
-
-Find them with `search_tools`, then invoke them through the outer `call_tool` tool. A run can be inspected or resumed only by its owner session.
+- `ctl script list` (`list_toolscript_runs`): one summary row per run with `runId`, `status`, `mode`, `scriptPath`, `createdAt` and, once finished, `completedAt`
+- `ctl script get <run-id>` (`get_toolscript_run`): the run's full record, including a waiting run's `continuationId`
+- `ctl script cancel <run-id>` (`cancel_toolscript_run`)
+ A run can be inspected or resumed only by its owner session.
 
 ## Execution results and diagnostics
 
@@ -308,7 +322,7 @@ Managed-event waits return `waitingReason: "managed_event"` and `waitingFor` ide
 
 The execution response does not include internal paths, owner/VM details, timestamps, or tool-activity diagnostics. Nested-call activity remains available in the UI, including after reloading history. Fields inside the script's own `result` are preserved.
 
-Use `get_toolscript_run` or `list_toolscript_runs` for full diagnostics:
+Use `get_toolscript_run` for full diagnostics:
 
 | Diagnostic field | Scope |
 | --- | --- |
@@ -329,7 +343,7 @@ Default VM limits include:
 
 - 64 MB memory
 - recursion depth 200
-- a Monty execution-duration limit initialized from the run's timeout budget and retained in snapshots
+- a Monty execution-duration limit initialized from the run's timeout budget and retained in snapshots; time spent sleeping does not count toward it
 - a 30-second Foxwarm safe-checkpoint budget per run/continue slice unless `timeoutSecs` is provided
 
 Monty does not expose an allocation-count limit. Memory, recursion, and execution-duration limits remain enforced in its isolated worker process.

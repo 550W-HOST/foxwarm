@@ -4,3 +4,6 @@ export const formatUsdCost = (value: number): string => {
   if (value < 0.0001) return '< $0.0001 USD'
   return `${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value)} USD`
 }
+
+/** The same estimate without the currency suffix, for compact places such as the status bar. */
+export const formatUsdCostCompact = (value: number): string => formatUsdCost(value).replace(/ USD$/, '')

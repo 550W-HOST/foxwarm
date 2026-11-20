@@ -58,7 +58,7 @@ export function createMasterWebSocketOptions(wsUrl: string): ClientOptions {
   }
 
   const target = new URL(wsUrl);
-  const agent = target.protocol === 'wss:'
+  const agent = target.protocol === 'wss:' || target.protocol === 'https:'
     ? new HttpsProxyAgent(proxyInfo.proxyUrl)
     : new HttpProxyAgent(proxyInfo.proxyUrl);
 

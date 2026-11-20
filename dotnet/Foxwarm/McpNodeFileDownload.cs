@@ -51,11 +51,10 @@ internal static class McpNodeFileDownload
                             ? 403
                             : 401;
                     await context.Response.WriteAsJsonAsync(
-                        new
+                        new JsonObject
                         {
-                            error = context.Response.StatusCode == 403
-                                ? "Forbidden"
-                                : "Unauthorized",
+                            ["error"] =
+                                context.Response.StatusCode == 403 ? "Forbidden" : "Unauthorized",
                         }
                     );
                     return;
@@ -74,9 +73,10 @@ internal static class McpNodeFileDownload
                 {
                     context.Response.StatusCode = 400;
                     await context.Response.WriteAsJsonAsync(
-                        new
+                        new JsonObject
                         {
-                            error = "Explicit nodeId and a Node-native absolute path are required.",
+                            ["error"] =
+                                "Explicit nodeId and a Node-native absolute path are required.",
                         }
                     );
                     return;
@@ -140,11 +140,12 @@ internal static class McpNodeFileDownload
                         _ => 503,
                     };
                     await context.Response.WriteAsJsonAsync(
-                        new
+                        new JsonObject
                         {
-                            error = context.Response.StatusCode == 403
-                                ? "File download is not permitted."
-                                : "File download failed.",
+                            ["error"] =
+                                context.Response.StatusCode == 403
+                                    ? "File download is not permitted."
+                                    : "File download failed.",
                         }
                     );
                 }

@@ -10,6 +10,9 @@ import WebSocket from 'ws'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
+
+const INBOUND_TOOLS = ['foxwarm_discover', 'foxwarm_call', 'foxwarm_node', 'foxwarm_exec_result', 'foxwarm_session', 'ctl']
 
 const options = { env: {} }
 const host = await createHostFixture('inbound-mcp', options)
@@ -30,7 +33,7 @@ const model = createServer(async (request, response) => {
     const marker = [...JSON.stringify(body.input).matchAll(/INSTALL-RULES-(\d+)/g)].at(-1)?.[1]
     const install = marker && ruleInstalls.get(marker)
     const already = install && body.input.some(item => item.type === 'function_call' && item.call_id === 'rules-' + marker)
-    const output = install && !already ? [{ type: 'function_call', call_id: 'rules-' + marker, name: 'set_config', arguments: JSON.stringify({ target: 'tool-rules', filePath: install }) }]
+    const output = install && !already ? [functionCall('rules-' + marker, 'set_config', { target: 'tool-rules', filePath: install })]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DURABLY-RECEIVED' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output, usage: { input_tokens: 20, output_tokens: 3 } } }) + '\n\n')
@@ -100,7 +103,7 @@ try {
   assert.equal((await api(alphaToken, 'POST', '/mcp', {})).status, 401, 'empty-map endpoint starts without accepting a credential')
   await install(app(identities))
   const alpha = await connect(), beta = await connect(betaToken), sameIdentityOtherContext = await connect()
-  assert.equal((await alpha.client.listTools()).tools.length, 5)
+  assert.deepEqual((await alpha.client.listTools()).tools.map(tool => tool.name), INBOUND_TOOLS)
   assert.equal(alpha.client.getServerCapabilities().experimental['foxwarm/session-notifications'].version, 1)
   const discovery = value(await call(alpha, 'foxwarm_discover', { limit: 50 }))
   assert(discovery.tools.some(tool => tool.toolId === 'builtin:node_pair_approve'))
@@ -109,6 +112,9 @@ try {
   const first = value(await concrete(alpha, 'mcp:peer/probe', { tag: 'first' })).id
   assert.equal(value(await concrete(alpha, 'mcp:peer/probe', { tag: 'again' })).id, first)
   assert.notEqual(value(await concrete(beta, 'mcp:peer/probe')).id, first)
+  // ctl is the same call through the same owner: one more effect on alpha's peer connection.
+  assert.equal(value(await call(alpha, 'ctl', { command: 'tool call mcp:peer/probe --args @args', values: { args: { tag: 'ctl' } } })).id, first)
+  assert.match((await call(alpha, 'ctl', { command: 'help' })).content[0].text, /exec +Read results/)
   assert.notEqual(value(await concrete(sameIdentityOtherContext, 'mcp:peer/probe')).id, first)
   for (const kind of ['duplicate', 'image', 'error', 'meta', 'audio', 'resource', 'opaque']) {
     const result = await concrete(alpha, 'mcp:peer/result', { kind })
@@ -124,7 +130,7 @@ try {
     assert.equal(result.isError, true); assert.match(rawText(result), /outcome may be unknown/); assert.match(rawText(result), /do not retry automatically/)
     assert.equal((await events()).filter(event => event.kind === 'effect' && event.tag === tag).length, 1)
   }
-  assert.equal((await alpha.client.listTools()).tools.length, 5, 'malformed downstream output does not retire the initialized context')
+  assert.deepEqual((await alpha.client.listTools()).tools.map(tool => tool.name), INBOUND_TOOLS, 'malformed downstream output does not retire the initialized context')
   const validProtocol = await concrete(alpha, 'mcp:peer/result', { rawResult: { content: [{ type: 'text', text: 'business extension', isError: 'business' }, { type: 'image', data: 'AA', mimeType: 'image/png' }, { type: 'resource_link', uri: 'ordinary-resource', name: 'resource', size: 'business' }], customTag: { retained: true } }, tag: 'valid-protocol-effect' })
   assert.equal(validProtocol.content[1].data, 'AA'); assert.equal(validProtocol.customTag.retained, true)
   assert.equal((await events()).filter(event => event.kind === 'effect' && event.tag === 'valid-protocol-effect').length, 1)
@@ -235,10 +241,10 @@ try {
   }
   assert.equal((await api(betaToken, 'DELETE', '/mcp')).status, 400)
   await install(app({ ...identities, alpha: { ...identities.alpha, surfaces: { mcp: {}, webui: { sessions: ['main/*'] } } } }))
-  assert.equal((await beta.client.listTools()).tools.length, 5)
+  assert.deepEqual((await beta.client.listTools()).tools.map(tool => tool.name), INBOUND_TOOLS)
   await install(app({ beta: identities.beta }))
   assert.equal((await api(alphaToken, 'POST', '/mcp', {})).status, 401)
-  assert.equal((await beta.client.listTools()).tools.length, 5, 'unaffected sibling remains initialized')
+  assert.deepEqual((await beta.client.listTools()).tools.map(tool => tool.name), INBOUND_TOOLS, 'unaffected sibling remains initialized')
   await install(app())
   assert.equal((await api(betaToken, 'POST', '/mcp', {})).status, 401, 'last identity removal is hot without restart')
   assert.equal((await admin('GET', '/api/auth/session')).body.role, 'admin')
@@ -246,14 +252,14 @@ try {
   // Headless activation uses the same listener/Node/bootstrap and does not construct a WebUI channel.
   await writeFile(join(host.data, 'state/config.yaml'), JSON.stringify(app(identities, false)))
   await host.start()
-  const headless = await connect(); assert.equal((await headless.client.listTools()).tools.length, 5)
+  const headless = await connect(); assert.deepEqual((await headless.client.listTools()).tools.map(tool => tool.name), INBOUND_TOOLS)
   assert(value(await call(headless, 'foxwarm_session', { action: 'list' })).sessions.some(item => item.id === 'target'))
   assert.equal((await admin('GET', '/api/auth/session')).status, 404)
   assert.equal((await fetch(host.origin + prefix + '/node/run.sh')).status, 200)
   await deleteOwner(headless)
   await host.stop()
   assert.deepEqual(errors, [])
-  console.log('PASS normal Main: official JS SDK, all five wrappers, independent peer/raw results/known-secret fence, live activation/revocation, actual durable local Session, real paired v3 CLI files/exec/signed completion/release, no post-effect replay, headless restart')
+  console.log('PASS normal Main: official JS SDK, all five wrappers and ctl, independent peer/raw results/known-secret fence, live activation/revocation, actual durable local Session, real paired v3 CLI files/exec/signed completion/release, no post-effect replay, headless restart')
 } finally {
   for (const socket of sockets) if (socket.readyState !== WebSocket.CLOSED) socket.terminate()
   for (const stream of streams) { stream.controller.abort(); await stream.reading.catch(() => {}) }

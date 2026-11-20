@@ -9,6 +9,9 @@ namespace Foxwarm.Tools;
 
 internal sealed partial class LocalExecManager
 {
+    // True for a value that equals a known secret; set by the host when a store exists.
+    internal Func<string, bool>? InheritedSecret { get; set; }
+
     private async Task<ExecRecord> StartNativeAsync(
         string session,
         string agent,
@@ -18,7 +21,8 @@ internal sealed partial class LocalExecManager
         MainNativePaths paths,
         string? requestedCwd,
         CancellationToken stop,
-        Action? beforeLaunch
+        Action? beforeLaunch,
+        IReadOnlyDictionary<string, string>? environment = null
     )
     {
         var date = DateTime.Now;
@@ -57,6 +61,12 @@ internal sealed partial class LocalExecManager
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
             );
         var launch = ExecNative.Launcher(script, cwd, self);
+        // Main's own environment may carry configured credentials: a master command
+        // inherits everything else, but not a variable whose value is a known secret.
+        if (InheritedSecret is { } known)
+            foreach (var key in launch.Environment.Keys.ToArray())
+                if (launch.Environment[key] is { Length: > 0 } value && known(value))
+                    launch.Environment.Remove(key);
         foreach (var key in launch.Environment.Keys.ToArray())
             if ((windows ? key.ToLowerInvariant() : key) is "fw_agentdir" or "fw_tmp")
                 launch.Environment.Remove(key);
@@ -74,6 +84,9 @@ internal sealed partial class LocalExecManager
             launch.Environment["FOXWARM_EXEC_STATUS_PATH"] = windowsLog + ".exit.json";
             launch.Environment["FOXWARM_EXEC_CWD_PATH"] = windowsLog + ".cwd.txt";
         }
+        // Stored secrets reach only the process environment, never the script or the record.
+        if (environment is not null)
+            ExecSecretEnvironment.Apply(launch.Environment, environment);
         beforeLaunch?.Invoke();
         stop.ThrowIfCancellationRequested();
         var started = Now();
@@ -209,7 +222,7 @@ internal sealed partial class LocalExecManager
                             ? JsonValue.Create(exit)
                             : null,
                     ["finishedAt"] = Text(raw, "finishedAt") is { Length: > 0 } finished
-                        ? finished
+                        ? ExecOutput.WrapperFinishedAt(finished, path)
                         : DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 };
                 if (
@@ -243,7 +256,7 @@ internal sealed partial class LocalExecManager
             ["error"] = ExecOutput.MissingStatusError,
         };
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await AtomicWriteAsync(path, fallback.ToJsonString());
+        await AtomicWriteAsync(path, fallback.ToJsonText());
         return fallback;
     }
 
@@ -253,8 +266,7 @@ internal sealed partial class LocalExecManager
         Regex.IsMatch(id, "^[a-z]+-[a-z]+$", RegexOptions.CultureInvariant)
         || Regex.IsMatch(id, "^exec_[A-Za-z0-9_-]{8,160}$", RegexOptions.CultureInvariant);
 
-    private static JsonObject Error(string kind, string message) =>
-        UnsupportedTurnToolExecutor.ToolError(kind, message);
+    private static JsonObject Error(string message) => ToolFailure.Result(message);
 
     private static async Task AtomicWriteAsync(string path, string text)
     {
@@ -263,7 +275,7 @@ internal sealed partial class LocalExecManager
         try
         {
             await File.WriteAllTextAsync(temporary, text);
-            File.Move(temporary, path, true);
+            AtomicFileReplace.Replace(temporary, path);
         }
         finally
         {

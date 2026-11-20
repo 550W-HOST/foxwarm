@@ -25,7 +25,7 @@ Foxwarm is a server you keep running. Conversations persist and can run for days
 
 ### Does it run on macOS?
 
-Yes, on Apple Silicon Macs with macOS 15 or later, using the same installer command as Linux. Intel Macs are not supported as a server, and there is no macOS desktop app. Any Mac can still join another server as a [Node](/docs/nodes/). See [macOS (Apple Silicon)](/docs/installing/#macos-apple-silicon).
+Yes, on Apple Silicon Macs with macOS 15 or later: install the server with the same installer command as Linux, or use the [macOS desktop app](/docs/installing/#macos-desktop-app). Neither runs on Intel Macs, but any Mac can still join another server as a [Node](/docs/nodes/). See [macOS (Apple Silicon)](/docs/installing/#macos-apple-silicon).
 
 ### Where do I sign in?
 
@@ -35,7 +35,7 @@ The WebUI token, Node pairing tokens and external MCP identity tokens are differ
 
 ### Can I use it from my phone?
 
-Yes. The WebUI works in mobile browsers; if your server is not reachable from the phone, put it behind your usual VPN or reverse proxy. You can also talk to a Session through a chat app with [Channels](/docs/channels/).
+Yes. The WebUI works in mobile browsers; if your server is not reachable from the phone, put it behind your usual VPN or reverse proxy. You can also talk to a Session through a chat app with [Channels](/docs/channels/). To let agents work on the phone itself, install the [Android Node app](/docs/installing/#android-node): it connects the phone to your server as a Node, so agents can read the screen, tap, type and open apps.
 
 ### Can I let someone else use my instance?
 

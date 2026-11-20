@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 using Google.Protobuf;
 using Monty.V1;
 using Exception = System.Exception;
@@ -16,7 +17,8 @@ internal sealed partial class MainToolScript
         string? code,
         JsonNode? input,
         JsonObject? resume,
-        byte[]? restoredSnapshot = null
+        byte[]? restoredSnapshot = null,
+        ToolScriptDetach? detach = null
     )
     {
         var id = Required(record, "runId");
@@ -37,9 +39,25 @@ internal sealed partial class MainToolScript
         MontyWorker? worker = null;
         var stdout = new ToolScriptStdout(Text(record["stdout"]) ?? "");
         var offset = stdout.Count;
+        // A detachable segment's output so far is read by its waiting call when it detaches.
+        Action<string> print = stdout.Append;
+        if (detach is not null)
+        {
+            print = text =>
+            {
+                lock (detach.Gate)
+                    stdout.Append(text);
+            };
+            lock (detach.Gate)
+                detach.Output = () => stdout.Delta(offset);
+        }
         var oldSnapshot = Text(record["snapshotBase64"]);
         var persistenceFailure = false;
         var slice = Stopwatch.StartNew();
+        // Time spent waiting for approval decisions does not count toward the slice limit.
+        var approvalWait = new ToolApprovalWaitMeter();
+        using var approvalMeter = ToolApprovalWaitMeter.Enter(approvalWait);
+        TimeSpan Elapsed() => slice.Elapsed - approvalWait.Total;
         record["hostCallCount"] = 0;
         record["subCalls"] = new JsonArray();
         record.Remove("lastHostCall");
@@ -87,31 +105,32 @@ internal sealed partial class MainToolScript
             run.Token.ThrowIfCancellationRequested();
             context.Owner.Entry.RequireIdentityAuthority();
             worker = new MontyWorker(binary);
-            ChildEvent progress;
+            WorkerEvent progress;
             ToolScriptDataBudget progressBudget;
+            DateTimeOffset? sleepUntil = null;
             if (resume is null)
             {
+                // A detachable run has no execution-time budget, like a background exec.
                 var configured = await worker.ConfigureAsync(
                     Required(record, "scriptName"),
-                    Number(record["timeoutSecs"], 30),
+                    detach is null ? Number(record["timeoutSecs"], 30) : null,
                     Budget(),
                     run.Cancel.Token
                 );
-                if (configured.KindCase != ChildEvent.KindOneofCase.Ok)
+                if (configured.KindCase != WorkerEvent.KindOneofCase.Ok)
                     throw new InvalidDataException(
                         "Monty configure did not acknowledge the qualified version."
                     );
                 var budget = Budget();
                 budget.Charge(8L * System.Text.Encoding.UTF8.GetByteCount(code!));
-                var feed = new Feed { Code = code! };
-                feed.Inputs.Add(
-                    new NamedValue { Name = "args", Value = MontyValues.FromJson(input, budget) }
-                );
+                var (values, root) = MontyValues.FromJson(input, budget);
+                var feed = new Feed { Code = code!, Values = values };
+                feed.Inputs.Add(new NamedRef { Name = "args", Value = root });
                 progressBudget = budget;
                 progress = await worker.TurnAsync(
                     new() { Feed = feed },
                     progressBudget,
-                    stdout.Append,
+                    print,
                     run.Cancel.Token
                 );
                 code = null;
@@ -123,13 +142,30 @@ internal sealed partial class MainToolScript
                 budget.Charge(4L * oldSnapshot!.Length * 3 / 4);
                 var snapshot = restoredSnapshot!;
                 progressBudget = budget;
+                // The snapshot restores the limits; the session policy is applied by this Configure.
+                var configured = await worker.ConfigureAsync(
+                    Required(record, "scriptName"),
+                    null,
+                    Budget(),
+                    run.Cancel.Token,
+                    restoring: true
+                );
+                if (configured.KindCase != WorkerEvent.KindOneofCase.Ok)
+                    throw new InvalidDataException(
+                        "Monty configure did not acknowledge the qualified version."
+                    );
                 progress = await worker.TurnAsync(
                     new() { Load = new Load { State = ByteString.CopyFrom(snapshot) } },
                     progressBudget,
-                    stdout.Append,
+                    print,
                     run.Cancel.Token
                 );
-                if (progress.KindCase != ChildEvent.KindOneofCase.FunctionCall)
+                var sleeping = Text(resume!["mode"]) == "sleep";
+                if (
+                    sleeping
+                        ? SleepSeconds(progress) is null
+                        : progress.KindCase != WorkerEvent.KindOneofCase.FunctionCall
+                )
                     throw new InvalidDataException(
                         "ToolScript persisted snapshot is not a resumable host-call snapshot."
                     );
@@ -142,26 +178,38 @@ internal sealed partial class MainToolScript
                 oldSnapshot = null;
                 restoredSnapshot = null;
                 progressBudget = Budget();
-                progress = await ResumeAsync(
-                    worker,
-                    progress.FunctionCall.CallId,
-                    resume,
-                    progressBudget,
-                    stdout,
-                    run.Cancel.Token
-                );
+                // A sleep paused at the time limit keeps its end instant; the loop waits out the rest.
+                if (sleeping)
+                    sleepUntil = DateTimeOffset.FromUnixTimeMilliseconds(
+                        (long)Number(resume["untilUnixMs"], 0)
+                    );
+                else
+                    progress = await ResumeAsync(
+                        worker,
+                        progress.FunctionCall.CallId,
+                        resume,
+                        progressBudget,
+                        print,
+                        run.Cancel.Token
+                    );
                 resume = null;
             }
             while (true)
             {
                 run.Cancel.Token.ThrowIfCancellationRequested();
                 context.Owner.Entry.RequireIdentityAuthority();
-                if (progress.KindCase == ChildEvent.KindOneofCase.Complete)
+                if (progress.KindCase == WorkerEvent.KindOneofCase.Complete)
                 {
-                    record["lastResult"] = MontyValues.ToJson(
+                    var completed = MontyValues.ToJson(
+                        progress.Complete.Values,
                         progress.Complete.Value,
                         progressBudget
                     );
+                    // A run begun before image admission keeps the old promotion (no
+                    // resultImages) for the result it eventually produces.
+                    if (record.ContainsKey("producedImages"))
+                        record["resultImages"] = AdmitResultImages(context.Owner, record, completed);
+                    record["lastResult"] = completed;
                     record["status"] = "completed";
                     record["completedAt"] = Now();
                     record.Remove("waiting");
@@ -169,29 +217,73 @@ internal sealed partial class MainToolScript
                     await CommitAsync();
                     return ProjectSlice();
                 }
-                if (progress.KindCase == ChildEvent.KindOneofCase.Error)
+                if (progress.KindCase == WorkerEvent.KindOneofCase.Error)
                     throw new InvalidDataException(
                         progress.Error.Exception.ExcType + ": " + progress.Error.Exception.Message
                     );
-                if (progress.KindCase == ChildEvent.KindOneofCase.NameLookup)
+                if (progress.KindCase == WorkerEvent.KindOneofCase.NameLookup)
                 {
                     var name = progress.NameLookup.Name;
                     progressBudget = Budget();
-                    progress = await worker.TurnAsync(
-                        new()
+                    // Every name is offered as a host function; the call itself is admitted or refused
+                    // by HostCallAsync. No host object exists, so a lazy attribute lookup finds nothing.
+                    var lookup = new ResumeNameLookup();
+                    if (progress.NameLookup.ObjectId is not null)
+                        lookup.Undefined = new Unit();
+                    else
+                    {
+                        lookup.Values = new Arena
                         {
-                            ResumeNameLookup = new ResumeNameLookup
+                            NodeCount = 1,
+                            Nodes =
                             {
-                                Value = new() { Function = new Function { Name = name } },
+                                new MontyNode { Function = new Monty.V1.Function { Name = name } },
                             },
-                        },
+                        };
+                        lookup.Value = 0;
+                    }
+                    progress = await worker.TurnAsync(
+                        new() { ResumeNameLookup = lookup },
                         progressBudget,
-                        stdout.Append,
+                        print,
                         run.Cancel.Token
                     );
                     continue;
                 }
-                if (progress.KindCase == ChildEvent.KindOneofCase.OsCall)
+                if (SleepSeconds(progress) is double delay)
+                {
+                    context.WaitScope.Pending = null;
+                    var until = sleepUntil ?? DateTimeOffset.UtcNow + TimeSpan.FromSeconds(delay);
+                    sleepUntil = null;
+                    var slept = await SleepAsync(until);
+                    if (slept is null)
+                    {
+                        await WaitAsync(
+                            "timeout",
+                            null,
+                            new JsonObject
+                            {
+                                ["mode"] = "sleep",
+                                ["untilUnixMs"] = until.ToUnixTimeMilliseconds(),
+                            },
+                            progress.OsCall.CallCase == OsCall.CallOneofCase.AsyncSleep
+                                ? "asyncio.sleep"
+                                : "time.sleep"
+                        );
+                        return ProjectSlice();
+                    }
+                    progressBudget = Budget();
+                    progress = await ResumeAsync(
+                        worker,
+                        progress.OsCall.CallId,
+                        slept,
+                        progressBudget,
+                        print,
+                        run.Cancel.Token
+                    );
+                    continue;
+                }
+                if (progress.KindCase == WorkerEvent.KindOneofCase.OsCall)
                 {
                     context.WaitScope.Pending = null;
                     progressBudget = Budget();
@@ -205,29 +297,31 @@ internal sealed partial class MainToolScript
                             },
                         },
                         progressBudget,
-                        stdout.Append,
+                        print,
                         run.Cancel.Token
                     );
                     continue;
                 }
-                if (progress.KindCase != ChildEvent.KindOneofCase.FunctionCall)
+                if (progress.KindCase != WorkerEvent.KindOneofCase.FunctionCall)
                     throw new InvalidDataException(
                         "Unsupported Monty suspension: " + progress.KindCase
                     );
                 context.WaitScope.Pending = null;
                 var call = progress.FunctionCall;
+                if (call.ObjectId is not null)
+                    throw new InvalidDataException("Unsupported Monty host object call.");
                 var hostBudget = progressBudget;
                 var positional = new JsonArray();
                 var kwargs = new JsonObject();
                 foreach (var value in call.Args)
-                    positional.Add(MontyValues.ToJson(value, hostBudget));
+                    positional.Add(MontyValues.ToJson(call.Values, value, hostBudget));
                 foreach (var pair in call.Kwargs)
                     kwargs[
-                        MontyValues.ToJson(pair.Key, hostBudget)?.GetValue<string>()
+                        MontyValues.ToJson(call.Values, pair.Key, hostBudget)?.GetValue<string>()
                             ?? throw new InvalidDataException(
                                 "Monty keyword name must be a string."
                             )
-                    ] = MontyValues.ToJson(pair.Value, hostBudget);
+                    ] = MontyValues.ToJson(call.Values, pair.Value, hostBudget);
                 if (call.FunctionName == "ask_agent")
                 {
                     run.RequireHostAdmission();
@@ -236,7 +330,7 @@ internal sealed partial class MainToolScript
                     var text =
                         question is JsonValue q && q.TryGetValue<string>(out var str)
                             ? str
-                            : question?.ToJsonString() ?? "null";
+                            : question?.ToJsonText() ?? "null";
                     record["hostCallCount"] = (int)Number(record["hostCallCount"], 0) + 1;
                     record["lastHostCall"] = new JsonObject
                     {
@@ -275,7 +369,8 @@ internal sealed partial class MainToolScript
                 }
                 run.Cancel.Token.ThrowIfCancellationRequested();
                 context.Owner.Entry.RequireIdentityAuthority();
-                if (slice.Elapsed.TotalSeconds >= Number(record["timeoutSecs"], 30))
+                // Detachable segments do not pause at the time limit; only their caller's wait ends.
+                if (detach is null && Elapsed().TotalSeconds >= Number(record["timeoutSecs"], 30))
                 {
                     await WaitAsync("timeout", null, outcome);
                     return ProjectSlice();
@@ -286,20 +381,60 @@ internal sealed partial class MainToolScript
                     call.CallId,
                     outcome,
                     progressBudget,
-                    stdout,
+                    print,
                     run.Cancel.Token
                 );
             }
-            async Task WaitAsync(string reason, JsonObject? fields, JsonObject? pending)
+            // Waits until the sleep's end instant within the slice's time limit. Returns the answer
+            // for the sleep, or null when the limit comes first and the run should pause there.
+            async Task<JsonObject?> SleepAsync(DateTimeOffset until)
+            {
+                var stopped = Failure(
+                    "RuntimeError",
+                    $"Sleep was interrupted because {context.Owner.Entry.ToolCancellationSource} cancelled the tool call."
+                );
+                if (run.Caller.IsCancellationRequested)
+                    return stopped;
+                var rest = until - DateTimeOffset.UtcNow;
+                var pause = false;
+                // Detachable segments have no time limit, like a background exec.
+                if (detach is null)
+                {
+                    var remaining = TimeSpan.FromSeconds(Number(record["timeoutSecs"], 30)) - Elapsed();
+                    if (rest > remaining)
+                        (rest, pause) = (remaining, true);
+                }
+                try
+                {
+                    // A timer can fire a little early; a sleep never ends before its time.
+                    var waited = Stopwatch.StartNew();
+                    for (var left = rest; left > TimeSpan.Zero; left = rest - waited.Elapsed)
+                        await Task.Delay(
+                            TimeSpan.FromMilliseconds(Math.Ceiling(left.TotalMilliseconds)),
+                            run.Token
+                        );
+                }
+                catch (OperationCanceledException) when (!run.Cancel.IsCancellationRequested)
+                {
+                    return stopped;
+                }
+                return pause ? null : new JsonObject { ["mode"] = "return", ["value"] = null };
+            }
+            async Task WaitAsync(
+                string reason,
+                JsonObject? fields,
+                JsonObject? pending,
+                string pausedAt = "call_tool"
+            )
             {
                 var budget = Budget();
                 var dump = await worker.TurnAsync(
                     new() { Dump = new Dump() },
                     budget,
-                    stdout.Append,
+                    print,
                     run.Cancel.Token
                 );
-                if (dump.KindCase != ChildEvent.KindOneofCase.DumpResult)
+                if (dump.KindCase != WorkerEvent.KindOneofCase.DumpResult)
                     throw new InvalidDataException("Monty snapshot dump failed.");
                 budget.Charge(4L * dump.DumpResult.State.Length);
                 record["snapshotBase64"] = Convert.ToBase64String(dump.DumpResult.State.Span);
@@ -311,10 +446,12 @@ internal sealed partial class MainToolScript
                     {
                         ["timeoutSecs"] = record["timeoutSecs"]!.DeepClone(),
                         ["pendingResume"] = pending,
-                        ["elapsedMs"] = slice.Elapsed.TotalMilliseconds,
-                        ["pausedAtFunctionName"] = "call_tool",
-                        ["pausedAtSummaryName"] = record["lastHostCall"]
-                            ?["functionName"]?.DeepClone(),
+                        ["elapsedMs"] = WholeMilliseconds(Elapsed()),
+                        ["pausedAtFunctionName"] = pausedAt,
+                        ["pausedAtSummaryName"] =
+                            pausedAt == "call_tool"
+                                ? record["lastHostCall"]?["functionName"]?.DeepClone()
+                                : null,
                     };
                 if (pending is not null && context.WaitScope.Pending is { } intent)
                     waiting["timeout"]!["pendingSessionWait"] = intent.DeepClone();
@@ -329,7 +466,10 @@ internal sealed partial class MainToolScript
             if (!persistenceFailure)
             {
                 record["status"] = error is OperationCanceledException ? "cancelled" : "failed";
-                record["error"] = error.Message;
+                record["error"] =
+                    error is OperationCanceledException && detach is not null && detachedClosing
+                        ? ShutdownCancellation
+                        : error.Message;
                 record.Remove("lastResult");
                 record.Remove("waiting");
                 record.Remove("snapshotBase64");
@@ -357,6 +497,16 @@ internal sealed partial class MainToolScript
         }
     }
 
+    /// <summary>The requested seconds when the worker suspends for a host-performed sleep.</summary>
+    private static double? SleepSeconds(WorkerEvent progress) =>
+        progress.KindCase != WorkerEvent.KindOneofCase.OsCall ? null
+        : progress.OsCall.CallCase switch
+        {
+            OsCall.CallOneofCase.Sleep => progress.OsCall.Sleep.Seconds,
+            OsCall.CallOneofCase.AsyncSleep => progress.OsCall.AsyncSleep.Delay,
+            _ => null,
+        };
+
     private static JsonObject Failure(string type, string message) =>
         new()
         {
@@ -364,16 +514,17 @@ internal sealed partial class MainToolScript
             ["exception"] = new JsonObject { ["type"] = type, ["message"] = message },
         };
 
-    private static Task<ChildEvent> ResumeAsync(
+    private static Task<WorkerEvent> ResumeAsync(
         MontyWorker worker,
         uint id,
         JsonObject outcome,
         ToolScriptDataBudget budget,
-        ToolScriptStdout stdout,
+        Action<string> print,
         CancellationToken token
     )
     {
         var result = new ExtFunctionResult();
+        var values = new Arena();
         if (Text(outcome["mode"]) == "exception")
             result.Error = new RaisedException
             {
@@ -381,16 +532,21 @@ internal sealed partial class MainToolScript
                 Message = Text(outcome["exception"]?["message"]) ?? "ToolScript host call failed.",
             };
         else if (Text(outcome["mode"]) == "return")
-            result.ReturnValue = MontyValues.FromJson(outcome["value"], budget);
+            (values, result.ReturnValue) = MontyValues.FromJson(outcome["value"], budget);
         else
             throw new InvalidDataException("Unknown ToolScript pending resume mode.");
         return worker.TurnAsync(
             new()
             {
-                ResumeCall = new ResumeCall { CallId = id, Result = result },
+                ResumeCall = new ResumeCall
+                {
+                    CallId = id,
+                    Result = result,
+                    Values = values,
+                },
             },
             budget,
-            stdout.Append,
+            print,
             token
         );
     }

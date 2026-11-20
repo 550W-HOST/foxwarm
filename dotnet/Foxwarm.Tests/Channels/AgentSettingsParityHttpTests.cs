@@ -125,19 +125,15 @@ public sealed class AgentSettingsParityHttpTests
             )!;
             Assert.Null(disk["childModelDefault"]);
             Assert.Null(disk["childEffortDefault"]);
-            f.Manager.Nodes.Registry.Create("inherit-bound");
-            await f.Manager.CreateAgentAsync(
-                "isolated-source",
-                false,
-                isolatedNode: "inherit-bound"
-            );
+            await f.Manager.CreateAgentAsync("isolated-source", false);
+            await f.Manager.SetAgentInheritableAsync("isolated-source", false);
             var inherited = await client.PutAsJsonAsync(
                 "/api/agents/main",
                 new { inheritAgent = "isolated-source" }
             );
             Assert.Equal(HttpStatusCode.BadRequest, inherited.StatusCode);
             Assert.Contains(
-                "is isolated and cannot be used as an inherit source",
+                "not inheritable",
                 await inherited.Content.ReadAsStringAsync()
             );
             Assert.Null(f.Manager.AgentInherit("main"));

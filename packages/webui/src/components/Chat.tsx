@@ -8,11 +8,13 @@ import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
-import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields } from './chatSessionSearch'
+import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields, type SessionSearchMatch } from './chatSessionSearch'
+import { ExecLinkContext, counterpartRole, findExecLink, flashExecLink, indexExecLinks, type ExecLinkController, type ExecLinkRole } from './execLinks'
 import ContextScrollbar from './ContextScrollbar'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '../contextScrollbarSettings'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
+import RunningCommands from './RunningCommands'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
 import { isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
@@ -21,6 +23,7 @@ import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRu
 import SessionDebugModal from './SessionDebugModal'
 import { ToolCallActivityContext } from './ToolCallActivityContext'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { SentVersionContext } from './SentVersionDialog'
 import { OpenModelSettingsContext } from './SystemEventCard'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
 import { isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation'
@@ -198,9 +201,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const viewportSessionId = canonicalSessionId || sessionId
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
-    messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
+    messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, queueFooterCount, pendingSend, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, memorySize, streamingAssistantDraft, toolScriptProgress, toolCallActivity,
-    historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
+    historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown, stateUnavailableReason,
     pendingControl, controlFeedback, loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
   } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
   const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
@@ -235,6 +238,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  const sentVersionEnabled = sessionRecord?.textRedaction === true
+  const sentVersion = useMemo(() => ({ sessionId, enabled: sentVersionEnabled }), [sessionId, sentVersionEnabled])
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -1108,6 +1113,56 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     lastSearchQueryRef.current = ''
   }, [sessionId])
 
+  // execId links between a background command's receipt and its completion event. A mounted
+  // counterpart is scrolled to directly; a loaded one hidden in a collapsed group or older window
+  // is revealed with the same targeting Search uses.
+  const execLinkIndex = useMemo(() => indexExecLinks(messages), [messages])
+  const [execJump, setExecJump] = useState<{ target: SessionSearchMatch | null; execId: string; role: ExecLinkRole; navigation: number } | null>(null)
+  const execJumpAppliedRef = useRef(0)
+  const revealExecLink = useCallback((execId: string, role: ExecLinkRole): boolean => {
+    const container = messagesContainerRef.current
+    const found = findExecLink(committedTimelineRef.current, execId, role)
+    if (!container || !found) return false
+    const rect = found.getBoundingClientRect()
+    const viewport = container.getBoundingClientRect()
+    container.scrollTop += rect.top - viewport.top - Math.min(96, container.clientHeight * 0.25)
+    currentViewportGeometryRef.current = null
+    captureCurrentViewportState()
+    flashExecLink(found)
+    return true
+  }, [captureCurrentViewportState])
+  const jumpToExec = useCallback((execId: string, role: ExecLinkRole) => {
+    const target = counterpartRole(role)
+    if (!(target === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId)) return
+    leaveBottomFollow()
+    if (revealExecLink(execId, target)) return
+    let match: SessionSearchMatch | null = null
+    if (timelineView !== 'conversation') {
+      const query = `[${execId}]`
+      const field = projectSessionSearchFields(messages, timelineView, activeMessages, { showInterAgentMessages, showCommentary })
+        .find(candidate => candidate.surface === (target === 'receipt' ? 'response' : 'system') && candidate.text.includes(query + ' '))
+      if (field) {
+        match = { ...field, id: `exec:${execId}:${target}`, offset: field.text.indexOf(query), ordinal: 0, query }
+        const inGroup = match.groupKey && (match.surface === 'response' || match.surface === 'system')
+        const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
+        if (historyMode === 'continuous') {
+          setContinuousProtectedRange(null)
+          setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
+        } else if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
+      }
+    }
+    setExecJump(previous => ({ target: match, execId, role: target, navigation: (previous?.navigation ?? 0) + 1 }))
+  }, [activeMessages, execLinkIndex, historyMode, leaveBottomFollow, messages, revealExecLink, showCommentary, showFullTimeline, showInterAgentMessages, timelineView])
+  useLayoutEffect(() => {
+    if (!execJump || execJump.navigation === execJumpAppliedRef.current) return
+    if (revealExecLink(execJump.execId, execJump.role)) execJumpAppliedRef.current = execJump.navigation
+  }, [execJump, revealExecLink, timelineMessages, showFullTimeline])
+  useLayoutEffect(() => { setExecJump(null) }, [sessionId, searchOpen, timelineView])
+  const execLinkController = useMemo<ExecLinkController>(() => ({
+    hasCounterpart: (execId, role) => (counterpartRole(role) === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId),
+    jump: jumpToExec,
+  }), [execLinkIndex, jumpToExec])
+
   useLayoutEffect(() => {
     const registry = CSS.highlights
     registry?.delete(searchHighlightName)
@@ -1375,7 +1430,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     void sendSessionCommand('/dequeue')
   }, [sendSessionCommand])
 
-  const handleCancelCompaction = useCallback(() => { void sendSessionCommand('/stop compact') }, [sendSessionCommand])
+  const handleCancelCompaction = useCallback(() => { void sendSessionCommand('/stop --compaction') }, [sendSessionCommand])
 
   const handleContinue = useCallback(() => {
     void sendSessionCommand('/continue')
@@ -1538,10 +1593,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   // Session-owned questions drive the answer dock and the timeline cards.
   const sessionQuestions = useSessionQuestions(sessionId, sessionRecord?.questions)
+  // A question set that asks for a secret is answered only in the dock, never by a message.
+  const waitedQuestions = sessionQuestions.open.filter(record => sessionQuestions.waitingIds.has(record.id))
   const waitingOnQuestion = sessionRecord?.runtimeState?.state === 'waiting' && sessionRecord.runtimeState.waiting?.waitingFor === 'question'
+    && !(waitedQuestions.length > 0 && waitedQuestions.every(record => record.questions.some(question => question.secret)))
 
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
-    count={sessionQueueLength}
+    count={queueFooterCount}
     disabled={!!pendingControl || !!sessionRecord?.runtimeState?.stopping}
     alignment={alignment}
     isMobile={isMobile}
@@ -1657,9 +1715,18 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
           connectionState === 'reconnecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
           'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20 text-fw-danger dark:text-fw-danger'
         }`}>
-          {connectionState === 'connecting' && 'Connecting...'}
-          {connectionState === 'reconnecting' && 'Reconnecting...'}
-          {connectionState === 'disconnected' && 'Disconnected'}
+          {stateUnavailableReason !== null && connectionState !== 'disconnected' ? (
+            <>
+              <span>Session state is unavailable. Retrying...</span>
+              {stateUnavailableReason && <span data-chat-state-unavailable-reason className="ml-2 opacity-80">{stateUnavailableReason}</span>}
+            </>
+          ) : (
+            <>
+              {connectionState === 'connecting' && 'Connecting...'}
+              {connectionState === 'reconnecting' && 'Reconnecting...'}
+              {connectionState === 'disconnected' && 'Disconnected'}
+            </>
+          )}
         </div>
       )}
 
@@ -1728,7 +1795,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
                 <OpenModelSettingsContext.Provider value={webUiIdentityMode ? null : onOpenModelSettings ?? null}>
                 <ToolCallActivityContext.Provider value={!displayingLatest ? NO_RUNNING_TOOL_CALLS : toolCallActivity?.runningCallIds ?? (sessionRecord?.runtimeState?.perCallToolActivity ? NO_RUNNING_TOOL_CALLS : undefined)}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
+                <SentVersionContext.Provider value={sentVersion}>
+                  <ExecLinkContext.Provider value={execLinkController}><ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : execJump?.target ?? null} renderMessageFooter={displayingLatest && queueFooterCount > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} liveTiming={!pendingSend} /></ExecLinkContext.Provider>
+                </SentVersionContext.Provider>
                 </ToolScriptProgressContext.Provider>
                 </ToolCallActivityContext.Provider>
                 </OpenModelSettingsContext.Provider>
@@ -1737,22 +1806,24 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
             </HistoryCommit>
             {historyMode === 'continuous' && archivePage.hasLater && <button type="button" disabled={archivePage.loading} className="my-3 text-xs text-fw-accent hover:underline" onClick={() => { void loadArchivePage('later') }}>Load newer messages</button>}
             {displayingLatest && <ProcessingStatus
-              timelineView={timelineView}
+              key={sessionId}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
-              sessionQueueLength={sessionQueueLength}
+              sessionQueueLength={queueFooterCount}
               turnIncomplete={isRuntimeStateInactiveName(sessionRecord?.runtimeState?.state) && turnIncomplete}
               loading={loading}
+              pendingSend={pendingSend}
               pendingControl={pendingControl}
               controlFeedback={controlFeedback}
               failure={getLastSessionFailure(messages)}
               onCancelCompaction={webUiIdentityMode ? undefined : handleCancelCompaction}
               isMobile={isMobile}
               onContinue={webUiIdentityMode ? undefined : handleContinue}
+              backgroundControl={!webUiIdentityMode && (sessionRecord?.runningExecs ?? 0) > 0 ? <RunningCommands sessionId={sessionId} count={sessionRecord!.runningExecs!} /> : undefined}
             />}
             {displayingLatest && queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={sessionQueueLength > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={queueFooterCount > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" data-chat-composer-spacer style={{ height: 'calc(var(--chat-composer-offset, 224px) - 2.5rem)' }} />
@@ -1831,7 +1902,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
-        aboveInput={<QuestionDock isMobile={isMobile} />}
+        aboveInput={<QuestionDock isMobile={isMobile} sendKeyMode={sendKeyMode} />}
         answersQuestion={waitingOnQuestion}
       />
 

@@ -9,33 +9,21 @@ Inbound MCP lets an external client use selected existing capabilities or queue 
 3. Apply the complete app candidate through WebUI Setup Config or `set_config` with `target: config`. A running Main HTTP listener can enable its first MCP identity immediately; without that listener, the result requires an approved restart. With no identity declaring `mcp`, authentication is refused. Identity deletion, token rotation, and MCP-surface removal close only the affected contexts and streams. The policy has its separate [safe update workflow](../../access-control/references/policy-updates.md).
 4. Use the receiving instance's `/mcp` URL on its existing HTTP port, retaining any reverse-proxy deployment prefix. Use HTTPS over an untrusted network. Send one `Authorization: Bearer <identity-token>` header on every request; WebUI cookies, the instance token, and Node pairing credentials do not authenticate MCP.
 
-A headless receiving instance can set `bot.enableWebUI: false` and `bot.enableTrigger: false`. An MCP identity still enables the shared HTTP server and Node connections.
+A headless receiving instance can set `bot.enableWebUI: false` and `bot.enableTrigger: false`. An MCP or webhook identity still enables the shared HTTP server and Node connections. `enableTrigger` no longer serves a route; it only keeps the HTTP server running when nothing else needs it.
 
 ## Connect from a Foxwarm Session
 
 On the calling instance, follow [outbound connections](outbound.md). Configure the receiver as a named `streamable-http` server using its existing private identity token. Discover its tools:
 
-```json
-{
-  "query": "foxwarm",
-  "sources": ["mcp"],
-  "server": "peer",
-  "limit": 5,
-  "includeSchema": true
-}
+```text
+tool search --source mcp --server peer --limit 5 foxwarm
 ```
 
-Use this descriptor with `search_tools`, then invoke the returned ID with `call_tool`. For example, after granting a send rule for the exact receiving Session:
+Run this with `ctl`, then call the returned ID with `ctl tool call`. For example, after granting a send rule for the exact receiving Session:
 
-```json
-{
-  "toolId": "mcp:peer/foxwarm_session",
-  "args": {
-    "action": "send",
-    "sessionId": "project/review",
-    "message": "Please review the requested change."
-  }
-}
+```text
+tool call mcp:peer/foxwarm_session --args @args
+  values: {"args": {"action": "send", "sessionId": "project/review", "message": "Please review the requested change."}}
 ```
 
 Accepted means queued, not completed or answered. The receiving Session runs under its own Agent and tool permissions. To receive an explicit answer without polling, use [explicit instance replies](instance-replies.md): start notifications **before** sending with `allowReply: true`. Reading history is a separate permission and operation, not a mandatory reply mechanism.
@@ -49,6 +37,9 @@ Accepted means queued, not completed or answered. The receiving Session runs und
 | `foxwarm_node` | List, inspect selection, or select a Node | `builtin:node` with `args.action` and a real Node target where applicable |
 | `foxwarm_exec_result` | Read status/output retained by this MCP context | Original command/tool/Node permission is rechecked |
 | `foxwarm_session` | Bounded list/read or send to an existing exact Session ID | `builtin:session`, `builtin:view_session`, or `builtin:send_to_session` |
+| `ctl` | The same operations as commands: `session list/view/send`, `node list/status/select/pending/approve`, `tool search/call`, `exec result`; `help` lists them | The policy identity of the wrapper operation each command runs |
+
+`ctl` takes `command` text and optional `values` for `@name` arguments, with the same grammar as the model's `ctl`. Each command runs the wrapper operation above with the same validation, policy and results; `node select` changes only this MCP context's Node, as `foxwarm_node` does.
 
 For send/read, use an exact internal Session ID, not `<main>` or `<parent>`. Session-list permission exposes a bounded global catalog rather than filtering by per-Session read grants. The [policy reference](../../access-control/references/tool-policy.md) explains caller versus target matching and concrete authorization; do not allow the inbound wrapper name as a substitute.
 
@@ -69,7 +60,7 @@ Navigation invokes this external tool, not internal `view_session` or `recall`. 
 - First-party CLI Nodes must negotiate protocol v3 and advertise external-owner support.
 - Configured outbound MCP servers expose only the tools allowed by this external identity's rules.
 
-Supported Node tools are `read`, `write`, `edit`, and `exec`. Inbound MCP does not expose execution on `master`, executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general Agent/Session management. Agent isolation/binding belongs to [agent-management](../../agent-management/SKILL.md); Node bootstrap belongs to [node-setup](../../node-setup/SKILL.md).
+Supported Node tools are `read`, `write`, `edit`, and `exec`. Inbound MCP does not expose execution on `master`, executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general Agent/Session management. Agent rules and default Nodes belong to [agent-management](../../agent-management/SKILL.md); Node bootstrap belongs to [node-setup](../../node-setup/SKILL.md).
 
 An `exec` result returns its actual `execId`. Read it with `foxwarm_exec_result` while the same MCP context lives; do not substitute a PID. Each context retains at most 20 command records, evicts completed records when needed, and rejects another start when 20 remain unresolved. Contexts expire after 15 minutes of inactivity; deletion/restart loses result ownership, not necessarily the already-started OS process. A dropped connection does not mean a mutation was cancelled. Do not automatically repeat an effect with an unknown outcome.
 

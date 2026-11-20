@@ -17,6 +17,10 @@ internal sealed class ClaudeSessionDriver(
     LocalSessionTurnHost host
 )
 {
+    // Longest approval deadline plus a margin, in milliseconds.
+    internal const long RuntimeToolTimeoutMs =
+        (Foxwarm.Tools.ToolAuthorizationPolicy.MaxApprovalTimeoutSeconds + 60) * 1000L;
+
     private readonly HashSet<string> observed = new(StringComparer.Ordinal);
     private readonly StringBuilder text = new();
     private readonly StringBuilder reasoning = new();
@@ -189,13 +193,17 @@ internal sealed class ClaudeSessionDriver(
                         {
                             ["type"] = "http",
                             ["url"] = endpoint.AbsoluteUri,
+                            // Claude Code otherwise ends HTTP MCP requests after 60 seconds and
+                            // idle ones after 5 minutes. Foxwarm tools keep their own bounds and
+                            // Stop; this lets a call wait for the longest approval deadline.
+                            ["timeout"] = RuntimeToolTimeoutMs,
                             ["headers"] = new JsonObject
                             {
                                 ["Authorization"] = "Bearer " + run.Token,
                             },
                         },
                     },
-                }.ToJsonString()
+                }.ToJsonText()
             );
             await PrivateFileAsync(
                 settingsFile,
@@ -206,11 +214,17 @@ internal sealed class ClaudeSessionDriver(
                     ["disableBundledSkills"] = true,
                     ["disableSkillShellExecution"] = true,
                     ["permissions"] = new JsonObject { ["defaultMode"] = "dontAsk" },
-                }.ToJsonString()
+                }.ToJsonText()
             );
+            // The external runtime is a model-facing request: apply the same secret stage.
             await PrivateFileAsync(
                 promptFile,
-                SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? ""
+                Foxwarm.Secrets.SecretRequestStage.Text(
+                    manager.Secrets,
+                    SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "",
+                    "model-request",
+                    owner.Id
+                )
             );
             var start = Command(
                 config.Executable,
@@ -244,7 +258,8 @@ internal sealed class ClaudeSessionDriver(
             checkpoint["submittedThroughSeq"] = snapshot.NextMessageSeq - 1;
             await host.AppendHistoryMessageStrictAsync(null, externalRuntime: checkpoint);
             inputMayBeAccepted = true;
-            await process.StandardInput.WriteLineAsync(input.ToJsonString());
+            var submitted = manager.Secrets?.Redact(input, "model-request", owner.Id) ?? input;
+            await process.StandardInput.WriteLineAsync(submitted.ToJsonText());
             await process.StandardInput.FlushAsync();
             process.StandardInput.Close();
             var resultSeen = false;
@@ -511,7 +526,7 @@ internal sealed class ClaudeSessionDriver(
                 n is null
                 || n != "EndConversation"
                     && !n.StartsWith("mcp__foxwarm__", StringComparison.Ordinal)
-            ) || !names.Contains("mcp__foxwarm__call_tool")
+            ) || !names.Contains("mcp__foxwarm__ctl")
         )
             throw new ClaudeRuntimeException(
                 "Claude Code did not report the required MCP-only tool set."

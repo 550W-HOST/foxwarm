@@ -43,7 +43,7 @@ internal static partial class UnifiedTools
                     string.Concat(text.EnumerateRunes().Take(100).Select(rune => rune.ToString()))
                 )
             : value is null ? "null"
-            : value is JsonValue ? value.ToJsonString()
+            : value is JsonValue ? value.ToJsonText()
             : "unknown";
         if (schema.ContainsKey("const"))
             return Literal(schema["const"]);
@@ -93,7 +93,7 @@ internal static partial class UnifiedTools
         if (requiredArray.Count > 100)
             return "Record<string, unknown> /* required constraints omitted */";
         var required = requiredArray
-            .Select(value => SessionWait.Text(value) ?? value?.ToJsonString() ?? "null")
+            .Select(value => SessionWait.Text(value) ?? value?.ToJsonText() ?? "null")
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var missing = required.Where(key => !properties.ContainsKey(key)).ToArray();

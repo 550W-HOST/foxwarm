@@ -7,11 +7,6 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal string InboundChannelNode(SessionOwner owner) =>
-        !AgentIsolated(owner.Agent) ? "master"
-        : CurrentNode(owner) is { } node && node != "master" ? node
-        : BoundNode(owner.Agent) ?? "master";
-
     // The resolved ingress owner, not a later conversation binding, owns the saved attachment.
     internal async Task<IReadOnlyList<JsonObject>> SaveInboundChannelFileFromPathAsync(
         SessionOwner owner,
@@ -30,21 +25,6 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException("Attachment Session owner is no longer current.");
         if (new FileInfo(source).Length != size)
             throw new IOException("Inbound spool size changed.");
-        if (InboundChannelNode(owner) != "master")
-        {
-            if (size > 10 * 1024 * 1024)
-                throw new InvalidDataException("Attachment exceeds the Node transfer limit.");
-            return await SaveInboundChannelFileCoreAsync(
-                platform,
-                owner,
-                await File.ReadAllBytesAsync(source, token),
-                filename,
-                mime,
-                "",
-                token,
-                image
-            );
-        }
         var segment = Regex.Replace(platform.Trim(), "[^a-zA-Z0-9._-]+", "_").TrimStart('.');
         var name = ChannelFileNames.StorageName(
             filename,

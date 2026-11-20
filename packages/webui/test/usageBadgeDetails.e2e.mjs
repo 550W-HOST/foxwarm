@@ -131,6 +131,16 @@ async function badgeState(id) {
 
 const clipboardWrites = () => page.evaluate(() => window.usageClipboard.writes)
 
+// Expanding a tool group animates its height and moves every fixture below it. The height
+// transition owner clears its inline height/transition when it finishes, so later pointer
+// targets are only measured after that completion state.
+async function waitForToolGroupLayoutSettled(id) {
+  await page.waitForFunction(groupId => {
+    const group = document.querySelector(`#${groupId} [data-tool-group]`)
+    return !!group && !group.style.height && !group.style.transition && document.getAnimations().every(animation => animation.playState !== 'running')
+  }, {}, id)
+}
+
 async function badgePosition(id) {
   return page.$eval(`#${id}`, (fixture) => {
     const timeline = fixture.querySelector('.foxwarm-chat-timeline')
@@ -390,6 +400,7 @@ test('an aggregate shows one actual model-seq range and one recall-range copy, t
 
   await page.click('#groupSeq [aria-label="Expand tool group"]')
   await page.waitForFunction(() => document.querySelectorAll('#groupSeq [data-usage-badge]').length === 2)
+  await waitForToolGroupLayoutSettled('groupSeq')
   const members = await page.$$eval('#groupSeq [data-usage-badge]', badges => badges.map(badge => badge.textContent.replace(/\s+/g, '').trim()))
   assert.equal(members.length, 2, 'two usage-bearing model messages, not three tool calls or either tool response')
   assert.equal(await page.$$eval('#groupSeq .foxwarm-system-message-card', cards => cards.length), 1, 'intervening event belongs in the range but contributes no usage badge')

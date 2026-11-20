@@ -25,6 +25,8 @@ internal sealed record ConcreteHostModel(
     internal string ProviderImageOutputFormat =>
         HostModels.Text(Configuration, "providerImageOutputFormat") ?? "webp";
     internal bool ImageInput => !ModelRoutingFingerprint.False(Configuration["imageInput"]);
+    internal IReadOnlyList<int> RetryIntervalsMs { get; init; } =
+        HostModels.DefaultRetryIntervalsMs;
     internal bool IsVirtual => ProviderType is "session-hash" or "failover";
     internal Uri BaseUri =>
         new(
@@ -41,11 +43,32 @@ internal sealed partial class HostModels
     private readonly string defaultKey = "";
     private readonly ModelConfiguration? owner;
     internal ModelConfiguration? ConfigurationOwner => owner;
+    internal TextRedactionKnownLabels KnownLabels { get; private init; } =
+        TextRedactionKnownLabels.Default;
     internal bool HandoffConfirmationEnabled { get; private init; }
+    private IReadOnlyList<int> defaultRetryIntervals = DefaultRetryIntervalsMs;
     internal double PresentationContextLimit { get; private init; } = 200000;
     internal double CompactKeepFraction { get; private init; } = .3;
     internal double CompactThresholdFraction { get; private init; } = .85;
     internal double MemoryWarningThresholdFraction { get; private init; } = .15;
+
+    // Secret names referenced by a provider (or its legacy llm fallback key) that had no
+    // stored value when this catalog was resolved. Requests to those providers fail closed.
+    internal IReadOnlyDictionary<string, IReadOnlyList<string>> MissingSecrets { get; set; } =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+    internal void RequireSecrets(ConcreteHostModel leaf)
+    {
+        if (MissingSecrets.TryGetValue(leaf.ProviderKey, out var names) && names.Count > 0)
+            throw new ModelPreparationException(
+                Foxwarm
+                    .Secrets.SecretUnavailableException.For(
+                        "Model provider " + leaf.ProviderKey,
+                        names
+                    )
+                    .Message
+            );
+    }
 
     internal HostModels(ModelConfiguration owner)
     {
@@ -61,6 +84,15 @@ internal sealed partial class HostModels
     }
 
     internal HostModels Capture() => owner?.Capture() ?? this;
+
+    internal IReadOnlyList<int> GetRetryIntervals(string key)
+    {
+        if (owner is not null)
+            return Capture().GetRetryIntervals(key);
+        return entries.TryGetValue(key, out var model)
+            ? model.RetryIntervalsMs
+            : defaultRetryIntervals;
+    }
 
     public string DefaultKey => owner is null ? defaultKey : Capture().DefaultKey;
 
@@ -138,6 +170,11 @@ internal sealed partial class HostModels
 
     internal static HostModels Parse(JsonObject root, JsonObject app)
     {
+        Foxwarm.Secrets.SecretReferences.Validate(
+            root,
+            Foxwarm.Secrets.SecretSinks.Models,
+            "Models configuration"
+        );
         var providers = root["providers"] ?? root["models"];
         if (providers is not JsonObject source)
             throw new InvalidDataException(
@@ -191,14 +228,7 @@ internal sealed partial class HostModels
                     throw new InvalidDataException(
                         "Concrete provider forbids routing field " + key + "."
                     );
-            var rawMembers = provider["models"] ?? provider["model"];
-            JsonNode?[] members =
-                rawMembers is JsonArray list ? list.ToArray()
-                : rawMembers is null || SessionWait.Text(rawMembers) == "" ? []
-                : rawMembers is JsonValue value && value.TryGetValue<string>(out _) ? [rawMembers]
-                : throw new InvalidDataException(
-                    "Provider models must be a string or array of IDs/model objects."
-                );
+            var members = Members(provider);
             if (members.Length > 0 && provider.ContainsKey("pricing"))
                 throw new InvalidDataException(
                     "pricing belongs on individual model objects, or a concrete provider without models."
@@ -249,10 +279,13 @@ internal sealed partial class HostModels
                     "maxOutput",
                     "providerImageOutputFormat",
                     "imageInput",
+                    "textRedaction",
                     "streamContentInactivityTimeoutMs",
                     "effort",
                     "historyReasoningField",
                     "asyncCompact",
+                    "idleCompactMinutes",
+                    "idleCompactMinContextPercent",
                     "disallowEmptyResponse",
                     "keepReasoningOnError",
                     "webSearch",
@@ -327,7 +360,10 @@ internal sealed partial class HostModels
                 null,
                 resolved,
                 leaves.Select(leaf => leaf.Key).ToArray()
-            );
+            )
+            {
+                RetryIntervalsMs = ReadRetryIntervals(config, ReadRetryIntervals(defaults)),
+            };
             display.Add(key);
         }
         var compatibility = ModelHistoryCompatibility.Build(models);
@@ -343,7 +379,9 @@ internal sealed partial class HostModels
                 : ordered.FirstOrDefault() ?? requested ?? "";
         return new HostModels(selected, models, ordered)
         {
+            KnownLabels = TextRedactionKnownLabels.FromDefaults(defaults),
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
+            defaultRetryIntervals = ReadRetryIntervals(defaults),
             PresentationContextLimit = PositiveSetting(
                 llm["contextLimit"],
                 200000,
@@ -356,6 +394,22 @@ internal sealed partial class HostModels
                 SessionWait.Number(llm["memoryWarningThresholdPercent"]) ?? .15,
         };
     }
+
+    // Model entries of a concrete provider: `models`, or the singular `model` alias.
+    internal static JsonNode?[] Members(JsonObject provider)
+    {
+        var rawMembers = provider["models"] ?? provider["model"];
+        return rawMembers is JsonArray list ? list.ToArray()
+            : rawMembers is null || SessionWait.Text(rawMembers) == "" ? []
+            : rawMembers is JsonValue value && value.TryGetValue<string>(out _) ? [rawMembers]
+            : throw new InvalidDataException(
+                "Provider models must be a string or array of IDs/model objects."
+            );
+    }
+
+    // Catalog keys with their models, including the provider alias of a single-model provider.
+    internal IEnumerable<KeyValuePair<string, ConcreteHostModel>> Entries =>
+        owner is null ? entries : Capture().Entries;
 
     private static string ProviderType(JsonObject provider)
     {

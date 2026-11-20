@@ -32,11 +32,7 @@ internal sealed partial class ModelConfiguration
             if (JsonNode.Parse(currentRaw) is JsonObject json)
             {
                 json["channels"] = channels.DeepClone();
-                return Encoding.UTF8.GetBytes(
-                    json.ToJsonString(
-                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
-                    )
-                );
+                return Encoding.UTF8.GetBytes(json.ToJsonText(indented: true));
             }
         }
         catch (System.Text.Json.JsonException) { }
@@ -58,7 +54,8 @@ internal sealed partial class ModelConfiguration
         Func<CancellationToken, Task<byte[]>> candidate,
         ToolAuthorizationAuthority? authorization = null,
         Func<CancellationToken, Task>? authorize = null,
-        CancellationToken token = default
+        CancellationToken token = default,
+        bool webhooksLocked = false
     )
     {
         await mutation.WaitAsync(token);
@@ -68,7 +65,7 @@ internal sealed partial class ModelConfiguration
                 await authorize(token);
             token.ThrowIfCancellationRequested();
             if (target == "config")
-                return await InstallAppAsync(candidate, token);
+                return await InstallAppAsync(candidate, token, webhooksLocked);
             var bytes = await candidate(token);
             if (target == "tool-rules")
             {
@@ -86,7 +83,15 @@ internal sealed partial class ModelConfiguration
             if (target == "models")
             {
                 var firstRun = !File.Exists(ActivePath);
-                var next = Validate(raw);
+                var generation = Secrets.Store.Generation;
+                bool whileLocked;
+                HostModels next;
+                lock (gate)
+                {
+                    resolvedWhileLocked = false;
+                    next = Validate(raw);
+                    whileLocked = resolvedWhileLocked;
+                }
                 // First-run Setup ends with this save, so it must not install an unfinished key.
                 if (!File.Exists(ActivePath))
                     ModelApiKeys.EnsureUsableForFirstRun(next);
@@ -98,9 +103,13 @@ internal sealed partial class ModelConfiguration
                     {
                         lock (gate)
                         {
+                            Secrets.SetTextRedactionKnownLabels(next.KnownLabels);
                             catalog = next;
                             cachedRaw = raw;
+                            cachedSecretGeneration = generation;
+                            cachedWhileLocked = whileLocked;
                         }
+                        Secrets.Invalidate();
                     }
                 );
                 // The seed is a separate first-run effect; the models receipt keeps its shape.
@@ -118,10 +127,11 @@ internal sealed partial class ModelConfiguration
 
     private async Task<JsonObject> InstallAppAsync(
         Func<CancellationToken, Task<byte[]>> candidate,
-        CancellationToken token
+        CancellationToken token,
+        bool webhooksLocked = false
     )
     {
-        var (config, access) = await PersistAppAsync(candidate, token);
+        var (config, access) = await PersistAppAsync(candidate, token, webhooksLocked);
         var restart = app.Select(pair => pair.Key)
             .Concat(config.Select(pair => pair.Key))
             .Distinct(StringComparer.Ordinal)
@@ -137,6 +147,12 @@ internal sealed partial class ModelConfiguration
         {
             notApplied.Add("access.surfaces.mcp");
             restart.Add("access.surfaces.mcp");
+        }
+        var webhooks = access.Values.Any(identity => identity.Webhook is not null);
+        if (webhooks && !Access.WebhookRuntimeAvailable)
+        {
+            notApplied.Add("access.surfaces.webhook");
+            restart.Add("access.surfaces.webhook");
         }
         if (ManagedChannels is not null && restart.Contains("channels.webui"))
             notApplied.Add("channels.webui");
@@ -156,6 +172,8 @@ internal sealed partial class ModelConfiguration
         var applied = Access.McpRuntimeAvailable
             ? new List<string> { "access.identities", "access.surfaces.mcp" }
             : new List<string> { "access.identities" };
+        if (webhooks && Access.WebhookRuntimeAvailable)
+            applied.Add("access.surfaces.webhook");
         var autoTitle = AppConfigurationRules.SessionAutoTitle(config);
         if (autoTitle != sessionAutoTitle)
             applied.Add("sessionAutoTitle");
@@ -242,7 +260,11 @@ internal sealed partial class ModelConfiguration
     private async Task<(
         JsonObject Config,
         System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access
-    )> PersistAppAsync(Func<CancellationToken, Task<byte[]>> candidate, CancellationToken token)
+    )> PersistAppAsync(
+        Func<CancellationToken, Task<byte[]>> candidate,
+        CancellationToken token,
+        bool webhooksLocked = false
+    )
     {
         // Only persistence is shared with direct command saves. Release before access/runtime
         // application, which may join a Weixin handler that is itself confirming a login.
@@ -252,12 +274,56 @@ internal sealed partial class ModelConfiguration
             var bytes = await candidate(token);
             var raw = new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
             var validated = await ValidateAppCandidateAsync(raw);
+            if (webhooksLocked)
+                RequireUnchangedWebhooks(validated.Access);
             await ReplaceRawAsync(AppPath, bytes, token);
+            Secrets.Invalidate();
             return validated;
         }
         finally
         {
             appPersistence.Release();
+        }
+    }
+
+    // Model-facing error copy; the coordinator owns its wording.
+    internal const string WebhooksLockedError =
+        "set_config cannot add or change webhook identities. Ask the user to configure webhooks in Setup.";
+
+    /// <summary>
+    /// Model-reachable saves may keep or remove webhook identities but not add or change one:
+    /// a webhook is a public endpoint that can run unattended code, so only the user's Setup
+    /// save or a direct file edit creates it. Compared with the saved file, not the live snapshot.
+    /// </summary>
+    private void RequireUnchangedWebhooks(
+        System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> candidate
+    )
+    {
+        System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> current;
+        try
+        {
+            var saved = ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
+            current = AccessConfiguration.Normalize(saved["access"], saved.ContainsKey("access"));
+        }
+        catch (InvalidDataException)
+        {
+            current = System
+                .Collections
+                .Immutable
+                .ImmutableDictionary<string, AccessIdentity>
+                .Empty;
+        }
+        foreach (var (id, identity) in candidate)
+        {
+            if (identity.Webhook is not { } hook)
+                continue;
+            if (
+                !current.TryGetValue(id, out var existing)
+                || existing.Webhook is not { } existingHook
+                || !AccessConfiguration.Equal(existing.Token, identity.Token)
+                || !existingHook.SameAs(hook)
+            )
+                throw new InvalidOperationException(WebhooksLockedError);
         }
     }
 
@@ -302,52 +368,33 @@ internal sealed partial class ModelConfiguration
         Action? publish = null
     )
     {
-        var directory = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(directory);
-        var temporary = Path.Combine(
-            directory,
-            "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp"
+        var file = new AtomicJsonFile(
+            Path.GetDirectoryName(path)!,
+            Path.GetFileName(path),
+            privateFile: true
         );
-        var renamed = false;
+        Exception? durability = null;
         try
         {
-            var options = new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-                Share = FileShare.None,
-                Options = FileOptions.Asynchronous,
-            };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            await using (var file = new FileStream(temporary, options))
-            {
-                await file.WriteAsync(bytes, token);
-                file.Flush(true);
-            }
-            token.ThrowIfCancellationRequested();
-            File.Move(temporary, path, true);
-            renamed = true;
-            publish?.Invoke();
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+            await file.WriteStreamPayloadAsync(stream => stream.Write(bytes), null, token);
         }
-        catch (Exception error) when (renamed)
+        catch (AuthorityCommittedException error)
         {
+            durability = error.InnerException;
+        }
+        // The file is in place; publish it even when its directory sync failed.
+        try
+        {
+            publish?.Invoke();
+        }
+        catch (Exception error)
+        {
+            durability ??= error;
+        }
+        if (durability is not null)
             throw new AuthorityCommittedException(
                 "Configuration committed but final durability failed.",
-                error
+                durability
             );
-        }
-        finally
-        {
-            if (!renamed)
-            {
-                try
-                {
-                    File.Delete(temporary);
-                }
-                catch { }
-            }
-        }
     }
 }

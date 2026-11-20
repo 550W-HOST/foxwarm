@@ -77,10 +77,13 @@ internal sealed partial class ModelConfiguration
                         "maxOutput",
                         "providerImageOutputFormat",
                         "imageInput",
+                        "textRedaction",
                         "streamContentInactivityTimeoutMs",
                         "effort",
                         "historyReasoningField",
                         "asyncCompact",
+                        "idleCompactMinutes",
+                        "idleCompactMinContextPercent",
                         "disallowEmptyResponse",
                         "keepReasoningOnError",
                         "sameProviderAs",
@@ -169,9 +172,7 @@ internal sealed partial class ModelConfiguration
         existing["default"] = selectedDefault.Length > 0 ? selectedDefault : fallback;
         existing[rootKey] = next;
         // JSON is YAML 1.2; raw mode is never regenerated through this form writer.
-        return existing.ToJsonString(
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
-            ) + "\n";
+        return existing.ToJsonText(indented: true) + "\n";
     }
 
     private static JsonArray NormalizeProviderDrafts(JsonObject input)

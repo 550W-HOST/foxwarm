@@ -1,3 +1,4 @@
+import { isKnownCommand } from '../commandIngress'
 import { applyToolCallActivity, type ToolCallActivity, type ToolCallActivityEvent } from '../toolCallActivity'
 import type { SessionQuestionsProjection } from '../sessionQuestions'
 import { CHAT_BOOTSTRAP_TAIL_LENGTH, peekPreparedChatHistory, peekPreparedChatArchive, discardPreparedChatHistory } from '../preparedChatHistory'
@@ -14,7 +15,7 @@ import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { buildReferencedAttachmentParts } from '../attachmentRefs'
 import { postReferencedMessage, toLegacyUploadedFiles, uploadReferencedFiles } from '../attachmentSend'
 import { createLatestRequestGate } from '../modelOptionsLoader'
-import { webUiRealtime } from '../realtime'
+import { SESSION_STATE_UNAVAILABLE, webUiRealtime } from '../realtime'
 import {
   advanceHistorySeqFrontier,
   buildOptimisticUserMessage,
@@ -25,6 +26,7 @@ import {
   hasStableHistoryIdentity,
   mergeHistoryMessages,
   mergeHistorySnapshot,
+  projectPendingSendQueue,
   reconcileHistoryMessage,
 } from '../chatHistoryState'
 
@@ -44,6 +46,8 @@ type ChatSessionRecord = {
   busyStartedAt?: number | null
   queueLength?: number
   runtimeState?: SessionRuntimeState
+  /** Background commands still tracked for this Session. */
+  runningExecs?: number
   runtime?: 'foxwarm' | 'claude-code'
   externalRuntime?: { status?: string; model?: string; canContinue?: boolean; lastResult?: { total_cost_usd?: number } }
   displayName?: string | null
@@ -65,8 +69,9 @@ type ChatSessionRecord = {
   effectiveChildEffort?: string
   childEffortAllowed?: string[]
   childModelEffortDefault?: string | null
-  isolated?: boolean
   questions?: SessionQuestionsProjection
+  /** Requests on the current model replace private text before sending. */
+  textRedaction?: boolean
 }
 
 export type MemorySize = {
@@ -151,6 +156,10 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: prepared?.messages || [], queuedMessages: prepared?.queuedMessages || [], archiveMessages: preparedArchive ? mergeContinuousHistory([],preparedArchive.messages) : [], archivePendingMessages: [], archiveStatus: preparedArchive ? 'loaded' : 'idle' })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
+  // Browser-owned rows for sends made while the Session is busy; same pending-ID records as optimistic rows.
+  const [localQueuedSends, setLocalQueuedSends] = useState<Message[]>([])
+  // Queue snapshot current when the server accepted each busy send; any newer snapshot is authoritative for it.
+  const acceptedLocalQueueRef = useRef(new Map<string, Message[]>())
   const blockExpansionCache = useMemo(() => new Map<number, Promise<Message[]>>(), [sessionId])
   const [resolvedContext, setResolvedContext] = useState({ cache: blockExpansionCache, blocks: new Map<number, ContinuousContextRange[]>(), key: '' })
   const rememberContextRanges = useCallback((context: typeof resolvedContext) => {
@@ -285,6 +294,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
+  // null: no failure; '' : unavailable without a stated reason.
+  const [stateUnavailableReason, setStateUnavailableReason] = useState<string | null>(null)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
   const streamingAssistantDraftRef = useRef<StreamingAssistantDraft | null>(null)
   const clearStreamingAssistantDraft = useCallback(() => {
@@ -344,6 +355,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     setToolScriptProgress({})
     setToolCallActivity(undefined)
     setQueuedMessages(prepared?.queuedMessages || [])
+    setLocalQueuedSends([])
+    acceptedLocalQueueRef.current.clear()
     setSessionRecord(prepared?.session || null)
     setSessionBusy(!!prepared?.session && isSessionRuntimeActive(prepared.session))
     setSessionQueueLength(prepared?.queueLength || 0)
@@ -389,6 +402,19 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   useEffect(() => {
     queuedMessagesRef.current = queuedMessages
   }, [queuedMessages])
+
+  // The server preview or canonical history takes over a busy send's row by client identity. After
+  // acceptance, the next queue snapshot owns it even without identity (older servers, capped previews).
+  useEffect(() => {
+    if (!localQueuedSends.length) return
+    const owned = new Set([...queuedMessages, ...messages].filter(message => !message.__meta?.optimistic).map(getClientMessageId))
+    const accepted = acceptedLocalQueueRef.current
+    const superseded = new Set(localQueuedSends.map(getClientMessageId).filter((id): id is string =>
+      !!id && (owned.has(id) || accepted.has(id) && accepted.get(id) !== queuedMessages)))
+    if (!superseded.size) return
+    for (const id of superseded) accepted.delete(id)
+    setLocalQueuedSends(previous => previous.filter(message => !superseded.has(getClientMessageId(message)!)))
+  }, [localQueuedSends, messages, queuedMessages])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -824,6 +850,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       onOpen: () => {
         setConnectionState('connected')
         setReconnectCountdown(0)
+        setStateUnavailableReason(null)
         if (historyBootstrapStartedRef.current) {
           reconnectAwaitingStateRef.current = true
           return
@@ -841,6 +868,10 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       },
       onMessage: data => {
         try {
+        if (data.type === 'error' && data.code === SESSION_STATE_UNAVAILABLE) {
+          setStateUnavailableReason(typeof data.message === 'string' && data.message.trim() ? data.message.trim() : '')
+          return
+        }
         if (data.type === 'session-event' && data.event?.type === 'session-control-feedback') {
           const feedback = parseSessionControlFeedback(data.event.feedback)
           if (!feedback || data.event.requestId !== lastControlIdRef.current) return
@@ -1098,6 +1129,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   }, [applySessionState, clearStreamingAssistantDraft, clearPendingControl, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
 
   useEffect(() => {
+    setStateUnavailableReason(null)
     const unsubscribe = subscribeRealtime()
 
     return () => {
@@ -1158,7 +1190,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     setLoading(true)
 
     const userMessage = text.trim()
-    const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
+    const isSlashCommand = isKnownCommand(userMessage)
     const files = [...attachments]
     const sendTimestamp = Date.now()
     const clientMessageId = globalThis.crypto?.randomUUID?.()
@@ -1200,6 +1232,14 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         parts: previewParts,
         timestamp: sendTimestamp,
       })])
+    } else if (!isSlashCommand) {
+      pendingSentMessageIdsRef.current.add(clientMessageId)
+      setLocalQueuedSends(prev => [...prev, buildOptimisticUserMessage({
+        clientMessageId,
+        parts: previewParts,
+        timestamp: sendTimestamp,
+        queued: true,
+      })])
     }
 
     try {
@@ -1209,12 +1249,15 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
           ...(!isSlashCommand ? { clientMessageId } : {}),
       })
       if (!appendOptimistic && !isSlashCommand) {
+        acceptedLocalQueueRef.current.set(clientMessageId, queuedMessagesRef.current)
         queueRefreshNeededRef.current = true
         scheduleHistoryRefresh()
       }
     } catch (e) {
       console.error('Failed to send message:', e)
       pendingSentMessageIdsRef.current.delete(clientMessageId)
+      acceptedLocalQueueRef.current.delete(clientMessageId)
+      setLocalQueuedSends(prev => prev.filter(message => getClientMessageId(message) !== clientMessageId))
       setMessages(prev => {
           const hasReconciledRow = prev.some(message => (
             !message.__meta?.optimistic
@@ -1273,6 +1316,9 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       && (!getClientMessageId(message) || !canonicalClientIds.has(getClientMessageId(message))))]
   }, [blockExpansionCache, isFullHistoryLoaded, messages, resolvedContext, timelineState.archiveMessages])
 
+  const pendingSendQueue = useMemo(() => projectPendingSendQueue({ messages, serverQueue: queuedMessages, localQueue: localQueuedSends, queueLength: sessionQueueLength }),
+    [localQueuedSends, messages, queuedMessages, sessionQueueLength])
+
   return {
     continuousMessages,
     continuousHistoryReady: isFullHistoryLoaded && resolvedContext.cache === blockExpansionCache
@@ -1280,7 +1326,9 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     archivePage,
     loadArchivePage,
     messages,
-    queuedMessages,
+    queuedMessages: pendingSendQueue.queuedMessages,
+    queueFooterCount: pendingSendQueue.footerCount,
+    pendingSend: pendingSendQueue.pendingSendIds.size > 0,
     sessionRecord,
     sessionMissing,
     sessionBusy,
@@ -1297,6 +1345,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     earlierHistoryError: earlierHistoryError || contextHistoryError === contextDemandKey,
     connectionState,
     reconnectCountdown,
+    stateUnavailableReason,
     loading,
     retryEarlierHistory,
     sendMessage,

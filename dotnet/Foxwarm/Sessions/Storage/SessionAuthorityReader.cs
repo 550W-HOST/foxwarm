@@ -20,7 +20,7 @@ internal static class SessionAuthorityReader
 
     internal static JsonObject ReadRaw(string root, string id)
     {
-        var path = new LinuxAtomicJsonFile(root, $"state/sessions/{id}.json").FilePath;
+        var path = new AtomicJsonFile(root, $"state/sessions/{id}.json").FilePath;
         try
         {
             return JsonNode.Parse(File.ReadAllText(path)) as JsonObject

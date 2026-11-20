@@ -5,7 +5,9 @@ import { execFileSync } from 'node:child_process'
 import { access, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { requireReceiptExecId } from './execReceipt.mjs'
 import testEnvironment from '../../../scripts/test/test-process-env.cjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('exec-parallel'), records = [], errors = [], scripts = new Map(), hostPids = fixture.hostPids, shellPids = [], releases = new Set()
 Object.assign(process.env, testEnvironment.isolatedApplicationEnv(fixture.data))
@@ -15,7 +17,7 @@ const exists = path => access(path).then(() => true, () => false)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const own = join(fixture.data, 'agents/team'), marks = join(own, 'marks')
-const tool = (id, name, args, raw) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: raw ?? JSON.stringify(args) })
+const tool = (id, name, args, raw) => raw === undefined ? { ...functionCall(id, name, args), id: 'output-' + id } : { type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: raw }
 const call = (id, command, args = {}) => tool(id, 'exec', { command, timeout: 60, ...args })
 function shell(id, extra = '') {
   releases.add(id)
@@ -54,12 +56,19 @@ try {
   await start(); await fixture.openApp(); assert([201, 409].includes((await fixture.api('POST', '/api/agents', { agentId: 'team' })).status)); await mkdir(marks, { recursive: true })
     const launch = await create('launch'), deniedCwd = join(own, 'no-search'); await mkdir(deniedCwd); await chmod(deniedCwd, 0)
     try {
+      const launchIds = ['launch-success-one', 'launch-error', 'launch-success-two']
+      const launchSettled = snapshot => {
+        const responses = snapshot.messages.flatMap(row => row.parts || []).map(part => part.functionResponse?.tool_use_id)
+        return !snapshot.session.busy && launchIds.every(id => responses.includes(id))
+      }
+      // A new Session is idle before its accepted message starts; idle alone is not completion.
+      const initial = await history(launch); assert.equal(launchSettled(initial), false)
       const before = records.length; await send(launch, 'launch-failure', [call('launch-success-one', 'touch launch-success-one; printf success-one'), call('launch-error', 'printf forbidden', { cwd: 'no-search' }), call('launch-success-two', 'touch launch-success-two; printf success-two')])
-      await until(async () => !(await history(launch)).session.busy, 'real launch failure and successful siblings settle')
+      await until(async () => launchSettled(await history(launch)), 'real launch failure and successful siblings settle')
       assert(await exists(join(own, 'launch-success-one'))); assert(await exists(join(own, 'launch-success-two')))
       const snapshot = await history(launch); console.log(JSON.stringify({ realCwdFailureProbe: true, responseCount: snapshot.messages.flatMap(row => row.parts || []).filter(part => part.functionResponse).length, providerRequests: records.length - before, state: (await fixture.api('GET', route(launch) + '/state')).body.session }))
       assert(await pair(launch, 'launch-error'), 'ordinary launch failure must retain its own paired response')
-      assert.equal((await pair(launch, 'launch-error')).response.error.type, 'tool_io_error'); assert((await pair(launch, 'launch-error')).executionTiming); assert((await pair(launch, 'launch-success-one')).response.output.includes('success-one')); assert((await pair(launch, 'launch-success-two')).response.output.includes('success-two'))
+      assert.equal(typeof (await pair(launch, 'launch-error')).response.error, 'string'); assert((await pair(launch, 'launch-error')).executionTiming); assert((await pair(launch, 'launch-success-one')).response.output.includes('success-one')); assert((await pair(launch, 'launch-success-two')).response.output.includes('success-two'))
     } finally { await chmod(deniedCwd, 0o700) }
   if (process.env.FOXWARM_EXEC_PARALLEL_LAUNCH_ONLY === '1') {
     await fixture.stop(); stopped = true; console.log(JSON.stringify({ ok: true, launchOnly: true, root: fixture.root, hostPids, requests: records.length }))
@@ -83,14 +92,14 @@ try {
   await mkdir(join(own, 'explicit'), { recursive: true }); const explicit = await create('explicit')
   await send(explicit, 'explicit', [call('cwd-own', 'pwd'), call('cwd-explicit', 'pwd', { cwd: 'explicit' }), call('ordinary-exit', 'printf ordinary; exit 7'), tool('malformed', 'exec', {}, '{"command":'), call('single-cancel', 'touch canceled-effect', { __cancelTool: true }), tool('invalid-control', 'exec', { command: 'touch invalid-control-effect', __cancelTool: false })]); await idle(explicit)
   assert((await pair(explicit, 'cwd-own')).response.output.includes(own)); assert((await pair(explicit, 'cwd-explicit')).response.output.includes(join(own, 'explicit'))); assert((await pair(explicit, 'ordinary-exit')).response.output.includes('Exit code: 7'))
-  assert.equal((await pair(explicit, 'malformed')).response.error.type, 'invalid_tool_arguments'); assert(!(await pair(explicit, 'malformed')).executionTiming)
-  assert((await pair(explicit, 'single-cancel')).response.canceled); assert.equal((await pair(explicit, 'invalid-control')).response.error.type, 'invalid_tool_control_argument'); assert(!await exists(join(own, 'canceled-effect'))); assert(!await exists(join(own, 'invalid-control-effect')))
+  assert.match((await pair(explicit, 'malformed')).response.error, /^Invalid tool arguments JSON: /); assert(!(await pair(explicit, 'malformed')).executionTiming)
+  assert((await pair(explicit, 'single-cancel')).response.canceled); assert.match((await pair(explicit, 'invalid-control')).response.error, /^__cancelTool accepts only the boolean value true when provided\./); assert(!await exists(join(own, 'canceled-effect'))); assert(!await exists(join(own, 'invalid-control-effect')))
   const canceled = await create('canceled'); await send(canceled, 'canceled', [call('global-first', 'touch canceled-first'), call('global-second', 'touch canceled-second', { __cancelAllToolsThisTurn: true })]); await idle(canceled); assert((await pair(canceled, 'global-first')).response.canceled); assert(!await exists(join(own, 'canceled-first')))
   await send(canceled, 'malformed-cancellation', [call('not-globally-canceled', 'touch malformed-not-canceled'), tool('malformed-cancellation', 'exec', {}, '{"__cancelAllToolsThisTurn":true,"command":')]); await idle(canceled)
-  assert(await exists(join(own, 'malformed-not-canceled'))); assert.equal((await pair(canceled, 'malformed-cancellation')).response.error.type, 'invalid_tool_arguments')
+  assert(await exists(join(own, 'malformed-not-canceled'))); assert.match((await pair(canceled, 'malformed-cancellation')).response.error, /^Invalid tool arguments JSON: /)
   const ruled = await create('ruled'); await writeFile(join(own, 'deny-policy.yaml'), 'version: 1\nrules: [{id: command, action: deny, match: {tool: {source: node, name: exec}, args: {command: "touch ordinary-denied-effect"}}}]')
   await send(ruled, 'ordinary-denied', [tool('install-ordinary-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: 'deny-policy.yaml' } }), call('allowed-one', 'printf allowed-one'), call('ordinary-denied', 'touch ordinary-denied-effect'), call('allowed-two', 'printf allowed-two')]); await idle(ruled)
-  assert.equal((await pair(ruled, 'ordinary-denied')).response.error.type, 'tool_authorization_denied'); assert(!(await pair(ruled, 'ordinary-denied')).executionTiming); assert(!await exists(join(own, 'ordinary-denied-effect'))); assert((await pair(ruled, 'allowed-two')).response.output.includes('allowed-two'))
+  assert.equal((await pair(ruled, 'ordinary-denied')).response.code, 'tool_authorization_denied'); assert(!(await pair(ruled, 'ordinary-denied')).executionTiming); assert(!await exists(join(own, 'ordinary-denied-effect'))); assert((await pair(ruled, 'allowed-two')).response.output.includes('allowed-two'))
   await writeFile(join(own, 'allow-policy.yaml'), 'version: 1\n'); await send(ruled, 'ordinary-repaired', [tool('install-allow-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: 'allow-policy.yaml' } })]); await idle(ruled)
   const policy = join(fixture.data, 'state/tool-authorization.yaml')
   const loss = await create('loss'), held = ['loss1', 'loss2', 'loss3', 'loss4']
@@ -99,13 +108,16 @@ try {
   await release('loss4'); await until(async () => await exists(join(marks, 'done-loss4')) && (await history(loss)).session.runtimeState.state === 'running-tool', 'first sibling returns while others remain active'); await sleep(300)
   assert(!await exists(join(own, 'loss5-effect'))); assert(!await exists(join(own, 'loss6-effect'))); assert(!await pair(loss, 'loss1')); assert.equal(records.length, beforeLoss)
   for (const id of held.slice(0, 3)) await release(id); await until(async () => !(await history(loss)).session.busy, 'trusted fatal settles every started sibling')
-  assert.equal((await pair(loss, 'loss5')).response.error.type, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert.equal((await pair(loss, 'loss6')).response.error.type, 'tool_call_skipped'); assert((await pair(loss, 'loss-preset')).response.canceled); assert(!await exists(join(own, 'loss-file-effect')))
+  // loss6 is skipped when it is dequeued after loss5's fatal; a held sibling released while loss5 is still authorizing
+  // may dequeue it first, and then its own authorization meets the same unavailable policy. Calls after the segment are always skipped.
+  assert.equal((await pair(loss, 'loss5')).response.code, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert(['tool_call_skipped', 'TOOL_AUTH_POLICY_UNAVAILABLE'].includes((await pair(loss, 'loss6')).response.code)); assert((await pair(loss, 'loss-preset')).response.canceled)
+  assert.equal((await pair(loss, 'loss-later-file')).response.code, 'tool_call_skipped'); assert(!await exists(join(own, 'loss-file-effect')))
   assert.equal((await saved(loss)).queue.length, 1); assert.equal(records.length, beforeLoss); await sleep(150); assert.equal(records.length, beforeLoss)
   await writeFile(policy, 'version: 1\n'); await send(loss, 'repaired'); await idle(loss); assert((await history(loss)).messages.some(row => row.parts?.some(part => part.text === 'DONE-repaired')))
   const stoppedId = await create('stopped'), stopHeld = ['stop1', 'stop2', 'stop3', 'stop4']
   await send(stoppedId, 'stopped', [...stopHeld.map(id => call(id, shell(id))), call('stop5', 'touch stop5-effect')]); await started(stopHeld)
   assert.equal((await fixture.api('POST', route(stoppedId) + '/stop', {})).status, 200); await until(async () => !(await history(stoppedId)).session.busy, 'Stop complete pairing settles launched calls')
-  for (const id of stopHeld) { const value = await pair(stoppedId, id); assert(value.response.output.includes('execId:')); assert(!await exists(join(marks, 'done-' + id))) }
+  for (const id of stopHeld) { const value = await pair(stoppedId, id); requireReceiptExecId(value.response.output); assert(!await exists(join(marks, 'done-' + id))) }
   assert(!await exists(join(own, 'stop5-effect'))); assert((await pair(stoppedId, 'stop5')).response.canceled)
   for (const id of stopHeld) await release(id); await until(async () => (await Promise.all(stopHeld.map(id => exists(join(marks, 'done-' + id))))).every(Boolean), 'Stop leaves shells alive to finish once')
   const overridden = await create('overridden'), overrideHeld = ['override1', 'override2', 'override3', 'override4']

@@ -50,6 +50,8 @@ Make a consistent backup before updating an important instance, then run from th
 
 `update` downloads the release for the same package type and verifies its checksum. The new release first checks the existing data while the old one keeps running; a blocking problem leaves the installed release unchanged. Foxwarm is then stopped (ended after 60 seconds if it has not exited), the new release is selected, Foxwarm starts again if it was running and the previous release is removed. Add a version, such as `update 0.9.1`, to install a specific release, or `--package FILE` (`-Package FILE` on Windows) to use a downloaded package. Rerunning the installer on an existing installation performs the same update and keeps its data directory.
 
+The self-contained Linux package was replaced by the native package in 0.9.4. An installation of it switches to the native package and keeps its data when it updates to 0.9.4 with `update 0.9.4`; a plain `update` fails once a later release is the newest. To go directly to a later release, rerun the installer once instead (with the same `--dir`, if you used one). See [moving from the self-contained Linux package](/docs/installing/#moving-from-the-self-contained-linux-package). The self-contained macOS and Windows packages were replaced by the native packages in 0.9.6 the same way: `update` to 0.9.6 switches such an installation to native, and after 0.9.6 rerunning the installer does. Rerunning the installer with `--native` or `--framework-dependent` (`-Native` or `-FrameworkDependent` on Windows), or with a downloaded package of the other type, switches any installation between those two packages.
+
 On Linux and macOS, these commands manage both tmux and detached background starts. The program directory's `foxwarm.pid` records Main's PID; a stale file does not make an unrelated process part of an update or stop. Use `status` to check the running PID and mode, or `attach` to open the tmux pane or see the background log paths.
 
 Existing TypeScript installations should use the [migration guide](/docs/typescript-migration/) for their first C# update.
@@ -109,6 +111,14 @@ docker compose pull foxwarm
 docker compose up -d foxwarm
 ```
 
-For a container started with `docker run`, pull `ghcr.io/550w-host/foxwarm:latest`, remove the old container and start a new one with the same data mount. Check the container logs and the WebUI afterward. A new image does not require a new data directory.
+Images since the non-root change run Foxwarm as uid 1000 and do not change ownership of the mounted data. A data directory written by an earlier image that ran as root must be handed over once, after stopping the container and before starting the new image:
+
+```bash
+sudo chown -R 1000:1000 foxwarm-data
+```
+
+Otherwise the container reports that `/data` is not writable and Foxwarm does not start.
+
+For a container started with `docker run`, pull `ghcr.io/550w-host/foxwarm:latest`, remove the old container and start a new one with the same data mount and options (including the seccomp profile). Check the container logs and the WebUI afterward. A new image does not require a new data directory.
 
 For archive storage details and external JSONL export, see [Archive Store](https://github.com/550W-HOST/foxwarm/blob/main/docs/archive-store.md).

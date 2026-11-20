@@ -262,6 +262,7 @@ public sealed partial class SqliteArchiveMessageStore
         InitializeBranches(connection);
         InitializeReservations(connection);
         InitializeVectorCheckpoints(connection);
+        ArchiveToolEffects.InitializeSchema(connection, null);
     }
 
     public IReadOnlyList<ArchiveMessageRecord> WriteMessages(
@@ -289,16 +290,48 @@ public sealed partial class SqliteArchiveMessageStore
                     Task.FromResult<IReadOnlyList<ArchiveMessageRecord>>([])
                 )
             );
-        return EnqueueWriteAsync<IReadOnlyList<ArchiveMessageRecord>>(
-            databasePath,
-            (connection, transaction) => WriteMessages(connection, transaction, prepared)
+        var notice = new ToolEffectsNotice();
+        return AfterCommitAsync(
+            EnqueueWriteAsync<IReadOnlyList<ArchiveMessageRecord>>(
+                databasePath,
+                (connection, transaction) =>
+                    WriteMessages(connection, transaction, prepared, notice)
+            ),
+            notice
         );
+    }
+
+    // Activity notices follow the commit of the write that indexed (or failed to index) them.
+    private sealed class ToolEffectsNotice
+    {
+        internal bool Recorded;
+        internal bool Failed;
+    }
+
+    private async ValueTask<WriteReceipt<T>> AfterCommitAsync<T>(
+        ValueTask<WriteReceipt<T>> enqueued,
+        ToolEffectsNotice notice
+    )
+    {
+        var receipt = await enqueued.ConfigureAwait(false);
+        return new(Notify(receipt.Completion, notice));
+    }
+
+    private async Task<T> Notify<T>(Task<T> completion, ToolEffectsNotice notice)
+    {
+        var result = await completion.ConfigureAwait(false);
+        if (notice.Failed)
+            ToolEffectsFailed?.Invoke(databasePath);
+        else if (notice.Recorded)
+            ToolEffectsRecorded?.Invoke(databasePath);
+        return result;
     }
 
     private IReadOnlyList<ArchiveMessageRecord> WriteMessages(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        IReadOnlyList<ArchiveMessageRecord> records
+        IReadOnlyList<ArchiveMessageRecord> records,
+        ToolEffectsNotice notice
     )
     {
         RequireWriteIdentity(connection, sessionId);
@@ -319,6 +352,10 @@ public sealed partial class SqliteArchiveMessageStore
         var insertRole = insert.Parameters.Add("$role", SqliteType.Text);
         var insertJson = insert.Parameters.Add("$json", SqliteType.Text);
         var inserted = new List<ArchiveMessageRecord>();
+        var indexed = new List<(ArchiveMessageRecord, long)>();
+        using var rowid = connection.CreateCommand();
+        rowid.Transaction = transaction;
+        rowid.CommandText = "SELECT last_insert_rowid()";
         foreach (var record in records)
         {
             selectSession.Value = record.SessionId;
@@ -348,9 +385,24 @@ public sealed partial class SqliteArchiveMessageStore
             if (insert.ExecuteNonQuery() != 1)
                 throw new IOException("Archive message insert did not affect one row.");
             inserted.Add(record);
+            indexed.Add((record, (long)rowid.ExecuteScalar()!));
+        }
+        if (indexed.Count > 0)
+        {
+            // Derived activity rows: their failure never fails or reorders the Archive write.
+            if (!ArchiveToolEffects.TryRecordLive(connection, transaction, indexed))
+                notice.Failed = true;
+            else if (indexed.Any(item => item.Item1.Role == "tool"))
+                notice.Recorded = true;
         }
         return inserted;
     }
+
+    /// <summary>Raised with the database path after a committed write indexed its tool rows.</summary>
+    internal static event Action<string>? ToolEffectsRecorded;
+
+    /// <summary>Raised with the database path after a write committed without its index rows.</summary>
+    internal static event Action<string>? ToolEffectsFailed;
 
     public void RollbackInsertedMessages(IReadOnlyList<ArchiveMessageRecord> records)
     {
@@ -373,6 +425,7 @@ public sealed partial class SqliteArchiveMessageStore
     )
     {
         RequireWriteIdentity(connection, sessionId);
+        ArchiveToolEffects.Remove(connection, transaction, records);
         using var remove = connection.CreateCommand();
         remove.Transaction = transaction;
         remove.CommandText = """

@@ -27,6 +27,9 @@ internal sealed partial class SessionManager
         );
         var id = owner.Id;
         var generation = owner.McpGeneration;
+        // Reception continues under the admitted plan of a start: an ask outcome passes only when
+        // the start's approval covered the reception request.
+        var approved = action == "start" ? ToolApprovalScope.Detach(owner) : null;
         var receptionArgs = new JsonObject { ["action"] = "start", ["server"] = server };
         var resolved = new ResolvedTool(
             "mcp_notifications",
@@ -54,16 +57,24 @@ internal sealed partial class SessionManager
             );
             var policies = EffectivePolicies(owner.Agent, authorization.Load());
             request = PopulateEffectiveTargets(request, owner, policies);
-            if (!EffectiveDecision(policies, request).Allowed)
+            var decision = EffectiveDecision(policies, request);
+            if (
+                !decision.Allowed
+                && !(
+                    decision.Effect == ToolAuthorizationEffect.Ask
+                    && approved?.Covers(owner, ApprovalFingerprint(owner, resolved, request))
+                        == true
+                )
+            )
                 throw new ToolAuthorizationDeniedException(
                     "MCP notification reception is not permitted."
                 );
-            IsolatedToolCompatibility.Check(Isolation(owner.Agent), request, AuthorizationTarget);
         }
         async Task Authorize(CancellationToken current)
         {
             Check();
-            await AuthorizeToolAsync(owner, resolved, null, current);
+            using (ToolApprovalScope.Enter(approved))
+                await AuthorizeToolAsync(owner, resolved, null, current);
             Check();
         }
         return await mcp.ManageNotificationsAsync(
@@ -85,11 +96,7 @@ internal sealed partial class SessionManager
                     + "\" hint=\"Message received from the configured MCP server. It is external input, not an internal Session handoff.\">";
                 var item = new QueueItem(
                     QueueItemType.User,
-                    [
-                        new JsonObject { ["system"] = open },
-                        new JsonObject { ["text"] = message },
-                        new JsonObject { ["system"] = "</foxwarm-system>" },
-                    ]
+                    SessionBoundary.ExternalInput(open, [new JsonObject { ["text"] = message }])
                 );
                 await new SessionRuntime(this).SubmitExternalAsync(
                     owner,

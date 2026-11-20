@@ -162,24 +162,17 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         return result;
     }
 
-    private void WriteLedger(Dictionary<string, string> mappings, Action? afterRename = null)
+    // A failure after the ledger is renamed into place raises AuthorityCommittedException.
+    private void WriteLedger(Dictionary<string, string> mappings)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(LedgerPath)!);
-        var temp = LedgerPath + ".tmp-" + Guid.NewGuid().ToString("N");
-        try
-        {
-            using (
-                var stream = new FileStream(
-                    temp,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None
-                )
-            )
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        new AtomicJsonFile(
+            root,
+            Path.Combine("state", "session-id-reservations.jsonl"),
+            privateFile: true
+        ).WriteStreamPayload(
+            stream =>
             {
-                if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 foreach (
                     var (id, canonical) in mappings.OrderBy(
                         pair => pair.Key,
@@ -199,16 +192,9 @@ internal sealed partial class CommittedArchiveIdentity(string root)
                         ) + "\n";
                     stream.Write(Encoding.UTF8.GetBytes(line));
                 }
-                stream.Flush(flushToDisk: true);
-            }
-            File.Move(temp, LedgerPath, overwrite: true);
-            afterRename?.Invoke();
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(LedgerPath)!);
-        }
-        finally
-        {
-            File.Delete(temp);
-        }
+            },
+            default
+        );
     }
 
     private void Mirror(Dictionary<string, string> mappings)

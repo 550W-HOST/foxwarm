@@ -69,6 +69,7 @@ internal sealed partial class SessionCatalog : IDisposable
             Execute(connection, WaitPresenceIndexSql);
             Execute(connection, QuestionPresenceIndexSql);
             EnsureGroupObjects(connection);
+            EnsureActivityObjects(connection);
             db = connection;
             Volatile.Write(
                 ref readerConnectionString,
@@ -449,7 +450,7 @@ internal sealed partial class SessionCatalog : IDisposable
             Number(row["stats"]?["totalInputTokens"]) ?? 0,
             Number(row["stats"]?["totalOutputTokens"]) ?? 0,
             Number(row["stats"]?["totalCost"]),
-            row.ToJsonString(),
+            row.ToJsonText(),
         };
         Execute(
             connection,

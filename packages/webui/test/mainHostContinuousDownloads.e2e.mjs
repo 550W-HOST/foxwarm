@@ -6,8 +6,9 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import sharp from 'sharp'
-import { createHostFixture, until } from './mainHostFixture.mjs'
+import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }, host = await createHostFixture('continuous-downloads', options)
 options.cwd = host.root
@@ -16,7 +17,7 @@ options.publicRoot = host.origin + '/nested/app/#session/continuous-parent'
 await writeFile(join(host.data, 'state/config.yaml'), (await readFile(join(host.data, 'state/config.yaml'), 'utf8')) + 'url: ' + host.origin + '/nested/app' + '\n')
 const requests = [], failures = [], pages = [], http = [], browserErrors = [], nativeRequests = [], signRequests = [], paused = [], requestFailures = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
@@ -25,12 +26,7 @@ const peer = createServer(async (request, response) => {
     let output
     if (text.includes('COMPACTION STARTED:')) {
       const prompt = body.input.filter(row => row.role === 'user').flatMap(row => row.content || []).map(part => part.text || '').join('\n')
-      const segments = [...prompt.matchAll(/^Segment \d+: raw message candidates[^\n]*\n([\s\S]*?)(?=^Segment \d+:|^Review the older candidate items)/gm)]
-      const blocks = segments.map(segment => {
-        const ranges = [...segment[1].matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
-        assert(ranges.length)
-        return { level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Compacted original conversation remains in immutable Archive.' }
-      })
+      const blocks = requiredCompactOperations(prompt, 'Compacted original conversation remains in immutable Archive.')
       assert(blocks.length, prompt)
       output = [call('compact-plan', 'submit_compact_plan', { replaceAsBlocks: blocks })]
     } else if (text.includes('DELIVER-FILES') && !body.input.some(row => row.type === 'function_call_output')) {
@@ -145,7 +141,7 @@ try {
   assert.equal((await host.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'deliveries' })).status, 200)
   await page.evaluate(() => window.foxwarmTest.switchToSession('deliveries'))
   await page.waitForFunction(() => location.hash.includes('deliveries') && document.querySelector('.foxwarm-chat-root')?.innerText.includes('deliveries') && document.querySelector('.foxwarm-chat-root')?.dataset.chatConnectionState === 'connected')
-  assert.equal((await host.api('POST', route('other-target') + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await host.api('POST', route('other-target') + '/message', { text: '/session clear-parent' })).status, 200)
   await page.evaluate(() => window.foxwarmTest.sendMessage('DELIVER-FILES'))
   const deliveryState = await done('deliveries', 'DELIVERY-FINISHED')
   const results = deliveryState.history.flatMap(row => row.parts || []).filter(part => part.functionResponse).map(part => part.functionResponse)

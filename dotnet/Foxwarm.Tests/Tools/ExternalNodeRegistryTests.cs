@@ -97,6 +97,37 @@ public sealed class ExternalNodeRegistryTests
         );
     }
 
+    [Fact]
+    public void Registry_writes_rotate_Source_backups_and_a_corrupt_registry_recovers_from_them()
+    {
+        using var temp = new TempDirectory();
+        var file = Path.Combine(temp.Path, "state", "nodes.json");
+        var registry = new ApprovedNodeRegistry(temp.Path);
+        var first = registry.Request(Pair(), NodeConnectionHub.Protocol(new()));
+        var approved = File.ReadAllText(file);
+        registry.Approve(first["id"]!.GetValue<string>(), "candidate");
+        Assert.Equal(approved, File.ReadAllText(file + ".1.bak"));
+        Assert.Equal(approved, File.ReadAllText(file + ".bak"));
+        if (!OperatingSystem.IsWindows())
+            foreach (var path in new[] { file, file + ".1.bak", file + ".bak" })
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(path)
+                );
+
+        var newest = File.ReadAllText(file);
+        File.Copy(file, file + ".1.bak", overwrite: true);
+        File.WriteAllText(file, "not JSON");
+        var restored = new ApprovedNodeRegistry(temp.Path);
+        Assert.Single(restored.ListApproved());
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(newest), JsonNode.Parse(File.ReadAllText(file))));
+
+        foreach (var path in Directory.GetFiles(Path.GetDirectoryName(file)!, "nodes.json*"))
+            File.WriteAllText(path, "not JSON");
+        var error = Assert.Throws<InvalidDataException>(() => new ApprovedNodeRegistry(temp.Path));
+        Assert.IsAssignableFrom<System.Text.Json.JsonException>(error.InnerException);
+    }
+
     [Theory]
     [InlineData(1, 1, 1)]
     [InlineData(1, 2, 2)]

@@ -319,6 +319,8 @@ public sealed class WebUiAccessTests
                     ),
                 },
                 new() { ["text"] = "\u2007@helper-name.\uFEFF/session delete outside-delete" },
+                new() { ["text"] = "\t/stop invalid", ["controlRequestId"] = "restricted-control" },
+                new() { ["text"] = "\uFEFF/model --effort invalid" },
                 new()
                 {
                     ["parts"] = new JsonArray(
@@ -345,6 +347,17 @@ public sealed class WebUiAccessTests
 
             var ordinary = new[]
             {
+                (Text: "/home/example/project/file.cs\nPlease inspect this file.  ", Parts: false),
+                (Text: "\uFEFF/unknown command-like text", Parts: true),
+                (Text: "\u2007@helper-name.\uFEFF/unknown text", Parts: true),
+                (Text: "/stpo", Parts: false),
+                (Text: "/Stop", Parts: true),
+                (Text: "/session/archive", Parts: false),
+                (Text: "/stop.txt", Parts: true),
+                (Text: "/stop-extra", Parts: false),
+                (Text: "/", Parts: false),
+                (Text: "/stop\u0085compact", Parts: true),
+                (Text: "/session\u0085move renamed", Parts: false),
                 (Text: "Discuss /session delete without running it", Parts: false),
                 (Text: "\uFEFFordinary text", Parts: true),
                 // U+0085 is .NET whitespace, but is not Source command whitespace.
@@ -362,6 +375,7 @@ public sealed class WebUiAccessTests
                         ),
                     }
                     : new JsonObject { ["text"] = ordinary[index].Text };
+                body["controlRequestId"] = "ordinary-" + index;
                 using var response = await http.PostAsJsonAsync("/api/sessions/chat/message", body);
                 Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
                 var queue = chat.Entry.Snapshot().Queue;
@@ -390,12 +404,89 @@ public sealed class WebUiAccessTests
             Assert.Null(runtime.Catalog.Get("outside-delete"));
             Assert.True(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
             Assert.Equal(ordinary.Length, chat.Entry.Snapshot().Queue.Count);
+            await AssertSlashUploadsAsync(http, manager, chat, scoped: false);
+            await AssertSlashUploadsAsync(
+                http,
+                manager,
+                chat,
+                scoped: false,
+                text: "/Stop inspect this image"
+            );
+            http.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-alice");
+            await AssertSlashUploadsAsync(http, manager, chat, scoped: true);
+            await AssertSlashUploadsAsync(
+                http,
+                manager,
+                chat,
+                scoped: true,
+                text: "/stpo inspect this image"
+            );
         }
         finally
         {
             await server.App.StopAsync();
             await server.App.DisposeAsync();
             await manager.ShutdownAsync();
+        }
+    }
+
+    private static async Task AssertSlashUploadsAsync(
+        HttpClient http,
+        SessionManager manager,
+        SessionOwner owner,
+        bool scoped,
+        string text = "/home/example/project/asset.png\nPlease inspect this image.  "
+    )
+    {
+        var bytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png);
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent(bytes), "file", "slash.png");
+        using var uploaded = await http.PostAsync("/api/upload?sessionId=chat", form);
+        Assert.Equal(HttpStatusCode.OK, uploaded.StatusCode);
+        var file = (await uploaded.Content.ReadFromJsonAsync<JsonObject>())!;
+        var path = SessionWait.Text(file["path"])!;
+        var queued = owner.Entry.Snapshot().Queue.Count;
+        try
+        {
+            foreach (var command in new[] { "\uFEFF/stop invalid", "\t@helper /session archive" })
+            {
+                using var denied = await http.PostAsJsonAsync(
+                    "/api/sessions/chat/message",
+                    new JsonObject
+                    {
+                        ["text"] = command,
+                        ["uploadedFiles"] = new JsonArray(file.DeepClone()),
+                    }
+                );
+                Assert.Equal(
+                    scoped ? HttpStatusCode.Forbidden : HttpStatusCode.BadRequest,
+                    denied.StatusCode
+                );
+                Assert.True(File.Exists(path));
+                Assert.Equal(queued, owner.Entry.Snapshot().Queue.Count);
+            }
+            var clientId = "slash-image-" + Guid.NewGuid().ToString("N");
+            using var accepted = await http.PostAsJsonAsync(
+                "/api/sessions/chat/message",
+                new JsonObject
+                {
+                    ["text"] = text,
+                    ["clientMessageId"] = clientId,
+                    ["uploadedFiles"] = new JsonArray(file.DeepClone()),
+                }
+            );
+            Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+            Assert.Equal(queued + 1, owner.Entry.Snapshot().Queue.Count);
+            var item = owner.Entry.Snapshot().Queue.Last();
+            Assert.Equal(clientId, item.ClientMessageId);
+            Assert.Equal(text, SessionWait.Text(item.Parts![1]["text"]));
+            var image = Assert.Single(item.Parts, part => part["inlineDataRef"] is not null);
+            Assert.Equal(bytes, await manager.Images.ReadAsync(image["inlineDataRef"]!.AsObject()));
+            Assert.False(File.Exists(path));
+        }
+        finally
+        {
+            File.Delete(path);
         }
     }
 

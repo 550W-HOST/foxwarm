@@ -8,7 +8,6 @@ using Foxwarm.Channels.WebUi;
 using Foxwarm.Sessions;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
-using Microsoft.Extensions.FileProviders;
 
 namespace Foxwarm;
 
@@ -43,11 +42,10 @@ internal sealed class HttpServer
         PublicWebAddress? publicAddress = null,
         bool? webUiEnabled = null,
         string bindAddress = "127.0.0.1",
-        bool desktop = false,
-        bool triggerEnabled = true
+        bool desktop = false
     )
     {
-        var address = publicAddress ?? PublicWebAddress.Capture(port);
+        var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
         Downloads = new(apiToken);
         var accessConfiguration =
             sessions.Models.ConfigurationOwner?.Access ?? new AccessConfiguration(new JsonObject());
@@ -75,7 +73,7 @@ internal sealed class HttpServer
         );
         // Node authentication uses Source-compatible query credentials. Do not log request URLs.
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
-        builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
+        builder.WebHost.UseUrls($"http://{HttpServerSettings.UrlHost(bindAddress)}:{port}");
         if (desktop)
             builder.WebHost.UseSockets(options =>
                 options.CreateBoundListenSocket = endpoint =>
@@ -99,10 +97,13 @@ internal sealed class HttpServer
             server.Limits.MaxRequestBodySize = 2 * 1024 * 1024
         );
         builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.Encoder = JsonText.Encoder;
+            options.SerializerOptions.TypeInfoResolver = MainJsonContext.Default;
             options.SerializerOptions.Converters.Add(
                 new Foxwarm.Images.ImageTransportConverterFactory()
-            )
-        );
+            );
+        });
         builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
             options.MultipartBodyLengthLimit = 51L * 1024 * 1024
         );
@@ -165,7 +166,7 @@ internal sealed class HttpServer
             }
         );
         app.UseResponseCompression();
-        var loginFile = Path.Combine(AppContext.BaseDirectory, "packages", "webui", "login.html");
+        var resources = new HttpAssets(sessions.Models.ConfigurationOwner?.Paths.ResourceRoot ?? AppContext.BaseDirectory);
         app.Use(
             async (context, next) =>
             {
@@ -174,10 +175,12 @@ internal sealed class HttpServer
                     || context.Request.Path == "/mcp"
                     || context.Request.Path == "/node_ws"
                     || Foxwarm.Nodes.NodeConnectionHub.IsShellPath(context.Request.Path)
+                    || context.Request.Path.StartsWithSegments("/node/transfer")
                     || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
                     || McpOAuthRoutes.IsPublic(context.Request)
                     || code?.IsCapabilityRequest(context) == true
                     || McpNodeFileDownload.IsRequest(context.Request)
+                    || WebhookHttp.IsRequest(context.Request.Path)
                 )
                 {
                     await next();
@@ -219,14 +222,16 @@ internal sealed class HttpServer
                 {
                     context.Response.ContentType = "text/html; charset=utf-8";
                     context.Response.Headers.CacheControl = "no-store";
-                    await context.Response.SendFileAsync(loginFile, context.RequestAborted);
+                    await resources.ServeAsync(context, "packages/webui/login.html");
                     return;
                 }
                 var resource = WebUiEnabled && Downloads.Authorizes(context);
                 if (!valid && !resource)
                 {
                     context.Response.StatusCode = 401;
-                    await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
+                    await context.Response.WriteAsJsonAsync(
+                        new JsonObject { ["error"] = "Unauthorized" }
+                    );
                     return;
                 }
                 if (scoped is not null && !resource)
@@ -234,7 +239,9 @@ internal sealed class HttpServer
                     if (!WebUiAccess.BrowserRoute(context))
                     {
                         context.Response.StatusCode = 403;
-                        await context.Response.WriteAsJsonAsync(new { error = "Forbidden" });
+                        await context.Response.WriteAsJsonAsync(
+                            new JsonObject { ["error"] = "Forbidden" }
+                        );
                         return;
                     }
                     try
@@ -249,10 +256,10 @@ internal sealed class HttpServer
                     {
                         context.Response.StatusCode = 403;
                         await context.Response.WriteAsJsonAsync(
-                            new
+                            new JsonObject
                             {
-                                error = "WebUI identity session binding changed.",
-                                code = "WEBUI_SESSION_NOT_ALLOWED",
+                                ["error"] = "WebUI identity session binding changed.",
+                                ["code"] = "WEBUI_SESSION_NOT_ALLOWED",
                             }
                         );
                     }
@@ -263,44 +270,52 @@ internal sealed class HttpServer
         );
         if (WebUiEnabled && distRoot is not null)
         {
-            app.UseStaticFiles(
-                new StaticFileOptions
+            var dist = new HttpAssets(Path.GetDirectoryName(distRoot)!);
+            var prefix = Path.GetFileName(distRoot) + "/";
+            app.Use(async (context, next) =>
+            {
+                var path = context.Request.Path;
+                if (context.Request.Method is not "GET" and not "HEAD")
                 {
-                    FileProvider = new PhysicalFileProvider(Path.Combine(distRoot, "assets")),
-                    RequestPath = "/assets",
-                }
-            );
-            app.UseWhen(
-                context => IsBrandAsset(context.Request.Path),
-                branch =>
-                    branch.UseStaticFiles(
-                        new StaticFileOptions
-                        {
-                            FileProvider = new PhysicalFileProvider(distRoot),
-                            OnPrepareResponse = context =>
-                                context.Context.Response.Headers.CacheControl = "private, no-cache",
-                        }
-                    )
-            );
-            var indexPath = Path.Combine(distRoot, "index.html");
-            app.Use(
-                async (context, next) =>
-                {
-                    if (context.Request.Method == "GET" && context.Request.Path == "/")
-                    {
-                        var html = await File.ReadAllTextAsync(indexPath, context.RequestAborted);
-                        const string marker = "<meta name=\"foxwarm-host\" content=\"dotnet\">";
-                        html = html.Contains("<head>", StringComparison.Ordinal)
-                            ? html.Replace("<head>", "<head>" + marker)
-                            : marker + html;
-                        context.Response.ContentType = "text/html; charset=utf-8";
-                        context.Response.Headers.CacheControl = "no-store";
-                        await context.Response.WriteAsync(html, context.RequestAborted);
-                        return;
-                    }
                     await next();
+                    return;
                 }
-            );
+                if (path.StartsWithSegments("/assets") || path != "/manifest.json" && IsBrandAsset(path))
+                {
+                    if (IsBrandAsset(path))
+                        context.Response.Headers.CacheControl = "private, no-cache";
+                    await dist.ServeAsync(context, prefix + path.Value!.TrimStart('/'));
+                    return;
+                }
+                if (context.Request.Method == "GET" && path == "/manifest.json" && dist.Exists(prefix + "manifest.json"))
+                {
+                    var manifest = JsonNode.Parse(await dist.ReadTextAsync(prefix + "manifest.json", context.RequestAborted))!.AsObject();
+                    var color = context.Request.Cookies["foxwarm_canvas"];
+                    if (color is not null && (color.Length == 6 || color.Length == 8) && color.All(Uri.IsHexDigit))
+                    {
+                        manifest["theme_color"] = "#" + color;
+                        manifest["background_color"] = "#" + color;
+                    }
+                    context.Response.Headers.CacheControl = "private, no-store";
+                    context.Response.Headers.Vary = "Cookie";
+                    context.Response.ContentType = "application/manifest+json";
+                    await context.Response.WriteAsync(manifest.ToJsonText(), context.RequestAborted);
+                    return;
+                }
+                if (context.Request.Method == "GET" && path == "/")
+                {
+                    var html = await dist.ReadTextAsync(prefix + "index.html", context.RequestAborted);
+                    const string marker = "<meta name=\"foxwarm-host\" content=\"dotnet\">";
+                    html = html.Contains("<head>", StringComparison.Ordinal)
+                        ? html.Replace("<head>", "<head>" + marker)
+                        : marker + html;
+                    context.Response.ContentType = "text/html; charset=utf-8";
+                    context.Response.Headers.CacheControl = "no-store";
+                    await context.Response.WriteAsync(html, context.RequestAborted);
+                    return;
+                }
+                await next();
+            });
         }
         if (WebUiEnabled)
         {
@@ -315,7 +330,7 @@ internal sealed class HttpServer
                     }
                     catch (JsonException)
                     {
-                        return Results.BadRequest(new { error = "Invalid JSON" });
+                        return Results.BadRequest(new JsonObject { ["error"] = "Invalid JSON" });
                     }
                     if (
                         body is null
@@ -328,19 +343,21 @@ internal sealed class HttpServer
                         )
                     )
                         return Results.Unauthorized();
-                    return Results.Ok(new { success = true });
+                    return Results.Ok(new JsonObject { ["success"] = true });
                 }
             );
             app.MapGet(
                 "/api/auth/session",
                 (HttpContext context) =>
                     Results.Ok(
-                        WebUiAccess.Request(context)?.AuthPayload()
-                            ?? new JsonObject
-                            {
-                                ["role"] = "admin",
-                                ["features"] = WebUiAccess.Features(true),
-                            }
+                        JsonData.WebNode(
+                            WebUiAccess.Request(context)?.AuthPayload()
+                                ?? new JsonObject
+                                {
+                                    ["role"] = "admin",
+                                    ["features"] = WebUiAccess.Features(true),
+                                }
+                        )
                     )
             );
             code!.Register(app);
@@ -350,9 +367,9 @@ internal sealed class HttpServer
             sessions,
             accessConfiguration,
             request => Authorized(request, apiToken, browserCookie),
-            context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.Nodes)
+            context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.NodeProviders)
         );
-        app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
+        app.MapGet("/health", () => Results.Ok(new JsonObject { ["status"] = "ready" }));
         app.MapPost(
             "/admin/shutdown",
             (IHostApplicationLifetime lifetime) =>
@@ -362,8 +379,7 @@ internal sealed class HttpServer
                 return Results.Accepted();
             }
         );
-        if (triggerEnabled)
-            TriggerHttp.Register(app, new SessionRuntime(sessions));
+        new WebhookHttp(accessConfiguration, new SessionRuntime(sessions)).Register(app, address);
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
         InboundMcp.Register(app);
@@ -371,12 +387,9 @@ internal sealed class HttpServer
         app.Lifetime.ApplicationStarted.Register(() =>
         {
             var bound = new Uri(app.Urls.First());
-            var localHost = bindAddress is "0.0.0.0" or "::" or "127.0.0.1"
-                ? "127.0.0.1"
-                : bindAddress;
             sessions.RuntimeMcpEndpoint = new UriBuilder(
                 "http",
-                localHost,
+                HttpServerSettings.LocalHost(bindAddress),
                 bound.Port,
                 address.Prefix.ToString() + "/runtime/mcp"
             ).Uri;

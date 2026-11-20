@@ -12,7 +12,22 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <EmbeddedResource Include="Capabilities.json" />
     <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
-    <ProjectReference Include="../Foxwarm.BrowserSupport/Foxwarm.BrowserSupport.csproj" />
+    <!-- The prebuilt browser host sits beside the executable. The delivery asset step builds it
+         (npm run build:host); compilation never invokes npm. -->
+    <Content
+      Include="../../packages/browser-host/dist/browser-host.bundle.cjs"
+      Condition="Exists('../../packages/browser-host/dist/browser-host.bundle.cjs')"
+      Link="browser-host.bundle.cjs"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/browser-host/dist/browser-host.bundle.cjs.LEGAL.txt"
+      Condition="Exists('../../packages/browser-host/dist/browser-host.bundle.cjs.LEGAL.txt')"
+      Link="browser-host.bundle.cjs.LEGAL.txt"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
   </ItemGroup>
   <Target
     Name="ValidateStaticMuslCli"

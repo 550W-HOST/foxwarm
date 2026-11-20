@@ -17,9 +17,6 @@ fetch() {
     wget -q -O "$notices/$1" "$2"
     test -s "$notices/$1"
 }
-fetch PuppeteerSharp-LICENSE.txt https://raw.githubusercontent.com/hardkoded/puppeteer-sharp/7ee221b6b9b4286ccc400bbc2537e4ec9a315dcd/LICENSE
-fetch ReactiveExtensionsSharp-LICENSE.txt https://raw.githubusercontent.com/hardkoded/ReactiveExtensions-Sharp/787712268f4bedf5945d43082d450042be275bce/LICENSE
-fetch RecyclableMemoryStream-LICENSE.txt https://raw.githubusercontent.com/microsoft/Microsoft.IO.RecyclableMemoryStream/e29a28387da9018fa9605a1dcb3f7a0435aa9974/LICENSE
 fetch musl-COPYRIGHT.txt "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v$(version musl)"
 # Current ICU release tags retain the packaged version's dots.
 icu=$(version icu-static)

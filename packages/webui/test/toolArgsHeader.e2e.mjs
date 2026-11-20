@@ -58,6 +58,10 @@ async function buildFixtureBundle() {
         call: { id: 'unusual-script', name: 'run_script', args: { summary: '', code: false, filePath: null, args: 0, argsJson: '', mode: null } },
         response: { tool_use_id: 'unusual-script', name: 'run_script', response: { error: 'Invalid historical arguments' } },
       },
+      genericArgs: {
+        call: { id: 'generic-call', name: 'wait', args: { waitAnySessions: ['a'], anotherProp: 'anotherValue', note: 'first\\nsecond' } },
+        response: { tool_use_id: 'generic-call', name: 'wait', response: { output: 'ok' } },
+      },
       unifiedExec: {
         call: { id: 'summary-unified', name: 'call_tool', args: { toolId: 'node:provider/worker/exec', argsJson: JSON.stringify({ summary: 'Compile source', command: 'build-project' }) } },
         response: { tool_use_id: 'summary-unified', name: 'call_tool', response: { error: 'Compiler unavailable' } },
@@ -86,7 +90,7 @@ async function buildFixtureBundle() {
         call: { id: 'child-call', name: 'create_child_session', args: {
           suffix: 'task-child', taskId: 'task_demo', agentName: 'worker', displayName: 'Task child',
           node: 'remote-a', forceModel: { modelId: 'openai/gpt-5.6-sol', effort: 'high' },
-          message: 'Start the assigned work.', afterSend: 'wait',
+          message: 'Start the assigned work.', currentSessionTurnAction: 'wait',
         } },
         response: { tool_use_id: 'child-call', name: 'create_child_session', response: { output: 'Child session created: \`agent/child\`' } },
       },
@@ -152,10 +156,11 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.evaluate(({ style, dark }) => {
     window.setFixtureTheme(style, dark)
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 17)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 18)
 }
 
 async function readVisualState(id) {
+  await waitForCardTransitions()
   return page.$eval(`#${id}`, (root) => {
     const effectiveBackground = (element) => {
       for (let current = element; current instanceof Element; current = current.parentElement) {
@@ -211,6 +216,7 @@ async function readVisualState(id) {
 }
 
 async function readCollapseTargetState(id) {
+  await waitForCardTransitions()
   return page.$eval(`#${id}`, (root) => {
     const card = root.querySelector('.foxwarm-tool-card')
     const header = root.querySelector('.foxwarm-tool-header')
@@ -253,7 +259,7 @@ function assertCollapseTargetState(state, expanded) {
 async function assertHeaderHoverKeepsTextColor(id) {
   await page.mouse.move(0, 0)
   const before = await readCollapseTargetState(id)
-  await page.hover(`#${id} .foxwarm-tool-header-toggle`)
+  await hoverSettled(`#${id} .foxwarm-tool-header-toggle`)
   const hovered = await readCollapseTargetState(id)
   assert.equal(hovered.toggleColor, before.toggleColor)
   assert.equal(hovered.summaryColor, before.summaryColor)
@@ -261,6 +267,18 @@ async function assertHeaderHoverKeepsTextColor(id) {
 
 async function waitForCardTransitions() {
   await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height))
+}
+
+// A card or tool group animates its height when it expands or collapses, which moves every control below it.
+// The transition owner clears its inline height when it finishes, so pointer targets are only measured then.
+async function clickSettled(selector) {
+  await waitForCardTransitions()
+  await page.click(selector)
+}
+
+async function hoverSettled(selector) {
+  await waitForCardTransitions()
+  await page.hover(selector)
 }
 
 // Hit a painted surface at real pointer coordinates, rather than dispatching a DOM click.
@@ -331,7 +349,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['fileScript', 'unusualExec', 'unusualScript', 'summarizedExec', 'summarizedScript', 'unifiedExec', 'exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult', 'timeline'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['fileScript', 'unusualExec', 'unusualScript', 'summarizedExec', 'summarizedScript', 'genericArgs', 'unifiedExec', 'exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult', 'timeline'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -355,13 +373,13 @@ test('invalid tool arguments show escaped raw text instead of structured args in
   assert.match(await page.$eval('#rawMissing .foxwarm-tool-call-summary', element => element.textContent), /echo fallback/)
   assert.match(await page.$eval('#noResult .foxwarm-tool-call-summary', element => element.textContent), /streaming tool call|reason/)
 
-  await page.click('#malformedPatch .foxwarm-tool-header-toggle')
+  await clickSettled('#malformedPatch .foxwarm-tool-header-toggle')
   const expanded = await page.$eval('#malformedPatch .foxwarm-tool-call-args pre', element => ({ text: element.textContent, whiteSpace: getComputedStyle(element).whiteSpace }))
   assert.equal(expanded.text, '<img src=x onerror=window.rawXss=1>\n{not-json')
   assert.equal(expanded.whiteSpace, 'pre-wrap')
   assert.equal(await page.$eval('#malformedPatch .foxwarm-tool-call-args img', element => element).catch(() => null), null)
   assert.equal(await page.evaluate(() => window.rawXss), undefined)
-  await page.click('#rawNoError .foxwarm-tool-header-toggle')
+  await clickSettled('#rawNoError .foxwarm-tool-header-toggle')
   assert.match(await page.$eval('#rawNoError .foxwarm-tool-call-args', element => element.textContent), /echo actual command/)
   assert.doesNotMatch(await page.$eval('#rawNoError .foxwarm-tool-call-args', element => element.textContent), /wrong raw command/)
 })
@@ -372,8 +390,8 @@ test('tool headers show valid invocation durations only at one second or above',
   for (const id of ['send', 'exec', 'edit', 'noResult']) {
     assert.equal(await page.$$eval(`#${id} [data-tool-execution-time]`, elements => elements.length), 0)
   }
-  await page.click('#send .foxwarm-tool-tag')
-  await page.click('#sendAlias .foxwarm-tool-tag')
+  await clickSettled('#send .foxwarm-tool-tag')
+  await clickSettled('#sendAlias .foxwarm-tool-tag')
   assert.equal(await page.$$eval('#send [data-tool-execution-time]', elements => elements.length), 0)
   assert.equal(await page.$eval('#sendAlias [data-tool-execution-time]', element => element.textContent.trim()), '1s')
 })
@@ -382,15 +400,15 @@ test('default desktop keeps call args in the dark header and results on the ligh
   await mountFixture({ width: 900, height: 800 })
   for (const id of ['exec', 'edit', 'error']) assertCollapsed(await readVisualState(id))
 
-  await page.click('#edit .foxwarm-tool-code-open')
+  await clickSettled('#edit .foxwarm-tool-code-open')
   assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
   assert.equal(await page.$eval('#edit', root => !!root.querySelector('.foxwarm-tool-call-args')), false, 'Code click does not expand')
 
   for (const id of ['exec', 'edit', 'error', 'noResult']) {
-    await page.click(`#${id} .foxwarm-tool-tag`)
+    await clickSettled(`#${id} .foxwarm-tool-tag`)
     assertExpanded(await readVisualState(id), { hasResult: id !== 'noResult' })
   }
-  await page.click('#edit .foxwarm-tool-call-args .foxwarm-tool-code-open')
+  await clickSettled('#edit .foxwarm-tool-call-args .foxwarm-tool-code-open')
   assert.equal(await page.evaluate(() => window.openedCodePaths.length), 2)
   assert.equal(await page.$eval('#edit', root => !!root.querySelector('.foxwarm-tool-call-args')), true, 'expanded Code click does not collapse')
   const exec = await readVisualState('exec')
@@ -407,7 +425,7 @@ test('dark and mobile 550A retain header continuity and bounded call/result cont
   ]) {
     await mountFixture(fixture)
     assertCollapsed(await readVisualState('exec'))
-    await page.click('#exec .foxwarm-tool-tag')
+    await clickSettled('#exec .foxwarm-tool-tag')
     assertExpanded(await readVisualState('exec'))
   }
 })
@@ -420,7 +438,7 @@ test('every built-in applies its declared full-width or inset tool-header geomet
     const expectedInset = ['banded', 'tab'].includes(headerTreatment) ? 0 : Number.parseFloat(collapsed.cardPaddingRight)
     assert.ok(Math.abs(collapsed.headerLeftOffset - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} collapsed left offset ${collapsed.headerLeftOffset}px`)
     assert.ok(Math.abs(collapsed.headerRightGap - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} collapsed right gap ${collapsed.headerRightGap}px`)
-    await page.click('#exec .foxwarm-tool-header-toggle')
+    await clickSettled('#exec .foxwarm-tool-header-toggle')
     const expanded = await readVisualState('exec')
     assert.ok(Math.abs(expanded.headerLeftOffset - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} expanded left offset ${expanded.headerLeftOffset}px`)
     assert.ok(Math.abs(expanded.headerRightGap - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} expanded right gap ${expanded.headerRightGap}px`)
@@ -458,7 +476,7 @@ test('send_to_session To prefixes inherit ordinary call text in collapsed and ex
       assert.equal(collapsed.aliasText, expected.alias)
       assert.match(collapsed.text, /^To/)
 
-      await page.click(`#${id} .foxwarm-tool-tag`)
+      await clickSettled(`#${id} .foxwarm-tool-tag`)
       const expanded = await readTo(id, true)
       assert.equal(expanded.prefixColor, expanded.containerColor, `${id} expanded To inherits foreground`)
       assert.equal(expanded.linkHref, expected.href)
@@ -471,7 +489,7 @@ test('send_to_session To prefixes inherit ordinary call text in collapsed and ex
 test('create_child_session identifies task assignments and shows supplied creation fields when expanded', async () => {
   await mountFixture({ width: 900, height: 800 })
   assert.match(await page.$eval('#child .foxwarm-tool-call-summary', element => element.textContent), /childtask-child\(new, task, message\)/)
-  await page.click('#child .foxwarm-tool-header-toggle')
+  await clickSettled('#child .foxwarm-tool-header-toggle')
   const expanded = await page.$eval('#child .foxwarm-tool-call-args', element => element.textContent)
   for (const value of ['task_demo', 'worker', 'Task child', 'remote-a', 'openai/gpt-5.6-sol', 'high', 'Start the assigned work.', 'wait']) {
     assert.match(expanded, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
@@ -498,11 +516,11 @@ test('collapsed native cards expand across their non-action surface and expanded
       assertCollapseTargetState(collapsed, false)
       assertCollapseTargetState(await readCollapseTargetState('exec'), true)
       await assertHeaderHoverKeepsTextColor('exec')
-      await page.click('#exec .foxwarm-tool-header-toggle')
+      await clickSettled('#exec .foxwarm-tool-header-toggle')
       assert.equal(await expanded(), false)
     }
 
-    await page.click('#exec [aria-label="Expand exec tool"]')
+    await clickSettled('#exec [aria-label="Expand exec tool"]')
     await selectText('#exec .foxwarm-tool-call-args')
     assert.equal(await expanded(), true)
     await selectText('#exec .foxwarm-tool-result-content')
@@ -510,7 +528,7 @@ test('collapsed native cards expand across their non-action surface and expanded
     await clickSurface('#exec .foxwarm-tool-card', { x: 0.99, y: 0.99 })
     await clickSurface('#exec .foxwarm-tool-header', { x: 0.99, y: 0.99 })
     assert.equal(await expanded(), true, 'expanded padding does not collapse')
-    await page.click('#exec [aria-label="Collapse exec tool"]')
+    await clickSettled('#exec [aria-label="Collapse exec tool"]')
     assert.equal(await expanded(), false)
   }
 })
@@ -518,24 +536,24 @@ test('collapsed native cards expand across their non-action surface and expanded
 test('Code, JSON, links, and diff actions keep their own behavior without toggling the card', async () => {
   await mountFixture({ width: 900, height: 800 })
   for (const selector of ['#send .foxwarm-tool-call-summary a', '#child .foxwarm-tool-result-preview a']) {
-    await page.click(selector)
+    await clickSettled(selector)
     assert.equal(await page.evaluate(() => location.hash), '#session/agent%2Fchild')
     assert.equal(await page.$('#send .foxwarm-tool-call-args, #child .foxwarm-tool-call-args'), null, 'session links navigate without expanding')
   }
-  await page.click('#edit .foxwarm-tool-code-open')
+  await clickSettled('#edit .foxwarm-tool-code-open')
   assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
   assert.equal(await page.$('#edit .foxwarm-tool-call-args'), null)
-  await page.hover('#edit .foxwarm-tool-header-toggle')
-  await page.click('#edit button[title="JSON"]')
+  await hoverSettled('#edit .foxwarm-tool-header-toggle')
+  await clickSettled('#edit button[title="JSON"]')
   await page.waitForSelector('[data-json-inspector-dialog]')
   assert.equal(await page.$('#edit .foxwarm-tool-call-args'), null)
-  await page.click('[data-json-inspector-dialog] button[title="Close"]')
+  await clickSettled('[data-json-inspector-dialog] button[title="Close"]')
   assert.equal(await page.$('#edit .foxwarm-tool-call-args'), null, 'portal close does not expand the card')
-  await page.click('#edit .foxwarm-tool-result-preview')
+  await clickSettled('#edit .foxwarm-tool-result-preview')
   await page.waitForSelector('#edit .foxwarm-tool-call-args')
-  await page.click('#edit button[title="Split"]')
+  await clickSettled('#edit button[title="Split"]')
   assert.ok(await page.$('#edit .foxwarm-tool-call-args'))
-  await page.click('#edit .foxwarm-tool-code-open')
+  await clickSettled('#edit .foxwarm-tool-code-open')
   assert.equal(await page.evaluate(() => window.openedCodePaths.length), 2)
   assert.ok(await page.$('#edit .foxwarm-tool-call-args'))
 })
@@ -547,7 +565,7 @@ test('Detailed and expanded-group member result clicks use the Timeline manual d
     await page.evaluate(view => window.renderFixtureTimeline(view), view)
     if (view === 'grouped') {
       await page.waitForSelector('#timeline [aria-label="Expand tool group"]')
-      await page.click('#timeline [aria-label="Expand tool group"]')
+      await clickSettled('#timeline [aria-label="Expand tool group"]')
     }
     await page.waitForSelector(`${card} .foxwarm-tool-result-preview`)
     assert.equal(await page.$eval(`${card} .foxwarm-tool-result-preview .cursor-text`, node => getComputedStyle(node).cursor), 'pointer')
@@ -561,12 +579,12 @@ test('Detailed and expanded-group member result clicks use the Timeline manual d
     await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Next input'))
     assert.ok(await page.$(`${card} .foxwarm-tool-call-args`), 'ordinary Timeline updates retain the manual choice')
     if (view === 'grouped') {
-      await page.click('#timeline [aria-label="Collapse tool group"]')
+      await clickSettled('#timeline [aria-label="Collapse tool group"]')
       await page.waitForSelector('#timeline [aria-label="Expand tool group"]')
-      await page.click('#timeline [aria-label="Expand tool group"]')
+      await clickSettled('#timeline [aria-label="Expand tool group"]')
       await page.waitForSelector(`${card} .foxwarm-tool-call-args`)
     }
-    await page.click(`${card} .foxwarm-tool-header-toggle`)
+    await clickSettled(`${card} .foxwarm-tool-header-toggle`)
     await page.waitForSelector(`${card} .foxwarm-tool-result-preview`)
     assert.equal(await page.$(`${card} .foxwarm-tool-call-args`), null)
   }
@@ -649,7 +667,7 @@ test('expanded execution arguments retain complete copyable source, inputs and e
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => window.copiedSources.push(text) } })
   })
   const beforeResult = await page.$eval('#summarizedExec .foxwarm-tool-result-preview', element => element.textContent)
-  for (const id of ['summarizedExec', 'summarizedScript', 'fileScript']) await page.click(`#${id} .foxwarm-tool-call-summary`)
+  for (const id of ['summarizedExec', 'summarizedScript', 'fileScript']) await clickSettled(`#${id} .foxwarm-tool-call-summary`)
   for (const [id, key, title] of [['summarizedExec', 'command', 'Copy command'], ['summarizedScript', 'code', 'Copy script']]) {
     const original = await page.evaluate((id, key) => window.toolFixtures[id].call.args[key], id, key)
     assert.equal(await page.$eval(`#${id} .foxwarm-tool-execution-code pre`, element => element.textContent), original)
@@ -667,22 +685,31 @@ test('expanded execution arguments retain complete copyable source, inputs and e
   const options = await page.$eval('#summarizedExec .foxwarm-tool-execution-options', element => element.textContent)
   for (const value of ['cwd: /workspace/source', 'timeout: 0', 'option: false', 'extra: null']) assert.ok(options.includes(value))
   const input = await page.$eval('#summarizedScript .foxwarm-tool-execution-input', element => element.textContent)
-  for (const value of ['"enabled": false', '"limit": 0', '"marker": null']) assert.ok(input.includes(value))
+  assert.equal(input, 'args:\n  enabled: false\n  limit: 0\n  marker: null')
   assert.equal(await page.$('#fileScript .foxwarm-tool-execution-code'), null)
   assert.equal(await page.$('#fileScript .foxwarm-tool-code-open'), null)
   const fileArgs = await page.$eval('#fileScript .foxwarm-tool-call-args', element => element.textContent)
-  for (const value of ['filePath: ./scripts/audit.py', 'node: other-node', 'argsJson: {"limit":0,"enabled":false}', 'timeoutSecs: 0']) assert.ok(fileArgs.includes(value))
+  for (const value of ['filePath: ./scripts/audit.py', 'node: other-node', 'argsJson:\n  limit: 0\n  enabled: false', 'timeoutSecs: 0']) assert.ok(fileArgs.includes(value))
   assert.equal(await page.$eval('#summarizedExec .foxwarm-tool-result-content', element => element.textContent), beforeResult)
   await page.evaluate(() => window.getSelection().removeAllRanges())
   await argumentScreenshot('expanded-arguments')
 })
 
+test('generic arguments are one key: value line each with flow values, escaped when collapsed', async () => {
+  await mountFixture({ width: 1100, height: 780 })
+  const summary = '#genericArgs .foxwarm-tool-call-summary'
+  assert.equal(await page.$eval(summary, element => element.textContent), 'waitAnySessions: [a]\nanotherProp: anotherValue\nnote: "first\\nsecond"')
+  assert.equal(await page.$eval(summary, element => element.innerText), 'waitAnySessions: [a] anotherProp: anotherValue note: "first\\nsecond"')
+  await clickSettled(summary)
+  assert.equal(await page.$eval('#genericArgs .foxwarm-tool-call-args', element => element.textContent), 'waitAnySessions: [a]\nanotherProp: anotherValue\nnote: |-\n  first\n  second')
+})
+
 test('unusual historical execution field values remain readable without code coercion', async () => {
   await mountFixture({ width: 900, height: 800 })
-  for (const id of ['unusualExec', 'unusualScript']) await page.click(`#${id} .foxwarm-tool-call-summary`)
+  for (const id of ['unusualExec', 'unusualScript']) await clickSettled(`#${id} .foxwarm-tool-call-summary`)
   const exec = await page.$eval('#unusualExec .foxwarm-tool-call-args', element => element.textContent)
-  for (const value of ['summary: null', 'command: {', '"shell": "historical command"', 'cwd: null', 'timeout: 0', 'enabled: false']) assert.ok(exec.includes(value))
+  for (const value of ['summary: null', 'command: {shell: historical command}', 'cwd: null', 'timeout: 0', 'enabled: false']) assert.ok(exec.includes(value))
   const script = await page.$eval('#unusualScript .foxwarm-tool-call-args', element => element.textContent)
-  for (const value of ['summary: ""', 'code: false', 'filePath: null', 'args: 0', 'argsJson: ""', 'mode: null']) assert.ok(script.includes(value))
+  for (const value of ["summary: ''", 'code: false', 'filePath: null', 'args: 0', "argsJson: ''", 'mode: null']) assert.ok(script.includes(value))
   assert.equal(await page.$$eval('#unusualExec .foxwarm-tool-execution-code, #unusualScript .foxwarm-tool-execution-code', elements => elements.length), 0)
 })

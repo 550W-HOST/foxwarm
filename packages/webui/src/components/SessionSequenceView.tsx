@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, RefreshCw } from 'lucide-react'
-import { CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX, storeChatViewportState, updateChatBottomFollow, type ChatBottomFollowState } from '../chatViewportState'
+import { CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX, openSessionAtSeq, updateChatBottomFollow, type ChatBottomFollowState } from '../chatViewportState'
 import { SessionMessageNamesContext } from './SessionMessageCard'
 import { formatTimelineTimeMarker } from './timelineTime'
 import { OTHER_SESSION_PEER, SequenceCell, type SequenceItemActions } from './SessionSequenceItems'
@@ -25,16 +25,6 @@ import {
   type SequenceData,
   type SequenceRow,
 } from '../sessionSequence'
-
-/** Opens a Session positioned at one of its messages. */
-export function openSessionAtSeq(sessionId: string, seq: number | undefined, open: (sessionId: string) => void) {
-  if (seq !== undefined && Number.isSafeInteger(seq) && seq > 0) {
-    const anchor = { kind: 'anchor' as const, messageKey: `seq-local-${seq}`, offsetPx: 48 }
-    storeChatViewportState(sessionId, anchor, 'continuous')
-    storeChatViewportState(sessionId, anchor, 'active')
-  }
-  open(sessionId)
-}
 
 const COLUMN_CONTENT_WIDTH = SEQUENCE_COLUMN_STRIDE - 12
 const WIDTH_ANIMATION_MS = 180

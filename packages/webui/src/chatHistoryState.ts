@@ -198,6 +198,7 @@ export function buildOptimisticUserMessage(options: {
   clientMessageId: string
   parts: MessagePart[]
   timestamp: number
+  queued?: boolean
 }): Message {
   return {
     role: 'user',
@@ -207,6 +208,45 @@ export function buildOptimisticUserMessage(options: {
       optimistic: true,
       temporary: true,
       timestamp: options.timestamp,
+      ...(options.queued ? { queuedPreview: true, queueType: 'user' } : {}),
     },
+  }
+}
+
+/**
+ * The visible queue for one Chat. Server preview items owned by a pending committed-lane send are
+ * hidden (that row already shows the input); browser rows for busy sends show until the server
+ * preview or history carries the same client identity. Items without identity always show.
+ */
+export function projectPendingSendQueue(options: {
+  messages: Message[]
+  serverQueue: Message[]
+  localQueue: Message[]
+  queueLength: number
+}): { queuedMessages: Message[]; footerCount: number; pendingSendIds: ReadonlySet<string> } {
+  const pendingSendIds = new Set<string>()
+  for (const message of options.messages) {
+    const id = message.__meta?.optimistic ? getClientMessageId(message) : null
+    if (id) pendingSendIds.add(id)
+  }
+  const serverIds = new Set(options.serverQueue.map(getClientMessageId).filter((id): id is string => !!id))
+  const own = (message: Message) => {
+    const id = getClientMessageId(message)
+    return !!id && pendingSendIds.has(id)
+  }
+  const server = pendingSendIds.size ? options.serverQueue.filter(message => !own(message)) : options.serverQueue
+  let local: Message[] = []
+  if (options.localQueue.length) {
+    const committedIds = new Set(options.messages.filter(message => !message.__meta?.optimistic).map(getClientMessageId).filter(Boolean))
+    local = options.localQueue.filter(message => {
+      const id = getClientMessageId(message)
+      return !!id && !serverIds.has(id) && !committedIds.has(id)
+    })
+  }
+  return {
+    queuedMessages: local.length ? [...server, ...local] : server,
+    // While a pending send owns part of the queue, only identified foreign preview items are counted.
+    footerCount: pendingSendIds.size ? server.length : options.queueLength,
+    pendingSendIds,
   }
 }

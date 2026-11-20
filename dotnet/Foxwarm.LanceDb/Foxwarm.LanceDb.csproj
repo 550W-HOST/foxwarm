@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <LanceSourceRoot>$(MSBuildProjectDirectory)/obj/upstream</LanceSourceRoot>
+    <LancePython Condition="'$(OS)' != 'Windows_NT'">python3</LancePython>
+    <LancePython Condition="'$(OS)' == 'Windows_NT'">python</LancePython>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Apache.Arrow" Version="[22.1.0]" />
+    <Content
+      Include="THIRD-PARTY-NOTICES.md"
+      Link="LanceDB-binding-NOTICES.md"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+  </ItemGroup>
+  <Target
+    Name="AcquireLanceSource"
+    BeforeTargets="CoreCompile"
+    Inputs="$(MSBuildProjectDirectory)/source.json;$(MSBuildProjectDirectory)/serialization.patch;$(MSBuildProjectDirectory)/../scripts/acquire-lancedb-source.py"
+    Outputs="$(LanceSourceRoot)/prepared"
+  >
+    <Exec Command="$(LancePython) &quot;$(MSBuildProjectDirectory)/../scripts/acquire-lancedb-source.py&quot; &quot;$(LanceSourceRoot)&quot;" />
+  </Target>
+  <Target
+    Name="IncludeLanceSource"
+    BeforeTargets="CoreCompile"
+    DependsOnTargets="AcquireLanceSource"
+  >
+    <ItemGroup>
+      <Compile Include="$(LanceSourceRoot)/src/**/*.cs" />
+    </ItemGroup>
+  </Target>
+</Project>

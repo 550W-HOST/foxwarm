@@ -9,6 +9,7 @@ import {
   compiledPath,
   deferredGroups,
   loadTestInventory,
+  nativeMainSmoke,
   routineUnitGroups,
   referenceGroups,
   standaloneSelftests,
@@ -22,19 +23,23 @@ const repoRoot = path.resolve(scriptDir, '../..')
 // Keep this runner-local: retries do not apply to preparation, other groups, or shards.
 const BROWSER_FIXTURE_RETRY_COUNT = 8
 const target = process.argv[2] || 'unit'
-const validTargets = new Set(['inventory', 'unit', 'reference', 'managed', 'published', 'browser', 'app', 'all'])
+const validTargets = new Set(['inventory', 'unit', 'unit-components', 'reference', 'managed', 'published', 'browser', 'app', 'native', 'all'])
 let shard = null
 let browserWorkers = 1
+let managedFilter = null
 const options = new Set()
 for (const argument of process.argv.slice(3)) {
-  const match = /^(--shard|--workers)=(.+)$/.exec(argument)
-  if (target !== 'browser' || !match || options.has(match[1])) {
-    console.error(`Invalid test option: ${argument}. Browser options: --shard=INDEX/TOTAL --workers=COUNT`)
+  const match = /^(--shard|--workers|--filter)=(.+)$/.exec(argument)
+  const allowed = target === 'browser' ? ['--shard', '--workers'] : target === 'managed' ? ['--filter'] : []
+  if (!match || !allowed.includes(match[1]) || options.has(match[1]) || !match[2].trim()) {
+    console.error(`Invalid test option: ${argument}. Browser options: --shard=INDEX/TOTAL --workers=COUNT; managed option: --filter=EXPRESSION`)
     process.exit(2)
   }
   options.add(match[1])
   const positive = value => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))
-  if (match[1] === '--shard') {
+  if (match[1] === '--filter') {
+    managedFilter = match[2]
+  } else if (match[1] === '--shard') {
     const parts = match[2].split('/')
     if (parts.length !== 2 || !parts.every(positive) || Number(parts[0]) > Number(parts[1])) {
       console.error('Invalid browser shard; use INDEX/TOTAL with 1 <= INDEX <= TOTAL.')
@@ -50,7 +55,12 @@ for (const argument of process.argv.slice(3)) {
   }
 }
 if (!validTargets.has(target)) {
-  console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}> [--shard=INDEX/TOTAL] [--workers=COUNT]`)
+  console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}> [--shard=INDEX/TOTAL] [--workers=COUNT] [--filter=EXPRESSION]`)
+  process.exit(2)
+}
+
+if (target === 'native' && !fs.statSync(process.env.FOXWARM_TEST_MAIN_EXECUTABLE || '', { throwIfNoEntry: false })?.isFile()) {
+  console.error('test:native requires FOXWARM_TEST_MAIN_EXECUTABLE to name a published Main executable.')
   process.exit(2)
 }
 
@@ -88,7 +98,7 @@ const artifactParent = process.env.FOXWARM_TEST_ARTIFACT_DIR
 const runId = `${target}${shard ? `-shard-${shard.index}-of-${shard.total}` : ''}-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
 const runBase = path.join(artifactParent, runId)
 await fsp.mkdir(path.join(runBase, 'logs'), { recursive: true })
-await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, standaloneSelftests, browserSelection }, null, 2)}\n`)
+await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, standaloneSelftests, browserSelection, ...(target === 'managed' ? { managedFilter } : {}) }, null, 2)}\n`)
 const shortTempBase = path.join(os.tmpdir(), `fw-${process.pid}`)
 await fsp.rm(shortTempBase, { recursive: true, force: true })
 await fsp.mkdir(shortTempBase, { recursive: true })
@@ -130,8 +140,10 @@ function managedGroup() {
     name: 'managed',
     steps: [
       { ...directStep('restore', 'dotnet', ['restore', 'dotnet/Foxwarm.sln'], 600_000), prepareDependencies: true },
-      // Includes the build and serial suite; a complete CI invocation already takes nearly 20 minutes.
-      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal'], 1_800_000),
+      // Build plus serial tests measured 27.5 minutes in CI; leave room for suite growth.
+      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal',
+        ...(managedFilter ? ['--filter', managedFilter] : []),
+        '--', 'RunConfiguration.TreatNoTestsAsError=true'], 2_400_000),
     ],
     env: { FOXWARM_TS_ROOT: repoRoot },
   }
@@ -225,14 +237,16 @@ function browserGroup() {
     name: 'webui-browser',
     concurrency: browserWorkers,
     stepArtifacts: true,
+    retryBrowserFixtures: true,
     steps: [
       // Cold Code assets plus the serial managed builds take nearly ten minutes in CI.
       { ...directStep('prepare', process.execPath, ['scripts/test/prepare-browser.mjs'], 900_000), prepareDependencies: true },
       ...files.map(file => ({
         ...nodeTestStep(path.basename(file), [file], {
           concurrency: 1,
-          // Workbench exercises many complete application mounts and navigation paths.
-          timeoutMs: path.basename(file) === 'workbenchPreview.e2e.mjs' ? 360_000 : 240_000,
+          // Workbench exercises many complete application mounts and navigation paths. Its serial tests take
+          // about 340 s on a CI runner and a loaded shard is a few percent slower, so the budget is about twice that.
+          timeoutMs: path.basename(file) === 'workbenchPreview.e2e.mjs' ? 720_000 : 240_000,
         }),
         // This fixture rebuilds the WebUI dist consumed by its peers.
         exclusive: path.basename(file) === 'setupModels.e2e.mjs',
@@ -258,6 +272,34 @@ function appGroup() {
       FOXWARM_TEST_KEEP_SYSTEM_TMP: '1',
     })],
   }
+}
+
+// The bounded smoke selection against a published Main executable, such as a
+// NativeAOT publication. The full-application harness and these fixtures launch
+// FOXWARM_TEST_MAIN_EXECUTABLE instead of managed Main; they need no managed
+// fixture preparation or Code workbench assets.
+function nativeGroups() {
+  const executable = process.env.FOXWARM_TEST_MAIN_EXECUTABLE
+  const chromium = findChromium()
+  const files = requireFiles(nativeMainSmoke, 'native Main fixtures')
+  console.log(`Native Main: ${executable}; ${files.length} browser fixture(s) after the full application`)
+  return [appGroup(), {
+    name: 'native-browser',
+    concurrency: 2,
+    stepArtifacts: true,
+    retryBrowserFixtures: true,
+    steps: files.map(file => ({
+      ...nodeTestStep(path.basename(file), [file], { concurrency: 1, timeoutMs: 240_000 }),
+      browserFixture: true,
+    })),
+    env: {
+      FOXWARM_E2E_BROWSER: 'chromium',
+      FOXWARM_E2E_CHROMIUM: chromium,
+      FOXWARM_CHROMIUM: chromium,
+      FOXWARM_E2E_SCREENSHOT_DIR: path.join(runBase, 'screenshots'),
+      FOXWARM_TEST_KEEP_SYSTEM_TMP: '1',
+    },
+  }]
 }
 
 function walkFiles(root) {
@@ -351,10 +393,11 @@ async function runStep(group, step, log) {
 const groups = [
   ...(target === 'managed' || target === 'unit' || target === 'all' ? [managedGroup()] : []),
   ...(target === 'published' || target === 'all' ? [publishedGroup()] : []),
-  ...(target === 'unit' || target === 'all' ? unitGroups() : []),
+  ...(target === 'unit' || target === 'unit-components' || target === 'all' ? unitGroups() : []),
   ...(target === 'reference' ? referenceTestGroups() : []),
   ...(target === 'browser' || target === 'all' ? [browserGroup()] : []),
   ...(target === 'app' || target === 'all' ? [appGroup()] : []),
+  ...(target === 'native' ? nativeGroups() : []),
 ]
 const summary = []
 for (const group of groups) {
@@ -366,7 +409,7 @@ for (const group of groups) {
   const groupLog = group.stepArtifacts ? null : fs.createWriteStream(path.join(runBase, 'logs', `${group.name}.log`), { flags: 'w' })
   async function executeStep(order) {
     const original = group.steps[order]
-    const retryable = group.name === 'webui-browser' && original.browserFixture
+    const retryable = group.retryBrowserFixtures && original.browserFixture
     const attempts = retryable ? BROWSER_FIXTURE_RETRY_COUNT + 1 : 1
     let allRetriesPassed = true
     for (let attempt = 0; attempt < attempts && !interrupted; attempt++) {

@@ -28,6 +28,7 @@ internal sealed class ProviderExecBackend(ExecutableNodeProvider provider, strin
     internal async Task<Started> StartAsync(
         string command,
         string? cwd,
+        IReadOnlyDictionary<string, string>? environment,
         Action beforeLaunch,
         CancellationToken hardCancellation
     )
@@ -35,6 +36,12 @@ internal sealed class ProviderExecBackend(ExecutableNodeProvider provider, strin
         var request = new JsonObject { ["nodeId"] = LocalId, ["command"] = command };
         if (cwd is not null)
             request["cwd"] = cwd;
+        // Admission required the Node's execEnv support; the adapter sets these only on the
+        // command's process.
+        if (environment is not null)
+            request["env"] = new JsonObject(
+                environment.Select(pair => KeyValuePair.Create(pair.Key, (JsonNode?)pair.Value))
+            );
         beforeLaunch();
         var dispatched = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         try
@@ -136,6 +143,38 @@ internal sealed class ProviderExecBackend(ExecutableNodeProvider provider, strin
         if (value.ContainsKey("error"))
             status["error"] = ExecutableNodeProvider.Bounded(value["error"], 4096);
         return new(status, Cwd(value));
+    }
+
+    // Optional exec-stop: the adapter terminates the command (gracefully, then forcibly after
+    // graceMs) and reports what it found. Completion still arrives through ordinary polling.
+    internal async Task<string> StopAsync(
+        string reference,
+        TimeSpan grace,
+        CancellationToken token
+    )
+    {
+        var value = ExecutableNodeProvider.Object(
+            await provider.RunAsync(
+                "exec-stop",
+                new JsonObject
+                {
+                    ["nodeId"] = LocalId,
+                    ["ref"] = reference,
+                    ["graceMs"] = (long)grace.TotalMilliseconds,
+                },
+                token
+            )
+        );
+        ExecutableNodeProvider.Keys(value, ["state"]);
+        return SessionWait.Text(value["state"]) is
+            "stopped"
+            or "killed"
+            or "finished"
+            or "lost"
+            ? SessionWait.Text(value["state"])!
+            : throw ExecutableNodeProvider.Invalid(
+                "Exec stop state must be stopped, killed, finished or lost."
+            );
     }
 
     private static string? Cwd(JsonObject value) =>

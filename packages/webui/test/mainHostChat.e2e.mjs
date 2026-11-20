@@ -11,11 +11,10 @@ import { join, resolve } from 'node:path'
 import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
 
 const token = 'local-browser-test-api-token'
 const providerToken = 'local-browser-test-provider-token'
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 const dll = process.env.FOXWARM_TEST_MAIN_DLL || resolve(import.meta.dirname, '../../../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK.')
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-chat-browser-'))
@@ -66,7 +65,7 @@ async function json(port, method, path, body) {
 async function startHost(port, providerPort, dataRoot) {
   await writeModelFixture(dataRoot, { default: 'local-browser-model', providers: { 'local-browser-model': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['local-browser-model'] } } })
   const env = testEnvironment.isolatedApplicationEnv(dataRoot)
-  const child = spawn(dotnet, [dll], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(...mainHostLaunch(dll), { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
   child.stdout.on('data', bytes => { output = (output + bytes).slice(-12000) })
   child.stderr.on('data', bytes => { output = (output + bytes).slice(-12000) })
@@ -191,6 +190,10 @@ try {
   await send(page, 'queued while busy')
   await page.waitForSelector('[data-queued-preview="true"]')
   assert.equal((await browserHistory(page, id)).queueLength, 1)
+  // Main queues the input before it answers the send, so queueLength 1 does not mean the page has seen the
+  // answer. Until it has, the composer still holds the sent text, and a reload restores that text as a draft,
+  // which replaces the Stop button with Send. An idle-text composer on a running session shows Stop.
+  await page.waitForSelector('button[aria-label="Stop session"]')
   await page.reload({ waitUntil: 'load' }); await waitForWebUiReady(page)
   await timeline(page, 'Waiting to stop')
   await page.waitForSelector('[data-queued-preview="true"]')

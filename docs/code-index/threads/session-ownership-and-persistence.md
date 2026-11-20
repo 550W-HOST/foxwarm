@@ -10,7 +10,7 @@ HTTP/WebUI or command ingress
   -> exact SessionEntry + SessionSaveLane
   -> PersistentSessionAuthorityStore
   -> Archive SQLite (when canonical history/compaction data is appended)
-  -> LinuxAtomicJsonFile (active Session JSON authority)
+  -> AtomicJsonFile (active Session JSON authority)
   -> SessionCatalog.PublishAuthority (Main-owned projection)
   -> SessionRuntime/WebUI queries and restart hydration
 ```
@@ -34,6 +34,8 @@ If the authority file is missing while Archive rows exist, `PersistentSessionAut
 
 [Save-lane core](../units/session-save-lane-core.md) appends every operation to one tail. A failed best-effort operation is swallowed and recorded; it does not poison later strict work. Identity mutations, display/settings changes, memory snapshots, canonical history append, compaction, queue admission, wait transitions, fork/clear, and retry notices enter this lane or an operation that is explicitly nested in it. A retired lane rejects new work after draining its predecessor.
 
+Every lane commit that stages new or replaced history rows (canonical append, retry notice, compaction, pruning) passes them through `RedactStagedHistory` before persistence and publication, and queue admission masks admitted input; see [secret masking](./secret-references-and-redaction.md#redaction-points).
+
 The turn path claims `SessionEntry.TryClaimProcessor`, marks busy, prepares canonical messages, and calls `CommitCanonicalAppendAsync`. Queue admission uses `SessionSaveLane.AdmitAsync`; ordinary input uses the best-effort path that updates hot queue state before attempting persistence, so an accepted HTTP admission is not a durable-completion receipt. Strict inter-Session/wait events use the strict admission path and publish after the store result; `AdmitTimerAsync` is explicitly timer-marked `SaveKind.BestEffort` and follows the hot-first path. Passive queue entries remain durable candidates but do not trigger a processor.
 
 Stop/dequeue has an intentional immediate path: `SessionControl.StopAsync` reaches `SessionEntry.BeginStop`, records stopping state, and cancels the current CTS before the save tail completes. Later finalization persists the result and must not let an older snapshot overwrite the stop/queue outcome. Dequeue and safe-point finalization still use the owner/save-lane ordering; stop is not reduced to an in-memory-only flag or falsely described as waiting for persistence before taking effect.
@@ -44,7 +46,7 @@ Stop/dequeue has an intentional immediate path: `SessionControl.StopAsync` reach
 
 1. `SessionSaveLane.CommitCanonicalAppendAsync` prepares the next history snapshot and the exact appended message rows while holding the lane order.
 2. `PersistentSessionAuthorityStore.CommitCanonicalAppendAsync` validates the bound snapshot, calls `SqliteArchiveMessageStore.WriteMessages`, and retains the exact list of rows newly inserted by this operation.
-3. It streams and syncs the complete temporary authority file while Archive persistence is pending, then awaits the accepted Archive receipt before publishing through `LinuxAtomicJsonFile`'s atomic rename.
+3. It streams and syncs the complete temporary authority file while Archive persistence is pending, then awaits the accepted Archive receipt before publishing through `AtomicJsonFile`'s atomic rename.
 4. A failure before rename rolls back only those newly inserted Archive rows. An exact replay row is not deleted, and a conflicting immutable row fails closed.
 5. A failure after rename is `AuthorityCommittedException`: the JSON authority is committed, hot state is published, and callers must treat the operation as committed even if directory sync or catalog projection failed.
 6. A catalog projection failure is also reported after JSON commit. The owner keeps the newer semantic snapshot and the catalog remains an older projection until a later strict save republishes it.
@@ -82,7 +84,7 @@ Identity move and Archive reservation code use [Archive identity](../units/archi
 
 ## Current boundary
 
-The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on owning saves, request-local task context, and compaction progress checkpoint calls. Request context is model-request-only and does not append history or wake a Session. Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.
+The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on owning saves, persisted Task reminder rows, and compaction progress checkpoint calls. A due reminder is appended through the canonical append path immediately before the normal request that consumes it and does not enqueue work or wake a Session ([D-tasks-reminder-history](../units/src-session-task-context.md#d-tasks-reminder-history)). Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.
 
 ## External Node placement
 

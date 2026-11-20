@@ -1,4 +1,5 @@
 import { parseFoxwarmMetadataLine, type Message, type FunctionCall } from './chatShared'
+import { ctlAsUnified } from '../ctlCall'
 
 export interface SessionCommunication {
   key: string
@@ -19,8 +20,9 @@ export function receivedSessionCommunication(message: Message): SessionCommunica
   return { key: 'received', direction: 'received', peerSessionId: opening.attrs.sourceSessionId.trim(), message: body }
 }
 
-function sendArguments(call: FunctionCall) {
-  if (call.argsParseError) return null
+function sendArguments(original: FunctionCall) {
+  if (original.argsParseError) return null
+  const call = ctlAsUnified(original)
   if (call.name === 'send_to_session' || call.name === 'functions.send_to_session') return call.args
   if (call.name === 'call_tool' && (call.args?.toolId === 'builtin:send_to_session' || call.args?.source === 'builtin' && call.args.name === 'send_to_session')) return call.args.args
   return null

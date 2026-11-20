@@ -91,7 +91,7 @@ internal sealed class McpInboundNodes(
                 };
                 if (
                     tool["parameters"] is JsonObject schema
-                    && Encoding.UTF8.GetByteCount(schema.ToJsonString()) <= 16 * 1024
+                    && Encoding.UTF8.GetByteCount(schema.ToJsonText()) <= 16 * 1024
                 )
                 {
                     var copy = (JsonObject)schema.DeepClone();

@@ -8,7 +8,11 @@ internal sealed partial class SessionToolExecutor(
     SessionOwner hosted,
     SessionManager sessions,
     ToolRegistry registry,
-    bool unattended = false
+    bool unattended = false,
+    // What started an unattended dispatcher, as approval requests name it: timer or webhook.
+    string unattendedOrigin = "timer",
+    // The timer or webhook ID, for the activity record of an unattended run.
+    string? unattendedOriginId = null
 ) : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
@@ -23,7 +27,11 @@ internal sealed partial class SessionToolExecutor(
 
     internal ClaudeRuntimeRun? ExternalRun { get; set; }
 
-    internal async Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token)
+    internal async Task AuthorizeAsync(
+        ResolvedTool resolved,
+        CancellationToken token,
+        JsonObject? target = null
+    )
     {
         void RequireRuntime()
         {
@@ -40,18 +48,227 @@ internal sealed partial class SessionToolExecutor(
             }
         }
         RequireRuntime();
-        await sessions.AuthorizeToolAsync(
-            hosted,
-            resolved,
+        if (IsCtlFrontEnd(resolved))
+            return;
+        var files =
             resolved.Name is "run_script" or "start_toolscript_run"
-                    ? invocation.Value?.ScriptSource?.Files ?? Files
-                : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
-                    ? ArtifactFiles(resolved.ExecutionNode)
-                : resolved.Name == "exec" ? ExecFiles
-                : Files,
-            token
-        );
+                ? invocation.Value?.ScriptSource?.Files ?? Files
+            : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
+                ? ArtifactFiles(resolved.ExecutionNode)
+            : resolved.Name == "exec" ? ExecFiles
+            : Files;
+        // This is the dispatch gate of the invocation's own call: only here may an ask outcome
+        // become an approval request, for the call's inputs (stage A) and then for its whole
+        // plan (stage B). Every later check inside the invocation passes an ask only for a
+        // request a grant lists, and otherwise fails closed.
+        var gate =
+            ToolApprovalScope.Current is { } scope && ReferenceEquals(scope.Owner, hosted)
+                ? scope
+                : null;
+        if (gate is not null)
+            gate.Primary = resolved;
+        while (true)
+            try
+            {
+                await sessions.AuthorizeCallAsync(
+                    hosted,
+                    resolved,
+                    files,
+                    ExecutionNode,
+                    token,
+                    observe: assessment =>
+                    {
+                        if (target is not null)
+                            target["rules"] = RuleRecord(assessment);
+                    }
+                );
+                break;
+            }
+            // Each stage is requested once, inputs before the call. An ask the re-check after an
+            // approval finds in that stage or an earlier one is a changed request, which fails
+            // closed rather than asking again.
+            catch (ToolApprovalRequiredException required)
+                when (gate is not null && !gate.Grants.Any(grant => grant.Stage >= required.Stage))
+            {
+                var pending = await sessions.BeginToolApprovalAsync(
+                    hosted,
+                    required,
+                    ApprovalOrigin(),
+                    unattended,
+                    ApprovalWorkingDirectory(resolved)
+                );
+                var record = await AwaitApprovalAsync(pending, token);
+                if (invocation.Value is { } current)
+                    current.Approval = SessionManager.ApprovalMeta(record);
+                gate.Add(SessionManager.ApprovalOutcome(pending, record));
+            }
+            catch (ToolApprovalRequiredException required) when (gate is not null)
+            {
+                throw required.ChangedAfterApproval();
+            }
         RequireRuntime();
+    }
+
+    // Audit evidence of what a call resolved to. Display data, never routing or policy authority.
+    // The action and argument summary let the activity index read a tool row on its own.
+    internal JsonObject TargetRecord(ResolvedTool resolved) =>
+        TargetRecord(resolved, ActivitySummary(sessions, resolved.Name, resolved.Args, hosted.Id));
+
+    internal static JsonObject TargetRecord(ResolvedTool resolved, string? summary)
+    {
+        var target = new JsonObject
+        {
+            ["source"] = resolved.Source,
+            ["name"] = resolved.Name,
+            ["node"] = resolved.ExecutionNode,
+        };
+        if (resolved.Server is not null)
+            target["server"] = resolved.Server;
+        if (resolved.InvocationName != resolved.Name)
+            target["invocationName"] = resolved.InvocationName;
+        if (
+            SessionWait.Text(resolved.Args["action"]) is { Length: > 0 and <= 40 } action
+            && !action.Contains('\n')
+        )
+            target["action"] = action;
+        if (summary is not null)
+            target["summary"] = summary;
+        return target;
+    }
+
+    /// <summary>Argument preview for activity records, masked before it is shortened.</summary>
+    internal static string ActivitySummary(
+        SessionManager sessions,
+        string name,
+        JsonObject args,
+        string? sessionId
+    ) => ToolArgsPreview(name, sessions.RedactActivity(args, sessionId));
+
+    // The deciding rule of each generic policy layer, named as approval records name them.
+    internal static JsonArray RuleRecord(AuthorizationAssessment assessment) =>
+        new(
+            assessment
+                .Layers.Select(layer =>
+                    (JsonNode?)
+                        new JsonObject
+                        {
+                            ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+                            ["id"] =
+                                SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction",
+                            ["effect"] = AuthorizationDecision.Name(layer.Decision.Effect),
+                        }
+                )
+                .ToArray()
+        );
+
+    // Where an exec command runs, so an approver can judge relative commands. Master resolves
+    // the directory as the launch will; another Node receives the declared or Session cwd, and
+    // null leaves its own default.
+    private string? ApprovalWorkingDirectory(ResolvedTool resolved)
+    {
+        if (resolved is not { Source: "node", Name: "exec" })
+            return null;
+        var declared = SessionWait.Text(resolved.Args["cwd"]);
+        if (resolved.ExecutionNode == "master")
+            try
+            {
+                return ExecFiles.Paths.ExecCwd(declared);
+            }
+            catch (ArgumentException)
+            {
+                return declared;
+            }
+        return declared ?? (ExecutionNode == resolved.ExecutionNode ? ExecutionCwd : null);
+    }
+
+    private ToolApprovalOrigin ApprovalOrigin() =>
+        new(
+            unattended ? unattendedOrigin
+                : Programmatic ? "script"
+                : ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
+                    ? "runtime"
+                : "turn",
+            invocation.Value?.CallId,
+            scriptScope.Value?.RunId
+        );
+
+    // While a foreground call waits, the Session's runtime state names the pending approval.
+    // Approval wait time does not count toward a ToolScript slice limit.
+    private async Task<JsonObject> AwaitApprovalAsync(
+        PendingToolApproval pending,
+        CancellationToken token
+    )
+    {
+        object? lease = null;
+        if (!Programmatic && !unattended)
+        {
+            var details = ToolRuntime(pending.Resolved);
+            details["approval"] = new JsonObject { ["id"] = pending.Id, ["status"] = "pending" };
+            lease = hosted.BeginTool(details, callActivity: false);
+        }
+        var started = ToolApprovalWaitMeter.Start();
+        try
+        {
+            return await sessions.AwaitToolApprovalAsync(hosted, pending, token);
+        }
+        finally
+        {
+            ToolApprovalWaitMeter.Stop(started);
+            if (lease is not null)
+                hosted.EndTool(lease);
+        }
+    }
+
+    /// <summary>
+    /// Waits for every approval requested while preparing a parallel exec segment, so no member
+    /// starts before all decisions. Approved members carry their grant into execution.
+    /// </summary>
+    internal async Task SettleApprovalsAsync(
+        TurnToolPreparation?[] preparations,
+        CancellationToken token
+    )
+    {
+        async Task<TurnToolPreparation?> Settle(TurnToolPreparation? prepared)
+        {
+            if (prepared?.Pending is not { } pending)
+                return prepared;
+            try
+            {
+                var record = await AwaitApprovalAsync(pending, token);
+                var meta = SessionManager.ApprovalMeta(record);
+                try
+                {
+                    return new(
+                        null,
+                        Grant: SessionManager.ApprovalOutcome(pending, record),
+                        Approval: meta
+                    );
+                }
+                catch (ToolAuthorizationDeniedException error)
+                {
+                    return new(error.ToolError(), Approval: meta);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return new(
+                    ToolFailure.Result("Tool call canceled before execution.", "tool_call_cancelled")
+                );
+            }
+            catch (Exception error)
+                when (error is InvalidOperationException or IOException or InvalidDataException)
+            {
+                return new(ToolFailure.Result(error.Message));
+            }
+        }
+        var settled = await Task.WhenAll(preparations.Select(Settle));
+        for (var index = 0; index < settled.Length; index++)
+            preparations[index] = settled[index] is { } value
+                ? value with
+                {
+                    Target = preparations[index]?.Target,
+                }
+                : null;
     }
 
     private readonly List<string> explicitWaitIds = [];
@@ -162,6 +379,7 @@ internal sealed partial class SessionToolExecutor(
         CancellationToken token
     )
     {
+        JsonObject? target = null;
         try
         {
             var args =
@@ -173,33 +391,44 @@ internal sealed partial class SessionToolExecutor(
                 execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted),
                 token
             );
-            await AuthorizeAsync(resolved, token);
-            return null;
+            target = TargetRecord(resolved);
+            try
+            {
+                await AuthorizeAsync(resolved, token, target);
+                return null;
+            }
+            catch (ToolApprovalRequiredException required)
+            {
+                // Requested now, decided together before any member of the segment starts.
+                return new(
+                    null,
+                    Pending: await sessions.BeginToolApprovalAsync(
+                        hosted,
+                        required,
+                        new("turn", SessionWait.Text(call["id"]), null),
+                        unattended,
+                        ApprovalWorkingDirectory(resolved)
+                    ),
+                    Target: target
+                );
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_cancelled",
-                    "Tool call canceled before execution."
-                )
+                ToolFailure.Result("Tool call canceled before execution.", "tool_call_cancelled")
             );
         }
         catch (ToolAuthorizationUnavailableException error)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    ToolAuthorizationUnavailableException.Code,
-                    error.Message
-                ),
+                ToolFailure.Result(error.Message, ToolAuthorizationUnavailableException.Code),
                 true
             );
         }
         catch (ToolAuthorizationDeniedException error)
         {
-            return new(
-                UnsupportedTurnToolExecutor.ToolError("tool_authorization_denied", error.Message)
-            );
+            return new(error.ToolError(), Target: target);
         }
         catch (Exception error)
             when (error
@@ -210,15 +439,50 @@ internal sealed partial class SessionToolExecutor(
                         or NotSupportedException
             )
         {
-            return new(UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message));
+            return new(
+                ToolFailure.Result(error.Message),
+                Target: target
+            );
         }
     }
+
+    // An approved call that ends without dispatch did not run: its record must not stay approved.
+    private Task<JsonObject?> AbandonApprovalAsync(
+        ToolApprovalGrant grant,
+        CancellationToken token
+    ) =>
+        sessions.AbandonApprovedToolAsync(
+            hosted,
+            grant.ApprovalId,
+            !token.IsCancellationRequested ? "notStarted"
+                : hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
+                    ? "shutdown"
+                : "stop"
+        );
+
+    /// <summary>Settles a prepared approval whose exec segment member is skipped before start.</summary>
+    internal async Task<TurnToolExecution> SkippedPrepared(
+        TurnToolExecution skipped,
+        TurnToolPreparation? prepared,
+        CancellationToken token
+    ) =>
+        prepared?.Grant is { } grant
+            ? skipped with
+            {
+                Approval = await AbandonApprovalAsync(grant, token) ?? prepared.Approval,
+                Target = prepared.Target,
+            }
+            : skipped;
 
     internal TurnToolExecution PreparedFailure(TurnToolPreparation prepared)
     {
         if (prepared.PolicyUnavailable)
             Interlocked.Exchange(ref policyUnavailable, 1);
-        return new((JsonObject)prepared.Response.DeepClone());
+        return new(
+            (JsonObject)prepared.Response!.DeepClone(),
+            Approval: (JsonObject?)prepared.Approval?.DeepClone(),
+            Target: (JsonObject?)prepared.Target?.DeepClone()
+        );
     }
 
     internal async Task<TurnToolExecution> ExecuteAttributedAsync(
@@ -226,7 +490,9 @@ internal sealed partial class SessionToolExecutor(
         CancellationToken token,
         int? index = null,
         int? total = null,
-        string? scriptDelivery = null
+        string? scriptDelivery = null,
+        TurnToolPreparation? approved = null,
+        string? command = null
     )
     {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
@@ -246,11 +512,31 @@ internal sealed partial class SessionToolExecutor(
             // Only a model batch call has a committed anchor; a script subcall inherits its parent's ID.
             AnchorSeq = index is null ? null : foregroundBatch,
             InheritedDelivery = scriptDelivery,
+            Approval = (JsonObject?)approved?.Approval?.DeepClone(),
+            Command = command,
         };
         invocation.Value = current;
+        // Each invocation gets its own approval scope; nested calls never inherit a grant.
+        var scope = new ToolApprovalScope(hosted);
+        if (approved?.Grant is { } prepared)
+            scope.Add(prepared);
+        using var approvalScope = ToolApprovalScope.Enter(scope);
         try
         {
-            var response = await ExecuteCoreAsync(call, token);
+            JsonNode? response;
+            try
+            {
+                response = await ExecuteCoreAsync(call, token);
+            }
+            catch when (scope is { Grant: not null, Dispatched: false })
+            {
+                foreach (var grant in scope.Grants)
+                    await AbandonApprovalAsync(grant, token);
+                throw;
+            }
+            if (scope is { Grant: not null, Dispatched: false })
+                foreach (var grant in scope.Grants)
+                    current.Approval = await AbandonApprovalAsync(grant, token) ?? current.Approval;
             if (!unattended && !Programmatic && current.Receipt is not null)
                 turnReceipts.Add(current.Receipt);
             return new(
@@ -262,7 +548,9 @@ internal sealed partial class SessionToolExecutor(
                 current.Receipt,
                 current.SessionMessages,
                 current.DeferredCwdNode,
-                current.ExecPlacement
+                current.ExecPlacement,
+                current.Approval,
+                current.Target
             );
         }
         finally
@@ -393,10 +681,13 @@ internal sealed partial class SessionToolExecutor(
         var raw = SessionWait.Text(call["argsParseError"]) is { Length: > 0 }
             ? SessionWait.Text(call["rawArgsText"])
             : null;
-        sessions.BroadcastTransientText(
-            hosted,
-            $"🛠 *[{name}]*: `{ToolArgsPreview(name, call["args"] as JsonObject ?? new JsonObject(), raw)}`"
-        );
+        var args = call["args"] as JsonObject ?? new JsonObject();
+        // ctl and call_tool calls are named like their timeline tag (a ctl command's path) and
+        // previewed with the arguments of the capability they resolve to.
+        var label = raw is null ? ToolActivity.ProgressName(name, args) : name;
+        if (raw is null)
+            (name, args) = ToolActivity.Target(name, args);
+        sessions.BroadcastTransientText(hosted, $"🛠 *[{label}]*: `{ToolArgsPreview(name, args, raw)}`");
     }
 
     internal static string ToolArgsPreview(string name, JsonObject args, string? rawArgsText = null)
@@ -408,24 +699,24 @@ internal sealed partial class SessionToolExecutor(
             ?? (
                 name switch
                 {
-                    "exec" or "run_script" or "call_tool" => ToolActivity.Summary(name, args),
+                    "exec" or "run_script" or "call_tool" or "ctl" => ToolActivity.Summary(
+                        name,
+                        args
+                    ),
                     "edit" when args.ContainsKey("apply_patch") => Text(args["apply_patch"]),
                     "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
                         args["filePath"]
                     ),
                     "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
+                    // Never the value: it is not a known secret until the call has stored it.
+                    "add_secret" => Text(args["name"]),
                     "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "")
                         + (
                             SessionWait.Number(args["startLine"]) is > 0
                                 ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
                                 : ""
                         ),
-                    _ => args.Count == 1
-                        ? Text(args.First().Value)
-                        : string.Join(
-                            '\n',
-                            args.Select(pair => pair.Key + ": " + Text(pair.Value))
-                        ),
+                    _ => ToolResponseFormatting.FormatArguments(args, singleLine: true),
                 }
             );
         return preview.Length > 200 ? preview[..197] + "..." : preview;
@@ -446,13 +737,10 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 functionCall["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
+            // call_tool is ToolScript's host function, not a model tool.
+            if (name == "call_tool" && !Programmatic)
+                throw new InvalidDataException(ToolRegistry.UnknownTool("call_tool"));
             var compactCall = CompactSubmissionCall(functionCall);
-            if (compactCall?["argsParseError"] is not null && name == "call_tool")
-            {
-                args = (JsonObject)args.DeepClone();
-                args.Remove("argsJson");
-                args["args"] = new JsonObject();
-            }
             if (invocation.Value is { } compactInvocation)
                 compactInvocation.CompactCall = compactCall;
             var resolved = await registry.ResolveAsync(
@@ -461,6 +749,16 @@ internal sealed partial class SessionToolExecutor(
                 ExecutionNode,
                 cancellationToken
             );
+            // A ToolScript ctl command runs as its concrete capability; it keeps the command
+            // it came from for display and denial attribution.
+            if (
+                name == "call_tool"
+                && resolved.Command is null
+                && invocation.Value?.Command is { } command
+            )
+                resolved = resolved with { Command = command };
+            if (invocation.Value is { } targeted)
+                targeted.Target = TargetRecord(resolved);
             if (
                 resolved.Name is "run_script" or "start_toolscript_run"
                 && invocation.Value is { } scriptCall
@@ -501,7 +799,9 @@ internal sealed partial class SessionToolExecutor(
                     files.ResolvedPaths = paths =>
                         invocation.Value!.ResolvedPaths = (JsonArray)paths.DeepClone();
                 }
-                await AuthorizeAsync(resolved, cancellationToken);
+                if (invocation.Value is { } authorized)
+                    authorized.Resolved = resolved;
+                await AuthorizeAsync(resolved, cancellationToken, invocation.Value?.Target);
                 if (identity == hosted.Id)
                     break;
             }
@@ -510,13 +810,28 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Registry.Runner.AssertCanContinue();
             BroadcastVerboseToolStart(functionCall);
             dispatched = true;
+            if (ToolApprovalScope.Current is { } approvalScope)
+                approvalScope.Dispatched = true;
             var runtimeLease =
                 Programmatic || unattended ? null : hosted.BeginTool(ToolRuntime(resolved));
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                return await registry.ExecuteAsync(resolved, this, cancellationToken);
+                var result = await registry.ExecuteAsync(resolved, this, cancellationToken);
+                // The approver's note reaches the model beside the result; native ToolScript
+                // values are never altered.
+                if (
+                    !Programmatic
+                    && ToolApprovalScope.Current?.Grants is { } grants
+                    && string.Join(
+                        "\n",
+                        grants.Select(grant => grant.Note).OfType<string>()
+                    ) is { Length: > 0 } note
+                    && result is JsonObject value
+                )
+                    value["approvalNote"] = note;
+                return result;
             }
             finally
             {
@@ -525,9 +840,9 @@ internal sealed partial class SessionToolExecutor(
                     {
                         ["startedAt"] = startedAt,
                         ["completedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        ["durationMs"] = System
-                            .Diagnostics.Stopwatch.GetElapsedTime(monotonic)
-                            .TotalMilliseconds,
+                        ["durationMs"] = Foxwarm.ToolScript.MainToolScript.WholeMilliseconds(
+                            System.Diagnostics.Stopwatch.GetElapsedTime(monotonic)
+                        ),
                     };
                 if (runtimeLease is not null)
                     hosted.EndTool(runtimeLease);
@@ -535,36 +850,30 @@ internal sealed partial class SessionToolExecutor(
         }
         catch (TaskError error)
         {
-            return UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
+            return ToolFailure.Result(error.Message, error.Code);
         }
         catch (ToolAuthorizationUnavailableException error)
         {
             Interlocked.Exchange(ref policyUnavailable, 1);
-            return UnsupportedTurnToolExecutor.ToolError(
-                ToolAuthorizationUnavailableException.Code,
-                error.Message
-            );
+            return ToolFailure.Result(error.Message, ToolAuthorizationUnavailableException.Code);
         }
         catch (ToolAuthorizationDeniedException error)
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError(
-                "tool_authorization_denied",
-                error.Message
-            );
+            return error.ToolError();
         }
         catch (ArgumentException error)
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("invalid_path", error.Message);
+            return ToolFailure.Result(error.Message);
         }
         catch (UnauthorizedAccessException error)
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
         catch (OperationCanceledException error)
             when (cancellationToken.IsCancellationRequested || error is SessionTurnShutdownException
@@ -574,11 +883,11 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
                     ? "process shutdown"
                     : hosted.Entry.ToolCancellationSource;
-            return UnsupportedTurnToolExecutor.ToolError(
-                "tool_call_cancelled",
+            return ToolFailure.Result(
                 dispatched
                     ? $"Tool request canceled by {source} after dispatch. Started effects may have occurred and were not reversed."
-                    : $"Tool call was not started because {source} cancelled it; it was not executed."
+                    : $"Tool call was not started because {source} cancelled it; it was not executed.",
+                "tool_call_cancelled"
             );
         }
         catch (Exception error)
@@ -594,7 +903,7 @@ internal sealed partial class SessionToolExecutor(
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -677,7 +986,11 @@ internal sealed partial class SessionToolExecutor(
         CancellationToken token
     )
     {
-        var backend = await registry.Providers!.AdmitExecAsync(resolved.ExecutionNode, token);
+        var backend = await registry.Providers!.AdmitExecAsync(
+            resolved.ExecutionNode,
+            token,
+            environment: resolved.Args.ContainsKey("secretEnv")
+        );
         string? observed = null;
         var response = await hosted.Executor.ExecuteAsync(
             hosted.Id,
@@ -739,7 +1052,7 @@ internal sealed partial class SessionToolExecutor(
         {
             return execution with
             {
-                Response = UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message),
+                Response = ToolFailure.Result(error.Message),
                 DeferredCwd = null,
                 DeferredCwdNode = null,
                 ResolvedPaths = null,
@@ -828,9 +1141,9 @@ internal sealed partial class SessionToolExecutor(
         if (
             response.Remove("__waitTarget", out var target) && SessionWait.Text(target) is string id
         )
-            if (!unattended)
+            if (!unattended && !ScriptDetached)
                 handoffTargets.Add(id);
-        if (finish && !unattended)
+        if (finish && !unattended && !ScriptDetached)
             Interlocked.Exchange(ref finishPending, 1);
         return response;
     }
@@ -855,7 +1168,7 @@ internal sealed partial class SessionToolExecutor(
         {
             if (error is CommittedWaitDeclarationException committed)
                 explicitWaitIds.Add(committed.WaitId);
-            return UnsupportedTurnToolExecutor.ToolError("wait_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -890,34 +1203,40 @@ internal sealed partial class SessionToolExecutor(
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException or IOException)
         {
-            return UnsupportedTurnToolExecutor.ToolError("ask_user_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
-    // Source behavior: broad MCP discovery for an isolated Agent connects only to
-    // servers named by its exact MCP allow rules; null means all enabled servers.
-    private static string[]? IsolatedMcpServers(SessionManager manager, string agent)
+    // One caller snapshot for every server of a single broad search.
+    private static Func<string, bool> BroadMcpServerVisible(
+        SessionManager manager,
+        SessionOwner owner
+    )
     {
-        try
-        {
-            var isolation = manager.Isolation(agent);
-            return !isolation.Isolated
-                ? null
-                : isolation
-                    .Rules.OfType<JsonObject>()
-                    .Where(rule =>
-                        SessionWait.Text(rule["effect"]) == "allow"
-                        && SessionWait.Text(rule["source"]) == "mcp"
-                    )
-                    .Select(rule => SessionWait.Text(rule["server"])!)
-                    .Distinct(StringComparer.Ordinal)
-                    .ToArray();
-        }
-        catch (InvalidDataException)
-        {
-            return [];
-        }
+        SessionManager.ToolVisibilityContext? context = null;
+        return server => manager.McpServerVisible(context ??= manager.VisibilityFor(owner), server);
     }
+
+    // The default model declarations: frequent tools stay native, everything else is reached
+    // through ctl. generate_image is added per request by its own policy.
+    internal static readonly IReadOnlySet<string> DefaultBuiltins = new HashSet<string>(
+        StringComparer.Ordinal
+    )
+    {
+        "read",
+        "write",
+        "edit",
+        "exec",
+        "run_script",
+        "continue_script",
+        "wait",
+        "ask_user",
+        "send_to_session",
+        "create_child_session",
+        "task",
+        "submit_compact_plan",
+        "ctl",
+    };
 
     internal static ToolRegistry CreateRegistry(
         JsonArray definitions,
@@ -937,7 +1256,13 @@ internal sealed partial class SessionToolExecutor(
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["artifact"] = (owner, args, token) => owner.ExecuteArtifactAsync(args, token);
         handlers["recall"] = (owner, args, token) =>
-            ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token, owner.Programmatic);
+            ArchiveRecallTool.ExecuteAsync(
+                owner.Manager,
+                owner.Hosted,
+                args,
+                token,
+                owner.Programmatic
+            );
         handlers["get_archived_messages"] = (owner, args, token) =>
             ArchiveControlTools.ReadMessagesAsync(owner.Manager, owner.Hosted, args, token);
         handlers["get_archived_blocks"] = (owner, args, token) =>
@@ -955,7 +1280,6 @@ internal sealed partial class SessionToolExecutor(
                 "move_session",
                 "delete_session",
                 "create_agent",
-                "set_agent_isolated",
                 "create_session",
                 "create_child_session",
                 "send_to_session",
@@ -965,6 +1289,7 @@ internal sealed partial class SessionToolExecutor(
                 "set_agent_rules",
                 "session",
                 "view_session",
+                "set_session_model",
                 "set_session_child_model",
                 "set_session_compact_threshold",
                 "compact_session",
@@ -990,7 +1315,19 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 owner.Manager.ExecuteTimerToolAsync(owner.Hosted, name, args, token);
         handlers["copy_between_nodes"] = (owner, args, token) =>
-            owner.Manager.CopyBetweenNodesAsync(owner.Hosted, args, token);
+            owner.Manager.CopyBetweenNodesAsync(
+                owner.Hosted,
+                args,
+                token,
+                owner.ExecutionNode,
+                owner.ExecutionCwd
+            );
+        handlers["exec_list"] = (owner, args, token) =>
+            owner.Manager.ListExecsToolAsync(owner.Hosted, args, token);
+        handlers["exec_stop"] = (owner, args, token) =>
+            owner.Manager.StopExecToolAsync(owner.Hosted, args, token);
+        handlers["cancel_transfer"] = (owner, args, token) =>
+            owner.Manager.CancelCopyTransferAsync(owner.Hosted, args, token);
         handlers["send_file"] = (owner, args, token) =>
             owner.Manager.SendFileAsync(
                 owner.Hosted,
@@ -998,7 +1335,8 @@ internal sealed partial class SessionToolExecutor(
                     ?? throw new NotSupportedException("This executor has no file resolver."),
                 args,
                 token,
-                owner.ExecutionNode
+                owner.ExecutionNode,
+                owner.ExecutionCwd
             );
         handlers["image_write_to_file"] = (owner, args, token) =>
             owner.Manager.ExportImageAsync(
@@ -1007,8 +1345,11 @@ internal sealed partial class SessionToolExecutor(
                     ?? throw new NotSupportedException("This executor has no file resolver."),
                 args,
                 token,
-                owner.ExecutionNode
+                owner.ExecutionNode,
+                owner.ExecutionCwd
             );
+        handlers["generate_image"] = (owner, args, token) =>
+            owner.Manager.GenerateImageAsync(owner.Hosted, args, token);
         handlers["image_crop"] = (owner, args, token) =>
             owner.Manager.CropImageAsync(owner.Hosted, args, token);
         foreach (
@@ -1024,11 +1365,41 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 MemoryTools.ExecuteAsync(owner.Hosted, owner.Manager, name, args, token);
         handlers["list_agents"] = (owner, _, _) =>
-            Task.FromResult(new JsonObject { ["output"] = owner.Manager.ListAgentsText() });
+            Task.FromResult(owner.Manager.ListAgents(owner.Hosted));
         handlers["set_config"] = (owner, args, token) =>
             owner.Manager.InstallConfigAsync(
                 owner.Hosted,
                 owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
+                args,
+                token
+            );
+        handlers["add_secret"] = (owner, args, token) =>
+            owner.Manager.AddSecretAsync(
+                owner.Hosted,
+                owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
+                owner.ExecutionNode,
+                owner.ExecutionCwd,
+                args,
+                // Deleting the source file is an ordinary edit on that Node.
+                async (path, current) =>
+                    _ = await registry.ExecuteAsync(
+                        new(
+                            "edit",
+                            "node",
+                            "edit",
+                            SessionManager.DeletePatch(path),
+                            ExecutionNode: owner.ExecutionNode
+                        ),
+                        owner,
+                        current
+                    ),
+                token
+            );
+        handlers["list_secrets"] = (owner, args, token) =>
+            owner.Manager.ListSecretsAsync(
+                owner.Hosted,
+                owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
+                owner.ExecutionNode,
                 args,
                 token
             );
@@ -1040,41 +1411,35 @@ internal sealed partial class SessionToolExecutor(
                 token
             );
         handlers["node"] = (owner, args, token) =>
-            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token, owner.Programmatic);
+            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
         handlers["node_create_auth_token"] = (owner, args, token) =>
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
         handlers["node_remove"] = (owner, args, token) =>
             owner.Manager.RemoveNodeAsync(owner.Hosted, args, token);
-        handlers["node_bootstrap_info"] = (owner, args, _) =>
-            Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
+        handlers["node_bootstrap_info"] = (owner, args, token) =>
+            owner.Manager.NodeBootstrapInfoAsync(args, token);
         handlers["node_pair_list"] = (owner, args, _) =>
             Task.FromResult(owner.Manager.NodePairList(args));
         handlers["node_pair_approve"] = (owner, args, _) =>
             owner.Manager.NodePairApproveAsync(args, owner.Hosted);
-        handlers["search_tools"] = (owner, args, token) =>
-            UnifiedTools.SearchAsync(
-                registry,
-                args,
-                token,
-                (source, name, server) =>
-                    owner.Manager.ToolVisible(
-                        owner.Hosted,
-                        source,
-                        name,
-                        source == "mcp" ? server : null,
-                        node: source == "node" ? server : null
-                    ),
-                owner.ScriptBudget,
-                owner.Hosted,
-                IsolatedMcpServers(owner.Manager, owner.Hosted.Agent)
-            );
-        handlers["call_tool"] = (_, _, _) =>
-            throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
+        handlers["ctl"] = (owner, args, token) => owner.ExecuteCtlAsync(args, token);
         handlers["mcp_notifications"] = (owner, args, token) =>
             owner.Manager.ManageMcpNotificationsAsync(owner.Hosted, args, token);
         handlers["send_to_channel"] = (owner, args, token) =>
             owner.Manager.SendToChannelAsync(owner.Hosted, args, token);
-        handlers["mcp_config"] = (_, args, token) => mcp.ConfigureAsync(args, token);
+        handlers["mcp_config"] = (owner, args, token) =>
+            mcp.ConfigureAsync(
+                args,
+                token,
+                (secrets, current) =>
+                    owner.Manager.AuthorizeToolAsync(
+                        owner.Hosted,
+                        new("mcp_config", "builtin", "mcp_config", args),
+                        owner.Files,
+                        current,
+                        secrets: secrets
+                    )
+            );
         handlers["list_mcp_servers"] = (_, args, token) =>
         {
             ToolRegistry.Keys(args, []);
@@ -1084,55 +1449,26 @@ internal sealed partial class SessionToolExecutor(
         {
             var name = SessionWait.Text(definition["name"])!;
             var source = name is "read" or "write" or "edit" or "exec" ? "node" : "builtin";
-            registry.Register(
-                definition,
-                source,
-                name
-                    is not (
-                        "set_session_child_model"
-                        or "set_session_compact_threshold"
-                        or "refresh_session_snapshot"
-                        or "compact_session"
-                        or "create_agent"
-                        or "create_session"
-                        or "set_agent_inherit"
-                        or "set_agent_rules"
-                        or "artifact"
-                        or "mcp_config"
-                        or "mcp_notifications"
-                        or "set_agent_isolated"
-                        or "node_create_auth_token"
-                        or "node_remove"
-                        or "node_bootstrap_info"
-                        or "node_pair_list"
-                        or "node_pair_approve"
-                        or "list_mcp_servers"
-                        or "delete_session"
-                        or "set_config"
-                        or "explain_tool_authorization"
-                        or "move_session"
-                        or "create_timer"
-                        or "list_timers"
-                        or "update_timer"
-                        or "delete_timer"
-                        or "start_toolscript_run"
-                        or "list_toolscript_runs"
-                        or "get_toolscript_run"
-                        or "cancel_toolscript_run"
-                        or "get_archived_messages"
-                        or "get_archived_blocks"
-                        or "stop_session"
-                    ),
-                handlers[name]
+            registry.Register(definition, source, DefaultBuiltins.Contains(name), handlers[name]
             );
         }
-        foreach (var definition in MainBrowserDefinitions.All().OfType<JsonObject>())
-            registry.RegisterBrowser(definition);
+        var browser = new BrowserHost(BrowserHost.DefaultBundlePath());
+        foreach (var definition in MainBrowserDefinitions.All(browser).OfType<JsonObject>())
+            registry.RegisterBrowser(definition, () => browser.Describe().Available);
         return registry;
     }
 }
 
-internal sealed record TurnToolPreparation(JsonObject Response, bool PolicyUnavailable = false);
+// A failed preparation has a Response. A segment member that needed approval carries its pending
+// request until the segment settles, then its grant into execution.
+internal sealed record TurnToolPreparation(
+    JsonObject? Response,
+    bool PolicyUnavailable = false,
+    PendingToolApproval? Pending = null,
+    ToolApprovalGrant? Grant = null,
+    JsonObject? Approval = null,
+    JsonObject? Target = null
+);
 
 internal sealed record TurnToolExecution(
     JsonNode? Response,
@@ -1143,7 +1479,9 @@ internal sealed record TurnToolExecution(
     TurnToolReceipt? Receipt = null,
     JsonArray? SessionMessages = null,
     string? DeferredCwdNode = null,
-    JsonObject? ExecPlacement = null
+    JsonObject? ExecPlacement = null,
+    JsonObject? Approval = null,
+    JsonObject? Target = null
 );
 
 internal sealed record TurnToolReceipt(
@@ -1156,6 +1494,13 @@ internal sealed record ToolScriptSourcePlacement(string Node, string? Cwd, Works
 
 internal sealed class TurnToolInvocation(string callId)
 {
+    // The call this invocation runs, as the dispatch gate authorized it. A ToolScript slice's
+    // model requests are assessed as this invocation.
+    internal ResolvedTool? Resolved { get; set; }
+
+    // The ctl command a ToolScript call names, when it runs as the concrete capability.
+    internal string? Command { get; init; }
+
     internal JsonObject? CompactCall { get; set; }
     internal string CallId { get; } = callId;
     internal int? Index { get; set; }
@@ -1175,6 +1520,12 @@ internal sealed class TurnToolInvocation(string callId)
     internal TurnToolReceipt? Receipt { get; set; }
     internal JsonArray? SessionMessages { get; set; }
     internal JsonObject? ExecPlacement { get; set; }
+
+    // Presentation-only outcome of this call's approval request.
+    internal JsonObject? Approval { get; set; }
+
+    // Audit evidence: the resolved capability, its Node and the deciding policy rules.
+    internal JsonObject? Target { get; set; }
 
     internal string? DeliverySeq(bool script) =>
         InheritedDelivery ?? SessionManager.BatchDeliverySeq(AnchorSeq, Index, Total, script);

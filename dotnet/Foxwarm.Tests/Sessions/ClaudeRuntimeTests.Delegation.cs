@@ -240,7 +240,7 @@ public sealed partial class ClaudeRuntimeTests
                             ["sessionId"] = "<parent>",
                             ["message"] =
                                 "Child command completed; parent-Node command was refused.",
-                            ["afterSend"] = "continue",
+                            ["currentSessionTurnAction"] = "continue",
                         }
                     )
                 ),
@@ -255,7 +255,7 @@ public sealed partial class ClaudeRuntimeTests
                     ["sessionId"] = f.Owner.Id,
                     ["message"] =
                         "Run the assigned child-Node command, observe scope refusal and report the outcome.",
-                    ["afterSend"] = "continue",
+                    ["currentSessionTurnAction"] = "continue",
                 }
             )
         );

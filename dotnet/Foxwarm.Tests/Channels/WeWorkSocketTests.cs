@@ -174,7 +174,7 @@ public sealed class WeWorkSocketTests
             f.Manager,
             f.Router,
             peer.Dependencies,
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         await direct.StartAsync();
         await TelegramChannelTests.Until(() =>

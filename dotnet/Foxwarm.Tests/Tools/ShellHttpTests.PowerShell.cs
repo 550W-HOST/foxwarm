@@ -121,6 +121,12 @@ public sealed partial class ShellHttpTests
                 }
                 function tar {
                     $target = $args[[Array]::IndexOf($args, '-C') + 1]
+                    $archive = $args[[Array]::IndexOf($args, '-xzf') + 1]
+                    if ([IO.Path]::IsPathRooted($archive) -or [IO.Path]::IsPathRooted($target)) {
+                        throw 'Native tar requires relative archive and destination paths.'
+                    }
+                    $global:extractionProcessCwd = [IO.Directory]::GetCurrentDirectory()
+                    $global:extractionLocation = (Get-Location).Path
                     $entry = Join-Path $target 'packages/cli-node/dist/client.bundle.js'
                     New-Item -ItemType Directory -Force -Path (Split-Path $entry) | Out-Null
                     [IO.File]::WriteAllText($entry, 'fixture')
@@ -129,6 +135,9 @@ public sealed partial class ShellHttpTests
                 function node {
                     [PSCustomObject]@{
                         cwd=(Get-Location).Path
+                        processCwd=[IO.Directory]::GetCurrentDirectory()
+                        extractionProcessCwd=$global:extractionProcessCwd
+                        extractionLocation=$global:extractionLocation
                         agents=$env:FOXWARM_AGENTS_DIR
                         agent=$env:FOXWARM_AGENT_DIR
                         args=@($args)
@@ -175,6 +184,15 @@ public sealed partial class ShellHttpTests
             var result = JsonNode.Parse(await File.ReadAllTextAsync(capture))!;
             var expected = memory ? caller : scriptDir;
             Assert.Equal(expected, result["cwd"]!.GetValue<string>());
+            Assert.Equal(caller, result["processCwd"]!.GetValue<string>());
+            Assert.Equal(
+                Path.Combine(expected, "foxwarm-node"),
+                result["extractionProcessCwd"]!.GetValue<string>()
+            );
+            Assert.Equal(
+                result["extractionProcessCwd"]!.GetValue<string>(),
+                result["extractionLocation"]!.GetValue<string>()
+            );
             Assert.Equal(
                 Path.Combine(expected, "data", "agents"),
                 result["agents"]!.GetValue<string>()

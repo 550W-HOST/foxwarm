@@ -31,7 +31,13 @@ internal static class ConfiguredModelRequests
                 "Image generation requires the OpenAI Responses protocol."
             );
         var featurePurpose = purpose is "background" or "setup-test";
-        var imageDeclared = imageEnabled && !featurePurpose;
+        var imageRequest = purpose == ImageGenerationRequests.Purpose;
+        var separateImages = ImageGenerationRequests.UsesSeparateRequest(model);
+        if (imageRequest && !separateImages)
+            throw new InvalidDataException(
+                "Separate image generation is not enabled for the selected model."
+            );
+        var imageDeclared = imageEnabled && !featurePurpose && (imageRequest || !separateImages);
         if (responses)
         {
             var extra = model.Configuration["extraFields"] as JsonObject;
@@ -78,8 +84,12 @@ internal static class ConfiguredModelRequests
             }
             return node?.DeepClone();
         }
-        return defaults with
+        var options = defaults with
         {
+            TextRedaction = TextRedactionOptions.FromResolved(
+                model.Configuration["textRedaction"] as JsonObject
+            ),
+            TextRedactionOmitsOversized = purpose == "compact-plan",
             KeepReasoningOnError =
                 model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
             BaseUri = model.BaseUri,
@@ -104,10 +114,12 @@ internal static class ConfiguredModelRequests
                 && flag.TryGetValue<bool>(out var forbid)
                 && forbid,
             WebSearch = featurePurpose ? null : model.Configuration["webSearch"] as JsonObject,
-            ImageGeneration = featurePurpose
-                ? null
-                : model.Configuration["imageGeneration"] as JsonObject,
+            ImageGeneration =
+                featurePurpose || (separateImages && !imageRequest)
+                    ? null
+                    : model.Configuration["imageGeneration"] as JsonObject,
         };
+        return imageRequest ? ImageGenerationRequests.Prepare(options) : options;
     }
 
     internal static IChatService CreateService(
@@ -125,6 +137,8 @@ internal static class ConfiguredModelRequests
         );
     }
 
+    // Callers supply request-owned history, including hydrated image-part identity.
+    // The service may transform ordinary text in that copy before serialization.
     internal static IChatService CreatePreparedService(
         HttpClient http,
         ConcreteHostModel model,
@@ -135,6 +149,34 @@ internal static class ConfiguredModelRequests
         ModelRequestScope scope = ModelRequestScope.LowLevel
     )
     {
+        if (options.TextRedaction is { } redaction)
+        {
+            var redactionOptions = options;
+            if (
+                options.Tools is null
+                && model.ProviderType is "openai" or "openai-responses" or "openai-ws"
+            )
+                redactionOptions = options with
+                {
+                    Tools = ResponsesRequestSerializer.BuildToolDefinitions(),
+                };
+            return new TextRedactionChatService(
+                http,
+                redactionOptions,
+                redaction,
+                progress,
+                (prepared, restoredProgress) =>
+                    CreatePreparedService(
+                        http,
+                        model,
+                        prepared,
+                        cacheKey,
+                        restoredProgress,
+                        websockets,
+                        scope
+                    )
+            );
+        }
         if (options.Diagnostics is { } diagnostics)
         {
             var prepared = options.AttemptPrepared;
@@ -149,7 +191,10 @@ internal static class ConfiguredModelRequests
             };
         }
         IChatService service =
-            model.ProviderType == "openai-ws"
+            options.ImageGenerationOnly
+            && ImageGenerationRequests.UsesImagesApi(options.ImageGeneration)
+                ? new ImagesApiChatService(http, options)
+            : model.ProviderType == "openai-ws"
                 ? new ResponsesWsChatService(
                     options,
                     websockets ?? new ResponsesWsTransport(),
@@ -170,7 +215,15 @@ internal static class ConfiguredModelRequests
             : model.ProviderType is "openai" or "openai-responses"
                 ? new ResponsesChatService(http, options, progress)
             : model.ProviderType == "anthropic"
-                ? new AnthropicMessagesService(http, options, progress: progress)
+                ? new AnthropicMessagesService(
+                    http,
+                    options,
+                    progress: progress,
+                    allowContinuation: scope
+                        is ModelRequestScope.Canonical
+                            or ModelRequestScope.CompactPlan
+                            or ModelRequestScope.BackgroundCompactPlan
+                )
             : throw new InvalidDataException(
                 "Unsupported providerType: " + model.ProviderType + "."
             );

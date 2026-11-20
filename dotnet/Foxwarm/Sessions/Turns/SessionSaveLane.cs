@@ -281,9 +281,16 @@ public sealed partial class SessionSaveLane
     ) =>
         EnqueueOperationAsync(async () =>
         {
-            var operation = entry.WithState(prepare);
-            var prepared = await PrepareGoalAsync(operation.StagedSnapshot, operation.Publish)
-                .ConfigureAwait(false);
+            var (before, operation) = entry.WithState(state =>
+                (state.History.Snapshot(), prepare(state))
+            );
+            var (redacted, publish) = RedactStagedHistory(
+                before,
+                operation.StagedSnapshot,
+                operation.AppendedMessages,
+                operation.Publish
+            );
+            var prepared = await PrepareGoalAsync(redacted, publish).ConfigureAwait(false);
             operation = operation with
             {
                 StagedSnapshot = prepared.Snapshot,
@@ -323,19 +330,21 @@ public sealed partial class SessionSaveLane
         CancellationToken cancellationToken = default
     )
     {
-        IReadOnlyList<JsonObject> rows = [];
+        IReadOnlyList<JsonObject> appended = [];
         await CommitCanonicalAppendCoreAsync(
                 state =>
                 {
                     var operation = prepare(state);
-                    rows = operation
-                        .AppendedMessages.Select(row => (JsonObject)row.DeepClone())
-                        .ToArray();
+                    appended = operation.AppendedMessages;
                     return operation;
                 },
                 cancellationToken
             )
             .ConfigureAwait(false);
+        // Copied after the commit, so announced rows carry the masked content.
+        IReadOnlyList<JsonObject> rows = appended
+            .Select(row => (JsonObject)row.DeepClone())
+            .ToArray();
         if (entry.BeforeCanonicalNotification is { } before)
             await before();
         if (notifyMessages)
@@ -355,7 +364,16 @@ public sealed partial class SessionSaveLane
                 ? null
                 : await refreshMemory(entry.Snapshot(), cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            var operation = entry.WithState(prepare);
+            var (before, operation) = entry.WithState(state =>
+                (state.History.Snapshot(), prepare(state))
+            );
+            var (redacted, redactedPublish) = RedactStagedHistory(
+                before,
+                operation.StagedSnapshot,
+                [],
+                operation.Publish
+            );
+            operation = operation with { StagedSnapshot = redacted, Publish = redactedPublish };
             if (memory is not null)
             {
                 var envelope = (JsonObject)operation.StagedSnapshot.AuthorityEnvelope.DeepClone();

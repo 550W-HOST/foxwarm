@@ -2,14 +2,11 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.AspNetCore.StaticFiles;
 
 namespace Foxwarm.Code;
 
 internal sealed partial class CodeWorkbench
 {
-    private static readonly FileExtensionContentTypeProvider Mime = new();
-
     private string UnavailableHtml() =>
         $$"""
             <!doctype html>
@@ -46,10 +43,16 @@ internal sealed partial class CodeWorkbench
                 <h1>Code is not installed</h1>
                 <p>This Foxwarm installation does not currently include the optional browser workbench assets. Choose one preparation method, then reload this page.</p>
                 <section class="option">
-                  <strong>Download Code OSS for Foxwarm {{WebUtility.HtmlEncode(ProductVersion.Value)}}</strong>
+                  <strong>Download Code OSS for Foxwarm {{WebUtility.HtmlEncode(
+                ProductVersion.Value
+            )}}</strong>
                   <p>Run on the computer running Foxwarm, then reload this page.</p>
-                  <details><summary>Linux / macOS</summary><code>{{WebUtility.HtmlEncode(InstallCommand(Assets, false))}}</code></details>
-                  <details><summary>Windows PowerShell</summary><code>{{WebUtility.HtmlEncode(InstallCommand(Assets, true))}}</code></details>
+                  <details><summary>Linux / macOS</summary><code>{{WebUtility.HtmlEncode(
+                InstallCommand(Assets, false)
+            )}}</code></details>
+                  <details><summary>Windows PowerShell</summary><code>{{WebUtility.HtmlEncode(
+                InstallCommand(Assets, true)
+            )}}</code></details>
                 </section>
                 <section class="option">
                   <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
@@ -59,7 +62,9 @@ internal sealed partial class CodeWorkbench
                   <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
                   <code>npm run download:code</code>
                 </section>
-                <p class="hint">The npm commands require a source checkout. Install Code assets into <span class="path">{{WebUtility.HtmlEncode(Assets)}}</span>.</p>
+                <p class="hint">The npm commands require a source checkout. Code assets are stored in <span class="path">{{WebUtility.HtmlEncode(
+                Assets
+            )}}</span>.</p>
               </main>
             </body>
             </html>
@@ -79,31 +84,10 @@ internal sealed partial class CodeWorkbench
             relative = string.Join('/', segments.Skip(1));
         if (relative.Length == 0)
             relative = "index.html";
-        var root = Path.Combine(
-            AssetRoot,
-            "out",
-            "vs",
-            "workbench",
-            "contrib",
-            "webview",
-            "browser",
-            "pre"
-        );
-        file = AssetFile(root, relative) ?? "";
-        return file.Length > 0;
-    }
-
-    private static string? AssetFile(string root, string? relative)
-    {
-        if (relative is null || relative.Contains('\0'))
-            return null;
-        var file = Path.GetFullPath(relative, root);
-        return file.StartsWith(
-            Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar,
-            StringComparison.Ordinal
-        )
-            ? file
-            : null;
+        if (!HttpAssets.ValidPath(relative))
+            return false;
+        file = AssetRoot + "/out/vs/workbench/contrib/webview/browser/pre/" + relative;
+        return true;
     }
 
     private static string? Text(JsonObject? body, string key) =>
@@ -137,14 +121,18 @@ internal sealed partial class CodeWorkbench
             var mapped = (CodeServiceException)CodeServiceException.FileError(error);
             context.Response.StatusCode = mapped.Status;
             await context.Response.WriteAsJsonAsync(
-                new { error = mapped.Message, code = mapped.Code },
+                new JsonObject
+                {
+                    ["error"] = mapped.Message,
+                    ["code"] = JsonData.WebNode(mapped.Code),
+                },
                 context.RequestAborted
             );
         }
     }
 
     private static Task Json(HttpContext context, JsonNode value) =>
-        context.Response.WriteAsJsonAsync(value, context.RequestAborted);
+        context.Response.WriteAsJsonAsync(JsonData.WebNode(value), context.RequestAborted);
 
     private static string Target(HttpContext context, JsonObject? body = null)
     {
@@ -233,7 +221,7 @@ internal sealed partial class CodeWorkbench
 
     internal static Task DownloadAsync(
         HttpContext context,
-        Foxwarm.Nodes.NodeConnectionHub nodes
+        Foxwarm.Nodes.NodeProviderRegistry nodes
     ) =>
         Guard(
             context,
@@ -537,7 +525,7 @@ internal sealed partial class CodeWorkbench
                 )
         );
         app.MapGet(
-            "/vscode-web",
+            RoutePath,
             context =>
                 Guard(
                     context,
@@ -576,6 +564,7 @@ internal sealed partial class CodeWorkbench
                     () =>
                         Static(
                             context,
+                            CodeAssets,
                             AssetRoot,
                             context.Request.RouteValues["path"]?.ToString(),
                             workbench: true
@@ -597,7 +586,7 @@ internal sealed partial class CodeWorkbench
             )
         )
         {
-            var extension = Path.Combine(extensionRoot, name);
+            var extension = "packages/vscode-web/" + name;
             app.MapGet(
                 "/vscode-web/extensions/" + name + "/{**path}",
                 context =>
@@ -606,6 +595,7 @@ internal sealed partial class CodeWorkbench
                         () =>
                             Static(
                                 context,
+                                name == "redhat-vscode-yaml" ? CodeAssets : payloadAssets,
                                 name == "redhat-vscode-yaml" ? YamlRoot : extension,
                                 context.Request.RouteValues["path"]?.ToString()
                             )
@@ -622,7 +612,7 @@ internal sealed partial class CodeWorkbench
                         if (
                             !Prepared
                             || !PreFile(context.Request.Path, out var file)
-                            || !File.Exists(file)
+                            || !CodeAssets.Exists(file)
                         )
                         {
                             context.Response.StatusCode = 404;
@@ -633,12 +623,12 @@ internal sealed partial class CodeWorkbench
                         {
                             context.Response.ContentType = "text/html; charset=utf-8";
                             await context.Response.WriteAsync(
-                                PatchPre(await File.ReadAllTextAsync(file, context.RequestAborted)),
+                                PatchPre(await CodeAssets.ReadTextAsync(file, context.RequestAborted)),
                                 context.RequestAborted
                             );
                         }
                         else
-                            await StaticFile(context, file);
+                            await CodeAssets.ServeAsync(context, file);
                     }
                 )
         );
@@ -646,13 +636,14 @@ internal sealed partial class CodeWorkbench
 
     private async Task Static(
         HttpContext context,
+        HttpAssets assets,
         string root,
         string? relative,
         bool workbench = false
     )
     {
-        var file = AssetFile(root, relative);
-        if ((workbench && !Prepared) || file is null || !File.Exists(file))
+        var file = root + "/" + relative;
+        if ((workbench && !Prepared) || !HttpAssets.ValidPath(relative) || !assets.Exists(file))
         {
             context.Response.StatusCode = 404;
             return;
@@ -662,19 +653,11 @@ internal sealed partial class CodeWorkbench
             context.Response.ContentType = "text/javascript; charset=utf-8";
             context.Response.Headers.CacheControl = "no-store";
             await context.Response.WriteAsync(
-                PatchWorkbench(await File.ReadAllTextAsync(file, context.RequestAborted)),
+                PatchWorkbench(await assets.ReadTextAsync(file, context.RequestAborted)),
                 context.RequestAborted
             );
         }
         else
-            await StaticFile(context, file);
-    }
-
-    private static Task StaticFile(HttpContext context, string file)
-    {
-        context.Response.ContentType = Mime.TryGetContentType(file, out var type)
-            ? type
-            : "application/octet-stream";
-        return context.Response.SendFileAsync(file, context.RequestAborted);
+            await assets.ServeAsync(context, file);
     }
 }

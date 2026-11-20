@@ -102,8 +102,9 @@ test('executeTools emits bounded string previews for primitive and structured ar
     { value: 42, expected: '42' },
     { value: null, expected: 'null' },
     { value: 'plain text', expected: 'plain text' },
-    { value: { nested: 'value' }, expected: '{"nested":"value"}' },
-    { value: ['a', 2], expected: '["a",2]' },
+    { value: { nested: 'value' }, expected: '{nested: value}' },
+    { value: ['a', 2], expected: '[a, 2]' },
+    { value: 'first\nsecond', expected: '"first\\nsecond"' },
   ];
   try {
     const session = await sessionManager.getSession(sessionId);
@@ -114,6 +115,11 @@ test('executeTools emits bounded string previews for primitive and structured ar
         session,
       );
     }
+    await executeTools(
+      [{ id: 'preview-several', name: 'set_session_child_model', args: { waitAnySessions: ['a'], anotherProp: 'anotherValue' } } as any],
+      { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
+      session,
+    );
     await executeTools(
       [{ id: 'preview-malformed', name: 'set_session_child_model', args: {}, rawArgsText: '{"goal":', argsParseError: 'bad args' }],
       { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
@@ -126,7 +132,8 @@ test('executeTools emits bounded string previews for primitive and structured ar
     );
 
     assert.deepEqual(previews.slice(0, cases.length), cases.map(item => item.expected));
-    assert.equal(previews[cases.length], '{"goal":');
+    assert.equal(previews[cases.length], 'waitAnySessions: [a]\nanotherProp: anotherValue');
+    assert.equal(previews[cases.length + 1], '{"goal":');
     assert.equal(typeof previews.at(-1), 'string');
     assert.equal((previews.at(-1) as string).length, 200);
     assert.match(previews.at(-1) as string, /\.\.\.$/);

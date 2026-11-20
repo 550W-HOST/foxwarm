@@ -29,21 +29,25 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     if (!File.Exists(sessions.Images.ResolveBlob(blobId)))
-                        return Results.NotFound(new { error = "Image is unavailable." });
+                        return Results.NotFound(
+                            new JsonObject { ["error"] = "Image is unavailable." }
+                        );
                     WebUiAccess.Request(request)?.Require();
                     var grant = downloads.Issue("blob", blobId, input, RouteIdentity(request));
                     request.HttpContext.Response.Headers.CacheControl = "no-store";
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            url = Uri.EscapeDataString(blobId) + grant.Query,
-                            expiresAt = grant.ExpiresAt,
+                            ["url"] = Uri.EscapeDataString(blobId) + grant.Query,
+                            ["expiresAt"] = grant.ExpiresAt,
                         }
                     );
                 }
                 catch (ImageInputException)
                 {
-                    return Results.BadRequest(new { error = "Image is unavailable or invalid." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Image is unavailable or invalid." }
+                    );
                 }
             }
         );

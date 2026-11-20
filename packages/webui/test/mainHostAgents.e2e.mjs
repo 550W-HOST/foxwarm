@@ -11,13 +11,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-agents-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const apiToken = 'synthetic-agents-api-secret'; const providerToken = 'synthetic-agents-provider-secret'
 const dll = process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const errors = []; const requests = []; const counts = new Map()
 const sleep = ms => new Promise(done => setTimeout(done, ms))
@@ -36,7 +36,7 @@ function event(res, output) {
   res.end(`data: ${JSON.stringify({ type: 'response.completed', response: { output, usage: { input_tokens: 100, output_tokens: 15 } } })}\n\n`)
 }
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const valueOf = (rows, id) => rows.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const idFrom = body => {
   const content = body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(item => item.text || '').join('\n')
@@ -109,7 +109,7 @@ try {
         if (!previousCalls.some(item => item.call_id === 'spawn'))
           output = [call('spawn', 'create_child_session', {
             suffix: 'probe', agentName: 'beta', message: 'CHILD-TASK',
-            forceModel: { modelId: 'local-b/two', effort: 'low' }, afterSend: 'continue',
+            forceModel: { modelId: 'local-b/two', effort: 'low' }, currentSessionTurnAction: 'continue',
           })]
         else {
           heldParent = true
@@ -127,7 +127,7 @@ try {
           assert.deepEqual(body.input.filter(item => item.type === 'function_call_output' && ['report', 'child-error'].includes(item.call_id)).map(item => item.call_id), ['report', 'child-error'])
           output = [text('CHILD-ERROR-HANDLED')]
         } else output = [call('report', 'send_to_session', {
-          sessionId: '<parent>', message: 'CHILD-REPORT: BETA-WORK', afterSend: 'finish',
+          sessionId: '<parent>', message: 'CHILD-REPORT: BETA-WORK', currentSessionTurnAction: 'end_turn',
         }), call('child-error', 'nonexistent_tool', {})]
       } else if (latest.includes('ALPHA-SECOND'))
         output = previousCalls.some(item => item.call_id === 'second-pwd') ? [text('SECOND-DONE')] :
@@ -137,7 +137,7 @@ try {
           assert.deepEqual(body.input.filter(item => item.type === 'function_call_output' && ['other-send', 'other-error'].includes(item.call_id)).map(item => item.call_id), ['other-send', 'other-error'])
           output = [text('OTHER-ERROR-HANDLED')]
         } else output = [call('other-send', 'send_to_session', {
-          sessionId: betaId, message: 'BETA-NONPARENT', afterSend: 'finish',
+          sessionId: betaId, message: 'BETA-NONPARENT', currentSessionTurnAction: 'end_turn',
         }), call('other-error', 'nonexistent_tool', {})]
       }
       else if (latest.includes('BETA-NONPARENT')) output = [text('BETA-RECEIVED-NONPARENT')]
@@ -168,7 +168,7 @@ try {
   }
   async function startHost() {
     await migrateModelFixture(dataRoot, modelsFile, { LOCAL_A_SECRET: providerToken, LOCAL_B_SECRET: providerToken })
-    const child = spawn(dotnet, [dll], { stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
+    const child = spawn(...mainHostLaunch(dll), { stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
     let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output = (output + data).slice(-18000) })
     await until(async () => {
       if (child.exitCode !== null) throw new Error(`Host exited ${child.exitCode}: ${output}`)
@@ -411,8 +411,8 @@ try {
   assert.equal((await request('GET', `/api/session-list/sidebar?limit=2&cursor=${encodeURIComponent(beforeListChange)}`)).body.reset, true)
   const metadataSearch = (await request('GET', '/api/session-list/search?q=Alpha%20named&limit=10')).body
   assert(metadataSearch.sessions.some(row => row.id === parentId))
-  await until(async () => page.evaluate(() => document.querySelector('button') && [...document.querySelectorAll('button')].some(item => /Show .* more\.\.\./.test(item.textContent))), 'original Sidebar load-more root cursor')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent))?.click())
+  await until(async () => page.evaluate(() => !!document.querySelector('[data-session-continuation="more"][data-session-continuation-owner="roots"]')), 'original Sidebar load-more root cursor')
+  await page.click('[data-session-continuation="more"][data-session-continuation-owner="roots"]')
   await until(async () => page.evaluate(() => document.querySelectorAll('[data-session-id]').length > 50), 'original Sidebar bounded next page')
   await page.type('input[aria-label="Search sessions"]', 'Alpha named')
   await until(async () => page.evaluate(id => !!document.querySelector(`[data-session-id="${id}"]`)

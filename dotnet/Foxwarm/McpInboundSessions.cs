@@ -204,24 +204,20 @@ internal sealed class McpInboundSessions(
             + "\" hint=\"Message from an external MCP client."
             + (
                 allowReply
-                    ? " For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection."
+                    ? " For an explicit reply, use `ctl channel send` with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection."
                     : ""
             )
             + "\">";
         var item = new QueueItem(
             QueueItemType.User,
-            [
-                new JsonObject { ["system"] = open },
-                new JsonObject { ["text"] = message },
-                new JsonObject { ["system"] = "</foxwarm-system>" },
-            ]
+            SessionBoundary.ExternalInput(open, [new JsonObject { ["text"] = message }])
         );
         var serialized = new JsonObject
         {
             ["type"] = "user",
             ["parts"] = new JsonArray(item.Parts!.Select(p => (JsonNode?)p.DeepClone()).ToArray()),
         };
-        if (Encoding.UTF8.GetByteCount(serialized.ToJsonString()) > 1024 * 1024)
+        if (Encoding.UTF8.GetByteCount(serialized.ToJsonText()) > 1024 * 1024)
             throw new McpInboundSafeException("Message exceeds the Session input limit.");
         try
         {

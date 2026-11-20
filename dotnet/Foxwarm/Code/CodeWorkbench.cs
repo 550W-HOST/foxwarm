@@ -18,10 +18,12 @@ internal sealed partial class CodeWorkbench
     private readonly string? modelsConfig;
     private readonly string extensionRoot;
     private readonly string installedAssets;
+    private readonly HttpAssets payloadAssets;
+    private readonly HttpAssets externalAssets;
     private readonly string defaultFolder;
     private readonly string workspacePath;
     private readonly bool hasPty;
-    private readonly Foxwarm.Nodes.NodeConnectionHub nodes;
+    private readonly Foxwarm.Nodes.NodeProviderRegistry nodes;
     private readonly object workspaceGate = new();
     private readonly string capabilityRoute =
         "webview/" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
@@ -36,31 +38,34 @@ internal sealed partial class CodeWorkbench
     internal CodeWorkbench(SessionManager sessions, PublicWebAddress address, bool hasPty)
     {
         this.hasPty = hasPty;
-        nodes = sessions.Nodes;
+        nodes = sessions.NodeProviders;
         publicAddress = address;
         dataRoot = sessions.DataRoot;
         var config = sessions.Models.ConfigurationOwner;
         applicationRoot =
-            config?.Paths.ApplicationRoot ?? Path.GetFullPath(AppContext.BaseDirectory);
+            config?.Paths.ApplicationRoot
+            ?? Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
         var resources = config?.Paths.ResourceRoot ?? AppContext.BaseDirectory;
         appConfig = config is null ? null : Path.GetFullPath(config.AppPath);
         modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
+        payloadAssets = new HttpAssets(resources, additionalPack: HttpAssets.CodePack);
+        externalAssets = new HttpAssets(applicationRoot, HttpAssets.CodePack);
         extensionRoot = Path.Combine(resources, "packages", "vscode-web");
         installedAssets = Path.Combine(applicationRoot, "packages", "vscode-web", "assets");
         defaultFolder = FoxwarmUri(applicationRoot);
         workspacePath = Path.Combine(dataRoot, "state", "vscode-web", "foxwarm.code-workspace");
     }
 
-    // Prepared Code assets are optional and outlive replaced payloads. A payload that
-    // ships or mounts them wins; otherwise they belong to the installation, where
-    // `build:code` and `download:code` write them. Checked per request so assets
-    // prepared while Main runs need only a reload.
-    private string Assets =>
-        Directory.Exists(Path.Combine(extensionRoot, "assets", "vscode-web"))
-            ? Path.Combine(extensionRoot, "assets")
-            : installedAssets;
-    private string AssetRoot => Path.Combine(Assets, "vscode-web");
-    private string YamlRoot => Path.Combine(Assets, "extensions", "redhat.vscode-yaml");
+    // Payload Code wins over the separately installed optional component. Lookup is
+    // live, so installing a pack or preparing loose assets needs only a browser reload.
+    private bool PayloadHasCode =>
+        payloadAssets.Exists(AssetRoot + "/out/nls.messages.js")
+        || Directory.Exists(Path.Combine(extensionRoot, "assets", "vscode-web"));
+    private HttpAssets CodeAssets => PayloadHasCode ? payloadAssets : externalAssets;
+    private string Assets => PayloadHasCode ? Path.Combine(extensionRoot, "assets") : installedAssets;
+    internal const string RoutePath = "/vscode-web";
+    private const string AssetRoot = HttpAssets.CodePrefix + "/vscode-web";
+    private const string YamlRoot = HttpAssets.CodePrefix + "/extensions/redhat.vscode-yaml";
 
     private bool Prepared =>
         new[]
@@ -68,8 +73,8 @@ internal sealed partial class CodeWorkbench
             "out/nls.messages.js",
             "out/vs/workbench/workbench.web.main.internal.css",
             "out/vs/workbench/workbench.web.main.internal.js",
-        }.All(file => File.Exists(Path.Combine(AssetRoot, file)));
-    private bool HasYaml => File.Exists(Path.Combine(YamlRoot, "package.json"));
+        }.All(file => CodeAssets.Exists(AssetRoot + "/" + file));
+    private bool HasYaml => CodeAssets.Exists(YamlRoot + "/package.json");
 
     internal JsonObject Roots()
     {
@@ -149,6 +154,12 @@ internal sealed partial class CodeWorkbench
         return nodeId;
     }
 
+    private static void WriteWorkspace(string path, JsonObject workspace) =>
+        new AtomicJsonFile(
+            Path.GetDirectoryName(path)!,
+            Path.GetFileName(path)
+        ).WriteTextPayload(workspace.ToJsonText(indented: true), default);
+
     private void MigrateWorkspace()
     {
         if (!File.Exists(workspacePath))
@@ -174,7 +185,7 @@ internal sealed partial class CodeWorkbench
                 if (!folders.Any(existing => JsonNode.DeepEquals(existing, folder)))
                     folders.Add(folder!.DeepClone());
             workspace["folders"] = folders.Parent is null ? folders : folders.DeepClone();
-            File.WriteAllText(destination, workspace.ToJsonString(new() { WriteIndented = true }));
+            WriteWorkspace(destination, workspace);
         }
         File.Move(workspacePath, workspacePath + ".migrated", true);
     }
@@ -193,8 +204,7 @@ internal sealed partial class CodeWorkbench
             MigrateWorkspace();
             if (!File.Exists(targetPath))
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                File.WriteAllText(
+                WriteWorkspace(
                     targetPath,
                     new JsonObject
                     {
@@ -202,7 +212,7 @@ internal sealed partial class CodeWorkbench
                             ? new JsonArray(new JsonObject { ["uri"] = folder })
                             : new JsonArray(),
                         ["settings"] = PrivacyDefaults.DeepClone(),
-                    }.ToJsonString(new() { WriteIndented = true })
+                    }
                 );
             }
             else
@@ -222,10 +232,7 @@ internal sealed partial class CodeWorkbench
                                 changed = true;
                             }
                         if (changed)
-                            File.WriteAllText(
-                                targetPath,
-                                workspace.ToJsonString(new() { WriteIndented = true })
-                            );
+                            WriteWorkspace(targetPath, workspace);
                     }
                 }
                 catch (System.Text.Json.JsonException)
@@ -256,7 +263,7 @@ internal sealed partial class CodeWorkbench
         Foxwarm.Nodes.NodeProviderRegistry.ValidateId(nodeId);
         if (FolderNode(folder) != nodeId)
             folder = "foxwarm://node+" + Uri.EscapeDataString(nodeId) + "/";
-        var route = address.Prefix.ToUriComponent() + "/vscode-web";
+        var route = address.Prefix.ToUriComponent() + RoutePath;
         var baseUrl = origin + route + "/static";
         var extensions = new JsonArray();
         foreach (
@@ -292,22 +299,27 @@ internal sealed partial class CodeWorkbench
         };
         foreach (var setting in PrivacyDefaults)
             configuration["configurationDefaults"]![setting.Key] = setting.Value!.DeepClone();
-        using var resource = Assembly
-            .GetExecutingAssembly()
-            .GetManifestResourceStream("Foxwarm.Code.workbench.html")!;
-        using var reader = new StreamReader(resource);
-        return reader
-            .ReadToEnd()
-            .Replace("@@CONFIGURATION@@", WebUtility.HtmlEncode(configuration.ToJsonString()))
+        return WorkbenchTemplate
+            .Replace("@@CONFIGURATION@@", WebUtility.HtmlEncode(configuration.ToJsonText()))
             .Replace(
                 "@@ASSETBASE@@",
                 context.Request.Path.Value?.EndsWith('/') == true ? "./static" : route + "/static"
             )
-            .Replace("@@BASEURL@@", JsonValue.Create(baseUrl)!.ToJsonString())
-            .Replace("@@WEBVIEWROUTE@@", JsonValue.Create(capabilityRoute)!.ToJsonString())
-            .Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToJsonString())
+            .Replace("@@BASEURL@@", JsonValue.Create(baseUrl)!.ToHtmlJson())
+            .Replace("@@WEBVIEWROUTE@@", JsonValue.Create(capabilityRoute)!.ToHtmlJson())
+            .Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToHtmlJson())
             .Replace("@@HASYAML@@", HasYaml ? "true" : "false")
             .Replace("@@HASPTY@@", hasPty ? "true" : "false");
+    }
+
+    private static readonly string WorkbenchTemplate = ReadResource("workbench.html")
+        .Replace("@@WORKBENCHFRAME@@", ReadResource("workbenchFrame.js"));
+
+    private static string ReadResource(string name)
+    {
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("Foxwarm.Code." + name)!;
+        using var reader = new StreamReader(resource);
+        return reader.ReadToEnd();
     }
 
     private static string PatchWorkbench(string source)

@@ -16,6 +16,17 @@ export async function until(check, label, timeout = 22000) {
   throw new Error('Timed out: ' + label)
 }
 // With only `main` and no alternative runtime, `+` creates directly and a split options control opens the dialog.
+// The planner prompt lists the operations the retention schedule requires; scripted planners
+// submit exactly those, with a fixture summary.
+export function requiredCompactOperations(text, summary) {
+  const seen = new Map()
+  for (const match of text.matchAll(/\d+\. sourceKind=(message|block), sourceStart=(\d+), sourceEnd=(\d+), level=(\d+)/g)) {
+    const operation = { level: Number(match[4]), sourceKind: match[1], sourceStart: Number(match[2]), sourceEnd: Number(match[3]) }
+    seen.set(`${operation.sourceKind}:${operation.sourceStart}`, { ...operation, summary: typeof summary === 'function' ? summary(operation) : summary })
+  }
+  return [...seen.values()]
+}
+
 export const NEW_SESSION_DIALOG_TRIGGER = 'button[aria-haspopup="dialog"]:is([aria-label="New session"], [aria-label="New session options"])'
 // Setup opens Models in the form view when the form can represent the file; fixtures that write exact YAML switch to the editor.
 export async function openModelsYaml(page) {
@@ -35,6 +46,12 @@ export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
   await waitForWebUiReady(page)
 }
+// Launch for drivers that spawn their own owned Main: FOXWARM_TEST_MAIN_EXECUTABLE selects a
+// published Main executable, such as a NativeAOT publication; otherwise the managed assembly runs.
+export function mainHostLaunch(assembly) {
+  const executable = process.env.FOXWARM_TEST_MAIN_EXECUTABLE
+  return executable ? [executable, []] : [join(process.env.DOTNET_ROOT || '', 'dotnet'), [assembly]]
+}
 export async function createHostFixture(name, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'foxwarm-' + name + '-')), data = join(root, 'data'), work = join(data, 'agents', 'main')
   await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work, { recursive: true })
@@ -53,7 +70,10 @@ export async function createHostFixture(name, options = {}) {
     const startup = { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_SYNC_FILE_LOG: '0', ...(options.env || {}), FOXWARM_DATA_DIR: data, }
     ownedListener = false
     const source = options.runtime === 'source'
-    const child = spawn(source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet'), [resolve(source ? 'lib/index.js' : options.corePath || 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+    const native = !source && (options.coreExecutable || process.env.FOXWARM_TEST_MAIN_EXECUTABLE)
+    const command = source ? process.execPath : native || join(process.env.DOTNET_ROOT, 'dotnet')
+    const arguments_ = native ? [] : [resolve(source ? 'lib/index.js' : options.corePath || 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')]
+    const child = spawn(command, arguments_, {
       stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: startup
     })
     let output = ''
@@ -67,7 +87,10 @@ export async function createHostFixture(name, options = {}) {
         output = (output + bytes).slice(-20000)
         const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: ([^\r\n]+)\r?\n/m.exec(output)?.[1]
         if (bound) {
-          if (bound !== (source ? origin : `http://0.0.0.0:${port}`) || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
+          // Published Main listens on the wildcard default, or on loopback when the test's
+          // config.yaml sets bot.httpHost: 127.0.0.1.
+          const expected = source ? [origin] : [`http://0.0.0.0:${port}`, origin]
+          if (!expected.includes(bound) || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
           else { ownedListener = true; finish() }
         }
       }
@@ -106,14 +129,15 @@ export async function createHostFixture(name, options = {}) {
     await afterAdmission?.()
     assert.deepEqual(await waitForExit(), { code: 0, signal: null }, host.output)
   }
-  const sql = (statement, parameters = []) => JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
+  const sql = (statement, parameters = []) => JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
   async function crash() {
     if (host && host.child.exitCode === null && host.child.signalCode === null) { const exited = once(host.child, 'exit').catch(() => {}); host.child.kill('SIGKILL'); await exited }
   }
   async function cleanup() {
     if (browser) await browser.close().catch(() => {})
     await crash()
-    if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await rm(root, { recursive: true, force: true }); else console.log('Retained owned root: ' + root)
+    // On Windows a command the test started can still hold its working directory for a moment.
+    if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await rm(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); else console.log('Retained owned root: ' + root)
   }
   return { root, data, work, modelPath, origin, token, port, api, start, openApp, save, stop, signalStop, waitForExit, crash, sql, cleanup, hostPids, get output() { return host?.output } }
 }

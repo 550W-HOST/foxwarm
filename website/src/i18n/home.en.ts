@@ -10,7 +10,7 @@ export const en: HomeStrings = {
     description: 'Foxwarm is an open-source, self-hosted workspace for long-running AI agents: one server holds the agent loop, models and memory, while lightweight Nodes run tools on any machine. Delegate to sessions you can open, and bring any session into a group chat.',
     ogTitle: 'Foxwarm — self-hosted AI agents that keep working'
   },
-  nav: { features: 'Features', install: 'Install', docs: 'Docs', github: 'GitHub', theme: 'Switch color theme', language: '中文', languageLabel: '切换到中文', skip: 'Skip to content' },
+  nav: { features: 'Features', install: 'Install', docs: 'Docs', demo: 'Demo', blog: 'Blog', download: 'Download', github: 'GitHub', theme: 'Switch color theme', language: '中文', languageLabel: '切换到中文', languageMenu: 'Select language', skip: 'Skip to content' },
   hero: {
     title: 'It keeps working after you close the laptop.',
     lede: 'Foxwarm runs your AI agents on a server you own. One task can run for days, spread across your machines, and report back wherever you are: in the browser, on your phone or in your team’s group chat.',
@@ -26,19 +26,70 @@ export const en: HomeStrings = {
       footer: 'Every step is a session you can open, read and talk to.',
       link: 'How Foxwarm works'
     },
+    actions: { demo: 'Explore the demo', more: 'Desktop apps, Docker and Android' },
     shotCaption: 'The same task in the Foxwarm WebUI. Real screenshot, demo project.',
-    screenshotAlt: 'The Foxwarm WebUI in Conversation view: the user asks an agent to fix a failing test suite, and the agent reports the cause, the fix and the commit. The sidebar lists other sessions, some with child sessions.'
+    screenshotAlt: 'The Foxwarm WebUI in Conversation view: the user asks an agent to fix a failing test suite, and the agent reports the cause, the fix and the commit. The sidebar lists other sessions, some with child sessions.',
+    demo: {
+      link: 'Open the interactive demo',
+      note: 'A recorded, read-only workspace: browse the sessions and open their tool calls, but nothing runs live.'
+    }
   },
+  featureDemo: 'Open in the demo',
   install: {
-    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
+    title: 'Install the server',
+    tabs: { linux: 'Linux / macOS', windows: 'Windows' },
     copy: 'Copy',
-    copied: 'Copied',
-    notes: {
-      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available. Includes .NET when no compatible runtime is installed.',
-      windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background. A Windows desktop app is also available.',
-      docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
+    copied: 'Copied'
+  },
+  downloads: {
+    title: 'Download Foxwarm',
+    download: 'Download',
+    current: 'This device',
+    desktop: {
+      title: 'Desktop app',
+      body: 'Runs Foxwarm in an app window on your Windows PC or Mac: the quickest way to start, though only that computer can connect to it.',
+      windows: {
+        name: 'Windows',
+        detail: 'x64',
+        note: 'Installs for your Windows account without administrator rights; the portable ZIP runs without installing. Both need the WebView2 Runtime, which Windows 10 and 11 normally include.',
+        alternative: 'Portable ZIP',
+        guide: { label: 'Windows app guide', href: docs('installing/#windows-desktop-app') }
+      },
+      mac: {
+        name: 'macOS',
+        detail: 'Apple Silicon',
+        note: 'Needs macOS 15 or later. The app isn’t notarized, so remove the quarantine flag from the download before you open it.',
+        guide: { label: 'macOS app guide', href: docs('installing/#macos-desktop-app') }
+      }
     },
-    requirementsLink: 'Packages and requirements'
+    server: {
+      title: 'Server',
+      body: 'Runs Foxwarm in the background on a machine that stays on, so work continues after you close your laptop, and your phone, other computers and Nodes can connect.',
+      installers: {
+        name: 'Linux, macOS, Windows',
+        note: 'Downloads the package for Linux x64 or WSL, macOS 15 or later on Apple Silicon, or Windows x64 (run it in PowerShell), and starts Foxwarm in the background.',
+        guide: { label: 'Packages and requirements', href: docs('installing/') }
+      },
+      docker: {
+        name: 'Docker',
+        detail: 'Linux x64',
+        note: 'Runs the published image, with Chromium and Node.js included; your data stays in foxwarm-data.',
+        guide: { label: 'Docker guide', href: docs('installing/#docker') }
+      },
+      packages: { label: 'Server packages for each platform', href: docs('installing/#packages') }
+    },
+    android: {
+      title: 'Android Node app',
+      body: 'Connects an Android phone to your server as a Node, so agents can read its screen, tap, type and open apps; it needs a server and doesn’t run Foxwarm by itself.',
+      app: {
+        name: 'Android',
+        detail: '11 or later',
+        note: 'Open the downloaded APK to install it, then pair it in your server’s WebUI under System → Nodes.',
+        guide: { label: 'Android app guide', href: docs('installing/#android-node') }
+      }
+    },
+    release: 'All files of the latest release, with checksums',
+    attribution: 'Android is a trademark of Google LLC. The Android robot is reproduced or modified from work created and shared by Google and used according to terms described in the Creative Commons 3.0 Attribution License.'
   },
   strip: {
     label: 'Works with',
@@ -76,8 +127,8 @@ export const en: HomeStrings = {
       id: 'room',
       eyebrow: 'Channels',
       title: 'Work it out here. Explain it in the group.',
-      body: 'Any chat can be attached to any session. Work through a problem in the WebUI, add the bot to your team’s group and run /attach: it answers with the full history behind it, and anyone in the group can ask a follow-up. Works with Telegram, Matrix, QQ, WeChat and WeCom.',
-      points: ['/attach connects a chat to an existing session', 'The agent sees who is asking and keeps the whole context', 'Sender allow lists; open a group to everyone while commands stay restricted'],
+      body: 'Any chat can be attached to any session. Work through a problem in the WebUI, add the bot to your team’s group and run /channel attach: it answers with the full history behind it, and anyone in the group can ask a follow-up. Works with Telegram, Matrix, QQ, WeChat and WeCom.',
+      points: ['/channel attach connects a chat to an existing session', 'The agent sees who is asking and keeps the whole context', 'Sender allow lists; open a group to everyone while commands stay restricted'],
       link: { label: 'Connect a channel', href: docs('channels/') },
       image: { alt: 'Illustration of a team group chat: a developer attaches the bot to an existing session, asks it to explain a change, and a colleague asks a follow-up question.' }
     }
@@ -116,7 +167,7 @@ export const en: HomeStrings = {
     title: 'tidepool-dev',
     status: '4 members',
     messages: [
-      { from: 'me', text: '/attach tidepool/proration', time: '16:02' },
+      { from: 'me', text: '/channel attach tidepool/proration', time: '16:02' },
       { from: 'system', text: 'Attached to “Ship the proration fix”.' },
       { from: 'me', text: '@foxwarm Give everyone a two-line summary of the proration change.', time: '16:03' },
       { from: 'bot', name: 'Foxwarm', text: 'prorate() rounded unused time to whole days, so a plan change at noon could credit half a day too much. It now uses the exact time, and all six tests pass on build-box.', time: '16:03' },
@@ -147,5 +198,5 @@ export const en: HomeStrings = {
     ],
     guide: 'Full installation guide'
   },
-  footer: { tagline: 'Self-hosted AI agents. MIT licensed.', docs: 'Docs', github: 'GitHub', license: 'License' }
+  footer: { tagline: 'Self-hosted AI agents. MIT licensed.', docs: 'Docs', download: 'Download', blog: 'Blog', github: 'GitHub', license: 'License' }
 };

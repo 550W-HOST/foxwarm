@@ -1,0 +1,2 @@
+# The patch applies to LF upstream source; keep it LF in Windows checkouts.
+serialization.patch text eol=lf

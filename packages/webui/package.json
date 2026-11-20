@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:demo": "tsc -p demo/tsconfig.json && vite build --config vite.demo.config.ts --configLoader runner",
+    "demo:generate": "node demo/scripts/generate.mjs",
     "test:tasks-e2e": "node --test test/tasksView.e2e.mjs",
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
     "test:mermaid-policy": "node --test test/mermaidPolicy.test.mjs",
@@ -43,7 +45,8 @@
     "test:chat-settings-placement-e2e": "node --test test/chatSettingsPlacement.e2e.mjs",
     "test:context-menu-e2e": "node --test test/contextMenu.e2e.mjs",
     "test:system-tabs-e2e": "node ../../test/app-e2e/run-app-e2e.mjs packages/webui/test/systemTabs.e2e.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:demo-e2e": "node --test test/webuiDemo.e2e.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

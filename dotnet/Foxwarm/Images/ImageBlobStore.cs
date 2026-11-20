@@ -100,9 +100,9 @@ internal sealed partial class ImageBlobStore(string dataRoot)
         if (File.Exists(filename))
         {
             await VerifyAsync(filename, bytes.Length, sha, token);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(filename)!);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(BlobRoot);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.Combine(DataRoot, "state"));
+            DirectorySync.Sync(Path.GetDirectoryName(filename)!);
+            DirectorySync.Sync(BlobRoot);
+            DirectorySync.Sync(Path.Combine(DataRoot, "state"));
         }
         else
         {
@@ -132,9 +132,9 @@ internal sealed partial class ImageBlobStore(string dataRoot)
                 {
                     await VerifyAsync(filename, bytes.Length, sha, token);
                 }
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(filename)!);
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(BlobRoot);
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.Combine(DataRoot, "state"));
+                DirectorySync.Sync(Path.GetDirectoryName(filename)!);
+                DirectorySync.Sync(BlobRoot);
+                DirectorySync.Sync(Path.Combine(DataRoot, "state"));
             }
             finally
             {

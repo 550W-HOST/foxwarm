@@ -25,9 +25,12 @@ internal sealed partial class SessionCompactor
             }
         if (split < 0)
             throw new CompactPlanInvalidException("The current tool exchange is no longer active.");
-        // The entire executing assistant/tool exchange stays outside the source region.
+        // The executing exchange includes an earlier deferred server call when
+        // its result and the local compact submission share this assistant row.
+        var history = snapshot.History.Select(row => row.ToJson()).ToArray();
+        split = CompactCandidateBuilder.WholeExchangeStart(history, split);
         var candidates = CompactCandidateBuilder.Build(
-            snapshot.History.Take(split).Select(row => row.ToJson()).ToArray(),
+            history.Take(split).ToArray(),
             inContext: true
         );
         var plan = CompactPlanValidator.Validate(args, candidates);
@@ -42,14 +45,18 @@ internal sealed partial class SessionCompactor
         run.PlanningSettled.TrySetResult();
         run.PipelineDone.TrySetResult();
         PublishRuntime(run);
-        return new JsonObject
+        var result = new JsonObject
         {
             ["accepted"] = true,
             ["applied"] = false,
             ["operationId"] = run.OperationId,
-            ["output"] =
+            ["note"] =
                 "Plan accepted for application after this complete tool batch is recorded. Acceptance does not mean it applied; cancellation or changed history can prevent application. Inspect the resulting active history and compaction boundary.",
         };
+        // Budgets are advisory here; regular compaction returns such summaries for revision.
+        if (plan.OverBudget is { } overBudget)
+            result["overBudget"] = overBudget.DeepClone();
+        return result;
     }
 
     internal bool PairInContextSubmission(JsonObject canonicalToolMessage)
@@ -67,7 +74,7 @@ internal sealed partial class SessionCompactor
                     .Any(part =>
                         part["functionResponse"] is JsonObject response
                         && SessionWait.Text(response["tool_use_id"]) == submission.CallId
-                        && response["response"]?["accepted"]?.ToJsonString() == "true"
+                        && response["response"]?["accepted"]?.ToJsonText() == "true"
                         && SessionWait.Text(response["response"]?["operationId"]) == run.OperationId
                     ) != true
             )

@@ -25,16 +25,16 @@ rules:
     action: deny
 ```
 
-This complete example restricts internal calls from the `reviewer` Agent while preserving the internal default for other Agents. It does not create that Agent or change its isolation/Node binding. Merge rules into the real policy only after reviewing existing ordering.
+This complete example restricts internal calls from the `reviewer` Agent while preserving the internal default for other Agents. It does not create that Agent or change its default Node. Merge rules into the real policy only after reviewing existing ordering.
 
-- Top level: `version: 1`, optional `defaultAction: allow | deny` (omission means `allow`), and optional `rules` (omission means an empty list). Prefer writing both optional fields explicitly.
-- Rule: optional unique non-empty `id` (omission assigns `rule-<position>`), optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | deny`, and optional `reason`.
+- Top level: `version: 1`, optional `defaultAction: allow | ask | deny` (omission means `allow`), and optional `rules` (omission means an empty list). Prefer writing both optional fields explicitly.
+- Rule: optional unique non-empty `id` (omission assigns `rule-<position>`), optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | ask | deny`, optional `reason`, and optional `approval` (only with `ask`; see [Require approval](#require-approval)).
 - Limits: at most 256 rules and 256 KiB of policy bytes; IDs up to 128 bytes, reasons up to 1,024 bytes, matcher strings up to 512 bytes, and scalar lists up to 64 items.
 - Unknown fields, unsupported versions/operators/path variables, unsafe dotted argument paths, and duplicate IDs are rejected.
 
 ## Concise Session and Node selectors
 
-A rule may put `agent`, `session`, `externalId`, `tool`, `node`, `args`, and `path` directly beside `action`. Do not mix these top-level selectors with `match`, even when `match` is empty. Legacy version-1 `match.session`, `match.targetNode` and argument strings retain their exact scalar semantics.
+A rule may put `agent`, `session`, `externalId`, `tool`, `node`, `secrets`, `args`, and `path` directly beside `action`. Do not mix these top-level selectors with `match`, even when `match` is empty. Legacy version-1 `match.session`, `match.targetNode` and argument strings retain their exact scalar semantics.
 
 ```yaml
 version: 1
@@ -60,7 +60,7 @@ rules:
     args: { sessionId: { session: { relation: parent } } }
     action: allow
   - agent: [developer, developer-worker]
-    tool: { source: builtin, name: [wait, search_tools] }
+    tool: { source: builtin, name: wait }
     action: allow
 ```
 
@@ -82,11 +82,36 @@ Executable-provider Nodes use Core IDs such as `development/worker-one`. The exe
 
 For list access, grant `args: { action: list, scope: owned }`. `owned` includes only tasks currently owned by the caller; the existing `current-session` scope still includes tasks created **or** owned by the caller. A creator is not necessarily the current owner.
 
+### Stored secrets
+
+A `set_config` or `mcp_config` change that would send a stored secret (`${secret:NAME}`) to a new destination carries those secret names: a new reference, or a changed provider base URL or protocol, inherited `llm` base URL, text-redaction endpoint, ASR URL, channel server, or MCP URL, transport, command, arguments, working directory or environment. Model lists, limits, descriptions, timeouts and enablement carry none. `exec` carries the secret names in its `secretEnv`, which passes stored secrets to the command as environment variables. `add_secret` carries its name, and `ask_user` the names its secret questions ask for, when configuration already refers to that name, because the new value then reaches those destinations.
+
+```yaml
+rules:
+  - agent: deploy-worker
+    secrets: { anyOf: ['staging-*'] }
+    action: allow
+  - secrets: { anyOf: ['prod-*'] }
+    action: deny
+    reason: Production credentials are changed by the user.
+  - agent: deploy-worker
+    secrets: { owned: true }
+    action: ask
+    reason: Confirm before the worker uses credentials it added itself.
+```
+
+- A rule with `secrets` decides only the secrets, never the call itself; the call still needs its own allow. Patterns use secret-name characters and `*`; a scalar is a one-item list.
+- An allow covers a call only if its patterns cover every named secret; a deny or ask matches any of them. The first matching `secrets` rule decides.
+- `owned: true` selects secrets the caller's Agent owns: those it added with `add_secret` from a value or a file, or received through its own secret question. Alone or together with `anyOf`, it applies to each name.
+- Secrets the caller's Agent owns need no allow. An allow must cover the other named secrets, and when the Agent owns all of them and no `secrets` rule matches, they are allowed. A deny or ask still matches owned secrets. Secrets added by Setup or moved from configuration belong to the instance, and a deleted Agent's secrets pass to the instance.
+- Without a matching `secrets` rule, the secrets follow the caller's authorization for unrestricted `exec` on master, because such a caller can already read the secret store. Rules on `exec` scoped by arguments or paths are skipped for this; the first other rule matching `exec` on master decides, else the default. With no rules this allows; a deny or ask on master `exec` that does not depend on the command, or an Agent-local layer ending in a selector-free deny, denies (or asks), even after a command allowlist. Legacy isolated Agents are refused except for secrets they own.
+- `secrets` is a top-level selector only and cannot be combined with `externalId`.
+
 ## Ordering and fallback
 
 The first **enabled matching rule** wins. Present conditions within one rule are AND; a list of exact alternatives within one scalar matcher is OR. Use separate rules for alternative sets of conditions. An early allow is not overridden by a later deny. A rule without `agent`, `session`, or `externalId` can match both internal and external callers.
 
-For unmatched internal calls, `defaultAction` applies. For unmatched external calls, the result is always deny, even with `defaultAction: allow`. A missing policy file preserves internal default-allow compatibility and denies unmatched external calls. Other read errors and invalid YAML fail closed after the loader's fresh retry; an old expired cache is not a fallback.
+For unmatched internal calls, `defaultAction` applies. For unmatched external calls, the result is always deny, even with `defaultAction: allow` or `ask`. A matching `ask` rule also denies an external call. A missing policy file preserves internal default-allow compatibility and denies unmatched external calls. Other read errors and invalid YAML fail closed after the loader's fresh retry; an old expired cache is not a fallback.
 
 Choose the policy's purpose before writing rules:
 
@@ -99,10 +124,31 @@ Before granting a builtin, check:
 
 1. **Targets and defaults:** which parameters select an Agent, Session, Node, path, or channel? Follow the actual resolver; omission does not universally mean self.
 2. **Effects:** include reads, mutations, file delivery, notifications, and queued input. For example, task assignment, comments, and completion can notify another Session; granting task operations is not merely granting a private task list.
-3. **Isolation-dependent checks:** which guards stop running without the isolated flag? Validate the proposed policy with a non-isolated test caller so legacy guards do not mask missing restrictions.
-4. **Expressibility:** can existing matchers enforce the intended boundary? If not, omit the capability from the baseline or make it a separately reviewed grant; do not compensate with an unconditional allow.
+3. **Expressibility:** can existing matchers enforce the intended boundary? If not, omit the capability from the baseline or make it a separately reviewed grant; do not compensate with an unconditional allow.
 
-A familiar name in the legacy default list is not evidence that an unconditional allow is safe after isolation is removed. Use [the offline baseline generator](isolated-rules.md) when its conservative scope fits; review its omissions rather than treating it as an exact migration.
+## Require approval
+
+`action: ask` makes a matching internal call wait for a person's decision before it runs. The request appears in the WebUI dock of the calling Session with the tool, arguments, resolved targets and the asking rules' reasons; the approver may add a note, which the agent receives on approval and on rejection.
+
+```yaml
+- id: confirm-production
+  agent: ops
+  tool: { source: node, name: exec }
+  node: production
+  action: ask
+  reason: Commands on production
+  approval:
+    timeoutSeconds: 1800
+    approvers: [alex]
+```
+
+- `approval` is optional and valid only with `ask`. `timeoutSeconds` is an integer from 30 to 604800. `approvers` lists 1–64 access identity IDs. Ask cannot be combined with an `externalId` selector.
+- The instance administrator can always decide. A scoped WebUI identity decides only when its `webui.sessions` scope includes the Session and every rule that asked for this call names it. When several layers ask, the shortest timeout applies. `approvers` limits who decides, not who sees: anyone who can open the Session sees the request and its arguments, as they see the call in its history.
+- Layers combine deny over ask over allow: any denying layer denies the call; otherwise any asking layer makes it wait. The call is authorized again against the current policy after approval, so a deny installed meanwhile still wins.
+- Without `timeoutSeconds`, foreground calls wait until a decision or Stop. Unattended timer script slices and webhook handler runs use one hour. A pending request expires when Foxwarm restarts; the call is not replayed. If the call is stopped after approval but before it starts, the request is recorded as cancelled.
+- An approval covers exactly one call and the internal checks of that call. An ask that applies only to an internal step of another allowed call (for example, a tool that reads the policy file as part of its work) is not requested and fails the call; ask for the outer tool instead. Nested ToolScript calls are separate calls and ask on their own.
+- A timer that would later create a Session through an asking `create_session` outcome is rejected at registration.
+- Discovery treats an asking tool as possibly invocable. Other Channels receive only a notice that a call is waiting.
 
 ## Match fields
 
@@ -148,7 +194,7 @@ rules:
     action: deny
 ```
 
-This grants only inbound send to one existing Session for `peer` if no earlier rule wins. It does not grant read/list, create a Session, or transfer the external identity's privileges to the receiving Session. Session-list permission exposes a bounded global catalog; it is not filtered by per-target read grants.
+This grants only inbound send to one existing Session for `peer` if no earlier rule wins. It does not grant read/list, create a Session, or transfer the external identity's privileges to the receiving Session. Inbound Session-list permission exposes the bounded global catalog; per-ID read and send grants do not filter it. A model's own Session list shows only itself and the Sessions its policy might let it read, message, assign to, stop or rename.
 
 Internal callers may also use registered relationship matching:
 
@@ -170,20 +216,23 @@ rules:
     action: deny
 ```
 
-The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, and `view_session`. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
+The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `session`, `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, `view_session`, `stop_session`, and the `task` assignment target. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
 
 | Registered family | Target/default behavior |
 | --- | --- |
+| `session` | `sessionId` defaults to the calling Session for every action, including `list`. `{session: {self: true}}` allows the list and the caller's own status; `{sameAgent: true}` also allows status of the Agent's other Sessions. |
 | `send_to_session` | Required `sessionId`; resolves `<main>`, `<parent>`, and catalog aliases. Self-send is rejected by the handler even if policy allows it. |
 | `send_file` | Session target defaults to self only without a non-empty channel target. Channel delivery has no Session relationship target. |
 | `create_timer`, `list_timers`, `update_timer`, `delete_timer` | `sessionId` defaults to self. This matcher scopes the owner, not persisted timer settings or `agentName` for new-session delivery. |
 | `get_archived_messages`, `get_archived_blocks` | `sessionId` defaults to self. |
 | `recall` | Exact recall defaults to self. Vector search without `sessionId` has a self target only with `scope: current-session`; broader/default search has no single Session target. |
 | `view_session` | Required `sessionId`; no universal default. |
+| `stop_session` | Required `sessionId`; no universal default. |
+| `task` | `ownerSessionId`, the Session a Task is assigned to; absent means no match. `<parent>` and `<main>` are not resolved here, so callers must pass the real Session ID. Use the owned-Task matcher on `taskId` for the caller's own Tasks. |
 
-Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The parser's family registry is in `src/toolAuthorization.ts`, and target/default resolution is in `src/toolAuthorizationSessionTargets.ts`; see the [canonical policy contract](../../../docs/code-index/units/src-tool-authorization.md#policy-contract).
+Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The family registry is `ToolAuthorizationPolicy.TargetResolvers` in the Main server; see the [policy selectors and authoritative facts](../../../docs/code-index/units/tool-authorization.md#policy-selectors-and-authoritative-facts) for target and default resolution.
 
-Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `session`, `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. A permitted Session list exposes its bounded catalog; individual read grants do not project that list into a private subset.
+Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. Model-facing Session and Agent lists are filtered by these grants; see List visibility below.
 
 ### Session creation targets
 
@@ -201,7 +250,11 @@ The Agent matcher is registered only for this exact builtin/argument pair; `same
 
 Discovery and default tool injection conservatively project the ordered policy without knowing every future argument or path. A definite identity-only deny can hide a tool; an argument/path/unknown-target denial does not prove that all invocations are denied. Conditional allows may keep the tool visible. Do not diagnose a rule by assuming every denied call removes its tool schema.
 
-`search_tools` has its own authorization and filters returned capabilities. Only `call_tool` is a permission-neutral dispatcher. ToolScript's nested `call_tool` uses the same resolved authorization boundary; that does not make `run_script` or all of its host functionality an unconditional grant.
+`ctl` is a permission-neutral front end: each command, including `tool call`, is authorized as the capability it runs, and `ctl` itself cannot be named in policy. Its help and `tool search` are not separately authorized; they list only commands and tools the caller's policy may allow. A rule naming the removed `search_tools` builtin still loads, matches nothing and is reported as a warning. ToolScript's nested `call_tool` uses the same resolved authorization boundary; that does not make `run_script` or all of its host functionality an unconditional grant.
+
+#### List visibility
+
+`session(action: "list")` and `list_agents` show the caller's own Session and Agent, plus the Sessions and Agents its policy might let it use. A Session is listed when `session` status or rename, `view_session`, `recall` or archive reads with its `sessionId`, `send_to_session`, `stop_session`, or a `task` created for or assigned to it might be allowed. An Agent is listed when it owns a listed Session, or when creating or moving Sessions there, reading its skills or managing it might be allowed. Timers, `send_file`, compaction and settings tools, `delete_session`, `move_session` and parent changes don't add rows. A rule that allows `session` status for every Session lists every Session; limit it with `args.sessionId: {session: {…}}` to narrow the list. The list doesn't grant any call, and hiding a Session doesn't make it confidential.
 
 ### Node and path scope
 
@@ -209,14 +262,71 @@ Discovery and default tool injection conservatively project the ordered policy w
 
 `path` accepts optional `arg` (one name or a list), `allWithin`, and/or `anyNotWithin`. At least one containment condition is required. Omitted `arg` selects all derived path records; no selected records means no match. Supported variables are `${agent.dir}`, `${agent.memoryDir}`, and `${workspace}` (the instance Agent directory root, not the Session cwd). Agent variables cannot match an external caller with no Agent.
 
-Path facts are derived for supported file/memory tools, patch headers, file delivery/image saves, policy candidates, copy legs, and `exec.cwd`; an unrelated MCP tool named `read` gains no filesystem facts. Master paths canonicalize existing symlinks and the nearest existing ancestor for prospective paths. Remote paths remain Node-owned/opaque: they cannot satisfy host `allWithin` rules and count as outside for `anyNotWithin`. Use trusted Node/environment boundaries rather than pretending a Main path base restricts remote files.
+Path facts are derived for supported file/memory tools (a memory tool's `agentName` makes the fact the target Agent's file, so `${agent.memoryDir}` covers only the caller's own memory), patch headers, file delivery/image saves, policy candidates, copy legs, and `exec.cwd`; an unrelated MCP tool named `read` gains no filesystem facts. Master paths canonicalize existing symlinks and the nearest existing ancestor for prospective paths. Remote paths remain Node-owned/opaque: they cannot satisfy host `allWithin` rules and count as outside for `anyNotWithin`. Use trusted Node/environment boundaries rather than pretending a Main path base restricts remote files.
 
 Even a permitted `exec` with a matched cwd can execute commands that access other paths or the network. Path containment is not an OS sandbox and does not promise protection against concurrent symlink replacement between authorization and the filesystem effect.
 
-## Generic policy versus legacy isolation
+## Agent-local layers
 
-Generic deny applies to isolated and non-isolated Sessions. Generic allow passes only this policy layer: current legacy isolated-Agent exact tool rules, bound-Node restrictions, own-Agent master paths, Session relations, own channel attachment requirements, and tool-local validation remain separate checks. A denied call cannot be fixed merely by adding a generic allow if a later structural check rejects it.
+An Agent can also carry its own ordered rule list. Set it with `create_agent({rules})` or replace it with `set_agent_rules`. The list uses the version-1 rule syntax above, written as a JSON array, but without caller selectors (`agent`, `session`, `externalId`): a layer always applies to calls made by Sessions of its own Agent **and of every Agent created from it**, directly or indirectly.
 
-Use [agent-management](../../agent-management/SKILL.md) for actual isolation creation, binding, migration, and lifecycle operations. Do not remove existing isolation as a workaround for a policy mismatch.
+```json
+[
+  {"id": "no-master", "node": {"exact": "master"}, "action": "deny"},
+  {"id": "current-node", "tool": {"source": "node"}, "node": {"current": true}, "action": "allow"},
+  {"id": "report", "tool": {"source": "builtin", "name": "send_to_session"},
+   "args": {"sessionId": {"session": {"relation": "parent"}}}, "action": "allow"},
+  {"action": "deny"}
+]
+```
 
-If a separately approved migration removes isolation, the generic policy still applies, but the legacy exact rules and isolated-only guards no longer do. Review lost path/target/incoming restrictions and persisted automation explicitly; [the generated baseline's limits](isolated-rules.md#differences-from-legacy-isolation) are not proof of full equivalence.
+- **Evaluation.** The global policy decides first. Then every local layer on the creator chain, from the top-level Agent down to the caller's own Agent, must pass. Within a layer the first enabled matching rule decides; a call that matches no rule passes that layer. End a layer with `{"action": "deny"}` to make it an allowlist.
+- **Layers only narrow.** A local allow passes only its own layer. It cannot override a deny or ask from the global policy or another layer, including a global `defaultAction: deny`, so the global policy must also let the intended calls through. Local rules may use `ask` with the same `approval` options; layers combine as described in [Require approval](#require-approval).
+- **Same facts.** Local rules see the same Node, path, Session-target and owned-Task facts as global rules, including `node: {current: true}` for the caller's selected Node.
+- **Who can change a layer.** A model may replace the rules of Agents created by its own Agent, directly or indirectly, but never its own or an ancestor's. Administrators can replace any layer. An empty list removes the layer's rules. Changes apply to the next call; no snapshot refresh is involved.
+- **Global `agent:` rules are unchanged.** A global `agent: A` selector still matches only Sessions of A itself, not Agents created from A. Put rules meant for a whole subtree in A's local layer.
+- **Scope.** Layers apply to internal Sessions only. Inbound MCP callers have no Agent and remain governed by the global policy alone.
+- **Compatibility.** Older Main server versions do not enforce Agent-local layers. Do not run an installation that relies on them with such a version.
+
+Two node-selector details matter for allowlists. A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and the endpoints of file transfers, so scope an environment allowance with `tool: {source: node}` unless those are intended. `node: {current: true}` also matches `master` when a Session is placed there, so put an explicit master deny first. The [agent-management templates](../../agent-management/references/memory-templates/) include complete reviewed layers for a restricted worker and a channel assistant.
+
+## Operation rules
+
+A rule with `op` decides what a call does rather than which tool it calls. It goes in the same ordered `rules` list as version-1 rules (the global policy or an Agent-local layer), and the policy stays `version: 1`.
+
+```yaml
+version: 1
+defaultAction: allow
+rules:
+  - id: no-node-switching
+    op: node.select
+    action: deny
+    reason: Stay on the assigned Node
+  - id: reviewer-reads-workspace
+    agent: reviewer
+    op: env.read
+    path: { within: '${agent.dir}' }
+    action: allow
+  - id: reviewer-no-other-reads
+    agent: reviewer
+    op: env.read
+    action: deny
+```
+
+- `op` names one operation, a list, a family (`env.*`) or `*`. Patterns never include `secret.use`.
+- Selectors: `agent`, `session`, `externalId` (global policy only); `node`; `path` (`within`, `notWithin`); `targetSession` and `parent` (`{session: {self|sameAgent|relation}}` or `{id: [...]}`); `targetAgent` (`{self: true}`, `{descendant: true}` or `{id: [...]}`); `task` (`{owned: true}` or `{created: true}`); `channel`, `secret` (`anyOf`, `owned`), `mcp` (`server`, `tool`), `nodeTool`, `model`; `with` for attributes such as `{change: rename}`. Each listed op must support every selector the rule uses.
+- Each operation of a call is decided by the first rule that matches it, whether that rule is a version-1 rule matching the whole call or an operation rule. Put an operation deny above any broad version-1 allow it should override.
+- Operation rules see normalized actions, so `op: node.select` also covers spellings such as `" Select"`. A version-1 `args: {action: ...}` rule still compares the raw value.
+- A copy is a read of its source and a write of its target, and both must be allowed.
+- `channel` matches the target a send reaches, `instance:conversation`, with the conversation as the transport delivers to it: a Telegram chat ID as a plain integer (`alpha:123` also covers `alpha:0123` and `alpha:123 `), a QQ Bot `kind:id` with the ID trimmed, and a WeWork conversation itself. A WeWork webhook send to anything other than a `wok`/`wrk` chat goes to the configured default webhook, named `instance:/default-webhook`. A target that can't be known before delivery is unresolved: an unregistered instance, a padded WeWork ID, or webhook text to a person while streaming is enabled.
+- Secrets: `op: secret.use` with `secret: {anyOf: [...]}` decides each name separately. Version-1 `secrets` rules keep matching the whole set.
+- Calls that only act on the caller's own turn, runs, transfers or images (for example `wait`, inline `run_script`, `artifact get`) can't be denied by any rule. A `deny` or `ask` rule that names such a builtin still loads, with a warning in the server log, and has no effect on it. Model requests made from scripts can: `op: model.request` with `model: <key>`.
+- When a rule can't establish what it tests (for example a Session that doesn't exist), the call is rejected as unresolved rather than allowed by a default.
+- Older Foxwarm versions reject any policy or Agent layer that contains `op`. After an Agent layer gets an operation rule, the installation requires a version that reads them.
+- `explain_tool_authorization` lists each operation with the rule that decided it (`ruleKind: operation` or `whole-call`).
+
+## Generic policy and tool-local checks
+
+Generic deny applies to every internal Session. Generic allow passes only this policy layer: Agent-local layers, own channel attachment requirements, Node readiness and tool-local validation remain separate checks. A denied call cannot be fixed merely by adding a generic allow if a later check rejects it.
+
+Agents migrated from legacy isolation carry a generated Agent-local layer. Review or replace it with [agent-management](../../agent-management/SKILL.md); a global allow cannot widen it.

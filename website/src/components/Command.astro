@@ -1,0 +1,13 @@
+---
+import Icon from './Icon.astro';
+
+// One shell command with its copy button. The button has its own column, so it never covers the command.
+// Wrapped commands break long lines at spaces on narrow screens; the others keep their lines and scroll.
+interface Props { command: string; prompt: string; copy: string; wrap?: boolean }
+const { command, prompt, copy, wrap = false } = Astro.props;
+const lines = command.split('\n');
+---
+<div class:list={['command', { 'command-wrap': wrap }]}>
+  <pre><code>{lines.map((line, index) => (<span class="command-line"><span class="prompt" aria-hidden="true">{index === 0 || !lines[index - 1].endsWith('\\') ? prompt : ''}</span><span class="command-text">{line}</span></span>))}</code></pre>
+  <button class="copy-button" type="button" data-copy={command} aria-label={copy} title={copy}><Icon name="copy" class="copy-idle" /><Icon name="check" class="copy-done" /></button>
+</div>

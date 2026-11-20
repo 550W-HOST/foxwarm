@@ -114,7 +114,7 @@ internal sealed partial class NodeExecManager(
                     }
                     entries[id] = entry;
                 }
-                await Save();
+                Save();
             }
         }
         catch (FileNotFoundException) { }
@@ -127,37 +127,28 @@ internal sealed partial class NodeExecManager(
         reconciliation = ReconcileLoop();
     }
 
-    private async Task Save()
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(registryPath)!);
-        var temporary =
-            registryPath
-            + "."
-            + Environment.ProcessId
-            + "."
-            + Guid.NewGuid().ToString("N")
-            + ".tmp";
-        try
-        {
-            await File.WriteAllTextAsync(
-                temporary,
-                new JsonObject
-                {
-                    ["execs"] = new JsonArray(
-                        entries.Values.Select(entry => entry.DeepClone()).ToArray()
-                    ),
-                    ["recentExecIds"] = new JsonArray(
-                        recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
-                    ),
-                }.ToJsonString(new() { WriteIndented = true })
-            );
-            File.Move(temporary, registryPath, true);
-        }
-        finally
-        {
-            File.Delete(temporary);
-        }
-    }
+    private void Save() =>
+        new AtomicJsonFile(
+            Path.GetDirectoryName(registryPath)!,
+            Path.GetFileName(registryPath)
+        ).WriteTextPayload(
+            new JsonObject
+            {
+                ["execs"] = new JsonArray(
+                    entries.Values.Select(entry => entry.DeepClone()).ToArray()
+                ),
+                ["recentExecIds"] = new JsonArray(
+                    recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+                ),
+            }.ToJsonText(indented: true),
+            default
+        );
+
+    // Set while an applied change has not reached the registry file. A save can fail after the
+    // in-memory change, for example on Windows while another process has the registry open, which
+    // blocks replacing it. Reconciliation writes it again, so the file does not keep a completed
+    // entry (and repeat its completion after a restart) until some unrelated later change.
+    private bool savePending;
 
     private async Task Mutate(Action action)
     {
@@ -165,12 +156,41 @@ internal sealed partial class NodeExecManager(
         try
         {
             action();
-            await Save();
+            savePending = true;
+            Save();
+            savePending = false;
         }
         finally
         {
             mutation.Release();
         }
+    }
+
+    // Values Main resolved for exec.secretEnv. They must cover exactly the requested variables:
+    // a call naming secrets without Main's values (for example an external-owner call) is
+    // refused rather than run without them.
+    internal static IReadOnlyDictionary<string, string>? SecretEnvironment(
+        JsonObject frame,
+        JsonObject args
+    )
+    {
+        var requested = args["secretEnv"] is { } names
+            ? ExecSecretEnvironment.Parse(names, "secretEnv")
+            : null;
+        var values = frame["env"] is { } env ? ExecSecretEnvironment.Parse(env, "env") : null;
+        if (requested is null && values is null)
+            return null;
+        if (
+            requested is null
+            || values is null
+            || !requested
+                .Keys.Order(StringComparer.Ordinal)
+                .SequenceEqual(values.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal)
+        )
+            throw new InvalidDataException(
+                "Only the Main server supplies secretEnv values, and only for the variables the call names."
+            );
+        return values;
     }
 
     internal async Task<JsonObject> Start(
@@ -185,10 +205,11 @@ internal sealed partial class NodeExecManager(
         var args = frame["args"] as JsonObject ?? new JsonObject();
         var command =
             Text(args, "command")
-            ?? (args["command"] is JsonObject ? "[object Object]" : args["command"]?.ToJsonString())
+            ?? (args["command"] is JsonObject ? "[object Object]" : args["command"]?.ToJsonText())
             ?? "";
         if (string.IsNullOrWhiteSpace(command))
             throw new InvalidDataException("exec requires command");
+        var environment = SecretEnvironment(frame, args);
         var requested = Text(frame, "backgroundExecId");
         string id;
         await mutation.WaitAsync();
@@ -298,6 +319,9 @@ internal sealed partial class NodeExecManager(
                 launch.Environment["FOXWARM_EXEC_STATUS_PATH"] = windowsLog + ".exit.json";
                 launch.Environment["FOXWARM_EXEC_CWD_PATH"] = windowsLog + ".cwd.txt";
             }
+            // Stored secrets reach only the process environment, never the script or the entry.
+            if (environment is not null)
+                ExecSecretEnvironment.Apply(launch.Environment, environment);
             BeforeLaunch?.Invoke();
             if (stop.IsCancellationRequested)
                 throw new InvalidDataException(
@@ -387,7 +411,7 @@ internal sealed partial class NodeExecManager(
                     ? raw["exitCode"]!.DeepClone()
                     : null,
                 ["finishedAt"] = Text(raw, "finishedAt") is { Length: > 0 } finished
-                    ? finished
+                    ? ExecOutput.WrapperFinishedAt(finished, file)
                     : DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             };
             if (Text(raw, "finishedAt") is not { Length: > 0 })
@@ -411,8 +435,8 @@ internal sealed partial class NodeExecManager(
         };
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         var temporary = file + ".tmp." + Environment.ProcessId + "." + Guid.NewGuid().ToString("N");
-        await File.WriteAllTextAsync(temporary, fallback.ToJsonString());
-        File.Move(temporary, file, true);
+        await File.WriteAllTextAsync(temporary, fallback.ToJsonText());
+        AtomicFileReplace.Replace(temporary, file);
         return fallback;
     }
 
@@ -470,6 +494,15 @@ internal sealed partial class NodeExecManager(
 
     internal async Task Reconcile()
     {
+        if (savePending)
+            try
+            {
+                await Mutate(() => { });
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine("[exec_registry_save] " + error.GetType().Name);
+            }
         await Task.WhenAll(
             entries.Values.Select(async entry =>
             {
@@ -486,7 +519,7 @@ internal sealed partial class NodeExecManager(
                     var status = await Status(entry);
                     if (status is null)
                         return;
-                    await deliver(entry, status, Completion(entry, status));
+                    await deliver(entry, status, await Completion(entry, status));
                     await Remove(entry);
                 }
                 catch (Exception error)

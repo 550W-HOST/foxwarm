@@ -22,7 +22,8 @@ before(async () => {
       const active = (state, extra = {}) => ({ state, queueLength: 0, busy: ['requesting-model','running-tool'].includes(state), ...extra })
       const examples = [
         ['request', active('requesting-model', {active: {phase: 'normal-turn', modelKey: 'Demo model'}})],
-        ['tool', active('running-tool', {tool: {name: 'exec', source: 'node', executionNode: 'compute-node', argsPreview: 'python benchmark.py', startedAt: 1, index: 0, total: 2}})],
+        // The owner publishes the call's summary as activity; argsPreview stays the details evidence.
+        ['tool', active('running-tool', {activity: {tool: 'Benchmark the parser', latest: 'tool'}, tool: {name: 'exec', source: 'node', executionNode: 'compute-node', argsPreview: 'python benchmark.py', startedAt: 1, index: 0, total: 2}})],
         ['read', active('running-tool', {tool: {name: 'read', source: 'node', target: 'report.md', executionNode: 'master', argsPreview: 'docs/report.md', startedAt: 1}})],
         ['compact', active('requesting-model', {active: {phase: 'compaction'}, compaction: {operationId: 'demo', phase: 'planning', background: false}})],
         ['waiting', active('waiting', {waiting: {waitId: 'demo-wait', waitingFor: 'all-sessions', waitAllSessions: ['analysis','review'], satisfiedSessions: [], pendingSessions: ['analysis','review'], reason: 'Review results'}})],
@@ -78,7 +79,7 @@ test('semantic model/tool colors, distinct poses and explicit execution labels',
    return {model:get('request'),tool:get('tool'),read:get('read'),compact:get('compact'),waiting:get('waiting'),retry:get('retry'),stopping:get('stopping'),idle:get('interrupted'),error:get('error'),unknown:get('unknown'),overflow:document.documentElement.scrollWidth>innerWidth}
   })
   assert.equal(result.model.kind,'request');assert.equal(result.tool.kind,'tool');assert.notEqual(result.model.color,result.tool.color)
-  assert.match(result.tool.text,/Executing exec/);assert.match(result.read.text,/Reading report.md/);assert.equal(result.compact.kind,'compact');assert.match(result.waiting.text,/Waiting for 2 sessions/)
+  assert.match(result.tool.text,/Benchmark the parser/);assert.match(result.read.text,/Reading report.md/);assert.equal(result.compact.kind,'compact');assert.match(result.waiting.text,/Waiting for 2 sessions/)
   assert.equal(result.retry.kind,'retry');assert.equal(result.stopping.kind,'stopping');assert.equal(result.idle.kind,'interrupted');assert.equal(result.error.kind,'error');assert.equal(result.unknown.kind,'unknown');assert.equal(result.overflow,false)
   if(process.env.FOXWARM_RUNTIME_ARTIFACT_DIR){await mkdir(process.env.FOXWARM_RUNTIME_ARTIFACT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_RUNTIME_ARTIFACT_DIR+'/runtime-status-desktop.png',fullPage:true})}
  }finally{await page.close()}

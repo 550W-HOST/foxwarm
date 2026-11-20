@@ -27,7 +27,8 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
 
     internal static async Task<StreamingModelPeer> StartAsync(
         bool websocket,
-        Func<Context, int, Task> respond
+        Func<Context, int, Task> respond,
+        RequestDelegate? images = null
     )
     {
         var builder = WebApplication.CreateBuilder();
@@ -37,6 +38,12 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
         var peer = new StreamingModelPeer(app, respond);
         app.UseWebSockets();
         app.Map("/responses", websocket ? peer.WebSocket : peer.Http);
+        // Images API endpoints are plain HTTP for every provider transport.
+        if (images is not null)
+        {
+            app.Map("/images/generations", images);
+            app.Map("/images/edits", images);
+        }
         await app.StartAsync();
         peer.Uri = new Uri(app.Urls.Single());
         return peer;

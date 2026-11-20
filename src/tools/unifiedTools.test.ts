@@ -383,8 +383,8 @@ test('search_tools limit normalization handles omitted, zero, fractions, non-fin
 test('call_tool rejects node capabilities as builtin and accepts them through node source', async () => {
   await assert.rejects(() => call_tool(
     {
-      toolId: 'builtin:browse_list',
-      args: {},
+      toolId: 'builtin:read',
+      args: { filePath: 'unused.txt' },
     },
     {
       sessionId: 'main',
@@ -392,11 +392,11 @@ test('call_tool rejects node capabilities as builtin and accepts them through no
     } as any,
   ), /node capability, not a builtin/i);
 
-  const result = await call_tool({ source: 'node', name: 'browse_list', args: {} }, {
+  const result = await call_tool({ source: 'node', name: 'read', args: { filePath: process.execPath, startLine: 1, endLine: 1 } }, {
     sessionId: 'main', session: { agent: 'main', currentNode: 'master' },
   } as any);
 
-  assert.match(String(result), /no tabs open/i);
+  assert.ok(String(result).length > 0);
 });
 
 test('direct and unified builtin dispatch keep session-owner tools local under a remote currentNode', async () => {
@@ -1058,15 +1058,10 @@ test('search_tools and call_tool schemas retain bounded discovery and invocation
   assert.equal((mcpConfigDef?.parameters?.properties as any)?.timeoutSeconds?.maximum, 3600);
 });
 
-test('default model-facing tool definitions exclude hidden browser and advanced tools', () => {
+test('default model-facing tool definitions exclude hidden advanced tools', () => {
   assert.equal(typeof (tools as any).refresh_session_snapshot, 'function');
   assert.equal((tools as any).update_session_snapshot, undefined);
   for (const name of [
-    'browse_open',
-    'browse_list',
-    'browse_get',
-    'browse_close',
-    'browse_interact',
     'get_archived_messages',
     'get_archived_blocks',
     'delete_session',
@@ -1234,10 +1229,10 @@ test('defaultInject metadata is the single source of truth for default model inj
     assert.equal(definition.defaultInject, true, `${definition.name} should explicitly opt in to default model injection`);
   }
 
-  const hiddenBrowse = definitions.find(def => def.name === 'browse_list');
-  assert.ok(hiddenBrowse);
-  assert.equal(hiddenBrowse?.defaultInject, undefined);
-  assert.equal(modelFacingDefinitions.some(def => def.name === 'browse_list'), false);
+  const hiddenTool = definitions.find(def => def.name === 'get_archived_messages');
+  assert.ok(hiddenTool);
+  assert.equal(hiddenTool?.defaultInject, undefined);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'get_archived_messages'), false);
 });
 
 test('default model-facing tool names stay consolidated', () => {
@@ -1315,8 +1310,8 @@ test('consolidated resource tool schemas expose their approved actions', () => {
   assert.equal(definitions.some(def => def.name === 'sandbox' || def.name === 'node_resource'), false);
 });
 
-test('builtin file/browser tool schemas no longer expose node selector parameters', () => {
-  for (const name of ['read', 'write', 'edit', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
+test('builtin file tool schemas no longer expose node selector parameters', () => {
+  for (const name of ['read', 'write', 'edit']) {
     const def = definitions.find(entry => entry.name === name);
     assert.ok(def, `${name} should exist`);
     assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'node'), false, `${name} should not expose node parameter`);

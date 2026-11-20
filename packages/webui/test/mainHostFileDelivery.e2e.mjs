@@ -8,13 +8,14 @@ import sharp from 'sharp'
 import { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { modelCall } from './ctlModelCalls.mjs'
 const options = { env: {} }, fixture = await createHostFixture('file-delivery', options), records = [], failures = [], counts = new Map(), sockets = []
 const home = join(fixture.root, 'home'); await mkdir(home); options.env.HOME = home; options.cwd = fixture.root
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 150, g: 30, b: 80, alpha: 1 } } }).png().toBuffer(), source = join(fixture.work, 'source.png')
 await writeFile(source, png); await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 await writeFile(join(fixture.data, 'state/mcp.json'), JSON.stringify({ servers: { image: { transport: 'stdio', command: process.execPath, args: [resolve(import.meta.dirname, 'mainHostImages.peer.mjs'), fixture.root, source], timeoutSeconds: 20 } } }))
 const headers = { authorization: 'Bearer synthetic-file-delivery-api' }, route = id => '/api/sessions/' + encodeURIComponent(id), authority = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'))
-const call = (id, name, args) => ({ id, name, args }), final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-FILES-' + key }] }]
+const call = (id, name, args) => ({ id, ...modelCall(name, args) }), final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-FILES-' + key }] }]
 function labels(body) { const values = []; const walk = value => { if (typeof value === 'string') for (const match of value.matchAll(/\[IMAGE: id=("(?:\\.|[^"\\])*")/g)) values.push(JSON.parse(match[1])); else if (value && typeof value === 'object') for (const item of Object.values(value)) walk(item) }; walk(body); return values }
 function plan(body, full = body.input || body.messages) {
   const key = [...JSON.stringify(full).matchAll(/FILES:([a-z-]+)/g)].at(-1)?.[1]; assert(key); const n = counts.get(key) || 0; counts.set(key, n + 1); const ids = labels(full); let calls = []
@@ -70,7 +71,7 @@ try {
   assert.equal((await download('relative')).status, 400); assert.equal((await download(join(fixture.root, 'absent'))).status, 404)
   await writeFile(outside, 'Changed after readiness.'); assert.equal(await (await download(outside)).text(), 'Changed after readiness.'); await rm(outside); assert.equal((await download(outside)).status, 404)
   // Normal command ingress creates a real persisted attachment without admitting the cold target.
-  assert.equal((await fixture.api('POST', route('target') + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await fixture.api('POST', route('target') + '/message', { text: '/session clear-parent' })).status, 200)
   const bindings = JSON.parse(await readFile(join(fixture.data, 'state/channels.json'), 'utf8')); assert.equal(bindings.channels['webui:target'].sessionId, 'target')
   for (const [provider, protocol] of [['r', 'responses'], ['c', 'completions'], ['a', 'anthropic'], ['w', 'websocket']]) {
     const id = 'export-' + protocol; assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200); assert.equal((await fixture.api('POST', route(id) + '/model', { model: provider })).status, 200)

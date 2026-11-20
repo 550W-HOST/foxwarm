@@ -479,9 +479,9 @@ var positiveInteger = {
 var openaiWebSearchOptions = {
   type: "object",
   additionalProperties: true,
-  description: "Opt-in OpenAI Responses hosted web search settings. Ignored by non-Responses providers.",
+  description: "Hosted web search for Responses and Anthropic Messages. Domain and location settings apply to both protocols.",
   properties: {
-    enabled: { type: "boolean", description: "Enable the hosted web_search tool for eligible Responses requests." },
+    enabled: { type: "boolean", description: "Enable hosted web search for eligible conversation and compaction requests." },
     toolChoice: { enum: ["auto", "required"], description: "Responses tool-selection mode when hosted search is enabled." },
     searchContextSize: { enum: ["low", "medium", "high"], description: "Amount of search context requested from OpenAI." },
     allowedDomains: { type: "array", items: { type: "string", minLength: 1 }, description: "Optional domain filter for web search." },
@@ -503,7 +503,18 @@ var openaiWebSearchConfig = {
     { type: "boolean" },
     openaiWebSearchOptions
   ],
-  description: "Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers."
+  description: "Hosted web search for Responses and Anthropic Messages. Use true/false for defaults or an object for tuning."
+};
+var openaiImageGenerationPricing = {
+  type: "object",
+  required: ["input", "imageInput", "output"],
+  additionalProperties: false,
+  description: "Image model prices in USD per million tokens, used with api images. Set all three rates. Without pricing, image requests record no cost. Changing prices doesn't recalculate saved costs.",
+  properties: {
+    input: { type: "number", minimum: 0, description: "USD per million text input tokens." },
+    imageInput: { type: "number", minimum: 0, description: "USD per million reference-image input tokens." },
+    output: { type: "number", minimum: 0, description: "USD per million output tokens." }
+  }
 };
 var openaiImageGenerationOptions = {
   type: "object",
@@ -511,13 +522,16 @@ var openaiImageGenerationOptions = {
   description: "Opt-in OpenAI Responses hosted image generation settings. Ignored by non-Responses providers.",
   properties: {
     enabled: { type: "boolean", description: "Enable the hosted image_generation tool for eligible Responses requests." },
-    model: { type: "string", minLength: 1, description: "Optional hosted image model override. Omitted uses the provider default." },
+    mode: { enum: ["hosted", "separate", "isolated"], description: "Hosted uses the conversation request. Separate uses generate_image with a reasoning-free request. Isolated is a legacy alias for separate." },
+    api: { enum: ["responses", "images"], description: "API used in separate mode. responses (default) sends a Responses request with the image tool; images calls the Images API and requires model." },
+    model: { type: "string", minLength: 1, description: "Image model. Required when api is images; for responses, omit it to use the provider default." },
     action: { enum: ["auto", "generate", "edit"], description: "Hosted image action. Defaults to auto." },
     size: { type: "string", minLength: 1, description: "Requested output size for the hosted image model." },
     quality: { enum: ["auto", "low", "medium", "high", "xhigh", "max"], description: "Requested output quality." },
     background: { enum: ["auto", "opaque", "transparent"], description: "Requested output background." },
     outputFormat: { enum: ["png", "jpeg", "webp"], description: "Requested output image format." },
-    outputCompression: { type: "integer", minimum: 0, maximum: 100, description: "Output compression percentage where the provider supports it." }
+    outputCompression: { type: "integer", minimum: 0, maximum: 100, description: "Output compression percentage where the provider supports it." },
+    pricing: openaiImageGenerationPricing
   }
 };
 var openaiImageGenerationConfig = {
@@ -545,8 +559,47 @@ var modelEffortConfig = {
     }
   }
 };
+var textRedaction = {
+  description: "Replace detected private text before sending it to the model and restore known placeholders in ordinary output. Defaults to disabled; options inherit field by field from defaults to provider to model.",
+  anyOf: [
+    { type: "boolean" },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", default: false },
+        endpoint: { type: "string", pattern: "^https?://", description: "Full URL of the text classification endpoint. Required when enabled." },
+        apiKey: { type: "string", description: "Optional Bearer credential for the detection service." },
+        threshold: { type: "number", minimum: 0, maximum: 1, default: 0.5 },
+        timeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 3e4 },
+        maxConcurrency: { type: "integer", minimum: 1, maximum: 64, default: 1, description: "Detection requests sent to this endpoint at once, shared by all Sessions. Use 1 for a service that handles one request at a time without queueing." },
+        batchBytes: { type: "integer", minimum: 0, maximum: 262144, default: 0, description: "Combine short texts into detection requests of up to this many bytes. 0 sends each text separately. Combined texts give the detector more context, so results can differ slightly." },
+        keepValues: { type: "array", items: { type: "string", pattern: "\\S" }, default: [], description: "Values never replaced, such as project or product names the detector mistakes for personal data. Matching ignores case. A list replaces the inherited list. Foxwarm's own names, such as channel platforms and message tags, are always kept." },
+        excludeLabels: { type: "array", items: { type: "string", pattern: "\\S" }, default: ["private_date", "private_url"], description: "Detection labels to leave unchanged. A list replaces the inherited one; an empty list redacts every label." }
+      }
+    }
+  ]
+};
+var defaultTextRedaction = {
+  ...textRedaction,
+  anyOf: [textRedaction.anyOf[0], {
+    ...textRedaction.anyOf[1],
+    properties: {
+      ...textRedaction.anyOf[1].properties,
+      knownLabels: {
+        anyOf: [{ type: "array", items: { type: "string", pattern: "\\S" } }, { const: "all" }],
+        default: ["private_email", "private_phone", "private_address"],
+        description: 'Labels whose detected values are also masked wherever they appear later, in every Session. Use [] to turn this off, or "all" for every label. Only valid under defaults.textRedaction.'
+      }
+    }
+  }]
+};
 var modelDefaultProperties = {
+  retryIntervalsMs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0, maximum: 2147483647 }, default: [2e3, 5e3, 1e4, 2e4, 4e4, 6e4], description: "Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline." },
+  textRedaction,
   contextLimit: { ...positiveInteger, description: "Context limit in tokens." },
+  idleCompactMinutes: { type: "number", minimum: 0, description: "Compact idle Sessions after this many minutes from their last provider request, before the provider prompt cache expires. Zero or omitted disables idle compaction. Model overrides provider, then defaults." },
+  idleCompactMinContextPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, description: "Minimum fraction of the context window the last request must exceed for idle compaction; default 0.5. Model overrides provider, then defaults." },
   maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
   providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." },
   imageInput: { type: "boolean", default: true, description: "Whether the model accepts image input. When false, images stay in the Session but each request to this model sends a short text placeholder instead." }
@@ -628,6 +681,8 @@ var providerObjectEntry = {
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: modelOverrideProperties.asyncCompact,
+    idleCompactMinutes: modelOverrideProperties.idleCompactMinutes,
+    idleCompactMinContextPercent: modelOverrideProperties.idleCompactMinContextPercent,
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
     disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
     keepReasoningOnError: { type: "boolean", default: false, description: "Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution." },
@@ -645,7 +700,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -653,7 +708,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -707,7 +762,7 @@ var MODELS_CONFIG_SCHEMA = {
       type: "object",
       additionalProperties: false,
       description: "Default model settings. Concrete providers and model entries may override these values.",
-      properties: modelDefaultProperties
+      properties: { ...modelDefaultProperties, textRedaction: defaultTextRedaction }
     },
     providers: {
       type: "object",
@@ -732,6 +787,7 @@ var guestAgent = {
   properties: {
     agentId: { type: "string" },
     mode: { enum: ["single", "inherited"] },
+    template: { type: "string", description: "Agent whose rules apply to this channel's guest Agents." },
     isolated: { type: "boolean" },
     node: { type: "string" }
   }
@@ -889,6 +945,8 @@ var APP_CONFIG_SCHEMA = {
                 type: "object",
                 additionalProperties: false,
                 minProperties: 1,
+                if: { required: ["webhook"] },
+                then: { maxProperties: 1 },
                 properties: {
                   webui: {
                     type: "object",
@@ -898,14 +956,56 @@ var APP_CONFIG_SCHEMA = {
                       sessions: { type: "array", minItems: 1, maxItems: 256, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 512 } }
                     }
                   },
-                  mcp: { type: "object", additionalProperties: false, maxProperties: 0 }
+                  mcp: { type: "object", additionalProperties: false, maxProperties: 0 },
+                  webhook: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["session", "verify"],
+                    allOf: [
+                      { if: { not: { properties: { verify: { const: "github" } } } }, then: { not: { required: ["events"] } } },
+                      {
+                        if: { required: ["action"], properties: { action: { const: "toolscript" } } },
+                        then: { required: ["script"], not: { required: ["wake"] } },
+                        else: { not: { required: ["script"] } }
+                      }
+                    ],
+                    properties: {
+                      session: { type: "string", minLength: 1, maxLength: 512, pattern: "^[^*]+$" },
+                      verify: {
+                        oneOf: [
+                          { type: "string", enum: ["github", "bearer"] },
+                          {
+                            type: "object",
+                            additionalProperties: false,
+                            required: ["header"],
+                            properties: { header: { type: "string", pattern: "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$" } }
+                          }
+                        ]
+                      },
+                      events: { type: "array", minItems: 1, maxItems: 64, uniqueItems: true, items: { type: "string", pattern: "^[A-Za-z0-9_.:-]{1,128}$" } },
+                      action: { type: "string", enum: ["message", "toolscript"], default: "message" },
+                      wake: { type: "boolean", default: true },
+                      script: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                          code: { type: "string", minLength: 1 },
+                          filePath: { type: "string", minLength: 1 },
+                          node: { type: "string", minLength: 1 },
+                          args: { type: "object", not: { required: ["webhook"] } },
+                          timeoutSecs: { type: "number", exclusiveMinimum: 0 }
+                        },
+                        anyOf: [{ required: ["code"] }, { required: ["filePath"] }]
+                      }
+                    }
+                  }
                 }
               }
             }
           }
         }
       },
-      description: "Startup-only shared WebUI and inbound MCP identities. Declare each surface explicitly and restart after changes."
+      description: "Shared WebUI, inbound MCP and webhook identities. Declare each surface explicitly; a webhook identity declares only the webhook surface. Saved identities apply while the HTTP server is running."
     },
     agentTree: {
       type: "object",
@@ -1021,6 +1121,11 @@ var APP_CONFIG_SCHEMA = {
         enableWebUI: { type: "boolean" },
         enableTrigger: { type: "boolean" },
         httpPort: { type: "integer", minimum: 1, maximum: 65535 },
+        httpHost: {
+          type: "string",
+          default: "0.0.0.0",
+          description: "IP address the server listens on, such as 127.0.0.1 for this computer only. Host names are not accepted. Requires restart."
+        },
         enableTUI: { type: "boolean" }
       }
     },
@@ -1213,7 +1318,6 @@ async function addFoxwarmFolder(request, name) {
   return { status: covering ? "existing" : "added", uri: uri.toString(true) };
 }
 async function revealWorkspaceRoot(uri) {
-  await vscode3.commands.executeCommand("workbench.view.explorer");
   await vscode3.commands.executeCommand("revealInExplorer", uri);
 }
 async function openManagedWorkspaceRoot(kind, provider) {
@@ -1288,6 +1392,7 @@ async function openFoxwarmFile(request, provider) {
       );
     }
   }
+  await vscode3.commands.executeCommand("foxwarm-webui.waitForEditorRestore");
   await vscode3.window.showTextDocument(document, { preview: true, selection });
   await revealWorkspaceRoot(uri);
   if (existing?.isDirty) {

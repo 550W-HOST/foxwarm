@@ -23,7 +23,9 @@ internal sealed partial class QQBotChannel : IManagedChannel
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
-    private readonly Action<Exception> log;
+    private readonly ChannelHealth health;
+    private const string GatewayPath = "QQ Bot gateway";
+    private const string SendingPath = "QQ Bot sending";
     private readonly Func<DateTimeOffset> now;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
     private readonly TimeSpan? partTimeout;
@@ -48,14 +50,14 @@ internal sealed partial class QQBotChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        Action<Exception> log
+        ChannelHealth health
     )
     {
         this.id = id;
         this.config = (JsonObject)config.DeepClone();
         this.sessions = sessions;
         this.router = router;
-        this.log = log;
+        this.health = health;
         partTimeout = dependencies?.QQBotPartTimeout;
         now = dependencies?.Now ?? (() => DateTimeOffset.UtcNow);
         delay = dependencies?.Delay ?? Task.Delay;
@@ -70,7 +72,13 @@ internal sealed partial class QQBotChannel : IManagedChannel
         groupLimit = GroupOption("groupContextLimit", 10, 0, 50);
         batchWindow = GroupOption("groupBatchWindowMs", 5000, 250, 30000, true);
         media = new QQBotMedia(sessions, http, config["media"] as JsonObject, dependencies);
-        Transport = new("qqbot", SendAsync, SendFileAsync, TypingAsync);
+        Transport = new(
+            "qqbot",
+            SendAsync,
+            SendFileAsync,
+            TypingAsync,
+            Conversation: (conversation, _) => Parse(conversation) is var (kind, id) ? kind + ":" + id : null
+        );
     }
 
     internal RegisteredChannel Transport { get; }
@@ -112,7 +120,7 @@ internal sealed partial class QQBotChannel : IManagedChannel
     private void RequireCurrent(long expected)
     {
         if (!Current(expected))
-            throw new IOException("QQ Bot operation was invalidated before delivery.");
+            throw new ChannelProblem("the connection was replaced before delivery");
     }
 
     private async Task ObserveAsync(Task operation)
@@ -124,7 +132,7 @@ internal sealed partial class QQBotChannel : IManagedChannel
         catch (OperationCanceledException) when (stopped) { }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
         }
     }
 
@@ -176,7 +184,7 @@ internal sealed partial class QQBotChannel : IManagedChannel
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
-            throw new ChannelFailure("token acquisition", error);
+            throw new ChannelFailure("QQ Bot token request", error);
         }
         finally
         {
@@ -199,7 +207,7 @@ internal sealed partial class QQBotChannel : IManagedChannel
         value?.GetValueKind() == System.Text.Json.JsonValueKind.Number ? Number(value) : null;
 
     private static StringContent JsonContent(JsonObject body) =>
-        new(body.ToJsonString(), Encoding.UTF8, "application/json");
+        new(body.ToJsonText(), Encoding.UTF8, "application/json");
 
     private async Task<JsonObject> ApiAsync(
         string path,

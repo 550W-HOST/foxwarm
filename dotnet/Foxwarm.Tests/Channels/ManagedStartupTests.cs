@@ -151,6 +151,7 @@ public sealed class ManagedStartupTests
             var status = await Command("status");
             Assert.Equal(Environment.ProcessId, status["pid"]!.GetValue<int>());
             Assert.False(status["stopping"]!.GetValue<bool>());
+            Assert.True(status["ready"]!.GetValue<bool>());
             Assert.Equal(
                 Path.Combine(data, "state", "logs", "foxwarm.stdout.log"),
                 status["stdoutLog"]!.GetValue<string>()

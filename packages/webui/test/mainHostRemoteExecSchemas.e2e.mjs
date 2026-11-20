@@ -6,11 +6,12 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('remote-exec-schemas')
 const plans = new Map(), rounds = new Map(), failures = [], schemaEvidence = []
 let canonicalTools
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'SCHEMA-DONE-' + key }] }]
 const peer = createServer(async (request, response) => {
   try {
@@ -82,7 +83,7 @@ try {
   state = await turn('policy', [call('policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: 'deny-exec.yaml' } })])
   assert(!pair(state, 'policy').error, JSON.stringify(pair(state, 'policy')))
   state = await turn('denied', [call('denied', 'exec', { command: 'printf forbidden > denied-effect' })])
-  assert.equal(pair(state, 'denied').error.type, 'tool_authorization_denied')
+  assert.equal(pair(state, 'denied').code, 'tool_authorization_denied')
   assert.equal(await access(join(remote, 'denied-effect')).then(() => true, () => false), false)
   const calls = state.history.flatMap(row => row.parts || []).filter(part => part.functionCall).map(part => part.functionCall.id)
   const replies = state.history.flatMap(row => row.parts || []).filter(part => part.functionResponse).map(part => part.functionResponse.tool_use_id)

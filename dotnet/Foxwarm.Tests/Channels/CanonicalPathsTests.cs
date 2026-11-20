@@ -190,7 +190,6 @@ public sealed class CanonicalPathsTests
                 JsonNode.Parse(await File.ReadAllTextAsync(file))
             )
         );
-        await agents.SetIsolationAsync("child", null, false, new JsonArray());
         var reopened = new AgentCatalog(app, root, canonicalLayout: true);
         Assert.Equal("directory_only", reopened.Inherit("child"));
         Assert.True(
@@ -301,7 +300,7 @@ public sealed class CanonicalPathsTests
     }
 
     [Fact]
-    public async Task Normal_manager_uses_Agents_policy_base_and_preserves_native_cwd_and_isolation()
+    public async Task Normal_manager_uses_Agents_policy_base_and_preserves_native_cwd_and_migrates_isolation()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -386,35 +385,12 @@ public sealed class CanonicalPathsTests
                 CancellationToken.None
             )
         );
-        // Canonical main/agents is ordinary own content, unlike the retained sibling-Agent tree.
-        manager.RequireMainFileSourcePath(owner, Path.Combine(own, "agents", "script.py"));
-        Assert.Throws<ToolAuthorizationDeniedException>(() =>
-            manager.RequireMainFileSourcePath(owner, Path.Combine(data, "outside.py"))
-        );
-        var request = new ToolAuthorizationRequest(
-            "node",
-            "read",
-            null,
-            new(),
-            [new("filePath", "agents/test", Path.Combine(own, "agents", "test"), "master")],
-            "main",
-            owner.Id,
-            "master",
-            paths.AgentsRoot,
-            own,
-            Path.Combine(own, "memory")
-        );
-        IsolatedToolCompatibility.Check(new(true, null, new()), request, _ => null);
-        Assert.Throws<ToolAuthorizationDeniedException>(() =>
-            IsolatedToolCompatibility.Check(
-                new(true, null, new()),
-                request with
-                {
-                    Workspace = own,
-                },
-                _ => null
-            )
-        );
+        // Startup migrated the isolated canonical main Agent instead of refusing it: the
+        // retained-layout blocker applies only to the shared-workspace layout.
+        var migrated = manager.AgentMetadata["main"]!.AsObject();
+        Assert.True(migrated["legacyIsolation"] is JsonObject);
+        Assert.Null(migrated["legacyIsolation"]!["failClosed"]);
+        Assert.True(migrated["isolated"]!.GetValue<bool>());
     }
 
     [Fact]

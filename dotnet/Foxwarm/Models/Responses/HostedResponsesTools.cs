@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 using Foxwarm.Images;
 using Foxwarm.Sessions;
 
@@ -9,7 +10,8 @@ internal sealed record GeneratedImageNormalization(
     Dictionary<int, JsonObject> Parts,
     IReadOnlyList<string> Failures,
     int SuccessfulCount,
-    IReadOnlyDictionary<string, byte[]> ReplayBytes
+    IReadOnlyDictionary<string, byte[]> ReplayBytes,
+    Dictionary<int, JsonObject> FailureParts
 );
 
 internal sealed class GeneratedImageBudget
@@ -75,15 +77,18 @@ internal static class HostedResponsesTools
 
     internal static async Task<GeneratedImageNormalization> ExternalizeAsync(
         JsonArray output,
-        ImageBlobStore images,
+        ImageBlobStore? images,
         string sourceModelId,
         CancellationToken token,
         GeneratedImageBudget? budget = null,
-        int outputStart = 0
+        int outputStart = 0,
+        string? responseId = null,
+        Func<string, string>? redact = null
     )
     {
         var parts = new Dictionary<int, JsonObject>();
         var failures = new List<string>();
+        var failureParts = new Dictionary<int, JsonObject>();
         budget ??= new GeneratedImageBudget();
         var success = 0;
         var replayBytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
@@ -91,7 +96,22 @@ internal static class HostedResponsesTools
         {
             if (output[index] is not JsonObject item || !IsGeneratedImage(item))
                 continue;
+            var summary = HostedImageEvidence.Summary(item, responseId, redact);
             var imageId = ImageId(Text(item["id"]), outputStart + index);
+            void Fail(string reason)
+            {
+                reason =
+                    HostedImageEvidence.SafeText(reason, item, redact)
+                    ?? "Image generation failed.";
+                var part = HostedImageEvidence.FailurePart(
+                    summary,
+                    ImageId(Text(summary["id"]), outputStart + index),
+                    reason,
+                    sourceModelId
+                );
+                failureParts[index] = part;
+                failures.Add(Text(part["text"])!);
+            }
             while (!budget.UsedIds.Add(imageId))
                 imageId +=
                     "_"
@@ -100,12 +120,21 @@ internal static class HostedResponsesTools
                     );
             if (!IsCompletedGeneratedImage(item))
             {
-                failures.Add(imageId + ": image generation result was missing or incomplete.");
+                Fail(
+                    Text(item["status"]) == "failed"
+                        ? "Image generation failed."
+                        : "Image generation result was missing or incomplete."
+                );
                 continue;
             }
             if (budget.Success >= MaxImages)
             {
-                failures.Add(imageId + ": response exceeded the image limit.");
+                Fail("Response exceeded the image limit.");
+                continue;
+            }
+            if (images is null)
+            {
+                Fail("Image storage is unavailable.");
                 continue;
             }
             try
@@ -171,10 +200,10 @@ internal static class HostedResponsesTools
             }
             catch (Exception error)
             {
-                failures.Add(imageId + ": " + error.Message);
+                Fail(error.Message);
             }
         }
-        return new(parts, failures, success, replayBytes);
+        return new(parts, failures, success, replayBytes, failureParts);
     }
 
     internal static JsonObject BuildReplayItem(JsonObject metadata, byte[] bytes)
@@ -212,7 +241,22 @@ internal static class HostedResponsesTools
                 )
                 .ToArray()
         );
-        return $"[IMAGE: id={imageId}, size={width}x{height}] you can use image_crop({{ id: \"{imageId}\", x: 0, y: 0, width: 100, height: 100 }}) and image_write_to_file({{ id: \"{imageId}\", filePath: \"artifacts/{fileName}.{extension}\" }})";
+        var crop = CtlCommandText.For(
+            "image_crop",
+            new JsonObject
+            {
+                ["id"] = imageId,
+                ["x"] = 0,
+                ["y"] = 0,
+                ["width"] = 100,
+                ["height"] = 100,
+            }
+        );
+        var save = CtlCommandText.For(
+            "image_write_to_file",
+            new JsonObject { ["id"] = imageId, ["filePath"] = $"artifacts/{fileName}.{extension}" }
+        );
+        return $"[IMAGE: id={imageId}, size={width}x{height}] you can use `{crop}` and `{save}`";
     }
 
     internal static string Placeholder(JsonObject part) =>
@@ -259,7 +303,7 @@ internal static class HostedResponsesTools
         return safe.Length > 0 ? "ig_" + safe : "ig_image" + (index + 1);
     }
 
-    private static byte[] DecodeBase64(string value, int maxBytes)
+    internal static byte[] DecodeBase64(string value, int maxBytes)
     {
         var compact = new string(
             value.Where(character => !OpenAIRequestText.IsWhitespace(character)).ToArray()
@@ -295,7 +339,7 @@ internal static class HostedResponsesTools
     private static bool IsBase64Ascii(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '+' or '/' or '=';
 
-    private static string? DeclaredMime(string? format) =>
+    internal static string? DeclaredMime(string? format) =>
         format switch
         {
             "png" => "image/png",

@@ -64,7 +64,7 @@ function peer(label) {
         if (plannerRound === 1) {
           held.set('compact-old', { record, finish: () => finish(response, protocols[label], [tool('plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid.' }] })]) }); return
         }
-        assert(JSON.stringify(body).includes('compact_plan_invalid')); assert.equal(request.headers['x-generation'], 'new-compact')
+        assert(JSON.stringify(body).includes('Compact plan rejected') && JSON.stringify(body).includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=999999, sourceEnd=1000000) is not a required operation')); assert.equal(request.headers['x-generation'], 'new-compact')
         assert.deepEqual(ranges, held.get('compact-old').record.ranges)
         finish(response, protocols[label], [tool('plan-valid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Source-owned route, paired local effects and immutable history evidence.' }] })]); return
       }
@@ -83,7 +83,7 @@ function peer(label) {
       }
       if (scenario === 'paired') {
         assert.equal(await readFile(join(fixture.work, 'route.txt'), 'utf8'), 'route-effect')
-        assert(JSON.stringify(body).includes('invalid_tool_arguments')); assert(JSON.stringify(body).includes('previous') || JSON.stringify(body).includes('prevLLMReqTime'))
+        assert(JSON.stringify(body).includes('\\nerror: Invalid workspace tool arguments.'), 'malformed write arguments return their error to the model'); assert(JSON.stringify(body).includes('previous') || JSON.stringify(body).includes('prevLLMReqTime'))
       }
       finish(response, protocols[label], output('DONE-' + scenario + '-' + label), scenario === 'compact-trigger' ? 30000 : 30)
     } catch (error) { errors.push(error.stack); response.destroy(error) }
@@ -209,7 +209,16 @@ try {
   assert.equal((await send(child, 'hash-reordered', 'DONE-hash-reordered-' + expectedHash))[0].label, expectedHash)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), child); await page.waitForSelector(`[data-workbench-content-tab=${JSON.stringify('chat:' + child)}] .foxwarm-chat-root[data-chat-connection-state="connected"]`, { visible: true }); await page.locator('.foxwarm-model-selector-trigger').click()
   await page.waitForSelector('[data-model-column="current"] [data-model-option-key="pool"]')
-  assert((await page.evaluate(() => document.body.innerText)).toLowerCase().includes('model'))
+  // The child's picker shows its inherited virtual model and effort, with child defaults still reachable.
+  const childPicker = await page.evaluate(() => ({
+    name: document.querySelector('[data-model-trigger-name="true"]')?.textContent?.trim(),
+    effort: document.querySelector('[data-model-trigger-effort="true"]')?.textContent?.trim(),
+    selected: [...document.querySelectorAll('[data-model-column="current"] [data-model-option-selected="true"]')].map(row => row.getAttribute('data-model-option-key')),
+    poolRoute: document.querySelector('[data-model-column="current"] [data-model-option-key="pool"] [data-model-option-target="true"]')?.textContent?.trim(),
+    childDefaults: !!document.querySelector('[data-model-child-mode="specific"]'),
+  }))
+  assert.equal(childPicker.name, 'pool', JSON.stringify(childPicker)); assert.equal(childPicker.effort, 'Max', JSON.stringify(childPicker))
+  assert.deepEqual(childPicker.selected, ['pool']); assert.match(childPicker.poolRoute || '', /^session-hash: /); assert.equal(childPicker.childDefaults, true)
 
   await select(main, 'messages');
   for (let index = 0; index < 15; index++) await send(main, 'seed-' + index + ' ' + ('retained-routing-context-' + index + '-').repeat(100), 'DONE-seed-' + index + '-c')

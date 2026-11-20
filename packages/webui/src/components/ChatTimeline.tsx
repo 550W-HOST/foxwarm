@@ -1,9 +1,10 @@
+import { getPartWebSearchAnnotations } from './webSearchCitations'
 import ArtifactView from '../artifacts/ArtifactView'
 import { buildArtifactGroups } from '../artifacts/projection'
 import SessionMessageCard from './SessionMessageCard'
 import { AskUserToolCard, isQuestionAnswerMarker, isStructuredQuestionAnswer, QuestionAnswerBubble } from './QuestionCard'
 import SystemEventCard from './SystemEventCard'
-import { getSessionNotice } from '../sessionNotices'
+import { getImageGenerationNotice, getSessionNotice } from '../sessionNotices'
 import ReplyFileGrid from './ReplyFileGrid'
 import { buildReplyFileGroups } from './replyFiles'
 import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
@@ -39,7 +40,7 @@ import ReasoningTokenBadge from './ReasoningTokenBadge'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { uniqueWebSearchCitations, type CitationRenderOptions } from './webSearchCitations'
-import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
+import { getPartWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import JsonInspectorDialog from './JsonInspectorDialog'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
@@ -53,6 +54,7 @@ import {
   ToolResponsesBlock,
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
+import { withLeadingExecLink } from './execLinks'
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
 import PastedTextBlock from './PastedTextBlock'
@@ -67,6 +69,8 @@ import {
   summarizeDurationSamples,
   type DurationSample,
 } from '../usageTiming'
+import { summarizeTextRedaction, textRedactionRows } from '../textRedaction'
+import { SentVersionButton, sentVersionTargets, useSentVersionAvailable } from './SentVersionDialog'
 import {
   buildTimelineRows,
   getGroupContentPartIndex,
@@ -89,6 +93,8 @@ interface ChatTimelineProps {
   activityDetails?: boolean
   runtimeState?: import('../sessionRuntimeState').SessionRuntimeState
   busyStartedAt?: number | null
+  /** False while a sent input is pending: the live clock starts with its canonical row, not before. */
+  liveTiming?: boolean
   isMobile: boolean
   showInterAgentMessages?: boolean
   showCommentary?: boolean
@@ -232,6 +238,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
 
   const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
   const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
+  const redaction = useMemo(() => summarizeTextRedaction(attribution.textRedaction), [attribution.textRedaction])
 
   return (
     <div
@@ -261,6 +268,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
           {usage.cost !== undefined ? <ModelUsageTextRow label="Estimated cost" value={formatUsdCost(usage.cost)} /> : null}
           <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
+          {redaction ? textRedactionRows(redaction).map(([label, value]) => <ModelUsageTextRow key={label} label={label} value={value} />) : null}
           <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
           <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
         </> : <>
@@ -720,6 +728,8 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
       || messageKind.kind
     return `${messageKind.previewPrefix}${body}`
   }, [allLines, messageKind.bodyText, messageKind.kind, messageKind.previewPrefix, renderedText])
+  const completionEvent = messageKind.kind === 'event' && msg.parts.some(part => part.system?.includes('type="background-process-finished"'))
+  const completionLine = completionEvent ? renderedLines.findIndex(line => line.trim() && !isSystemLikeText(line)) : -1
   const surfaceClass = 'bg-fw-system-surface/55 dark:bg-fw-system-surface/10 text-fw-system-text'
   const threadLineClass = 'text-fw-system-accent hover:text-fw-system-accent focus-visible:text-fw-system-accent'
   const headerClass = 'bg-fw-system-surface-strong/80 dark:bg-fw-system-surface-strong/20'
@@ -750,7 +760,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
             <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
               {messageKind.previewSessionId ? (
                 <>From <span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>:{messageKind.kind !== 'inter-agent' ? ` ${preview.slice(messageKind.previewPrefix.length)}` : null}</>
-              ) : preview}
+              ) : completionEvent ? <>{messageKind.previewPrefix}{withLeadingExecLink(preview.slice(messageKind.previewPrefix.length), 'completion', rest => rest)}</> : preview}
             </span>
           )}
         </div>
@@ -773,7 +783,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
                     : { opacity: 0.92 }
                   }
                 >
-                  {renderSystemTextWithSessionLinks(line)}{!isPrefix && !nextIsPrefix ? '\n' : null}
+                  {lineIdx === completionLine ? withLeadingExecLink(line, 'completion', renderSystemTextWithSessionLinks) : renderSystemTextWithSessionLinks(line)}{!isPrefix && !nextIsPrefix ? '\n' : null}
                 </span>
               )
             })}
@@ -866,6 +876,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessi
       <IconToggleButton onClick={handleCopy} active={copied} title={copied ? 'Copied' : 'Copy Raw Text'}>
         {copied ? <Check size={12} /> : <Copy size={12} />}
       </IconToggleButton>
+      <SentVersionButton targets={sentVersionTargets([{ meta: message.__meta }])} />
     </div>
   )
 
@@ -967,6 +978,7 @@ const MessageRow = memo(function MessageRow({
   } = row
   const llmError = useMemo(() => getLlmErrorMessageDetails(msg), [msg])
   const sessionNotice = useMemo(() => getSessionNotice(msg), [msg])
+  const sentVersionAvailable = useSentVersionAvailable()
   const toolDisclosure = {
     hideCollapsedContent: conversationDetails,
     neutralSuccess: conversationDetails || neutralToolSuccess,
@@ -995,7 +1007,7 @@ const MessageRow = memo(function MessageRow({
       // Mixed-field parts retain their ordinary output alongside their reasoning.
       if (part.text || part.system) visible.push({ part, webSearchAction: null, partIndex })
       const webSearchAction = msg.role === 'model'
-        ? getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
+        ? getPartWebSearchAction(part, msg.parts)
         : null
       if (webSearchAction) visible.push({ part, webSearchAction, partIndex })
     }
@@ -1076,6 +1088,9 @@ const MessageRow = memo(function MessageRow({
               </div>
             ))}
           </div>}
+          {hasUserBody && sentVersionAvailable && !msg.__meta?.queuedPreview ? <div data-search-exclude className="foxwarm-user-action-buttons mt-0.5 flex justify-end opacity-0 transition-opacity">
+            <SentVersionButton targets={sentVersionTargets([{ meta: msg.__meta }])} />
+          </div> : null}
           </>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
@@ -1097,6 +1112,10 @@ const MessageRow = memo(function MessageRow({
                     ? reasoningTokens : undefined
                 return <ReasoningCard key={`thinking-${partIndex}`} thinking={reasoningRun.map(item => item.thinking).join('\n')} parts={reasoningRun} reasoningTokens={hideMetrics ? undefined : tokens} tone="message" searchReveal={rowSearchTarget?.surface === 'reasoning' && reasoningRun.some(item => item.partIndex === rowSearchTarget.partIndex)} />
               }
+              const imageFailure = getImageGenerationNotice(part)
+              if (imageFailure) {
+                return <SystemEventCard key={`image-failure-${partIndex}`} notice={imageFailure} searchSurface="model" searchPartIndex={partIndex} reveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              }
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
@@ -1105,7 +1124,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={getPartWebSearchAnnotations(part)} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
@@ -1195,6 +1214,7 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
   const attribution = badge?.attribution
   const input = usage ? usage.cachedTokens + usage.inputTokens : 0
   const seq = attribution ? formatUsageMessageSeq(attribution.messageSeqs) : null
+  const redaction = useMemo(() => attribution ? summarizeTextRedaction(attribution.textRedaction) : null, [attribution])
   const rows = usage && attribution ? [
     ['Requests', `${(badge.callCount || 0) + missingRequests + pendingRequests}${pendingRequests ? ` · ${pendingRequests} pending` : ''}${missingRequests ? ` · ${missingRequests} unavailable` : ''}`],
     ['Cached', usage.cachedTokens.toLocaleString()],
@@ -1203,6 +1223,7 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
     ...(usage.cost !== undefined ? [['Estimated cost', formatUsdCost(usage.cost)]] : []),
     ['Cache share', input ? `${(usage.cachedTokens / input * 100).toFixed(1)}%` : 'unavailable'],
     ['API time', formatDurationSummary(attribution.apiDurationsMs)],
+    ...(redaction ? textRedactionRows(redaction) : []),
     ['Time range', formatUsageTimes(attribution.timestamps)],
     ['Model', formatUsageModels(attribution.models)],
   ] : []
@@ -1278,7 +1299,7 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, liveTiming = true, renderMessageFooter }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
@@ -1309,7 +1330,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   ), [timelineView, showInterAgentMessages, showCommentary, historyMessages, messages, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showInterAgentMessages, showCommentary, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showInterAgentMessages, showCommentary, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 && liveTiming ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && timelineView === 'grouped' && nestedDepth === 0) {
@@ -1324,7 +1345,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, timelineView, showInterAgentMessages, showCommentary, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
+  }, [expandedToolGroups, timelineView, showInterAgentMessages, showCommentary, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, liveTiming, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
 
 
   // A loaded predecessor can change the projected first row without changing the process being read.

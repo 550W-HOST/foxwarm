@@ -308,19 +308,31 @@ public sealed class SessionCatalogSourceTests
         );
         all.Remove(index);
         // Sidebar grouping adds its indexes and maintained Node counts beside the Source core;
-        // the question-presence index serves open-question elevation.
+        // the question-presence index serves open-question elevation. The Source oracle orders
+        // by each row's own time, so the comparison data keeps every Session at least as new as
+        // its descendants; subtree activity ordering has its own tests.
         foreach (
             var name in new[]
             {
                 "catalog_node_count",
                 "idx_session_catalog_question_presence",
-                "idx_session_catalog_agent_root_default",
-                "idx_session_catalog_node_root_default",
-                "idx_session_catalog_node_root_time",
                 "idx_session_catalog_node_time",
                 "session_catalog_node_count_delete",
                 "session_catalog_node_count_insert",
                 "session_catalog_node_count_update",
+                // Tree-mode Sidebar ordering by maintained subtree activity.
+                "idx_session_catalog_parent_subtree",
+                "idx_session_catalog_root_activity",
+                "idx_session_catalog_root_activity_default",
+                "idx_session_catalog_parent_activity",
+                "idx_session_catalog_parent_activity_default",
+                "idx_session_catalog_agent_root_activity",
+                "idx_session_catalog_agent_root_activity_default",
+                "idx_session_catalog_node_root_activity",
+                "idx_session_catalog_node_root_activity_default",
+                "session_catalog_subtree_insert",
+                "session_catalog_subtree_update",
+                "session_catalog_subtree_delete",
             }
         )
             all.Remove(
@@ -349,7 +361,13 @@ public sealed class SessionCatalogSourceTests
                 .Replace(",costrealnotnulldefault0", "", StringComparison.Ordinal)
                 .Replace(",cost_countintegernotnulldefault0", "", StringComparison.Ordinal)
                 .Replace(",positive_cost_countintegernotnulldefault0", "", StringComparison.Ordinal)
-                .Replace(",costreal", "", StringComparison.Ordinal);
+                .Replace(",costreal", "", StringComparison.Ordinal)
+                .Replace(",subtree_timerealnotnulldefault0", "", StringComparison.Ordinal)
+                .Replace(
+                    ",subtree_rankrealgeneratedalwaysas(-subtree_time)virtual",
+                    "",
+                    StringComparison.Ordinal
+                );
         return all;
     }
 

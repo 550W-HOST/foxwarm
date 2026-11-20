@@ -153,7 +153,7 @@ internal sealed partial class SessionManager
                 turn.Id,
                 ProgressTargets(owner, turn.Id),
                 SessionWait.Text(call["id"]) ?? "",
-                SessionWait.Text(call["name"]) ?? "tool",
+                Foxwarm.Tools.ToolActivity.ProgressName(SessionWait.Text(call["name"]), call["args"]),
                 start
             );
         }

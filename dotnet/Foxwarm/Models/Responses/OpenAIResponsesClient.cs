@@ -26,6 +26,17 @@ public sealed record ResponsesClientOptions(
 {
     internal ModelHistoryCompatibility HistoryCompatibility { get; init; } =
         ModelHistoryCompatibility.Exact;
+    internal TextRedactionOptions? TextRedaction { get; init; }
+
+    // Supplies the installation's redactor, which needs the instance key; enabled redaction
+    // fails without one.
+    internal Func<TextRedactor>? TextRedactorSource { get; init; }
+
+    // Compaction omits a slot the detection service rejects as too large instead of failing.
+    internal bool TextRedactionOmitsOversized { get; init; }
+
+    // Receives this attempt's redaction counts and timings, when the request owner records them.
+    internal TextRedactionStats? TextRedactionStats { get; init; }
     internal double? HardTimeoutMs { get; init; }
     internal TimeProvider? Clock { get; init; }
     internal bool KeepReasoningOnError { get; init; }
@@ -35,6 +46,7 @@ public sealed record ResponsesClientOptions(
     internal Func<JsonNode, Task>? AttemptPrepared { get; init; }
     internal JsonObject? WebSearch { get; init; }
     internal JsonObject? ImageGeneration { get; init; }
+    internal bool ImageGenerationOnly { get; init; }
     internal Foxwarm.Images.ImageBlobStore? Images { get; init; }
     public Uri ResponsesUri =>
         new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
@@ -369,7 +381,7 @@ public static partial class ResponsesRequestSerializer
         return data;
     }
 
-    private static JsonArray BuildToolDefinitions() =>
+    internal static JsonArray BuildToolDefinitions() =>
         new(
             new JsonObject
             {
@@ -424,151 +436,6 @@ public static partial class ResponsesRequestSerializer
                 }
             );
         }
-    }
-
-    private static string FormatToolResponsePayload(JsonObject response)
-    {
-        if (response.Count == 1 && response["output"] is JsonValue output)
-        {
-            if (output.TryGetValue<string>(out var text))
-                return text;
-            if (output.TryGetValue<bool>(out var boolean))
-                return boolean ? "true" : "false";
-            return output.ToJsonString();
-        }
-        if (
-            response.Count == 1
-            && response["error"] is JsonObject { Count: 2 } error
-            && error.All(pair => pair.Key is "type" or "message")
-            && error["type"] is JsonValue errorType
-            && errorType.TryGetValue<string>(out _)
-            && error["message"] is JsonValue errorMessage
-            && errorMessage.TryGetValue<string>(out _)
-        )
-        {
-            var type = String(error, "type") ?? "tool_error";
-            var message = String(error, "message") ?? "Tool execution failed";
-            return $"error: {{type: {YamlScalar(type)}, message: {YamlScalar(message)}}}";
-        }
-        if (
-            response.Count is >= 4 and <= 5
-            && response["target"] is JsonValue target
-            && target.TryGetValue<string>(out var reference)
-            && reference.StartsWith("msg#", StringComparison.Ordinal)
-            && response["offset"] is JsonValue
-            && response["text"] is JsonValue recallPage
-            && recallPage.TryGetValue<string>(out var page)
-            && page.EnumerateRunes().Count() <= 12000
-            && response["totalCharacters"] is JsonValue
-            && response.All(item =>
-                item.Key is "target" or "offset" or "text" or "totalCharacters" or "nextOffset"
-            )
-        )
-            return response.ToJsonString();
-        if (
-            response.Count == 6
-            && response["status"] is JsonValue status
-            && status.TryGetValue<string>(out var state)
-            && state is "running" or "finished"
-            && response["output"] is JsonValue execOutput
-            && execOutput.TryGetValue<string>(out var excerpt)
-            && excerpt.Length <= 16 * 1024
-            && response["offset"] is JsonValue start
-            && start.TryGetValue<long>(out var startByte)
-            && startByte >= 0
-            && response["totalBytes"] is JsonValue total
-            && total.TryGetValue<long>(out var totalBytes)
-            && totalBytes >= 0
-            && (
-                response["nextOffset"] is null
-                || response["nextOffset"] is JsonValue next
-                    && next.TryGetValue<long>(out var nextByte)
-                    && nextByte >= startByte
-                    && nextByte <= totalBytes
-            )
-            && (
-                response["exitCode"] is null
-                || response["exitCode"] is JsonValue code && code.TryGetValue<int>(out _)
-            )
-            && response.All(item =>
-                item.Key
-                    is "status"
-                        or "exitCode"
-                        or "output"
-                        or "offset"
-                        or "nextOffset"
-                        or "totalBytes"
-            )
-        )
-            return response.ToJsonString();
-        return Foxwarm.Tools.ToolResponseFormatting.Format(response);
-    }
-
-    private static string YamlScalar(string value)
-    {
-        if (
-            value.Any(character =>
-                character <= '\u001F'
-                || character is >= '\u007F' and <= '\u009F'
-                || character is '\u2028' or '\u2029'
-            )
-        )
-            return DoubleQuotedYamlScalar(value);
-        if (
-            value.Length == 0
-            || value.Contains(": ", StringComparison.Ordinal)
-            || value[0]
-                is '-'
-                    or '?'
-                    or ':'
-                    or '!'
-                    or '&'
-                    or '*'
-                    or '#'
-                    or '{'
-                    or '}'
-                    or '['
-                    or ']'
-                    or ','
-                    or '|'
-                    or '>'
-                    or '@'
-                    or '`'
-        )
-            return $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
-        return value;
-    }
-
-    private static string DoubleQuotedYamlScalar(string value)
-    {
-        var result = new StringBuilder(value.Length + 2).Append('"');
-        foreach (var character in value)
-        {
-            result.Append(
-                character switch
-                {
-                    '\0' => "\\0",
-                    '\u0007' => "\\a",
-                    '\b' => "\\b",
-                    '\t' => "\\t",
-                    '\n' => "\\n",
-                    '\u000B' => "\\v",
-                    '\f' => "\\f",
-                    '\r' => "\\r",
-                    '\u001B' => "\\e",
-                    '"' => "\\\"",
-                    '\\' => "\\\\",
-                    '\u0085' => "\\N",
-                    '\u2028' => "\\L",
-                    '\u2029' => "\\P",
-                    <= '\u00FF'
-                        when character <= '\u001F' || character is >= '\u007F' and <= '\u009F' =>
-                        $"\\x{(int)character:X2}",
-                    _ => character.ToString(),
-                }
-            );
-        }
-        return result.Append('"').ToString();
     }
 
     private static void RejectUnsupportedInput(JsonObject part)
@@ -630,7 +497,8 @@ public static class ResponsesCanonicalConverter
         double durationMs,
         IReadOnlyDictionary<int, JsonObject>? generatedParts = null,
         IReadOnlyList<string>? generatedFailures = null,
-        int? successfulImageCount = null
+        int? successfulImageCount = null,
+        IReadOnlyDictionary<int, JsonObject>? generatedFailureParts = null
     )
     {
         var parts = new JsonArray();
@@ -644,6 +512,8 @@ public static class ResponsesCanonicalConverter
             {
                 if (generatedParts?.TryGetValue(outputIndex, out var generated) == true)
                     parts.Add(generated.DeepClone());
+                else if (generatedFailureParts?.TryGetValue(outputIndex, out var failed) == true)
+                    parts.Add(failed.DeepClone());
                 continue;
             }
             if (type == "web_search_call")
@@ -757,7 +627,8 @@ public static class ResponsesCanonicalConverter
             );
         }
         if (
-            generatedFailures is { Count: > 0 }
+            generatedFailureParts is null
+            && generatedFailures is { Count: > 0 }
             && (successfulImageCount ?? generatedParts?.Count ?? 0) > 0
         )
             parts.Add(
@@ -878,7 +749,7 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
         cancellationToken.ThrowIfCancellationRequested();
         var name = functionCall["name"]?.GetValue<string>() ?? "";
         if (name != "write_fixture")
-            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", $"Unknown tool: {name}");
+            return ToolFailure.Result($"Unknown tool: {name}");
         if (
             functionCall["args"] is not JsonObject args
             || args.Count != 2
@@ -887,19 +758,15 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
             || args["content"] is not JsonValue contentValue
             || !contentValue.TryGetValue<string>(out var content)
         )
-            return UnsupportedTurnToolExecutor.ToolError(
-                "invalid_tool_arguments",
+            return ToolFailure.Result(
                 "write_fixture requires exactly string fileName and content."
             );
         if (!IsPlainFileName(fileName))
-            return UnsupportedTurnToolExecutor.ToolError(
-                "invalid_path",
-                "fileName must be a plain file name."
-            );
+            return ToolFailure.Result("fileName must be a plain file name.");
 
         var path = Path.Combine(sandboxRoot, fileName);
         if (TargetExists(path))
-            return UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.");
+            return ToolFailure.Result("File already exists.");
         var bytes = Utf8NoBom.GetBytes(content);
         cancellationToken.ThrowIfCancellationRequested();
         Stream stream;
@@ -910,7 +777,7 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
         catch (IOException)
         {
             return TargetExists(path)
-                ? UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.")
+                ? ToolFailure.Result("File already exists.")
                 : ToolIoError();
         }
         catch (UnauthorizedAccessException)
@@ -971,10 +838,7 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
     }
 
     private static JsonObject ToolIoError() =>
-        UnsupportedTurnToolExecutor.ToolError(
-            "tool_io_error",
-            "write_fixture failed due to an I/O error."
-        );
+        ToolFailure.Result("write_fixture failed due to an I/O error.");
 
     private static bool IsPlainFileName(string fileName) =>
         fileName.Length > 0

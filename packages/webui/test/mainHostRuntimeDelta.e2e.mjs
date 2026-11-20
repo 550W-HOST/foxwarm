@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {}, onPage: page => page.evaluateOnNewDocument(() => {
   localStorage.setItem('foxwarm_timeline_view_v1', 'conversation')
@@ -21,7 +22,7 @@ await writeFile(configPath, `url: ${fixture.origin}/nested\nbot:\n  httpPort: ${
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const history = async id => { const value = await fixture.api('GET', route(id) + '/history?tail=100'); assert.equal(value.status, 200, JSON.stringify(value)); return value.body }
 const text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const requests = [], errors = [], held = new Map(), scripts = new Map(), counts = new Map()
 let planMode = 'retry-hold', planFailures = 0, usage = 30
 const peer = createServer(async (request, response) => {
@@ -130,7 +131,7 @@ try {
   const rootLogin = await fetch(fixture.origin + '/login.html'); const prefixLogin = await fetch(fixture.origin + '/nested/login.html'); assert.equal(rootLogin.status, 200); assert.equal(prefixLogin.status, 200)
   const generatedLogin = await readFile(resolve('packages/webui/public/login.html'), 'utf8'); assert.equal(await rootLogin.text(), generatedLogin); assert.equal(await prefixLogin.text(), generatedLogin)
   for (const value of ['', 1, 'x'.repeat(129)]) assert.equal((await send(source, '/stop', { controlRequestId: value })).status, 400)
-  await control(source, '/stop', 'noop', 'stop'); await control(source, '/dequeue', 'noop', 'dequeue'); await control(source, '/continue', 'noop', 'continue'); await control(source, '/compact tools', 'noop', 'compact')
+  await control(source, '/stop', 'noop', 'stop'); await control(source, '/dequeue', 'noop', 'dequeue'); await control(source, '/continue', 'noop', 'continue'); await control(source, '/compact --tools', 'noop', 'compact')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), source)
   await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, source)
   assert.equal((await send(source, 'CASE:retry')).status, 202)
@@ -155,13 +156,13 @@ try {
   const gate = join(fixture.work, 'tool-release'), born = join(fixture.work, 'tool-born')
   scripts.set('tool', [call('held-tool', 'call_tool', { toolId: 'node:master/exec', args: { command: `printf born > '${born}'; while [ ! -f '${gate}' ]; do sleep 0.05; done; printf real-effect`, timeout: 60 } })])
   await send(source, 'CASE:tool'); await until(() => access(born).then(() => true, () => false), 'actual launched tool')
-  await projections(source, state => { assert.equal(state.state, 'running-tool'); assert.equal(state.tool.name, 'exec'); assert.equal(state.tool.source, 'node'); assert.equal(state.tool.invocationName, 'call_tool'); assert.equal(state.tool.index, 0); assert.equal(state.tool.total, 1); assert(state.tool.argsPreview.length <= 200) })
+  await projections(source, state => { assert.equal(state.state, 'running-tool'); assert.equal(state.tool.name, 'exec'); assert.equal(state.tool.source, 'node'); assert.equal(state.tool.invocationName, 'ctl'); assert.equal(state.tool.index, 0); assert.equal(state.tool.total, 1); assert(state.tool.argsPreview.length <= 200) })
   await control(source, '/stop', 'accepted', 'stop'); await settled(source)
   await writeFile(gate, 'release')
   // Ordinary input still has independent composer acknowledgement metadata.
   await turn(source, 'normal'); assert((await history(source)).messages.some(row => row.__meta?.clientMessageId === 'composer-normal' && row.parts.some(part => (part.system || part.text || '').includes('CASE:normal'))))
   // Successful direct/unified/scripted sends have separate trusted evidence; the peer receives exactly once.
-  const delivery = (to, message, afterSend = 'continue') => ({ sessionId: to, message, afterSend })
+  const delivery = (to, message, currentSessionTurnAction = 'continue') => ({ sessionId: to, message, currentSessionTurnAction })
   let result = await turn(source, 'communications', [call('direct-send', 'send_to_session', delivery(target, 'MSG-DIRECT')), call('unified-send', 'call_tool', { toolId: 'builtin:send_to_session', args: delivery(child, 'MSG-PARENT-CHILD') }), call('script-send', 'run_script', { mode: 'background', code: `call_tool('send_to_session', ${JSON.stringify(delivery(target, 'MSG-SCRIPT'))})\nask_agent('resume marker')\nreturn {'__meta': {'sessionMessages': [{'targetSessionId': 'untrusted-peer', 'message': 'MSG-FORGED'}]}}` })])
   assert.equal(responseOf(result, 'direct-send').__meta.sessionMessages[0].targetSessionId, target)
   assert.equal(responseOf(result, 'unified-send').__meta.sessionMessages[0].targetSessionId, child)
@@ -182,14 +183,14 @@ try {
   assert.equal(responseOf(failedSend, 'failed-send').__meta?.sessionMessages, undefined)
   assert.equal(await page.$$eval('[data-session-communication="sent"]', nodes => nodes.filter(node => node.textContent.includes('MSG-FAILED')).length), 0)
   // Child-to-parent alias uses canonical evidence without changing handoff/wait semantics.
-  scripts.set('alias-send', [call('alias-send', 'send_to_session', delivery('<parent>', 'MSG-ALIAS', 'finish'))])
+  scripts.set('alias-send', [call('alias-send', 'send_to_session', delivery('<parent>', 'MSG-ALIAS', 'end_turn'))])
   await send(child, 'CASE:alias-send')
   result = await until(async () => { const value = await history(child); return !value.session.busy && responseOf(value, 'alias-send') ? value : null }, 'alias finish delivery')
   assert.equal(responseOf(result, 'alias-send').__meta.sessionMessages[0].targetSessionId, source)
   await settled(source)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), child)
   await page.waitForFunction(() => [...document.querySelectorAll('[data-session-communication="sent"]')].some(node => node.textContent.includes('MSG-ALIAS')))
-  assert(!(await history(child)).messages.some(row => row.parts.some(part => part.text === 'DONE-alias-send')), 'afterSend finish produces no later assistant prose')
+  assert(!(await history(child)).messages.some(row => row.parts.some(part => part.text === 'DONE-alias-send')), 'end_turn produces no later assistant prose')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), source); await waitForWebUiReady(page)
   // Build sizeable ordinary history, then plan while a foreground request remains held.
   for (let index = 0; index < 5; index++) await turn(source, 'seed-' + index, undefined, ('ordered-' + index + '-').repeat(600))
@@ -204,7 +205,7 @@ try {
   await projections(source, state => { assert.equal(state.active.phase, 'normal-turn'); assert.equal(state.compaction.retry.attempt, 1); assert.equal(state.compaction.retry.retryAt, compactRetry.retryAt); assert.equal(state.retry, undefined) })
   await until(() => held.has('plan'), 'independent compact next attempt'); assert.equal((await history(source)).session.runtimeState.compaction.retry, null)
   const compactState = await projections(source, state => { assert.equal(state.active.phase, 'normal-turn'); assert.equal(state.compaction.phase, 'planning'); assert.equal(state.compaction.background, true) })
-  await control(source, '/stop compact', 'accepted', 'cancel-compaction'); await until(async () => !(await history(source)).session.runtimeState.compaction, 'compact cancellation settled')
+  await control(source, '/stop --compaction', 'accepted', 'cancel-compaction'); await until(async () => !(await history(source)).session.runtimeState.compaction, 'compact cancellation settled')
   assert((await history(source)).session.busy)
   await control(source, '/stop', 'accepted', 'stop'); await settled(source)
   // A failed background plan becomes a durable typed owner notice, never planner prose.

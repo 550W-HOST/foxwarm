@@ -56,7 +56,7 @@ internal static class SequenceBenchCommand
             manager.ArchiveDatabase
         );
         static string Line(string label, JsonObject page, double ms) =>
-            $"{label} ms={ms:F0} lanes={page["sessions"]!.AsArray().Count} events={page["events"]!.AsArray().Count} links={page["links"]!.AsArray().Count} jsonKiB={page.ToJsonString().Length / 1024} from={page["range"]?["from"]}";
+            $"{label} ms={ms:F0} lanes={page["sessions"]!.AsArray().Count} events={page["events"]!.AsArray().Count} links={page["links"]!.AsArray().Count} jsonKiB={page.ToJsonText().Length / 1024} from={page["range"]?["from"]}";
         foreach (var limit in new[] { 400, 2000 })
         {
             var timer = Stopwatch.StartNew();
@@ -147,7 +147,7 @@ internal static class SequenceBenchCommand
                     ["role"] = isUser ? "user" : "model",
                     ["parts"] = new JsonArray(new JsonObject { ["text"] = isUser ? "question" : "answer " + n }),
                     ["__meta"] = new JsonObject { ["timestamp"] = Math.Round(at), ["seq"] = n },
-                }.ToJsonString();
+                }.ToJsonText();
                 insert.ExecuteNonQuery();
             }
         }
@@ -300,7 +300,7 @@ internal static class SequenceBenchCommand
                     seqParameter.Value = seq;
                     time.Value = Math.Round(stamp);
                     role.Value = message["role"]!.GetValue<string>();
-                    var text = message.ToJsonString();
+                    var text = message.ToJsonText();
                     total += text.Length;
                     json.Value = text;
                     insert.ExecuteNonQuery();

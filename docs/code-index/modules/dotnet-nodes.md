@@ -4,7 +4,7 @@ Main-owned generic registry, executable-provider file/process primitives, Sessio
 
 ## Boundaries
 
-This module connects existing CLI/browser/Android Node protocol clients to the .NET host. Optional lifecycle requests go to configured providers; Core itself supplies no provisioning driver or OS isolation. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers use the generic registry, retaining the existing CLI transfer protocol for resident Nodes. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
+This module connects existing CLI/browser/Android Node protocol clients to the .NET host. Optional lifecycle requests go to configured providers; Core itself supplies no provisioning driver or OS isolation. Fixed Code/PTY services use advertised capabilities of authenticated resident Nodes or the optional persistent service channel of an admitted executable-Provider Node, routed by `NodeProviderRegistry`; neither is model-tool dispatch. Whole-file consumers use the generic registry, retaining the existing CLI transfer protocol for resident Nodes. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
 
 Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests) connect native registry and configured provider ancestry without expanding incoming Node access. Executable registry/files, persistent provider exec and optional lifecycle are connected. Discovery and lifecycle authority are canonical in [provider lifecycle](../threads/tool-dispatch-node-execution.md#d-dispatch-node-provider-lifecycle). Session Worker hosting and managed controllers remain excluded; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
@@ -13,7 +13,7 @@ Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions
 - [Native-aware Node bootstrap](../units/native-node-bootstrap.md) — generated platform selection, state/service paths and public download channel.
 - [.NET CLI Node](../units/dotnet-cli-node.md) — separate authenticated file/exec, fixed Code/optional terminal services, loopback trigger and Session client API executable.
 - [Native CLI interactive entry](../units/dotnet-cli-interactive.md) — explicit console mode with bounded Session history/message input and ordinary-tool approval.
-- [Main-local browser and shared evaluation](../units/dotnet-main-browser.md) — hidden master capabilities with process-owned tabs and caller-specific file/image effects.
+- [Managed browser host](../units/browser-host.md) — hidden `browser_*` capabilities hosted by Main on `master` and by the CLI Node on its own Node, backed by one JavaScript host.
 - [Shared native primitives](../units/dotnet-node-primitives.md) — the narrow Main/CLI algorithm library.
 
 - [.NET executable Node registry and files](../units/dotnet-node-providers.md)
@@ -24,7 +24,10 @@ Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions
 - [External Node file consumers](../units/external-node-files.md)
 - [External exec authority and Node Session events](../units/remote-exec.md)
 - [Unified tools and Session tool execution](../units/tools-registry.md)
-- [Tool authorization and isolation compatibility](../units/tool-authorization.md)
+- [Tool authorization](../units/tool-authorization.md)
+- [Node list visibility](../units/node-list-visibility.md)
+
+The System Nodes administrator APIs also expose credential-free restart suggestions, explicit token reissue and confirmed native subtree deletion; see [administrator maintenance](../units/external-nodes.md#administrator-node-maintenance).
 
 ## Tests and callers
 

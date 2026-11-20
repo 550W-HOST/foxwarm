@@ -29,9 +29,9 @@ public sealed partial class CommandAdministrationTests
         var replies = new List<string>();
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, f.Owner);
-        await f.Router.HandleExternalMessageAsync(source, Message("/node pair-help"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/node bootstrap-info"));
         var help = replies.Single();
-        var reservation = Regex.Match(help, @"/node create ([a-zA-Z0-9_-]+)").Groups[1].Value;
+        var reservation = Regex.Match(help, @"/node token ([a-zA-Z0-9_-]+)").Groups[1].Value;
         var shell = help[help.IndexOf("run-shell.sh", StringComparison.Ordinal)..];
         var shellId = Regex.Match(shell, "--node-id='([^']+)'").Groups[1].Value;
         Assert.Equal("my-shell", reservation);
@@ -39,7 +39,7 @@ public sealed partial class CommandAdministrationTests
         Assert.Contains("--node-id='my-node'", help);
         Assert.Contains("/nested/app/node/run-shell.sh", help);
         replies.Clear();
-        await f.Router.HandleExternalMessageAsync(source, Message("/node create " + reservation));
+        await f.Router.HandleExternalMessageAsync(source, Message("/node token " + reservation));
         var token = Regex.Match(replies.Single(), @"--auth-token=([a-f0-9]+)").Groups[1].Value;
         Assert.NotEmpty(token);
         // run-shell.sh forwards --node-id in X-Foxwarm-Node with this bearer token.
@@ -54,7 +54,7 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Actual_Node_commands_reserve_pair_approve_select_move_and_revoke_with_official_client_effects()
+    public async Task Actual_Node_commands_reserve_approve_select_move_and_revoke_with_official_client_effects()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
@@ -78,12 +78,12 @@ public sealed partial class CommandAdministrationTests
         var replies = new List<string>();
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, f.Owner);
-        await f.Router.HandleExternalMessageAsync(source, Message("/node pair-help"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/node bootstrap-info"));
         Assert.Contains("/nested/app/node/", replies.Single());
         Assert.Contains("docker-compose.yaml", replies.Single());
         Assert.Contains("--install", replies.Single());
         replies.Clear();
-        await f.Router.HandleExternalMessageAsync(source, Message("/node create command-node"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/node token command-node"));
         var token = Regex.Match(replies.Single(), @"--auth-token=([a-f0-9]+)").Groups[1].Value;
         Assert.NotEmpty(token);
         Assert.True(f.Manager.Nodes.Registry.Authenticate("command-node", token));
@@ -177,7 +177,7 @@ public sealed partial class CommandAdministrationTests
                 }
             }
             replies.Clear();
-            await f.Router.HandleExternalMessageAsync(source, Message("/node command-node"));
+            await f.Router.HandleExternalMessageAsync(source, Message("/node select command-node"));
             Assert.Equal("command-node", f.Manager.CurrentNode(f.Owner));
             Assert.Contains("Switched", replies.Single());
             var remotePath = Path.Combine(nodeRoot, "command-effect.txt");
@@ -194,40 +194,19 @@ public sealed partial class CommandAdministrationTests
                 "Selected official client effect.",
                 await File.ReadAllTextAsync(remotePath)
             );
-            await f.Manager.CreateAgentAsync(
-                "isolated",
-                createMainSession: false,
-                isolatedNode: "command-node"
-            );
-            var isolated = await f.Manager.CreateNamedAsync("isolated", "chat", null, null);
-            await f.Manager.SelectNodeAsync(isolated, "command-node"); // Valid lower-level selection remains valid.
-            replies.Clear();
-            await f.Router.HandleExternalCommandAsync(source, "/node", "command-node", isolated);
-            Assert.Contains("isolated agent", replies.Single());
+            // A migrated isolated Agent is not inheritable; the command reports the refusal.
+            await f.Manager.CreateAgentAsync("isolated", createMainSession: false);
+            await f.Manager.SetAgentInheritableAsync("isolated", false);
             replies.Clear();
             await f.Router.HandleExternalMessageAsync(
                 source,
                 Message("/agent inherit main isolated")
             );
             Assert.Null(f.Manager.AgentInherit("main"));
-            Assert.Contains("isolated", replies.Single());
-            replies.Clear();
+            Assert.Contains("not inheritable", replies.Single());
             await f.Router.HandleExternalMessageAsync(
                 source,
-                Message("/timer after 3600 --new-session --agent main -- forbidden")
-            );
-            // The ordinary owner is not isolated; use the actual selected isolated owner for the boundary.
-            var before = f.Manager.Timers.List(isolated.Id).Count;
-            await f.Router.HandleExternalCommandAsync(
-                source,
-                "/timer",
-                "after 3600 --new-session --agent main -- forbidden",
-                isolated
-            );
-            Assert.Equal(before, f.Manager.Timers.List(isolated.Id).Count);
-            await f.Router.HandleExternalMessageAsync(
-                source,
-                Message("/node move command-node renamed-node")
+                Message("/node rename command-node renamed-node")
             );
             Assert.False(f.Manager.Nodes.Registry.Authenticate("command-node", token));
             Assert.True(f.Manager.Nodes.Registry.Authenticate("renamed-node", token));
@@ -243,7 +222,7 @@ public sealed partial class CommandAdministrationTests
         try
         {
             await TelegramChannelTests.Until(() => f.Manager.Nodes.Online("renamed-node"));
-            await f.Router.HandleExternalMessageAsync(source, Message("/node renamed-node"));
+            await f.Router.HandleExternalMessageAsync(source, Message("/node select renamed-node"));
             Assert.Equal("renamed-node", f.Manager.CurrentNode(f.Owner));
             await f.Router.HandleExternalMessageAsync(source, Message("/node remove renamed-node"));
             Assert.False(f.Manager.Nodes.Registry.Authenticate("renamed-node", token));
@@ -271,11 +250,11 @@ public sealed partial class CommandAdministrationTests
             replies.Clear();
             await f.Router.HandleExternalMessageAsync(
                 source,
-                Message("/node approve " + pending["id"] + " paired-command")
+                Message("/node approve " + pending["id"] + " --node-id paired-command")
             );
             Assert.Contains("Approved pending pairing", replies.Single());
             await TelegramChannelTests.Until(() => f.Manager.Nodes.Online("paired-command"));
-            await f.Router.HandleExternalMessageAsync(source, Message("/node paired-command"));
+            await f.Router.HandleExternalMessageAsync(source, Message("/node select paired-command"));
             Assert.Equal("paired-command", f.Manager.CurrentNode(f.Owner));
             var path = Path.Combine(nodeRoot, "paired-effect.txt");
             var written = await f.ToolAsync(

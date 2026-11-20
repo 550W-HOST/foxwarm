@@ -14,11 +14,6 @@ import {
 import { resolveDirectTool } from './resolvedTools';
 
 const EXPECTED_NODE_ENVIRONMENT_TOOLS = [
-  'browse_close',
-  'browse_get',
-  'browse_interact',
-  'browse_list',
-  'browse_open',
   'edit',
   'exec',
   'read',

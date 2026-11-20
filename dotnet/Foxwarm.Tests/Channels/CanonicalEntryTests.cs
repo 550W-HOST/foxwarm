@@ -116,8 +116,9 @@ public sealed class CanonicalEntryTests
                     Path.Combine(data, "state", "config.yaml"),
                     roots["configFiles"]!["app"]!["path"]!.GetValue<string>()
                 );
+                // POST /trigger was removed in 0.9.6.
                 Assert.Equal(
-                    HttpStatusCode.BadRequest,
+                    HttpStatusCode.NotFound,
                     (
                         await client.PostAsJsonAsync(
                             "/trigger",

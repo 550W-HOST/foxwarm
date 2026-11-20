@@ -1,6 +1,5 @@
 using System.Net;
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
@@ -111,10 +110,9 @@ public sealed class ModelInteractionDiagnosticsTests
         payload["escaped \"key\""] = string.Concat(
             Enumerable.Repeat("line\r\n\t\"\\ <>& café 中文 🦊\u0000", 32768)
         );
-        var indented = new JsonSerializerOptions { WriteIndented = true };
         await attempt.PreparedAsync(payload);
         Assert.Equal(
-            Encoding.UTF8.GetBytes(payload.ToJsonString(indented)),
+            Encoding.UTF8.GetBytes(payload.ToJsonText(indented: true)),
             await File.ReadAllBytesAsync(
                 Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_req.json"))
             )
@@ -139,7 +137,7 @@ public sealed class ModelInteractionDiagnosticsTests
             );
             Assert.Equal(
                 Encoding.UTF8.GetBytes(
-                    new JsonObject { ["attempts"] = failures.DeepClone() }.ToJsonString(indented)
+                    new JsonObject { ["attempts"] = failures.DeepClone() }.ToJsonText(indented: true)
                 ),
                 await File.ReadAllBytesAsync(
                     Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_res.json"))
@@ -161,7 +159,7 @@ public sealed class ModelInteractionDiagnosticsTests
         if (failures is not null)
             expected["attempts"] = failures;
         Assert.Equal(
-            Encoding.UTF8.GetBytes(expected.ToJsonString(indented)),
+            Encoding.UTF8.GetBytes(expected.ToJsonText(indented: true)),
             await File.ReadAllBytesAsync(
                 Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_res.json"))
             )
@@ -789,7 +787,6 @@ public sealed class ModelInteractionDiagnosticsTests
 
     [Theory]
     [InlineData("history")]
-    [InlineData("context")]
     [InlineData("unchanged")]
     public async Task Canonical_retry_raw_pairs_follow_the_existing_logical_context_identity(
         string change
@@ -817,7 +814,6 @@ public sealed class ModelInteractionDiagnosticsTests
                 ["role"] = "user",
                 ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
             };
-        var context = false;
         await owner.RequestAsync(
             "s",
             HostModels.Parse(Catalog(uri), new JsonObject()),
@@ -834,15 +830,8 @@ public sealed class ModelInteractionDiagnosticsTests
             default,
             ModelRequestScope.Canonical,
             prepareRetry: _ =>
-            {
-                context = true;
-                return Task.FromResult<IReadOnlyList<JsonObject>?>(
+                Task.FromResult<IReadOnlyList<JsonObject>?>(
                     change == "history" ? [User("original"), User("new-input")] : null
-                );
-            },
-            requestContext: () =>
-                Task.FromResult<IReadOnlyList<JsonObject>>(
-                    change == "context" && context ? [User("new-input")] : []
                 )
         );
         Assert.Equal(2, handler.Bodies.Count);

@@ -377,9 +377,13 @@ public sealed class SessionTurnRunner
             }
             finally
             {
-                entry.ReleaseProcessor();
+                // Claims are taken under the lifecycle lock, so releasing the claim together with the
+                // registration keeps a concurrent start from claiming an entry that is still registered.
                 lock (lifecycle)
+                {
                     processors.Remove(entry);
+                    entry.ReleaseProcessor();
+                }
                 try
                 {
                     if (
@@ -392,6 +396,7 @@ public sealed class SessionTurnRunner
                 }
                 finally
                 {
+                    entry.NotifyProcessorReleased();
                     turnScope.Dispose();
                     settled.TrySetResult();
                 }

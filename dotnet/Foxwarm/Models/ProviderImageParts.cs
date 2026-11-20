@@ -129,13 +129,13 @@ internal static class ProviderImageParts
                     ["type"] = textType,
                     ["text"] =
                         "[IMAGE: id="
-                        + JsonValue.Create(id)!.ToJsonString()
+                        + JsonValue.Create(id)!.ToJsonText()
                         + size
                         + resized
                         + "]"
                         + (
                             resized.Length > 0
-                                ? " image_crop coordinates use the original size."
+                                ? " `ctl image crop` coordinates use the original size."
                                 : ""
                         ),
                 }

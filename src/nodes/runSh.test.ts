@@ -237,7 +237,7 @@ case "$url" in
 esac
 if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
 `);
-    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\0" "$@" > "$MOCK_CALLS/node"\n');
+    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\0" "$@" > "$MOCK_CALLS/node"\nprintf "%s\\0" "$FOXWARM_NODE_LAUNCH_METHOD" "$FOXWARM_NODE_LAUNCH_DIR" "$FOXWARM_NODE_LAUNCH_SERVICE_SCOPE" > "$MOCK_CALLS/launch"\n');
     await writeExecutable(path.join(fixture.bin, 'docker'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOCK_CALLS/docker"\n');
     const env = { ...fixture.env, TEMPLATE_DIR: templateDir };
     for (const authToken of [undefined, token]) {
@@ -267,6 +267,16 @@ if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
           assert.ok(envFile.includes(`NODE_PAIRING_TOKEN='${authToken ? '' : "fixture\\'token/$literal"}'`));
           assert.equal((await fs.stat(path.join(cwd, '.env'))).mode & 0o077, 0);
         } else await assertClientArgs();
+        if (method === 'docker') {
+          const envFile = await fs.readFile(path.join(cwd, '.env'), 'utf8');
+          assert.ok(envFile.includes(`NODE_LAUNCH_DIR='${cwd}'`));
+          assert.match(await fs.readFile(path.join(fixture.calls, 'docker'), 'utf8'), /--env-file \.\/\.env -f \.\/docker-compose.yaml up -d --build/);
+        } else {
+          const launch = (await fs.readFile(path.join(fixture.calls, 'launch'), 'utf8')).split('\0');
+          assert.equal(launch[0], method);
+          assert.equal(launch[1], method === 'interactive' ? cwd : installDir);
+          if (method === 'bareMetalInstall') assert.equal(launch[2], 'user');
+        }
       }
     }
   } finally { await fs.remove(fixture.root); }

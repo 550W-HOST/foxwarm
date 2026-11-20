@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { sshFixture } from '../../../scripts/test/loopbackSshFixture.cjs'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 if (process.platform !== 'linux') throw new Error('The SSH qualification requires Linux, Python 3 and OpenSSH.')
 const env = {}, options = { env, }
@@ -15,7 +16,7 @@ options.cwd = fixture.root
 const sshRoot = await mkdtemp(join(homedir(), '.foxwarm-ssh-test-'))
 let connection, model
 const failures = [], scripts = new Map(), requests = []
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const quote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'"
 const result = (state, id) => state.messages.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response
 let route
@@ -64,7 +65,8 @@ try {
   const discovery = result(state, 'discovery')
   assert.equal(discovery.status, 'completed', JSON.stringify(discovery))
   assert.equal(discovery.result[0].nodes.find(row => row.id === node).availability, 'ready', connection.diagnostics)
-  assert.deepEqual(discovery.result[0].providers.find(row => row.id === 'external-ssh').lifecycle, [])
+  // The model's list shows a Provider only with lifecycle actions the caller might use; this one has none.
+  assert(!discovery.result[0].providers.some(row => row.id === 'external-ssh'))
   assert.deepEqual(discovery.result[1].provider.lifecycle, [])
   assert(discovery.result[1].provider.dataRetention)
   state = await turn('unsupported', [call('create-unsupported', 'node', { action: 'create', providerId: 'external-ssh' }), call('inspect-unsupported', 'node', { action: 'inspect', nodeId: node }), call('destroy-unsupported', 'node', { action: 'destroy', nodeId: node, confirmation: 'destroy node ' + node })])

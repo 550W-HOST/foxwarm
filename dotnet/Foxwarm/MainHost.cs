@@ -20,6 +20,7 @@ internal sealed class MainHost : IAsyncDisposable
     internal IHostApplicationLifetime Lifetime =>
         host.Services.GetRequiredService<IHostApplicationLifetime>();
     internal bool HttpEnabled => host is WebApplication;
+    internal SessionManager Sessions => sessions;
 
     internal async Task StartAsync()
     {
@@ -115,6 +116,7 @@ internal sealed class MainHost : IAsyncDisposable
     {
         if (http.HttpEnabled)
             configuration.Access.ReserveInstanceToken(http.Token);
+        configuration.Secrets.Open();
         var options = new ResponsesClientOptions(
             new Uri("http://127.0.0.1:1/v1"),
             "",
@@ -188,8 +190,7 @@ internal sealed class MainHost : IAsyncDisposable
                 http.Address,
                 http.WebUiEnabled,
                 http.BindAddress,
-                http.Desktop,
-                http.TriggerEnabled
+                http.Desktop
             );
             if (server.WebUiEnabled)
             {
@@ -266,6 +267,7 @@ internal sealed class MainHost : IAsyncDisposable
         await rotation.DisposeAsync().ConfigureAwait(false);
         channelStopping.Dispose();
         await sessions.DisposeAsync().ConfigureAwait(false);
+        sessions.Secrets?.Dispose();
         if (log is not null)
             Console.WriteLine("Main stopped.");
         log?.Dispose();

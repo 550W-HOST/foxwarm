@@ -11,12 +11,10 @@ internal sealed partial class SessionManager
     internal ToolAuthorizationAuthority Authorization => authorization;
     internal string ToolWorkspace => toolWorkspace;
 
+    // The retained legacy isolation fields. Since R2 they are a downgrade fence and the
+    // migration input only; nothing enforces them as authority.
     internal AgentIsolation Isolation(string agent) =>
         IsolatedToolCompatibility.Metadata(agents.MetadataSnapshot()[agent]);
-
-    internal string? RecordedIsolationNode(string agent) => Isolation(agent).RecordedNode;
-
-    internal bool AgentIsolated(string agent) => Isolation(agent).Isolated;
 
     private string? AuthorizationParent(JsonObject? row)
     {
@@ -127,11 +125,12 @@ internal sealed partial class SessionManager
         }
         else
             requested ??= owner.Id;
-        return request with
-        {
-            SourceParent = parent,
-            SessionTarget = AuthorizationTarget(requested),
-        };
+        var target = AuthorizationTarget(requested);
+        // An Archive outlives its catalog row. Without a live row, the requested identity's
+        // Agent names the owner, so same-Agent rules still cover deleted Sessions.
+        if (target is null && family == "archive" && SessionIdentity.IsValid(requested))
+            target = new(requested, SessionIdentity.Agent(requested), null);
+        return request with { SourceParent = parent, SessionTarget = target };
     }
 
     internal async Task AuthorizeToolAsync(
@@ -140,8 +139,10 @@ internal sealed partial class SessionManager
         WorkspaceTools? files,
         CancellationToken token,
         SessionOwner? concreteTarget = null,
-        bool toolScriptSourceRead = false,
-        IReadOnlyList<string>? nodeEffects = null
+        IReadOnlyList<string>? nodeEffects = null,
+        Action<AuthorizationAssessment>? observe = null,
+        IReadOnlyList<string>? secrets = null,
+        IReadOnlyList<AuthorizationOperation>? operations = null
     )
     {
         var assessment = await AssessToolAsync(
@@ -150,36 +151,132 @@ internal sealed partial class SessionManager
             files,
             token,
             concreteTarget,
-            toolScriptSourceRead,
-            nodeEffects
+            nodeEffects,
+            secrets: secrets,
+            operations: operations
         );
-        if (assessment.Denied is { } denied)
-            throw new ToolAuthorizationDeniedException(
-                SessionWait.Text(denied.Decision.Rule?["reason"])
-                    ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
-            );
-        IsolatedToolCompatibility.Check(
-            Isolation(owner.Agent),
-            assessment.Request,
-            AuthorizationTarget
-        );
+        observe?.Invoke(assessment);
+        if (assessment.Denied is not null)
+            throw Denial(owner, resolved, assessment);
+        // Deny is final above: the current policy is always evaluated first. An ask outcome
+        // passes only when a grant of this invocation covers this exact request.
+        if (assessment.Effect == ToolAuthorizationEffect.Ask)
+        {
+            var fingerprint = ApprovalFingerprint(owner, resolved, assessment.Request);
+            if (ToolApprovalScope.Current?.Covers(owner, fingerprint) != true)
+                throw new ToolApprovalRequiredException(assessment, resolved, fingerprint);
+        }
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
     }
 
+    // The denial of a request: the existing message, then which rule denied which obligation of
+    // which call.
+    internal static ToolAuthorizationDeniedException Denial(
+        SessionOwner owner,
+        ResolvedTool resolved,
+        AuthorizationAssessment assessment,
+        string? lead = null
+    )
+    {
+        var denied = assessment.Denied!;
+        if (denied.Decision.Unresolved is { } unresolved)
+            return new ToolAuthorizationUnresolvedException(
+                OperationAttribution.Unresolved(
+                    resolved,
+                    OperationAttribution.Primary(owner),
+                    denied,
+                    unresolved
+                )
+            );
+        return new ToolAuthorizationDeniedException(
+            OperationAttribution.Append(
+                denied.Decision
+                    is {
+                        Secrets.Effect: ToolAuthorizationEffect.Deny,
+                        Call.Effect: not ToolAuthorizationEffect.Deny
+                    }
+                    ? SessionWait.Text(denied.Decision.Secrets.Rule?["reason"])
+                        ?? Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(
+                            assessment.Request.Secrets!
+                        )
+                    : SessionWait.Text(denied.Decision.Rule?["reason"])
+                        ?? lead
+                        ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`.",
+                OperationAttribution.Denial(
+                    resolved,
+                    OperationAttribution.Primary(owner),
+                    denied,
+                    assessment.Request.Secrets
+                )
+            )
+        );
+    }
+
+    // The identity an approval binds and a later check must match: the request with its Session
+    // target and Task owner resolved even when no rule needed them, so a check that names its
+    // concrete target and one that resolves it from the arguments agree. Resolution failures
+    // leave the fact absent; a check that resolves it differently is then not covered.
+    internal string ApprovalFingerprint(
+        SessionOwner owner,
+        ResolvedTool resolved,
+        ToolAuthorizationRequest request
+    ) => ToolApprovalScope.Fingerprint(resolved, ApprovalRequest(owner, request));
+
+    // The request with the facts an approval binds, as approvers see them.
+    internal ToolAuthorizationRequest ApprovalRequest(
+        SessionOwner owner,
+        ToolAuthorizationRequest request
+    )
+    {
+        if (request.SessionTarget is null)
+            try
+            {
+                request = PopulateAuthorizationTargets(request, owner);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // The fact stays absent: a check that resolves it is then not covered.
+            }
+        if (
+            request.TaskOwnerSession is null
+            && SessionWait.Text(request.Args["taskId"]) is { Length: > 0 and <= 128 } taskId
+            && !string.IsNullOrWhiteSpace(taskId)
+        )
+            try
+            {
+                var taskOwner = Tasks.OwnerSessionId(taskId.Trim());
+                request = request with
+                {
+                    TaskOwnerSession = taskOwner is null
+                        ? null
+                        : SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"]),
+                };
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // The fact stays absent: a check that resolves it is then not covered.
+            }
+        return request;
+    }
+
     // Shared by enforcement and explanation: structural prechecks, fact construction and
     // every generic policy layer. A replacement global policy only substitutes that layer.
+    // Secret facts are computed from the current configuration unless the effect owner supplies
+    // those of the exact change it installs.
     internal async Task<AuthorizationAssessment> AssessToolAsync(
         SessionOwner owner,
         ResolvedTool resolved,
         WorkspaceTools? files,
         CancellationToken token,
         SessionOwner? concreteTarget = null,
-        bool toolScriptSourceRead = false,
         IReadOnlyList<string>? nodeEffects = null,
-        ToolAuthorizationPolicy? global = null
+        ToolAuthorizationPolicy? global = null,
+        IReadOnlyList<string>? secrets = null,
+        IReadOnlyList<AuthorizationPath>? paths = null,
+        IReadOnlyList<AuthorizationOperation>? operations = null
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -187,26 +284,14 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
-        if (resolved.Source == "node")
-        {
-            if (toolScriptSourceRead && resolved.ExecutionNode == "master")
-                RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-            else if (!IsMasterBrowser(resolved.Source, resolved.Name, resolved.ExecutionNode))
-                RequireNodeBoundary(owner, resolved.ExecutionNode);
-        }
         if (
             resolved.Source == "builtin"
-            && resolved.Name == "artifact"
-            && ToolRegistry.ArtifactFileSource(resolved.Args)
+            && resolved.Name == "generate_image"
+            && !UsesSeparateImageGeneration(owner)
         )
-            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-        if (resolved.Source == "builtin" && resolved.Name is "run_script" or "start_toolscript_run")
-            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-        if (resolved.Source == "builtin" && resolved.Name is "send_file" or "image_write_to_file")
-            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-        if (resolved.Source == "builtin" && resolved.Name == "copy_between_nodes")
-            foreach (var key in new[] { "sourceNode", "targetNode" })
-                RequireFileNodeBoundary(owner, SessionWait.Text(resolved.Args[key])?.Trim() ?? "");
+            throw new ToolAuthorizationDeniedException(
+                "Separate image generation is not enabled for the selected concrete model."
+            );
         var remote =
             resolved.ExecutionNode != "master"
             && (
@@ -221,9 +306,11 @@ internal sealed partial class SessionManager
                             or "run_script"
                             or "start_toolscript_run"
             );
-        var paths =
+        // Given path facts (explain's reuse of facts a probe already established) replace the
+        // computed ones.
+        paths ??=
             resolved.Source == "builtin" && resolved.Name == "copy_between_nodes"
-                ? CopyAuthorizationPaths(owner, resolved.Args)
+                ? CopyAuthorizationPaths(owner, resolved.Args, files)
             : remote ? RemoteAuthorizationPaths(resolved)
             : resolved.Source == "builtin"
             && resolved.Name == "artifact"
@@ -238,6 +325,7 @@ internal sealed partial class SessionManager
             || resolved.Source == "builtin"
                 && resolved.Name
                     is "node_create_auth_token"
+                        or "node_bootstrap_info"
                         or "set_config"
                         or "send_file"
                         or "image_write_to_file"
@@ -303,13 +391,57 @@ internal sealed partial class SessionManager
             {
                 NodeForest = await NodeProviders.PrepareAuthorizationForestAsync(endpoints, token),
             };
-        var layers = EffectiveLayers(owner.Agent, global ?? await authorization.LoadAsync(token));
+        var policy = global ?? await authorization.LoadAsync(token);
+        // A Self call is not authorizable: every valid layer passes it. Structural failures (an
+        // unavailable policy, an invalid creator chain, an unreadable layer) still reject it.
+        // Operations a host call states (a ToolScript model request) are never Self.
+        if (operations is null && OperationPlan.SelfReason(resolved) is { } self)
+            return new(
+                request,
+                EffectiveLayers(owner.Agent, policy)
+                    .Select(layer => new AuthorizationLayerDecision(
+                        layer.Name,
+                        layer.Policy,
+                        new(ToolAuthorizationEffect.Allow, null)
+                    ))
+                    .ToArray()
+            )
+            {
+                Self = self,
+            };
+        var secretsUnknown = false;
+        if (secrets is null)
+        {
+            secrets = await SecretFactsAsync(owner, resolved, files, policy, token);
+            secretsUnknown =
+                secrets is null
+                && resolved.Source == "builtin"
+                && (
+                    resolved.Name == "mcp_config"
+                    || resolved.Name == "set_config"
+                        && files is not null
+                        && SessionWait.Text(resolved.Args["target"]) is "config" or "models"
+                        && SessionWait.Text(resolved.Args["filePath"]) is not null
+                        && models.ConfigurationOwner is not null
+                );
+        }
+        if (secrets is { Count: > 0 })
+            request = request with
+            {
+                Secrets = secrets,
+                OwnedSecrets = OwnedSecrets(owner.Agent, secrets),
+            };
+        var layers = EffectiveLayers(owner.Agent, policy);
         request = PopulateEffectiveTargets(
             request,
             owner,
             layers.Select(layer => layer.Policy).ToArray(),
             concreteTarget
         );
+        if (operations is not null)
+            request = request with { Operations = operations };
+        else if (layers.Any(layer => layer.Policy.HasOperationRules))
+            request = request with { Operations = AuthorizationOperations(owner, resolved, request, files) };
         return new(
             request,
             layers
@@ -319,7 +451,93 @@ internal sealed partial class SessionManager
                     ToolAuthorizationEvaluation.Evaluate(layer.Policy, request)
                 ))
                 .ToArray()
-        );
+        )
+        {
+            SecretsUnknown = secretsUnknown,
+        };
+    }
+
+    // Those of the named secrets that the Agent owns. An unreadable store grants nothing.
+    private IReadOnlyList<string> OwnedSecrets(string agent, IReadOnlyList<string> names)
+    {
+        if (secrets is not { } store)
+            return [];
+        try
+        {
+            return names.Where(name => store.Store.Owner(name) == agent).ToArray();
+        }
+        catch (Foxwarm.Secrets.SecretStoreLockedException)
+        {
+            return [];
+        }
+    }
+
+    // Stored secrets a configuration call would send to a new destination, against the
+    // configuration as it is now. A set_config candidate is read only when the caller may read
+    // it, so a fact never reveals anything about a file the caller cannot read; the call then
+    // fails on that read anyway.
+    private async Task<IReadOnlyList<string>?> SecretFactsAsync(
+        SessionOwner owner,
+        ResolvedTool resolved,
+        WorkspaceTools? files,
+        ToolAuthorizationPolicy global,
+        CancellationToken token
+    )
+    {
+        if (resolved is { Source: "node", Name: "exec" })
+            return ExecSecretFacts(resolved.Args);
+        if (resolved.Source != "builtin")
+            return null;
+        if (resolved.Name == "mcp_config")
+            return mcp.SecretFacts(resolved.Args);
+        if (resolved.Name == "add_secret")
+            return AddSecretFacts(resolved.Args);
+        if (resolved.Name == "ask_user")
+            return AskUserSecretFacts(resolved.Args);
+        if (
+            resolved.Name != "set_config"
+            || files is null
+            || SessionWait.Text(resolved.Args["target"]) is not ("config" or "models")
+            || SessionWait.Text(resolved.Args["filePath"]) is not { } path
+            || models.ConfigurationOwner is not { } configuration
+        )
+            return null;
+        try
+        {
+            var readTool = CandidateRead(path);
+            var read = await AssessToolAsync(
+                owner,
+                readTool,
+                files,
+                token,
+                global: global,
+                secrets: []
+            );
+            // An asking read counts only when an approval of this invocation covers it.
+            if (
+                read.Effect == ToolAuthorizationEffect.Deny
+                || read.Effect == ToolAuthorizationEffect.Ask
+                    && ToolApprovalScope.Current?.Covers(
+                        owner,
+                        ApprovalFingerprint(owner, readTool, read.Request)
+                    ) != true
+            )
+                return null;
+            // The bytes admitted before the plan, which the installation consumes.
+            var bytes =
+                AdmittedCandidate(owner, path)
+                ?? await files.CaptureConfigCandidateAsync(path, false, token);
+            return Foxwarm.Secrets.SecretConfigurationChanges.ForConfiguration(
+                configuration,
+                SessionWait.Text(resolved.Args["target"])!,
+                new UTF8Encoding(false).GetString(bytes).TrimStart('\uFEFF')
+            );
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // The handler reads the candidate itself and reports why it cannot.
+            return null;
+        }
     }
 
     private (string? Name, ToolAuthorizationPolicy Policy)[] EffectiveLayers(
@@ -342,13 +560,16 @@ internal sealed partial class SessionManager
         ToolAuthorizationRequest request
     )
     {
+        AuthorizationDecision? ask = null;
         foreach (var policy in policies)
         {
             var decision = ToolAuthorizationEvaluation.Evaluate(policy, request);
-            if (!decision.Allowed)
+            if (decision.Effect == ToolAuthorizationEffect.Deny)
                 return decision;
+            if (decision.Effect == ToolAuthorizationEffect.Ask)
+                ask ??= decision;
         }
-        return new(true, null);
+        return ask ?? new(ToolAuthorizationEffect.Allow, null);
     }
 
     private async Task AuthorizeCreateSessionTargetAsync(
@@ -370,24 +591,52 @@ internal sealed partial class SessionManager
             new JsonObject { ["agentName"] = agent },
             []
         );
-        var policies = EffectivePolicies(source.Agent, await authorization.LoadAsync(token));
-        var indeterminate = false;
-        foreach (var policy in policies)
+        var layers = EffectiveLayers(source.Agent, await authorization.LoadAsync(token));
+        var primary = OperationAttribution.Primary(source);
+        (string? Layer, ToolAuthorizationPolicy Policy, CreationTargetOutcome Outcome)? indeterminate = null;
+        (string? Layer, ToolAuthorizationPolicy Policy, CreationTargetOutcome Outcome)? ask = null;
+        foreach (var (layer, policy) in layers)
         {
-            var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
+            var outcome = ToolAuthorizationEvaluation.EvaluateCreationTargetOutcome(policy, request);
+            var decision = outcome.Decision;
             if (decision == CreationTargetDecision.Deny)
                 throw new ToolAuthorizationDeniedException(
-                    $"Tool authorization rules deny creating a Session in Agent '{agent}'."
+                    OperationAttribution.Append(
+                        $"Tool authorization rules deny creating a Session in Agent '{agent}'.",
+                        OperationAttribution.CreationTarget(primary, layer, policy, outcome)
+                    )
                 );
-            indeterminate |= decision == CreationTargetDecision.Indeterminate;
+            if (decision == CreationTargetDecision.Indeterminate)
+                indeterminate ??= (layer, policy, outcome);
+            if (decision == CreationTargetDecision.Ask)
+                ask ??= (layer, policy, outcome);
         }
-        if (indeterminate)
+        if (indeterminate is { } unsettled)
             throw new ToolAuthorizationDeniedException(
-                "Future Session parameters make create_session target authorization indeterminate at timer registration. "
-                    + "Place a decisive creation-target rule before rules depending on future names or settings."
+                OperationAttribution.Append(
+                    "Future Session parameters make create_session target authorization indeterminate at timer registration. "
+                        + "Place a decisive creation-target rule before rules depending on future names or settings.",
+                    OperationAttribution.CreationTarget(
+                        primary,
+                        unsettled.Layer,
+                        unsettled.Policy,
+                        unsettled.Outcome
+                    )
+                )
             );
-        // Only generic policy is shared. Legacy structural create_session denial must not
-        // replace the timer's independent isolation and creator-target checks.
+        // A future unattended creation has no invocation a person could approve.
+        if (ask is { } asking)
+            throw new ToolAuthorizationDeniedException(
+                OperationAttribution.Append(
+                    $"Tool authorization rules require approval to create Sessions in Agent '{agent}'. A scheduled creation can't be approved in advance, so this timer was not registered.",
+                    OperationAttribution.CreationTarget(
+                        primary,
+                        asking.Layer,
+                        asking.Policy,
+                        asking.Outcome
+                    )
+                )
+            );
         source.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(source))
             throw new InvalidOperationException(
@@ -480,6 +729,11 @@ internal sealed partial class SessionManager
                     )
         );
 
+    internal Task SetAgentInheritableAsync(string agent, bool inheritable) =>
+        agents.SetInheritableAsync(agent, inheritable);
+
+    internal bool AgentInheritable(string agent) => agents.Inheritable(agent);
+
     internal string? AgentDefaultNode(string agent) => agents.EffectiveDefaultNode(agent);
 
     internal string? AgentDefaultCwd(string agent) => agents.DefaultCwd(agent);
@@ -519,103 +773,19 @@ internal sealed partial class SessionManager
             );
     }
 
-    // This exception reaches generic policy and the existing exact isolated capability check.
-    // It does not grant selection, exec, file export or any other off-bound-Node authority.
-    private static bool IsMasterBrowser(string source, string name, string node) =>
-        source == "node" && node == "master" && MainBrowserDefinitions.Contains(name);
-
     internal bool ToolVisible(
         SessionOwner owner,
         string source,
         string name,
         string? server = null,
         bool unknownNode = false,
-        string? node = null
-    )
-    {
-        if (
-            owner.Entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope))
-            && !ClaudeRuntimeToolSupport.Visible(source, name)
-        )
-            return false;
-        ToolAuthorizationPolicy[] layers;
-        try
-        {
-            layers = agents.RuleLayers(owner.Agent);
-        }
-        catch (InvalidDataException)
-        {
-            return false;
-        }
-        if (name == "call_tool" && source == "builtin")
-            return true;
-        if (
-            source == "builtin"
-            && name
-                is "artifact"
-                    or "run_script"
-                    or "start_toolscript_run"
-                    or "send_file"
-                    or "image_write_to_file"
-        )
-            unknownNode = true;
-        var targetNode =
-            node
-            ?? (
-                source == "node"
-                || source == "builtin" && name is "send_file" or "image_write_to_file"
-                    ? CurrentNode(owner)
-                    : "master"
-            );
-        if (
-            source == "node"
-            && AgentIsolated(owner.Agent)
-            && targetNode != (RecordedIsolationNode(owner.Agent) ?? "master")
-            && !IsMasterBrowser(source, name, targetNode)
-        )
-            return false;
-        var unknownNodeTargets =
-            source == "builtin"
-            && name
-                is "send_file"
-                    or "image_write_to_file"
-                    or "copy_between_nodes"
-                    or "node"
-                    or "node_create_auth_token"
-                    or "node_remove";
-        try
-        {
-            var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
-            return new[] { authorization.Load() }
-                    .Concat(layers)
-                    .All(policy =>
-                        ToolAuthorizationEvaluation.Visible(
-                            policy,
-                            request,
-                            unknownNode,
-                            unknownNodeTargets
-                        )
-                    )
-                && IsolatedToolCompatibility.Visible(
-                    Isolation(owner.Agent),
-                    source,
-                    name,
-                    server,
-                    unknownNode,
-                    targetNode
-                );
-        }
-        catch (InvalidDataException)
-        {
-            return false;
-        }
-    }
+        string? node = null,
+        JsonObject? fixedArgs = null
+    ) =>
+        (source != "builtin" || name != "generate_image" || UsesSeparateImageGeneration(owner))
+        && ToolVisible(VisibilityFor(owner), source, name, server, unknownNode, node, fixedArgs);
 
-    internal JsonArray ModelDefinitions(
-        SessionOwner owner,
-        JsonArray? explicitOverride = null,
-        bool batchControls = true
-    )
+    internal JsonArray ModelDefinitions(SessionOwner owner, JsonArray? explicitOverride = null)
     {
         if (explicitOverride is not null)
             return (JsonArray)explicitOverride.DeepClone();
@@ -628,7 +798,10 @@ internal sealed partial class SessionManager
         return new JsonArray(
             tools
                 .Entries.Where(entry =>
-                    entry.DefaultInject
+                    (
+                        entry.DefaultInject
+                        || SessionWait.Text(entry.Definition["name"]) == "generate_image"
+                    )
                     && (
                         entry.Source == "node"
                         || ToolVisible(
@@ -639,18 +812,15 @@ internal sealed partial class SessionManager
                     )
                 )
                 .OrderBy(entry => entry.Source == "node")
-                .Select(entry =>
-                    (JsonNode?)ToolCallControls.ForModel(entry.Definition, batchControls)
-                )
+                .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition))
                 .ToArray()
         );
     }
 
     // The external runtime receives the same visible model tool set as an internal Session.
-    // Each MCP request is one call, so response-wide batch controls are omitted.
     internal JsonArray RuntimeModelDefinitions(SessionOwner owner) =>
         new(
-            ModelDefinitions(owner, batchControls: false)
+            ModelDefinitions(owner)
                 .OfType<JsonObject>()
                 .Select(definition => (JsonNode)ClaudeRuntimeToolSupport.Project(definition))
                 .ToArray()
@@ -687,6 +857,19 @@ internal sealed partial class SessionManager
         return paths;
     }
 
+    // The protected input of set_config: its candidate, read on master as the caller.
+    internal static ResolvedTool CandidateRead(string path) =>
+        new("set_config", "node", "read", new JsonObject { ["filePath"] = path });
+
+    internal static string CandidateInput(string path) => "set_config:" + path;
+
+    private static byte[]? AdmittedCandidate(SessionOwner owner, string path) =>
+        ToolApprovalScope.Current is { } scope
+        && ReferenceEquals(scope.Owner, owner)
+        && scope.Inputs.TryGetValue(CandidateInput(path), out var bytes)
+            ? bytes
+            : null;
+
     internal async Task<JsonObject> InstallConfigAsync(
         SessionOwner owner,
         WorkspaceTools files,
@@ -705,23 +888,26 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 "set_config requires target (config, models, or tool-rules) and one nonempty filePath within 4096 UTF-8 bytes."
             );
-        async Task Authorize(CancellationToken current)
+        async Task Authorize(CancellationToken current, IReadOnlyList<string>? secrets = null)
         {
             await AuthorizeToolAsync(
                 owner,
                 new("set_config", "builtin", "set_config", args),
                 files,
-                current
+                current,
+                secrets: secrets
             );
-            await AuthorizeToolAsync(
-                owner,
-                new("set_config", "node", "read", new JsonObject { ["filePath"] = path }),
-                files,
-                current
-            );
+            await AuthorizeToolAsync(owner, CandidateRead(path), files, current);
         }
         await Authorize(token);
-        var bytes = await files.CaptureConfigCandidateAsync(path, target == "tool-rules", token);
+        // The candidate the plan was derived from, when it was admitted before planning;
+        // otherwise read now.
+        var bytes =
+            (target is "config" or "models" ? AdmittedCandidate(owner, path) : null)
+            ?? await files.CaptureConfigCandidateAsync(path, target == "tool-rules", token);
+        var text = new UTF8Encoding(false).GetString(bytes).TrimStart('\uFEFF');
+        if (target is "config" or "models" && models.ConfigurationOwner is { } current)
+            Foxwarm.Secrets.SecretMarkerGuard.Require(text, current.Secrets.Redactor.HasLabel);
         JsonObject installed;
         try
         {
@@ -730,8 +916,21 @@ internal sealed partial class SessionManager
                     target,
                     _ => Task.FromResult(bytes),
                     authorization,
-                    Authorize,
-                    token
+                    // Inside the installer's lane: the secret facts of these exact bytes against
+                    // the files they replace.
+                    current =>
+                        Authorize(
+                            current,
+                            target == "tool-rules"
+                                ? []
+                                : Foxwarm.Secrets.SecretConfigurationChanges.ForConfiguration(
+                                    configuration,
+                                    target,
+                                    text
+                                )
+                        ),
+                    token,
+                    webhooksLocked: true
                 );
             else if (target == "tool-rules")
             {
@@ -756,6 +955,14 @@ internal sealed partial class SessionManager
                 $"Invalid {target} YAML candidate. The active file was not changed."
             );
         }
-        return new JsonObject { ["output"] = installed.ToJsonString() };
+        if (target == "tool-rules")
+        {
+            var policy = ToolAuthorizationYaml.Parse(bytes);
+            if (policy.Warnings.Count > 0)
+                installed["warnings"] = new JsonArray(
+                    policy.Warnings.Select(warning => (JsonNode?)warning).ToArray()
+                );
+        }
+        return installed;
     }
 }

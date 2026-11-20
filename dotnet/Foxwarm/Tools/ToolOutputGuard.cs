@@ -159,6 +159,7 @@ internal static class ToolOutputGuard
             var key in new[]
             {
                 "error",
+                "code",
                 "status",
                 "runId",
                 "continuationId",
@@ -178,7 +179,7 @@ internal static class ToolOutputGuard
             if (
                 response is JsonObject obj
                 && obj.TryGetPropertyValue(key, out var value)
-                && (value is null || value.ToJsonString().Length <= 2000)
+                && (value is null || value.ToJsonText().Length <= 2000)
             )
                 result[key] = value?.DeepClone();
         var notice = saved is not null

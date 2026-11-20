@@ -1,0 +1,1148 @@
+using System.Text;
+using System.Text.Json.Nodes;
+using Foxwarm.Sessions;
+using Foxwarm.Tools;
+using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
+
+namespace Foxwarm.Tests;
+
+public sealed class CtlCommandTests
+{
+    private static JsonObject Args(string command, JsonObject? values = null)
+    {
+        var args = new JsonObject { ["command"] = command };
+        if (values is not null)
+            args["values"] = values;
+        return args;
+    }
+
+    private static CtlTarget Target(string command, JsonObject? values = null) =>
+        Assert.IsType<CtlTarget>(CtlParser.Parse(Args(command, values)));
+
+    private static CtlError Error(string command, JsonObject? values = null) =>
+        Assert.IsType<CtlError>(CtlParser.Parse(Args(command, values)));
+
+    [Fact]
+    public void Node_pairing_verbs_are_pending_approve_and_reject_without_pair_prefixed_spellings()
+    {
+        var target = Target("node approve pair_1 --node-id box");
+        Assert.Equal("node_pair_approve", target.Name);
+        Assert.Equal("pair_1", target.Args["pendingId"]!.GetValue<string>());
+        Assert.Equal("box", target.Args["nodeId"]!.GetValue<string>());
+        Assert.Equal("node_pair_list", Target("node pending").Name);
+        Assert.IsType<CtlError>(CtlParser.Parse(Args("node pair-list")));
+        Assert.IsType<CtlError>(CtlParser.Parse(Args("node pair-approve pair_1")));
+        Assert.IsType<CtlError>(CtlParser.Parse(Args("node pair-reject pair_1")));
+    }
+
+    [Fact]
+    public void Words_split_like_a_shell_without_expansion()
+    {
+        var target = Target(
+            "ctl memory write 'notes/a b.md' \"say \\\"hi\\\" \\\\ $HOME\" "
+        );
+        Assert.Equal("builtin", target.Source);
+        Assert.Equal("write_memory", target.Name);
+        Assert.Equal("notes/a b.md", target.Args["filePath"]!.GetValue<string>());
+        Assert.Equal("say \"hi\" \\ $HOME", target.Args["content"]!.GetValue<string>());
+        Assert.Equal(
+            "a;b|c",
+            Target("memory read a\\;b'|'c").Args["filePath"]!.GetValue<string>()
+        );
+        foreach (var shell in new[] { "session list | head", "session list; ls", "session list &", "memory read <x", "memory read $(id)", "memory read `id`" })
+            Assert.Contains("not a shell", Error(shell).Message);
+        Assert.Contains("Unterminated", Error("memory read 'open").Message);
+    }
+
+    [Fact]
+    public void Values_bind_only_whole_at_name_arguments_and_must_all_be_used()
+    {
+        var text = "line one\nline two";
+        var bound = Target("memory write notes.md @body", new() { ["body"] = text });
+        Assert.Equal(text, bound.Args["content"]!.GetValue<string>());
+        Assert.Equal(
+            "@literal",
+            Target("memory read @@literal").Args["filePath"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "x@y",
+            Target("memory read x@y").Args["filePath"]!.GetValue<string>()
+        );
+        Assert.Contains("values.missing", Error("memory read @missing").Message);
+        Assert.Contains("not a valid @name", Error("memory read @bad.name").Message);
+        Assert.Contains(
+            "Unused values: extra",
+            Error("memory read a.md", new() { ["extra"] = 1 }).Message
+        );
+        var fromJson = CtlParser.Parse(
+            new JsonObject
+            {
+                ["command"] = "memory write a.md --content=@body",
+                ["valuesJson"] = "{\"body\":\"json text\"}",
+            }
+        );
+        Assert.Equal(
+            "json text",
+            Assert.IsType<CtlTarget>(fromJson).Args["content"]!.GetValue<string>()
+        );
+        Assert.IsType<CtlError>(
+            CtlParser.Parse(
+                new JsonObject
+                {
+                    ["command"] = "memory read a.md",
+                    ["values"] = new JsonObject(),
+                    ["valuesJson"] = "{}",
+                }
+            )
+        );
+        // Bound values are checked against the parameter type, never coerced.
+        Assert.Contains(
+            "bound value is a number",
+            Error("memory write a.md @body", new() { ["body"] = 3 }).Message
+        );
+    }
+
+    [Fact]
+    public void Options_accept_kebab_and_property_spellings_and_check_types()
+    {
+        var listed = Target("session list fox --count=5 --scope all --start 2");
+        Assert.Equal("session", listed.Name);
+        Assert.Equal("list", listed.Args["action"]!.GetValue<string>());
+        Assert.Equal("fox", listed.Args["query"]!.GetValue<string>());
+        Assert.Equal(5, listed.Args["count"]!.GetValue<long>());
+        Assert.Equal(2, listed.Args["start"]!.GetValue<long>());
+        var camel = Target("node copy --targetPath=c.txt master a.txt box --overwrite");
+        Assert.Equal("c.txt", camel.Args["targetPath"]!.GetValue<string>());
+        Assert.Equal("box", camel.Args["targetNode"]!.GetValue<string>());
+        Assert.Contains("more than once", Error("node copy master a box b --target-path c").Message);
+        var copy = Target("node copy master a.txt box --target-path b.txt --no-overwrite");
+        Assert.Equal("b.txt", copy.Args["targetPath"]!.GetValue<string>());
+        Assert.False(copy.Args["overwrite"]!.GetValue<bool>());
+        Assert.True(
+            Target("node copy master a box b --overwrite=true").Args["overwrite"]!.GetValue<bool>()
+        );
+        Assert.Contains("one of current-agent, all", Error("session list --scope everyone").Message);
+        Assert.Contains("a number", Error("session list --count many").Message);
+        Assert.Contains("Unknown option `--bogus`", Error("session list --bogus 1").Message);
+        Assert.Contains("Missing required argument <file-path>", Error("memory read").Message);
+        Assert.Contains("Unexpected argument", Error("memory read a b").Message);
+        var error = Error("session list --count many");
+        Assert.Equal("session list", error.Command!.Path);
+    }
+
+    [Fact]
+    public void Arrays_repeat_or_take_one_json_value_and_objects_take_json_or_values()
+    {
+        var search = Assert.IsType<CtlSearch>(
+            CtlParser.Parse(Args("tool search browser open --source node --source mcp --limit 3"))
+        );
+        Assert.Equal("browser open", search.Args["query"]!.GetValue<string>());
+        Assert.Equal(["node", "mcp"], search.Args["sources"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Assert.Equal(3, search.Args["limit"]!.GetValue<long>());
+        var json = Assert.IsType<CtlSearch>(CtlParser.Parse(Args("tool search --source '[\"builtin\"]' --no-schema")));
+        Assert.Equal("builtin", json.Args["sources"]![0]!.GetValue<string>());
+        Assert.False(json.Args["includeSchema"]!.GetValue<bool>());
+        var call = Assert.IsType<CtlCall>(
+            CtlParser.Parse(Args("tool call node:box/read --args '{\"filePath\":\"x\"}'"))
+        );
+        Assert.Equal("node:box/read", call.Descriptor["toolId"]!.GetValue<string>());
+        Assert.Equal("x", call.Descriptor["args"]!["filePath"]!.GetValue<string>());
+        var bound = Assert.IsType<CtlCall>(
+            CtlParser.Parse(
+                Args(
+                    "tool call --source mcp --server 'my server' --name probe --args @a",
+                    new() { ["a"] = new JsonObject { ["n"] = 1 } }
+                )
+            )
+        );
+        Assert.Equal("my server", bound.Descriptor["server"]!.GetValue<string>());
+        Assert.Equal(1, bound.Descriptor["args"]!["n"]!.GetValue<int>());
+        Assert.Empty(Assert.IsType<CtlCall>(CtlParser.Parse(Args("tool call builtin:list_mcp_servers"))).Descriptor["args"]!.AsObject());
+        Assert.Contains("JSON", Error("tool call builtin:x --args notjson").Message);
+        Assert.Contains("toolId", Error("tool call").Message);
+    }
+
+    [Fact]
+    public void Rest_text_is_taken_raw_after_options_and_binds_only_when_exactly_one_name()
+    {
+        var raw = Target("channel send webui:x it's done; really | ok");
+        Assert.Equal("webui:x", raw.Args["channelTargetId"]!.GetValue<string>());
+        Assert.Equal("it's done; really | ok", raw.Args["message"]!.GetValue<string>());
+        Assert.Equal(
+            "--not-a-flag",
+            Target("channel send webui:x -- --not-a-flag").Args["message"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "bound text",
+            Target("channel send webui:x @m", new() { ["m"] = "bound text" }).Args["message"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "@m hi",
+            Target("channel send webui:x @@m hi").Args["message"]!.GetValue<string>()
+        );
+        Assert.Contains("Missing required", Error("channel send webui:x").Message);
+    }
+
+    [Fact]
+    public void Memory_commands_take_an_Agent_flag_that_fills_agentName()
+    {
+        foreach (var (command, tool) in new[]
+        {
+            ("memory read notes.md", "read_memory"),
+            ("memory write notes.md body", "write_memory"),
+            ("memory edit notes.md --old-text a --new-text b", "edit_memory"),
+            ("memory delete notes.md", "delete_memory"),
+            ("memory patch @patch", "apply_patch_memory"),
+        })
+        {
+            JsonObject? Values() =>
+                command.Contains('@')
+                    ? new JsonObject { ["patch"] = "*** Begin Patch\n*** End Patch" }
+                    : null;
+            Assert.False(Target(command, Values()).Args.ContainsKey("agentName"));
+            foreach (var spelling in new[] { "--agent beta", "--agent=beta" })
+            {
+                var parsed = CtlParser.Parse(Args(command + " " + spelling, Values()));
+                Assert.True(parsed is CtlTarget, command + " " + spelling + ": " + (parsed as CtlError)?.Message);
+                var target = (CtlTarget)parsed;
+                Assert.Equal(tool, target.Name);
+                Assert.Equal("beta", target.Args["agentName"]!.GetValue<string>());
+            }
+        }
+        Assert.Contains("Unknown option `--agent-name`", Error("memory edit a --old-text a --new-text b --agent-name beta").Message);
+        // The value is passed verbatim; the handler decides whether the name is canonical.
+        Assert.Equal(" beta ", Target("memory read a.md --agent ' beta '").Args["agentName"]!.GetValue<string>());
+        Assert.Contains("--agent", Error("memory read a.md --agent").Message);
+    }
+
+    [Fact]
+    public void Memory_help_and_usage_list_the_Agent_flag()
+    {
+        var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        foreach (var verb in new[] { "read", "write", "edit", "delete", "patch" })
+            Assert.Contains("[--agent ", CtlHelp.Render(new("memory", verb), visibleAll)!);
+        Assert.Contains("[--agent ", CtlHelp.Error(Error("memory read"), visibleAll));
+    }
+
+    [Fact]
+    public void Help_forms_and_unknown_commands_resolve_to_help_or_usage()
+    {
+        Assert.Equal(new CtlHelpRequest(null, null), CtlParser.Parse(Args("")));
+        Assert.Equal(new CtlHelpRequest(null, null), CtlParser.Parse(Args("help")));
+        Assert.Equal(new CtlHelpRequest("session", null), CtlParser.Parse(Args("session")));
+        Assert.Equal(new CtlHelpRequest("session", null), CtlParser.Parse(Args("session --help")));
+        Assert.Equal(new CtlHelpRequest("session", "list"), CtlParser.Parse(Args("session list --help")));
+        Assert.Equal(new CtlHelpRequest("session", "list"), CtlParser.Parse(Args("help session list")));
+        var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        var unknown = Error("session lst");
+        Assert.Contains("`session list`", CtlHelp.Error(unknown, visibleAll));
+        Assert.Equal("session", unknown.Noun);
+        Assert.Contains("Did you mean `session list`?", CtlHelp.Error(Error("sesion list"), visibleAll));
+        // Suggestions come from the commands the caller may see.
+        Assert.DoesNotContain(
+            "session list",
+            CtlHelp.Error(unknown, command => command.Path != "session list")
+        );
+        Assert.Contains("session list", CtlHelp.Render(new("session", null), visibleAll));
+        Assert.Contains("--count <number>", CtlHelp.Render(new("session", "list"), visibleAll));
+        Assert.Null(CtlHelp.Render(new("session", "missing"), visibleAll));
+        foreach (var ingress in new[] { "model", "user", "external" })
+            Assert.All(
+                CtlRegistry.Nouns.Where(noun => CtlRegistry.ForNoun(noun.Name, ingress).Any()),
+                noun =>
+                    Assert.True(
+                        CtlHelp.Render(new(noun.Name, null), visibleAll, ingress)!.Length < CtlHelp.MaxLength
+                    )
+            );
+    }
+
+    [Fact]
+    public void Errors_for_common_guesses_point_to_the_form_that_runs()
+    {
+        var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        string Message(string command, JsonObject? values = null, Func<CtlCommand, bool>? visible = null) =>
+            CtlHelp.Error(Error(command, values), visible ?? visibleAll);
+
+        // A plural or misspelled noun with a verb suggests the whole command.
+        Assert.Equal("Unknown command `sessions list`. Did you mean `session list`?", Message("sessions list").Split("\n")[0]);
+        Assert.Contains("Did you mean `session`?", Message("sessions"));
+        Assert.Contains("Did you mean `session`?", Message("sessions frobnicate"));
+        // A verb is compared with its noun's verbs only: no distant verb is offered, and the
+        // noun's commands follow.
+        var messages = Message("session messages x --count 3");
+        Assert.StartsWith("Unknown command `session messages`.\n\n", messages);
+        Assert.DoesNotContain("Did you mean", messages);
+        Assert.Contains("session view <session-id>", messages);
+        Assert.Contains("Did you mean `session list`?", Message("session lst"));
+
+        // Unknown options suggest the option they begin or nearly spell.
+        var memory = Error("memory edit MEMORY.md --old @o --new @n", new() { ["o"] = "a", ["n"] = "b" });
+        Assert.Equal("Unknown option `--old`. Did you mean `--old-text`?", memory.Message);
+        Assert.Equal("memory edit", memory.Command!.Path);
+        Assert.Equal(
+            "Unknown option `--file`. Did you mean `--file-path`?",
+            Error("memory edit --file MEMORY.md").Message
+        );
+        Assert.Equal("Unknown option `--cout`. Did you mean `--count`?", Error("session list --cout 3").Message);
+        Assert.Equal("Unknown option `--last`.", Error("session view x --last 3").Message);
+
+        // An extra word names the positionals and the words that filled them.
+        Assert.Equal(
+            "Unexpected argument `New name`: `session rename` takes only <name> as a positional argument, given as `agent/s1`; pass other values with their options.",
+            Error("session rename agent/s1 \"New name\"").Message
+        );
+        Assert.Equal(
+            "Unexpected argument `box`: `node list` takes no positional arguments.",
+            Error("node list box").Message
+        );
+        Assert.Contains(
+            "takes only <source-node> <source-path> <target-node> <target-path> as positional arguments, given as `a` `b` `c` `d`;",
+            Error("node copy a b c d e").Message
+        );
+        Assert.Equal(
+            "Unexpected argument `x`: `/session stop` takes only <session-id> as a positional argument, given as `s1`; pass other values with their options.",
+            Assert.IsType<CtlError>(CtlParser.ParseUser("/session", "stop s1 x")).Message
+        );
+
+        // Node lifecycle commands name their required Provider.
+        Assert.Equal("Missing required option `--provider-id`.", Error("node ensure dev/box").Message);
+        Assert.Equal(
+            "dev",
+            Target("node ensure dev/box --provider-id dev").Args["providerId"]!.GetValue<string>()
+        );
+        Assert.Equal("Missing required option `--provider-id`.", Error("node create --node-id dev/box").Message);
+    }
+
+    [Fact]
+    public void Help_reports_a_hidden_command_as_unavailable_and_a_missing_one_as_unknown()
+    {
+        var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        var noView = new Func<CtlCommand, bool>(command => command.Path != "session view");
+        var view = CtlHelp.Error(CtlHelp.Unknown(new("session", "view")), noView);
+        Assert.StartsWith("`session view` is not available to this Session.\n\nsession: ", view);
+        Assert.Contains("session status", view);
+        Assert.DoesNotContain("Unknown command", view);
+        // Any parse error of a hidden command reports it as unavailable.
+        Assert.StartsWith(
+            "`session view` is not available to this Session.",
+            CtlHelp.Error(Error("session view x --last 3"), noView)
+        );
+        var noConfig = new Func<CtlCommand, bool>(command => command.Noun != "config");
+        Assert.Equal(
+            "No `config` commands are available to this Session.\n\nRun `help` for the available commands.",
+            CtlHelp.Error(CtlHelp.Unknown(new("config", null)), noConfig)
+        );
+        Assert.StartsWith(
+            "`config set` is not available to this Session.\n\nRun `help`",
+            CtlHelp.Error(CtlHelp.Unknown(new("config", "set")), noConfig)
+        );
+        Assert.StartsWith(
+            "`session view` is not available to this connection.",
+            CtlHelp.Error(CtlHelp.Unknown(new("session", "view"), "external"), noView, "external")
+        );
+        // A command or noun the ingress doesn't have stays unknown.
+        Assert.StartsWith(
+            "Unknown command `session missing`.",
+            CtlHelp.Error(CtlHelp.Unknown(new("session", "missing")), visibleAll)
+        );
+        Assert.StartsWith(
+            "Unknown command `memory`.",
+            CtlHelp.Error(CtlHelp.Unknown(new("memory", null), "external"), visibleAll, "external")
+        );
+    }
+
+    [Fact]
+    public void Quoting_only_an_option_value_keeps_the_option()
+    {
+        Assert.Equal(
+            "hello world",
+            Target("memory edit MEMORY.md --old-text=\"hello world\" --new-text=x").Args["oldText"]!.GetValue<string>()
+        );
+        var write = Target("memory write notes.md --content=\"hello world\"");
+        Assert.Equal("hello world", write.Args["content"]!.GetValue<string>());
+        Assert.Equal("notes.md", write.Args["filePath"]!.GetValue<string>());
+        var call = Assert.IsType<CtlCall>(CtlParser.Parse(Args("tool call node:box/read --args='{\"filePath\":\"x y\"}'")));
+        Assert.Equal("x y", call.Descriptor["args"]!["filePath"]!.GetValue<string>());
+        // A quoted option name is ordinary text.
+        Assert.Equal(
+            "--content=x",
+            Target("memory write notes.md \"--content=x\"").Args["content"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "--content=x",
+            Target("memory write notes.md --\"content=x\"").Args["content"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
+    public void Rest_follows_a_positional_given_as_an_option()
+    {
+        var sent = Target("channel send --channel-target-id webui:x @m", new() { ["m"] = "message" });
+        Assert.Equal("webui:x", sent.Args["channelTargetId"]!.GetValue<string>());
+        Assert.Equal("message", sent.Args["message"]!.GetValue<string>());
+        Assert.Equal(
+            "plain words",
+            Target("channel send --channel-target-id webui:x plain words").Args["message"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
+    public void Model_options_build_the_target_model_objects()
+    {
+        var created = Target("session create main worker --model sonnet --effort high --force-effort max");
+        Assert.True(
+            JsonNode.DeepEquals(
+                new JsonObject { ["modelId"] = "sonnet", ["effort"] = "high" },
+                created.Args["model"]
+            )
+        );
+        Assert.True(JsonNode.DeepEquals(new JsonObject { ["effort"] = "max" }, created.Args["forceModel"]));
+        Assert.Contains("one of", Error("session create main worker --effort extreme").Message);
+        Assert.Contains("an integer", Error("session view main/a --count 2.5").Message);
+    }
+
+    // Selection intent is read from the command words, even when the call is invalid.
+    [Theory]
+    [InlineData("node select box", null, true)]
+    [InlineData("node select box", "values-json", true)]
+    [InlineData("node select box", "extra-key", true)]
+    [InlineData("node select", null, true)]
+    [InlineData("tool call builtin:node --args @a", "unused", true)]
+    [InlineData("tool call builtin:node --args @a", "values-json", true)]
+    [InlineData("tool call --source builtin --name node --args='{\"action\":\"select\"}' --bogus", null, true)]
+    [InlineData("tool call builtin:node --args @list", "unused", false)]
+    [InlineData("node list --bogus", null, false)]
+    [InlineData("tool call node:box/node --args @a", "unused", false)]
+    [InlineData("tool call mcp:srv/node --args @a", null, false)]
+    public void Node_selection_intent_survives_invalid_calls(string command, string? damage, bool selects)
+    {
+        var args = Args(
+            command,
+            new()
+            {
+                ["a"] = new JsonObject { ["action"] = "select", ["nodeId"] = "box" },
+                ["list"] = new JsonObject { ["action"] = "list" },
+            }
+        );
+        if (!command.Contains('@'))
+            args.Remove("values");
+        else if (!command.Contains("@list"))
+            args["values"]!.AsObject().Remove("list");
+        else
+            args["values"]!.AsObject().Remove("a");
+        if (damage == "unused")
+            args["values"]!["unused"] = 1;
+        if (damage == "values-json")
+        {
+            args.Remove("values");
+            args["valuesJson"] = "{";
+        }
+        if (damage == "extra-key")
+            args["unexpected"] = true;
+        Assert.Equal(selects, CtlParser.SelectsNode(args));
+    }
+
+    // Recovery reads identities and --args with the parser's option and @name rules.
+    [Theory]
+    [InlineData("tool call @id --args @a", """{"id":"builtin:node","a":{"action":"select"},"unused":1}""", true)]
+    [InlineData("tool call --source @source --name @name --args @a", """{"source":"builtin","name":"node","a":{"action":"select"},"unused":1}""", true)]
+    [InlineData("tool call --tool-id=@id --args=@a", """{"id":"builtin:node","a":{"action":"select"},"unused":1}""", true)]
+    [InlineData("tool call @id --args @a", """{"id":"mcp:srv/node","a":{"action":"select"},"unused":1}""", false)]
+    [InlineData("tool call @id --args @a", """{"id":"builtin:node","a":{"action":"list"},"unused":1}""", false)]
+    [InlineData("tool call mcp:srv/read \"--tool-id=builtin:node\" --args @a", """{"a":{"action":"select"}}""", false)]
+    [InlineData("tool call mcp:srv/read '--source' builtin --args @a", """{"a":{"action":"select"}}""", false)]
+    [InlineData("tool call @missing --args @a", """{"a":{"action":"select"}}""", true)]
+    [InlineData("tool call @missing --args @a", """{"a":{"action":"list"}}""", false)]
+    [InlineData("tool call --source builtin --name @missing --args @a", """{"a":{"action":"select"}}""", true)]
+    [InlineData("tool call --source node --name @missing --args @a", """{"a":{"action":"select"}}""", false)]
+    [InlineData("tool call builtin:node --args @missing", """{"unused":1}""", true)]
+    [InlineData("tool call @missing --args @missing2", """{"unused":1}""", false)]
+    [InlineData("tool call builtin:node --args @a --bogus", """{"a":{"action":"select"}}""", true)]
+    [InlineData("tool call -- builtin:node --args", """{"unused":1}""", false)]
+    public void Node_selection_intent_binds_identities_like_the_parser(string command, string values, bool selects)
+    {
+        var args = Args(command, JsonNode.Parse(values)!.AsObject());
+        Assert.IsType<CtlError>(CtlParser.Parse(args));
+        Assert.Equal(selects, CtlParser.SelectsNode(args));
+    }
+
+    // A generated next-page command keeps the page's options, including values the target
+    // accepts but normalizes (a fractional budget) and an explicit empty selection.
+    [Fact]
+    public async Task Generated_navigation_reads_back_the_same_page_options()
+    {
+        await using var f = await ScriptFixture.Create();
+        await ForkClearLifecycleTests.AppendAsync(
+            f.Owner,
+            VectorFixture.Message("older content", "user"),
+            VectorFixture.Message("newer content", "user")
+        );
+        async Task<JsonObject> FollowOlder(JsonObject options)
+        {
+            var output = SessionWait.Text((await f.Manager.ObserveAsync(f.Owner, "view_session", options))["output"])!;
+            var hint = output.Split('\n').Single(line => line.StartsWith("Older: "))["Older: ".Length..];
+            var target = Assert.IsType<CtlTarget>(CtlParser.Parse(new JsonObject { ["command"] = hint }));
+            Assert.Equal("view_session", target.Name);
+            return target.Args;
+        }
+        var fractional = await FollowOlder(
+            new JsonObject { ["sessionId"] = f.Owner.Id, ["count"] = 1, ["previewLength"] = 1234.5 }
+        );
+        Assert.Equal(1234.5, fractional["previewLength"]!.GetValue<double>());
+        var empty = await FollowOlder(
+            new JsonObject { ["sessionId"] = f.Owner.Id, ["start"] = 1, ["count"] = 1, ["parts"] = new JsonArray() }
+        );
+        Assert.True(JsonNode.DeepEquals(new JsonArray(), empty["parts"]));
+        var older = SessionWait.Text((await f.Manager.ObserveAsync(f.Owner, "view_session", empty))["output"])!;
+        Assert.DoesNotContain("older content", older);
+    }
+
+    // Every builtin a hint names: any argument values its command accepts are written so the
+    // parser reads back the same arguments.
+    [Fact]
+    public void Hints_round_trip_for_every_argument_shape_of_hinted_builtins()
+    {
+        string[] strings =
+        [
+            "plain", "two words", "it's \"quoted\"", "--looks-like-an-option", "--x=y", "-", "--",
+            "@name", "@@two", "[bracket", "{brace", "line\nbreak", "", " leading space",
+            "trailing space ", "semi;colon | pipe & amp $(sub) `tick` <in >out", "über ✓",
+        ];
+        JsonNode?[] Samples(CtlParameter parameter, bool element = false)
+        {
+            var type = element ? parameter.Items! : parameter.Type;
+            if (parameter.Values is { Count: > 0 } choices && (element || !parameter.IsArray))
+                return choices.Select(choice => (JsonNode?)choice).ToArray();
+            return type switch
+            {
+                "integer" => [0, 7, -3, 9007199254740991L],
+                "number" => [0, 7, -3, 1234.5, 1e20, 0.000001],
+                "boolean" => [true, false],
+                "array" =>
+                [
+                    new JsonArray(),
+                    new JsonArray(Samples(parameter, element: true).Take(1).Select(item => item?.DeepClone()).ToArray()),
+                    new JsonArray(Samples(parameter, element: true).Select(item => item?.DeepClone()).ToArray()),
+                ],
+                "object" or "json" => [new JsonObject { ["k"] = "v w", ["n"] = 1 }],
+                _ => strings.Select(text => (JsonNode?)text).ToArray(),
+            };
+        }
+        var builtins = new[] { "recall", "view_session", "session", "send_to_channel", "cancel_toolscript_run", "image_crop", "image_write_to_file", "send_file" };
+        var checkedCount = 0;
+        foreach (var builtin in builtins)
+        // Of `session`, hints name only `session list`.
+        foreach (var command in CtlRegistry.ForTarget("builtin", builtin).Where(command => builtin != "session" || command.Path == "session list"))
+        {
+            var required = command.Parameters.Where(parameter => parameter.Required).ToArray();
+            JsonObject Base(int variant)
+            {
+                var args = new JsonObject();
+                foreach (var parameter in required)
+                {
+                    var samples = Samples(parameter);
+                    CtlTestArgs.SetPath(args, parameter.Arg, samples[variant % samples.Length]?.DeepClone());
+                }
+                return args;
+            }
+            var cases = new List<JsonObject>();
+            for (var variant = 0; variant < strings.Length; variant++)
+                cases.Add(Base(variant));
+            foreach (var parameter in command.Parameters.Where(parameter => !parameter.Required))
+            foreach (var sample in Samples(parameter))
+            {
+                var args = Base(cases.Count);
+                CtlTestArgs.SetPath(args, parameter.Arg, sample?.DeepClone());
+                cases.Add(args);
+            }
+            // Every optional argument at once.
+            for (var variant = 0; variant < 4; variant++)
+            {
+                var all = Base(variant);
+                foreach (var parameter in command.Parameters.Where(parameter => !parameter.Required))
+                {
+                    var samples = Samples(parameter);
+                    CtlTestArgs.SetPath(all, parameter.Arg, samples[variant % samples.Length]?.DeepClone());
+                }
+                cases.Add(all);
+            }
+            foreach (var expected in cases)
+            {
+                foreach (var pair in command.Fixed ?? [])
+                    expected[pair.Key] = pair.Value?.DeepClone();
+                var text = CtlCommandText.For(builtin, expected);
+                var parsed = CtlParser.Parse(new JsonObject { ["command"] = text });
+                Assert.True(
+                    parsed is CtlTarget target && JsonNode.DeepEquals(expected, target.Args),
+                    text + " => " + (parsed is CtlTarget t ? t.Args.ToJsonString() : parsed.ToString())
+                );
+                checkedCount++;
+            }
+        }
+        Assert.True(checkedCount > 300, checkedCount.ToString());
+    }
+
+    // Every `tool search` descriptor, pasted after `tool call` with the values it shows,
+    // resolves to the same tool.
+    [Fact]
+    public void Search_descriptors_parse_back_to_the_same_target()
+    {
+        string[] names =
+        [
+            "read", "browser_fill", "two words", "it's \"quoted\"", "--looks-like-option", "--", "-x",
+            "@name", "@@two", "a/b", "srv:tool", "über✓", "back\\slash", "semi;colon | pipe & $(sub) `tick`",
+            "line\nbreak", "tab\there", "rtl\u202eoverride", "isolate\u2066x\u2069", "nul\u0000x",
+            "unsafe*/\nline\u202e",
+        ];
+        string?[] scopes = ["local", "external-ssh/ssh:fixture", "fixture/readonly", "two words", "line\nbreak", "@srv"];
+        var cases = new List<(string Source, string Name, string? Scope)>();
+        foreach (var name in names)
+        {
+            cases.Add(("builtin", name, null));
+            foreach (var scope in scopes)
+            {
+                cases.Add(("mcp", name, scope));
+                cases.Add(("node", name, scope));
+            }
+        }
+        foreach (var (source, name, scope) in cases)
+        {
+            var descriptor = UnifiedTools.Descriptor(source, name, scope);
+            var split = descriptor.IndexOf(" with values ", StringComparison.Ordinal);
+            var values = split < 0
+                ? new JsonObject()
+                : JsonNode.Parse(descriptor[(split + " with values ".Length)..])!.AsObject();
+            var words = split < 0 ? descriptor : descriptor[..split];
+            Assert.DoesNotMatch("[\\x00-\\x1f\\u202a-\\u202e\\u2066-\\u2069]", descriptor);
+            values["args"] = new JsonObject();
+            var parsed = CtlParser.Parse(
+                new JsonObject { ["command"] = "tool call " + words + " --args @args", ["values"] = values }
+            );
+            var call = Assert.IsType<CtlCall>(parsed);
+            var described = CtlParser.DescribeCall(call.Descriptor);
+            Assert.True(described is not null, descriptor + " => " + call.Descriptor.ToJsonString());
+            Assert.Equal((source, name), (described!.Source, described.Name));
+            Assert.Equal(source == "mcp" ? scope : null, described.Server);
+            Assert.Equal(source == "node" ? scope : null, described.Node);
+        }
+    }
+
+    // Channel progress and verbose broadcasts name a ctl call like its timeline tag: the command
+    // path, or for `tool call` the builtin's command path or the MCP or Node tool.
+    [Theory]
+    [InlineData("memory edit MEMORY.md --old-text a --new-text b", "memory edit")]
+    [InlineData("tool call builtin:send_to_channel --args @args", "channel send")]
+    [InlineData("tool call node:master/exec --args @args", "exec")]
+    [InlineData("tool call mcp:srv/probe --args @args", "probe")]
+    [InlineData("channel send webui:x hello", "channel send")]
+    [InlineData("node select box", "node select")]
+    [InlineData("node destroy box", "node destroy")]
+    [InlineData("history recall msg#12", "history recall")]
+    [InlineData("session view a/b", "session view")]
+    [InlineData("tool call builtin:node --args @args", "node")]
+    [InlineData("tool call builtin:task --args @args", "task")]
+    [InlineData("tool call builtin:missing_builtin --args @args", "missing_builtin")]
+    [InlineData("tool call mcp:srv/probe --help", "ctl")]
+    [InlineData("node --help", "ctl")]
+    [InlineData("help", "ctl")]
+    [InlineData("session --help", "ctl")]
+    [InlineData("tool search memory", "ctl")]
+    [InlineData("sesion list", "ctl")]
+    [InlineData("session list 'unclosed", "ctl")]
+    public void Progress_names_the_resolved_capability(string command, string expected)
+    {
+        var args = new JsonObject { ["command"] = command, ["values"] = new JsonObject { ["args"] = new JsonObject { ["command"] = "true" } } };
+        if (!command.Contains("@args"))
+            args.Remove("values");
+        Assert.Equal(expected, ToolActivity.ProgressName("ctl", args));
+        // The activity target keeps the concrete capability.
+        if (CtlParser.Describe(args) is { } described)
+            Assert.Equal(described.Name, ToolActivity.Target("ctl", args).Name);
+        Assert.Equal("write", ToolActivity.ProgressName("write", new JsonObject { ["filePath"] = "x" }));
+        Assert.Equal("tool", ToolActivity.ProgressName(null, null));
+    }
+
+    // `tool call builtin:<name>` with the fixed arguments of one of its commands is that command.
+    [Fact]
+    public void Builtin_tool_calls_are_named_by_the_command_their_arguments_select()
+    {
+        JsonObject Call(JsonObject args) => Args("tool call builtin:node --args @args", new() { ["args"] = args });
+        Assert.Equal("node select", CtlParser.DisplayName(Call(new JsonObject { ["action"] = "select", ["nodeId"] = "box" })));
+        Assert.Equal("node destroy", CtlParser.DisplayName(Call(new JsonObject { ["action"] = "destroy" })));
+        Assert.Equal("node", CtlParser.DisplayName(Call(new JsonObject())));
+        Assert.Equal("session list", CtlParser.DisplayName(Args("tool call builtin:session --args @args", new() { ["args"] = new JsonObject { ["action"] = "list" } })));
+    }
+
+    // Hints in tool output name commands from the registry and read back to the same call.
+    [Fact]
+    public async Task Command_hints_round_trip_through_the_parser()
+    {
+        var cases = new (string Builtin, JsonObject Args)[]
+        {
+            ("recall", new JsonObject { ["target"] = "msg#12" }),
+            ("recall", new JsonObject { ["sessionId"] = "a/b", ["target"] = "msg#3", ["toolDetail"] = "full", ["previewLength"] = 20000 }),
+            ("recall", new JsonObject { ["sessionId"] = "a/b", ["text_query"] = "it's a \"quote\" | here", ["beforeSeq"] = 40 }),
+            ("view_session", new JsonObject { ["sessionId"] = "a/b", ["before"] = 10, ["count"] = 5, ["historyVersion"] = 3, ["parts"] = new JsonArray("text", "tools") }),
+            ("session", new JsonObject { ["action"] = "list", ["query"] = "it's main", ["start"] = 3, ["count"] = 2, ["scope"] = "all" }),
+            ("image_crop", new JsonObject { ["id"] = "img_1", ["x"] = 0, ["y"] = 0, ["width"] = 100, ["height"] = 100 }),
+            ("image_write_to_file", new JsonObject { ["id"] = "@img", ["filePath"] = "artifacts/my file.png" }),
+            ("send_to_channel", new JsonObject { ["channelTargetId"] = "webui:x", ["message"] = "--starts like a flag" }),
+            ("create_session", new JsonObject { ["agentName"] = "main", ["sessionName"] = "w", ["model"] = new JsonObject { ["modelId"] = "sonnet", ["effort"] = "low" } }),
+        };
+        foreach (var (builtin, expected) in cases)
+        {
+            var text = CtlCommandText.For(builtin, expected);
+            Assert.StartsWith("ctl ", text);
+            var parsed = Assert.IsType<CtlTarget>(CtlParser.Parse(Args(text)));
+            Assert.Equal(builtin, parsed.Name);
+            var canonical = (JsonObject)expected.DeepClone();
+            foreach (var pair in parsed.Command.Fixed ?? [])
+                canonical[pair.Key] = pair.Value?.DeepClone();
+            Assert.True(JsonNode.DeepEquals(canonical, parsed.Args), text + " => " + parsed.Args.ToJsonString());
+        }
+        Assert.Equal("ctl history recall msg#12", CtlCommandText.For("recall", new JsonObject { ["target"] = "msg#12" }));
+        // Hints can carry any argument of these builtins.
+        await using var f = await ScriptFixture.Create();
+        foreach (var builtin in new[] { "recall", "view_session", "image_crop", "image_write_to_file" })
+        {
+            var properties = f.Manager.ToolRegistry.Entries
+                .Single(entry => entry.Definition["name"]!.GetValue<string>() == builtin)
+                .Definition["parameters"]!["properties"]!.AsObject()
+                .Select(pair => pair.Key);
+            var command = CtlRegistry.ForTarget("builtin", builtin).Single();
+            Assert.All(properties, property => Assert.Contains(command.Parameters, parameter => parameter.Arg == property));
+        }
+        Assert.Equal("ctl history recall", CtlCommandText.Prefix("recall"));
+        Assert.Equal("--preview-length 20000", CtlCommandText.Option("view_session", "previewLength", 20000));
+    }
+
+    // The same corpus is checked by the WebUI display parser (packages/webui/test/ctlCall.test.mjs).
+    [Fact]
+    public void Conformance_corpus_matches_the_parser()
+    {
+        var corpus = JsonNode.Parse(
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Tools", "Fixtures", "ctl-conformance.json"))
+        )!;
+        foreach (var item in corpus["cases"]!.AsArray())
+        {
+            var args = new JsonObject { ["command"] = item!["command"]!.DeepClone() };
+            if (item["values"] is JsonObject values)
+                args["values"] = values.DeepClone();
+            JsonNode? actual = CtlParser.Parse(args) switch
+            {
+                CtlTarget target => new JsonObject
+                {
+                    ["toolId"] = target.Source + ":" + target.Name,
+                    ["args"] = target.Args.DeepClone(),
+                },
+                CtlCall call => call.Descriptor.DeepClone(),
+                _ => null,
+            };
+            Assert.True(
+                JsonNode.DeepEquals(item["descriptor"], actual),
+                item["command"] + " => " + actual?.ToJsonString()
+            );
+        }
+    }
+
+    [Fact]
+    public void Ctl_calls_describe_their_canonical_target_for_display_and_batch_rules()
+    {
+        var described = CtlParser.Describe(Args("node select box"))!;
+        Assert.Equal(("builtin", "node", "select"), (described.Source, described.Name, described.Args["action"]!.GetValue<string>()));
+        var unified = CtlParser.Describe(Args("tool call mcp:srv/probe --args @a", new() { ["a"] = new JsonObject() }))!;
+        Assert.Equal(("mcp", "probe", "srv"), (unified.Source, unified.Name, unified.Server));
+        Assert.Null(CtlParser.Describe(Args("help")));
+        Assert.Equal(("session", new JsonObject { ["action"] = "list" }.ToJsonString()), (ToolActivity.Target("ctl", Args("session list")).Name, ToolActivity.Target("ctl", Args("session list")).Args.ToJsonString()));
+    }
+
+    [Fact]
+    public async Task Registry_commands_target_registered_builtins_with_their_declared_arguments()
+    {
+        await using var f = await ScriptFixture.Create();
+        var registered = f
+            .Manager.ToolRegistry.Entries.ToDictionary(
+                entry => entry.Definition["name"]!.GetValue<string>(),
+                StringComparer.Ordinal
+            );
+        // Model commands call their target with these arguments; commands of other ingresses only
+        // name the capability their own dispatch is checked as.
+        foreach (
+            var command in CtlRegistry
+                .Commands.Where(command => command.Local is null && command.Available("model"))
+                .Select(command => command.View("model"))
+        )
+        {
+            Assert.True(registered.TryGetValue(command.Name!, out var entry), command.Path);
+            Assert.Equal(entry!.Source, command.Source);
+            var schema = entry.Definition["parameters"] as JsonObject ?? new JsonObject();
+            var properties = schema["properties"] as JsonObject ?? new JsonObject();
+            foreach (var parameter in command.Parameters)
+            {
+                // A dotted Arg names a field of an object argument.
+                var path = parameter.Arg.Split('.');
+                Assert.True(properties.ContainsKey(path[0]), command.Path + " " + parameter.Arg);
+                if (path.Length > 1)
+                    Assert.True(
+                        (properties[path[0]]?["properties"] as JsonObject)?.ContainsKey(path[1]) == true,
+                        command.Path + " " + parameter.Arg
+                    );
+            }
+            foreach (var key in command.Fixed ?? [])
+                Assert.True(properties.ContainsKey(key.Key), command.Path + " " + key.Key);
+            foreach (var required in (schema["required"] as JsonArray ?? []).Select(value => value!.GetValue<string>()))
+                Assert.True(
+                    command.Fixed?.ContainsKey(required) == true
+                        || command.Parameters.Any(parameter => parameter.Arg == required && parameter.Required),
+                    command.Path + " leaves required " + required + " optional"
+                );
+        }
+        // Every builtin outside the native default set has a specific command, so none is
+        // reachable only through `tool call`.
+        var uncovered = registered
+            .Values.Where(entry =>
+                entry.Source == "builtin"
+                && !entry.DefaultInject
+                && !CtlRegistry.ForTarget("builtin", entry.Definition["name"]!.GetValue<string>()).Any()
+            )
+            .Select(entry => entry.Definition["name"]!.GetValue<string>())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Empty(uncovered);
+    }
+
+    // Builtins show as their commands or as declared tools: no tool IDs, schemas, raw builtin
+    // descriptions or `tool call` hints, and no names of builtins that are not declared.
+    [Fact]
+    public async Task Builtin_search_results_are_commands_and_declared_tools()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        var undeclared = f
+            .Manager.ToolRegistry.Entries.Where(entry => !entry.DefaultInject)
+            .Select(entry => entry.Definition["name"]!.GetValue<string>())
+            .Where(name => name.Contains('_'))
+            .ToArray();
+        foreach (var command in new[] { "tool search --source builtin --limit 200", "tool search --source builtin --limit 200 --schema", "tool search node --source builtin --limit 200" })
+        {
+            var output = SessionWait.Text((await Run(tools, "ctl", Args(command))).Response!["output"])!;
+            Assert.DoesNotContain("builtin:", output);
+            Assert.DoesNotContain("args:", output);
+            Assert.DoesNotContain("`tool call", output);
+            foreach (var name in undeclared)
+                Assert.DoesNotMatch("(?<![A-Za-z0-9_-])" + name + "(?![A-Za-z0-9_])", output);
+            foreach (var line in output.Split('\n').Skip(2).TakeWhile(line => line.Length > 0))
+                Assert.True(
+                    line.Contains(" (declared tool)")
+                        || CtlRegistry.Commands.Any(item => line.StartsWith(item.Path + " ", StringComparison.Ordinal) || line.StartsWith(item.Path + " —", StringComparison.Ordinal)),
+                    line
+                );
+        }
+        var all = SessionWait.Text((await Run(tools, "ctl", Args("tool search --source builtin --limit 200"))).Response!["output"])!;
+        Assert.Contains("\nnode copy <source-node> <source-path> <target-node> <target-path> [options] — Copy a file between Nodes, including master.\n", all);
+        Assert.Contains("\nscript start [options] — Start a background ToolScript run.\n", all);
+        Assert.Contains("\nexec (declared tool) — ", all);
+        Assert.Contains("\ntask (declared tool) — ", all);
+        // A multi-command builtin lists the commands that match.
+        var select = SessionWait.Text((await Run(tools, "ctl", Args("tool search select node --source builtin"))).Response!["output"])!;
+        Assert.StartsWith("node select <node-id> — ", select.Split('\n')[2]);
+        var copy = SessionWait.Text((await Run(tools, "ctl", Args("tool search \"copy file between nodes\""))).Response!["output"])!;
+        Assert.StartsWith("node copy ", copy.Split('\n')[2]);
+        var exa = SessionWait.Text((await Run(tools, "ctl", Args("tool search exa"))).Response!["output"])!;
+        Assert.StartsWith("No matching commands or tools.", exa);
+        var exec = SessionWait.Text((await Run(tools, "ctl", Args("tool search exec --source builtin"))).Response!["output"])!;
+        Assert.StartsWith("exec (declared tool) — ", exec.Split('\n')[2]);
+        // The current Node's declared tools are listed once, as declared tools; a search of
+        // another Node lists only that Node's tools.
+        foreach (var current in new[] { "tool search --source node --limit 200", "tool search --source node --node-id master --limit 200" })
+        {
+            var listed = SessionWait.Text((await Run(tools, "ctl", Args(current))).Response!["output"])!;
+            Assert.Contains("\nread (declared tool) — ", listed);
+            Assert.DoesNotContain("node:master/read", listed);
+        }
+        var other = SessionWait.Text((await Run(tools, "ctl", Args("tool search --source node --node-id elsewhere"))).Response!["output"])!;
+        Assert.DoesNotContain("(declared tool)", other);
+        // `tool call builtin:<name> --help` names the commands instead of the tool ID.
+        var help = SessionWait.Text((await Run(tools, "ctl", Args("tool call builtin:node --help"))).Response!["output"])!;
+        Assert.Contains("\nnode select <node-id> — ", help);
+        Assert.DoesNotContain("builtin:", help);
+        Assert.Contains("declared tool", SessionWait.Text((await Run(tools, "ctl", Args("tool call builtin:task --help"))).Response!["output"])!);
+    }
+
+    // Help, search and parse errors never suggest `tool call builtin:<name>`.
+    [Fact]
+    public async Task Help_never_suggests_builtin_tool_ids()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        foreach (var command in new[] { "help", "tool", "tool --help", "tool search --help", "tool call --help", "tool call", "tool call builtin:x --args notjson", "tool frob" })
+        {
+            var response = (await Run(tools, "ctl", Args(command))).Response!;
+            var text = SessionWait.Text(response["output"]) ?? response.FailureMessage()!;
+            Assert.DoesNotContain("builtin:", text);
+        }
+        foreach (var ingress in new[] { "model", "external" })
+            foreach (var command in CtlRegistry.ForNoun("tool", ingress))
+                Assert.DoesNotContain("builtin:", CtlHelp.Command(command, ingress));
+    }
+
+    [Theory]
+    [InlineData("tool call mcp:srv/probe --help", "mcp", "probe", "srv", null)]
+    [InlineData("tool call --help node:box/read", "node", "read", null, "box")]
+    [InlineData("tool call --source mcp --server srv --name probe --help", "mcp", "probe", "srv", null)]
+    [InlineData("tool call builtin:node --args @a --help", "builtin", "node", null, null)]
+    public void Tool_call_help_parses_to_the_named_tool_and_runs_nothing(
+        string command,
+        string source,
+        string name,
+        string? server,
+        string? node
+    )
+    {
+        var args = Args(command, command.Contains("@a") ? new() { ["a"] = new JsonObject { ["action"] = "select" } } : null);
+        var help = Assert.IsType<CtlToolHelp>(CtlParser.Parse(args));
+        var described = CtlParser.DescribeCall(help.Descriptor)!;
+        Assert.Equal((source, name, server, node), (described.Source, described.Name, described.Server, described.Node));
+        Assert.Null(CtlParser.Describe(args));
+        Assert.False(CtlParser.SelectsNode(args));
+        Assert.Equal("ctl", ToolActivity.ProgressName("ctl", args));
+        Assert.IsType<CtlHelpRequest>(CtlParser.Parse(Args("tool call --help")));
+        Assert.IsType<CtlHelpRequest>(CtlParser.Parse(Args("tool call --source mcp --help")));
+    }
+
+    [Fact]
+    public async Task Default_declarations_keep_the_native_set_and_one_ctl_declaration()
+    {
+        await using var f = await ScriptFixture.Create();
+        var names = f
+            .Manager.ModelDefinitions(f.Owner)
+            .Select(definition => definition!["name"]!.GetValue<string>())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        string[] expected =
+        [
+            "ask_user",
+            "continue_script",
+            "create_child_session",
+            "ctl",
+            "edit",
+            "exec",
+            "read",
+            "run_script",
+            "send_to_session",
+            "submit_compact_plan",
+            "task",
+            "wait",
+            "write",
+        ];
+        Assert.Equal(
+            expected.Where(name => Foxwarm.ToolScript.MontyWorker.IsSupported || name is not ("run_script" or "continue_script")).Where(name => LocalExecManager.IsSupported || name != "exec"),
+            names
+        );
+        var ctl = f.Manager.ModelDefinitions(f.Owner).Single(definition => definition!["name"]!.GetValue<string>() == "ctl")!;
+        Assert.Equal(["command"], ctl["parameters"]!["required"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Assert.Equal(
+            ["command", "values", "valuesJson"],
+            ctl["parameters"]!["properties"]!.AsObject().Select(pair => pair.Key)
+        );
+    }
+
+    private static SessionToolExecutor Executor(ScriptFixture f)
+    {
+        var tools = new SessionToolExecutor(new WorkspaceTools(f.Work), f.Owner, f.Manager, f.Manager.ToolRegistry);
+        tools.BeginTurn();
+        return tools;
+    }
+
+    private static async Task<TurnToolExecution> Run(SessionToolExecutor tools, string name, JsonObject args) =>
+        await tools.ExecuteAttributedAsync(
+            new JsonObject { ["id"] = Guid.NewGuid().ToString("N"), ["name"] = name, ["args"] = args },
+            default
+        );
+
+    [Fact]
+    public async Task Commands_resolve_to_the_same_target_as_direct_calls_and_record_it()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        var direct = await Run(tools, "skill", new JsonObject { ["action"] = "list" });
+        var command = await Run(tools, "ctl", Args("skill list"));
+        Assert.Null((command.Response as JsonObject)?["error"]);
+        Assert.Equal(direct.Response!.ToJsonString(), command.Response!.ToJsonString());
+        Assert.Equal("builtin", SessionWait.Text(command.Target!["source"]));
+        Assert.Equal("skill", SessionWait.Text(command.Target["name"]));
+        Assert.Equal("ctl", SessionWait.Text(command.Target["invocationName"]));
+        Assert.Equal("list", SessionWait.Text(command.Target["action"]));
+        // The former model wrapper is gone; call_tool is only ToolScript's host function.
+        var removed = await Run(tools, "call_tool", new JsonObject { ["toolId"] = "builtin:skill", ["args"] = new JsonObject { ["action"] = "list" } });
+        Assert.Contains("Unknown tool: call_tool", removed.Response!.ToJsonString());
+        var search = await Run(tools, "search_tools", new JsonObject());
+        Assert.Contains("Unknown tool: search_tools", search.Response!.ToJsonString());
+        // Both name their ctl replacement, for model calls and ToolScript alike.
+        Assert.Equal(
+            "Unknown tool: call_tool. Use `ctl tool call <tool-id>` or the tool's `ctl` command.",
+            removed.Response!.FailureMessage()
+        );
+        Assert.Equal(
+            "Unknown tool: search_tools. Use `ctl tool search <words>`.",
+            search.Response!.FailureMessage()
+        );
+        var script = await Run(tools, "run_script", new JsonObject { ["code"] = "return call_tool('search_tools', {'query': 'x'})" });
+        Assert.Contains("Unknown tool: search_tools. Use `ctl tool search <words>`.", SessionWait.Text(script.Response!["error"]));
+        var nested = await Run(tools, "ctl", Args("tool call builtin:ctl --args @a", new() { ["a"] = Args("help") }));
+        Assert.Contains("not a concrete tool", nested.Response!.ToJsonString());
+        var invalid = await Run(tools, "ctl", Args("session list --count many"));
+        Assert.NotNull(invalid.Response!.FailureMessage());
+        Assert.Contains("Usage: session list", invalid.Response.FailureMessage());
+    }
+
+    [Fact]
+    public async Task Help_and_discovery_follow_each_target_policy_and_targets_keep_their_checks()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        var help = SessionWait.Text((await Run(tools, "ctl", Args("help"))).Response!["output"])!;
+        Assert.Contains("memory", help);
+        Assert.Contains("timer", help);
+        await f.Manager.Authorization.InstallAsync(
+            Encoding.UTF8.GetBytes(
+                """
+                version: 1
+                rules:
+                - id: no-memory
+                  action: deny
+                  tool: {source: builtin, name: [read_memory, write_memory, edit_memory, delete_memory, apply_patch_memory]}
+                - id: no-timer-create
+                  action: deny
+                  tool: {source: builtin, name: create_timer}
+                - id: retired
+                  action: allow
+                  tool: {source: builtin, name: search_tools}
+                """
+            ),
+            default
+        );
+        var filtered = SessionWait.Text((await Run(tools, "ctl", Args("help"))).Response!["output"])!;
+        Assert.DoesNotContain("\n  memory", filtered);
+        Assert.Contains("\n  timer", filtered);
+        var timer = SessionWait.Text((await Run(tools, "ctl", Args("timer"))).Response!["output"])!;
+        Assert.DoesNotContain("timer create", timer);
+        Assert.Contains("timer list", timer);
+        var hidden = await Run(tools, "ctl", Args("timer create --help"));
+        Assert.NotNull(hidden.Response!.FailureMessage());
+        // A command that exists but is hidden is reported as unavailable, not unknown, with the
+        // noun's visible commands.
+        var unavailable = hidden.Response!.FailureMessage()!;
+        Assert.StartsWith("`timer create` is not available to this Session.", unavailable);
+        Assert.Contains("timer list", unavailable);
+        Assert.StartsWith(
+            "No `memory` commands are available to this Session.",
+            SessionWait.Text((await Run(tools, "ctl", Args("memory --help"))).Response!.FailureMessageNode())
+        );
+        Assert.StartsWith(
+            "`timer create` is not available to this Session.",
+            SessionWait.Text((await Run(tools, "ctl", Args("timer create --bogus"))).Response!.FailureMessageNode())
+        );
+        Assert.DoesNotContain("mean `timer create`", hidden.Response!.FailureMessage());
+        var misspelled = SessionWait.Text((await Run(tools, "ctl", Args("timer creat"))).Response!.FailureMessageNode())!;
+        Assert.DoesNotContain("`timer create`", misspelled);
+        Assert.Contains(
+            "`timer list`",
+            SessionWait.Text((await Run(tools, "ctl", Args("timer lst"))).Response!.FailureMessageNode())
+        );
+        var denied = await Run(tools, "ctl", Args("memory read MEMORY.md"));
+        Assert.Equal("tool_authorization_denied", denied.Response!.FailureCode());
+        Assert.Equal("read_memory", SessionWait.Text(denied.Target!["name"]));
+        var discovered = SessionWait.Text((await Run(tools, "ctl", Args("tool search memory --source builtin --limit 50"))).Response!["output"])!;
+        Assert.DoesNotContain("memory read", discovered);
+        Assert.Contains("timer list", SessionWait.Text((await Run(tools, "ctl", Args("tool search timer --source builtin --limit 50"))).Response!["output"])!);
+        Assert.DoesNotContain("timer create", SessionWait.Text((await Run(tools, "ctl", Args("tool search timer --source builtin --limit 50"))).Response!["output"])!);
+        // A rule naming the removed discovery builtin loads, with a warning, and matches nothing.
+        var policy = ToolAuthorizationYaml.Parse(
+            Encoding.UTF8.GetBytes("version: 1\nrules:\n- action: allow\n  tool: search_tools\n")
+        );
+        Assert.Contains(policy.Warnings, warning => warning.Contains("search_tools"));
+        Assert.True(f.Manager.ToolVisible(f.Owner, "builtin", "ctl"));
+    }
+
+    [Fact]
+    public async Task ToolScript_calls_ctl_and_receives_the_target_native_value()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        var run = await Run(
+            tools,
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "a = call_tool('ctl', {'command': 'skill list'})\n"
+                    + "b = call_tool('skill', {'action': 'list'})\n"
+                    + "found = call_tool('ctl', {'command': 'tool search skill --source builtin'})['tools']\n"
+                    + "try:\n    call_tool('ctl', {'command': 'session list --count many'})\n    bad = 'accepted'\nexcept Exception as error:\n    bad = str(error)\n"
+                    + "return {'same': a == b, 'found': [row['toolId'] for row in found], 'bad': bad}\n",
+            }
+        );
+        Assert.True(run.Response?["result"] is JsonObject, run.Response?.ToJsonString());
+        var result = run.Response!["result"]!.AsObject();
+        Assert.True(result["same"]!.GetValue<bool>(), run.Response.ToJsonString());
+        Assert.Contains("builtin:skill", result["found"]!.AsArray().Select(value => value!.GetValue<string>()));
+        // Programs receive the command form next to the existing fields.
+        var rows = await Run(
+            tools,
+            "run_script",
+            new JsonObject { ["code"] = "return ctl('tool search skill load --source builtin --limit 1')['tools']" }
+        );
+        var row = rows.Response!["result"]![0]!.AsObject();
+        Assert.Equal("builtin:skill", SessionWait.Text(row["toolId"]));
+        Assert.Equal("command", SessionWait.Text(row["kind"]));
+        Assert.Equal("skill load", SessionWait.Text(row["command"]));
+        Assert.Equal(CtlHelp.Synopsis(CtlRegistry.Find("skill", "load")!, compact: true), SessionWait.Text(row["usage"]));
+        Assert.Equal(CtlRegistry.Find("skill", "load")!.Summary, SessionWait.Text(row["summary"]));
+        Assert.True(row.ContainsKey("description") && row.ContainsKey("hidden") && row.ContainsKey("inputSchema"));
+        Assert.Contains("Usage: session list", result["bad"]!.GetValue<string>());
+    }
+
+    // ctl(command, values=None) is call_tool("ctl", {"command": ..., "values": ...}).
+    [Fact]
+    public async Task ToolScript_ctl_host_function_matches_call_tool_ctl()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        var run = await Run(
+            tools,
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "a = ctl('skill list')\n"
+                    + "b = call_tool('ctl', {'command': 'skill list'})\n"
+                    + "c = ctl(command='skill list', values=None)\n"
+                    + "d = ctl('tool search @q --source builtin', {'q': 'skill'})['tools']\n"
+                    + "e = call_tool('ctl', {'command': 'tool search @q --source builtin', 'values': {'q': 'skill'}})['tools']\n"
+                    + "errors = []\n"
+                    + "try:\n    errors.append(type(ctl('session list --count many')).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl(42)).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list', [1])).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list', None, None)).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list', extra=1)).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list @unused', {'unused': 1})).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('help')).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "return {'same': a == b and b == c, 'search': d == e, 'errors': errors}\n",
+            }
+        );
+        Assert.True(run.Response?["result"] is JsonObject, run.Response?.ToJsonString());
+        var result = run.Response!["result"]!.AsObject();
+        Assert.True(result["same"]!.GetValue<bool>(), run.Response.ToJsonString());
+        Assert.True(result["search"]!.GetValue<bool>(), run.Response.ToJsonString());
+        var errors = result["errors"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray();
+        Assert.Contains("Usage: session list", errors[0]);
+        Assert.Contains("ctl() requires a command string", errors[1]);
+        Assert.Contains("values must be a dict or None", errors[2]);
+        Assert.Contains("at most two arguments", errors[3]);
+        Assert.Contains("unexpected keyword argument 'extra'", errors[4]);
+        Assert.Contains("unused", errors[5]);
+        // Help returns its text like any other ctl result.
+        Assert.Equal("dict", errors[6]);
+    }
+}

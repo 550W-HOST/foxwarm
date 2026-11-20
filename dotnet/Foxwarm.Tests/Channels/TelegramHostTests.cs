@@ -113,8 +113,8 @@ public sealed class TelegramHostTests
         var id = SessionWait.Text(
             (await created.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]
         )!;
-        peer.Push("a", TelegramPeer.Text("-100", "11", "/attach " + id));
-        peer.Push("b", TelegramPeer.Text("-100", "11", "/attach " + id));
+        peer.Push("a", TelegramPeer.Text("-100", "11", "/channel attach " + id));
+        peer.Push("b", TelegramPeer.Text("-100", "11", "/channel attach " + id));
         await TelegramChannelTests.Until(() => peer.Sent("a").Any() && peer.Sent("b").Any());
         peer.Push("b", TelegramPeer.Text("-100", "11", "/channel mode send-only"));
         await TelegramChannelTests.Until(() =>

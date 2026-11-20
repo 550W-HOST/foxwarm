@@ -57,11 +57,11 @@ const form = (overrides = {}) => ({
 
 test('generated first-run YAML is the OpenAI preset with an API key placeholder line', () => {
   const yaml = defaultModelsYaml()
-  assert.match(yaml, /^default: "openai\/gpt-5\.6-sol"$/m)
+  assert.match(yaml, /^default: "openai\/gpt-6-astra"$/m)
   assert.match(yaml, /^ {4}apiKey: "your-openai-api-key"$/m)
   const reading = readModelSetupForm(yaml)
   assert.equal(reading.ok, true)
-  assert.deepEqual(reading.form.models, ids('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'))
+  assert.deepEqual(reading.form.models, ids('gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna'))
   assert.equal(presetFor(reading.form).id, 'openai')
   assert.equal(validateModelSetupForm(reading.form), 'Replace the placeholder API key with your key.')
 })
@@ -128,6 +128,9 @@ test('files the form cannot represent faithfully stay in YAML', () => {
     assert.deepEqual(reading, { ok: false, reason: 'unsupported' }, name)
   }
   assert.deepEqual(readModelSetupForm('providers: [\n'), { ok: false, reason: 'invalid' })
+  // An alias typed before its anchor exists must not throw while the YAML is being edited.
+  assert.deepEqual(readModelSetupForm(base.replace('apiKey: k', 'apiKey: *')), { ok: false, reason: 'invalid' })
+  assert.deepEqual(readModelSetupForm(base.replace('apiKey: k', 'apiKey: *c')), { ok: false, reason: 'invalid' })
   assert.equal(readModelSetupForm(base).ok, true)
   const withLimits = readModelSetupForm(base.replace('models: [m]', 'models: [{id: m, contextLimit: 200000, maxOutput: 64000}, n]'))
   assert.deepEqual(withLimits.ok && withLimits.form.models, [{ id: 'm', contextLimit: 200000, maxOutput: 64000 }, { id: 'n' }])
@@ -226,7 +229,7 @@ test('placeholder and hosted-endpoint detection matches the server rules', () =>
 
 test('presets, model editing and connection requests', () => {
   const anthropic = formFromPreset('anthropic')
-  assert.deepEqual(anthropic, { providerId: 'anthropic', providerType: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: '', models: ids('claude-opus-5'), defaultModel: 'claude-opus-5' })
+  assert.deepEqual(anthropic, { providerId: 'anthropic', providerType: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: '', models: ids('claude-opus-5-5', 'claude-fable-5-2', 'claude-sonnet-5-5', 'claude-haiku-5-5'), defaultModel: 'claude-opus-5-5' })
   assert.equal(presetFor({ providerType: 'openai-completions', baseUrl: 'http://localhost:11434/v1/' }).id, 'ollama')
   assert.equal(presetFor({ providerType: 'openai-responses', baseUrl: 'http://localhost:11434/v1' }).id, 'custom')
   let draft = formFromPreset('openrouter')

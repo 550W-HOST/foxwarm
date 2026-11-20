@@ -34,6 +34,7 @@ try {
   // Brand row with settings and collapse; navigation rows; no footer.
   await page.waitForSelector('[data-sidebar-nav-list]')
   assert.deepEqual(await page.$$eval('[data-sidebar-nav-list] [data-sidebar-nav]', rows => rows.map(row => row.textContent.trim())), ['System', 'Tasks', 'Search', 'Code', 'Terminal'])
+  assert.ok(await page.$('[data-sidebar-brand] button[aria-label="Open setup"]'))
   assert.ok(await page.$('[data-sidebar-brand] button[aria-label="Open UI settings"]'))
   assert.equal(await page.$('.foxwarm-sidebar-panel [data-sidebar-footer]'), null)
   // Toolbar: search, new session, display options.
@@ -100,7 +101,7 @@ try {
   // The collapsed rail keeps the same entries at the top.
   await page.click('button[title="Collapse sidebar"]')
   await page.waitForSelector('.w-12 [data-sidebar-nav-list]')
-  assert.deepEqual(await page.$$eval('.w-12 [data-sidebar-nav-list] button[aria-label]', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open UI settings', 'System', 'Tasks', 'Search history'])
+  assert.deepEqual(await page.$$eval('.w-12 [data-sidebar-nav-list] button[aria-label]', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open setup', 'Open UI settings', 'System', 'Tasks', 'Search history'])
   await shot(page, 'sidebar-collapsed.png', { x: 0, y: 0, width: 120, height: 400 })
 
   assert.deepEqual(browserErrors, [])

@@ -64,7 +64,7 @@ Foxwarm 会为每个 session 生成 `persistentMemorySnapshot`。当前 prompt �
 
 1. inherited agent memory（按继承链从根到当前 agent）
 2. 当前 agent 自身 memory
-3. visible skills catalog（技能名 + 描述；完整文档按需通过 `skill({ action: "load", ... })` 加载）
+3. visible skills catalog（技能名 + 描述；完整文档按需通过 `ctl skill load <name>` 加载）
 
 生成后的 snapshot 会缓存到 session，并在相关变更时刷新。
 
@@ -97,7 +97,7 @@ Foxwarm 会为每个 session 生成 `persistentMemorySnapshot`。当前 prompt �
 - 维护 channel attachment
 - 持久化 session metadata 与 history
 - child session / parent session 关系
-- alias / archive / isolated / current node 管理
+- alias / archive / current node 管理
 
 ### LLM Engine
 实现位置：`src/llm.ts`

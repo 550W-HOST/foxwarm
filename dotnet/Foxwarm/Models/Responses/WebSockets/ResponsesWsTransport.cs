@@ -85,7 +85,7 @@ internal sealed class ResponsesWsTransport(
             if (diagnostics is not null)
                 diagnostics(data);
             else
-                MainLog.Diagnostic(data.ToJsonString(), failure);
+                MainLog.Diagnostic(data.ToJsonText(), failure);
         }
         catch { }
     }

@@ -77,8 +77,8 @@ try {
   await assert.rejects(client.sendSessionMessage(id, 'REASSIGNED-DENIED'), /cannot send messages to.*not assigned/)
   assert((await other.listBoundSessions()).some(row => row.id === id))
   assert.equal((await other.getSessionHistory(id)).totalMessages, 2)
-  // Bound isolated Agent scope is independent of an ordinary Session's selection.
-  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'cli-bound', isolatedNode: 'cli-one' })).status, 201)
+  // A Session placed by its Agent's default Node is assigned to that Node like any selection.
+  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'cli-bound', defaultNode: 'cli-one' })).status, 201)
   const bound = await create('bound-history', 'cli-bound')
   assert((await client.listBoundSessions()).some(row => row.id === bound))
   assert.equal((await client.getSessionHistory(bound)).session.currentNode, 'cli-one')

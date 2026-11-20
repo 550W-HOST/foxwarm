@@ -434,26 +434,26 @@ public sealed class SessionDeletionTests
         var self = await executor.ExecuteAsync(
             new JsonObject
             {
-                ["name"] = "call_tool",
-                ["args"] = new JsonObject
+                ["name"] = "ctl",
+                ["args"] = CtlTestArgs.Unified(new JsonObject
                 {
                     ["toolId"] = "builtin:delete_session",
                     ["args"] = new JsonObject { ["sessionId"] = "self" },
-                },
+                }),
             },
             default
         );
-        Assert.Equal("SESSION_DELETE_CURRENT", self!["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("SESSION_DELETE_CURRENT", self!.FailureCode()!);
         var deleted = await executor.ExecuteAsync(
             new JsonObject
             {
-                ["name"] = "call_tool",
-                ["args"] = new JsonObject
+                ["name"] = "ctl",
+                ["args"] = CtlTestArgs.Unified(new JsonObject
                 {
                     ["source"] = "builtin",
                     ["name"] = "delete_session",
                     ["args"] = new JsonObject { ["sessionId"] = "target" },
-                },
+                }),
             },
             default
         );

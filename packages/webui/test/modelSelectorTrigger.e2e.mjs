@@ -23,10 +23,17 @@ let fixtureUrl
 await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
-  window.fetch = async () => ({ ok: true, json: async () => ({ commands: [], nodes: [{ id: 'master', label: 'master', selectable: true, reason: null }, { id: 'build-node', label: 'build-node', selectable: true, reason: null }], lockedReason: null }) })
+  window.fixtureOfflineNodes = []
+  window.fetch = async url => {
+    const directory = String(url).endsWith('/api/nodes')
+    return { ok: true, json: async () => directory
+      ? { nodes: ['build-node', 'a-very-long-remote-node-id-that-must-stay-readable-in-the-tooltip'].map(id => ({ id, online: !window.fixtureOfflineNodes.includes(id) })) }
+      : { commands: [], nodes: [{ id: 'master', label: 'master', selectable: true, reason: null }, { id: 'build-node', label: 'build-node', selectable: !window.fixtureOfflineNodes.includes('build-node'), reason: window.fixtureOfflineNodes.includes('build-node') ? 'Offline' : null }] } }
+  }
   const noop = async () => {}
   window.modelSelections = []
   window.childModelSelections = []
+  window.childEffortSelections = []
   const props = {
     sessionId: 'fixture/main', sessionMissing: false, loading: false, asrAvailable: false,
     modelOptions: [
@@ -39,7 +46,7 @@ await writeFile(entryPath, `
     childModelDefault: 'provider/an-equally-long-child-model-label-that-must-not-overflow',
     effectiveChildModelKey: 'provider/an-equally-long-child-model-label-that-must-not-overflow',
     effectiveEffort: 'xhigh', effectiveChildEffort: 'medium',
-    onChangeModel: async model => { window.modelSelections.push(model) }, onChangeChildModel: async model => { window.childModelSelections.push(model) }, onChangeEffort: noop, onChangeChildEffort: noop,
+    onChangeModel: async model => { window.modelSelections.push(model) }, onChangeChildModel: async model => { window.childModelSelections.push(model) }, onChangeEffort: noop, onChangeChildEffort: async effort => { window.childEffortSelections.push(effort) },
     onRefreshModels: noop, onOpenModelSettings: () => { window.modelSettingsOpens += 1 }, onSend: async () => false,
     onTranscribeAudio: async () => ({ text: '', status: 200, rawLength: 0, textLength: 0, responsePreview: '' }),
     onCreateStreamingTranscriber: async () => ({ sendAudioChunk() {}, stop() {}, cancel() {} }),
@@ -56,6 +63,7 @@ await writeFile(entryPath, `
   window.renderFixture = (mode = 'default') => {
     window.modelSelections = []
     window.childModelSelections = []
+    window.childEffortSelections = []
     window.modelSettingsOpens = 0
     const activeProps = mode.startsWith('short-node-')
       ? { ...props, asrAvailable: true, modelOptions: [{ key: 'openai/gpt-6.1', label: 'gpt-6.1' }], currentModelKey: 'openai/gpt-6.1', sessionModel: 'openai/gpt-6.1', effectiveEffort: 'high', childModelDefault: null, currentNode: mode === 'short-node-master' ? 'master' : 'build-node', onChangeNode: noop }
@@ -65,6 +73,8 @@ await writeFile(entryPath, `
       ? { ...props, modelOptions: detailOptions, currentModelKey: 'alpha', sessionModel: 'alpha', defaultModelKey: 'alias', childModelDefault: 'beta', effectiveChildModelKey: 'beta', effectiveEffort: 'high', effectiveChildEffort: 'high' }
       : mode === 'short'
         ? { ...props, modelOptions: [{ key: 'master', label: 'master', isVirtual: true }, { key: 'thinker', label: 'thinker', isVirtual: true }], currentModelKey: 'master', sessionModel: 'master', defaultModelKey: 'master', childModelDefault: 'thinker', effectiveChildModelKey: 'thinker', effectiveEffort: 'high', childEffortDefault: 'high', effectiveChildEffort: 'high' }
+      : mode === 'follow-child-effort'
+        ? { ...props, modelOptions: detailOptions, currentModelKey: 'unique', sessionModel: 'unique', defaultModelKey: 'alias', effort: 'low', effectiveEffort: 'low', childModelDefault: null, childModelPolicySource: 'follow-parent', effectiveChildModelKey: 'unique', childEffortDefault: 'high', effectiveChildEffort: 'high', childEffortAllowed: ['low', 'high'] }
       : mode === 'no-child'
         ? { ...props, childModelDefault: null, effectiveChildModelKey: null }
         : props
@@ -86,7 +96,7 @@ before(async () => {
   server = createServer(async (request, response) => {
     if (request.url === '/fixture.js') { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end(await readFile(path.join(outputDirectory, 'fixture.js'))); return }
     response.writeHead(200, { 'Content-Type': 'text/html' })
-    response.end(`<!doctype html><html><head><style>:root { --foxwarm-color-hover: rgb(230 232 236); --foxwarm-color-accent: rgb(0 125 180); --foxwarm-color-text-muted: rgb(94 104 120); --foxwarm-color-text-strong: rgb(25 31 42); --foxwarm-color-surface: white; --foxwarm-color-surface-sunken: rgb(246 248 251); --foxwarm-color-border: rgb(217 224 232); --foxwarm-color-border-strong: rgb(204 212 223); }</style><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
+    response.end(`<!doctype html><html><head><style>:root { --foxwarm-color-hover: rgb(230 232 236); --foxwarm-color-accent: rgb(0 125 180); --foxwarm-color-text-muted: rgb(94 104 120); --foxwarm-color-text-strong: rgb(25 31 42); --foxwarm-color-surface: white; --foxwarm-color-surface-sunken: rgb(246 248 251); --foxwarm-color-border: rgb(217 224 232); --foxwarm-color-border-strong: rgb(204 212 223); --foxwarm-color-warning: rgb(180 83 9); }</style><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -134,6 +144,32 @@ test('short model and Node triggers share a small gap with free space after Node
     await page.evaluate(() => document.activeElement?.blur())
     await page.mouse.move(0, 0)
   }
+  await page.evaluate(() => window.renderFixture())
+  await page.waitForFunction(() => !document.querySelector('.foxwarm-node-picker-trigger'))
+})
+
+test('an offline remote execution Node is marked on the trigger and clears when it reconnects', async () => {
+  await page.setViewport({ width: 1000, height: 700 })
+  await page.evaluate(() => { window.fixtureOfflineNodes = ['build-node']; window.renderFixture('short-node-remote') })
+  await page.waitForSelector('.foxwarm-node-picker-trigger[title="Execution node: build-node · Offline"]')
+  const offline = await page.evaluate(() => {
+    const trigger = document.querySelector('.foxwarm-node-picker-trigger')
+    const icon = trigger.querySelector('svg')
+    return { label: trigger.getAttribute('aria-label'), status: trigger.dataset.nodeStatus, icon: icon.getAttribute('class'), iconColor: getComputedStyle(icon).color, text: trigger.querySelector('span').textContent, width: icon.getBoundingClientRect().width }
+  })
+  assert.equal(offline.label, 'Execution node: build-node · Offline')
+  assert.equal(offline.status, 'problem')
+  assert.match(offline.icon, /lucide-server-off/)
+  assert.equal(offline.text, 'build-node')
+  assert.equal(offline.iconColor, 'rgb(180, 83, 9)')
+  assert.equal(offline.width, 14)
+  if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await (await page.$('.foxwarm-chat-composer-form')).screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, 'composer-node-offline.png') })
+  // Opening the picker rereads the directory, so a reconnected Node clears the mark.
+  await page.evaluate(() => { window.fixtureOfflineNodes = [] })
+  await page.click('.foxwarm-node-picker-trigger')
+  await page.waitForSelector('.foxwarm-node-picker-trigger[title="Execution node: build-node"]:not([data-node-status])')
+  assert.match(await page.$eval('.foxwarm-node-picker-trigger svg', icon => icon.getAttribute('class')), /lucide-server(?!-off)/)
+  await page.keyboard.press('Escape')
   await page.evaluate(() => window.renderFixture())
   await page.waitForFunction(() => !document.querySelector('.foxwarm-node-picker-trigger'))
 })
@@ -499,4 +535,79 @@ test('without a configured child the trigger stays compact and the popup has onl
   assert.equal(await page.$$eval('[data-model-column]', columns => columns.length), 1)
   await page.keyboard.press('Escape')
   assert.equal(await page.evaluate(() => document.activeElement?.matches('.foxwarm-model-selector-trigger')), true)
+})
+
+for (const viewport of [{ name: 'desktop', width: 1000, height: 700 }, { name: 'narrow', width: 390, height: 700 }]) {
+  test(`${viewport.name}: a child effort override stays visible and editable while the child model follows this session`, async () => {
+    await page.reload({ waitUntil: 'load' })
+    await page.setViewport({ width: viewport.width, height: viewport.height })
+    await page.waitForSelector('.foxwarm-model-selector-trigger')
+    await page.evaluate(() => window.renderFixture('follow-child-effort'))
+    const trigger = await page.waitForSelector('[data-model-trigger-child="true"]')
+    assert.equal(await trigger.evaluate(element => element.title), 'Children: Follow this session · High')
+    const triggerState = await trigger.evaluate(element => ({
+      text: element.textContent?.trim(),
+      iconVisible: element.querySelector('svg')?.getBoundingClientRect().width > 0,
+      viewportOverflow: document.documentElement.scrollWidth - innerWidth,
+    }))
+    assert.equal(triggerState.iconVisible, true)
+    assert.ok(triggerState.viewportOverflow <= 0, JSON.stringify(triggerState))
+    if (viewport.name === 'desktop') assert.equal(triggerState.text, 'Unique Friendly · High')
+
+    await page.click('.foxwarm-model-selector-trigger')
+    await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    assert.equal(await page.$$eval('[data-model-column]', columns => columns.length), 2)
+    assert.equal(await page.$('[data-model-child-mode="specific"]'), null)
+    const followRow = await page.$eval('[data-model-column="child"] [data-model-child-mode="follow"]', row => ({
+      selected: row.getAttribute('data-model-option-selected'),
+      text: row.textContent,
+    }))
+    assert.equal(followRow.selected, 'true')
+    assert.match(followRow.text, /Follow this session/)
+    assert.equal(await page.$$eval('[data-model-column="child"] [data-model-option-selected="true"]', rows => rows.length), 1)
+    const childEffort = await page.$('input[type="range"][aria-label="Child effort"]')
+    assert.ok(childEffort, 'child effort control is rendered')
+    const childEffortState = await childEffort.evaluate(input => {
+      const rect = input.getBoundingClientRect()
+      return { value: input.value, disabled: input.disabled, text: input.getAttribute('aria-valuetext'), visible: rect.width > 0 && rect.height > 0 }
+    })
+    assert.deepEqual(childEffortState, { value: '1', disabled: false, text: 'Child effort: high', visible: true })
+    const popup = await page.$eval('[data-model-selector-popup="true"]', element => {
+      const rect = element.getBoundingClientRect()
+      return { left: rect.left, right: rect.right, layout: element.getAttribute('data-model-layout') }
+    })
+    assert.ok(popup.left >= 0 && popup.right <= viewport.width, JSON.stringify(popup))
+    if (process.env.FOXWARM_PICKER_SCREENSHOT_DIR) {
+      await page.screenshot({ path: path.join(process.env.FOXWARM_PICKER_SCREENSHOT_DIR, `picker-follow-child-effort-${viewport.name}.png`) })
+    }
+
+    await childEffort.focus()
+    await page.keyboard.press('Home')
+    await page.waitForFunction(() => window.childEffortSelections.length === 1)
+    assert.deepEqual(await page.evaluate(() => window.childEffortSelections), ['low'])
+    await page.click('[data-model-column="child"] [data-model-child-mode="follow"]')
+    assert.deepEqual(await page.evaluate(() => window.childModelSelections), [], 'selecting the already selected follow row does not save')
+    await page.keyboard.press('Escape')
+  })
+}
+
+test('child defaults open without pinning a child model', async () => {
+  await page.reload({ waitUntil: 'load' })
+  await page.setViewport({ width: 1000, height: 700 })
+  await page.waitForSelector('.foxwarm-model-selector-trigger')
+  await page.evaluate(() => window.renderFixture('no-child'))
+  await page.click('.foxwarm-model-selector-trigger')
+  await page.waitForSelector('[data-model-child-mode="specific"]')
+  await page.click('[data-model-child-mode="specific"]')
+  await page.waitForSelector('[data-model-column="child"]')
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter child models"]'))
+  assert.deepEqual(await page.evaluate(() => window.childModelSelections), [])
+  assert.equal(await page.$eval('[data-model-column="child"] [data-model-child-mode="follow"]', row => row.getAttribute('data-model-option-selected')), 'true')
+  assert.ok(await page.$('input[type="range"][aria-label="Child effort"]'))
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[data-model-selector-popup="true"]', { hidden: true })
+  await page.click('.foxwarm-model-selector-trigger')
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+  assert.equal(await page.$$eval('[data-model-column]', columns => columns.length), 1)
+  await page.keyboard.press('Escape')
 })

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isCoreNodeId } from '../../../shared/src/nodeIdentity';
 import { getWorkspaceTerminalTarget, parseFoxwarmUri } from './foxwarmUri';
 import { isTerminalInsideWorkspace, shouldKillBackendTerminal } from './terminalLifecycle';
 export { getWorkspaceTerminalTarget, parseFoxwarmUri } from './foxwarmUri';
@@ -245,8 +246,8 @@ function getActiveWorkspaceTarget(): { nodeId: string; realPath: string } | unde
   return { nodeId: target.nodeId, realPath: target.realPath };
 }
 
-function ensureSupportedTarget(target: TerminalTarget): TerminalTarget {
-  if (!/^[A-Za-z0-9._-]+$/.test(target.nodeId)) throw new Error(`Invalid Foxwarm terminal node id: ${target.nodeId}`);
+export function ensureSupportedTarget(target: TerminalTarget): TerminalTarget {
+  if (!isCoreNodeId(target.nodeId)) throw new Error(`Invalid Foxwarm terminal node id: ${target.nodeId}`);
   return target;
 }
 

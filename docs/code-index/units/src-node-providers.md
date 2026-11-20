@@ -7,7 +7,7 @@ Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExec
 
 The Main-owned registry describes exact execution Nodes, derives canonical capabilities from filesystem/process primitives and routes optional provider lifecycle operations. Node is execution identity. Provider is its driver, not a tool source, credential boundary, Session placement or isolation guarantee.
 
-Production has fixed master/authenticated-remote adapters plus startup-configured executable providers. Authenticated resident Nodes retain their existing complete-tool transport. External executable providers use the single `foxwarm-node-provider` JSON stdin/stdout contract; there is no old complete-exec adapter, protocol-version field or negotiation. The independent [Linux SSH reference](./example-linux-ssh-provider.md) consumes only that public protocol; Core has no SSH backend or dependency.
+Production has fixed master/authenticated-remote adapters plus startup-configured executable providers. Authenticated resident Nodes retain their existing complete-tool transport. External executable providers use the single `foxwarm-node-provider` JSON stdin/stdout contract; there is no old complete-exec adapter, protocol-version field or negotiation. The independent [Linux SSH reference](./example-linux-ssh-provider.md) and [container reference](./example-container-provider.md) consume only that public protocol; Core has no SSH or container backend or dependency.
 
 ## Key exports and function index
 

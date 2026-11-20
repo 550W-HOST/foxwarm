@@ -53,7 +53,7 @@ Usage:
 Parameters:
   -HostUrl        Override Foxwarm master base URL (default: derived from request URL)
   -Pairing        Pairing token for first-time setup
-  -AuthToken      Per-node auth token from /node create (use with -NodeId)
+  -AuthToken      Per-node auth token from /node token (use with -NodeId)
   -NodeId         Node name (default: node-<hostname>)
   -StateDir       Persistent data dir (default: .\data)
   -SourceDir      Source dir for node client (default: .\foxwarm-node)
@@ -138,14 +138,16 @@ if (-not $NativeExecutable) {
     Invoke-WebRequest -Uri $tarUrl -OutFile $tarFile -UseBasicParsing
 
     Write-Host "Extracting source ..."
-    # GNU tar on PATH interprets a drive-qualified archive as a remote host.
-    # Keep the archive name relative for GNU tar, while the explicit destination
-    # preserves the source root independently of PowerShell/process cwd differences.
+    # Native tar receives relative paths; in-process extraction must resolve
+    # those paths against the same directory as PowerShell.
+    $previousProcessDirectory = [IO.Directory]::GetCurrentDirectory()
     Push-Location -LiteralPath $SourceDir
     try {
-        & tar -xzf './source.tar.gz' -C $SourceDir
+        [IO.Directory]::SetCurrentDirectory($SourceDir)
+        & tar -xzf './source.tar.gz' -C '.'
         if ($LASTEXITCODE -ne 0) { throw 'Node source extraction failed.' }
     } finally {
+        [IO.Directory]::SetCurrentDirectory($previousProcessDirectory)
         Pop-Location
     }
     Remove-Item -LiteralPath $tarFile -Force -ErrorAction SilentlyContinue
@@ -260,10 +262,16 @@ if (-not $Pairing -or (Test-Path -LiteralPath $CredentialsFile)) {
 } else {
     Write-Host "First run - after startup, approve on master:"
     Write-Host "  /node"
-    Write-Host "  /node approve <pending-id> $NodeId"
+    Write-Host "  /node approve <pending-id> --node-id $NodeId"
 }
 
 Write-Host ""
+
+$env:FOXWARM_NODE_LAUNCH_METHOD = 'windows'
+$env:FOXWARM_NODE_LAUNCH_DIR = [System.IO.Path]::GetFullPath($ScriptDir)
+$env:FOXWARM_NODE_LAUNCH_STATE_DIR = $StateDir
+$env:FOXWARM_NODE_LAUNCH_SOURCE_DIR = $SourceDir
+$env:FOXWARM_NODE_LAUNCH_MODE = if ($Interactive) { 'interactive' } else { 'foreground' }
 
 # ─── Run synchronously ───
 $nodeExitCode = 1

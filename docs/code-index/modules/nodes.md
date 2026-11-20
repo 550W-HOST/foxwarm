@@ -8,9 +8,11 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 
 ## Units
 
-- [Node development workflow](../units/node-development-workflow.md) — portable existing-Node source/material transfer, Task-linked assignment and committed/evidence-only delivery example.
+- [Node development workflow](../units/node-development-workflow.md) — portable provisioning, source/material transfer, Task-linked assignment, committed/evidence-only delivery and explicit release example.
 
 - [External Linux SSH reference](../units/example-linux-ssh-provider.md) — optional independently runnable executable adapter; not a Core backend or sandbox.
+
+- [Container Provider reference](../units/example-container-provider.md) — optional executable adapter creating one disposable Docker/Podman container per Node from administrator profiles, without network.
 
 - [Shell HTTP Node](../units/src-nodes-shell-http.md) — POSIX sh/curl exec-only transport, bounded output, and existing scoped background completion.
 
@@ -21,6 +23,8 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 - [src-nodes-misc](../units/src-nodes-misc.md) — WebSocket handler, heartbeat, bootstrap HTTP routes/info, and local node session events.
 - [src-nodes-registry](../units/src-nodes-registry.md) — pending/approved registry, pairing lifecycle, credential hashes, rename/removal, and durable storage.
 
+The [Android Node app](../units/android-node-app.md) runs directly on a phone, with QR/manual per-Node credentials and accessibility tools.
+
 Client implementations are separate modules: [CLI node](./cli-node.md) and [browser node](./browser-node.md). Cross-module protocol: [node communication](../threads/node-communication.md).
 
 ## Public interfaces
@@ -29,13 +33,14 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - `registerNodeHttpRoutes(httpServer)` — bootstrap scripts, compose template, and source bundle.
 - `buildNodeBootstrapInfo(options)` — current endpoint/examples payload for `node_bootstrap_info`.
 - Pending pairing create/list/approve/reject/claim operations.
-- `/node create <node-id>` directly reserves an approved Node credential and returns its plaintext auth token once; the ordinary pending/approve flow remains available.
+- `/node token <node-id>` directly reserves an approved Node credential and returns its plaintext auth token once; the ordinary pending/approve flow remains available.
+- `node_bootstrap_info` (.NET Main) writes the shared pairing token to a new owner-only file and returns instructions without it.
 - `node_create_auth_token` reserves an approved Node ID and writes its per-node credential to a new owner-only file on Main, returning only the Node ID and file path; it is a discoverable hidden builtin and does not rotate existing credentials.
 - `node_remove` is a discoverable hidden builtin that revokes an explicit approved Node ID and disconnects its active runtime through the same operation as `/node remove`. It returns only `{ nodeId, disconnected }`, removes any unclaimed approved handoff, and does not stop the client, delete resources, or rebind Agents/Sessions. This is distinct from provider lifecycle `node({ action: "destroy" })`.
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
-- `foxwarm-node-provider` — one-shot bounded JSON stdin/stdout contract for trusted executable providers exposing describe/list, filesystem primitives, optional process start/poll, and optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
+- `foxwarm-node-provider` — one-shot (per request) bounded JSON stdin/stdout contract for trusted executable providers exposing describe/list, filesystem primitives, optional process start/poll, and optional create/ensure/inspect/destroy operations, plus an optional long-lived stdio service channel (`connect`) for the fixed Code/Terminal services; see `docs/executable-node-provider-protocol.md`.
 - `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
 - `readNodeFile()` — source-fenced complete non-master file reader behind ToolScript source loading; it retains canonical read authorization and provider availability rather than using displayed tool text.
 
@@ -53,7 +58,7 @@ Unauthenticated bootstrap routes are:
 
 The source archive normally includes the built CLI bundles produced by the master build. `run.sh` uses `client.bundle.js` without installing the CLI dependency tree; if the bundle is absent it requires npm and builds shared/CLI as a fallback. The optional `node-pty` runtime is installed separately. Bare-metal failure leaves non-PTY capabilities available; Docker image preparation treats its required installation path as fatal.
 
-The operator-facing deployment/configuration workflow is documented by the single `skills/node-setup/SKILL.md` source skill, which also links the [existing-Node development example](../units/node-development-workflow.md) and optional installed SSH adapter resources. Temporary isolated-worker creation remains a separate `skills/isolated-worker/SKILL.md` workflow: it binds an already-online Node before agent/session creation. It does not create Git worktrees, add a lease/ownership layer, or replace node setup.
+The operator-facing deployment/configuration workflow is documented by the single `skills/node-setup/SKILL.md` source skill, which also links the [development workflow](../units/node-development-workflow.md) and the optional installed SSH and container adapter resources. Delegated work in disposable environments composes that workflow, a container Provider Node per assignment and a restricted worker Agent from the agent-management templates; there is no separate isolated-worker skill or lease/ownership layer.
 
 ## Invariants
 
@@ -63,8 +68,8 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Master-side WebSocket heartbeat sends protocol ping frames every 30 seconds and requires liveness within 10 seconds.
 - Pre-authentication messages are queued and replayed after authentication.
 - Authenticated registration negotiates the shared 1-3 core Node protocol before capability admission. Missing metadata selects executable legacy generation 1, the current CLI selects generation 3, and only malformed/disjoint clients remain connected and visible as upgrade-required without executable capabilities, dispatch, selection, or application events. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
-- Ordinary node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID, or the target belongs to an isolated agent bound to that node. Remote exec completion instead requires the scoped start-time capability, correlated ACK, deterministic mailbox identity, and newest-32 authoritative Session receipt contract defined by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
-- Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
+- Ordinary node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID. Remote exec completion instead requires the scoped start-time capability, correlated ACK, deterministic mailbox identity, and newest-32 authoritative Session receipt contract defined by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
+- Agent-local rule layers are the agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create a permission boundary or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
 - Executable providers are startup-only trusted configuration and advertise remote- or sandbox-kind Nodes through fixed filesystem (`read` or `read-write`) and optional process start/poll backends. Exec requires readable same-Node logs; the existing Core exec manager owns waiting, output and completion. Core derives canonical file tools over parent/stat/ranged-read/readdir/replace/exclusive-create/append-write/mkdir/remove primitives; provider path and restriction semantics remain authoritative. Authenticated remote Nodes retain their resident complete-tool adapter internally.
@@ -73,12 +78,18 @@ The operator-facing deployment/configuration workflow is documented by the singl
 ## Compatibility
 
 - Missing core protocol metadata is explicitly classified as compatible legacy generation 1 rather than assumed current. Operators update/restart only an explicitly malformed or disjoint upgrade-required Node; credentials and pairing approval remain valid.
-- Current CLI advertises 1-3 and selects generation 3; browser-extension and Android clients advertise 1-2 and select generation 2. All retain omitted-field generation-1 compatibility for Node-first rolling upgrades. Removing the informational six-digit pairing display code does not alter authentication or supported protocol ranges.
+- Current CLI and Android app advertise 1-3 and select generation 3; browser-extension clients advertise 1-2 and select generation 2. All retain omitted-field generation-1 compatibility for Node-first rolling upgrades. Removing the informational six-digit pairing display code does not alter authentication or supported protocol ranges.
 - Approved-node rename is server-side registry migration plus old-runtime disconnect. The current client has no credential-rewrite protocol; the operator updates/restarts/re-pairs the node.
 - `/node/run-cli-node.sh` remains a bootstrap route alias for the current interactive script.
-- Existing numbered `nodes.json` backups remain readable through the durable JSON store.
+- `nodes.json` keeps the Source backup layout: each write rotates three numbered backups plus the legacy `.bak`, and a corrupt registry loads the first readable backup through the [durable state-file helper](../units/dotnet-node-primitives.md#durable-state-files).
 
 ## Design decisions
+
+### D-node-restart-and-revocation
+
+[2026-11-15, user decision] System Nodes offers existing CLI restart commands without a credential, using the Node's saved credentials. Official clients report non-secret launch method, platform and installation paths; older or unknown installations have editable defaults. Shell clients retain no credentials, so restarting them requires the operator's token or explicit reissue. Main cannot recover an existing plaintext token. Reissue replaces its hash, invalidates the old token, disconnects the current transport and returns the replacement command/token once to the administrator. The mounted dialog discards it on close.
+
+Deletion revokes credentials, disconnects and removes the approved record. Descendants require explicit cascade confirmation; processes and files on the remote machine are untouched. Provider-owned Nodes use Provider destruction, not native credential deletion; the System Nodes delete action is unavailable for those Nodes and mixed subtrees. Implementation: [external Node maintenance](../units/external-nodes.md#administrator-node-maintenance), [System Nodes](../units/webui-nodes.md).
 
 ### D-node-credential-hash
 
@@ -88,13 +99,13 @@ Persist approved authentication tokens only as hashes on the master; return plai
 
 ### D-node-session-event-scope
 
-The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node or isolated-agent binding checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
+The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 
 ### D-node-isolation-boundary
 
 **Governing distinction; directly selected.** Environment isolation and [tool authorization](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries) solve different problems. A Node/Provider supplies the execution environment; an Agent flag, role label or selected Node alone cannot prove an OS/network sandbox.
 
-`currentNode` is execution routing. `agent.isolatedNode` is the isolation boundary inherited by that agent's sessions. Pairing/binding does not imply node exclusivity or environment virtualization.
+`currentNode` is execution routing. An Agent's `defaultNode` only places new sessions; the legacy `agent.isolatedNode` binding was retired in R2 ([isolation migration](../units/isolation-migration.md#r2-startup-migration)). Pairing/binding does not imply node exclusivity or environment virtualization.
 
 ### D-node-bootstrap-bundle
 
@@ -102,12 +113,7 @@ Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundl
 
 Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 
-### D-node-android-adb-host
-
-[2026-08-06] The current `packages/android-node` implementation is an unpublished ADB host-run node. Inline screenshots are JPEG quality 80. Connection configuration reads only the current `FOXWARM_*` environment variables; removed predecessor aliases are not accepted. It is not the unimplemented Termux/standalone accessibility-and-capture architecture.
-
-Like the other official Nodes, it advertises core protocol range 1-2, selects generation 2 with a current Master, and accepts an unversioned old-Master registration as generation 1.
-Its explicit Master response validator enforces the same strict bounded plain-data shape as the shared TypeScript contract. A `node_incompatible` response keeps the authenticated socket and heartbeat alive for diagnostics, rejects application work while quarantined, and suppresses reconnect spinning if that socket later closes.
+Android on-device delivery and replacement of the ADB host client are canonical in [D-node-android-on-device](../units/android-node-app.md#d-node-android-on-device).
 
 ## Canonical ownership
 

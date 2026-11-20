@@ -68,7 +68,12 @@ public sealed partial class ToolAuthorizationEffectsTests
         WorkspaceTools Files,
         Foxwarm.McpClient Mcp,
         ToolRegistry Registry
-    ) Executor(SessionManager manager, SessionOwner owner, string root)
+    ) Executor(
+        SessionManager manager,
+        SessionOwner owner,
+        string root,
+        IEnumerable<JsonNode?>? extra = null
+    )
     {
         var files = new WorkspaceTools(
             Path.Combine(root, "workspace", "agents", owner.Agent),
@@ -95,6 +100,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         foreach (var definition in FileDeliveryDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(CompactToolDefinition.Definition());
+        foreach (var definition in extra ?? [])
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in SessionSettingsDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         var mcp = new Foxwarm.McpClient(Path.Combine(root, "data"));
@@ -126,7 +133,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         )!.AsObject();
 
     private static string? Error(JsonObject response) =>
-        response["error"]?["type"]?.GetValue<string>();
+        response.FailureIdentity();
 
     [Fact]
     public async Task Loader_root_cache_expiration_fresh_async_retry_sync_unavailable_and_exact_missing_are_not_stale_allow()
@@ -199,7 +206,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var definitions = manager.ModelDefinitions(owner);
         Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "exec");
         Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "write");
-        Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "call_tool");
+        Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "ctl");
         Assert.DoesNotContain(
             definitions,
             node => node?["name"]?.GetValue<string>() == "set_config"
@@ -211,7 +218,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         var reference = Regex
             .Match(
-                refused["error"]!["message"]!.GetValue<string>(),
+                refused.FailureMessage()!,
                 "contentRef: \"(write_[a-f0-9]+)\""
             )
             .Groups[1]
@@ -219,8 +226,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.NotEmpty(reference);
         var denied = await Call(
             execution.Tools,
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["source"] = "node",
                 ["name"] = "write",
@@ -231,7 +238,7 @@ public sealed partial class ToolAuthorizationEffectsTests
                     ["contentRef"] = reference,
                     ["overwrite"] = true,
                 },
-            }
+            })
         );
         Assert.Equal("tool_authorization_denied", Error(denied));
         Assert.False(File.Exists(Path.Combine(own, "forbidden", "new")));
@@ -266,8 +273,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal("tool_authorization_denied", Error(literal));
         var search = await Call(
             execution.Tools,
-            "search_tools",
-            Obj("""{"sources":["node"],"query":"exec"}""")
+            "ctl",
+            CtlTestArgs.Search(Obj("""{"sources":["node"],"query":"exec"}"""))
         );
         Assert.DoesNotContain("node:master/exec", search["output"]!.GetValue<string>());
         var overrideSchema = new JsonArray(new JsonObject { ["name"] = "exec" });
@@ -324,7 +331,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Equal(original, await File.ReadAllBytesAsync(target));
         Assert.Empty(
-            Directory.GetFiles(Path.GetDirectoryName(target)!, ".tool-authorization-*.tmp")
+            Directory.GetFiles(Path.GetDirectoryName(target)!, Path.GetFileName(target) + ".tmp-*")
         );
         manager.Authorization.InstallBoundary = stage =>
         {
@@ -466,7 +473,7 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
-    public async Task Isolated_read_old_metadata_exact_allow_is_not_structural_or_handler_permission_and_current_default_status_stays_usable()
+    public async Task Migrated_old_metadata_exact_allow_is_not_structural_or_handler_permission_and_current_default_status_stays_usable()
     {
         using var temp = new TempDirectory();
         await Seed(
@@ -480,17 +487,18 @@ public sealed partial class ToolAuthorizationEffectsTests
         var owner = await manager.RequiredAsync("opaque");
         var execution = Executor(manager, owner, temp.Path);
         await using var mcp = execution.Mcp;
-        Assert.True(manager.AgentIsolated("alpha"));
-        Assert.Equal("future-node", manager.RecordedIsolationNode("alpha"));
+        Assert.True(manager.Isolation("alpha").Isolated);
+        Assert.Equal("future-node", manager.Isolation("alpha").RecordedNode);
+
         Assert.Equal(
             "tool_authorization_denied",
             Error(
                 await Call(
                     execution.Tools,
-                    "call_tool",
-                    Obj(
+                    "ctl",
+                    CtlTestArgs.Unified(Obj(
                         """{"toolId":"node:master/exec","args":{"command":"touch forbidden-exec"}}"""
-                    )
+                    ))
                 )
             )
         );
@@ -504,12 +512,12 @@ public sealed partial class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "call_tool",
-                    new JsonObject
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject
                     {
                         ["toolId"] = "node:master/read",
                         ["args"] = new JsonObject { ["filePath"] = other },
-                    }
+                    })
                 )
             )
         );
@@ -527,8 +535,9 @@ public sealed partial class ToolAuthorizationEffectsTests
                 )
             )
         );
+        // The migrated layer limits status to the current Session.
         Assert.Equal(
-            "agent_tool_error",
+            "tool_authorization_denied",
             Error(
                 await Call(
                     execution.Tools,
@@ -551,7 +560,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             "tool_authorization_denied",
             Error(await Call(execution.Tools, "recall", Obj("""{"sessionId":"outside"}""")))
         );
-        Assert.Single(manager.Owners());
+        // Startup placement loaded the migrated Agent's Sessions; denied calls loaded nothing else.
+        Assert.DoesNotContain(manager.Owners(), loaded => loaded.Agent != "alpha");
         Assert.Equal(
             "tool_authorization_denied",
             Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"opaque"}""")))
@@ -562,7 +572,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Contains(
             manager.ModelDefinitions(owner),
-            node => node?["name"]?.GetValue<string>() == "session"
+            node => node?["name"]?.GetValue<string>() == "ctl"
         );
     }
 
@@ -626,8 +636,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "call_tool",
-                    Obj("""{"toolId":"mcp:peer/probe","args":{"tag":"unified-denied"}}""")
+                    "ctl",
+                    CtlTestArgs.Unified(Obj("""{"toolId":"mcp:peer/probe","args":{"tag":"unified-denied"}}"""))
                 )
             )
         );
@@ -644,8 +654,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "call_tool",
-                    Obj("""{"toolId":"mcp:peer/probe","args":{"tag":"unified"}}""")
+                    "ctl",
+                    CtlTestArgs.Unified(Obj("""{"toolId":"mcp:peer/probe","args":{"tag":"unified"}}"""))
                 )
             )
         );
@@ -654,8 +664,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             new JsonObject
             {
                 ["id"] = "forged-display",
-                ["name"] = "call_tool",
-                ["args"] = Obj("""{"toolId":"mcp:peer/probe","args":{"kind":"forged-display"}}"""),
+                ["name"] = "ctl",
+                ["args"] = CtlTestArgs.Unified(Obj("""{"toolId":"mcp:peer/probe","args":{"kind":"forged-display"}}""")),
             },
             default
         );
@@ -670,10 +680,10 @@ public sealed partial class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "call_tool",
-                    Obj(
+                    "ctl",
+                    CtlTestArgs.Unified(Obj(
                         """{"toolId":"mcp:peer/read","args":{"filePath":"owned","tag":"pretend-file"}}"""
-                    )
+                    ))
                 )
             )
         );

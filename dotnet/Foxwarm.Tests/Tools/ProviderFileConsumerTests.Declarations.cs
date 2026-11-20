@@ -14,14 +14,16 @@ public sealed partial class ProviderFileConsumerTests
         await f.Manager.SelectNodeAsync(f.Owner, "fixture/readonly");
         Assert.Equal(canonical, f.Manager.ModelDefinitions(f.Owner).ToJsonString());
         var discovery = await f.Call(
-            "search_tools",
-            new JsonObject { ["sources"] = new JsonArray("node"), ["includeSchema"] = true }
+            "ctl",
+            CtlTestArgs.Search(new JsonObject { ["sources"] = new JsonArray("node"), ["includeSchema"] = true })
         );
-        Assert.Contains(
-            "name: \"read\", nodeId: \"fixture/readonly\"",
-            discovery["output"]!.GetValue<string>()
-        );
-        Assert.DoesNotContain("name: \"write\"", discovery["output"]!.GetValue<string>());
+        // Node discovery lists the declared tools the selected Node provides, and only those.
+        var listed = discovery["output"]!.GetValue<string>();
+        Assert.Contains("\nread (declared tool) — ", listed);
+        Assert.DoesNotContain("write (declared tool)", listed);
+        Assert.DoesNotContain("--name write ", listed);
+        var help = await f.Call("ctl", CtlTestArgs.Command("tool call node:fixture/readonly/write --help"));
+        Assert.NotNull(help["error"]);
         var args = new JsonObject { ["filePath"] = "no-effect.txt", ["content"] = "forbidden" };
         var missing = await f.Call("write", args);
         Assert.Contains("Node file capability is unavailable", missing.ToJsonString());
@@ -34,18 +36,20 @@ public sealed partial class ProviderFileConsumerTests
         f.Manager.Authorization.Invalidate();
         Assert.Equal(canonical, f.Manager.ModelDefinitions(f.Owner).ToJsonString());
         discovery = await f.Call(
-            "search_tools",
-            new JsonObject { ["sources"] = new JsonArray("node"), ["includeSchema"] = true }
+            "ctl",
+            CtlTestArgs.Search(new JsonObject { ["sources"] = new JsonArray("node"), ["includeSchema"] = true })
         );
-        Assert.DoesNotContain("name: \"write\"", discovery["output"]!.GetValue<string>());
+        Assert.DoesNotContain("--name write ", discovery["output"]!.GetValue<string>());
+        Assert.DoesNotContain("write (declared tool)", discovery["output"]!.GetValue<string>());
+        Assert.Contains("\nread (declared tool) — ", discovery["output"]!.GetValue<string>());
         var before = (await f.Requests()).Length;
         var direct = await f.Call("write", args);
-        Assert.Equal("tool_authorization_denied", direct["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", direct.FailureCode()!);
         var unified = await f.Call(
-            "call_tool",
-            new JsonObject { ["toolId"] = "node:" + f.Node + "/write", ["args"] = args.DeepClone() }
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:" + f.Node + "/write", ["args"] = args.DeepClone() })
         );
-        Assert.Equal("tool_authorization_denied", unified["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", unified.FailureCode()!);
         var script = await f.Call(
             "run_script",
             new JsonObject

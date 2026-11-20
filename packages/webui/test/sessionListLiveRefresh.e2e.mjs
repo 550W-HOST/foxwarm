@@ -435,7 +435,7 @@ test('Sidebar auto-expansion acquires child pages and exposes branch loading, fa
     assert.equal(await rowExists(children[0]), false, 'the delayed initial child page has not rendered rows yet')
     assert.equal(await page.evaluate(workerId => {
       const row = document.querySelector(`[data-session-id="${CSS.escape(workerId)}"]`)
-      return [...(row?.parentElement?.querySelectorAll('button') || [])].some(button => /Show \d+ more/.test(button.textContent || ''))
+      return !!row?.parentElement?.querySelector(`[data-session-continuation="more"][data-session-continuation-owner="${CSS.escape(workerId)}"]`)
     }, worker), false, 'Show more never substitutes for a missing initial child page')
     const replayRequests = await page.evaluate(() => window.__foxwarmIssue45.requests)
     assert.equal(replayRequests.some(ids => ids.includes(worker)), true,
@@ -449,7 +449,7 @@ test('Sidebar auto-expansion acquires child pages and exposes branch loading, fa
     assert.equal(await page.$(`[data-session-branch-retry="${worker}"]`), null)
     assert.equal(await page.evaluate(workerId => {
       const row = document.querySelector(`[data-session-id="${CSS.escape(workerId)}"]`)
-      return [...(row?.parentElement?.querySelectorAll('button') || [])].some(button => /Show \d+ more/.test(button.textContent || ''))
+      return !!row?.parentElement?.querySelector(`[data-session-continuation="more"][data-session-continuation-owner="${CSS.escape(workerId)}"]`)
     }, worker), false, 'a complete initial page does not create a continuation action')
 
     await clickDisclosure(worker)

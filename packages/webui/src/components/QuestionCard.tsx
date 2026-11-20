@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Check, ChevronDown, ChevronLeft, MessageCircleQuestion, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, KeyRound, MessageCircleQuestion, ShieldAlert, X } from 'lucide-react'
 import {
   askUserArgs,
   askUserQuestionId,
@@ -7,10 +7,10 @@ import {
   buildQuestionSkipBody,
   canSubmitQuestionDraft,
   describeQuestionAnswer,
-  emptyQuestionDraft,
-  isQuestionDraftEntryAnswered,
+  isQuestionAnswered,
   QuestionAnswerError,
   questionOutcomeLabel,
+  storedSecretLabel,
   toggleQuestionOption,
   type QuestionAnswerBody,
   type QuestionDraftEntry,
@@ -18,59 +18,81 @@ import {
   type QuestionRecord,
 } from '../sessionQuestions'
 import { useSessionQuestionsContext } from '../sessionQuestionsState'
+import { useQuestionAnswerDraft } from '../questionAnswerDrafts'
 import { questionContentSummary } from '../questionContent'
 import QuestionContent from './QuestionContent'
 import type { FunctionCall, FunctionResponse } from './chatShared'
+import { ApprovalDecisionForm } from './ApprovalCard'
+import { approvalToolLabel, type ToolApprovalRecord } from '../sessionApprovals'
+import type { SendKeyMode } from '../chatPreferences'
+import { isImeComposing, isSendKey, sendShortcutLabel } from '../sendKey'
 
-const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text')
+const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && ['text', 'password'].includes((target as HTMLInputElement).type))
 
-/** Answer form for one open question set: step through the questions, then submit together. */
-export function QuestionAnswerForm({ record, onSubmit, focusToken = 0, compact = false }: {
+/**
+ * Answer form for one open question set: step through the questions, then submit together.
+ * The unsent answer is the Session's shared draft for this question, so it survives remounts.
+ * In text fields the Chat send key advances or submits and other Enter presses insert a newline;
+ * elsewhere in the form plain Enter advances too. Ctrl/Cmd+Enter advances from anywhere.
+ */
+export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0, compact = false, sendKeyMode = 'modEnter' }: {
+  sessionId: string
   record: QuestionRecord
   onSubmit: (body: QuestionAnswerBody) => Promise<void>
   /** Changing a nonzero value moves keyboard focus into the form. */
   focusToken?: number
   compact?: boolean
+  sendKeyMode?: SendKeyMode
 }) {
-  const [draft, setDraft] = useState<QuestionDraftEntry[]>(() => emptyQuestionDraft(record))
-  const [step, setStep] = useState(0)
-  const [note, setNote] = useState('')
-  const [noteOpen, setNoteOpen] = useState(false)
+  const [{ entries: draft, step, note, noteOpen }, updateDraft] = useQuestionAnswerDraft(sessionId, record)
+  const setStep = (change: (value: number) => number) => updateDraft(current => ({ ...current, step: change(current.step) }))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Typed secret values stay in this form's memory only, unlike the shared draft.
+  const [secretValues, setSecretValues] = useState<Record<number, string>>({})
   const rootRef = useRef<HTMLDivElement>(null)
   const otherId = useId()
   const total = record.questions.length
   const question = record.questions[step]
   const entry = draft[step]
   const last = step === total - 1
-  useEffect(() => { setDraft(emptyQuestionDraft(record)); setStep(0); setNote(''); setError(null) }, [record.id])
+  useEffect(() => { setError(null); setSecretValues({}) }, [sessionId, record.id])
   useEffect(() => {
     if (!focusToken) return
     rootRef.current?.scrollIntoView({ block: 'nearest' })
     rootRef.current?.focus({ preventScroll: true })
   }, [focusToken])
 
-  const update = (next: QuestionDraftEntry) => setDraft(current => current.map((item, index) => index === step ? next : item))
+  const update = (next: QuestionDraftEntry) => updateDraft(current => ({ ...current, entries: current.entries.map((item, index) => index === current.step ? next : item) }))
   const send = async (body: QuestionAnswerBody) => {
     setPending(true)
     setError(null)
-    try { await onSubmit(body) }
-    catch (cause) {
+    try {
+      await onSubmit(body)
+      setSecretValues({})
+    } catch (cause) {
       setError(cause instanceof QuestionAnswerError && cause.notOpen ? 'This question was already resolved.' : cause instanceof Error ? cause.message : 'The answer could not be sent.')
     } finally { setPending(false) }
   }
-  const submit = () => { if (canSubmitQuestionDraft(draft) && !pending) void send(buildQuestionAnswerBody(draft, note)) }
+  const canSubmit = canSubmitQuestionDraft(draft, record.questions, secretValues)
+  const submit = () => { if (canSubmit && !pending) void send(buildQuestionAnswerBody(draft, note, record.questions, secretValues)) }
   const advance = () => { if (last) submit(); else setStep(value => value + 1) }
+  const shortcut = sendShortcutLabel(sendKeyMode)
+  const ariaShortcut = sendKeyMode === 'enter' ? 'Enter Control+Enter Meta+Enter' : 'Control+Enter Meta+Enter'
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (pending || event.altKey || event.ctrlKey || event.metaKey) return
-    if (event.key === 'Enter' && !event.shiftKey) {
-      if (event.target instanceof HTMLButtonElement) return
+    // Keys handled by an input method belong to the composition, including the Enter that commits it.
+    if (pending || isImeComposing(event.nativeEvent)) return
+    if (event.key === 'Enter') {
+      if (isTextEntry(event.target)) {
+        if (!isSendKey(event.nativeEvent, sendKeyMode)) return
+      } else if (!event.ctrlKey && !event.metaKey && (event.shiftKey || event.altKey || event.target instanceof HTMLButtonElement)) {
+        return
+      }
       event.preventDefault()
       advance()
       return
     }
-    if (isTextEntry(event.target)) return
+    if (event.altKey || event.ctrlKey || event.metaKey || isTextEntry(event.target)) return
     const number = Number(event.key)
     const options = question.options || []
     if (Number.isInteger(number) && number >= 1 && number <= options.length) {
@@ -85,19 +107,21 @@ export function QuestionAnswerForm({ record, onSubmit, focusToken = 0, compact =
         <div className="mb-2 flex items-center gap-2 text-xs text-fw-text-muted">
           <span>Question {step + 1} of {total}</span>
           <span className="flex gap-1" aria-hidden="true">
-            {record.questions.map((_, index) => <span key={index} className={`h-1.5 w-4 rounded-full ${index === step ? 'bg-fw-accent' : isQuestionDraftEntryAnswered(draft[index]) ? 'bg-fw-accent/40' : 'bg-fw-border'}`} />)}
+            {record.questions.map((_, index) => <span key={index} className={`h-1.5 w-4 rounded-full ${index === step ? 'bg-fw-accent' : isQuestionAnswered(record.questions[index], draft[index], secretValues[index]) ? 'bg-fw-accent/40' : 'bg-fw-border'}`} />)}
           </span>
         </div>
       )}
-      <QuestionBody question={question} entry={entry} onChange={update} otherId={otherId} compact={compact} disabled={pending} />
+      {question.secret
+        ? <SecretQuestionBody question={question} value={secretValues[step] || ''} onChange={value => setSecretValues(current => ({ ...current, [step]: value }))} inputId={otherId} compact={compact} disabled={pending} />
+        : <QuestionBody question={question} entry={entry} onChange={update} otherId={otherId} compact={compact} disabled={pending} />}
       {noteOpen ? (
         <label className="mt-2 block text-xs text-fw-text-muted">
           Note
-          <textarea value={note} onChange={event => setNote(event.target.value)} rows={2} disabled={pending} placeholder="Add context for your answer"
+          <textarea value={note} onChange={event => { const value = event.target.value; updateDraft(current => ({ ...current, note: value })) }} rows={2} disabled={pending} placeholder="Add context for your answer"
             className="mt-1 block w-full resize-y rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 text-sm text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring" />
         </label>
       ) : (
-        <button type="button" onClick={() => setNoteOpen(true)} className="mt-2 text-xs text-fw-text-muted hover:text-fw-text hover:underline">Add a note</button>
+        <button type="button" onClick={() => updateDraft(current => ({ ...current, noteOpen: true }))} className="mt-2 text-xs text-fw-text-muted hover:text-fw-text hover:underline">Add a note</button>
       )}
       {error && <div role="alert" className="mt-2 text-xs text-fw-danger">{error}</div>}
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -109,11 +133,11 @@ export function QuestionAnswerForm({ record, onSubmit, focusToken = 0, compact =
         <button type="button" disabled={pending} onClick={() => void send(buildQuestionSkipBody(note))} className="rounded-md px-2.5 py-1.5 text-sm text-fw-text-muted hover:bg-fw-hover hover:text-fw-text disabled:opacity-50">Skip</button>
         <span className="flex-1" />
         {last ? (
-          <button type="button" disabled={pending || !canSubmitQuestionDraft(draft)} onClick={submit} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="button" disabled={pending || !canSubmit} onClick={submit} title={shortcut} aria-keyshortcuts={ariaShortcut} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
             {pending ? 'Sending…' : 'Submit'}
           </button>
         ) : (
-          <button type="button" disabled={pending} onClick={advance} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:opacity-50">Next</button>
+          <button type="button" disabled={pending} onClick={advance} title={shortcut} aria-keyshortcuts={ariaShortcut} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:opacity-50">Next</button>
         )}
       </div>
     </div>
@@ -170,7 +194,40 @@ function QuestionBody({ question, entry, onChange, otherId, compact, disabled }:
         rows={options.length ? 1 : 2}
         onChange={event => onChange({ ...entry, text: event.target.value })}
         placeholder={options.length ? 'Write a different answer' : 'Write your answer'}
-        className="mt-1 block w-full resize-y rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 text-sm text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring"
+        className={`mt-1 block max-h-40 w-full resize-y rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 text-sm text-fw-text-strong outline-none [field-sizing:content] placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring ${options.length ? '' : 'min-h-[3.375rem]'}`}
+      />
+    </fieldset>
+  )
+}
+
+/** A question answered with a credential, which is stored as a secret and not sent to the agent. */
+function SecretQuestionBody({ question, value, onChange, inputId, compact, disabled }: {
+  question: QuestionItem
+  value: string
+  onChange: (value: string) => void
+  inputId: string
+  compact: boolean
+  disabled: boolean
+}) {
+  const secret = question.secret!
+  return (
+    <fieldset className="min-w-0" disabled={disabled} data-question-secret={secret.name}>
+      <legend className={`mb-2 whitespace-pre-wrap break-words font-medium text-fw-text-strong ${compact ? 'text-sm' : 'text-[15px]'}`}>{question.question}</legend>
+      <div className="mb-2 flex min-w-0 items-start gap-1.5 text-xs text-fw-text-muted">
+        <KeyRound size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
+        <span className="min-w-0 break-words">
+          Saved as secret <span className="font-mono text-fw-text">{secret.name}</span>{secret.description ? ` · ${secret.description}` : ''}. The agent can use it without seeing it.
+        </span>
+      </div>
+      <label htmlFor={inputId} className="block text-xs text-fw-text-muted">Value</label>
+      <input
+        id={inputId}
+        type="password"
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        className="mt-1 block w-full rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 font-mono text-sm text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring"
       />
     </fieldset>
   )
@@ -213,6 +270,12 @@ function QuestionPreview({ questions }: { questions: QuestionItem[] }) {
       {questions.map((question, index) => (
         <div key={index} className="min-w-0">
           <div className="whitespace-pre-wrap break-words font-medium text-fw-text-strong">{question.question}</div>
+          {question.secret && (
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-fw-text-muted">
+              <KeyRound size={13} aria-hidden="true" className="shrink-0" />
+              <span className="min-w-0 truncate">Secret <span className="font-mono">{question.secret.name}</span></span>
+            </div>
+          )}
           {!!question.options?.length && (
             <ul className="mt-1 flex flex-col gap-0.5 pl-1 text-fw-text-muted">
               {question.options.map(option => (
@@ -291,11 +354,27 @@ export function AskUserToolCard({ call, response }: { call: FunctionCall; respon
   )
 }
 
-/** Pinned dock above the composer: open questions answerable in place, driven by Session state. */
-export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
+type DockItem = { kind: 'approval'; id: string; record: ToolApprovalRecord } | { kind: 'question'; id: string; record: QuestionRecord }
+
+const dockItemTitle = (item: DockItem): string => item.kind === 'approval'
+  ? [approvalToolLabel(item.record.tool), item.record.summary].filter(Boolean).join(' · ')
+  : item.record.questions[0]?.question || ''
+
+function dockHeading(approvals: number, questions: number): string {
+  if (!questions) return approvals === 1 ? 'Tool call needs approval' : `${approvals} tool calls need approval`
+  if (!approvals) return questions === 1 ? 'Open question' : `${questions} open questions`
+  return `${approvals + questions} open requests`
+}
+
+/**
+ * Pinned dock above the composer, driven by Session state: pending tool approvals, which the
+ * agent always waits on, then open questions answerable in place.
+ */
+export function QuestionDock({ isMobile = false, sendKeyMode = 'modEnter' }: { isMobile?: boolean; sendKeyMode?: SendKeyMode }) {
   const questions = useSessionQuestionsContext()
   const open = questions?.open || []
-  const waitingAny = open.some(record => questions?.waitingIds.has(record.id))
+  const approvals = questions?.approvals || []
+  const waitingAny = approvals.length > 0 || open.some(record => questions?.waitingIds.has(record.id))
   const [expanded, setExpanded] = useState<boolean | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const sessionId = questions?.sessionId
@@ -308,35 +387,48 @@ export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
     setSelectedId(request.questionId)
     setFocusToken(request.nonce)
   }, [request])
-  if (!questions || open.length === 0) return null
-  const ordered = [...open].sort((a, b) => Number(questions.waitingIds.has(b.id)) - Number(questions.waitingIds.has(a.id)))
-  const current = ordered.find(record => record.id === selectedId) || ordered[0]
+  if (!questions || open.length + approvals.length === 0) return null
+  const ordered: DockItem[] = [
+    ...approvals.map(record => ({ kind: 'approval' as const, id: record.id, record })),
+    ...[...open]
+      .sort((a, b) => Number(questions.waitingIds.has(b.id)) - Number(questions.waitingIds.has(a.id)))
+      .map(record => ({ kind: 'question' as const, id: record.id, record })),
+  ]
+  const current = ordered.find(item => item.id === selectedId) || ordered[0]
   const isExpanded = expanded ?? waitingAny
-  const currentWaiting = questions.waitingIds.has(current.id)
+  const isWaiting = (item: DockItem) => item.kind === 'approval' || questions.waitingIds.has(item.id)
+  const Icon = approvals.length ? ShieldAlert : MessageCircleQuestion
+  const waitingLabel = approvals.length ? 'Waiting for approval' : 'Waiting for your answer'
   return (
     <div data-question-dock data-question-dock-expanded={isExpanded ? 'true' : 'false'} className={`mb-2 min-w-0 rounded-lg border shadow-sm ${waitingAny ? 'border-fw-warning-border bg-fw-surface' : 'border-fw-accent-border bg-fw-surface'}`}>
       <button type="button" aria-expanded={isExpanded} onClick={() => setExpanded(!isExpanded)} className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-sm">
-        <MessageCircleQuestion size={16} aria-hidden="true" className={`shrink-0 ${waitingAny ? 'text-fw-warning' : 'text-fw-accent'}`} />
-        <span className="shrink-0 font-medium text-fw-text-strong">{open.length === 1 ? 'Open question' : `${open.length} open questions`}</span>
-        {!isExpanded && <span className="min-w-0 truncate text-fw-text-muted">· {current.questions[0]?.question}</span>}
-        {waitingAny && <span className="ml-auto shrink-0 text-xs font-medium text-fw-warning">{isMobile ? 'Waiting' : 'Waiting for your answer'}</span>}
+        <Icon size={16} aria-hidden="true" className={`shrink-0 ${waitingAny ? 'text-fw-warning' : 'text-fw-accent'}`} />
+        <span className="shrink-0 font-medium text-fw-text-strong">{dockHeading(approvals.length, open.length)}</span>
+        {!isExpanded && <span className="min-w-0 truncate text-fw-text-muted">· {dockItemTitle(current)}</span>}
+        {waitingAny && <span className="ml-auto shrink-0 text-xs font-medium text-fw-warning">{isMobile ? 'Waiting' : waitingLabel}</span>}
         <ChevronDown size={14} aria-hidden="true" className={`shrink-0 text-fw-text-muted ${waitingAny ? '' : 'ml-auto'} ${isExpanded ? 'rotate-180' : ''}`} />
       </button>
       {isExpanded && (
         <div className="max-h-[min(55vh,28rem)] overflow-y-auto border-t border-fw-border px-3 pb-3 pt-2">
           {ordered.length > 1 && (
-            <div role="tablist" aria-label="Open questions" className="mb-2 flex flex-wrap gap-1">
-              {ordered.map((record, index) => (
-                <button key={record.id} type="button" role="tab" aria-selected={record.id === current.id} onClick={() => setSelectedId(record.id)}
-                  className={`max-w-[12rem] truncate rounded-md px-2 py-1 text-xs ${record.id === current.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/30' : 'text-fw-text-muted hover:bg-fw-hover'}`}
-                  title={record.questions[0]?.question}>
-                  {questions.waitingIds.has(record.id) ? '● ' : ''}{index + 1}. {record.questions[0]?.question}
+            <div role="tablist" aria-label="Open requests" className="mb-2 flex flex-wrap gap-1">
+              {ordered.map((item, index) => (
+                <button key={item.id} type="button" role="tab" aria-selected={item.id === current.id} data-dock-item={item.kind} onClick={() => setSelectedId(item.id)}
+                  className={`max-w-[12rem] truncate rounded-md px-2 py-1 text-xs ${item.id === current.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/30' : 'text-fw-text-muted hover:bg-fw-hover'}`}
+                  title={dockItemTitle(item)}>
+                  {isWaiting(item) ? '● ' : ''}{index + 1}. {item.kind === 'approval' ? approvalToolLabel(item.record.tool) : dockItemTitle(item)}
                 </button>
               ))}
             </div>
           )}
-          {!currentWaiting && <div className="mb-1 text-xs text-fw-text-muted">The agent keeps working while this is open.</div>}
-          <QuestionAnswerForm key={current.id} record={current} compact={isMobile} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
+          {current.kind === 'approval' ? (
+            <ApprovalDecisionForm key={current.id} record={current.record} sessionId={questions.sessionId} focusToken={current.id === request?.questionId ? focusToken : 0} onDecide={body => questions.decide(current.id, body)} />
+          ) : (
+            <>
+              {!isWaiting(current) && <div className="mb-1 text-xs text-fw-text-muted">The agent keeps working while this is open.</div>}
+              <QuestionAnswerForm key={current.id} sessionId={questions.sessionId} record={current.record} compact={isMobile} sendKeyMode={sendKeyMode} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
+            </>
+          )}
         </div>
       )}
     </div>
@@ -349,7 +441,7 @@ export interface QuestionAnswerMeta {
   questionIds?: string[]
   status?: 'answered' | 'skipped'
   questions?: string[]
-  answers?: Array<{ selected?: string[]; text?: string }>
+  answers?: Array<{ selected?: string[]; text?: string; secret?: string }>
   note?: string
   viaMessage?: boolean
 }
@@ -371,7 +463,7 @@ export function QuestionAnswerBubble({ answer }: { answer: QuestionAnswerMeta })
       {skipped && <div className="font-medium">Skipped {texts.length > 1 ? 'the questions' : 'the question'}</div>}
       {texts.map((question, index) => {
         const entry = answer.answers?.[index]
-        const value = [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
+        const value = entry?.secret ? storedSecretLabel(entry.secret) : [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
         return (
           <div key={index} className="min-w-0">
             <div className="text-xs opacity-75"><QuestionContent text={question} userBubble /></div>

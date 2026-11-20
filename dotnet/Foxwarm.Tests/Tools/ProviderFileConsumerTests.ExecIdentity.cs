@@ -58,7 +58,7 @@ public sealed partial class ProviderFileConsumerTests
 
             var moved = await new MessageRouter(new SessionRuntime(f.Manager)).HandleMessageAsync(
                 new ChannelContext(originalId, "webui"),
-                new ChannelMessage("/session move destination/renamed", null)
+                new ChannelMessage("/session move --new-agent-name destination --new-session-id renamed", null)
             );
             Assert.Equal(200, moved.Status);
             Assert.Equal("destination/renamed", f.Owner.Id);
@@ -67,7 +67,7 @@ public sealed partial class ProviderFileConsumerTests
 
             var result = await pending;
             Assert.True(result["error"] is null, result.ToJsonString());
-            Assert.Contains("Switched to background", result["output"]!.GetValue<string>());
+            ExecReceipt.Header(result["output"]!.GetValue<string>());
             var record = Assert.Single(ExecRecords(f.Data));
             var id = record["id"]!.GetValue<string>();
             var log = record["logPath"]!.GetValue<string>();

@@ -27,6 +27,10 @@ internal sealed partial class NodeProviderRegistry
     {
         this.native = native;
         this.pending = pending ?? new();
+        forwardEvent = value => ServiceReceived?.Invoke(value);
+        forwardDisconnect = (generation, reason) =>
+            ServicesDisconnected?.Invoke(generation, reason);
+        ConnectServiceEvents();
         var app = new JsonObject();
         if (configuration is not null)
             app["nodeProviders"] = configuration.DeepClone();
@@ -141,6 +145,7 @@ internal sealed partial class NodeProviderRegistry
         discovered.Clear();
         foreach (var value in inventories.Values.SelectMany(nodes => nodes.OfType<JsonObject>()))
             PublishDescriptor(value);
+        ReconcileChannels();
         return Snapshot();
     }
 
@@ -221,6 +226,7 @@ internal sealed partial class NodeProviderRegistry
             PublishDescriptor(descriptor);
         else
             discovered.TryRemove(id, out _);
+        ReconcileChannels(id);
         return descriptor;
     }
 
@@ -326,7 +332,9 @@ internal sealed partial class NodeProviderRegistry
             ["online"] = ready,
             ["connected"] = ready,
             ["executable"] = ready,
-            ["services"] = new JsonObject(),
+            ["services"] = ready
+                ? descriptor["services"]?.DeepClone() ?? new JsonObject()
+                : new JsonObject(),
             ["tools"] = DefinitionsFor(descriptor),
         };
     }
@@ -344,11 +352,20 @@ internal sealed partial class NodeProviderRegistry
                     .ToArray()
             );
         if (descriptor["exec"]?.GetValue<bool>() == true)
-            definitions.Add(LocalExecManager.Definitions()[0]!.DeepClone());
+        {
+            var exec = LocalExecManager.Definitions()[0]!.DeepClone();
+            if (descriptor["execEnv"]?.GetValue<bool>() != true)
+                exec["parameters"]!["properties"]!.AsObject().Remove("secretEnv");
+            definitions.Add(exec);
+        }
         return definitions;
     }
 
-    internal async Task<ProviderExecBackend> AdmitExecAsync(string node, CancellationToken token)
+    internal async Task<ProviderExecBackend> AdmitExecAsync(
+        string node,
+        CancellationToken token,
+        bool environment = false
+    )
     {
         var descriptor = await ResolveAsync(node, token);
         RequireAuthorizationAncestry(node);
@@ -358,7 +375,31 @@ internal sealed partial class NodeProviderRegistry
             || descriptor["exec"]?.GetValue<bool>() != true
         )
             throw new InvalidOperationException("Node exec capability is unavailable: " + node);
+        if (environment && descriptor["execEnv"]?.GetValue<bool>() != true)
+            throw new InvalidOperationException(ExecSecretEnvironment.Unsupported(node));
         return ResolveExecBackend(node[..node.IndexOf('/')], node);
+    }
+
+    // Stopping a tracked command needs the Node's current declaration of exec-stop; a Node that
+    // does not declare it, or cannot be discovered now, cannot stop commands.
+    internal async Task<ProviderExecBackend?> ExecStopBackendAsync(
+        string providerId,
+        string node,
+        CancellationToken token
+    )
+    {
+        JsonObject? descriptor;
+        try
+        {
+            descriptor = await ResolveAsync(node, token);
+        }
+        catch (Exception error) when (error is NodeProviderException or IOException)
+        {
+            return null;
+        }
+        return descriptor?["execStop"]?.GetValue<bool>() == true
+            ? ResolveExecBackend(providerId, node)
+            : null;
     }
 
     // An admitted persistent reference belongs to the exact configured backend, not live discovery.
@@ -451,12 +492,21 @@ internal sealed partial class NodeProviderRegistry
         SessionOwner owner,
         bool ingress,
         CancellationToken token,
-        Action<long>? beforeMaterialize = null
+        Action<long>? beforeMaterialize = null,
+        string? sessionCwd = null
     )
     {
         if (!IsProviderNode(node))
-            return await native.ReadFileAsync(node, path, owner, ingress, token, beforeMaterialize);
-        var operations = await FileOperationsAsync(node, false, null, token);
+            return await native.ReadFileAsync(
+                node,
+                path,
+                owner,
+                ingress,
+                token,
+                beforeMaterialize,
+                sessionCwd
+            );
+        var operations = await FileOperationsAsync(node, false, sessionCwd, token);
         var bytes = await TargetFileContent.ReadAsync(
             operations,
             path,
@@ -466,10 +516,10 @@ internal sealed partial class NodeProviderRegistry
             requireRegular: true
         );
         var name = NodeConnectionHub.RemoteFileName(path);
-        return new(bytes, path, name, PrimitiveTransferMime(name));
+        return new(bytes, path, name, TransferMime(name));
     }
 
-    private static string PrimitiveTransferMime(string name) =>
+    internal static string TransferMime(string name) =>
         Path.GetExtension(name).ToLowerInvariant() switch
         {
             ".png" => "image/png",
@@ -514,13 +564,23 @@ internal sealed partial class NodeProviderRegistry
         bool overwrite,
         SessionOwner owner,
         bool ingress,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         if (!IsProviderNode(node))
-            return await native.WriteFileAsync(node, path, bytes, overwrite, owner, ingress, token);
+            return await native.WriteFileAsync(
+                node,
+                path,
+                bytes,
+                overwrite,
+                owner,
+                ingress,
+                token,
+                sessionCwd
+            );
         owner.Entry.RequireIdentityAuthority();
-        var operations = await FileOperationsAsync(node, true, null, token);
+        var operations = await FileOperationsAsync(node, true, sessionCwd, token);
         await TargetFileContent.WriteAsync(operations, path, bytes, overwrite, token);
         return new JsonObject { ["filePath"] = path, ["sizeBytes"] = bytes.Length };
     }

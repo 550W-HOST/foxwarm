@@ -89,6 +89,34 @@ public sealed class CodeRoutesTests
     }
 
     [Fact]
+    public async Task Workbench_configuration_stays_inside_its_HTML_attribute()
+    {
+        await using var f = await Fixture.Create();
+        foreach (
+            var file in new[]
+            {
+                "out/nls.messages.js",
+                "out/vs/workbench/workbench.web.main.internal.css",
+                "out/vs/workbench/workbench.web.main.internal.js",
+            }
+        )
+        {
+            var path = Path.Combine(f.Assets, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, "metadata fixture");
+        }
+        const string attack = "</script><img onerror> + ' \" & 中文";
+        var folder = "foxwarm://node+master/" + attack;
+        var html = await f.Client.GetStringAsync(
+            "/vscode-web/?folderUri=" + Uri.EscapeDataString(folder)
+        );
+        Assert.DoesNotContain("<img", html);
+        var match = System.Text.RegularExpressions.Regex.Match(html, "data-settings=\"([^\"]+)\"");
+        var configuration = JsonNode.Parse(WebUtility.HtmlDecode(match.Groups[1].Value))!;
+        Assert.Equal("/" + attack, configuration["folderUri"]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Missing_Code_assets_return_the_actionable_noncacheable_setup_page()
     {
         await using var f = await Fixture.Create(separateInstallation: true);
@@ -103,12 +131,12 @@ public sealed class CodeRoutesTests
         Assert.Contains("npm run download:code", html);
         Assert.Contains(WebUtility.HtmlEncode(Path.GetDirectoryName(f.InstalledAssets)!), html);
         Assert.Contains($"releases/download/v{ProductVersion.Value}", html);
-        Assert.Contains($"foxwarm-code-{ProductVersion.Value}.tar.gz", html);
+        Assert.Contains($"foxwarm-code-{ProductVersion.Value}.fwassets", html);
         Assert.Contains("SHA256SUMS", html);
         Assert.Contains("sha256sum -c", html);
         Assert.Contains("shasum -a 256 -c", html);
         Assert.Contains("Get-FileHash", html);
-        Assert.Contains("tar -xzf", html);
+        Assert.Contains("foxwarm.assets", html);
         using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");
         Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);
     }
@@ -284,8 +312,9 @@ public sealed class CodeRoutesTests
         await using var f = await Fixture.Create();
         var roots = await f.Json(await f.Client.GetAsync("/api/vscode-web/fs/workspace-roots"));
         Assert.Equal(1, roots["version"]!.GetValue<int>());
+        // Captured roots carry no trailing separator, unlike AppContext.BaseDirectory.
         Assert.Equal(
-            Path.GetFullPath(AppContext.BaseDirectory),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)),
             roots["roots"]!["app"]!["path"]!.ToString()
         );
         Assert.Equal(f.Data, roots["roots"]!["data"]!["path"]!.ToString());
@@ -651,6 +680,181 @@ public sealed class CodeRoutesTests
         var terminal = await f.Terminals.CreateAsync(mapped, 80, 24, CancellationToken.None);
         Assert.Equal(root, terminal.Cwd);
         await f.Terminals.CloseAsync(terminal.Id, "test-complete");
+    }
+
+    [Fact]
+    public async Task Windows_Code_virtual_root_lists_drives_and_leaves_real_roots_unchanged()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        await using var f = await Fixture.Create();
+        var drive = Path.GetPathRoot(f.Work)![..2].ToUpperInvariant();
+        var rootEntries = Directory.GetFileSystemEntries(Path.GetPathRoot(f.Work)!).Length;
+        var stat = await f.Json(await f.Client.GetAsync(f.Fs("stat", "/")));
+        Assert.Equal(2, stat["type"]!.GetValue<int>());
+        var listing = await f.Json(await f.Client.GetAsync(f.Fs("read-directory", "/")));
+        var entries = listing["entries"]!.AsArray();
+        Assert.Contains(entries, entry => entry!["name"]!.ToString() == drive);
+        Assert.All(entries, entry => Assert.Equal(2, entry!["type"]!.GetValue<int>()));
+        var file = Path.Combine(f.Work, "virtual root.txt");
+        await File.WriteAllTextAsync(file, "through the drive root");
+        var mapped = CodeNativePaths.Transport(file);
+        Assert.StartsWith("/" + drive + "/", mapped, StringComparison.OrdinalIgnoreCase);
+        var driveListing = await f.Json(
+            await f.Client.GetAsync(f.Fs("read-directory", "/" + drive))
+        );
+        Assert.NotNull(driveListing["entries"]);
+        Assert.Equal(
+            "through the drive root",
+            await f.Client.GetStringAsync(f.Fs("read-file", mapped))
+        );
+        var written = await f.Client.PutAsync(
+            f.Fs("write-file", mapped) + "&overwrite=1",
+            new ByteArrayContent(Encoding.UTF8.GetBytes("rewritten"))
+        );
+        Assert.True(written.IsSuccessStatusCode, await written.Content.ReadAsStringAsync());
+        Assert.Equal("rewritten", await File.ReadAllTextAsync(file));
+
+        async Task<string> Code(HttpResponseMessage response, HttpStatusCode status)
+        {
+            Assert.Equal(status, response.StatusCode);
+            return JsonNode.Parse(await response.Content.ReadAsStringAsync())!["code"]!.ToString();
+        }
+        Assert.Equal(
+            "FileIsADirectory",
+            await Code(
+                await f.Client.PutAsync(
+                    f.Fs("write-file", "/") + "&create=1&overwrite=1",
+                    new ByteArrayContent([1])
+                ),
+                HttpStatusCode.BadRequest
+            )
+        );
+        Assert.Equal(
+            "FileExists",
+            await Code(
+                await f.Client.PostAsJsonAsync(f.Fs("create-directory", "/"), new { }),
+                HttpStatusCode.Conflict
+            )
+        );
+        Assert.Equal(
+            "NoPermissions",
+            await Code(
+                await f.Client.PostAsJsonAsync(f.Fs("delete", "/"), new { recursive = true }),
+                HttpStatusCode.Forbidden
+            )
+        );
+        Assert.Equal(
+            "NoPermissions",
+            await Code(
+                await f.Client.PostAsJsonAsync(
+                    "/api/vscode-web/fs/rename",
+                    new { oldPath = "/", newPath = mapped }
+                ),
+                HttpStatusCode.Forbidden
+            )
+        );
+        Assert.Equal(
+            "NoPermissions",
+            await Code(
+                await f.Client.PostAsJsonAsync(
+                    "/api/vscode-web/fs/rename",
+                    new
+                    {
+                        oldPath = mapped,
+                        newPath = "/",
+                        overwrite = true,
+                    }
+                ),
+                HttpStatusCode.Forbidden
+            )
+        );
+        Assert.Equal(
+            "InvalidPath",
+            await Code(
+                await f.Client.GetAsync("/api/vscode-web/git/status?workspace=%2F"),
+                HttpStatusCode.BadRequest
+            )
+        );
+        Assert.Equal("rewritten", await File.ReadAllTextAsync(file));
+        Assert.Equal(rootEntries, Directory.GetFileSystemEntries(Path.GetPathRoot(f.Work)!).Length);
+    }
+
+    [Fact]
+    public async Task Workspace_migration_and_defaults_publish_complete_replacement_files()
+    {
+        await using var f = await Fixture.Create();
+        var assets = Path.Combine(f.Assets, "out");
+        Directory.CreateDirectory(Path.Combine(assets, "vs/workbench"));
+        await File.WriteAllTextAsync(Path.Combine(assets, "nls.messages.js"), "");
+        await File.WriteAllTextAsync(
+            Path.Combine(assets, "vs/workbench/workbench.web.main.internal.css"),
+            ""
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(assets, "vs/workbench/workbench.web.main.internal.js"),
+            "export function create() {}"
+        );
+        var directory = Path.Combine(f.Data, "state/vscode-web");
+        Directory.CreateDirectory(directory);
+        var target = Path.Combine(directory, "node-master.code-workspace");
+        var original = new JsonObject
+        {
+            ["folders"] = new JsonArray(),
+            ["settings"] = new JsonObject { ["editor.fontSize"] = 17 },
+        }.ToJsonString();
+        var legacy = new JsonObject
+        {
+            ["folders"] = new JsonArray(
+                new JsonObject { ["uri"] = CodeWorkbench.FoxwarmUri(f.Work) }
+            ),
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "foxwarm.code-workspace"),
+            legacy.ToJsonString()
+        );
+        await File.WriteAllTextAsync(target, original);
+        using (
+            var reader = new StreamReader(
+                new FileStream(
+                    target,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete
+                )
+            )
+        )
+        {
+            await f.Client.GetStringAsync("/vscode-web/?nodeId=master");
+            Assert.Equal(original, await reader.ReadToEndAsync());
+        }
+        var migrated = JsonNode.Parse(await File.ReadAllTextAsync(target))!;
+        Assert.Single(migrated["folders"]!.AsArray());
+        Assert.Equal(17, migrated["settings"]!["editor.fontSize"]!.GetValue<int>());
+        Assert.False(migrated["settings"]!["yaml.schemaStore.enable"]!.GetValue<bool>());
+
+        migrated["settings"]!.AsObject().Remove("yaml.schemaStore.enable");
+        original = migrated.ToJsonString();
+        await File.WriteAllTextAsync(target, original);
+        using (
+            var reader = new StreamReader(
+                new FileStream(
+                    target,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete
+                )
+            )
+        )
+        {
+            await f.Client.GetStringAsync("/vscode-web/?nodeId=master");
+            Assert.Equal(original, await reader.ReadToEndAsync());
+        }
+        Assert.False(
+            JsonNode.Parse(await File.ReadAllTextAsync(target))!["settings"]![
+                "yaml.schemaStore.enable"
+            ]!.GetValue<bool>()
+        );
     }
 
     [Fact]

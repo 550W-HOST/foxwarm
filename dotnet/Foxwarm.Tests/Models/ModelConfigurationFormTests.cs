@@ -266,8 +266,8 @@ public sealed class ModelConfigurationFormTests
             "sessionId"
         ]!.GetValue<string>();
         var trigger = await client.PostAsJsonAsync(
-            "/trigger",
-            new { text = "exercise saved default", sessionId }
+            "/api/sessions/" + Uri.EscapeDataString(sessionId) + "/message",
+            new { text = "exercise saved default" }
         );
         Assert.True(trigger.IsSuccessStatusCode, await trigger.Content.ReadAsStringAsync());
         var request = JsonNode.Parse(

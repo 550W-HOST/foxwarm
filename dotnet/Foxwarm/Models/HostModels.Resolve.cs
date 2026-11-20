@@ -80,6 +80,7 @@ internal sealed partial class HostModels
             ?? Text(defaults, "providerImageOutputFormat")
             ?? Text(llm, "providerImageOutputFormat")
             ?? "webp";
+        config["textRedaction"] = TextRedactionOptions.Resolve(defaults, provider, model);
         config["imageInput"] =
             model?["imageInput"]?.DeepClone()
             ?? provider["imageInput"]?.DeepClone()
@@ -98,6 +99,19 @@ internal sealed partial class HostModels
             model?["asyncCompact"]?.DeepClone()
             ?? provider["asyncCompact"]?.DeepClone()
             ?? JsonValue.Create(true);
+        foreach (var scope in new[] { defaults, provider, model })
+            if (scope is not null)
+                ValidateIdleCompact(scope);
+        config["idleCompactMinutes"] =
+            model?["idleCompactMinutes"]?.DeepClone()
+            ?? provider["idleCompactMinutes"]?.DeepClone()
+            ?? defaults["idleCompactMinutes"]?.DeepClone()
+            ?? JsonValue.Create(0);
+        config["idleCompactMinContextPercent"] =
+            model?["idleCompactMinContextPercent"]?.DeepClone()
+            ?? provider["idleCompactMinContextPercent"]?.DeepClone()
+            ?? defaults["idleCompactMinContextPercent"]?.DeepClone()
+            ?? JsonValue.Create(.5);
         config["disallowEmptyResponse"] =
             model?["disallowEmptyResponse"]?.DeepClone()
             ?? provider["disallowEmptyResponse"]?.DeepClone()
@@ -178,7 +192,34 @@ internal sealed partial class HostModels
             effort.Default,
             config,
             []
-        );
+        )
+        {
+            RetryIntervalsMs = ReadRetryIntervals(
+                model,
+                ReadRetryIntervals(provider, ReadRetryIntervals(defaults))
+            ),
+        };
+    }
+
+    internal static void ValidateIdleCompact(JsonObject scope)
+    {
+        foreach (var field in new[] { "idleCompactMinutes", "idleCompactMinContextPercent" })
+        {
+            if (!scope.ContainsKey(field))
+                continue;
+            var value = SessionWait.Number(scope[field]);
+            if (
+                value is null
+                || !double.IsFinite(value.Value)
+                || (field == "idleCompactMinutes" ? value < 0 : value <= 0 || value > 1)
+            )
+                throw new InvalidDataException(
+                    field
+                        + (field == "idleCompactMinutes"
+                            ? " must be a finite nonnegative number."
+                            : " must be a finite number greater than 0 and at most 1.")
+                );
+        }
     }
 
     internal static void ValidateDefaults(
@@ -197,9 +238,27 @@ internal sealed partial class HostModels
                         or "maxOutput"
                         or "providerImageOutputFormat"
                         or "imageInput"
+                        or "retryIntervalsMs"
+                        or "textRedaction"
+                        or "idleCompactMinutes"
+                        or "idleCompactMinContextPercent"
                     )
                 )
                     throw new InvalidDataException(label + " has unsupported field " + field + ".");
+        if (modelsScope && scope.ContainsKey("retryIntervalsMs"))
+            _ = ReadRetryIntervals(scope);
+        if (modelsScope && scope.ContainsKey("textRedaction"))
+        {
+            if (
+                label != "defaults"
+                && scope["textRedaction"] is JsonObject redaction
+                && redaction.ContainsKey("knownLabels")
+            )
+                throw new InvalidDataException(
+                    "textRedaction.knownLabels is only supported in defaults.textRedaction."
+                );
+            TextRedactionOptions.Validate(scope["textRedaction"]);
+        }
         foreach (var field in new[] { "contextLimit", "maxOutput" })
             if (scope.ContainsKey(field))
             {
@@ -223,6 +282,39 @@ internal sealed partial class HostModels
             && (scope["imageInput"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))
         )
             throw new InvalidDataException(label + ".imageInput must be boolean.");
+    }
+
+    internal static IReadOnlyList<int> DefaultRetryIntervalsMs { get; } =
+    [2000, 5000, 10000, 20000, 40000, 60000];
+
+    private static IReadOnlyList<int> ReadRetryIntervals(
+        JsonObject? scope,
+        IReadOnlyList<int>? fallback = null
+    )
+    {
+        if (scope?.ContainsKey("retryIntervalsMs") != true)
+            return fallback ?? DefaultRetryIntervalsMs;
+        if (scope["retryIntervalsMs"] is not JsonArray { Count: > 0 } intervals)
+            throw new InvalidDataException(
+                "retryIntervalsMs must be a nonempty array of integers between 0 and 2147483647."
+            );
+        return intervals
+            .Select(raw =>
+            {
+                var value = SessionWait.Number(raw);
+                if (
+                    value is null
+                    || !double.IsFinite(value.Value)
+                    || value < 0
+                    || value > int.MaxValue
+                    || value != Math.Truncate(value.Value)
+                )
+                    throw new InvalidDataException(
+                        "retryIntervalsMs must be a nonempty array of integers between 0 and 2147483647."
+                    );
+                return (int)value.Value;
+            })
+            .ToArray();
     }
 
     private static JsonObject Map(JsonNode? node, string label) =>
@@ -305,6 +397,8 @@ internal sealed partial class HostModels
                 ? new Dictionary<string, string[]>
                 {
                     ["action"] = ["auto", "generate", "edit"],
+                    ["mode"] = ["hosted", "separate", "isolated"],
+                    ["api"] = ["responses", "images"],
                     ["quality"] = ["auto", "low", "medium", "high", "xhigh", "max"],
                     ["background"] = ["auto", "opaque", "transparent"],
                     ["outputFormat"] = ["png", "jpeg", "webp"],
@@ -349,6 +443,8 @@ internal sealed partial class HostModels
                         );
                     result["outputCompression"] = compression;
                 }
+                if (raw.ContainsKey("pricing"))
+                    result["pricing"] = ModelUsageCost.ValidateImagePrices(raw["pricing"]);
                 CheckImageConflict(result);
             }
             else
@@ -403,13 +499,42 @@ internal sealed partial class HostModels
         var earlier = Normalize(provider);
         var later = Normalize(model);
         if (later is null)
+        {
+            if (image && earlier is not null)
+                CheckImagesApi(earlier);
             return earlier;
+        }
         var merged = earlier ?? new JsonObject();
         foreach (var (key, value) in later)
             merged[key] = value?.DeepClone();
         if (image)
+        {
             CheckImageConflict(merged);
+            CheckImagesApi(merged);
+        }
         return merged;
+    }
+
+    // The Images API backend serves only the separate generate_image request and has no
+    // provider-default image model, so the effective (inherited) settings must name both.
+    private static void CheckImagesApi(JsonObject result)
+    {
+        if (SessionWait.Text(result["api"]) != "images")
+        {
+            // Only the Images API call has image-model tokens to price; elsewhere the
+            // conversation model's own pricing governs, so image pricing would be ignored.
+            if (result.ContainsKey("pricing"))
+                throw new InvalidDataException(
+                    "imageGeneration.pricing requires imageGeneration.api images."
+                );
+            return;
+        }
+        if (SessionWait.Text(result["mode"]) is not ("separate" or "isolated"))
+            throw new InvalidDataException("imageGeneration.api images requires mode separate.");
+        if (SessionWait.Text(result["model"]) is null)
+            throw new InvalidDataException(
+                "imageGeneration.api images requires an image model in imageGeneration.model."
+            );
     }
 
     private static void CheckImageConflict(JsonObject result)

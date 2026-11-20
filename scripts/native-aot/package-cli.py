@@ -16,17 +16,18 @@ import tempfile
 LIMIT = 25 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = "native-cli-node-linux-x64"
+# Built by `npm run build:host`; it runs under the user's installed node, never an embedded one.
+HOST_FILES = ("browser-host.bundle.cjs", "browser-host.bundle.cjs.LEGAL.txt")
 ALIAS = "native-cli-node-latest-v3.tar.gz"
 NOTICES = (
     "dotnet-LICENSE.txt", "dotnet-NOTICES.txt", "aspnetcore-LICENSE.txt",
-    "aspnetcore-NOTICES.txt", "PuppeteerSharp-LICENSE.txt",
-    "ReactiveExtensionsSharp-LICENSE.txt", "RecyclableMemoryStream-LICENSE.txt",
+    "aspnetcore-NOTICES.txt",
     "musl-COPYRIGHT.txt", "ICU-LICENSE.txt", "OpenSSL-LICENSE.txt",
     "zlib-LICENSE.txt", "GCC-COPYING3.txt", "GCC-RUNTIME-EXCEPTION.txt", "SOURCES.txt",
 )
 
 
-def package(publish, output, source_commit, epoch, build_id, target="linux-musl-x64"):
+def package(publish, output, source_commit, epoch, build_id, target="linux-musl-x64", host=None):
     """Use only named release files, never the complete publish/debug directory."""
     if target not in ("linux-musl-x64", "win-x64", "osx-arm64"):
         raise ValueError(f"Unsupported native CLI target: {target}")
@@ -34,14 +35,15 @@ def package(publish, output, source_commit, epoch, build_id, target="linux-musl-
     windows = target == "win-x64"
     package_name = PACKAGE if linux else "native-cli-node-" + target
     alias = ALIAS if linux else f"{package_name}-latest-v3." + ("zip" if windows else "tar.gz")
-    notices = NOTICES if linux else (*NOTICES[:7], "SOURCES.txt")
+    notices = NOTICES if linux else (*NOTICES[:4], "SOURCES.txt")
     binaries = ["Foxwarm.CliNode.exe" if windows else "Foxwarm.CliNode"]
     if target == "osx-arm64":
         binaries += ["libfoxwarm-pty.dylib", "foxwarm-pty-helper"]
     publish, output = Path(publish), Path(output)
     executable = publish / binaries[0]
     inputs = publish / "BUILD-INPUTS.txt"
-    for path in (inputs, *(publish / name for name in binaries), *(publish / "notices" / name for name in notices)):
+    host = Path(host) if host else ROOT / "packages/browser-host/dist"
+    for path in (inputs, *(publish / name for name in binaries), *(publish / "notices" / name for name in notices), *(host / name for name in HOST_FILES)):
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"Required distribution input is missing or empty: {path}")
     if not windows and not os.access(executable, os.X_OK):
@@ -63,6 +65,8 @@ def package(publish, output, source_commit, epoch, build_id, target="linux-musl-
         shutil.copyfile(ROOT / "LICENSE", stage / "LICENSE")
         shutil.copyfile(ROOT / ("scripts/native-aot/PACKAGE-README.md" if linux else "scripts/native-aot/PLATFORM-PACKAGE-README.md"), stage / "README.md")
         shutil.copyfile(inputs, stage / "BUILD-INPUTS.txt")
+        for name in HOST_FILES:
+            shutil.copyfile(host / name, stage / name)
         (stage / "notices").mkdir()
         for name in notices:
             shutil.copyfile(publish / "notices" / name, stage / "notices" / name)

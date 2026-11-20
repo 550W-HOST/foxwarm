@@ -23,7 +23,7 @@ An agent stores durable instructions and notes under:
 agents/<agent>/memory/
 ```
 
-Use agents when different long-term roles, projects, memories, or isolation boundaries should stay separate.
+Use agents when different long-term roles, projects, memories, or tool restrictions should stay separate.
 
 ### Session
 
@@ -37,15 +37,15 @@ Use sessions for individual chats or task threads. One agent can have many sessi
 
 A **child session** is a session linked to a parent session for parallel work such as investigation, testing, review, or research.
 
-Child sessions should explicitly report back to the parent when they finish.
+Child sessions report back to the parent when they finish; for a Task assignment, completing the Task is the report.
 
 ### Tool
 
 A **tool** is an action the assistant can call, such as reading files, editing files, running shell commands, searching memory, sending files, managing sessions, or interacting with nodes.
 
-Tool availability depends on the current session, agent isolation, and node.
+Tool availability depends on the current session, its agent's rules, the instance tool policy, and the node.
 
-Generic tool policy can restrict internal Agents/Sessions and external MCP identities. It checks the concrete tool and target, not just a calling wrapper. Loading a skill or selecting a Node does not grant permission.
+Generic tool policy can restrict internal Agents/Sessions and external MCP identities, and each Agent can add its own local rules. It checks the concrete tool and target, not just a calling wrapper. Loading a skill or selecting a Node does not grant permission.
 
 ### Node
 
@@ -53,7 +53,7 @@ A **node** is an execution host for tools.
 
 - `master` is the default local node where the Foxwarm server runs.
 - Remote nodes can run on another machine, in Docker, in a terminal approval UI, in a browser extension, or in a sandbox.
-- Nodes are paired with the Foxwarm master and then approved.
+- Native Nodes are paired with `master` and approved; Provider Nodes are listed or created by a configured Provider.
 
 Use nodes when tools should run somewhere other than the master process, for example on another machine, inside a sandbox, or inside a browser.
 
@@ -101,7 +101,7 @@ ToolScript is an automation layer for orchestrating tool calls and managed sessi
 
 ### Access identity and MCP
 
-An **access identity** is a configured entry credential with explicitly declared WebUI and/or MCP surfaces. A WebUI identity can chat with bound existing Sessions without receiving administrator management access. Its browser scope does not grant tools or change those Sessions' Agent authority.
+An **access identity** is a configured entry credential with explicitly declared WebUI and/or MCP surfaces, or only a webhook surface. A WebUI identity can chat with bound existing Sessions without receiving administrator management access. Its browser scope does not grant tools or change those Sessions' Agent authority. A webhook identity lets one external service (GitHub, Cloudflare, monitoring) deliver verified events to one fixed Session, either as untrusted input or to a configured handler script; the user adds it in Setup, and agents cannot create one.
 
 Foxwarm can connect outward to MCP tool servers and accept permitted external clients at its own `/mcp` endpoint. An MCP identity must also have concrete tool grants. Two Foxwarm instances can exchange explicit text replies when the calling Session starts notifications and the receiving Session sends to a server-provided channel destination; ordinary assistant output is not automatically forwarded.
 
@@ -120,18 +120,21 @@ If models are configured and WebUI is open, the user can ask:
 - "Give a collaborator WebUI access to one existing Session."
 - "Allow an external MCP identity to send work to one Session."
 - "Receive an explicit reply from another Foxwarm instance."
+- "Notify a Session when a GitHub CI run fails."
 
 ## Choose the next skill
 
 | Goal | Skill |
 | --- | --- |
-| Create or migrate Agents, manage memory/inheritance, or bind Node isolation | [agent-management](../agent-management/SKILL.md) |
+| Create or migrate Agents, manage memory/inheritance, or restrict an Agent with local rules | [agent-management](../agent-management/SKILL.md) |
 | Configure entry identities, restrict browser Session scope, or safely update internal/external tool rules | [access-control](../access-control/SKILL.md) |
+| Receive events from GitHub, Cloudflare or monitoring through a webhook identity | [access-control](../access-control/SKILL.md) |
+| Schedule a reminder or a recurring check | [timer-automation](../timer-automation/SKILL.md) |
 | Connect outbound/inbound MCP, discover/call tools, or set up explicit instance replies | [mcp-management](../mcp-management/SKILL.md) |
-| Pair/bootstrap a Node | [node-setup](../node-setup/SKILL.md) |
+| Pair/bootstrap a Node, add disposable container Nodes, or run delegated development work on a Node | [node-setup](../node-setup/SKILL.md) |
 | Coordinate dependent tool calls | [toolscript-automation](../toolscript-automation/SKILL.md) |
 
-These skills own different workflows; their cross-links provide navigation rather than another copy of the same rules. Ask the agent to load the named skill, or use `skill({ action: "load", skillName: "access-control" })` through the tool interface.
+These skills own different workflows; their cross-links provide navigation rather than another copy of the same rules. Ask the agent to load the named skill, or run `ctl skill load access-control`.
 
 ## Where to find details
 

@@ -146,6 +146,13 @@
             "type": "string",
             "description": "Working directory for this command. Relative paths use the session working directory supplied for this Node, or the Node process working directory if unset. With no cwd, execution uses that same default chain. On master and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
           },
+          "secretEnv": {
+            "type": "object",
+            "description": "Environment variables to set from stored secrets, as {\"VARIABLE\": \"secret-name\"}. The command receives the values; they are not written into the command, exec records or this conversation, and command output that contains them is masked. Available on master and on Nodes that support it.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "timeout": {
             "type": "number",
             "minimum": 1,
@@ -166,147 +173,19 @@
         "properties": {},
         "required": []
       }
-    },
-    {
-      "name": "browse_open",
-      "description": "Open a browser tab at a URL and return its tab ID for later browser calls.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string",
-            "description": "URL to open."
-          }
-        },
-        "required": [
-          "url"
-        ]
-      }
-    },
-    {
-      "name": "browse_list",
-      "description": "List open browser tabs with their IDs, titles, and URLs.",
-      "parameters": {
-        "type": "object",
-        "properties": {}
-      }
-    },
-    {
-      "name": "browse_get",
-      "description": "Read a browser tab's HTML or return a screenshot.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "tabId": {
-            "type": "string",
-            "description": "Tab ID returned by browse_open or browse_list."
-          },
-          "screenshot": {
-            "type": [
-              "boolean",
-              "string"
-            ],
-            "default": false,
-            "description": "Omit or set false for page HTML. Set true for a viewport screenshot, or use full for a full-page screenshot. Screenshots are returned as images, not saved to a supplied path."
-          }
-        },
-        "required": [
-          "tabId"
-        ]
-      }
-    },
-    {
-      "name": "browse_close",
-      "description": "Close a browser tab.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "tabId": {
-            "type": "string",
-            "description": "Tab to close."
-          }
-        },
-        "required": [
-          "tabId"
-        ]
-      }
-    },
-    {
-      "name": "browse_interact",
-      "description": "Interact with a browser tab: click, type, fill, press a key, scroll, wait, evaluate JavaScript, or navigate.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "tabId": {
-            "type": "string",
-            "description": "Tab to control."
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "click",
-              "type",
-              "fill",
-              "press",
-              "scroll",
-              "wait",
-              "evaluate",
-              "goto",
-              "back",
-              "forward",
-              "reload"
-            ],
-            "description": "Browser action to perform."
-          },
-          "params": {
-            "type": "object",
-            "properties": {
-              "selector": {
-                "type": "string",
-                "description": "CSS selector for the target element."
-              },
-              "text": {
-                "type": "string",
-                "description": "Text to type or fill."
-              },
-              "key": {
-                "type": "string",
-                "description": "Key to press, such as Enter, Tab, or Escape."
-              },
-              "y": {
-                "type": "number",
-                "description": "Vertical scroll distance in pixels."
-              },
-              "url": {
-                "type": "string",
-                "description": "Destination URL for goto."
-              },
-              "code": {
-                "type": "string",
-                "description": "JavaScript to evaluate in the tab."
-              },
-              "timeout": {
-                "type": "number",
-                "description": "Action timeout in milliseconds. Defaults to 5,000."
-              }
-            },
-            "description": "Arguments for the action, such as {selector: '#id'} for click, {selector: 'input', text: 'hello'} for fill, {key: 'Enter'} for press, {y: 500} for scroll, {url: 'https://example.com'} for goto, or {code: 'document.title'} for evaluate."
-          }
-        },
-        "required": [
-          "tabId",
-          "action"
-        ]
-      }
     }
   ],
   "features": {
+    "fileStream": 1,
     "programmaticToolData": true,
     "execWaitCancellation": true,
     "remoteExecBackgroundRegistration": true,
     "execPlacement": true,
     "externalToolOwner": 1,
-    "unifiedEdit": true
+    "unifiedEdit": true,
+    "toolCallCancellation": true,
+    "secretEnv": true,
+    "execControl": true
   },
   "services": {
     "vscode-fs": 1,

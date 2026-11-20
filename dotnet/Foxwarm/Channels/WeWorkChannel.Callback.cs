@@ -13,6 +13,11 @@ internal sealed partial class WeWorkChannel
     {
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
         builder.Logging.ClearProviders();
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.Encoder = JsonText.Encoder;
+            options.SerializerOptions.TypeInfoResolver = MainJsonContext.Default;
+        });
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = 100 * 1024; // Express json/text default.
@@ -74,7 +79,8 @@ internal sealed partial class WeWorkChannel
         }
         catch (Exception error)
         {
-            log(error);
+            // A rejected request is not a failure of the callback listener.
+            health.Log(error);
             return Results.Text(error.Message, statusCode: 500);
         }
     }
@@ -182,7 +188,7 @@ internal sealed partial class WeWorkChannel
                 }
             }
             if (body is null)
-                return Results.Json(new { code = 0, msg = "success" });
+                return Results.Json(new JsonObject { ["code"] = 0, ["msg"] = "success" });
             var result = await ProcessInboundAsync(
                 body,
                 new("webhook", Text(body["response_url"])),
@@ -190,26 +196,28 @@ internal sealed partial class WeWorkChannel
             );
             if (result is not null)
                 return Results.Json(
-                    encrypted.Length > 0
-                    && timestamp.Length > 0
-                    && nonce.Length > 0
-                    && crypto is not null
-                        ? crypto.EncryptCallback(result.ToJsonString(), timestamp, nonce)
-                        : result
+                    JsonData.WebNode(
+                        encrypted.Length > 0
+                        && timestamp.Length > 0
+                        && nonce.Length > 0
+                        && crypto is not null
+                            ? crypto.EncryptCallback(result.ToJsonText(), timestamp, nonce)
+                            : result
+                    )
                 );
             return isAibot || Nonempty(Text(body["response_url"]))
                 ? Results.Text("")
-                : Results.Json(new { code = 0, msg = "success" });
+                : Results.Json(new JsonObject { ["code"] = 0, ["msg"] = "success" });
         }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
             return Results.Json(
-                new
+                new JsonObject
                 {
-                    code = -1,
-                    msg = "error",
-                    error = error.Message,
+                    ["code"] = -1,
+                    ["msg"] = "error",
+                    ["error"] = error.Message,
                 },
                 statusCode: 500
             );
@@ -392,7 +400,7 @@ internal sealed partial class WeWorkChannel
                         ["username"] = username,
                         ["isAIBot"] = messageIsAibot,
                         ["hasResponseUrl"] = responseUrl.Length > 0,
-                    }.ToJsonString()
+                    }.ToJsonText()
             );
         }
         if (oldPush is not null)

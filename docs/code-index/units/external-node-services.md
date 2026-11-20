@@ -6,6 +6,10 @@ Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Services.cs`
 
 Connects authenticated, compatible Node capabilities to the fixed filesystem, read-only Git and PTY consumers. These are trusted administrator/browser APIs, not ordinary model tools, shell execution, Provider lifecycle or an external-owner platform.
 
+## Transports
+
+This unit owns the resident WebSocket transport. Service target resolution is generic: `NodeProviderRegistry.ServiceAsync`/`RequestServiceAsync`/`CommandServiceAsync` select this hub for resident Nodes and the [Provider service channel](./dotnet-node-providers.md) for executable-Provider Nodes. `NodeServiceTarget`/`NodeServiceEvent` are shared; reply handling is shared through `NodeServiceReplies`. Callers (Code, Terminal) use the registry; the MCP download route stays resident-only.
+
 ## Stable symbols and callers
 
 - `NodeConnectionHub.Service` captures the registered connection generation and advertised service version. `Services` discovers currently executable service endpoints. Missing or old capabilities on a connected Node produce `UnsupportedService` (HTTP 501); an offline, revoked or replaced connection produces `NodeUnavailable` (HTTP 503). There is no Master fallback.

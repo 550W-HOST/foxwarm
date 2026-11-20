@@ -27,11 +27,11 @@ Pass `--host=...` only when the node should connect to a different reachable mas
 Options:
   --host=URL              Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN         Pairing token for first-time setup
-  --auth-token=TOKEN      Per-node auth token from /node create (use with --node-id)
+  --auth-token=TOKEN      Per-node auth token from /node token (use with --node-id)
   --node-id=ID            Node name (default: node-<hostname>)
   --state-dir=DIR         Persistent data dir (default: ./data)
   --source-dir=DIR        Source dir for node client (default: ./foxwarm-node)
-  --auto-approve=REGEX    Auto-approve tools matching regex (e.g. "read|browse_list")
+  --auto-approve=REGEX    Auto-approve tools matching regex (e.g. "read|browser_tabs")
   --timeout=SECONDS       Auto-reject after N seconds of no input
   --help                  Show this help
 
@@ -41,7 +41,7 @@ Examples:
 
   # Auto-approve read-only tools:
   curl ... | bash -s -- --pairing=TOKEN --node-id=macbook \
-    --auto-approve="read|browse_list|browse_get"
+    --auto-approve="read|browser_tabs|browser_read"
 
   # Auto-reject after 60s of no input:
   curl ... | bash -s -- --pairing=TOKEN --node-id=macbook --timeout=60
@@ -192,10 +192,15 @@ elif [ -z "$PAIRING" ] || [ -s "$ABS_STATE_DIR/state/node_credentials.json" ]; t
 else
   echo "First run — after startup, approve on master:"
   echo "  /node"
-  echo "  /node approve <pending-id> $NODE_ID"
+  echo "  /node approve <pending-id> --node-id $NODE_ID"
 fi
 
 echo ""
+
+export FOXWARM_NODE_LAUNCH_METHOD=interactive
+export FOXWARM_NODE_LAUNCH_DIR="$(pwd -P)"
+export FOXWARM_NODE_LAUNCH_STATE_DIR="$ABS_STATE_DIR"
+export FOXWARM_NODE_LAUNCH_SOURCE_DIR="$ABS_SOURCE_DIR"
 
 # Run interactively (foreground, stdin attached)
 # curl | bash consumes stdin for the script; attach the controlling terminal

@@ -235,12 +235,12 @@ public sealed class MainToolScriptTests
                 ["code"] =
                     $"status = call_tool('session', {{'action': 'status', 'sessionId': '{target.Id}'}})\n"
                     + $"parent = call_tool('session', {{'action': 'update-parent', 'sessionId': '{child.Id}', 'parentSessionId': '{parent.Id}'}})\n"
-                    + "return {'status': status['output'], 'parent': parent}\n",
+                    + "return {'status': status, 'parent': parent}\n",
             }
         );
         Assert.True(run["status"]?.GetValue<string>() == "completed", run.ToJsonString());
         var result = run["result"]!.AsObject();
-        Assert.Contains($"session id: `{target.Id}`", result["status"]!.GetValue<string>());
+        Assert.Equal(target.Id, result["status"]!["sessionId"]!.GetValue<string>());
         Assert.Equal(child.Id, result["parent"]!["sessionId"]!.GetValue<string>());
         Assert.Equal(parent.Id, result["parent"]!["parentSessionId"]!.GetValue<string>());
     }

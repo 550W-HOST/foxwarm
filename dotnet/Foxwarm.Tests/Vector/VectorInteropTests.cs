@@ -48,7 +48,10 @@ public sealed class VectorInteropTests
             ["sessionId"] = id,
             ["oldSessionId"] = oldId,
             ["records"] = new JsonArray(Record(id, 1, "violet retained moved message")),
-            ["blocks"] = JsonSerializer.SerializeToNode(new[] { f.Block(id) }, VectorWire.Json),
+            ["blocks"] = JsonSerializer.SerializeToNode(
+                new[] { f.Block(id) },
+                JsonSerializerOptions.Web
+            ),
             ["append"] = Record(id, 2, "violet later legitimate queued work"),
             ["runSource"] = true,
         };
@@ -162,7 +165,7 @@ public sealed class VectorInteropTests
                 Record(id, 1, "violet Source first"),
                 Record(id, 2, "violet Source second")
             ),
-            ["blocks"] = JsonSerializer.SerializeToNode(new[] { block }, VectorWire.Json),
+            ["blocks"] = JsonSerializer.SerializeToNode(new[] { block }, JsonSerializerOptions.Web),
             ["facts"] = new JsonObject
             {
                 ["sessionId"] = id,

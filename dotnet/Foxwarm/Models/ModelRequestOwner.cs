@@ -12,21 +12,26 @@ internal sealed class ModelRequestOwner(
     ResponsesWsTransport? websockets = null,
     Foxwarm.Images.ImageBlobStore? images = null,
     LlmRequestJournalStore? journal = null,
-    ModelInteractionDiagnostics? diagnostics = null
+    ModelInteractionDiagnostics? diagnostics = null,
+    Func<string, IReadOnlyList<int>>? retryIntervals = null,
+    Foxwarm.Secrets.InstanceSecrets? secrets = null
 )
 {
     internal const int DefaultMaxAttempts = 6;
 
-    internal static int RetryDelay(int failedAttempt) =>
-        failedAttempt switch
-        {
-            <= 1 => 2000,
-            2 => 5000,
-            3 => 10000,
-            4 => 20000,
-            5 => 40000,
-            _ => 60000,
-        };
+    internal const string RedactionFailoverRefused =
+        "Can't fail over to {0}: this request started on a model that uses text redaction, and {0} doesn't. Nothing was sent to {0}.";
+
+    private static bool Redacts(HostModels catalog, string key) =>
+        catalog.Contains(key)
+        && catalog.Resolve(key).Configuration["textRedaction"] is JsonObject settings
+        && TextRedactionOptions.FromResolved(settings) is not null;
+
+    internal static int RetryDelay(int failedAttempt, IReadOnlyList<int>? intervals = null)
+    {
+        var delays = intervals ?? HostModels.DefaultRetryIntervalsMs;
+        return delays[Math.Clamp(failedAttempt - 1, 0, delays.Count - 1)];
+    }
 
     internal sealed record CapturedRequest(
         HostModels Catalog,
@@ -48,6 +53,24 @@ internal sealed class ModelRequestOwner(
         return new(catalog, routeKey, rawEffort, route, request);
     }
 
+    internal ConcreteHostModel ResolveConcrete(HostModels catalog, SessionSnapshot snapshot)
+    {
+        var route = catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"]));
+        if (!route.IsVirtual)
+            return route;
+        var request = routing.Preview(route.Key, route);
+        Func<string, bool>? eligible =
+            request.Strategy == "failover" && Redacts(catalog, request.Targets[0])
+                ? target => Redacts(catalog, target)
+                : null;
+        var selection = routing.Select(
+            request,
+            SessionWait.Text(snapshot.AuthorityEnvelope["promptCacheKey"]) ?? snapshot.Id,
+            eligible
+        );
+        return catalog.Resolve(selection.TargetKey);
+    }
+
     internal Task<ChatResult> RequestAsync(
         string sessionId,
         HostModels catalog,
@@ -67,8 +90,7 @@ internal sealed class ModelRequestOwner(
         Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null,
         string journalPurpose = "low-level",
         int journalIteration = 0,
-        Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null
+        Action<string>? journalRequestStarted = null
     ) =>
         RequestAsync(
             sessionId,
@@ -87,8 +109,7 @@ internal sealed class ModelRequestOwner(
             prepareRetry,
             journalPurpose,
             journalIteration,
-            journalRequestStarted,
-            requestContext
+            journalRequestStarted
         );
 
     internal Task<ChatResult> RequestAsync(
@@ -109,7 +130,6 @@ internal sealed class ModelRequestOwner(
         string journalPurpose = "low-level",
         int journalIteration = 0,
         Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null,
         int maxAttempts = DefaultMaxAttempts
     ) =>
         RequestAsync(
@@ -135,7 +155,6 @@ internal sealed class ModelRequestOwner(
             journalPurpose,
             journalIteration,
             journalRequestStarted,
-            requestContext,
             maxAttempts: maxAttempts
         );
 
@@ -157,7 +176,6 @@ internal sealed class ModelRequestOwner(
         string journalPurpose = "low-level",
         int journalIteration = 0,
         Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null,
         Func<CapturedRequest?>? recaptureSelection = null,
         Func<
             ConcreteHostModel,
@@ -180,11 +198,7 @@ internal sealed class ModelRequestOwner(
         var journalAttempt = 0;
         Task manifestCompletion = Task.CompletedTask;
         var interaction = diagnostics?.Begin(journalIteration);
-        var baseHistory = history;
-        var retainedContext = requestContext is null
-            ? Array.Empty<JsonObject>()
-            : (await requestContext().ConfigureAwait(false)).ToArray();
-        history = baseHistory.WithContext(retainedContext);
+        bool? redactionRequired = null;
         try
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
@@ -208,7 +222,23 @@ internal sealed class ModelRequestOwner(
                     journalRequestId = null;
                     journalAttempt = 0;
                 }
-                var selection = request is null ? null : routing.Select(request, cacheKey);
+                if (explicitSelectionChanged)
+                    redactionRequired = null;
+                // Route health is shared by every Session. When a failover route's primary
+                // target redacts, every request on it admits only redacting targets from its
+                // first attempt, so a cooling primary never starts a request on a plain one.
+                if (
+                    redactionRequired is null
+                    && request is { Strategy: "failover" }
+                    && Redacts(catalog, request.Targets[0])
+                )
+                    redactionRequired = true;
+                var redactingCatalog = catalog;
+                Func<string, bool>? eligible =
+                    redactionRequired == true ? target => Redacts(redactingCatalog, target) : null;
+                var selection = request is null
+                    ? null
+                    : routing.Select(request, cacheKey, eligible);
                 var leaf =
                     selection is null ? route
                     : catalog.Contains(selection.TargetKey) ? catalog.Resolve(selection.TargetKey)
@@ -217,6 +247,16 @@ internal sealed class ModelRequestOwner(
                     );
                 if (leaf.IsVirtual)
                     throw new ModelPreparationException("Virtual targets must be concrete models.");
+                // A request that started on a redacting model never fails over to one that
+                // would receive its originals.
+                redactionRequired ??=
+                    leaf.Configuration["textRedaction"] is JsonObject started
+                    && TextRedactionOptions.FromResolved(started) is not null;
+                if (redactionRequired == true && !Redacts(catalog, leaf.Key))
+                    throw new ModelPreparationException(
+                        string.Format(RedactionFailoverRefused, leaf.Key)
+                    );
+                catalog.RequireSecrets(leaf);
                 var effort =
                     rawEffort is not null && leaf.AllowedEfforts.Contains(rawEffort)
                         ? rawEffort
@@ -232,8 +272,7 @@ internal sealed class ModelRequestOwner(
                     cancellationToken.ThrowIfCancellationRequested();
                     if (updated is not null)
                     {
-                        baseHistory = updated;
-                        history = baseHistory.WithContext(retainedContext);
+                        history = updated;
                         interaction = diagnostics?.Begin(journalIteration);
                         // An adoption notice refreshes journal input, but the same
                         // response still includes elapsed retries and failover.
@@ -256,6 +295,21 @@ internal sealed class ModelRequestOwner(
                     {
                         Tools = definitions(),
                     };
+                if (secrets is not null)
+                {
+                    // Stage S runs before the journal manifest, text redaction and serialization.
+                    var masked = Foxwarm.Secrets.SecretRequestStage.Apply(
+                        secrets,
+                        instructions,
+                        requestDefaults.Tools,
+                        history,
+                        sessionId.Length == 0 ? null : sessionId
+                    );
+                    instructions = masked.Instructions;
+                    history = masked.History;
+                    if (!ReferenceEquals(masked.Tools, requestDefaults.Tools))
+                        requestDefaults = requestDefaults with { Tools = masked.Tools };
+                }
                 var options = ConfiguredModelRequests.Plan(
                     leaf,
                     requestDefaults,
@@ -265,9 +319,14 @@ internal sealed class ModelRequestOwner(
                     turnId,
                     journalPurpose
                 );
+                var redactionStats = options.TextRedaction is null
+                    ? null
+                    : new TextRedactionStats();
                 options = options with
                 {
                     Images = images,
+                    TextRedactorSource = secrets is null ? null : secrets.TextRedactor,
+                    TextRedactionStats = redactionStats,
                     Diagnostics = interaction?.StartAttempt(
                         leaf,
                         options,
@@ -296,6 +355,49 @@ internal sealed class ModelRequestOwner(
                 }
                 var currentJournalRequestId = journalRequestId;
                 var currentJournalAttempt = journal is null ? 0 : ++journalAttempt;
+                // Rows name the model and API that this attempt actually calls, which is the
+                // leaf except for an Images API request.
+                var (attributedModel, attributedType) = ImageGenerationRequests.Attribution(
+                    leaf,
+                    journalPurpose
+                );
+                // Counts only, for the usage overview; never originals or placeholders.
+                LlmRedactionRecord? Redaction(string? failureKind) =>
+                    redactionStats is null
+                        ? null
+                        : LlmRedactionRecord.From(
+                            redactionStats,
+                            sessionId.Length == 0 ? null : sessionId,
+                            journalPurpose,
+                            attributedModel,
+                            leaf.ProviderKey,
+                            attributedType,
+                            request is null ? null : route.Key,
+                            failureKind
+                        );
+                async Task RecordRedactionAsync(string? failureKind)
+                {
+                    if (
+                        journal is null
+                        || currentJournalRequestId is null
+                        || Redaction(failureKind) is not { } record
+                    )
+                        return;
+                    try
+                    {
+                        await journal
+                            .AppendRedactionAsync(
+                                currentJournalRequestId,
+                                currentJournalAttempt,
+                                record
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception journalError)
+                    {
+                        warning?.Invoke(journalError);
+                    }
+                }
                 if (journal is not null && currentJournalRequestId is not null)
                     journalRequestStarted?.Invoke(currentJournalRequestId);
                 var attemptPrepared = false;
@@ -327,9 +429,9 @@ internal sealed class ModelRequestOwner(
                                     journal,
                                     currentJournalRequestId,
                                     currentJournalAttempt,
-                                    leaf.Key,
+                                    attributedModel,
                                     request is null ? null : route.Key,
-                                    leaf.ProviderType,
+                                    attributedType,
                                     payload,
                                     instructions,
                                     manifestCompletion
@@ -398,9 +500,13 @@ internal sealed class ModelRequestOwner(
                             ["completedAt"] = completedAt,
                             ["durationMs"] = duration,
                         };
-                        meta["modelId"] = leaf.Key;
+                        meta["modelId"] = attributedModel;
                         if (result.Usage is not null)
                             meta["usage"] = result.Usage.DeepClone();
+                        if (redactionStats is { Completed: true })
+                            meta["textRedaction"] = redactionStats.ToMeta();
+                        else
+                            meta.Remove("textRedaction");
                         if (request is null)
                             meta.Remove("virtualModelKey");
                         else
@@ -422,7 +528,9 @@ internal sealed class ModelRequestOwner(
                                     currentJournalRequestId,
                                     currentJournalAttempt,
                                     JournalResult(result),
-                                    cancellationToken
+                                    cancellationToken,
+                                    new LlmUsageAttribution(leaf.ProviderKey),
+                                    redactionStats is { Completed: true } ? Redaction(null) : null
                                 )
                                 .ConfigureAwait(false);
                         }
@@ -463,7 +571,21 @@ internal sealed class ModelRequestOwner(
                         {
                             warning?.Invoke(journalError);
                         }
+                    if (attemptPrepared && redactionStats is { Completed: true })
+                        await RecordRedactionAsync(null).ConfigureAwait(false);
                     throw;
+                }
+                catch (TextRedactionException error) when (!attemptPrepared)
+                {
+                    // Nothing was sent: the row records the failure kind without an attempt
+                    // start or result, so it never reads as a provider attempt.
+                    await RecordRedactionAsync(error.Kind).ConfigureAwait(false);
+                    failure = new ModelAttemptFailure(
+                        error.Message,
+                        "text-redaction",
+                        error.Retryable,
+                        false
+                    );
                 }
                 catch (Exception) when (!attemptPrepared)
                 {
@@ -537,6 +659,8 @@ internal sealed class ModelRequestOwner(
                         {
                             warning?.Invoke(journalError);
                         }
+                    if (attemptPrepared && redactionStats is { Completed: true })
+                        await RecordRedactionAsync(null).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -555,7 +679,16 @@ internal sealed class ModelRequestOwner(
                         ? routing.Failed(request, selection, cause is not null)
                         : null;
                 var terminalTarget = routed?.Terminal == true;
-                var failsOver = routed is { Terminal: false, EnteredCooldown: true };
+                // With only ineligible alternatives left, the next selection is this same
+                // target again; a configuration cause then ends the request as it does for a
+                // single model.
+                var failsOver =
+                    routed is { Terminal: false, EnteredCooldown: true }
+                    && (
+                        eligible is null
+                        || routing.Select(request!, cacheKey, eligible).TargetKey
+                            != selection!.TargetKey
+                    );
                 var final =
                     !failure.Retryable
                     || terminalTarget
@@ -568,6 +701,12 @@ internal sealed class ModelRequestOwner(
                 var explanation = cause is null
                     ? null
                     : ModelAttemptFailure.ConfigurationExplanation(cause, leaf);
+                var retryDelay = final
+                    ? 0
+                    : RetryDelay(
+                        attempt,
+                        retryIntervals?.Invoke(captured.RouteKey) ?? route.RetryIntervalsMs
+                    );
                 var value = new ModelRetryEvent(
                     attempt,
                     maxAttempts,
@@ -577,7 +716,7 @@ internal sealed class ModelRequestOwner(
                     request is null ? null : route.Key,
                     failure.Status,
                     final ? null : attempt + 1,
-                    final ? null : RetryDelay(attempt),
+                    final ? null : retryDelay,
                     final,
                     cause,
                     explanation
@@ -611,9 +750,9 @@ internal sealed class ModelRequestOwner(
                         TerminalNoticeDelivered = delivered,
                     };
                 if (delay is null)
-                    await Task.Delay(RetryDelay(attempt), cancellationToken);
+                    await Task.Delay(retryDelay, cancellationToken);
                 else
-                    await delay(RetryDelay(attempt), cancellationToken);
+                    await delay(retryDelay, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 // Semantic owner preparation is awaited outside provider failure/health handling.
                 if (scope == ModelRequestScope.Canonical && prepareRetry is not null)
@@ -622,30 +761,11 @@ internal sealed class ModelRequestOwner(
                     cancellationToken.ThrowIfCancellationRequested();
                     if (updated is not null)
                     {
-                        baseHistory = updated;
-                        history = baseHistory.WithContext(retainedContext);
+                        history = updated;
                         interaction = diagnostics?.Begin(journalIteration);
                         requestStarted = null;
                         journalRequestId = null;
                         journalAttempt = 0;
-                    }
-                    if (requestContext is not null)
-                    {
-                        var nextContext = (await requestContext().ConfigureAwait(false)).ToArray();
-                        var changed =
-                            retainedContext.Length != nextContext.Length
-                            || retainedContext
-                                .Zip(nextContext)
-                                .Any(pair => !JsonNode.DeepEquals(pair.First, pair.Second));
-                        if (changed)
-                        {
-                            retainedContext = nextContext;
-                            history = baseHistory.WithContext(retainedContext);
-                            interaction = diagnostics?.Begin(journalIteration);
-                            requestStarted = null;
-                            journalRequestId = null;
-                            journalAttempt = 0;
-                        }
                     }
                 }
             }

@@ -39,8 +39,8 @@ public sealed partial class SessionCommandEffectsTests
                     Text("retained second"),
                     Text("retained third")
                 );
-                await router.HandleMessageAsync(new(id, "webui"), new("/verbose on", null));
-                await router.HandleMessageAsync(new(id, "webui"), new("/delete-messages 1", null));
+                await router.HandleMessageAsync(new(id, "webui"), new("/session verbose on", null));
+                await router.HandleMessageAsync(new(id, "webui"), new("/session delete-messages 1", null));
                 await manager.RunBtwAsync(owner, "persist across clean reload");
                 cache = owner.Entry.Snapshot().AuthorityEnvelope["promptCacheKey"]!.ToString();
             }
@@ -62,15 +62,15 @@ public sealed partial class SessionCommandEffectsTests
     }
 
     [Theory]
-    [InlineData("999999999999999999999999extra")]
-    [InlineData("-999999999999999999999999extra")]
-    public async Task Delete_command_clamps_Source_integer_prefix_even_beyond_CLR_integer_range(
+    [InlineData("9223372036854775807")]
+    [InlineData("-9223372036854775807")]
+    public async Task Delete_command_clamps_counts_beyond_the_CLR_integer_range(
         string argument
     )
     {
         await using var f = await FixtureAsync();
         await AppendAsync(f.Owner, Text("a"), Text("b"));
-        var reply = await CommandAsync(f, "/delete-messages " + argument);
+        var reply = await CommandAsync(f, "/session delete-messages " + argument);
         Assert.Contains("Deleted 2", reply.Single());
         Assert.Empty(f.Owner.History());
         Assert.Equal(3, f.Owner.Entry.Snapshot().NextMessageSeq);

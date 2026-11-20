@@ -53,7 +53,6 @@ public sealed partial class InContextCompactTests
         var question = view["questions"]!.AsArray().Single()!;
         Assert.Equal("open", SessionWait.Text(question["status"]));
         Assert.Equal("Ship on Friday?", SessionWait.Text(question["questions"]![0]!["question"]));
-        Assert.Contains("question-reminder", fixture.Requests[2]["input"]!.ToJsonString());
         var id = SessionWait.Text(question["id"])!;
         await fixture.Manager.AnswerQuestionAsync(
             fixture.Owner,

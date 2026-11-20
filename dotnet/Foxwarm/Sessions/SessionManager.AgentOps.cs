@@ -32,7 +32,6 @@ internal sealed partial class SessionManager
         bool createMainSession = true,
         string? initialMemory = null,
         string? inherit = null,
-        string? isolatedNode = null,
         string? initialSoul = null,
         SessionOwner? sourceSession = null,
         string? initialModel = null,
@@ -42,19 +41,20 @@ internal sealed partial class SessionManager
         SessionOwner? creator = null,
         JsonArray? rules = null,
         string? defaultNode = null,
-        string? defaultCwd = null
+        string? defaultCwd = null,
+        string? guestTemplate = null
     )
     {
         await EnsureIdentityStartupAsync();
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
+        if (creator is not null && guestTemplate is not null)
+            throw new InvalidOperationException("A guest Agent has no creating Session.");
+        var creatorAgent = creator?.Agent ?? guestTemplate;
         using var membership = BeginAgentAdmission(
-            creator is null ? [agentName] : [agentName, creator.Agent]
+            creatorAgent is null ? [agentName] : [agentName, creatorAgent]
         );
         RequireAgentCreation(agentName);
-        isolatedNode = string.IsNullOrWhiteSpace(isolatedNode) ? null : isolatedNode.Trim();
-        if (isolatedNode is not null)
-            await RequireAgentNodeAsync(isolatedNode);
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         using var operation = TrackCreation();
         var mainId = SessionIdentity.Build(agentName, "main");
@@ -88,10 +88,11 @@ internal sealed partial class SessionManager
                     initialMemory,
                     inherit,
                     initialSoul,
-                    creator?.Agent,
+                    creatorAgent,
                     rules,
                     defaultNode,
-                    defaultCwd
+                    defaultCwd,
+                    unlimitedChildren: guestTemplate is not null
                 );
             }
             catch (AuthorityCommittedException error)
@@ -105,9 +106,10 @@ internal sealed partial class SessionManager
             try
             {
                 if (inheritMemory)
-                    agents.CopyIdentityMemory(sourceSession?.Agent ?? "main", agentName);
-                if (isolatedNode is not null)
-                    await agents.SetNodeAsync(agentName, isolatedNode);
+                    agents.CopyIdentityMemory(
+                        SessionCreationDefaults.MemorySourceAgent(sourceSession?.Agent),
+                        agentName
+                    );
                 if (!createMainSession)
                     return (agentName, null);
                 var source = sourceSession?.Entry.Snapshot().AuthorityEnvelope;
@@ -203,7 +205,10 @@ internal sealed partial class SessionManager
                     null,
                     null,
                     exactId: id,
-                    initialNode: agents.EffectiveDefaultNode(SessionIdentity.Agent(id)) ?? "master"
+                    initialNode: SessionCreationDefaults.PlacedNode(
+                        null,
+                        agents.EffectiveDefaultNode(SessionIdentity.Agent(id))
+                    )
                 );
         }
         finally
@@ -225,9 +230,10 @@ internal sealed partial class SessionManager
     )
     {
         using var operation = TrackCreation();
-        using var parentMutation = parentSessionId is null
-            ? null
-            : BeginOwnerMutation(await RequiredAsync(parentSessionId));
+        // The parent is stored by its canonical ID, as its authorization target names it.
+        var parent = parentSessionId is null ? null : await RequiredAsync(parentSessionId);
+        parentSessionId = parent?.Id;
+        using var parentMutation = parent is null ? null : BeginOwnerMutation(parent);
         while (true)
         {
             var candidate = sessionName ?? GenerateSessionId();
@@ -292,7 +298,10 @@ internal sealed partial class SessionManager
         SessionOwner Child,
         bool Delivered,
         bool CallVisible
-    );
+    )
+    {
+        internal CreationModelPlan? ModelPlan { get; init; }
+    }
 
     /// <summary>
     /// Creates a child. A Task-linked creation never delivers initialMessage itself; the Task
@@ -312,7 +321,8 @@ internal sealed partial class SessionManager
         string? initialNode = null,
         bool userInitiated = false,
         string runtime = "foxwarm",
-        string? creatorCallId = null
+        string? creatorCallId = null,
+        JsonObject? model = null
     )
     {
         var instructed = !string.IsNullOrEmpty(initialMessage);
@@ -333,7 +343,7 @@ internal sealed partial class SessionManager
             )
         )
             throw new InvalidDataException("Claude Code Session forks are not supported.");
-        targetAgent ??= parent.Agent;
+        targetAgent = SessionCreationDefaults.ChildAgent(targetAgent, parent.Agent);
         if (!userInitiated)
             agents.RequireSessionTarget(parent.Agent, targetAgent);
         using var membership = BeginAgentAdmission(parent.Agent, targetAgent);
@@ -351,10 +361,11 @@ internal sealed partial class SessionManager
         var gate = CreationKey(allocationBase);
         await gate.WaitAsync();
         SessionOwner child;
+        CreationModelPlan modelPlan;
         try
         {
             if (fork)
-                (child, callVisible) = await ForkLockedAsync(
+                (child, callVisible, modelPlan) = await ForkLockedAsync(
                     parent,
                     suffix,
                     true,
@@ -363,7 +374,8 @@ internal sealed partial class SessionManager
                     taskId,
                     initialNode: initialNode,
                     creatorCallId: creatorCallId,
-                    instructed: instructed
+                    instructed: instructed,
+                    suggestedModel: model
                 );
             else
             {
@@ -377,26 +389,28 @@ internal sealed partial class SessionManager
                 for (var serial = 2; await IdReservedAsync(candidate); serial++)
                     candidate = baseId + "_" + serial.ToString(CultureInfo.InvariantCulture);
                 var parentEnvelope = parent.Entry.Snapshot().AuthorityEnvelope;
-                var childRawModel =
-                    forceModel?["modelId"]?.GetValue<string>()
-                    ?? parentEnvelope["childModelDefault"]?.GetValue<string>()
-                    ?? parentEnvelope["model"]?.GetValue<string>();
-                var childRawEffort =
-                    forceModel?["effort"]?.GetValue<string>()
-                    ?? parentEnvelope["childEffortDefault"]?.GetValue<string>()
-                    ?? parentEnvelope["effort"]?.GetValue<string>();
+                modelPlan = PlanCreationModel(
+                    parentEnvelope,
+                    forceModel,
+                    model,
+                    ignoreSuggested: runtime == ClaudeRuntimeState.Kind
+                );
                 child = await CreateNamedLockedAsync(
                     targetAgent,
                     candidate[(candidate.IndexOf('/') + 1)..],
                     parentId,
                     displayName,
-                    (childRawModel, childRawEffort),
-                    forceModel,
+                    modelPlan.Inherited,
+                    modelPlan.Force,
                     candidate,
                     targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null,
                     // Only a same-Agent parent supplies its Node; the target's defaults follow.
-                    initialNode: initialNode
-                        ?? (targetAgent == parent.Agent ? CurrentNode(parent) : null),
+                    initialNode: SessionCreationDefaults.InitialNode(
+                        initialNode,
+                        targetAgent,
+                        parent.Agent,
+                        CurrentNode(parent)
+                    ),
                     runtime: runtime
                 );
                 try
@@ -450,11 +464,11 @@ internal sealed partial class SessionManager
             gate.Release();
         }
         if (taskId is not null || !instructed)
-            return new(child, false, callVisible);
+            return new(child, false, callVisible) { ModelPlan = modelPlan };
         if (callVisible)
         {
             StartForkedChild(child);
-            return new(child, true, true);
+            return new(child, true, true) { ModelPlan = modelPlan };
         }
         try
         {
@@ -472,7 +486,7 @@ internal sealed partial class SessionManager
                 committed
             );
         }
-        return new(child, true, false);
+        return new(child, true, false) { ModelPlan = modelPlan };
     }
 
     // Continues the child's copied turn: the creating call's result is already in its history.
@@ -672,13 +686,13 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
-        // User decision 2026-11-06: binding, explicit or same-Agent parent (supplied by the
-        // caller as initialNode; a timer's stored owner Node counts as one), Agent default,
-        // installation default, then master.
-        var selectedNode =
-            BoundNode(agentName)
-            ?? (timerCreation ? timerNode : initialNode)
-            ?? agents.EffectiveDefaultNode(agentName);
+        // User decision 2026-11-06: explicit or same-Agent parent (supplied by the caller as
+        // initialNode; a timer's stored owner Node counts as one), Agent default, installation
+        // default, then master. Legacy isolation bindings no longer place Sessions (R2).
+        var selectedNode = SessionCreationDefaults.PlacedNode(
+            timerCreation ? timerNode : initialNode,
+            agents.EffectiveDefaultNode(agentName)
+        );
         return await WithCreationIdentityAsync(
             id,
             async () =>
@@ -730,7 +744,7 @@ internal sealed partial class SessionManager
                         state.AuthorityEnvelope["parentSessionId"] = parentId;
                     if (displayName is not null)
                         state.AuthorityEnvelope["displayName"] = displayName;
-                    state.AuthorityEnvelope["currentNode"] = selectedNode ?? "master";
+                    state.AuthorityEnvelope["currentNode"] = selectedNode;
                     if (agents.DefaultCwdFor(agentName, selectedNode) is { } defaultCwd)
                         state.AuthorityEnvelope["cwd"] = defaultCwd;
                     if (model is not null)

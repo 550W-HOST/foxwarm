@@ -205,6 +205,14 @@ internal static class CodeFileOperations
 
     internal static JsonObject StatFile(string path)
     {
+        if (CodeNativePaths.IsVirtualRoot(path))
+            return new()
+            {
+                ["type"] = 2,
+                ["ctime"] = 0,
+                ["mtime"] = 0,
+                ["size"] = 0UL,
+            };
         if (OperatingSystem.IsWindows())
         {
             try
@@ -277,6 +285,21 @@ internal static class CodeFileOperations
 
     internal static JsonObject ReadDirectory(string path)
     {
+        if (CodeNativePaths.IsVirtualRoot(path))
+        {
+            var drives = new JsonArray();
+            foreach (var drive in DriveInfo.GetDrives())
+                if (drive.IsReady)
+                    drives.Add(
+                        (JsonNode)
+                            new JsonObject
+                            {
+                                ["name"] = drive.Name.TrimEnd('\\'),
+                                ["type"] = 2,
+                            }
+                    );
+            return new() { ["entries"] = drives };
+        }
         if (!DirectoryStat(StatFile(path)))
             throw new CodeServiceException("FileNotADirectory", "Path is not a directory: " + path);
         var entries = new JsonArray();
@@ -373,6 +396,8 @@ internal static class CodeFileOperations
         CancellationToken token
     )
     {
+        if (CodeNativePaths.IsVirtualRoot(path))
+            throw new CodeServiceException("FileIsADirectory", "Path is a directory: " + path);
         Parent(path);
         var exists = Exists(path);
         if (!exists && !create)
@@ -401,6 +426,8 @@ internal static class CodeFileOperations
 
     internal static JsonObject CreateDirectory(string path)
     {
+        if (CodeNativePaths.IsVirtualRoot(path))
+            throw new CodeServiceException("FileExists", "Path already exists: " + path);
         Parent(path);
         if (Exists(path))
             throw new CodeServiceException("FileExists", "Path already exists: " + path);
@@ -415,6 +442,8 @@ internal static class CodeFileOperations
 
     internal static JsonObject Delete(string path, bool recursive)
     {
+        if (CodeNativePaths.IsVirtualRoot(path))
+            throw new CodeServiceException("NoPermissions", "Permission denied: " + path);
         var stat = StatFile(path);
         if (DirectoryStat(stat))
         {
@@ -432,6 +461,12 @@ internal static class CodeFileOperations
 
     internal static JsonObject Rename(string oldPath, string newPath, bool overwrite)
     {
+        if (CodeNativePaths.IsVirtualRoot(oldPath) || CodeNativePaths.IsVirtualRoot(newPath))
+            throw new CodeServiceException(
+                "NoPermissions",
+                "Permission denied: "
+                    + (CodeNativePaths.IsVirtualRoot(oldPath) ? oldPath : newPath)
+            );
         _ = StatFile(oldPath);
         Parent(newPath);
         if (Exists(newPath))

@@ -63,19 +63,18 @@ internal sealed partial class CommittedArchiveIdentity
             }
             graph.Add(oldId, newId);
             ValidateGraph(graph);
-            var renamed = false;
             Mirror(new Dictionary<string, string>(StringComparer.Ordinal) { [oldId] = newId });
             try
             {
-                WriteLedger(graph, () => renamed = true);
+                WriteLedger(graph);
             }
-            catch (Exception error)
+            catch (AuthorityCommittedException error)
             {
-                if (renamed)
-                {
-                    reserved = graph.Keys.Concat(graph.Values).ToHashSet(StringComparer.Ordinal);
-                    throw new ArchiveIdentityCommittedException(error);
-                }
+                reserved = graph.Keys.Concat(graph.Values).ToHashSet(StringComparer.Ordinal);
+                throw new ArchiveIdentityCommittedException(error.InnerException!);
+            }
+            catch
+            {
                 var receipt = await SqliteArchiveMessageStore
                     .EnqueueWriteAsync(
                         DatabasePath,

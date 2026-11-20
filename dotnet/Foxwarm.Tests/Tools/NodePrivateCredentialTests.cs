@@ -65,12 +65,12 @@ public sealed class NodePrivateCredentialTests
                     new JsonObject
                     {
                         ["id"] = "private-file",
-                        ["name"] = "call_tool",
-                        ["args"] = new JsonObject
+                        ["name"] = "ctl",
+                        ["args"] = CtlTestArgs.Unified(new JsonObject
                         {
                             ["toolId"] = "builtin:node_create_auth_token",
                             ["args"] = new JsonObject { ["nodeId"] = id, ["filePath"] = path },
-                        },
+                        }),
                     },
                     token
                 )
@@ -81,7 +81,7 @@ public sealed class NodePrivateCredentialTests
             var file = typeof(ApprovedNodeRegistry)
                 .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(Manager.Nodes.Registry)!;
-            typeof(LinuxAtomicJsonFile)
+            typeof(AtomicJsonFile)
                 .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(file, hook);
         }
@@ -135,28 +135,30 @@ public sealed class NodePrivateCredentialTests
     }
 
     [Fact]
-    public async Task Main_policy_and_exact_isolation_grant_cannot_be_replaced_by_remote_authority()
+    public async Task Main_policy_and_migrated_exact_grant_cannot_be_replaced_by_remote_authority()
     {
         await using var fixture = new Fixture();
         await fixture.Start(
             new JsonObject
             {
-                ["isolated"] = true,
-                ["isolatedNode"] = "bound",
-                ["toolRules"] = new JsonArray(
-                    new JsonObject
-                    {
-                        ["source"] = "builtin",
-                        ["tool"] = "node_create_auth_token",
-                        ["effect"] = "allow",
-                    }
+                ["rules"] = LegacyIsolationFixture.Layer(
+                    "main",
+                    "bound",
+                    new JsonArray(
+                        new JsonObject
+                        {
+                            ["source"] = "builtin",
+                            ["tool"] = "node_create_auth_token",
+                            ["effect"] = "allow",
+                        }
+                    )
                 ),
             }
         );
         var outside = fixture.PathFor("outside");
         Assert.Equal(
             "tool_authorization_denied",
-            (await fixture.Call("outside", outside))["error"]?["type"]?.GetValue<string>()
+            (await fixture.Call("outside", outside)).FailureCode()
         );
         Assert.False(File.Exists(outside));
         var allowed = fixture.PathFor("work/allowed");
@@ -170,7 +172,7 @@ public sealed class NodePrivateCredentialTests
         );
         Assert.Equal(
             "tool_authorization_denied",
-            (await fixture.Call("denied", allowed))["error"]?["type"]?.GetValue<string>()
+            (await fixture.Call("denied", allowed)).FailureCode()
         );
         Assert.False(File.Exists(allowed));
         await fixture.Manager.Authorization.InstallAsync(

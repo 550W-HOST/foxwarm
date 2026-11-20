@@ -11,17 +11,18 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall, ctlHint } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-observation-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const token = 'synthetic-wait-api-token'; const providerToken = 'synthetic-wait-provider-token'
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const plans = new Map(); const requests = []; const errors = []; const counts = new Map(); const holds = []
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const signal = () => { let release; const promise = new Promise(done => { release = done }); return { promise, release } }
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const messageText = body => body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').join('\n')
 let host, browser, provider, port, firstPid, secondPid, plannerTarget, plannerCount = 0
 async function until(fn, label, timeout = 20000) {
@@ -57,13 +58,13 @@ async function final(id, marker) {
 }
 async function deliver(source, target, label, extra = []) {
   const id = `${label}-send`
-  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, afterSend: 'finish' }), ...extra])
+  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, currentSessionTurnAction: 'end_turn' }), ...extra])
   await send(source, label); await idle(source)
   await until(async () => (await history(source)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === id)), `${label} paired`)
 }
 async function startHost() {
   await writeModelFixture(dataRoot, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+  const child = spawn(...mainHostLaunch(process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')), {
     stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-14000) })
   const owned = { child, get output() { return output } }; host = owned
@@ -82,7 +83,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert(body.tools.some(tool => tool.name === 'view_session'))
+      assert(body.tools.some(tool => tool.name === 'ctl')); assert(!body.tools.some(tool => tool.name === 'view_session'))
       assert(!body.tools.some(tool => tool.name === 'get_session_messages'))
       const compact = body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').findLast(item => item.includes('COMPACTION STARTED:'))
       if (compact) {
@@ -144,11 +145,11 @@ try {
   const observed = await history(actor)
   assert(value(observed, 'live-page').output.includes('requesting-model') && value(observed, 'live-page').output.includes('Header only'))
   assert(value(observed, 'live-filter').output.includes('requesting-model') && value(observed, 'live-filter').output.includes('No selected records matched'))
-  assert(value(observed, 'current-status').output.includes('session id: `' + actor + '`'))
-  assert(value(observed, 'target-status').output.includes('session id: `' + target + '`'))
-  assert(value(observed, 'target-status').output.includes('requesting-model'))
-  assert(value(observed, 'current-status').output.includes(join(dataRoot, 'agents', 'team')) && value(observed, 'current-status').output.includes('token estimate'))
-  assert(!value(observed, 'current-list').output.includes('other/main')); assert(value(observed, 'all-list').output.includes('Found 4 session(s)'))
+  assert.equal(value(observed, 'current-status').sessionId, actor)
+  assert.equal(value(observed, 'target-status').sessionId, target)
+  assert(JSON.stringify(value(observed, 'target-status').runtime).includes('requesting-model'))
+  assert.equal(value(observed, 'current-status').agentDirectory, join(dataRoot, 'agents', 'team')); assert.equal(typeof value(observed, 'current-status').tokenEstimate, 'number')
+  assert(!JSON.stringify(value(observed, 'current-list').sessions).includes('other/main')); assert.equal(value(observed, 'all-list').total, 4)
   assert(value(observed, 'rename').output.includes('changed from unset to "Observed name"')); assert(value(observed, 'rename-noop').output.includes('unchanged'))
   // The active target Chat must show both its identity and the renamed header.
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, target)
@@ -197,12 +198,13 @@ try {
     assert(output.includes(toolName), id + ' selects the hidden-content match')
     assert(output.includes('#' + selected[index].__meta.seq), id + ' identifies the original source')
     assert(!output.includes(needleContent), id + ' keeps original bodies folded')
-    const examples = [...output.matchAll(/recall\((\{[^\n]+\})\)/g)].map(match => JSON.parse(match[1]))
+    const examples = [...output.matchAll(/Archive example: (ctl history recall [^\n]+)/g)].map(match => match[1])
     assert.equal(examples.length, 1, id + ' supplies one usable Archive expansion')
-    assert.equal(examples[0].sessionId, target)
-    assert.equal(examples[0].target, 'msg#' + selected[index].__meta.seq)
-    assert.equal(examples[0].toolDetail, 'full')
-    drilldowns.push(call(id + '-original', 'recall', examples[0]))
+    const example = ctlHint(examples[0])
+    assert.deepEqual(example.positional, ['ctl', 'history', 'recall', 'msg#' + selected[index].__meta.seq])
+    assert.equal(example.options['session-id'], target)
+    assert.equal(example.options['tool-detail'], 'full')
+    drilldowns.push({ type: 'function_call', call_id: id + '-original', name: 'ctl', arguments: JSON.stringify({ command: examples[0] }) })
   }
   assert(!value(pages, 'argument-fold').output.includes('HIDDEN_ARGUMENT_NEEDLE'))
   assert(!value(pages, 'argument-miss').output.includes('msg#' + selected[argumentIndex].__meta.seq))
@@ -220,7 +222,7 @@ try {
   assert(!value(pages, 'prose-page').output.includes('HIDDEN_TOOL_NEEDLE'))
   assert(value(pages, 'literal-archive').output.includes('FOLLOW-6'))
   assert(value(pages, 'literal-archive').output.includes('Examined'))
-  assert(value(pages, 'literal-archive').output.includes('Older literal search: recall('))
+  assert(value(pages, 'literal-archive').output.includes('Older literal search: ctl history recall '))
 
   await turn(actor, 'EXPAND-ORIGINALS', drilldowns)
   const originals = await history(actor)

@@ -283,7 +283,9 @@ internal sealed partial class ImageBlobStore
                             imageId is not null
                                 ? "The original is retained as image "
                                     + JsonStringQuoting.Quote(imageId)
-                                    + "; use image_write_to_file to save it as a file."
+                                    + "; save it as a file with `ctl image save "
+                                    + CtlCommandText.Quote(imageId)
+                                    + " <file-path>`."
                                 : "The original remains in the source message."
                         ),
                 }.Where(text => !string.IsNullOrEmpty(text))
@@ -389,7 +391,7 @@ internal sealed partial class ImageBlobStore
                 };
                 await using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write))
                 {
-                    await file.WriteAsync(Encoding.UTF8.GetBytes(header.ToJsonString() + "\n"));
+                    await file.WriteAsync(Encoding.UTF8.GetBytes(header.ToJsonText() + "\n"));
                     if (!passthrough)
                         await file.WriteAsync(converted.Bytes);
                 }

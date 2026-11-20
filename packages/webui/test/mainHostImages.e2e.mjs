@@ -8,6 +8,7 @@ import sharp from 'sharp'
 import { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { ctlCalls } from './ctlModelCalls.mjs'
 const options = { env: {} }, fixture = await createHostFixture('input-images', options), records = [], failures = [], sockets = [], frames = [], counts = new Map()
 const home = join(fixture.root, 'home'); await mkdir(home); options.env.HOME = home; options.cwd = fixture.root
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 200, g: 20, b: 90, alpha: 1 } } }).png().toBuffer(), imagePath = join(fixture.work, 'pixel.png')
@@ -15,7 +16,7 @@ await writeFile(imagePath, png); await mkdir(join(fixture.work, 'memory'), { rec
 await writeFile(join(fixture.data, 'state/mcp.json'), JSON.stringify({ servers: { image: { transport: 'stdio', command: process.execPath, args: [resolve(import.meta.dirname, 'mainHostImages.peer.mjs'), fixture.root, imagePath], timeoutSeconds: 20, enable: true } } }))
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 let releaseHold, stagingAlias; const held = new Promise(resolve => { releaseHold = resolve })
-const calls = key => [{ id: key + '-read', name: 'read', args: { filePath: imagePath } }, { id: key + '-sdk', name: 'call_tool', args: { toolId: 'mcp:image/image', args: { corrupt: key === 'corrupt', carrier: key === 'carrier' } } }]
+const calls = key => ctlCalls([{ id: key + '-read', name: 'read', args: { filePath: imagePath } }, { id: key + '-sdk', name: 'call_tool', args: { toolId: 'mcp:image/image', args: { corrupt: key === 'corrupt', carrier: key === 'carrier' } } }])
 const responseCalls = key => calls(key).map(call => ({ type: 'function_call', call_id: call.id, name: call.name, arguments: JSON.stringify(call.args) }))
 const final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-IMAGES-' + key }] }]
 const textOf = body => JSON.stringify(body)
@@ -88,7 +89,7 @@ try {
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'IMAGES:heic-next', uploadedFiles: [heicUpload.body] })).status, 202); await done('main', 'heic-next')
   const heicRef = imageRefs(await authority('main')).at(-1).inlineDataRef, heicBlob = await fetch(fixture.origin + '/api/blobs/' + heicRef.blobId, { headers }); assert.equal(heicBlob.headers.get('content-type'), 'application/octet-stream'); assert(heicBlob.headers.get('content-disposition').includes('attachment')); assert.deepEqual(Buffer.from(await heicBlob.arrayBuffer()), heic)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'IMAGES:corrupt' })).status, 202); await done('main', 'corrupt')
-  const corruptRow = (await authority('main')).history.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'corrupt-sdk')); assert(corruptRow.parts.some(part => part.functionResponse?.response?.error?.type === 'image_materialization_failed')); assert(!JSON.stringify(corruptRow).includes(Buffer.from('not a PNG raster').toString('base64')))
+  const corruptRow = (await authority('main')).history.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'corrupt-sdk')); assert(corruptRow.parts.some(part => / The tool call completed; its effects were not reversed\.$/.test(part.functionResponse?.response?.error))); assert(!JSON.stringify(corruptRow).includes(Buffer.from('not a PNG raster').toString('base64')))
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'IMAGES:carrier' })).status, 202); await done('main', 'carrier')
   const carrierRow = (await authority('main')).history.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'carrier-sdk')); assert.equal(carrierRow.parts.filter(part => part.toolUseId === 'carrier-sdk' && part.inlineDataRef).length, 1); assert(!JSON.stringify(carrierRow).includes(png.toString('base64'))); assert(!carrierRow.parts.some(part => part.functionResponse?.response?.outputTruncated))
   for (const id of ['image-retry', 'image-queue']) assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200)

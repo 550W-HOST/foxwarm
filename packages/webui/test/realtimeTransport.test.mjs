@@ -301,3 +301,59 @@ test('Logs shares the existing socket, resumes its byte cursor, and ignores an o
   stopFresh(); stopChat(); transport.dispose()
   assert.equal(transport.getUnderlyingConnectionCount(), 0)
 })
+
+test('unavailable-state errors reach the named Session or every Session view, never list consumers', async () => {
+  const { WebUiRealtimeTransport } = await loadTransport()
+  const sockets = []
+  const transport = new WebUiRealtimeTransport({
+    createSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    setTimer: () => 1,
+    clearTimer() {},
+    random: () => 0.5,
+  })
+  const first = []
+  const second = []
+  const list = []
+  transport.subscribeSession('first', { onMessage: message => first.push(message) })
+  transport.subscribeSession('second', { onMessage: message => second.push(message) })
+  transport.subscribeSessionList([], { onMessage: message => list.push(message) })
+  sockets[0].open()
+  sockets[0].receive({ type: 'error', code: 'SESSION_STATE_UNAVAILABLE', message: 'named', revision: 3, sessionId: 'second' })
+  sockets[0].receive({ type: 'error', code: 'SESSION_STATE_UNAVAILABLE', message: 'unnamed', revision: 3 })
+  sockets[0].receive({ type: 'error', code: 'SOMETHING_ELSE', message: 'ignored' })
+  assert.deepEqual(first.map(message => message.message), ['unnamed'])
+  assert.deepEqual(second.map(message => message.message), ['named', 'unnamed'])
+  assert.deepEqual(list, [])
+})
+
+test('reconnect backoff grows while subscription initialization keeps failing and resets once accepted', async () => {
+  const { WebUiRealtimeTransport } = await loadTransport()
+  const sockets = []
+  const delays = []
+  let pending = null
+  const transport = new WebUiRealtimeTransport({
+    createSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    setTimer: (callback, delayMs) => { delays.push(delayMs); pending = callback; return delays.length },
+    clearTimer() {},
+    random: () => 0.5,
+  })
+  transport.subscribeSession('broken', { onMessage() {} })
+  const failOnce = () => {
+    const socket = sockets.at(-1)
+    socket.open()
+    socket.receive({ type: 'connected' })
+    socket.receive({ type: 'error', code: 'SESSION_STATE_UNAVAILABLE', message: 'unavailable', revision: 1, sessionId: 'broken' })
+    socket.drop()
+    const retry = pending
+    pending = null
+    retry()
+  }
+  failOnce(); failOnce(); failOnce()
+  assert.deepEqual(delays, [1000, 2000, 4000])
+  const socket = sockets.at(-1)
+  socket.open()
+  socket.receive({ type: 'connected' })
+  socket.receive({ type: 'subscriptions-accepted', revision: 1, sessionResolutions: {} })
+  socket.drop()
+  assert.equal(delays.at(-1), 1000, 'an accepted subscription restores the initial delay')
+})

@@ -172,6 +172,65 @@ public sealed partial class ResponsesPrefixCommitTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_later_search_leaves_earlier_request_input_byte_identical(bool websocket)
+    {
+        var older = HostedSearchSourcesTests.Search("older", "https://example.com/older");
+        // Large enough that the former request-wide budget dropped the older call.
+        var later = HostedSearchSourcesTests.Search("later");
+        later["action"]!["sources"] = new JsonArray(
+            Enumerable
+                .Range(0, 70)
+                .Select(index =>
+                    (JsonNode)
+                        new JsonObject
+                        {
+                            ["type"] = "url",
+                            ["url"] = $"https://example.com/later/{index}",
+                            ["title"] = new string('t', 200),
+                        }
+                )
+                .ToArray()
+        );
+        await using var peer = await StreamingModelPeer.StartAsync(
+            websocket,
+            async (context, number) =>
+                await context.Send(
+                    number switch
+                    {
+                        1 => Completed(older, Commentary("first", "final_answer")),
+                        2 => Completed(later, Commentary("second", "final_answer")),
+                        _ => Completed(Commentary("third", "final_answer")),
+                    }
+                )
+        );
+        await using var owner = new Owner(
+            peer.Uri,
+            websocket,
+            providerFields: JsonNode.Parse("""{"webSearch":{"enabled":true}}""")!.AsObject()
+        );
+        await owner.Run("one");
+        await owner.Run("two");
+        await owner.Run("three");
+        Assert.Null(owner.Entry.LastBackgroundProcessorFailure);
+        Assert.Equal(3, peer.Requests.Count);
+        // Both requests follow a hosted-search response, so each sends full input.
+        Assert.Null(peer.Requests[1]["previous_response_id"]);
+        Assert.Null(peer.Requests[2]["previous_response_id"]);
+        var before = peer.Requests[1]["input"]!.AsArray();
+        var after = peer.Requests[2]["input"]!.AsArray();
+        Assert.Contains("https://example.com/older", before.ToJsonString());
+        Assert.True(after.Count > before.Count);
+        for (var index = 0; index < before.Count; index++)
+            Assert.Equal(before[index]!.ToJsonString(), after[index]!.ToJsonString());
+        Assert.Contains(
+            "https://example.com/later/63",
+            string.Concat(after.Skip(before.Count).Select(item => item!.ToJsonString()))
+        );
+    }
+
+    [Theory]
     [InlineData(false, "none", "custom", true)]
     [InlineData(true, "none", "custom", true)]
     [InlineData(false, "high", "custom", true)]

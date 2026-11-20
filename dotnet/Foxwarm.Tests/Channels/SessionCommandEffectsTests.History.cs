@@ -41,7 +41,7 @@ public sealed partial class SessionCommandEffectsTests
                 },
             }
         );
-        var replies = await CommandAsync(f, "/delete-messages " + count);
+        var replies = await CommandAsync(f, "/session delete-messages " + count);
         Assert.Contains("Deleted " + expected["result"]!["deleted"], replies.Single());
         var after = f.Owner.Entry.Snapshot();
         Assert.Equal(
@@ -149,7 +149,7 @@ public sealed partial class SessionCommandEffectsTests
         {
             await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
             var before = f.Owner.Entry.Snapshot();
-            var result = await CommandAsync(f, "/delete-messages 1");
+            var result = await CommandAsync(f, "/session delete-messages 1");
             Assert.Contains("Deleted 1", result.Single());
             Assert.True(f.Owner.Metadata().Busy);
             release.TrySetResult();
@@ -157,7 +157,7 @@ public sealed partial class SessionCommandEffectsTests
             Assert.Contains("retained later output", f.Owner.History().Last().ToJsonString());
             Assert.Equal(before.NextMessageSeq, f.Owner.Entry.Snapshot().History.Last().Sequence);
             Assert.Equal(3, f.Owner.Archive.ReadMessages().Count);
-            await CommandAsync(f, "/delete-messages -1");
+            await CommandAsync(f, "/session delete-messages -1");
             Assert.Equal("user", f.Owner.History().Last()["role"]!.ToString());
             Assert.True(SessionContinuation.IsIncomplete(f.Owner.Entry.Snapshot().History));
         }
@@ -198,7 +198,7 @@ public sealed partial class SessionCommandEffectsTests
                 },
             }
         );
-        var result = await CommandAsync(f, "/compact tools malformed");
+        var result = await CommandAsync(f, "/compact --tools");
         Assert.Contains("Pruned 1 oversized response(s) across 1 message(s)", result.Single());
         var estimates = System.Text.RegularExpressions.Regex.Match(
             result.Single(),
@@ -247,7 +247,7 @@ public sealed partial class SessionCommandEffectsTests
         };
         await f.Router.HandleMessageAsync(
             new(f.Owner.Id, "webui"),
-            new("/compact tools 100", null, ControlRequestId: "manual-tools")
+            new("/compact 100 --tools", null, ControlRequestId: "manual-tools")
         );
         var single = Assert.Single(feedback);
         Assert.Equal("manual-tools", single!["requestId"]!.ToString());

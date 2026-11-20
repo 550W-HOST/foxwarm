@@ -19,14 +19,58 @@ internal static class AnthropicCanonicalConverter
         var stopReason = StopReason(response);
         var parts = new JsonArray();
         var content = response is JsonObject obj ? obj["content"] as JsonArray : null;
+        var nativeSearch =
+            content
+                ?.OfType<JsonObject>()
+                .Any(block =>
+                    SessionWait.Text(block["type"]) is "server_tool_use" or "web_search_tool_result"
+                ) == true
+            || SessionWait.Text((response as JsonObject)?["stop_reason"]) == "pause_turn";
+        var textBlocks = new List<JsonObject>();
+        void FlushText()
+        {
+            if (textBlocks.Count == 0)
+                return;
+            var text = string.Concat(
+                textBlocks.Select(block => SessionWait.Text(block["text"]) ?? "")
+            );
+            if (
+                nativeSearch
+                || textBlocks.Any(block => block["citations"] is JsonArray { Count: > 0 })
+            )
+            {
+                var part = NativePart(textBlocks, concreteModelId);
+                part["text"] = text;
+                parts.Add(part);
+            }
+            else if (TaggedThinking(text) is JsonArray tagged)
+                foreach (var part in tagged)
+                    parts.Add(part?.DeepClone());
+            else
+                parts.Add(new JsonObject { ["text"] = text });
+            textBlocks.Clear();
+        }
         foreach (var raw in content ?? [])
         {
             if (raw is not JsonObject block)
+            {
+                FlushText();
                 continue;
+            }
             var type = SessionWait.Text(block["type"]) ?? "";
+            if (type == "text")
+            {
+                textBlocks.Add(block);
+                continue;
+            }
+            FlushText();
             if (
-                type is "server_tool_use" or "mcp_tool_use"
-                || type.EndsWith("_tool_result", StringComparison.Ordinal)
+                (type == "server_tool_use" && SessionWait.Text(block["name"]) != "web_search")
+                || type == "mcp_tool_use"
+                || (
+                    type.EndsWith("_tool_result", StringComparison.Ordinal)
+                    && type != "web_search_tool_result"
+                )
             )
                 throw new ModelAttemptFailure(
                     $"Anthropic server tool block \"{type}\" is not supported by Foxwarm.",
@@ -36,14 +80,9 @@ internal static class AnthropicCanonicalConverter
                 );
             switch (type)
             {
-                case "text":
-                    var text = SessionWait.Text(block["text"]) ?? "";
-                    var tagged = TaggedThinking(text);
-                    if (tagged is null)
-                        parts.Add(new JsonObject { ["text"] = text });
-                    else
-                        foreach (var part in tagged)
-                            parts.Add(part?.DeepClone());
+                case "server_tool_use":
+                case "web_search_tool_result":
+                    parts.Add(NativePart([block], concreteModelId));
                     break;
                 case "thinking":
                     var thinking = new JsonObject { ["thinking"] = block["thinking"]?.DeepClone() };
@@ -89,6 +128,7 @@ internal static class AnthropicCanonicalConverter
                     break;
             }
         }
+        FlushText();
         if (parts.Count == 0)
             return null;
         var meta = new JsonObject
@@ -129,13 +169,6 @@ internal static class AnthropicCanonicalConverter
                 false
             );
         }
-        if (reason == "pause_turn")
-            throw new ModelAttemptFailure(
-                "Anthropic paused a server-tool turn, which Foxwarm does not continue automatically.",
-                "response-error",
-                false,
-                false
-            );
         return reason is "max_tokens" or "model_context_window_exceeded" ? reason : null;
     }
 
@@ -146,7 +179,7 @@ internal static class AnthropicCanonicalConverter
         var result = new JsonObject
         {
             ["inputTokens"] = Reported(usage["input_tokens"]) is double input
-                ? System.Text.Json.JsonSerializer.SerializeToNode(
+                ? JsonData.SerializeToNode(
                     input + (Reported(usage["cache_creation_input_tokens"]) ?? 0)
                 )
                 : null,
@@ -159,8 +192,48 @@ internal static class AnthropicCanonicalConverter
         };
         if (Reported(usage["output_tokens_details"]?["thinking_tokens"]) is double reasoning)
             result["reasoningTokens"] = reasoning;
+        // Billing counts may accumulate over the server-side search loop. Only a
+        // reported sampling iteration measures one context, never a compaction entry.
+        var iteration = (usage["iterations"] as JsonArray)
+            ?.OfType<JsonObject>()
+            .LastOrDefault(item => SessionWait.Text(item["type"]) == "message");
+        if (
+            iteration is not null
+            && Reported(iteration["input_tokens"]) is double lastInput
+            && Reported(iteration["output_tokens"]) is double lastOutput
+        )
+        {
+            result["contextTokens"] =
+                lastInput
+                + lastOutput
+                + (Reported(iteration["cache_creation_input_tokens"]) ?? 0)
+                + (Reported(iteration["cache_read_input_tokens"]) ?? 0);
+            result["contextTokensSource"] = "reported-iteration";
+        }
         return result;
     }
+
+    private static JsonObject NativePart(IEnumerable<JsonObject> blocks, string model) =>
+        new()
+        {
+            ["providerMeta"] = new JsonObject
+            {
+                ["anthropic"] = new JsonObject
+                {
+                    ["sourceModelId"] = model,
+                    ["contentBlocks"] = new JsonArray(
+                        blocks.Select(block => block.DeepClone()).ToArray()
+                    ),
+                },
+            },
+        };
+
+    internal static double? InputContext(JsonObject? usage) =>
+        Reported(usage?["input_tokens"]) is double input
+            ? input
+                + (Reported(usage?["cache_creation_input_tokens"]) ?? 0)
+                + (Reported(usage?["cache_read_input_tokens"]) ?? 0)
+            : null;
 
     private static double? Reported(JsonNode? node) =>
         SessionWait.Number(node) is double value && double.IsFinite(value) ? value : null;

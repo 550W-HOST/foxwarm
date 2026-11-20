@@ -141,10 +141,10 @@ internal sealed class NodePaths(string startupDirectory)
     private static string FullPath(string path, string basis) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(path, basis));
 
-    internal string Transfer(string raw, string agent, bool restrict)
+    internal string Transfer(string raw, string agent, bool restrict, string? sessionCwd = null)
     {
         var root = AgentDirectory(agent);
-        var path = Resolve(raw, agent);
+        var path = Resolve(raw, agent, sessionCwd);
         if (
             restrict
             && path != root

@@ -1,7 +1,9 @@
 import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHistory'
+import { subscribeWindowFrame, windowFrameActive } from './windowFrame'
 import { SessionMessageNamesContext } from './components/SessionMessageCard'
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type Modifier } from '@dnd-kit/core'
+import { getEventCoordinates } from '@dnd-kit/utilities'
 import { Plus } from 'lucide-react'
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
@@ -12,6 +14,7 @@ import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchStatusBar from './components/WorkbenchStatusBar'
 import WorkbenchPane, { type WorkbenchPaneProps } from './components/WorkbenchPane'
+import { WorkbenchTabDragPreview } from './components/WorkbenchTabs'
 import VscodeWebFrameHost, { createCodeFrame, useCodeFrames } from './components/VscodeWebFrameHost'
 import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
@@ -22,6 +25,7 @@ import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchLayoutNode, WorkbenchTab } from './workbench/types'
 import type { SystemSection } from './components/SystemView'
+import type { UsagePeriod } from './usageOverview'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, codeTabId, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget, type CodeOpenRequest } from './vscodeWeb'
 import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
@@ -33,7 +37,7 @@ import { FoxPaneLoader } from './components/FoxLoaders'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
-// systemSection carries a section route (#nodes, #timers) into the System tab's section.
+// systemSection carries a section route (#nodes, #timers, #webhooks, #usage, #activity) into the System tab's section.
 type RouteState = { view: 'tab'; tabId: string | null; systemSection?: SystemSection }
 
 type TerminalRegistryRecord = {
@@ -213,6 +217,17 @@ function buildSvgFaviconDataUrl(label: string): string | null {
   }
 }
 
+// A whole-pane drag starts from a wide header, so the compact overlay is centred on the pointer.
+const snapCenterToPointer: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  const pointer = activatorEvent ? getEventCoordinates(activatorEvent) : null
+  if (!pointer || !draggingNodeRect) return transform
+  return {
+    ...transform,
+    x: transform.x + pointer.x - draggingNodeRect.left - draggingNodeRect.width / 2,
+    y: transform.y + pointer.y - draggingNodeRect.top - draggingNodeRect.height / 2,
+  }
+}
+
 function applyCustomTabIcon(tabIcon: string) {
   const trimmed = tabIcon.trim()
   const customLink = document.getElementById(CUSTOM_FAVICON_LINK_ID)
@@ -344,8 +359,12 @@ function readHashRoute(): RouteState {
     return { view: 'tab', tabId: NODES_TAB_ID }
   }
 
-  if (hash === 'timers') {
-    return { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: 'timers' }
+  if (hash === 'timers' || hash === 'usage' || hash === 'activity') {
+    return { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: hash }
+  }
+
+  if (hash === 'webhooks') {
+    return { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: 'webhooks' }
   }
 
   if (hash === SETUP_HASH || hash === 'oobe') {
@@ -474,6 +493,8 @@ function App() {
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
+  // Under a window frame every pane's tab strip is a title row, so a sole tab keeps it.
+  const windowFramed = useSyncExternalStore(subscribeWindowFrame, windowFrameActive, () => false)
   const pendingChatRef = useRef<{ sessionId: string; paneId: string; fromTabId: string | null; controller: AbortController } | null>(null)
   const [pendingChatNavigation, setPendingChatNavigation] = useState<{sessionId:string;paneId:string;title:string;showLoader:boolean} | null>(null)
   const cancelPendingChatNavigation = useCallback(() => {
@@ -527,7 +548,7 @@ function App() {
   const setPaneCollapsed = useWorkbenchStore((state) => state.setPaneCollapsed)
   const updateSplitSizes = useWorkbenchStore((state) => state.updateSplitSizes)
 
-  const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session' | 'pane'; id: string; title: string } | null>(null)
+  const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session' | 'pane'; id: string; title: string; tabId?: string; active?: boolean; more?: number; preview?: ReactNode } | null>(null)
   const [tabRevealRequest, setTabRevealRequest] = useState<{ tabId: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
@@ -573,7 +594,7 @@ function App() {
     return selectVisibleSessionIds(activeSessionIds, !isMobile || !showSessionList)
   }, [isMobile, showSessionList, focusedPane, paneNodes, tabsById])
   const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
-  const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true, groupable: true })
+  const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true, groupable: true, childWindow: 'recent' })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
   const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
@@ -1013,8 +1034,10 @@ function App() {
 
   const openCodeCommit = async (target: CodeCommitTarget): Promise<void> => {
     if (codeOpenInNewWindow) {
-      const opened = window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(), '_blank', 'noopener,noreferrer')
+      // With noopener, window.open returns null even when the window opens.
+      const opened = window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(), '_blank')
       if (!opened) throw new Error('The browser blocked the Code window.')
+      try { opened.opener = null } catch {}
       return
     }
     await requestEmbeddedCode(target, { kind: 'openCommit', ...target })
@@ -1091,6 +1114,12 @@ function App() {
   const openSystemSessions = (status: 'active' | 'waiting') => {
     setSessionsFilterRequest(current => ({ status, nonce: (current?.nonce || 0) + 1 }))
     openSystemSection('sessions')
+  }
+
+  const [usageRequest, setUsageRequest] = useState<{ period: UsagePeriod; nonce: number } | null>(null)
+  const openSystemUsage = (period: UsagePeriod) => {
+    setUsageRequest(current => ({ period, nonce: (current?.nonce || 0) + 1 }))
+    openSystemSection('usage')
   }
 
   const openTasksTab = () => {
@@ -1721,6 +1750,7 @@ function App() {
             onAgentsChanged={() => { void Promise.all([fetchAgents(), fetchSessions()]) }}
             agentRequest={agentSettingsRequest}
             sessionsRequest={sessionsFilterRequest}
+            usageRequest={usageRequest}
             onOpenAgentMemory={(memoryRoot: string, filePath?: string) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
@@ -1822,7 +1852,7 @@ function App() {
       emphasizeFocus: paneIds.length > 1,
       dragEnabled: !isMobile,
       showPaneControls: !isMobile,
-      hideTabStrip: isMobile || paneTabs.length === 1 && paneTabs[0].type !== 'vscode',
+      hideTabStrip: isMobile || paneTabs.length === 1 && paneTabs[0].type !== 'vscode' && !windowFramed,
       canClosePane: paneIds.length > 1,
       onFocusPane: handleFocus,
       onSetCollapsed: (targetPaneId, collapsed) => {
@@ -1870,22 +1900,40 @@ function App() {
     return props ? <WorkbenchPane {...props} /> : null
   }
 
+  // One owner for the drag cursor and text selection: the attribute follows draggingItem, which
+  // drag end, cancel (Escape) and drops outside all clear. See [data-fw-dragging] in index.css.
+  const dragging = draggingItem !== null
+  useEffect(() => {
+    if (!dragging) return
+    document.documentElement.setAttribute('data-fw-dragging', '')
+    return () => document.documentElement.removeAttribute('data-fw-dragging')
+  }, [dragging])
+
   const draggingTab = draggingItem?.type === 'tab' && draggingItem.id ? (tabsById[draggingItem.id] || null) : null
+  const paneOverlayTab = draggingItem?.type === 'pane' && draggingItem.tabId ? (tabsById[draggingItem.tabId] || null) : null
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = String(event.active.id)
-    const activeData = event.active.data.current as { type?: string; title?: string; sessionId?: string; paneId?: string } | undefined
+    const activeData = event.active.data.current as { type?: string; title?: string; sessionId?: string; paneId?: string; preview?: ReactNode } | undefined
     if (activeData?.type === 'pane' && activeData.paneId) {
       const pane = findPaneNode(root, activeData.paneId)
-      setDraggingItem({ type: 'pane', id: activeData.paneId, title: pane?.tabIds.map((id) => tabsById[id]?.title).filter(Boolean).join(', ') || 'Empty pane' })
+      const shownTabId = pane?.activeTabId && tabsById[pane.activeTabId] ? pane.activeTabId : pane?.tabIds.find((id) => tabsById[id])
+      setDraggingItem({
+        type: 'pane',
+        id: activeData.paneId,
+        title: pane?.tabIds.map((id) => tabsById[id]?.title).filter(Boolean).join(', ') || 'Empty pane',
+        tabId: shownTabId,
+        active: !!shownTabId && shownTabId === pane?.activeTabId,
+        more: shownTabId && pane ? pane.tabIds.filter((id) => id !== shownTabId && tabsById[id]).length : 0,
+      })
       return
     }
     if (activeData?.type === 'session') {
-      setDraggingItem({ type: 'session', id: activeData.sessionId || activeId, title: activeData.title || activeData.sessionId || activeId })
+      setDraggingItem({ type: 'session', id: activeData.sessionId || activeId, title: activeData.title || activeData.sessionId || activeId, preview: activeData.preview })
       return
     }
     const tab = tabsById[activeId]
-    setDraggingItem({ type: 'tab', id: activeId, title: tab?.title || activeId })
+    setDraggingItem({ type: 'tab', id: activeId, title: tab?.title || activeId, active: !!activeData?.paneId && findPaneNode(root, activeData.paneId)?.activeTabId === activeId })
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -2099,18 +2147,19 @@ function App() {
       <WorkbenchContentProvider>
         {content}
         {renderStableContent()}
-        <DragOverlay>
+        <DragOverlay
+          style={draggingItem?.type === 'session' ? undefined : { width: 'max-content', height: 'auto' }}
+          modifiers={draggingItem?.type === 'pane' ? [snapCenterToPointer] : undefined}
+        >
           {draggingTab ? (
-            <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
-              <span className="truncate">{draggingTab.title}</span>
-            </div>
+            <WorkbenchTabDragPreview tab={draggingTab} active={!!draggingItem?.active} />
           ) : draggingItem?.type === 'pane' ? (
-            <div data-pane-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">
-              <span className="truncate">Pane: {draggingItem.title}</span>
-            </div>
+            paneOverlayTab
+              ? <WorkbenchTabDragPreview data-pane-drag-overlay tab={paneOverlayTab} active={!!draggingItem.active} more={draggingItem.more} />
+              : <div data-pane-drag-overlay aria-hidden="true" className="pointer-events-none inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">Empty pane</div>
           ) : draggingItem?.type === 'session' ? (
-            <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
-              <span className="truncate">{draggingItem.title}</span>
+            <div data-session-drag-overlay aria-hidden="true" className="pointer-events-none w-full cursor-grabbing select-none">
+              {draggingItem.preview}
             </div>
           ) : null}
         </DragOverlay>
@@ -2220,6 +2269,7 @@ function App() {
           onSelectSearch={() => openSearchTab()}
           onSelectSetup={openSetupView}
           onSelectLogs={openLogsTab}
+          setupActive={currentView === 'setup' || currentView === 'logs'}
           onSelectTasks={openTasksTab}
           onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}
@@ -2235,9 +2285,8 @@ function App() {
           />
         </div>
         <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets}
-          onOpenTasks={openTasksTab} onOpenNodes={openNodesTab} onOpenSessions={openSystemSessions}
+          onOpenTasks={openTasksTab} onOpenNodes={openNodesTab} onOpenSessions={openSystemSessions} onOpenUsage={openSystemUsage}
           onToggleTerminal={toggleTerminalPanel} terminalVisible={statusTerminalVisible}
-          totalUsage={boundedSessions.globalSummary?.tokenUsage}
           currentSessionId={focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined}
           currentSession={focusedActiveTab?.type === 'chat' ? currentContextSessionRecord : undefined}
         />

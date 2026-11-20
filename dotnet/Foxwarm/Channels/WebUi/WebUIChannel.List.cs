@@ -20,9 +20,11 @@ internal sealed partial class WebUIChannel
                         "childLimit",
                         "cursor",
                         "focusSessionId",
-                        "group"
+                        "group",
+                        "childWindow"
                     );
                     var mode = SessionListQueries.Mode(Query(query, "mode"));
+                    var recent = SessionListQueries.ChildWindow(Query(query, "childWindow"));
                     var grouping = SessionListQueries.Grouping(Query(query, "group"));
                     var limit = SessionListQueries.Limit(Query(query, "limit"), 50, 100);
                     var childLimit = SessionListQueries.Limit(Query(query, "childLimit"), 5, 20);
@@ -54,7 +56,8 @@ internal sealed partial class WebUIChannel
                                 rootIds.Select(id => (id, (string?)null)).ToArray(),
                                 mode,
                                 childLimit,
-                                previews: true
+                                previews: true,
+                                recentWindow: recent ? rootIds.ToHashSet(StringComparer.Ordinal) : null
                             );
                     foreach (var group in groups)
                     {
@@ -85,7 +88,7 @@ internal sealed partial class WebUIChannel
                                 forced[id] = links = new JsonArray();
                             var next = path[index + 1]!.GetValue<string>();
                             if (!links.Any(item => item!.GetValue<string>() == next))
-                                links.Add(next);
+                                links.Add((System.Text.Json.Nodes.JsonNode?)(next));
                         }
                     result["children"] = children;
                     result["focus"] = focus["results"]!.DeepClone();
@@ -207,6 +210,7 @@ internal sealed partial class WebUIChannel
                                 "parents accepts at most 20 requests."
                             );
                         var seen = new HashSet<string>(StringComparer.Ordinal);
+                        var recent = new HashSet<string>(StringComparer.Ordinal);
                         var requests = new List<(string Id, string? Cursor)>();
                         foreach (var node in parents)
                         {
@@ -218,7 +222,8 @@ internal sealed partial class WebUIChannel
                             SessionListQueries.Keys(
                                 parent.Select(pair => pair.Key),
                                 "parentSessionId",
-                                "cursor"
+                                "cursor",
+                                "window"
                             );
                             var id = SessionCatalog.Text(parent["parentSessionId"]);
                             if (id is null || id.Length is < 1 or > 512 || !seen.Add(id))
@@ -235,9 +240,22 @@ internal sealed partial class WebUIChannel
                                     "Child cursor must be a string."
                                 );
                             requests.Add((id, SessionCatalog.Text(parent["cursor"])));
+                            if (
+                                parent.ContainsKey("window")
+                                && SessionListQueries.ChildWindow(
+                                    SessionCatalog.Text(parent["window"])
+                                )
+                            )
+                                recent.Add(id);
                         }
                         var view = new SessionListQueries(runtime);
-                        var pages = view.ChildPages(requests.ToArray(), mode, limit, agent);
+                        var pages = view.ChildPages(
+                            requests.ToArray(),
+                            mode,
+                            limit,
+                            agent,
+                            recentWindow: recent
+                        );
                         var reset = pages.Any(page => page["reset"]!.GetValue<bool>());
                         foreach (var page in pages)
                             page.Remove("reset");
@@ -266,6 +284,7 @@ internal sealed partial class WebUIChannel
                             "mode",
                             "limit",
                             "childLimit",
+                            "childWindow",
                             "groups"
                         );
                         var grouping =
@@ -277,6 +296,7 @@ internal sealed partial class WebUIChannel
                         var mode = SessionListQueries.Mode(BodyText(body, "mode"));
                         var limit = BodyLimit(body, "limit", 10, 100);
                         var childLimit = BodyLimit(body, "childLimit", 5, 20);
+                        var recent = SessionListQueries.ChildWindow(BodyText(body, "childWindow"));
                         if (body["groups"] is not JsonArray groups || groups.Count > 20)
                             throw new SessionListQueryException(
                                 "SESSION_LIST_GROUPS_INVALID",
@@ -328,7 +348,14 @@ internal sealed partial class WebUIChannel
                                         .ToArray(),
                                     mode,
                                     childLimit,
-                                    previews: true
+                                    previews: true,
+                                    recentWindow: recent
+                                        ? result["groups"]!
+                                            .AsArray()
+                                            .SelectMany(group => group!["sessions"]!.AsArray())
+                                            .Select(row => row!["id"]!.GetValue<string>())
+                                            .ToHashSet(StringComparer.Ordinal)
+                                        : null
                                 );
                         foreach (var preview in previews)
                         {
@@ -505,12 +532,12 @@ internal sealed partial class WebUIChannel
     {
         try
         {
-            return Results.Ok(build());
+            return Results.Ok(JsonData.WebNode(build()));
         }
         catch (SessionListQueryException error)
         {
             return Results.Json(
-                new { error = error.Message, code = error.Code },
+                new JsonObject { ["error"] = error.Message, ["code"] = error.Code },
                 statusCode: error.Code == "SESSION_NOT_FOUND" ? 404 : 400
             );
         }
@@ -523,7 +550,11 @@ internal sealed partial class WebUIChannel
             )
         {
             return Results.BadRequest(
-                new { error = "Invalid Session list request", code = "SESSION_LIST_DTO_INVALID" }
+                new JsonObject
+                {
+                    ["error"] = "Invalid Session list request",
+                    ["code"] = "SESSION_LIST_DTO_INVALID",
+                }
             );
         }
     }
@@ -538,14 +569,18 @@ internal sealed partial class WebUIChannel
             var body = await JsonNode.ParseAsync(request.Body) as JsonObject;
             return body is null
                 ? Results.BadRequest(
-                    new { error = "Request must be an object", code = "SESSION_LIST_DTO_INVALID" }
+                    new JsonObject
+                    {
+                        ["error"] = "Request must be an object",
+                        ["code"] = "SESSION_LIST_DTO_INVALID",
+                    }
                 )
                 : ListResult(() => build(body));
         }
         catch (System.Text.Json.JsonException)
         {
             return Results.BadRequest(
-                new { error = "Invalid JSON", code = "SESSION_LIST_DTO_INVALID" }
+                new JsonObject { ["error"] = "Invalid JSON", ["code"] = "SESSION_LIST_DTO_INVALID" }
             );
         }
     }

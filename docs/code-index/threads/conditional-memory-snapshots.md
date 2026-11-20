@@ -10,7 +10,7 @@ The observable source/adoption choices and refresh rationale are owned by [worki
 
 ### D-memory-request-prefix-stability
 
-**Governing constraint; directly requested.** Preserve reusable leading prompt content across related requests. The snapshot, planner-prefix and tool-declaration designs below serve this goal; matching their current implementations is not a reason to introduce new prefix variation. The constraint concerns local request construction, not a promise about a provider's cache accounting.
+**Derived design; serves the governing goal [D-request-prefix-stability](../overview.md#d-request-prefix-stability).** Preserve reusable leading prompt content across related requests. The snapshot, planner-prefix and tool-declaration designs below serve this goal; matching their current implementations is not a reason to introduce new prefix variation. The constraint concerns local request construction, not a promise about a provider's cache accounting.
 
 [2026-10-27] Keep memory-backed leading instructions stable so ordinary and dedicated compaction requests can share a prefix extending into older history. With unchanged base instructions and a matching concrete memory snapshot, ordinary, compact, and detached BTW requests compose the same base instructions plus snapshot bytes. Node selection, working directory, and connection status must not inject request-time text into this prefix or become snapshot inputs. Model-identity changes and the lifecycle refreshes below retain their existing effects.
 
@@ -46,7 +46,7 @@ Tool catalogs remain independent of memory snapshots. The [canonical default dec
 - A never-run virtual Session has no truthful concrete generation identity and leaves its snapshot unmaterialized until an actual attempt selects a leaf.
 - Forks retain the copied snapshot and cache lineage; first actual use rebuilds when the selected concrete identity differs.
 - Explicit, stale-idle, agent-metadata, and compaction-commit refreshes rebuild using the snapshot's recorded concrete generation identity. A concrete Session without a marker can derive its identity directly. A markerless virtual Session defers rather than selecting a synthetic leaf.
-- Exact-target refresh resolves an existing lifetime before assembly and uses its saved selection and Agent-relative path base. The maintained reader does not reapply destination isolation to [creator-admitted custom sources](../behaviors/conversation-and-history.md#custom-prompt-files-and-legacy-isolation). Default targeting and refresh admission are governed by [instruction adoption](../behaviors/conversation-and-history.md#when-do-changed-instructions-reach-the-model); refreshing does not choose an arbitrary virtual leaf.
+- Exact-target refresh resolves an existing lifetime before assembly and uses its saved selection and Agent-relative path base. The maintained reader does not reapply the destination Agent's rules to [creator-admitted custom sources](../behaviors/conversation-and-history.md#custom-prompt-files-and-creator-authority). Default targeting and refresh admission are governed by [instruction adoption](../behaviors/conversation-and-history.md#when-do-changed-instructions-reach-the-model); refreshing does not choose an arbitrary virtual leaf.
 - Compaction commit keeps its existing memory reread behavior when a truthful live snapshot identity exists. Detached compact prompts are never copied back over live authority.
 
 ## Memory size warning

@@ -19,6 +19,7 @@ internal sealed class MainLog : IDisposable
     private readonly bool json = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG") == "1";
     private bool failed;
     private static MainLog? active;
+    private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
 
     // Typed lifecycle diagnostics are INFO only inside Main's capture. Outside Main, stderr
     // remains the diagnostic stream so CLI and private helper stdout framing stays intact.
@@ -42,6 +43,13 @@ internal sealed class MainLog : IDisposable
             return error.GetType().Name
                 + ": "
                 + unavailable.Diagnostic.Format(unavailable.SessionId);
+        if (
+            error
+            is Foxwarm.Secrets.SecretUnavailableException
+                or Foxwarm.Secrets.SecretStoreLockedException
+                or ControlPipeUnavailableException
+        )
+            return error.GetType().Name + ": " + error.Message;
         if (Foxwarm.Sessions.SessionAuthorityErrors.Detail(error) is { } diagnostic)
             return error.GetType().Name + ": " + diagnostic.Format();
         var detail = error switch
@@ -67,6 +75,7 @@ internal sealed class MainLog : IDisposable
 
     internal MainLog(ModelConfiguration configuration)
     {
+        secrets = configuration.Secrets;
         var path = Destination(configuration);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         file = new StreamWriter(Foxwarm.Tools.AppendLogFile.Open(path), new UTF8Encoding(false))
@@ -92,6 +101,10 @@ internal sealed class MainLog : IDisposable
         Volatile.Write(ref active, this);
     }
 
+    // Known secret values are masked in each write before the console sees it and again in
+    // each complete file line.
+    private string Redact(string line) => secrets?.LastBuilt.Redact(line) ?? line;
+
     private void Record(string line, bool isError)
     {
         if (failed)
@@ -101,14 +114,14 @@ internal sealed class MainLog : IDisposable
             var now = DateTimeOffset.Now;
             file.WriteLine(
                 json
-                    ? JsonSerializer.Serialize(
-                        new
+                    ? JsonData.Serialize(
+                        new System.Text.Json.Nodes.JsonObject
                         {
-                            level = isError ? 50 : 30,
-                            time = now.ToUnixTimeMilliseconds(),
-                            pid = Environment.ProcessId,
-                            hostname = Environment.MachineName,
-                            msg = line,
+                            ["level"] = isError ? 50 : 30,
+                            ["time"] = now.ToUnixTimeMilliseconds(),
+                            ["pid"] = Environment.ProcessId,
+                            ["hostname"] = Environment.MachineName,
+                            ["msg"] = line,
                         }
                     )
                     : "["
@@ -161,23 +174,40 @@ internal sealed class MainLog : IDisposable
             lock (owner.gate)
             {
                 console?.Write(value);
-                if (value == '\n')
-                {
-                    owner.Record(pending.ToString().TrimEnd('\r'), isError);
-                    pending.Clear();
-                }
-                else
-                    pending.Append(value);
+                Append(value);
             }
         }
 
+        // Each write is masked as a whole before the console sees it, so console output
+        // keeps its timing and a multi-line value written at once is still masked. The
+        // file receives complete lines, masked again for values split across writes.
         public override void Write(string? value)
         {
-            if (value is null)
+            if (string.IsNullOrEmpty(value))
                 return;
             lock (owner.gate)
-                foreach (var character in value)
-                    Write(character);
+            {
+                var masked = owner.Redact(value);
+                console?.Write(masked);
+                foreach (var character in masked)
+                    Append(character);
+            }
+        }
+
+        public override void Write(char[] buffer, int index, int count) =>
+            Write(new string(buffer, index, count));
+
+        public override void Write(ReadOnlySpan<char> buffer) => Write(new string(buffer));
+
+        private void Append(char value)
+        {
+            if (value == '\n')
+            {
+                owner.Record(owner.Redact(pending.ToString().TrimEnd('\r')), isError);
+                pending.Clear();
+            }
+            else
+                pending.Append(value);
         }
 
         public override void Flush()
@@ -190,7 +220,7 @@ internal sealed class MainLog : IDisposable
         {
             if (pending.Length > 0)
             {
-                owner.Record(pending.ToString(), isError);
+                owner.Record(owner.Redact(pending.ToString()), isError);
                 pending.Clear();
             }
             console?.Flush();

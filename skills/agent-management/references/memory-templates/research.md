@@ -22,8 +22,7 @@
 
 ## Experiment policy
 
-- Main/direct sessions preserve global judgment, research direction, and final decisions.
-- Child sessions execute bounded experiments, literature reviews, code investigations, or artifact preparation.
+- Coordinating Sessions keep the research direction and final decisions; delegated Sessions run bounded experiments, literature reviews, code investigations or artifact preparation.
 - After each result, reflect on what changed in the hypothesis, what uncertainty remains, and what next action has the highest information value.
 - Do not store run-by-run logs, detailed metrics, or long reflections in memory.
 - Put detailed experiment notes under `docs/` and keep only durable conclusions plus pointers here.
@@ -31,6 +30,7 @@
 ## Execution and artifact defaults
 
 - Preferred workspace: <path or description>
+- Execution Node: <Node ID, or Provider and profile for disposable environments>
 - Large artifacts/cache location: <path or policy>
 - Standard environment setup: `<command or doc pointer>`
 - Standard evaluation command: `<command or doc pointer>`
@@ -42,9 +42,6 @@ Read these on demand:
 - `docs/<file>.md` — <purpose>
 - `docs/<file>.md` — <purpose>
 
-## Keep/drop policy
+## Keeping this file current
 
-- Keep durable goals, boundaries, strategic conclusions, current environment facts, and doc pointers.
-- Use progressive disclosure: memory for durable research direction, skills for reusable research/evaluation procedures, skill resources for detailed templates/scripts/examples, and `docs/` for experiment notes/artifacts.
-- Do not keep raw logs, temporary numbers, completed experiment chronology, secrets, or private external credentials.
-- If this file grows past about 500 lines, archive old detail into docs and keep a short current-state summary here.
+- Keep durable goals, boundaries, strategic conclusions, environment facts and pointers. Put experiment notes, raw results and chronology in `docs/`.

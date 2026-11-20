@@ -24,7 +24,8 @@ internal static class ClaudeRuntimeToolSupport
         var name = SessionWait.Text(projected["name"]);
         if (name is "send_to_session" or "create_child_session")
         {
-            var after = projected["parameters"]?["properties"]?["afterSend"] as JsonObject;
+            var after =
+                projected["parameters"]?["properties"]?["currentSessionTurnAction"] as JsonObject;
             if (after is not null)
             {
                 after["enum"] = new JsonArray("continue");
@@ -67,11 +68,11 @@ internal static class ClaudeRuntimeToolSupport
         var args = resolved.Args;
         if (
             resolved.Name is "send_to_session" or "create_child_session"
-            && SessionWait.Text(args["afterSend"]) is { } after
+            && SessionWait.Text(args["currentSessionTurnAction"]) is { } after
             && after != "continue"
         )
             throw new InvalidOperationException(
-                "Claude Code runtime supports only afterSend=continue."
+                "Claude Code runtime supports only currentSessionTurnAction=continue."
             );
         if (
             resolved.Name == "ask_user"

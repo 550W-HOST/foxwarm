@@ -16,7 +16,7 @@ The contract is split by responsibility. Each detailed rule has one canonical ow
 Automatic and explicit compact requests, the default keep ratio, and the historical pruning attempt are in [triggers](./context-compaction.md#triggers-and-tool-response-pruning). Snapshot planning and the async and awaited modes are in [snapshots and jobs](./compaction-lifecycle.md#snapshots-and-jobs).
 
 ### 2. Candidate policy and planning
-Raw and block candidate quotas, planner submission, and plan contents are in [candidate policy and planning](./context-compaction.md#candidate-policy-and-planning).
+The retention policy that selects operations, planner submission, and plan contents are in [candidate policy and planning](./context-compaction.md#candidate-policy-and-planning).
 
 ### 3. Commit and continuation
 Safe-point application, stale-snapshot aborts, and cancellation are in [commit and safe points](./compaction-lifecycle.md#commit-and-safe-points) and [cancellation](./compaction-lifecycle.md#cancellation). Replacement of active history is governed by [D-context-active-history-authority](#d-context-active-history-authority).

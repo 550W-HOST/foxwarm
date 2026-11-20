@@ -40,7 +40,9 @@ internal sealed partial class WebUIChannel
                             )
                         )
                             throw new InvalidDataException("Choose a valid date and time.");
-                        return Results.Json(await logs.Seek(date.ToUnixTimeMilliseconds(), fileId));
+                        return Results.Json(
+                            JsonData.WebNode(await logs.Seek(date.ToUnixTimeMilliseconds(), fileId))
+                        );
                     }
                     if (direction.Length > 0 && direction is not ("latest" or "before" or "after"))
                         throw new InvalidDataException("Invalid log direction.");
@@ -63,15 +65,17 @@ internal sealed partial class WebUIChannel
                         position = number;
                     }
                     return Results.Json(
-                        new
+                        new System.Text.Json.Nodes.JsonObject
                         {
-                            window = (
-                                await logs.Read(
-                                    direction.Length == 0 ? "latest" : direction,
-                                    position,
-                                    fileId
-                                )
-                            ).Json(),
+                            ["window"] = JsonData.WebNode(
+                                (
+                                    await logs.Read(
+                                        direction.Length == 0 ? "latest" : direction,
+                                        position,
+                                        fileId
+                                    )
+                                ).Json()
+                            ),
                         }
                     );
                 }
@@ -79,7 +83,11 @@ internal sealed partial class WebUIChannel
                 {
                     var reset = error is LogFileResetException;
                     return Results.Json(
-                        new { error = error.Message, reset },
+                        new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["reset"] = reset,
+                        },
                         statusCode: reset ? 409 : 400
                     );
                 }

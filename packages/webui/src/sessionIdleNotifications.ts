@@ -9,7 +9,7 @@ export interface SessionIdleNotificationSession extends RuntimeStateSessionLike 
   displayName?: string
   aliases?: string[]
   queueLength?: number
-  questions?: { open?: number; revision?: number } | null
+  questions?: { open?: number; approvals?: number; revision?: number } | null
 }
 
 export interface SessionIdleNotificationHandle {
@@ -135,7 +135,7 @@ export function showSessionIdleNotification(session: SessionIdleNotificationSess
 export function showSessionQuestionNotification(session: SessionIdleNotificationSession): SessionIdleNotificationHandle | null {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return null
   try {
-    return new Notification('Question for you', { body: session.displayName || session.id })
+    return new Notification((session.questions?.approvals ?? 0) > 0 ? 'Approval needed' : 'Question for you', { body: session.displayName || session.id })
   } catch {
     return null
   }

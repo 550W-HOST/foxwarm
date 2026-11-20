@@ -7,7 +7,7 @@ A new installation trusts its agents: they can use every tool on every Node you 
 
 | Question | Controlled by |
 | --- | --- |
-| Who can sign in or call in? | The WebUI token, [identities](#scoped-webui-access) and Channel [allow lists](/docs/channels/#who-can-talk-to-the-agent) |
+| Who can sign in or call in? | The WebUI token, [identities](#scoped-webui-access), [webhooks](/docs/webhooks/) and Channel [allow lists](/docs/channels/#who-can-talk-to-the-agent) |
 | Which tools may this Agent use, with which arguments, on which Node? | [Instance rules](#instance-wide-rules) and [rules for each Agent](#rules-for-each-agent) |
 | What can a permitted command actually reach? | The Node's operating-system user, files and network |
 
@@ -34,6 +34,35 @@ rules:
 - A call that matches no rule gets `defaultAction`. Calls from external MCP clients that match no rule are always denied.
 
 To restrict one Agent, list what it may do and finish with a deny for that Agent, as above. Ask the agent to load the `access-control` Skill for the complete matcher reference and safe update steps.
+
+## Ask before a tool runs
+
+A rule can ask for a decision instead of allowing or denying:
+
+```yaml
+version: 1
+defaultAction: allow
+rules:
+  - id: confirm-production
+    agent: ops
+    tool: { source: node, name: exec }
+    node: production
+    action: ask
+    reason: Commands on production
+    approval:
+      timeoutSeconds: 1800
+      approvers: [alex]
+```
+
+A matching call waits until someone approves or rejects it in the WebUI. The request appears above the message box with the tool, its arguments and targets, and the rule's reason. You can add a note for the agent either way. The call runs only after approval; a rejected or expired request returns an error to the agent, and Stop cancels a waiting call.
+
+- You can always decide as administrator. A [scoped identity](#scoped-webui-access) can decide only when it can see the Session and every rule that asked names it in `approvers`. Anyone who can open the Session can see the request and its arguments; `approvers` only limits who decides.
+- Without `timeoutSeconds`, a call waits until someone decides or the turn is stopped. Scheduled scripts and webhook handlers give up after an hour unless the rule sets a deadline.
+- A request still waiting when Foxwarm restarts is dropped. The call does not run later.
+- Each approval covers one call. Repeating the call asks again.
+- Rules in every layer still apply: a deny anywhere wins, and the call waits only when no layer denies it. `defaultAction: ask` and Agent rule lists can ask too.
+- External MCP clients cannot wait, so for them a rule that asks counts as a deny.
+- Other Channels receive a notice that a call is waiting; decisions are made in the WebUI.
 
 ## Rules for each Agent
 
@@ -107,3 +136,7 @@ The Sessions still run with their own Agent's rules. If Alex should not see some
 ## External MCP clients
 
 Programs and other Foxwarm instances can call in through the inbound MCP endpoint with their own identity (`surfaces.mcp: {}`). They get no tools until instance rules allow them by `externalId`. See [Connect an external MCP client](/docs/mcp-inbound/).
+
+## Webhooks
+
+GitHub, Cloudflare and monitoring tools can notify one Session through a webhook identity (`surfaces.webhook`). A delivery is data for that Session and grants the sender no tools. See [Webhooks](/docs/webhooks/).

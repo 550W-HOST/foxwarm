@@ -44,8 +44,8 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Equal(before, (await f.Requests()).Length);
         Success(
             await f.Call(
-                "call_tool",
-                new JsonObject
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject
                 {
                     ["toolId"] = "builtin:artifact",
                     ["args"] = new JsonObject
@@ -54,7 +54,7 @@ public sealed partial class ProviderFileConsumerTests
                         ["node"] = f.Node,
                         ["filePath"] = "nested/chart.json",
                     },
-                }
+                })
             )
         );
         Assert.All(

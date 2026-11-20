@@ -134,6 +134,15 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
+    internal string? CreatorSessionId(string taskId)
+    {
+        lock (gate)
+        {
+            var row = Read(Open(), taskId);
+            return row is null ? null : Canonical(Text(row["createdBySessionId"]));
+        }
+    }
+
     internal string? DefaultActor(JsonObject args)
     {
         var id = Text(args["taskId"]);
@@ -294,12 +303,7 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
-    internal JsonObject TaskContext(
-        string sessionId,
-        IReadOnlyList<long> sequences,
-        bool consume,
-        IReadOnlyList<string> retained
-    )
+    internal JsonObject TaskContext(string sessionId, IReadOnlyList<long> sequences, bool consume)
     {
         lock (gate)
         {
@@ -356,7 +360,7 @@ internal sealed class TaskStore : IDisposable
                     count = hasLast ? Math.Min(30, count + sequences.Count(seq => seq > last)) : 0;
                     var due = count >= 30;
                     var id = Text(row["id"])!;
-                    if (consume && (due || retained.Contains(id)))
+                    if (consume && due)
                     {
                         result.Add(
                             new JsonObject
@@ -366,8 +370,7 @@ internal sealed class TaskStore : IDisposable
                                 ["status"] = Text(row["status"]),
                             }
                         );
-                        if (due)
-                            count = 0;
+                        count = 0;
                     }
                     Update(
                         db,
@@ -513,7 +516,7 @@ internal sealed class TaskStore : IDisposable
             var now = Now();
             using var cmd = db.CreateCommand();
             cmd.CommandText =
-                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES($id,$title,$description,$status,$parent,$creatorKind,$creator,$owner,$now,$now,$revision,$notification,$anchor)";
+                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq,ownerAssignedAt) VALUES($id,$title,$description,$status,$parent,$creatorKind,$creator,$owner,$now,$now,$revision,$notification,$anchor,$assigned)";
             Add(cmd, "$id", id);
             Add(cmd, "$title", Text(args["title"])!);
             Add(cmd, "$description", Text(args["description"]));
@@ -522,6 +525,7 @@ internal sealed class TaskStore : IDisposable
             Add(cmd, "$creator", actorKind == "session" ? Canonical(actor!) : null);
             Add(cmd, "$owner", requestedOwner);
             Add(cmd, "$now", now);
+            Add(cmd, "$assigned", requestedOwner is null ? null : now);
             Add(cmd, "$status", requestedOwner is null ? "open" : "active");
             Add(cmd, "$revision", requestedOwner is null ? 0 : 1);
             Add(cmd, "$notification", notifyNew ? "pending" : null);
@@ -607,6 +611,8 @@ internal sealed class TaskStore : IDisposable
                     taskId,
                     "ownerSessionId",
                     actor,
+                    "ownerAssignedAt",
+                    now2,
                     "status",
                     "active",
                     "updatedAt",
@@ -684,6 +690,8 @@ internal sealed class TaskStore : IDisposable
                         "reminderMessageCount",
                         changed ? 0 : Int(task["reminderMessageCount"])
                     );
+                    if (changed)
+                        Update(db, taskId, "ownerAssignedAt", requested is null ? null : now2);
                     if (changed)
                         AddNote(
                             db,
@@ -810,6 +818,7 @@ internal sealed class TaskStore : IDisposable
                 "reminderLastSeq",
                 "reminderMessageCount",
                 "assignmentRevision",
+                "ownerAssignedAt",
             }
         )
             row.Remove(key);
@@ -818,6 +827,18 @@ internal sealed class TaskStore : IDisposable
         if (Text(row["result"]) is { Length: > 20000 } result)
             row["result"] = result[..19999] + "…";
         return CanonicalReferences(row);
+    }
+
+    /// <summary>When the current owner was assigned (epoch ms); null for tasks owned before the column existed.</summary>
+    internal long? OwnerAssignedAt(string taskId)
+    {
+        lock (gate)
+        {
+            var db = Open();
+            return Read(db, taskId) is { } row && row["ownerAssignedAt"] is JsonValue value
+                ? Long(value)
+                : null;
+        }
     }
 
     // Bounded title/status lookup for display surfaces that already reference these Tasks.
@@ -840,6 +861,22 @@ internal sealed class TaskStore : IDisposable
         return result;
     }
 
+    // Status only, for surfaces that must not expose Task content. Unknown IDs are absent.
+    internal IReadOnlyDictionary<string, string> Statuses(IReadOnlyList<string> ids)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (ids.Count == 0 || !File.Exists(path))
+            return result;
+        lock (gate)
+        {
+            var db = Open();
+            foreach (var id in ids)
+                if (Read(db, id) is { } row && Text(row["status"]) is { Length: > 0 } status)
+                    result[id] = status;
+        }
+        return result;
+    }
+
     private JsonObject? Read(SqliteConnection db, string id)
     {
         using var cmd = db.CreateCommand();
@@ -855,9 +892,20 @@ internal sealed class TaskStore : IDisposable
         for (var i = 0; i < reader.FieldCount; i++)
             row[reader.GetName(i)] = reader.IsDBNull(i)
                 ? null
-                : JsonValue.Create(reader.GetValue(i));
+                : Value(reader.GetValue(i));
         return row;
     }
+
+    // Task columns are text and integers. Build the DOM primitive from its actual type so a
+    // row clone or save never needs runtime-type serialization in a native publication.
+    private static JsonValue Value(object value) =>
+        value switch
+        {
+            string text => JsonValue.Create(text),
+            long number => JsonValue.Create(number),
+            int number => JsonValue.Create((long)number),
+            _ => JsonValue.Create(Convert.ToString(value, CultureInfo.InvariantCulture)),
+        };
 
     private JsonObject CanonicalReferences(JsonObject row)
     {
@@ -1055,6 +1103,18 @@ internal sealed class TaskStore : IDisposable
                 db.ExecuteNonQuery($"ALTER TABLE tasks ADD COLUMN {column.Item1} {column.Item2}");
         }
         MigrateActorColumns(db);
+        // Added after the actor migration, which rebuilds the table from its older column set.
+        using (var info = db.CreateCommand())
+        {
+            info.CommandText = "PRAGMA table_info(tasks)";
+            var found = false;
+            using (var reader = info.ExecuteReader())
+                while (reader.Read())
+                    if (reader.GetString(1) == "ownerAssignedAt")
+                        found = true;
+            if (!found)
+                db.ExecuteNonQuery("ALTER TABLE tasks ADD COLUMN ownerAssignedAt INTEGER");
+        }
         db.ExecuteNonQuery(
             "CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,updatedAt); "
                 + "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId,createdAt); "

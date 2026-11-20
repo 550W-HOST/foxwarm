@@ -80,7 +80,7 @@ public sealed partial class ClaudeRuntimeTests
                 args["handoffRecall"] = "Report the completed assigned work to its parent.";
             args["sessionId"] = "<parent>";
             args["message"] = "completed once";
-            args["afterSend"] = "continue";
+            args["currentSessionTurnAction"] = "continue";
             if (confirmation)
                 args["handoffConfirmation"] =
                     "The assignment is complete and this is the required report. "
@@ -195,10 +195,10 @@ public sealed partial class ClaudeRuntimeTests
         foreach (var input in new[] { boundary, reminder })
         {
             var choices = Regex
-                .Matches(input, "afterSend: \\\"([^\\\"]+)\\\"")
+                .Matches(input, "currentSessionTurnAction: \\\"([^\\\"]+)\\\"")
                 .Select(match => match.Groups[1].Value)
                 .ToArray();
-            Assert.Contains("finish", choices);
+            Assert.Contains("end_turn", choices);
             Assert.Contains("wait", choices);
         }
     }
@@ -206,7 +206,7 @@ public sealed partial class ClaudeRuntimeTests
     private static void AssertSupportedGuidance(string input, bool confirmation)
     {
         var choices = Regex
-            .Matches(input, "afterSend: \\\"([^\\\"]+)\\\"")
+            .Matches(input, "currentSessionTurnAction: \\\"([^\\\"]+)\\\"")
             .Select(match => match.Groups[1].Value)
             .ToArray();
         Assert.NotEmpty(choices);
@@ -221,7 +221,7 @@ public sealed partial class ClaudeRuntimeTests
                     < fragment.IndexOf("message:", StringComparison.Ordinal)
             );
             Assert.True(
-                fragment.IndexOf("afterSend:", StringComparison.Ordinal)
+                fragment.IndexOf("currentSessionTurnAction:", StringComparison.Ordinal)
                     < fragment.IndexOf("handoffConfirmation:", StringComparison.Ordinal)
             );
             Assert.Contains(HandoffConfirmation.Suffix, fragment);

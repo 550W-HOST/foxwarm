@@ -3,12 +3,16 @@ using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Channels;
+
+internal sealed class WeixinHttpException(int status, string message) : IOException(message)
+{
+    internal int Status { get; } = status;
+}
 
 internal sealed partial class WeixinApi
 {
@@ -17,7 +21,7 @@ internal sealed partial class WeixinApi
     private static readonly HttpClient DefaultHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private static readonly JsonSerializerOptions WireJson = new()
     {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Encoder = JsonText.Encoder,
     };
     private readonly HttpClient http;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
@@ -83,7 +87,8 @@ internal sealed partial class WeixinApi
         using var response = await http.SendAsync(request, timeout.Token);
         var raw = await response.Content.ReadAsStringAsync(timeout.Token);
         if (!response.IsSuccessStatusCode)
-            throw new IOException(
+            throw new WeixinHttpException(
+                (int)response.StatusCode,
                 label
                     + " "
                     + (int)response.StatusCode

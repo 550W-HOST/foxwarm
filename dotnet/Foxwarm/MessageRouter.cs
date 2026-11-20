@@ -9,7 +9,9 @@ internal sealed record ChannelMessage(
     string Text,
     string? ClientMessageId,
     IReadOnlyList<JsonObject>? Parts = null,
-    string? ControlRequestId = null
+    string? ControlRequestId = null,
+    // Who sent WebUI input: the administrator or a scoped identity. Administrator-only evidence.
+    JsonObject? Sender = null
 );
 
 internal sealed record MessageRouteResult(int Status, object Value);
@@ -24,238 +26,17 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
         Action? beforeAdmission = null
     )
     {
-        if (IsPresentationCommand(message.Text))
-        {
-            var canonical = SessionCatalog.Text(
-                runtime.Catalog.Resolve(context.SessionId)["sessionId"]
-            );
-            if (canonical is null)
-                return new(404, new { error = "Session not found" });
-            return HandlePresentationCommand(context with { SessionId = canonical }, message.Text);
-        }
-        var owner =
-            attachmentOwner
-            ?? await runtime.GetOwnerAsync(context.SessionId)
-            ?? throw new InvalidDataException("Session not found.");
-        var command = SessionCatalog.Trim(message.Text);
-        if (IsDeleteCommand(message.Text))
-            return await HandleDeleteCommandAsync(context, message.Text, owner);
-        if (IsIdentityMoveCommand(message.Text))
-            return await HandleIdentityMoveCommandAsync(context, message.Text, owner);
-        if (
-            context.Platform == "webui"
-            && message.ControlRequestId is { } requestId
-            && ControlAction(command) is { } action
-        )
-            return await HandleControlAsync(owner, command, requestId, action);
-        if (context.Platform == "webui")
-        {
-            var match = System.Text.RegularExpressions.Regex.Match(
-                message.Text,
-                @"^(/[a-zA-Z_\-.]+)(?:\s+([\s\S]*))?$"
-            );
-            if (
-                match.Success
-                && Foxwarm.Channels.ExternalCommands.Find(match.Groups[1].Value) is not null
-            )
-            {
-                var source = new Foxwarm.Channels.ExternalChannelContext(
-                    "webui",
-                    "webui",
-                    context.SessionId,
-                    null,
-                    null,
-                    text =>
-                    {
-                        runtime.ReplyToCommand(context.SessionId, text);
-                        return Task.CompletedTask;
-                    }
-                );
-                await HandleExternalCommandAsync(
-                    source,
-                    match.Groups[1].Value,
-                    match.Groups[2].Success ? match.Groups[2].Value : null,
-                    owner
-                );
-                return new(200, new { success = true });
-            }
-        }
-        if (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal))
-            return await HandleNodeCommandAsync(command, owner);
-        if (command.StartsWith("/", StringComparison.Ordinal))
-        {
-            if (command == "/session index")
-            {
-                runtime.ReplyToCommand(owner.Id, "🔄 Indexing session archive...");
-                try
-                {
-                    var latest = await runtime.Manager.ForceVectorIndexAsync(owner);
-                    runtime.ReplyToCommand(
-                        owner.Id,
-                        $"✅ Archive indexing completed up to seq {latest}."
-                    );
-                    return new(200, new { success = true, latestSeq = latest });
-                }
-                catch (Exception error)
-                {
-                    runtime.ReplyToCommand(owner.Id, "❌ Indexing failed: " + error.Message);
-                    return new(
-                        503,
-                        new
-                        {
-                            error = error.Message,
-                            code = error is Foxwarm.Vector.VectorUnavailableException unavailable
-                                ? unavailable.Code
-                                : "VECTOR_INDEX_FAILED",
-                        }
-                    );
-                }
-            }
-            if (command == "/session clear")
-            {
-                try
-                {
-                    var result = await runtime.ClearHistoryAsync(context.SessionId);
-                    return new(200, result);
-                }
-                catch (AuthorityCommittedException error)
-                {
-                    return new(500, new { error = error.Message, committed = true });
-                }
-                catch (InvalidOperationException error)
-                {
-                    return new(409, new { error = error.Message });
-                }
-            }
-            if (System.Text.RegularExpressions.Regex.IsMatch(command, @"^/fork(?:\s|$)"))
-            {
-                var rest = message
-                    .Text[(message.Text.IndexOf("/fork", StringComparison.Ordinal) + 5)..]
-                    .TrimStart();
-                var parsed = System.Text.RegularExpressions.Regex.Match(
-                    rest,
-                    @"^(\S+)(?:\s+([\s\S]*))?$"
-                );
-                var suffix = parsed.Success
-                    ? parsed.Groups[1].Value
-                    : runtime.Manager.GenerateSessionId();
-                var initial =
-                    parsed.Groups[2].Success && parsed.Groups[2].Value.Length > 0
-                        ? parsed.Groups[2].Value
-                        : null;
-                try
-                {
-                    var child = await runtime.ForkCommandAsync(context.SessionId, suffix, initial);
-                    return new(200, new { success = true, newSessionId = child.Id });
-                }
-                catch (CommittedSessionCreationException error)
-                {
-                    return new(
-                        500,
-                        new
-                        {
-                            error = error.Message,
-                            code = "partial_create",
-                            sessionId = error.SessionId,
-                            initialDeliveryCommitted = error.InitialDeliveryCommitted,
-                            parentNoticeCommitted = error.ParentNoticeCommitted,
-                        }
-                    );
-                }
-                catch (InvalidDataException error)
-                {
-                    return new(400, new { error = error.Message });
-                }
-            }
-            if (command == "/continue")
-            {
-                try
-                {
-                    await runtime.ContinueAsync(context.SessionId);
-                    return new(200, new { success = true });
-                }
-                catch (SessionContinuationUnavailableException error)
-                {
-                    return new(409, new { error = error.Message, code = error.Code });
-                }
-                catch (InvalidOperationException error)
-                {
-                    return new(409, new { error = error.Message });
-                }
-            }
-            if (System.Text.RegularExpressions.Regex.IsMatch(command, @"^/compact(?:\s|$)"))
-            {
-                if (owner.Entry.HistoryMutation)
-                    return new(409, new { error = "Session history change is in progress." });
-                var keep = CommandArguments.CompactKeep(
-                    command
-                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-                        .Skip(1)
-                        .ToArray()
-                );
-                var result = await owner.Compactor.StartManualAsync(keepPercent: keep);
-                return result.Started || result.AlreadyPending
-                    ? new(
-                        202,
-                        new
-                        {
-                            accepted = true,
-                            compacting = true,
-                            alreadyPending = result.AlreadyPending,
-                            runsInBackground = result.Background,
-                        }
-                    )
-                    : new(
-                        409,
-                        new
-                        {
-                            error = "This model disables background compaction. Stop or wait for the current run to finish, then request compaction again.",
-                        }
-                    );
-            }
-            if (command == "/dequeue")
-            {
-                var result = await runtime.DequeueAsync(context.SessionId);
-                return new(
-                    200,
-                    new
-                    {
-                        success = true,
-                        queuedItems = result.QueuedItems,
-                        stoppedCurrent = result.StoppedCurrent,
-                        abortedInFlight = result.AbortedInFlight,
-                    }
-                );
-            }
-            if (command == "/stop compact")
-            {
-                var result = await owner.Compactor.StopAsync();
-                return new(
-                    200,
-                    new
-                    {
-                        success = true,
-                        stoppedCompact = result.Cancelled,
-                        tooLate = result.TooLate,
-                    }
-                );
-            }
-            if (command != "/stop")
-                return new(422, new { error = "This Session command has not been implemented." });
-            if (owner.Compactor.Standalone)
-                return new(200, new { success = true, stoppedCurrent = false });
-            if (!owner.Metadata().Busy)
-                return new(200, new { success = true, stoppedCurrent = false });
-            var stopped = await runtime.StopAsync(context.SessionId);
-            return new(200, new { success = true, stoppedCurrent = stopped.StoppedCurrent });
-        }
+        if (TryReadCommand(message.Text, out var commandName, out var rawArgs))
+            return await HandleWebCommandAsync(context, message, commandName, rawArgs, attachmentOwner);
+        if (attachmentOwner is null && await runtime.GetOwnerAsync(context.SessionId) is null)
+            throw new InvalidDataException("Session not found.");
         var parts = message.Parts ?? [new JsonObject { ["text"] = message.Text }];
         var item = new QueueItem(
             QueueItemType.User,
             SessionBoundary.ChannelInput(parts, context.Platform),
             ClientMessageId: message.ClientMessageId,
             // Direct user input; while the Session waits on a question it is the answer.
-            OpenFields: new JsonObject { ["userInput"] = true }
+            OpenFields: InputSender.With(new JsonObject { ["userInput"] = true }, message.Sender)
         );
         if (attachmentOwner is null)
             await runtime.SubmitAndRunAsync(context.SessionId, item);
@@ -263,10 +44,10 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             await runtime.SubmitAndRunAsync(attachmentOwner, item, beforeAdmission);
         return new(
             202,
-            new
+            new JsonObject
             {
-                accepted = true,
-                note = "Queue save attempted; durable completion is not guaranteed.",
+                ["accepted"] = true,
+                ["note"] = "Queue save attempted; durable completion is not guaranteed.",
             }
         );
     }

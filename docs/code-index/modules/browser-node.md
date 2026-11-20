@@ -2,19 +2,20 @@
 
 ## Responsibility and boundaries
 
-Browser-specific Chrome/Chromium and Firefox Manifest V3 packages cooperatively control existing logged-in tabs and shared windows. Extension APIs own sharing, tab/window lifecycle and connection configuration; a bounded Chrome `chrome.debugger`/CDP adapter or Firefox document-targeted WebExtension adapter owns top-document page operations. It does not launch a browser, export cookies, implement generic CDP forwarding or provide a filesystem/execution environment.
+Browser-specific Chrome/Chromium and Firefox Manifest V3 packages cooperatively control existing logged-in tabs and shared windows. Extension APIs own sharing, tab/window lifecycle and connection configuration; a bounded Chrome `chrome.debugger`/CDP adapter or Firefox document-targeted WebExtension adapter owns top-document page operations. It does not launch a browser (the managed headless host does, separately), export cookies, implement generic CDP forwarding or provide a filesystem/execution environment.
 
 - [Extension implementation](../units/browser-node-extension.md) maps storage, popup, transport, CDP and tests.
+- [Managed browser host](../units/browser-host.md) owns the shared `browser_*` contract and the headless host used on `master` and CLI Nodes.
 - [Node communication](../threads/node-communication.md) owns pairing, authenticated discovery, result/image transport and optional ordinary-call cancellation.
 - [External Nodes](../units/external-nodes.md) maps C# bootstrap assets and authenticated Browser onboarding.
 
 ## Public tools
 
-`list_tabs`, `get_tab_content`, `screenshot`, `click`, `fill`, `select_option`, `scroll`, `navigate`, `wait_for`, `press_key`, `execute_js`, `open_tab`, `close_tab`. Firefox omits `press_key`; it has no trusted editing-key API.
+`browser_tabs`, `browser_open`, `browser_close`, `browser_navigate`, `browser_read`, `browser_screenshot`, `browser_click`, `browser_fill`, `browser_type`, `browser_press`, `browser_select`, `browser_scroll`, `browser_wait`, `browser_evaluate`. Firefox omits `browser_type` and `browser_press`; it has no trusted key-input API.
 
-### D-browser-node-distinct-tools
+### D-browser-node-shared-contract
 
-Extension tools use short names within their Node namespace. They operate shared existing browser tabs and remain separate from process-owned Puppeteer `browse_*` tools. There are no `browser_*` aliases. Explicit discovery/calls can target Browser Node while a development Node remains selected; ordinary Session/Node authorization still applies.
+**Supersedes the former distinct-tools decision.** The extension and the [managed headless browser host](../units/browser-host.md) expose one `browser_*` contract, owned by `packages/browser-node/background/contract.js`. The Node a call targets decides whose browser it drives: a Browser Node drives the user's shared logged-in tabs under extension sharing policy, while `master` or a CLI Node drives its own managed headless browser. Capability differences (`windowId` on `browser_open`, key input, full-page screenshots, the Chrome and Firefox description variants) are profile entries of the one contract, not separate tools. There is no `browse_*` surface and no short-name alias. Explicit discovery/calls can target Browser Node while a development Node remains selected; ordinary Session/Node authorization still applies.
 
 ### D-browser-node-tab-policy
 
@@ -26,7 +27,7 @@ Approval shows the actual Agent, Session, page and action. Document, current sha
 
 ### D-browser-node-main-world-js
 
-`execute_js` evaluates in the page context, awaits Promises and follows that page's Ask/Auto policy. Firefox additionally requires an explicit optional user-script permission and uses MAIN-world `userScripts.execute` source injection, without page eval or CSP relaxation. Ordinary snapshots/text/HTML omit password values and fill previews/results do not echo text. Explicit JavaScript remains able to access sensitive page data; omission is not a script sandbox.
+`browser_evaluate` evaluates in the page context, awaits Promises and follows that page's Ask/Auto policy. Firefox additionally requires an explicit optional user-script permission and uses MAIN-world `userScripts.execute` source injection, without page eval or CSP relaxation. Ordinary snapshots/text/HTML omit password values and fill previews/results do not echo text. Explicit JavaScript remains able to access sensitive page data; omission is not a script sandbox.
 
 ### D-browser-node-debugger-control
 
@@ -34,13 +35,13 @@ On Chrome/Chromium, debugger permission and Chrome's visible debugging banner ar
 
 ### D-browser-node-connection-intent
 
-**Derived connection-state design for the selected [browser Node capability](#d-browser-node-distinct-tools).** User connection intent and temporary transport loss have different meanings. Stored intent/reconnect mechanics implement that distinction; browser wake or a transient disconnect is not a new user authorization.
+**Derived connection-state design for the selected [browser Node capability](#d-browser-node-shared-contract).** User connection intent and temporary transport loss have different meanings. Stored intent/reconnect mechanics implement that distinction; browser wake or a transient disconnect is not a new user authorization.
 
 Stop persists disabled intent; startup, reconnect and alarms respect it. Forget additionally deletes credentials/bootstrap secret. Credentials bind to the normalized Main server address including deployment path; a changed target requires fresh pairing, and retired pairing replies cannot install credentials. A transient network failure may reconnect only while enabled. There is no legacy Browser settings or old-tool migration path.
 
 ### D-browser-node-firefox-control
 
-Firefox requires version 153+ for document IDs and on-demand user-script execution. Fixed DOM helpers use isolated-world scripting with the admitted document ID; arbitrary JavaScript uses MAIN and the same document target. Target-tab PNG capture never activates the tab. DOM activation/fill use synthetic events; trusted native input and `press_key` are unavailable. Broad page-host permission enables these browser APIs but does not weaken sharing. Optional user-script permission is browser-owned, requested only by an explicit popup gesture, and checked for every JS call. Ask uses the pending collection's action-badge count and existing popup cards, without notifications or automatic popup focus. Chrome retains its existing notifications and debugger driver.
+Firefox requires version 153+ for document IDs and on-demand user-script execution. Fixed DOM helpers use isolated-world scripting with the admitted document ID; arbitrary JavaScript uses MAIN and the same document target. Target-tab PNG capture never activates the tab. DOM activation/fill use synthetic events; trusted native input and `browser_type`/`browser_press` are unavailable. Broad page-host permission enables these browser APIs but does not weaken sharing. Optional user-script permission is browser-owned, requested only by an explicit popup gesture, and checked for every JS call. Ask uses the pending collection's action-badge count and existing popup cards, without notifications or automatic popup focus. Chrome retains its existing notifications and debugger driver.
 
 ## Installation and qualification
 

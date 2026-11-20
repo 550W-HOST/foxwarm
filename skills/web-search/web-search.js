@@ -32,11 +32,11 @@ const GEMINI_SECRET_PATHS = {
   ],
 };
 
-const DEFAULT_OPENAI_MODEL = 'gpt-5.6-sol';
+const DEFAULT_OPENAI_MODEL = 'gpt-6.1-terra';
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_WEB_SEARCH_TOOL = 'web_search';
 const DEFAULT_OPENAI_TOOL_CHOICE = 'required';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
 const DEFAULT_PROVIDER = 'auto';
 const WEB_SEARCH_REQUEST_TIMEOUT_MS = 240000;
 const BASE_DIR = path.resolve(__dirname, '../..');

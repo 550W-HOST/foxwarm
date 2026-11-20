@@ -27,14 +27,14 @@ internal interface ITerminalStreamTarget
 internal sealed partial class TerminalRouter : IAsyncDisposable
 {
     private readonly TerminalRegistry local;
-    private readonly NodeConnectionHub nodes;
+    private readonly NodeProviderRegistry nodes;
     private readonly ConcurrentDictionary<string, RemoteTerminal> remote = new(
         StringComparer.Ordinal
     );
     private readonly CancellationTokenSource stopping = new();
     private readonly CancellationToken lifetime;
 
-    internal TerminalRouter(TerminalRegistry local, NodeConnectionHub nodes)
+    internal TerminalRouter(TerminalRegistry local, NodeProviderRegistry nodes)
     {
         this.local = local;
         this.nodes = nodes;
@@ -44,7 +44,7 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
     }
 
     internal bool Supported =>
-        TerminalRegistry.IsSupported || nodes.Services("vscode-pty").Length > 0;
+        TerminalRegistry.IsSupported || nodes.ServiceNodes("vscode-pty").Length > 0;
 
     internal async Task<JsonObject> CreateAsync(
         string nodeId,
@@ -56,7 +56,7 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
     {
         if (nodeId == "master")
             return (await local.CreateAsync(cwd, cols, rows, token)).Describe();
-        var target = nodes.Service(nodeId, "vscode-pty");
+        var target = await nodes.ServiceAsync(nodeId, "vscode-pty", 1, token);
         var result = await nodes.RequestServiceAsync(
             target,
             "create",
@@ -71,9 +71,9 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
         return Register(target, result["terminal"]).Describe();
     }
 
-    private RemoteTerminal Register(NodeConnectionHub.ServiceTarget target, JsonNode? value)
+    private RemoteTerminal Register(NodeServiceTarget target, JsonNode? value)
     {
-        var descriptor = DescribeRemote(target.NodeId, value);
+        var descriptor = DescribeRemote(target.NodeId, value, out var remoteId);
         var id = descriptor["id"]!.GetValue<string>();
         if (local.TryGet(id, out _))
             throw new CodeServiceException(
@@ -81,23 +81,48 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
                 "Remote terminal identity conflicts with a local terminal.",
                 502
             );
-        var record = remote.GetOrAdd(id, _ => new RemoteTerminal(this, target, descriptor));
+        var record = remote.GetOrAdd(
+            id,
+            _ => new RemoteTerminal(this, target, descriptor, remoteId)
+        );
         record.Refresh(target, descriptor);
         return record;
     }
 
-    private static JsonObject DescribeRemote(string nodeId, JsonNode? value)
+    private const string ProviderTerminalPrefix = "pn.";
+
+    // Resident Nodes keep their own (unique) terminal IDs. A Provider's IDs are only unique inside
+    // that Node, so the browser-visible identity is derived from both and is deterministic across
+    // reconnects and Main restarts. The Node only ever sees its own ID.
+    internal static string PublicId(string nodeId, string remoteId) =>
+        nodeId.Contains('/')
+            ? ProviderTerminalPrefix + Base64Url(nodeId) + "." + Base64Url(remoteId)
+            : remoteId;
+
+    private static string Base64Url(string value) =>
+        Convert
+            .ToBase64String(System.Text.Encoding.UTF8.GetBytes(value))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    private static JsonObject DescribeRemote(string nodeId, JsonNode? value, out string remoteId)
     {
         if (
             value is not JsonObject data
             || SessionWait.Text(data["id"]) is not { Length: > 0 and <= 256 } id
+            || (
+                !nodeId.Contains('/')
+                && id.StartsWith(ProviderTerminalPrefix, StringComparison.Ordinal)
+            )
         )
             throw new CodeServiceException(
                 "NodeServiceError",
                 "Invalid remote terminal descriptor.",
                 502
             );
-        var result = new JsonObject { ["id"] = id, ["nodeId"] = nodeId };
+        remoteId = id;
+        var result = new JsonObject { ["id"] = PublicId(nodeId, id), ["nodeId"] = nodeId };
         foreach (var key in new[] { "shell", "cwd" })
             result[key] = SessionWait.Text(data[key]) ?? (key == "cwd" ? "/" : "");
         foreach (var key in new[] { "cols", "rows", "createdAt", "pid" })
@@ -117,10 +142,13 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
     internal async Task<IReadOnlyList<JsonObject>> ListAsync(CancellationToken token)
     {
         var result = local.List().ToList();
-        foreach (var target in nodes.Services("vscode-pty"))
+        // Listing never starts a Provider channel: only resident Nodes and Provider Nodes whose
+        // channel is already live are asked. Opening Code or a terminal on a Provider Node starts it.
+        foreach (var nodeId in nodes.LiveServiceNodes("vscode-pty"))
         {
             try
             {
+                var target = nodes.LiveServiceTarget(nodeId, "vscode-pty", 1);
                 var response = await nodes.RequestServiceAsync(target, "list", new(), token);
                 if (response["terminals"] is not JsonArray values)
                     throw new CodeServiceException(
@@ -157,11 +185,11 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
         var record = await FindAsync(id, token);
         if (record is null)
             return null;
-        var target = nodes.Service(record.NodeId, "vscode-pty");
+        var target = await nodes.ServiceAsync(record.NodeId, "vscode-pty", 1, token);
         var result = await nodes.RequestServiceAsync(
             target,
             "get",
-            new() { ["terminalId"] = id },
+            new() { ["terminalId"] = record.RemoteId },
             token
         );
         if (result["terminal"] is null)
@@ -200,11 +228,11 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
         var record = await FindAsync(id, token);
         if (record is null)
             return;
-        var target = nodes.Service(record.NodeId, "vscode-pty");
+        var target = await nodes.ServiceAsync(record.NodeId, "vscode-pty", 1, token);
         await nodes.RequestServiceAsync(
             target,
             "close",
-            new() { ["terminalId"] = id, ["reason"] = reason },
+            new() { ["terminalId"] = record.RemoteId, ["reason"] = reason },
             token
         );
         await ForgetAsync(record, null);
@@ -216,12 +244,12 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
         await record.DisconnectAsync(error);
     }
 
-    private void OnEvent(NodeConnectionHub.ServiceEvent value)
+    private void OnEvent(NodeServiceEvent value)
     {
         if (
             value.Target.Service != "vscode-pty"
             || SessionWait.Text(value.Event["terminalId"]) is not string id
-            || !remote.TryGetValue(id, out var record)
+            || !remote.TryGetValue(PublicId(value.Target.NodeId, id), out var record)
         )
             return;
         record.Receive(value);

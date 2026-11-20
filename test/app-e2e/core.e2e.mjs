@@ -17,6 +17,8 @@ const token = (await fs.readFile(tokenFile, 'utf8')).trim()
 let browser
 let page
 const browserConsole = []
+// Sessions the running scenario opened; a failed scenario stops any left busy.
+const scenarioSessions = new Set()
 
 async function api(pathname, init = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
@@ -34,6 +36,7 @@ async function createSession(name) {
 }
 
 async function openSession(sessionId) {
+  scenarioSessions.add(sessionId)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), sessionId)
   await page.waitForFunction(id => (document.querySelector('.foxwarm-chat-root')?.textContent || '').includes(`session ${id}`), { timeout: 15_000 }, sessionId)
   await page.waitForSelector('[role="textbox"][aria-label="Message"]', { timeout: 15_000 })
@@ -44,6 +47,19 @@ async function sendMessage(text) {
   await page.click(editor)
   await page.type(editor, text)
   await page.click('button[aria-label="Send message"]')
+}
+
+// The composer shows a queued preview before the server accepts the send, and the
+// owner publishes hot queue state before its Session JSON save. Ordinary input is
+// acknowledged by the send response, which follows the owner's save attempt.
+async function sendAcceptedMessage(sessionId, text) {
+  const pathname = `/api/sessions/${encodeURIComponent(sessionId)}/message`
+  const accepted = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith(pathname)
+    && (response.request().postData() || '').includes(text), { timeout: 15_000 })
+  await sendMessage(text)
+  const response = await accepted
+  assert.equal(response.status(), 202, `${pathname} returned ${response.status()}`)
 }
 
 async function history(sessionId) {
@@ -86,8 +102,11 @@ async function waitForAuthority(sessionId, predicate, timeout = 20_000) {
 
 function assertCommittedCompaction(authority, before, summary) {
   const blockMessage = authority.history[0]
+  // The required level-1 block covers every raw message before the kept tail.
+  const end = blockMessage.__meta?.contextBlock?.sourceEnd
+  assert(Number.isInteger(end) && end > 4 && end < before.history.length, `block end ${end}`)
   assert.equal(blockMessage.role, 'model')
-  assert.match(blockMessage.parts?.[0]?.text || '', new RegExp(`^\\[CTX-BLOCK L1 B#1 raw#1-#4 time .+\\] ${summary}$`))
+  assert.match(blockMessage.parts?.[0]?.text || '', new RegExp(`^\\[CTX-BLOCK L1 B#1 raw#1-#${end} time .+\\] ${summary}$`))
   assert.deepEqual({
     level: blockMessage.__meta?.contextBlock?.level,
     sourceKind: blockMessage.__meta?.contextBlock?.sourceKind,
@@ -95,16 +114,44 @@ function assertCommittedCompaction(authority, before, summary) {
     sourceEnd: blockMessage.__meta?.contextBlock?.sourceEnd,
     rawStartSeq: blockMessage.__meta?.contextBlock?.rawStartSeq,
     rawEndSeq: blockMessage.__meta?.contextBlock?.rawEndSeq,
-  }, { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 4, rawStartSeq: 1, rawEndSeq: 4 })
-  assert.equal(authority.history.some(message => Number.isInteger(message.__meta?.seq) && message.__meta.seq <= 4), false)
-  assert.deepEqual(authority.history.slice(1, -1), before.history.slice(4))
+  }, { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: end, rawStartSeq: 1, rawEndSeq: end })
+  assert.equal(authority.history.some(message => Number.isInteger(message.__meta?.seq) && message.__meta.seq <= end), false)
+  assert.deepEqual(authority.history.slice(1, -1), before.history.slice(end))
   assert.match(authority.history.at(-1)?.parts?.[0]?.system || '', /kind="session-boundary" event="compact-completed"/)
 }
 
+function isIdle(value) {
+  return value.session?.runtimeState === 'idle' || value.runtimeState === 'idle' || value.session?.busy === false
+}
+
+// Leaves the application as later scenarios expect it after a failure: owned
+// Sessions idle (a held provider stream is aborted by Stop) and a freshly loaded page.
+async function releaseFailedScenario() {
+  for (const sessionId of scenarioSessions) {
+    const statePath = `/api/sessions/${encodeURIComponent(sessionId)}/state`
+    if (isIdle(await api(statePath))) continue
+    await api(`/api/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' })
+    const deadline = Date.now() + 15_000
+    while (!isIdle(await api(statePath))) {
+      if (Date.now() > deadline) throw new Error(`${sessionId} did not become idle after Stop`)
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+  await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
+}
+
 async function scenario(name, run) {
+  scenarioSessions.clear()
+  const segment = await fetch(`${providerUrl}/__control/segment/${encodeURIComponent(`core:${name}`)}`, { method: 'POST' })
+  assert.equal(segment.status, 204, `provider segment core:${name}: ${await segment.text()}`)
   try { await run() }
   catch (error) {
     await page.screenshot({ path: path.join(artifactDir, 'screenshots', `core-${name}.png`), fullPage: true }).catch(() => {})
+    await releaseFailedScenario().catch(cleanupError => {
+      console.error(`core-${name} cleanup after failure: ${cleanupError?.stack || cleanupError}`)
+    })
     throw error
   }
 }
@@ -174,7 +221,7 @@ test('Stop aborts a held stream and later input can run as a new turn', async ()
   await sendMessage('APP_E2E_STOP')
   await page.waitForFunction(() => document.body.textContent?.includes('held stream'), { timeout: 15_000 })
   const queuedText = 'owned input queued before Stop'
-  await sendMessage(queuedText)
+  await sendAcceptedMessage(sessionId, queuedText)
   await page.waitForFunction(text => document.querySelector('[data-queued-preview]')?.textContent.includes(text), { timeout: 15_000 }, queuedText)
   const queued = await history(sessionId)
   assert.equal(queued.queueLength, 1)

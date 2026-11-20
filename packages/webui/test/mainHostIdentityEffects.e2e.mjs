@@ -5,11 +5,13 @@ import { once } from 'node:events'
 import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { requireReceiptExecId } from './execReceipt.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const owned = await createHostFixture('identity-effects'), requests = [], failures = [], counts = new Map(), processes = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const execRecords = async () => JSON.parse(await readFile(join(owned.data, 'state/running-exec.json'), 'utf8')).execs
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 let backgroundId, backgroundLog
 const preparationControl = process.env.IDENTITY_PREPARATION_CONTROL === '1', concreteControl = process.env.IDENTITY_CONCRETE_CONTROL === '1', deniedLate = preparationControl || concreteControl
@@ -36,8 +38,9 @@ await mkdir(join(owned.work, 'memory'), { recursive: true }); await writeFile(jo
 await writeModelFixture(owned.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000 } } })
 if (deniedLate) await writeFile(join(owned.data, 'state/tool-authorization.yaml'), JSON.stringify({ version: 1, defaultAction: 'allow', rules: [{ id: 'prepared-old-agent-denial', match: { agent: preparationControl ? 'main' : 'destination', tool: { source: 'node', name: 'exec' }, args: { command: { oneOf: [segmentCommand(5), segmentCommand(6)] } } }, action: 'deny' }] }))
 const authority = async id => JSON.parse(await readFile(join(owned.data, 'state/sessions', id + '.json'), 'utf8'))
+const moveArgs = target => { const [agent, name] = target.includes('/') ? target.split('/') : [null, target]; return (agent ? `--new-agent-name ${agent} ` : '') + `--new-session-id ${name}` }
 async function create(id) { const response = await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: id }); assert.equal(response.status, 200, JSON.stringify(response.body)); return response.body.sessionId }
-async function move(id, target) { const response = await owned.api('POST', route(id) + '/message', { text: '/session move ' + target }); assert.equal(response.status, 200, JSON.stringify(response.body)); return response.body.result }
+async function move(id, target) { const response = await owned.api('POST', route(id) + '/message', { text: '/session move ' + moveArgs(target) }); assert.equal(response.status, 200, JSON.stringify(response.body)); return response.body.result }
 async function hasFinal(id, text) { return (await owned.api('GET', route(id) + '/history')).body.messages?.some(row => row.parts?.some(part => part.text === text)) }
 try {
   await owned.start(); const page = await owned.openApp(); await create('busy'); assert.equal((await owned.api('POST', '/api/agents', { agentId: 'destination' })).status, 201)
@@ -69,7 +72,7 @@ try {
   await create('background'); assert.equal((await owned.api('POST', route('background') + '/message', { text: 'EFFECT-CASE:background' })).status, 202)
   await until(() => hasFinal('background', 'DONE-EFFECT-background'), 'real shell background result')
   const background = await authority('background'), result = background.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'background-exec').functionResponse.response.output
-  backgroundId = /execId: ([a-z]+-[a-z]+)/.exec(result)[1]
+  backgroundId = requireReceiptExecId(result)
   const metadata = (await execRecords()).find(record => record.id === backgroundId); backgroundLog = metadata.logPath; processes.push(metadata.pid)
   await move('background', 'background-current'); await writeFile(join(owned.work, 'background-release'), 'release')
   await until(async () => (await authority('background-current')).history.some(row => JSON.stringify(row).includes(backgroundId) && JSON.stringify(row).includes('background-process-finished')), 'historical process once-only current-owner completion')

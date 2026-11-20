@@ -80,7 +80,7 @@ internal sealed partial class McpClient
         var settings = new JsonObject();
         foreach (var key in new[] { "command", "args", "env", "cwd", "stderr" })
             settings[key] = config[key]?.DeepClone();
-        return settings.ToJsonString();
+        return settings.ToJsonText();
     }
 
     private async Task<T> WithClientAsync<T>(
@@ -361,7 +361,12 @@ internal sealed partial class McpClient
         {
             return configuration.Get(server);
         }
-        catch (InvalidDataException)
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or Foxwarm.Secrets.SecretUnavailableException
+                        or Foxwarm.Secrets.SecretStoreLockedException
+            )
         {
             return null;
         }

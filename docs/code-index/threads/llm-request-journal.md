@@ -42,6 +42,16 @@ Full request/attempt row structure, request and attempt-prompt object type/hash 
 
 Request listing uses a stable `(createdAt, requestId)` composite cursor, including when multiple requests share one millisecond timestamp.
 
+## Usage ledger
+
+The journal also keeps `llm_usage`, a derived per-attempt summary of successful results used for [installation usage](../units/usage-overview.md): request/attempt identity, completion time, the recorded Session ID, purpose, concrete model, provider, protocol, virtual route, and the recorded cached/input/output tokens and cost. It stores no Agent: usage is attributed to Agents when it is read ([D-llm-request-journal-usage-ledger](#d-llm-request-journal-usage-ledger)). The table and its time index are additive and nothing reads them for reconstruction, so an older Foxwarm that ignores them keeps working on the same database.
+
+A live success writes its ledger row in the result's own writer command, inside a separate savepoint: if the ledger cannot be written (for example because the table was removed), only that row is rolled back and the result still commits; the store then asks for a backfill pass. Creating the table on an existing database is cheap because it starts empty; no index is built over existing journal tables.
+
+Results committed without a ledger row (from before the table existed, by an older version after a downgrade, or after a ledger write failed) are added by a background backfill from each result's recorded `usage`. Metadata checkpoints bound the covered range of attempt-result row IDs: `usage-ledger-high` moves forward with every live result written while all earlier results are covered, so a restart rescans nothing that was recorded live; results above it are added oldest first, then history below `usage-ledger-low` newest first. Reads and row preparation run on a separate read-only connection; the writer only inserts prepared batches (500 rows) and moves the checkpoint in the same command, so live journal commands wait at most for one such insert. A missing ledger table is recreated and its checkpoints reset, and an empty ledger whose checkpoints claim covered results is reset the same way, so removing or emptying the table rebuilds it. Recorded costs are copied as recorded; a result without a cost stays tokens-only and no current price is applied ([D-model-usage-cost](./model-request-and-streaming.md#d-model-usage-cost)).
+
+Redacting attempts also write a row to the additive `llm_redaction` table, keyed by request and attempt number, with counts, labels and detection time; a detection failure that consumed an attempt number without any send is a row with a `failure_kind` and no attempt start or result. The table is not read by reconstruction, the usage ledger or provider health, and its rows are never backfilled ([text redaction observability](../units/model-text-redaction-observability.md#d-model-text-redaction-observability)).
+
 ## Security boundary
 
 The canonical journal contains the same model-visible prompt/message classes needed for training and must be protected like session archives. It stores no authorization headers, API keys, provider-hydrated image expansion, or semantic provider payload body. Physical attempts store only a payload SHA-256 digest.
@@ -67,6 +77,14 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 
 [2026-08-03] The dedicated SQLite database is the sole runtime authority. Legacy JSONL is a migration-only input that is strictly imported, verified, and moved to migration backup before completion; runtime does not dual-write it. SQLite commits use durable WAL/FULL boundaries, and compatibility JSONL is generated only by explicit export.
 
+### D-llm-request-journal-usage-ledger
+
+[2026-11-09, user decision] Installation-wide usage is read from a derived ledger inside the journal database rather than from Session stats or the Session catalog, because only the journal records every request purpose (normal turns, compaction, BTW, ToolScript, titles, setup checks, CLI and low-level calls) and outlives Session deletion. The ledger is written in the success result's own writer batch, not by a separate subscriber, so it cannot drift from the journal; older results enter through a resumable newest-first backfill. It stores only counters and identities already present in the journal, never prompt content. It is a reporting projection with no budgets, limits or blocking, and it never fails a result write. Removing or emptying the table loses nothing: the next backfill pass rebuilds it from attempt results.
+
+[2026-11-16, user decision] Rows name the model and protocol an attempt actually called. An Images API image request records the image model (`<providerKey>/<imageModel>`) and protocol `openai-images`, not the conversation leaf; the conversation model remains the request's `requested_model_key` ([attribution](../units/session-image-generation.md#d-image-generation-images-api-attribution)). Model keys in the ledger need not exist in the catalog.
+
+[2026-11-09, user decision] Spend belongs to the Agent that currently owns the Session, resolved when usage is read, so a Session's whole history follows it when it moves to another Agent. Deleted Sessions are attributed to the Agent recorded in their retained Archive. The ledger therefore records the Session ID, not a request-time Agent snapshot.
+
 ## Modules and units
 
 - [LLM module](../modules/llm.md)
@@ -77,3 +95,5 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 - [src-btw](../units/src-btw.md)
 - [src-toolscript](../units/src-toolscript.md)
 - [model-cli](../units/model-cli.md)
+- [model-journal](../units/model-journal.md)
+- [usage-overview](../units/usage-overview.md)

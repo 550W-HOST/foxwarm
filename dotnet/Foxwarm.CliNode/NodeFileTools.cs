@@ -285,7 +285,7 @@ internal sealed class NodeFileTools(NodePaths paths)
             return null;
         if (node is JsonValue value && value.TryGetValue<bool>(out var flag))
             return flag ? 1 : 0;
-        var text = Text(node) ?? node.ToJsonString();
+        var text = Text(node) ?? node.ToJsonText();
         if (string.IsNullOrWhiteSpace(text))
             return 0;
         return double.TryParse(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acquire the fixed official Monty 0.0.19 standalone executable for a supported target RID."""
+"""Acquire the fixed official Monty 1.6.0 standalone executable for a supported target RID."""
 import argparse
 import base64
 import hashlib
@@ -24,10 +24,10 @@ parser.add_argument('--rid', choices=tuple(targets), default=default_rid)
 args = parser.parse_args()
 package_name, executable = targets[args.rid]
 prefix = args.prefix.resolve()
-url = f'https://registry.npmjs.org/@pydantic/{package_name}/0.0.19'
+url = f'https://registry.npmjs.org/@pydantic/{package_name}/1.6.0'
 with urllib.request.urlopen(url, timeout=40) as response:
     metadata = json.load(response)
-if metadata.get('version') != '0.0.19':
+if metadata.get('version') != '1.6.0':
     raise RuntimeError('unexpected package version')
 with urllib.request.urlopen(metadata['dist']['tarball'], timeout=60) as response:
     archive = response.read()
@@ -42,9 +42,9 @@ with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as package:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(package.extractfile(member).read())
 manifest = json.loads((prefix / 'share/package.json').read_text())
-if manifest['version'] != '0.0.19' or manifest['license'] != 'MIT':
+if manifest['version'] != '1.6.0' or manifest['license'] != 'MIT':
     raise RuntimeError('unexpected package metadata')
 os.chmod(prefix / 'bin' / executable, 0o755)
 license_file = Path(__file__).resolve().parent.parent / 'Foxwarm/ToolScript/MONTY-LICENSE'
 (prefix / 'share/MONTY-LICENSE').write_bytes(license_file.read_bytes())
-print(json.dumps({'version': '0.0.19', 'binary': str(prefix / 'bin' / executable), 'integrityVerified': True}))
+print(json.dumps({'version': '1.6.0', 'binary': str(prefix / 'bin' / executable), 'integrityVerified': True}))

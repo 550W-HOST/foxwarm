@@ -30,8 +30,10 @@ internal sealed partial class MainToolScript
         {
             switch (name)
             {
+                case "ctl":
                 case "call_tool":
-                    var wrapper = Wrapper(positional, kwargs);
+                    var wrapper =
+                        name == "ctl" ? CtlWrapper(positional, kwargs) : Wrapper(positional, kwargs);
                     var toolName = Text(wrapper["name"]) ?? Text(wrapper["toolId"]) ?? "call_tool";
                     last["summaryName"] = toolName;
                     var arguments = wrapper["args"] as JsonObject ?? new JsonObject();
@@ -67,6 +69,8 @@ internal sealed partial class MainToolScript
                     Emit();
                     var previousDeliveryCapture = context.SessionMessageDelivered;
                     var previousPlacementCapture = context.ExecPlacementObserved;
+                    var previousTargetCapture = context.TargetObserved;
+                    var previousImageCapture = context.ImageProduced;
                     var previousRunId = context.ToolScriptRunId;
                     var previousOrdinal = context.SubCallOrdinal;
                     var previousRunOrdinal = context.RunSubCallOrdinal;
@@ -81,6 +85,8 @@ internal sealed partial class MainToolScript
                         };
                         context.ExecPlacementObserved = placement =>
                             subcall["exec"] = placement.DeepClone();
+                        context.TargetObserved = target => subcall["target"] = target.DeepClone();
+                        context.ImageProduced = blob => NoteProducedImage(record, blob);
                         context.ToolScriptRunId = Required(record, "runId");
                         context.SubCallOrdinal = ordinal;
                         context.RunSubCallOrdinal = runOrdinal;
@@ -90,6 +96,8 @@ internal sealed partial class MainToolScript
                     {
                         context.SessionMessageDelivered = previousDeliveryCapture;
                         context.ExecPlacementObserved = previousPlacementCapture;
+                        context.TargetObserved = previousTargetCapture;
+                        context.ImageProduced = previousImageCapture;
                         context.ToolScriptRunId = previousRunId;
                         context.SubCallOrdinal = previousOrdinal;
                         context.RunSubCallOrdinal = previousRunOrdinal;
@@ -98,7 +106,7 @@ internal sealed partial class MainToolScript
                     (
                         record["executedTools"] as JsonArray
                         ?? throw new InvalidDataException("Missing ToolScript tool history.")
-                    ).Add(toolName);
+                    ).Add((JsonNode?)toolName);
                     return result;
                 case "request_model_without_context":
                     var prompt =
@@ -115,6 +123,7 @@ internal sealed partial class MainToolScript
                         );
                     var answer = await context.RequestModel(prompt, model, budget, run.Token);
                     budget.JsonValue(answer);
+                    NoteModelImages(record, answer);
                     return answer;
                 case "session_create":
                 case "session_step":
@@ -127,7 +136,7 @@ internal sealed partial class MainToolScript
                     throw new InvalidDataException(
                         "Unknown ToolScript host function: "
                             + name
-                            + ". Available functions are call_tool, ask_agent and request_model_without_context."
+                            + ". Available functions are call_tool, ctl, ask_agent and request_model_without_context."
                     );
             }
         }
@@ -144,12 +153,13 @@ internal sealed partial class MainToolScript
         }
         finally
         {
-            last["durationMs"] = watch.Elapsed.TotalMilliseconds;
+            var durationMs = WholeMilliseconds(watch.Elapsed);
+            last["durationMs"] = durationMs;
             if (Text(last["status"]) == "running")
                 last["status"] = "completed";
             if (subcall is not null)
             {
-                subcall["durationMs"] = watch.Elapsed.TotalMilliseconds;
+                subcall["durationMs"] = durationMs;
                 if (Text(subcall["status"]) == "running")
                     subcall["status"] = "completed";
                 Emit();
@@ -178,11 +188,20 @@ internal sealed partial class MainToolScript
             "image_write_to_file",
             "send_file",
             "exec",
-            "browse_open",
-            "browse_list",
-            "browse_get",
-            "browse_close",
-            "browse_interact",
+            "browser_tabs",
+            "browser_open",
+            "browser_close",
+            "browser_navigate",
+            "browser_read",
+            "browser_screenshot",
+            "browser_click",
+            "browser_fill",
+            "browser_type",
+            "browser_press",
+            "browser_select",
+            "browser_scroll",
+            "browser_wait",
+            "browser_evaluate",
             "terminal_open",
             "terminal_send",
             "terminal_read",
@@ -191,6 +210,37 @@ internal sealed partial class MainToolScript
         ],
         StringComparer.Ordinal
     );
+
+    // ctl(command, values=None) is call_tool("ctl", {"command": command, "values": values}).
+    private static JsonObject CtlWrapper(JsonArray positional, JsonObject kwargs)
+    {
+        foreach (var key in kwargs.Select(pair => pair.Key))
+            if (key is not ("command" or "values"))
+                throw new InvalidDataException(
+                    "ctl() got an unexpected keyword argument '" + key + "'."
+                );
+        if (positional.Count > 2)
+            throw new InvalidDataException("ctl() takes at most two arguments: command and values.");
+        if (positional.Count > 0 && kwargs.ContainsKey("command"))
+            throw new InvalidDataException("ctl() got multiple values for argument 'command'.");
+        if (positional.Count > 1 && kwargs.ContainsKey("values"))
+            throw new InvalidDataException("ctl() got multiple values for argument 'values'.");
+        var command =
+            Text(positional.Count > 0 ? positional[0] : kwargs["command"])
+            ?? throw new InvalidDataException("ctl() requires a command string.");
+        var values = positional.Count > 1 ? positional[1] : kwargs["values"];
+        if (values is not null and not JsonObject)
+            throw new InvalidDataException("ctl() values must be a dict or None.");
+        var args = new JsonObject { ["command"] = command };
+        if (values is not null)
+            args["values"] = values.DeepClone();
+        return new JsonObject
+        {
+            ["name"] = "ctl",
+            ["args"] = args,
+            ["source"] = "builtin",
+        };
+    }
 
     private static JsonObject Wrapper(JsonArray positional, JsonObject kwargs)
     {
@@ -279,10 +329,21 @@ internal sealed partial class MainToolScript
             }
             if (output["result"] is JsonObject result && result["parts"] is JsonArray parts)
             {
+                // A run completed with admission stores its admitted blobs (`resultImages`), and
+                // only those are promoted. A record without the field completed before admission
+                // existed, under the policy of its time, and keeps promoting every reference
+                // (read-old/write-new: persisted history projects as before).
+                var admitted = record.ContainsKey("resultImages")
+                    ? (record["resultImages"] as JsonArray ?? [])
+                        .Select(Text)
+                        .OfType<string>()
+                        .ToHashSet(StringComparer.Ordinal)
+                    : null;
                 var images = parts
                     .OfType<JsonObject>()
                     .Where(part =>
-                        Foxwarm.Images.ImageBlobStore.NormalizeToolReference(part) is not null
+                        Foxwarm.Images.ImageBlobStore.NormalizeToolReference(part) is { } reference
+                        && (admitted is null || admitted.Contains(Text(reference["blobId"])!))
                     )
                     .ToArray();
                 if (images.Length > 0)
@@ -302,7 +363,7 @@ internal sealed partial class MainToolScript
                     var placeholder = $"[{images.Length} image part(s) promoted]";
                     if (survivors.Count > 0)
                     {
-                        survivors.Add(placeholder);
+                        survivors.Add((System.Text.Json.Nodes.JsonNode?)(placeholder));
                         result["parts"] = survivors;
                     }
                     else

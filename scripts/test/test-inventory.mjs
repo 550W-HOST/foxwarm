@@ -13,6 +13,28 @@ export const appRuntimeE2e = [
   'packages/webui/test/systemTabs.e2e.mjs',
 ]
 
+// Bounded `test:native` smoke against a published Main executable. These Main-host
+// fixtures also run in the ordinary Chromium shards; this list selects the
+// serialization-heavy routes and recent features for the native lane.
+export const nativeMainSmoke = [
+  'packages/webui/test/askUser.e2e.mjs',
+  'packages/webui/test/dotnetMainBrowser.e2e.mjs',
+  'packages/webui/test/mainHostChat.e2e.mjs',
+  'packages/webui/test/mainHostIsolationMigration.e2e.mjs',
+  'packages/webui/test/mainHostNodeFiles.e2e.mjs',
+  'packages/webui/test/mainHostProviderLifecycle.e2e.mjs',
+  'packages/webui/test/mainHostSecrets.e2e.mjs',
+  'packages/webui/test/mainHostSetupProviders.e2e.mjs',
+  'packages/webui/test/mainHostSse.e2e.mjs',
+  'packages/webui/test/mainHostSystemActivity.e2e.mjs',
+  'packages/webui/test/mainHostSystemTimers.e2e.mjs',
+  'packages/webui/test/mainHostSystemUsage.e2e.mjs',
+  'packages/webui/test/mainHostSystemWebhooks.e2e.mjs',
+  'packages/webui/test/mainHostTextRedaction.e2e.mjs',
+  'packages/webui/test/mainHostToolScript.e2e.mjs',
+  'packages/webui/test/toolApproval.e2e.mjs',
+]
+
 export const standaloneSelftests = [
   'lib/selftest/queueDrainSelfTest.js',
   'lib/selftest/toolLoopStallSelfTest.js',
@@ -33,6 +55,8 @@ const testLike = /(?:\.test\.(?:ts|js|mjs|cjs)|\.e2e\.mjs|\/test_[^/]+\.py)$/
 
 const manualGroups = new Map([
   ['packages/webui/test/mainHostFirefoxNode.e2e.mjs', 'manual-smoke'],
+  // Needs a real Docker or Podman engine and a locally built image; see the container adapter README.
+  ['packages/webui/test/mainHostProviderContainer.e2e.mjs', 'manual-smoke'],
   ['scripts/native-aot/pty-native-probe.c', 'manual-smoke'],
   ['scripts/native-aot/tests/test_package.py', 'manual-smoke'],
   ['dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs', 'manual-smoke'],
@@ -45,7 +69,6 @@ const manualGroups = new Map([
   ['test/toolscriptPhase1Smoke.js', 'manual-smoke'],
   ['test/llmToolSerializationTest.js', 'manual-regression'],
   ['test/toolscriptSkillAgentTrial.js', 'manual-skill-trial'],
-  ['packages/android-node/test.py', 'manual-hardware-smoke'],
 ])
 
 function normalize(value) {
@@ -66,8 +89,7 @@ function classify(file) {
   if (file === 'scripts/test/reference-isolation.test.mjs') return 'reference-isolation'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
   if (/^packages\/cli-node\/src\/.*\.test\.ts$/.test(file)) return 'cli-node'
-  if (/^packages\/browser-node\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
-  if (/^packages\/android-node\/test_[^/]+\.py$/.test(file)) return 'python'
+  if (/^packages\/browser-(?:node|host)\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
   if (/^docs\/code-index\/scripts\/tests\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^scripts\/.*\.test\.(?:js|mjs)$/.test(file)) return 'scripts'
   if (/^skills\/.*\/tests\/test_[^/]+\.py$/.test(file)) return 'python'

@@ -45,7 +45,7 @@ public sealed class PersistencePrimitiveTests
         var returned = document.CloneRoot();
         returned["futureTop"]!["nested"]!.AsArray().Clear();
         returned["history"]![0]!["parts"]![0]!["futurePart"]!["array"]![0] = 99;
-        var file = new LinuxAtomicJsonFile(temp.Path, "state/authority.json");
+        var file = new AtomicJsonFile(temp.Path, "state/authority.json");
         file.Write(document);
 
         Assert.True(JsonNode.DeepEquals(expected, file.Read(Fixture.SessionId).CloneRoot()));
@@ -316,12 +316,12 @@ public sealed class PersistencePrimitiveTests
     {
         using var temp = new TempDirectory();
         var baseline = SessionAuthorityDocument.FromNode(FixtureAuthority(), Fixture.SessionId);
-        var path = new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json");
+        var path = new AtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json");
         path.Write(baseline);
         var changedRoot = FixtureAuthority();
         changedRoot["futureTopLevel"] = "new";
         var changed = SessionAuthorityDocument.FromNode(changedRoot, Fixture.SessionId);
-        var failing = new LinuxAtomicJsonFile(
+        var failing = new AtomicJsonFile(
             temp.Path,
             "state/sessions/c1/fixture.json",
             stage =>
@@ -348,7 +348,7 @@ public sealed class PersistencePrimitiveTests
         var changedRoot = FixtureAuthority();
         changedRoot["futureTopLevel"] = "published";
         var changed = SessionAuthorityDocument.FromNode(changedRoot, Fixture.SessionId);
-        var failing = new LinuxAtomicJsonFile(
+        var failing = new AtomicJsonFile(
             temp.Path,
             "state/sessions/c1/fixture.json",
             stage =>
@@ -369,7 +369,7 @@ public sealed class PersistencePrimitiveTests
     {
         using var temp = new TempDirectory();
         var stages = new List<AtomicJsonWriteStage>();
-        var writer = new LinuxAtomicJsonFile(
+        var writer = new AtomicJsonFile(
             temp.Path,
             "state/sessions/c1/fixture.json",
             stages.Add

@@ -22,8 +22,17 @@ internal sealed partial class McpClient : IAsyncDisposable
     internal McpClient(string root, string? publicBaseUrl = null, string? configPath = null)
     {
         configuration = new(root, configPath);
-        OAuth = new(root, publicBaseUrl, configuration.Get, FenceServer, shutdown.Token);
+        OAuth = new(
+            root,
+            publicBaseUrl,
+            configuration.Get,
+            name => configuration.Snapshot()[name] as JsonObject,
+            FenceServer,
+            shutdown.Token
+        );
     }
+
+    internal McpConfiguration Configuration => configuration;
 
     private Task<T> RunAsync<T>(
         Func<CancellationToken, Task<T>> operation,
@@ -61,6 +70,11 @@ internal sealed partial class McpClient : IAsyncDisposable
             {
                 completion.TrySetException(error);
             }
+            // Policy denials carry no credential data and keep their error type.
+            catch (ToolAuthorizationDeniedException error)
+            {
+                completion.TrySetException(error);
+            }
             catch (Exception error)
             {
                 completion.TrySetException(
@@ -95,54 +109,99 @@ internal sealed partial class McpClient : IAsyncDisposable
         }
     }
 
+    // The server mcp_config changes: its name argument, trimmed. The handler and the operation
+    // plan (`mcp-config-name`) both use it.
+    internal static string? ConfiguredServerName(JsonObject args) => ToolRegistry.Text(args, "name")?.Trim();
+
+    private static (string Name, JsonObject Patch) ConfigurationPatch(JsonObject args)
+    {
+        ToolRegistry.Keys(
+            args,
+            [
+                "name",
+                "url",
+                "command",
+                "args",
+                "cwd",
+                "stderr",
+                "token",
+                "description",
+                "enable",
+                "transport",
+                "type",
+                "timeoutSeconds",
+                "env",
+                "envJson",
+                "headers",
+                "headersJson",
+            ]
+        );
+        var name = ConfiguredServerName(args);
+        if (string.IsNullOrEmpty(name))
+            throw new InvalidDataException("mcp_config requires name.");
+        var patch = (JsonObject)args.DeepClone();
+        patch.Remove("name");
+        foreach (var key in new[] { "env", "headers" })
+        {
+            var map = ToolRegistry.ObjectArg(args, key, key + "Json");
+            patch.Remove(key + "Json");
+            if (map is not null)
+                patch[key] = map;
+        }
+        return (name, patch);
+    }
+
+    // Stored secrets an mcp_config call would send to a new destination, against the current
+    // configuration. Null for arguments the call itself rejects.
+    internal IReadOnlyList<string>? SecretFacts(JsonObject args)
+    {
+        try
+        {
+            var (name, patch) = ConfigurationPatch(args);
+            return Foxwarm.Secrets.SecretConfigurationChanges.ForMcpServer(
+                configuration.Snapshot(),
+                name,
+                patch
+            );
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    // admit authorizes the secret facts of the exact update inside the configuration's lane.
     internal Task<JsonObject> ConfigureAsync(
         JsonObject args,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<IReadOnlyList<string>, CancellationToken, Task>? admit = null
     ) =>
         RunAsync(
             async token =>
             {
-                ToolRegistry.Keys(
-                    args,
-                    [
-                        "name",
-                        "url",
-                        "command",
-                        "args",
-                        "cwd",
-                        "stderr",
-                        "token",
-                        "description",
-                        "enable",
-                        "transport",
-                        "type",
-                        "timeoutSeconds",
-                        "env",
-                        "envJson",
-                        "headers",
-                        "headersJson",
-                    ]
-                );
-                var name = ToolRegistry.Text(args, "name")?.Trim();
-                if (string.IsNullOrEmpty(name))
-                    throw new InvalidDataException("mcp_config requires name.");
-                var patch = (JsonObject)args.DeepClone();
-                patch.Remove("name");
-                foreach (var key in new[] { "env", "headers" })
-                {
-                    var map = ToolRegistry.ObjectArg(args, key, key + "Json");
-                    patch.Remove(key + "Json");
-                    if (map is not null)
-                        patch[key] = map;
-                }
+                var (name, patch) = ConfigurationPatch(args);
                 token.ThrowIfCancellationRequested();
                 try
                 {
                     await UpdateConfigurationAsync(
                         name,
                         patch,
-                        enabledOnly: patch.Count == 1 && patch.ContainsKey("enable")
+                        enabledOnly: patch.Count == 1 && patch.ContainsKey("enable"),
+                        admit is null
+                            ? null
+                            : (before, after) =>
+                                admit(
+                                    Foxwarm.Secrets.SecretConfigurationChanges.ForMcp(
+                                        before,
+                                        after
+                                    ),
+                                    token
+                                )
                     );
+                }
+                catch (ToolAuthorizationDeniedException)
+                {
+                    throw;
                 }
                 catch (Exception error)
                 {

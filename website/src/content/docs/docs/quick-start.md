@@ -25,11 +25,15 @@ irm https://foxwarm.net/install-foxwarm.ps1 | iex
 
 ```bash
 mkdir -p foxwarm-data
+sudo chown 1000:1000 foxwarm-data
+curl -fsSLO https://foxwarm.net/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
-  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+  --security-opt seccomp=seccomp-chromium.json \
+  --shm-size 1g -v "$PWD/foxwarm-data:/data" \
+  ghcr.io/550w-host/foxwarm:latest
 ```
 
-The installers download a prebuilt release; nothing is compiled. When the ASP.NET Core 10 runtime is not installed, they use the package that includes .NET. On Windows there is also a desktop app. See [Install Foxwarm](/docs/installing/) for packages and requirements.
+The installers download a prebuilt release; nothing is compiled. Windows and Apple Silicon Macs also have a desktop app that runs Foxwarm in a window, for use on that computer only ([Windows](/docs/installing/#windows-desktop-app), [macOS](/docs/installing/#macos-desktop-app)). See [Install Foxwarm](/docs/installing/) for packages and requirements.
 
 When the installer finishes, it starts Foxwarm and prints a sign-in link such as `http://localhost:3001/#token=...`. Treat that link like a password.
 

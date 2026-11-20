@@ -10,8 +10,128 @@ internal sealed class ToolAuthorizationUnavailableException()
     internal const string Code = "TOOL_AUTH_POLICY_UNAVAILABLE";
 }
 
-internal sealed class ToolAuthorizationDeniedException(string message)
-    : InvalidOperationException(message);
+// A call operation rules cannot decide because a resource or fact they test, or the call's
+// operations themselves, could not be established. It is rejected before dispatch.
+internal sealed class ToolAuthorizationUnresolvedException(string message)
+    : ToolAuthorizationDeniedException(message)
+{
+    internal override string ErrorType => "tool_authorization_unresolved";
+}
+
+internal class ToolAuthorizationDeniedException(string message) : InvalidOperationException(message)
+{
+    internal virtual string ErrorType => "tool_authorization_denied";
+
+    // Additional model-facing fields of the result beside the error.
+    internal virtual JsonObject? ResultFields => null;
+
+    // The type is the result's code: Activity classifies denials, approvals and skips by it.
+    internal JsonObject ToolError()
+    {
+        var result = ToolFailure.Result(Message, ErrorType);
+        foreach (var pair in ResultFields ?? [])
+            result[pair.Key] = pair.Value?.DeepClone();
+        return result;
+    }
+}
+
+// One asking check of a call: the call itself or another request it must pass, with its
+// assessment and the fingerprint an approval of it covers.
+internal sealed record ApprovalCheck(
+    string Id,
+    ResolvedTool Resolved,
+    AuthorizationAssessment Assessment,
+    string Fingerprint,
+    bool Primary
+)
+{
+    // The facts the fingerprint binds, as the approver sees them.
+    internal ToolAuthorizationRequest Facts { get; init; } = Assessment.Request;
+}
+
+// Asking checks that no approval covers. The dispatch gate turns them into one approval request
+// for the call (Resolved), at the stage they were found; anywhere else (a check after the
+// approval, a recheck outside the approved invocation) they are refused.
+internal sealed class ToolApprovalRequiredException(
+    IReadOnlyList<ApprovalCheck> checks,
+    ResolvedTool resolved,
+    ToolApprovalStage stage = ToolApprovalStage.Call,
+    ToolAuthorizationRequest? callFacts = null
+) : ToolAuthorizationDeniedException(Text(checks[0]))
+{
+    internal ToolApprovalRequiredException(
+        AuthorizationAssessment assessment,
+        ResolvedTool resolved,
+        string fingerprint
+    )
+        : this(
+            [new("primary", resolved, assessment, fingerprint, true)],
+            resolved,
+            callFacts: assessment.Request
+        ) { }
+
+    internal IReadOnlyList<ApprovalCheck> Checks => checks;
+
+    // The first asking check: the call itself when it asks.
+    internal AuthorizationAssessment Assessment => checks[0].Assessment;
+
+    // The call the approval is for.
+    internal ResolvedTool Resolved => resolved;
+
+    internal ToolApprovalStage Stage => stage;
+
+    // The call's own facts when its request was assessed, whether or not it asked itself.
+    internal ToolAuthorizationRequest? CallFacts => callFacts;
+
+    // The combined options of every asking check: the shortest deadline, and only the
+    // identities every asking rule admits.
+    internal ToolApprovalOptions Approval =>
+        ToolApprovalOptions.Combine(checks.SelectMany(check => check.Assessment.Asking));
+
+    internal override string ErrorType => "tool_approval_unavailable";
+
+    private static string Text(ApprovalCheck check) =>
+        $"This call needs approval for a step its approval does not cover ({check.Resolved.Source} `{check.Resolved.Name}`, rule {RuleId(check.Assessment)}), and approval can't be requested at this point. It was not executed.";
+
+    // The failure of a call whose re-check after approval finds an ask the approval did not
+    // list: policy or the call's facts changed while it waited.
+    internal ToolApprovalOutcomeException ChangedAfterApproval()
+    {
+        var check = checks[0];
+        return new(
+            "tool_approval_unavailable",
+            $"This call changed while it waited for approval: {check.Resolved.Source} `{check.Resolved.Name}` now needs approval under rule {RuleId(check.Assessment)}, which the approval did not cover. It was not executed."
+        );
+    }
+
+    private static string RuleId(AuthorizationAssessment assessment) =>
+        assessment.Asking.FirstOrDefault() is { } layer
+            ? SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction"
+            : "defaultAction";
+}
+
+// Final outcome of an approval request that did not approve the call.
+internal sealed class ToolApprovalOutcomeException(
+    string type,
+    string message,
+    string? approvalId = null,
+    string? note = null
+) : ToolAuthorizationDeniedException(message)
+{
+    internal override string ErrorType => type;
+    internal override JsonObject? ResultFields
+    {
+        get
+        {
+            var fields = new JsonObject();
+            if (note is not null)
+                fields["note"] = note;
+            if (approvalId is not null)
+                fields["approvalId"] = approvalId;
+            return fields;
+        }
+    }
+}
 
 internal sealed class ToolAuthorizationAuthority(
     string dataRoot,
@@ -82,7 +202,9 @@ internal sealed class ToolAuthorizationAuthority(
                     throw new InvalidDataException("Tool policy exceeds its byte limit.");
                 output.Write(buffer, 0, count);
             }
-            return ToolAuthorizationYaml.Parse(output.ToArray());
+            var policy = ToolAuthorizationYaml.Parse(output.ToArray());
+            ToolAuthorizationPolicy.Report("policy", policy);
+            return policy;
         }
         catch (Exception error)
             when ((error is FileNotFoundException or DirectoryNotFoundException)
@@ -149,38 +271,31 @@ internal sealed class ToolAuthorizationAuthority(
     internal async Task InstallAsync(byte[] bytes, CancellationToken token)
     {
         _ = ToolAuthorizationYaml.Parse(bytes);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temporary = Path.Combine(
+        var file = new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
-            ".tool-authorization-" + Guid.NewGuid().ToString("N") + ".tmp"
+            Path.GetFileName(path),
+            stage =>
+            {
+                if (stage == AtomicJsonWriteStage.BeforeTempWrite)
+                    InstallBoundary?.Invoke("captured");
+                else if (stage == AtomicJsonWriteStage.BeforeRename)
+                    InstallBoundary?.Invoke("before-rename");
+            },
+            privateFile: true
         );
         try
         {
-            InstallBoundary?.Invoke("captured");
-            var options = new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-                Share = FileShare.None,
-                Options = FileOptions.Asynchronous,
-            };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            await using (var stream = new FileStream(temporary, options))
-            {
-                await stream.WriteAsync(bytes, token);
-                stream.Flush(true);
-            }
-            token.ThrowIfCancellationRequested();
-            InstallBoundary?.Invoke("before-rename");
-            File.Move(temporary, path, true);
-            Invalidate();
+            await file.WriteStreamPayloadAsync(stream => stream.Write(bytes), null, token);
         }
-        finally
+        catch (AuthorityCommittedException error)
         {
-            if (File.Exists(temporary))
-                File.Delete(temporary);
+            Invalidate();
+            throw new AuthorityCommittedException(
+                "Configuration committed but final durability failed.",
+                error.InnerException!
+            );
         }
+        Invalidate();
     }
 }
 
@@ -217,7 +332,7 @@ public sealed partial class WorkspaceTools
         {
             "read" or "set_config" or "send_file" or "run_script" or "start_toolscript_run" =>
                 ResolveReadWrite(raw, true),
-            "node_create_auth_token" => PrivateNodeTokenPath(raw),
+            "node_create_auth_token" or "node_bootstrap_info" => PrivateNodeTokenPath(raw, name),
             "write" or "image_write_to_file" => ResolveReadWrite(raw, false),
             "edit" => ResolvePatchPath(raw, true),
             "exec" => Paths.ExecCwd(raw),

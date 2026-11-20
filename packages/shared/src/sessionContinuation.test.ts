@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isSessionTurnIncomplete, type ContinuationMessage } from './sessionContinuation';
+import { isSessionTurnIncomplete, isTaskReminderMessage, type ContinuationMessage } from './sessionContinuation';
 
 const modelText = (text = 'done'): ContinuationMessage => ({ role: 'model', parts: [{ text }] })
 const userText = (text = 'please continue'): ContinuationMessage => ({ role: 'user', parts: [{ text }] })
@@ -21,6 +21,11 @@ const intervalGoalReminder = (): ContinuationMessage => ({
   role: 'user',
   parts: [{ system: compactCompletionGoalReminderText }],
   __meta: { goalReminder: true, goalReminderKind: 'interval' },
+})
+const taskReminder = (system = '<foxwarm-system kind="task-reminder" seq="9">Continue the active tasks:\ntask_0123456789ab — Ship it (active)</foxwarm-system>'): ContinuationMessage => ({
+  role: 'user',
+  parts: [{ system }],
+  __meta: { taskReminder: true, seq: 9 },
 })
 const llmRetry = (): ContinuationMessage => ({
   role: 'model', modelVisible: false, parts: [{ text: 'provider failed' }], __meta: { noticeType: 'llm-retry' },
@@ -87,6 +92,13 @@ const cases: Array<{ name: string; messages: ContinuationMessage[]; incomplete: 
       { system: '<foxwarm-system kind="event">real input</foxwarm-system>' },
     ],
   }], incomplete: true },
+  { name: 'task reminder over final model remains complete', messages: [userText(), modelText(), taskReminder()], incomplete: false },
+  { name: 'task reminder over user remains incomplete', messages: [modelText(), userText(), taskReminder()], incomplete: true },
+  { name: 'task reminder over dangling tool result remains incomplete', messages: [callMessage('read-task', 'read'), toolMessage('read-task', 'read'), taskReminder()], incomplete: true },
+  { name: 'task reminder over terminal wait remains complete', messages: [callMessage('wait-task', 'wait'), toolMessage('wait-task', 'wait'), taskReminder()], incomplete: false },
+  { name: 'unstamped task reminder is transparent', messages: [userText(), modelText(), taskReminder('<foxwarm-system kind="task-reminder">Continue the active tasks:\ntask_0123456789ab — Ship it (active)</foxwarm-system>')], incomplete: false },
+  { name: 'unflagged task-reminder text is ordinary input', messages: [userText(), modelText(), { ...taskReminder(), __meta: {} }], incomplete: true },
+  { name: 'flagged task reminder with additional content is ordinary input', messages: [userText(), modelText(), { ...taskReminder(), parts: [...taskReminder().parts, { text: 'more' }] }], incomplete: true },
   { name: 'llm retry notice is incomplete despite display-only visibility', messages: [userText(), llmRetry()], incomplete: true },
   { name: 'BTW notice is transparent over a complete model', messages: [userText(), modelText(), displayOnly()], incomplete: false },
   { name: 'BTW notice is transparent over an incomplete user message', messages: [modelText(), userText(), displayOnly()], incomplete: true },
@@ -154,7 +166,7 @@ const cases: Array<{ name: string; messages: ContinuationMessage[]; incomplete: 
   { name: 'failed ordinary sibling leaves a successful handoff batch incomplete', messages: [
     { role: 'model', parts: [
       { functionCall: { id: 'read-before-handoff', name: 'read', args: {} } },
-      { functionCall: { id: 'successful-handoff', name: 'send_to_session', args: { sessionId: 'child', message: 'go', afterSend: 'wait' } } },
+      { functionCall: { id: 'successful-handoff', name: 'send_to_session', args: { sessionId: 'child', message: 'go', currentSessionTurnAction: 'wait' } } },
     ] },
     { role: 'tool', parts: [
       { functionResponse: { tool_use_id: 'read-before-handoff', name: 'read', response: { error: 'read failed' } } },
@@ -167,9 +179,14 @@ const cases: Array<{ name: string; messages: ContinuationMessage[]; incomplete: 
     callMessage('nearest-read', 'read'),
     toolMessage('nearest-read', 'read'),
   ], incomplete: true },
-  { name: 'send_to_session afterSend wait is terminal completion', messages: [callMessage('send-1', 'send_to_session', { sessionId: 'child', message: 'go', afterSend: 'wait' }), toolMessage('send-1', 'send_to_session')], incomplete: false },
-  { name: 'send_to_session afterSend finish is terminal completion', messages: [callMessage('send-finish', 'send_to_session', { sessionId: 'parent', message: 'done', afterSend: 'finish' }), toolMessage('send-finish', 'send_to_session')], incomplete: false },
-  { name: 'create_child_session afterSend wait is terminal completion', messages: [callMessage('child-1', 'create_child_session', { suffix: 'child', message: 'go', afterSend: 'wait' }), toolMessage('child-1', 'create_child_session')], incomplete: false },
+  { name: 'send_to_session currentSessionTurnAction wait is terminal completion', messages: [callMessage('send-1', 'send_to_session', { sessionId: 'child', message: 'go', currentSessionTurnAction: 'wait' }), toolMessage('send-1', 'send_to_session')], incomplete: false },
+  { name: 'send_to_session currentSessionTurnAction end_turn is terminal completion', messages: [callMessage('send-end', 'send_to_session', { sessionId: 'parent', message: 'done', currentSessionTurnAction: 'end_turn' }), toolMessage('send-end', 'send_to_session')], incomplete: false },
+  { name: 'create_child_session currentSessionTurnAction wait is terminal completion', messages: [callMessage('child-1', 'create_child_session', { suffix: 'child', message: 'go', currentSessionTurnAction: 'wait' }), toolMessage('child-1', 'create_child_session')], incomplete: false },
+  { name: 'send_to_session explicit continue still needs a model response', messages: [callMessage('send-continue', 'send_to_session', { sessionId: 'child', message: 'go', currentSessionTurnAction: 'continue' }), toolMessage('send-continue', 'send_to_session')], incomplete: true },
+  { name: 'unrenamed finish value is not a terminal currentSessionTurnAction', messages: [callMessage('send-mixed', 'send_to_session', { sessionId: 'child', message: 'go', currentSessionTurnAction: 'finish' }), toolMessage('send-mixed', 'send_to_session')], incomplete: true },
+  { name: 'persisted afterSend finish remains terminal completion', messages: [callMessage('legacy-finish', 'send_to_session', { sessionId: 'parent', message: 'done', afterSend: 'finish' }), toolMessage('legacy-finish', 'send_to_session')], incomplete: false },
+  { name: 'persisted create_child_session afterSend wait remains terminal completion', messages: [callMessage('legacy-child', 'create_child_session', { suffix: 'child', message: 'go', afterSend: 'wait' }), toolMessage('legacy-child', 'create_child_session')], incomplete: false },
+  { name: 'persisted afterSend continue still needs a model response', messages: [callMessage('legacy-continue', 'send_to_session', { sessionId: 'child', message: 'go', afterSend: 'continue' }), toolMessage('legacy-continue', 'send_to_session')], incomplete: true },
   { name: 'legacy waitAfterHandoff remains terminal completion', messages: [callMessage('legacy-send', 'send_to_session', { sessionId: 'child', message: 'go', waitAfterHandoff: true }), toolMessage('legacy-send', 'send_to_session')], incomplete: false },
   { name: 'handoff with default continue still needs a model response', messages: [callMessage('send-2', 'send_to_session', { sessionId: 'child', message: 'go' }), toolMessage('send-2', 'send_to_session')], incomplete: true },
   { name: 'optimistic client row never overrides committed completion', messages: [userText(), modelText(), { ...userText('optimistic'), __meta: { optimistic: true, temporary: true, clientMessageId: 'pending-1' } }], incomplete: false },
@@ -185,11 +202,12 @@ for (const fixture of cases) {
 
 for (const [name, args] of [
   ['wait', {}],
+  ['send_to_session', { currentSessionTurnAction: 'end_turn' }],
+  ['create_child_session', { currentSessionTurnAction: 'wait' }],
   ['send_to_session', { afterSend: 'finish' }],
-  ['create_child_session', { afterSend: 'wait' }],
 ] as const) {
   for (const errorFirst of [false, true]) {
-    test(`${name} with a ${errorFirst ? 'preceding' : 'following'} error remains continuable after interruption`, () => {
+    test(`${name} ${JSON.stringify(args)} with a ${errorFirst ? 'preceding' : 'following'} error remains continuable after interruption`, () => {
       const calls = [callMessage('terminal', name, args).parts[0], callMessage('failure', 'read').parts[0]];
       const results = [toolMessage('terminal', name).parts[0], toolMessage('failure', 'read', { error: false }).parts[0]];
       if (errorFirst) {
@@ -211,7 +229,7 @@ test('nested business errors and nonzero exec status do not suppress a terminal 
     { role: 'model', parts: [
       callMessage('handled', 'run_script').parts[0],
       callMessage('nonzero', 'exec').parts[0],
-      callMessage('terminal', 'send_to_session', { afterSend: 'finish' }).parts[0],
+      callMessage('terminal', 'send_to_session', { currentSessionTurnAction: 'end_turn' }).parts[0],
     ] },
     { role: 'tool', parts: [
       toolMessage('handled', 'run_script', { status: 'completed', result: { error: 'handled' } }).parts[0],
@@ -219,4 +237,10 @@ test('nested business errors and nonzero exec status do not suppress a terminal 
       toolMessage('terminal', 'send_to_session').parts[0],
     ] },
   ]), false);
+});
+
+test('isTaskReminderMessage requires the generated wrapper', () => {
+  assert.equal(isTaskReminderMessage(taskReminder()), true);
+  assert.equal(isTaskReminderMessage(taskReminder('<foxwarm-system kind="task-reminders">x</foxwarm-system>')), false);
+  assert.equal(isTaskReminderMessage({ ...taskReminder(), role: 'model' }), false);
 });

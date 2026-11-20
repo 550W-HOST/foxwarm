@@ -615,6 +615,7 @@ public sealed partial class ResponsesPrefixCommitTests
         private readonly HttpClient http = ProviderHttpRequest.CreateClient();
         private readonly ResponsesWsTransport transport = new(diagnostics: _ => { });
         internal readonly LlmRequestJournalStore Journal;
+        internal readonly Foxwarm.Secrets.InstanceSecrets Secrets;
         internal readonly PersistentSessionAuthorityStore Store;
         internal readonly SessionOwner Hosted;
         internal SessionEntry Entry => Hosted.Entry;
@@ -670,6 +671,8 @@ public sealed partial class ResponsesPrefixCommitTests
             var defaults = new ResponsesClientOptions(uri, "m", "a/m", "", "", 713);
             Journal = new(temp.Path);
             Store = new(temp.Path, "s");
+            // Owned instance key for text-redaction placeholders.
+            Secrets = new(Path.Combine(temp.Path, "instance"));
             Hosted = new("s", "main", catalog);
             var agents = new AgentCatalog(temp.Path, Path.Combine(temp.Path, "work"));
             var requests = new ModelRequestOwner(
@@ -680,7 +683,8 @@ public sealed partial class ResponsesPrefixCommitTests
                 transport,
                 images: Store.Images,
                 journal: Journal,
-                diagnostics: diagnostics ? new(temp.Path) : null
+                diagnostics: diagnostics ? new(temp.Path) : null,
+                secrets: Secrets
             );
             var chat = new RequestChatService(
                 new SessionChatService(
@@ -724,6 +728,7 @@ public sealed partial class ResponsesPrefixCommitTests
         {
             await transport.DisposeAsync();
             await Journal.DisposeAsync();
+            Secrets.Dispose();
             http.Dispose();
             temp.Dispose();
         }
@@ -755,10 +760,12 @@ public sealed partial class ResponsesPrefixCommitTests
     private sealed class Effects : ITurnToolExecutor
     {
         internal int Count;
+        internal readonly List<JsonObject> Calls = [];
 
         public Task<JsonNode?> ExecuteAsync(JsonObject call, CancellationToken token)
         {
             Count++;
+            Calls.Add((JsonObject)call.DeepClone());
             return Task.FromResult<JsonNode?>(new JsonObject());
         }
     }

@@ -22,12 +22,14 @@ await writeFile(entryPath, `
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
   const noop = async () => {}
   const models = Array.from({ length: 45 }, (_, i) => ({ key: 'provider/model-' + i, label: 'Model ' + i, providerKey: 'provider', modelId: 'model-' + i }))
-  const nodes = Array.from({ length: 45 }, (_, i) => ({ id: 'node-' + i, label: 'node-' + i, selectable: i !== 30, reason: i === 30 ? 'Offline' : null }))
+  const nodes = Array.from({ length: 45 }, (_, i) => ({ id: 'node-' + i, label: 'node-' + i, selectable: i !== 30, reason: i === 30 ? 'Offline' : null, hint: i === 31 ? 'Policy hint fixture' : null }))
   window.directoryRequests = []
   window.fetch = async (url, init) => {
+    // The installation directory only feeds the trigger's status; the Session directory is the picker list.
+    if (url.endsWith('/api/nodes')) return { ok: true, json: async () => ({ nodes: nodes.map(node => ({ id: node.id, online: true })) }) }
     if (!url.endsWith('/nodes')) return { ok: true, json: async () => ({ commands: [] }) }
     window.directoryRequests.push({ url, signal: init.signal })
-    return new Promise(resolve => { window.resolveDirectory = () => resolve({ ok: true, json: async () => ({ nodes, lockedReason: null }) }) })
+    return new Promise(resolve => { window.resolveDirectory = () => resolve({ ok: true, json: async () => ({ nodes }) }) })
   }
   function Fixture() {
     const [state, setState] = useState({
@@ -215,6 +217,8 @@ test('async Node directory centers once, preserves manual scroll through pending
   await page.waitForSelector('[data-node-option="node-22"]')
   await expectCentered('node')
   assert.equal(await page.$eval('[data-node-option="node-30"]', row => row.disabled), true)
+  // A policy hint describes the Session's tools; administrator selection stays enabled.
+  assert.deepEqual(await page.$eval('[data-node-option="node-31"]', row => [row.disabled, row.textContent]), [false, 'node-31Policy hint fixture'])
   await screenshot('node-open-centered')
   await page.$eval(nodeList, row => { row.parentElement.scrollTop = 120 })
   await settle()

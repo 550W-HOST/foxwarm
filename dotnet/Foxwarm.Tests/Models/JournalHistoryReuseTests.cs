@@ -163,7 +163,7 @@ public sealed class JournalHistoryReuseTests
     }
 
     [Fact]
-    public async Task Retry_reuses_neutral_records_but_current_reminders_start_the_correct_manifest_across_models()
+    public async Task Unchanged_retry_reuses_neutral_records_and_its_manifest_across_models()
     {
         using var temp = new TempDirectory();
         await using var journal = new LlmRequestJournalStore(temp.Path);
@@ -178,7 +178,6 @@ public sealed class JournalHistoryReuseTests
             )!
             .AsObject();
         var snapshot = SessionHistory.FromJson([User("seed"), model]);
-        var contexts = 0;
         var ids = new List<string>();
         await owner.RequestAsync(
             "s",
@@ -194,31 +193,12 @@ public sealed class JournalHistoryReuseTests
             default,
             ModelRequestScope.Canonical,
             prepareRetry: _ => Task.FromResult<RequestHistory?>(null),
-            journalRequestStarted: ids.Add,
-            requestContext: () =>
-                Task.FromResult<IReadOnlyList<JsonObject>>([
-                    User(++contexts < 3 ? "reminder-one" : "reminder-two"),
-                ])
+            journalRequestStarted: ids.Add
         );
-        Assert.Equal(3, contexts);
-        Assert.Equal(ids[0], ids[1]);
-        Assert.NotEqual(ids[1], ids[2]);
+        Assert.Equal(ids[0], Assert.Single(ids.Distinct()));
         var original = await journal.ReconstructAsync(ids[0]);
-        var changed = await journal.ReconstructAsync(ids[2]);
-        Assert.Equal(2, original["attempts"]!.AsArray().Count);
-        Assert.Single(changed["attempts"]!.AsArray());
-        Assert.Equal(
-            "reminder-one",
-            original["messages"]![2]!["parts"]![0]!["text"]!.GetValue<string>()
-        );
-        Assert.Equal(
-            "reminder-two",
-            changed["messages"]![2]!["parts"]![0]!["text"]!.GetValue<string>()
-        );
-        Assert.Equal(
-            LlmRequestJournalStore.EncodeCli(original["messages"]![1]!),
-            LlmRequestJournalStore.EncodeCli(changed["messages"]![1]!)
-        );
+        Assert.Equal(3, original["attempts"]!.AsArray().Count);
+        Assert.Equal(2, original["messages"]!.AsArray().Count);
         Assert.Contains("signed", Cached(snapshot[1])!.Payload);
         Assert.EndsWith("/a/v1/messages", handler.Paths[0]);
         Assert.EndsWith("/b/v1/messages", handler.Paths[2]);

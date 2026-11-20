@@ -75,8 +75,8 @@ public sealed class ExecDurationTests
             },
             default
         );
-        Assert.Contains("Elapsed: ", result["output"]!.GetValue<string>());
-        Assert.DoesNotContain("Elapsed: unknown", result["output"]!.GetValue<string>());
+        // The receipt header carries the measured elapsed time.
+        Assert.DoesNotContain("unknown", ExecReceipt.Header(result["output"]!.GetValue<string>()));
         // Restart uses real persisted process ownership; no guessed finish time on SIGKILL.
         await first.DisposeAsync();
         await using var recovered = new LocalExecManager(
@@ -90,9 +90,90 @@ public sealed class ExecDurationTests
         );
         await recovered.InitializeAsync(_ => true);
         var message = await completion.Task.WaitAsync(TimeSpan.FromSeconds(8));
+        // The header line carries the measured duration, or none when it is unknown.
+        var header = ExecReceipt.Summary(message);
         if (missingStatus)
-            Assert.Contains("Duration: unknown", message);
+            Assert.DoesNotMatch(@"\d(\.\d+)?m?s\b", header);
         else
-            Assert.Matches(@"Duration: 1\.[4-9]s", message);
+            Assert.Matches(@"\b1\.[4-9]s\b", header);
+    }
+
+    // macOS: BSD date has no %N, so the wrapper falls back to whole seconds. The command
+    // replaces date with a function that behaves like that inside the wrapper's own shell.
+    [Fact]
+    public async Task Whole_second_wrapper_finish_time_still_gives_the_subsecond_duration()
+    {
+        using var temp = new TempDirectory();
+        await using var exec = new LocalExecManager(
+            temp.Path,
+            _ => temp.Path,
+            (_, _, _) => Task.CompletedTask
+        );
+        var execution = exec.ExecuteAsync(
+            "owner",
+            new JsonObject
+            {
+                ["command"] =
+                    "date() { case \"$*\" in *%3N*) command date -u +%Y-%m-%dT%H:%M:%S.3NZ ;; *) command date \"$@\" ;; esac; }\nsleep 0.2; printf done",
+            },
+            default
+        );
+        while (!File.Exists(Path.Combine(temp.Path, "state", "running-exec.json")))
+            await Task.Delay(5);
+        var meta = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(temp.Path, "state", "running-exec.json"))
+        )!["execs"]![0]!;
+        var output = (await execution)["output"]!.GetValue<string>();
+        var written = JsonNode.Parse(
+            await File.ReadAllTextAsync(meta["statusPath"]!.GetValue<string>())
+        )!["finishedAt"]!.GetValue<string>();
+        Assert.Matches(@"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", written);
+        var match = Regex.Match(output, @"Duration: (\d+)ms");
+        Assert.True(match.Success, output);
+        Assert.InRange(int.Parse(match.Groups[1].Value), 180, 950);
+    }
+
+    [Fact]
+    public void Whole_second_finish_time_takes_milliseconds_only_from_its_own_status_write()
+    {
+        using var temp = new TempDirectory();
+        var status = Path.Combine(temp.Path, "status.json");
+        File.WriteAllText(status, "{}");
+        var second = new DateTime(2026, 11, 12, 10, 11, 47, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(status, second.AddMilliseconds(912));
+        Assert.Equal(
+            "2026-11-12T10:11:47.912Z",
+            ExecOutput.WrapperFinishedAt("2026-11-12T10:11:47Z", status)
+        );
+        var entry = new JsonObject
+        {
+            ["startedAt"] = new DateTimeOffset(second.AddMilliseconds(825)).ToUnixTimeMilliseconds(),
+        };
+        Assert.Equal(
+            "87ms",
+            ExecOutput.CompletedDuration(
+                entry,
+                new JsonObject
+                {
+                    ["exitCode"] = 0,
+                    ["finishedAt"] = ExecOutput.WrapperFinishedAt("2026-11-12T10:11:47Z", status),
+                }
+            )
+        );
+        // Millisecond timestamps, and a file written outside that second (a copy or a
+        // restore), keep the written value.
+        Assert.Equal(
+            "2026-11-12T10:11:47.100Z",
+            ExecOutput.WrapperFinishedAt("2026-11-12T10:11:47.100Z", status)
+        );
+        File.SetLastWriteTimeUtc(status, second.AddMinutes(5));
+        Assert.Equal(
+            "2026-11-12T10:11:47Z",
+            ExecOutput.WrapperFinishedAt("2026-11-12T10:11:47Z", status)
+        );
+        Assert.Equal(
+            "2026-11-12T10:11:47Z",
+            ExecOutput.WrapperFinishedAt("2026-11-12T10:11:47Z", Path.Combine(temp.Path, "missing"))
+        );
     }
 }

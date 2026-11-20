@@ -63,12 +63,21 @@ internal static class ModelRoutingFingerprint
                     ["extraFieldsHash"] = Hash(config["extraFields"] ?? new JsonObject()),
                     ["extraHeadersHash"] = Hash(config["extraHeaders"] ?? new JsonObject()),
                     ["webSearchHash"] = Hash(config["webSearch"] ?? new JsonObject()),
-                    ["imageGenerationHash"] = Hash(config["imageGeneration"] ?? new JsonObject()),
+                    ["textRedactionHash"] = Hash(config["textRedaction"] ?? new JsonObject()),
+                    ["imageGenerationHash"] = Hash(ImageGenerationRouting(config["imageGeneration"])),
                 }
             );
         }
         data["leaves"] = entries;
         return Hash(data);
+    }
+
+    // Prices never change a request, so editing them keeps routing state, like model pricing.
+    private static JsonNode ImageGenerationRouting(JsonNode? node)
+    {
+        var result = node?.DeepClone() as JsonObject ?? new JsonObject();
+        result.Remove("pricing");
+        return result;
     }
 
     internal static bool True(JsonNode? node) =>

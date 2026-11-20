@@ -29,8 +29,8 @@ test('Firefox requires current optional JavaScript permission and does not emula
     permissions: { contains: async () => false },
     userScripts: { execute: async () => { evaluations++; } },
   };
-  await assert.rejects(firefox.action(1, {}, 'execute_js', { code: '1' }, signal()), /Allow page JavaScript/);
-  await assert.rejects(firefox.action(1, {}, 'press_key', { key: 'Enter' }, signal()), /not supported/);
+  await assert.rejects(firefox.action(1, {}, 'browser_evaluate', { code: '1' }, signal()), /Allow page JavaScript/);
+  await assert.rejects(firefox.action(1, {}, 'browser_press', { key: 'Enter' }, signal()), /not supported/);
   assert.equal(evaluations, 0);
 });
 test('Firefox fences a canceled injection and never retries its effect', async () => {

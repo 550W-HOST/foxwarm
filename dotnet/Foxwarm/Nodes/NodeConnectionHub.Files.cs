@@ -30,10 +30,67 @@ internal sealed partial class NodeConnectionHub
         SessionOwner owner,
         bool restrict,
         CancellationToken token,
+        Action<long>? beforeMaterialize = null,
+        string? sessionCwd = null
+    )
+    {
+        using var admission = owner.Entry.AdmitMutation();
+        var charged = false;
+        void Charge(long length)
+        {
+            beforeMaterialize?.Invoke(length);
+            charged = true;
+        }
+        await using var source = await OpenReadStreamAsync(
+            node,
+            path,
+            owner,
+            restrict,
+            token,
+            Charge,
+            sessionCwd
+        );
+        if (!charged)
+            Charge(source.Length);
+        if (source.Length > int.MaxValue)
+            throw new IOException("File exceeds the materialization limit.");
+        var bytes = new byte[(int)source.Length];
+        await source.Stream.ReadExactlyAsync(bytes, token);
+        var extra = new byte[1];
+        if (await source.Stream.ReadAsync(extra, token) != 0)
+            throw new IOException("Source changed or transfer was interrupted.");
+        return new(bytes, source.Path, source.Name, source.MimeType);
+    }
+
+    private async Task<TransferFile> ReadFileLegacyAsync(
+        string node,
+        string path,
+        SessionOwner owner,
+        bool restrict,
+        CancellationToken token,
+        Action<long>? beforeMaterialize = null,
+        string? sessionCwd = null
+    )
+    {
+        var response = await TransferAsync(
+            node,
+            path,
+            owner,
+            restrict,
+            null,
+            false,
+            token,
+            sessionCwd: sessionCwd
+        );
+        return DecodeReadResponse(response, path, beforeMaterialize);
+    }
+
+    private static TransferFile DecodeReadResponse(
+        JsonObject response,
+        string path,
         Action<long>? beforeMaterialize = null
     )
     {
-        var response = await TransferAsync(node, path, owner, restrict, null, false, token);
         var file =
             response["file"] as JsonObject
             ?? throw new InvalidDataException("Node file response is missing file data.");
@@ -76,10 +133,66 @@ internal sealed partial class NodeConnectionHub
         bool overwrite,
         SessionOwner owner,
         bool restrict,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
-        var response = await TransferAsync(node, path, owner, restrict, bytes, overwrite, token);
+        using var admission = owner.Entry.AdmitMutation();
+        if (bytes.Length < StreamThreshold || !StreamingAvailable(node))
+            return await WriteFileLegacyAsync(
+                node,
+                path,
+                bytes,
+                overwrite,
+                owner,
+                restrict,
+                token,
+                sessionCwd: sessionCwd
+            );
+        using var source = new MemoryStream(bytes, writable: false);
+        var result = await WriteStreamAsync(
+            node,
+            path,
+            source,
+            bytes.LongLength,
+            overwrite,
+            owner,
+            restrict,
+            token,
+            sessionCwd: sessionCwd
+        );
+        return new JsonObject
+        {
+            ["filePath"] = path,
+            ["absolutePath"] = result.Path,
+            ["sizeBytes"] = bytes.LongLength,
+            ["sha256"] = result.Sha256,
+        };
+    }
+
+    private async Task<JsonObject> WriteFileLegacyAsync(
+        string node,
+        string path,
+        byte[] bytes,
+        bool overwrite,
+        SessionOwner owner,
+        bool restrict,
+        CancellationToken token,
+        bool detachAfterDispatch = false,
+        string? sessionCwd = null
+    )
+    {
+        var response = await TransferAsync(
+            node,
+            path,
+            owner,
+            restrict,
+            bytes,
+            overwrite,
+            token,
+            detachAfterDispatch,
+            sessionCwd
+        );
         var result =
             response["result"] as JsonObject
             ?? throw new InvalidDataException(
@@ -104,6 +217,14 @@ internal sealed partial class NodeConnectionHub
             );
     }
 
+    // Sent only when the target is the Session's current Node. A Node that does not know the field
+    // keeps resolving relative paths against its Agent directory.
+    internal static void AddSessionCwd(JsonObject frame, string? sessionCwd)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionCwd))
+            frame["sessionCwd"] = sessionCwd;
+    }
+
     internal static string RemoteFileName(string path) => path.Replace('\\', '/').Split('/').Last();
 
     private async Task<JsonObject> TransferAsync(
@@ -113,7 +234,9 @@ internal sealed partial class NodeConnectionHub
         bool restrict,
         byte[]? bytes,
         bool overwrite,
-        CancellationToken token
+        CancellationToken token,
+        bool detachAfterDispatch = false,
+        string? sessionCwd = null
     )
     {
         if (
@@ -125,25 +248,33 @@ internal sealed partial class NodeConnectionHub
             );
         token.ThrowIfCancellationRequested();
         owner.Entry.RequireIdentityAuthority();
-        using var admission = owner.Entry.AdmitMutation();
+        var admission = owner.Entry.AdmitMutation();
         var id = "file_" + Guid.NewGuid().ToString("N");
         Connection connection;
         var result = new TaskCompletionSource<JsonObject>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var kind = bytes is null ? "read" : "write";
-        lock (gate)
+        try
         {
-            connection = Require(node);
-            if (
-                !connection.Capabilities["tools"]!
-                    .AsArray()
-                    .Any(tool => SessionWait.Text(tool?["name"]) == kind)
-            )
-                throw new NotSupportedException(
-                    "Node does not advertise file " + kind + ": " + node
-                );
-            transfers[id] = new(connection, "file_" + kind + "_response", result);
+            lock (gate)
+            {
+                connection = Require(node);
+                if (
+                    !connection.Capabilities["tools"]!
+                        .AsArray()
+                        .Any(tool => SessionWait.Text(tool?["name"]) == kind)
+                )
+                    throw new NotSupportedException(
+                        "Node does not advertise file " + kind + ": " + node
+                    );
+                transfers[id] = new(connection, "file_" + kind + "_response", result);
+            }
+        }
+        catch
+        {
+            admission?.Dispose();
+            throw;
         }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, shutdown.Token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
@@ -159,6 +290,7 @@ internal sealed partial class NodeConnectionHub
                 ["agentName"] = owner.Agent,
                 ["restrictToAgentDir"] = restrict,
             };
+            AddSessionCwd(request, sessionCwd);
             if (bytes is not null)
             {
                 request["dataBase64"] = Convert.ToBase64String(bytes);
@@ -170,6 +302,11 @@ internal sealed partial class NodeConnectionHub
                     throw new IOException("Node connection changed before file transfer.");
             attempted = true;
             await SendAsync(connection, request, deadline.Token);
+            if (detachAfterDispatch)
+            {
+                admission?.Dispose();
+                admission = null;
+            }
             return await result.Task.WaitAsync(deadline.Token);
         }
         catch (System.Net.WebSockets.WebSocketException error)
@@ -187,12 +324,15 @@ internal sealed partial class NodeConnectionHub
         }
         finally
         {
+            admission?.Dispose();
             transfers.TryRemove(id, out _);
         }
     }
 
     private void HandleFileReply(Connection connection, JsonObject message, string type)
     {
+        if (HandleStreamingFileReply(connection, message, type))
+            return;
         var id = SessionWait.Text(message["transferId"]);
         if (
             id is null
@@ -216,6 +356,7 @@ internal sealed partial class NodeConnectionHub
 
     private void FailTransfers(Connection connection, string reason)
     {
+        FailStreamingTransfers(connection, reason);
         foreach (var pair in transfers)
             if (
                 ReferenceEquals(pair.Value.Connection, connection)

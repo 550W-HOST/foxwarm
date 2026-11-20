@@ -3,6 +3,8 @@
 #   docker compose up -d foxwarm
 # Then open http://localhost:3001 and finish WebUI OOBE.
 # To skip OOBE, create foxwarm-data/state/models.yaml before starting.
+# Foxwarm runs as uid 1000 and does not change ownership of ./foxwarm-data; create it owned by 1000:1000
+# (data from an earlier root-run image needs a one-time `sudo chown -R 1000:1000 foxwarm-data`).
 # To run this checkout instead of the published release, build the image first:
 #   docker build -t ghcr.io/550w-host/foxwarm:latest .
 
@@ -14,6 +16,13 @@ services:
     container_name: foxwarm
     restart: unless-stopped
     init: true
+    # Foxwarm runs as the image's non-root user. Chromium keeps its own sandbox, which needs
+    # this profile (Docker's default plus the namespace calls Chromium uses); no extra
+    # capabilities are granted.
+    security_opt:
+      - seccomp=./docker/seccomp-chromium.json
+    # Chromium's shared memory; Docker's 64 MB default is too small for ordinary pages.
+    shm_size: 1gb
     environment:
       NODE_ENV: production
       FOXWARM_DATA_DIR: /data
@@ -46,7 +55,17 @@ services:
       no_proxy: "localhost,127.0.0.1,foxwarm,host.docker.internal"
       WORKSPACE: "/workspace"
     volumes:
-      - ./foxwarm-data:/data:ro
+      # The Node reads only the pairing token (scripts/start-sandbox-node.sh); it keeps its own
+      # credentials inside the container. Main creates the file when it starts and never replaces
+      # it, so this single-file mount stays current. The data directory itself (models, secrets,
+      # keys, Sessions) is not exposed. `create_host_path: false` makes a missing file an error
+      # instead of Docker creating a directory there.
+      - type: bind
+        source: ./foxwarm-data/state/node_token
+        target: /data/state/node_token
+        read_only: true
+        bind:
+          create_host_path: false
       - ./sandbox-workspace:/workspace
     extra_hosts:
       - host.docker.internal:host-gateway

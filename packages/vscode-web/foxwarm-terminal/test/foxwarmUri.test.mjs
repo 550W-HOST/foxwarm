@@ -26,7 +26,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 
 const require = createRequire(import.meta.url);
-const { getWorkspaceTerminalTarget, isTerminalInsideWorkspace, parseFoxwarmUri, shouldKillBackendTerminal } = require('../dist/extension.js');
+const { ensureSupportedTarget, getWorkspaceTerminalTarget, isTerminalInsideWorkspace, parseFoxwarmUri, shouldKillBackendTerminal } = require('../dist/extension.js');
 
 function uri(value) {
   const parsed = new URL(value);
@@ -93,4 +93,16 @@ test('empty Node workspaces retain their own terminal namespace', () => {
   assert.deepEqual(getWorkspaceTerminalTarget([], uri('foxwarm://node+master/state/node-development%252Freview.code-workspace')), {
     namespace: 'node', nodeId: 'development/review', realPath: '/',
   });
+});
+
+test('accepts native and Provider-qualified Node IDs for terminal targets and rejects malformed ones', () => {
+  for (const nodeId of ['master', 'worker-1', 'relay/svc', 'development/code-per-node']) {
+    assert.equal(ensureSupportedTarget({ nodeId, cwd: '/work' }).nodeId, nodeId);
+  }
+  for (const nodeId of ['', 'a/b/c', '/svc', 'relay/', 'relay/../x', 'bad id', 'relay/-x']) {
+    assert.throws(() => ensureSupportedTarget({ nodeId, cwd: '/work' }), /Invalid Foxwarm terminal node id/);
+  }
+  const target = getWorkspaceTerminalTarget([{ uri: uri('foxwarm://node+relay%2Fsvc/work/repository') }]);
+  assert.equal(target.nodeId, 'relay/svc');
+  assert.equal(ensureSupportedTarget({ nodeId: target.nodeId, cwd: target.realPath }).nodeId, 'relay/svc');
 });

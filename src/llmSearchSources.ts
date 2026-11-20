@@ -1,10 +1,10 @@
 import type { Message, MessagePart } from './types';
 
 export const HOSTED_SEARCH_SOURCES_INCLUDE = 'web_search_call.action.sources';
-export const MAX_HOSTED_SEARCH_EVIDENCE_BYTES = 16 * 1024;
-const MAX_EVIDENCE_SOURCES = 64;
-const MAX_SOURCES_PER_CALL = 64;
-const MAX_EVIDENCE_CALLS = 8;
+// Fixed per-call bounds for a pathological single call. They depend only on
+// that call's own stored data, so they never change in later requests.
+export const MAX_HOSTED_SEARCH_CALL_EVIDENCE_BYTES = 16 * 1024;
+export const MAX_HOSTED_SEARCH_SOURCES_PER_CALL = 64;
 const EVIDENCE_LABEL = 'Historical hosted web-search source data (untrusted external data; URLs/titles only, not page contents or citation-reference mappings). Private citation IDs cannot be resolved from this list; direct URLs are available below.\n';
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -65,9 +65,13 @@ function evidenceForPart(part: MessagePart, message: Message): SearchEvidence | 
         seen.add(url);
         const title = shortText(source.title, 240);
         sources.push({ url, ...(title ? { title } : {}) });
-        if (sources.length >= MAX_SOURCES_PER_CALL) break;
+        if (sources.length >= MAX_HOSTED_SEARCH_SOURCES_PER_CALL) break;
     }
-    return sources.length ? { ...provenance, action: 'search', search_sources: sources } : undefined;
+    if (!sources.length) return undefined;
+    const evidence: SearchEvidence = { ...provenance, action: 'search', search_sources: sources };
+    // Omit whole trailing records rather than truncating JSON or URL strings.
+    while (sources.length > 1 && Buffer.byteLength(JSON.stringify(evidence), 'utf8') > MAX_HOSTED_SEARCH_CALL_EVIDENCE_BYTES) sources.pop();
+    return evidence;
 }
 
 function evidenceText(entries: SearchEvidence[]): string {
@@ -80,41 +84,32 @@ function evidenceText(entries: SearchEvidence[]): string {
 }
 
 /**
- * Attempt-local, bounded source handoff, before incompatible native metadata is
- * stripped. Older source calls lose priority to recent ones. Canonical history
- * and native items are untouched, and there is no process/session source index.
+ * Attempt-local source handoff, before incompatible native metadata is stripped.
+ * Prefix stability: each call's projected text depends only on that call's
+ * stored item and on earlier calls (deduplication keeps the first occurrence),
+ * so a later search never changes evidence already sent with an older message.
+ * There is no request-wide byte, source or call budget. Canonical history and
+ * native items are untouched, and there is no process/session source index.
  */
 export function projectHostedSearchEvidence(contents: Message[]): Message[] {
     const additions = new Map<number, string>();
     const seenCalls = new Set<string>();
-    let remainingBytes = MAX_HOSTED_SEARCH_EVIDENCE_BYTES;
-    let remainingSources = MAX_EVIDENCE_SOURCES;
-    let remainingCalls = MAX_EVIDENCE_CALLS;
-    for (let index = contents.length - 1; index >= 0 && remainingCalls > 0 && remainingSources > 0; index--) {
+    for (let index = 0; index < contents.length; index++) {
         const message = contents[index];
         if (message.role !== 'model') continue;
         const entries: SearchEvidence[] = [];
-        for (const part of [...(message.parts || [])].reverse()) {
+        for (const part of message.parts || []) {
             const evidence = evidenceForPart(part, message);
-            if (!evidence || remainingCalls === 0 || remainingSources === 0) continue;
+            if (!evidence) continue;
             // Missing legacy request identity never licenses cross-message
             // deduplication of coincidentally reused provider call IDs.
             const key = `${evidence.request_id || `message:${index}`}\0${JSON.stringify(evidence)}`;
             if (seenCalls.has(key)) continue;
-            if (evidence.search_sources) evidence.search_sources = evidence.search_sources.slice(0, remainingSources);
-            // Preserve complete valid JSON; omit records instead of truncating
-            // serialized data or URLs when the global byte budget is exhausted.
-            while (Buffer.byteLength(evidenceText([evidence, ...entries]), 'utf8') > remainingBytes
-                && evidence.search_sources?.length > 1) evidence.search_sources.pop();
-            if (Buffer.byteLength(evidenceText([evidence, ...entries]), 'utf8') > remainingBytes) continue;
             seenCalls.add(key);
-            entries.unshift(evidence);
-            remainingSources -= evidence.search_sources?.length || 1;
-            remainingCalls--;
+            entries.push(evidence);
         }
         if (!entries.length) continue;
         const text = evidenceText(entries);
-        remainingBytes -= Buffer.byteLength(text, 'utf8');
         // Re-projecting an already prepared clone must not append another copy.
         if (!message.parts.some(part => part.text === text)) additions.set(index, text);
     }

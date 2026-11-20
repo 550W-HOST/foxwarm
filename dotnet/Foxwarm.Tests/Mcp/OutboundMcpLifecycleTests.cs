@@ -31,7 +31,7 @@ public sealed class OutboundMcpLifecycleTests
         );
         var tools = f.Tools(f.First);
         var discovered = await tools.ExecuteAsync(
-            new JsonObject { ["name"] = "search_tools", ["args"] = Search() },
+            new JsonObject { ["name"] = "ctl", ["args"] = CtlTestArgs.Search(Search()) },
             default
         );
         Assert.Contains("probe", discovered!["output"]!.GetValue<string>());
@@ -55,10 +55,10 @@ public sealed class OutboundMcpLifecycleTests
         await WaitFileAsync(root, "effect", "stopped");
         cancel.Cancel();
         var response = await stopped.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal("tool_call_cancelled", response!["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_call_cancelled", response!.FailureCode());
         Assert.Equal("stdio", Id(await f.CallAsync(f.First, "probe", Args("after-stop"))));
         var timed = await f.CallAsync(f.First, "hold", Args("timeout"));
-        Assert.Contains("timed out", timed!["error"]!["message"]!.GetValue<string>());
+        Assert.Contains("timed out", timed!.FailureMessage()!);
         await WaitFileAsync(root, "cancelled", "timeout");
         Assert.Equal("stdio", Id(await f.CallAsync(f.First, "probe", Args("after-timeout"))));
         var events = await FileEventsAsync(root);
@@ -86,14 +86,14 @@ public sealed class OutboundMcpLifecycleTests
         await f.ConfigureAsync(peer.Url + "/mcp");
         var search = await f.Tools(f.First)
             .ExecuteAsync(
-                new JsonObject { ["name"] = "search_tools", ["args"] = Search() },
+                new JsonObject { ["name"] = "ctl", ["args"] = CtlTestArgs.Search(Search()) },
                 default
             );
         Assert.Contains("probe", search!["output"]!.GetValue<string>());
         var first = Id(await f.CallAsync(f.First, "probe", Args("first")));
         var again = Id(await f.CallAsync(f.First, "probe", Args("again")));
         var script = await f.ScriptAsync(
-            "search_tools = call_tool('search_tools', {'sources': ['mcp'], 'server': 'peer'})\nreturn {'search': search_tools, 'call': call_tool('mcp:peer/probe', {'tag': 'native'})}"
+            "found = call_tool('ctl', {'command': 'tool search --source mcp --server peer'})\nreturn {'search': found, 'call': call_tool('mcp:peer/probe', {'tag': 'native'})}"
         );
         Assert.Equal("completed", script!["status"]!.GetValue<string>());
         Assert.Equal(first, Id(script["result"]!["call"]));
@@ -140,10 +140,7 @@ public sealed class OutboundMcpLifecycleTests
         var surviving = f.CallAsync(f.First, "hold", Args("two"));
         await peer.WaitAsync("effect", "two");
         cancel.Cancel();
-        Assert.Equal(
-            "tool_call_cancelled",
-            (await cancelled)!["error"]!["type"]!.GetValue<string>()
-        );
+        Assert.Equal("tool_call_cancelled", (await cancelled)!.FailureCode());
         Assert.False(surviving.IsCompleted);
         Assert.DoesNotContain(
             (await peer.EventsAsync()),

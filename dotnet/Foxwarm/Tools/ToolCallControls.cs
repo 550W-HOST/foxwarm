@@ -7,26 +7,12 @@ internal static class ToolCallControls
 {
     private static readonly string[] Names = ["__cancelTool", "__cancelAllToolsThisTurn"];
 
-    internal static JsonObject ForModel(JsonObject definition, bool batchControls = true)
+    // The controls are accepted on every call but deliberately not declared: the framework prompt
+    // describes them once instead of repeating them in each of the tool schemas.
+    internal static JsonObject ForModel(JsonObject definition)
     {
         var copy = (JsonObject)definition.DeepClone();
         copy.Remove("defaultInject");
-        if (!batchControls || SessionWait.Text(copy["name"]) == "submit_compact_plan")
-            return copy;
-        var properties = copy["parameters"]!["properties"]!.AsObject();
-        properties[Names[0]] = new JsonObject
-        {
-            ["type"] = "boolean",
-            ["enum"] = new JsonArray(true),
-            ["description"] = "Set true to cancel this tool call before it runs.",
-        };
-        properties[Names[1]] = new JsonObject
-        {
-            ["type"] = "boolean",
-            ["enum"] = new JsonArray(true),
-            ["description"] =
-                "Set true to cancel every tool call in this model response before any of them runs.",
-        };
         return copy;
     }
 
@@ -55,8 +41,7 @@ internal static class ToolCallControls
                         original?.ContainsKey(key) == true && !True(original[key])
                     );
                     if (invalid is not null)
-                        preset = UnsupportedTurnToolExecutor.ToolError(
-                            "invalid_tool_control_argument",
+                        preset = ToolFailure.Result(
                             invalid + " accepts only the boolean value true when provided."
                         );
                     else if (True(original?[Names[0]]))
@@ -66,19 +51,28 @@ internal static class ToolCallControls
                         && HandoffConfirmation.Handoff(SessionWait.Text(copy["name"]))
                     )
                     {
+                        var handoffArgs = copy["args"] as JsonObject ?? new JsonObject();
                         try
                         {
-                            HandoffConfirmation.Validate(
-                                copy["args"] as JsonObject ?? new JsonObject()
+                            HandoffConfirmation.RejectRenamedTurnAction(
+                                SessionWait.Text(copy["name"]),
+                                handoffArgs
                             );
                         }
                         catch (InvalidDataException error)
                         {
-                            preset = UnsupportedTurnToolExecutor.ToolError(
-                                HandoffConfirmation.ErrorCode,
-                                error.Message
-                            );
+                            // Same rejection the handler gives when the checkpoint is off.
+                            preset = ToolFailure.Result(error.Message);
                         }
+                        if (preset is null)
+                            try
+                            {
+                                HandoffConfirmation.Validate(handoffArgs);
+                            }
+                            catch (InvalidDataException error)
+                            {
+                                preset = ToolFailure.Result(error.Message);
+                            }
                     }
                 }
                 return (Call: copy, Preset: preset);

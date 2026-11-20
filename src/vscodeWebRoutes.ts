@@ -1,3 +1,4 @@
+import { replaceConfigFile } from './configFile';
 import { codeWorkspaceFilename } from '../packages/shared/dist/codeWorkspace';
 import { isCoreNodeId } from '../packages/shared/dist/nodeIdentity';
 import express from 'express';
@@ -697,7 +698,7 @@ function migrateFoxwarmWorkspace(): void {
     const destination = nodeWorkspacePath(nodeId);
     const workspace = fs.existsSync(destination) ? fs.readJsonSync(destination) : { ...legacy, folders: [] };
     for (const folder of folders) if (!workspace.folders.some((existing: unknown) => JSON.stringify(existing) === JSON.stringify(folder))) workspace.folders.push(folder);
-    fs.outputJsonSync(destination, workspace, { spaces: 2 });
+    replaceConfigFile(destination, JSON.stringify(workspace, null, 2));
   }
   fs.moveSync(DEFAULT_VSCODE_WEB_WORKSPACE_PATH, DEFAULT_VSCODE_WEB_WORKSPACE_PATH + '.migrated', { overwrite: true });
 }
@@ -707,10 +708,10 @@ function ensureFoxwarmWorkspace(initialFolderUri: string, nodeId: string, seedFo
   migrateFoxwarmWorkspace();
   const workspacePath = nodeWorkspacePath(nodeId);
   if (!fs.existsSync(workspacePath)) {
-    fs.outputJsonSync(workspacePath, {
+    replaceConfigFile(workspacePath, JSON.stringify({
       folders: seedFolder ? [{ uri: initialFolderUri }] : [],
       settings: VSCODE_YAML_PRIVACY_DEFAULTS,
-    }, { spaces: 2 });
+    }, null, 2));
   } else {
     try {
       const workspace = fs.readJsonSync(workspacePath) as { settings?: Record<string, unknown> };
@@ -725,7 +726,7 @@ function ensureFoxwarmWorkspace(initialFolderUri: string, nodeId: string, seedFo
             changed = true;
           }
         }
-        if (changed) fs.outputJsonSync(workspacePath, { ...workspace, settings }, { spaces: 2 });
+        if (changed) replaceConfigFile(workspacePath, JSON.stringify({ ...workspace, settings }, null, 2));
       }
     } catch {
       // Leave a malformed preexisting workspace untouched so Code can report it.

@@ -112,8 +112,8 @@ public sealed class ToolScriptSourceTests
         using var batch = f.Tools.CaptureDirectExecSegment();
         var operation = unified
             ? f.Call(
-                "call_tool",
-                new JsonObject { ["toolId"] = "builtin:" + name, ["args"] = args }
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:" + name, ["args"] = args })
             )
             : f.Call(name, args);
         try
@@ -173,11 +173,14 @@ public sealed class ToolScriptSourceTests
         Assert.True(f.Manager.ToolVisible(f.Owner, "builtin", "run_script"));
         Assert.True(f.Manager.ToolVisible(f.Owner, "builtin", "start_toolscript_run"));
         var found = await f.Call(
-            "search_tools",
-            new JsonObject { ["query"] = "run_script", ["sources"] = new JsonArray("builtin") }
+            "ctl",
+            CtlTestArgs.Search(new JsonObject { ["query"] = "run_script", ["sources"] = new JsonArray("builtin") })
         );
-        Assert.Contains("builtin:run_script", found["output"]!.GetValue<string>());
+        Assert.True(
+            CtlTestArgs.ListsBuiltin(found["output"]!.GetValue<string>(), "run_script"),
+            found["output"]!.GetValue<string>()
+        );
         var denied = await f.Call("run_script", new JsonObject { ["filePath"] = "missing.py" });
-        Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", denied.FailureCode()!);
     }
 }

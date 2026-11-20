@@ -60,7 +60,7 @@ server.on('connection', (ws, request) => {
           compactRanges = ranges; held.set('compact', record)
           record.invalid = () => complete([tool('invalid-plan-' + plannerRound, 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid.' }] })]); return
         }
-        const rejected = [...full].reverse().find(item => item.type === 'function_call_output'); assert(rejected); assert.match(rejected.output, /\btype:\s*compact_plan_invalid\b/); assert.deepEqual(ranges, compactRanges)
+        const rejected = [...full].reverse().find(item => item.type === 'function_call_output'); assert(rejected); assert.match(rejected.output, /^error: (?:\|-?\n  )?'?Compact plan rejected\b/); assert(rejected.output.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=999999, sourceEnd=1000000) is not a required operation')); assert.deepEqual(ranges, compactRanges)
         if (compactMode === 'same') { assert(previous, 'transient append enables invalid-feedback suffix'); assert(!Object.hasOwn(body, 'max_output_tokens')) }
         else { assert(!previous, 'changed catalog connection/invariant reconnects'); assert.equal(body.max_output_tokens, 713) }
         complete([tool('valid-plan-' + plannerRound, 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Ordered prefix and exact paired state evidence.' }] })]); return
@@ -117,7 +117,7 @@ try {
   wire = await send(main, 'next', 'DONE-next'); assert(wire[0].body.previous_response_id); assert.equal(wire[0].body.input.length, 1); assert(!Object.hasOwn(wire[0].body, 'max_output_tokens'))
   wire = await send(main, 'paired', 'DONE-paired'); assert.equal(wire.length, 2); assert.equal(await readFile(join(fixture.work, 'ws-effect.txt'), 'utf8'), 'one effect')
   assert(wire[0].body.previous_response_id); assert(!wire[1].body.previous_response_id, 'canonical array argument error discards prior completion despite ordinary paired errors')
-  assert(JSON.stringify(wire[1].body.input).includes('invalid_tool_arguments')); assert(JSON.stringify(wire[1].body.input).includes('prevLLMReqTime'))
+  assert.match(JSON.stringify(wire[1].body.input), /error: '?Invalid tool arguments JSON: /); assert(JSON.stringify(wire[1].body.input).includes('prevLLMReqTime'))
   const archive = fixture.sql('SELECT message_json FROM archive_messages WHERE session_id=? ORDER BY seq', [main]); const beforeSwitch = (await authority(main)).persistentMemorySnapshot
   await fixture.save(configuration('two')); wire = await send(main, 'config-change', 'DONE-config-change'); assert(!wire[0].body.previous_response_id); assert.equal(wire[0].headers.authorization, 'Bearer synthetic-two'); assert.equal((await authority(main)).promptCacheKey, cache); assert.equal((await authority(main)).persistentMemorySnapshot, beforeSwitch)
   assert.deepEqual(fixture.sql('SELECT message_json FROM archive_messages WHERE session_id=? ORDER BY seq LIMIT ?', [main, archive.length]), archive)
@@ -133,7 +133,8 @@ try {
   await fixture.api('POST', route(parallelA) + '/stop'); held.get('parallel-b').complete(final('VISIBLE-DONE-parallel-b')); await until(async () => !(await history(parallelB)).session.busy, 'other lease finished'); assert((await history(parallelB)).messages.some(row => row.parts?.some(part => part.text?.includes('DONE-parallel-b'))))
   async function compact(mode) {
     compactMode = mode; held.delete('compact'); for (let i = 0; i < 12; i++) await send(main, `seed-${mode}-${i} ${('ordered-prefix-' + mode + '-' + i + '-').repeat(110)}`, `DONE-seed-${mode}-${i}`)
-    const snapshot = await history(main), original = snapshot.messages; let split = Math.floor(original.length * .7); if (original[split]?.role === 'tool') { while (split > 0 && original[split].role === 'tool') split--; if (original[split]?.role !== 'model') throw new Error('unexpected atomic split') }
+    // The force-kept tail is a token share of the raw history; it always covers the last two of these equal seed exchanges.
+    const snapshot = await history(main), original = snapshot.messages; const split = original.findIndex(row => row.role === 'user' && row.parts?.some(part => (part.system ?? part.text)?.includes(`CASE:seed-${mode}-10 `))); assert(split > 0, 'seed exchange found')
     const tail = original.slice(split), tailTexts = tail.flatMap(row => row.parts?.map(part => part.text).filter(Boolean) || []); const firstPrefixText = original[0].parts.find(part => typeof part.text === 'string')?.text || original[0].parts.find(part => typeof part.system === 'string')?.system
     const persisted = (await authority(main)).persistentMemorySnapshot; assert.equal((await fixture.api('POST', route(main) + '/message', { text: '/compact' })).status, 200)
     await until(() => held.has('compact'), 'planner prefix held'); const first = held.get('compact'); assert(!first.body.previous_response_id); assert.equal(first.body.max_output_tokens, 713)

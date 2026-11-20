@@ -21,5 +21,5 @@ export function getSessionControlAction(command: string): SessionControlAction |
   if (/^\/compact(?: |$)/.test(normalized)) return 'compact';
   if (/^\/continue(?: |$)/.test(normalized)) return 'continue';
   if (/^\/dequeue(?: |$)/.test(normalized)) return 'dequeue';
-  return normalized === '/stop' ? 'stop' : normalized === '/stop compact' ? 'cancel-compaction' : null;
+  return normalized === '/stop' ? 'stop' : normalized === '/stop --compaction' ? 'cancel-compaction' : null;
 }

@@ -70,7 +70,10 @@ public sealed class ForkClearLifecycleTests
         );
         Assert.Null(fork.AuthorityEnvelope["childHandoffState"]);
         Assert.Contains("history-inherited", fork.History[before.History.Count + 1].ToJsonString());
-        Assert.Contains("afterSend", fork.History[before.History.Count + 2].ToJsonString());
+        Assert.Contains(
+            "currentSessionTurnAction",
+            fork.History[before.History.Count + 2].ToJsonString()
+        );
         Assert.Equal("user", fork.History.Materialize().Last()["role"]!.GetValue<string>());
         Assert.Equal(
             before.History.Select(row => row.ToJsonString()),
@@ -168,7 +171,10 @@ public sealed class ForkClearLifecycleTests
             "user",
             delegated.Entry.Snapshot().History.Materialize().Last()["role"]!.GetValue<string>()
         );
-        Assert.Contains("afterSend", delegated.Entry.Snapshot().History.Last().ToJsonString());
+        Assert.Contains(
+            "currentSessionTurnAction",
+            delegated.Entry.Snapshot().History.Last().ToJsonString()
+        );
         var created = await fixture.Manager.Tasks.ExecuteAsync(
             new JsonObject { ["action"] = "create", ["title"] = "linked fork" },
             parent.Id

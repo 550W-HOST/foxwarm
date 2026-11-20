@@ -1,6 +1,7 @@
 node_modules
 /lib
 /state
+/keys
 /data_dir
 /foxwarm.pid
 /workspace
@@ -14,6 +15,7 @@ __pycache__/
 # WebUI
 /packages/webui/node_modules
 /packages/webui/dist
+/packages/webui/dist-demo
 /packages/vscode-web/assets
 /packages/vscode-web/.cache
 
@@ -23,6 +25,7 @@ __pycache__/
 # Test environment
 /test/.env
 /test/state
+/test/keys
 /test/workspace
 /test/agents
 /test/node-client-state
@@ -42,3 +45,5 @@ __pycache__/
 # Source build staging and retained runnable outputs
 /build/
 /runtime/
+/packages/browser-host/dist
+/packages/browser-host/node_modules

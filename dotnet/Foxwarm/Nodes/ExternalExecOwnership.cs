@@ -38,7 +38,7 @@ internal sealed class ExternalExecOwnership(RemoteExecAuthority capabilities)
         long selectionGeneration
     )
     {
-        if (Encoding.UTF8.GetByteCount(args.ToJsonString()) > 64 * 1024)
+        if (Encoding.UTF8.GetByteCount(args.ToJsonText()) > 64 * 1024)
             throw new McpInboundSafeException("External exec arguments exceed 64 KiB.");
         lock (gate)
         {

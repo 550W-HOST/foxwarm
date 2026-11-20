@@ -230,6 +230,27 @@ public sealed partial class SqliteArchiveMessageStore
             .ThenBy(row => row.Timestamp)
             .ToArray();
 
+    /// <summary>
+    /// Effective rows whose recorded timestamp is at least <paramref name="startTime"/> and before
+    /// <paramref name="endTime"/>, independent of active-history compaction.
+    /// </summary>
+    internal IReadOnlyList<ArchiveMessageRecord> ReadEffectiveMessagesBetween(
+        long startTime,
+        long endTime
+    ) =>
+        Lineage()
+            .SelectMany(part =>
+                part.Store.ReadMessagesNumericRange(
+                    null,
+                    MinCap(null, part.Messages),
+                    startTime: startTime,
+                    endTime: endTime
+                )
+            )
+            .OrderBy(row => row.Seq)
+            .ThenBy(row => row.Timestamp)
+            .ToArray();
+
     internal IReadOnlyList<ArchiveMessageRecord> ReadEffectiveMessagesPage(
         double? first,
         double? last,

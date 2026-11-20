@@ -9,9 +9,7 @@ for other projects, browser installations, or future rebuilds.
 | Embedded input | Notice/source basis and redistribution obligation |
 | --- | --- |
 | .NET Native AOT runtime and ASP.NET Core framework | Their runtime-pack licenses and complete third-party notices are copied from the exact 10.0.14 packages used by publish. These cover runtime-incorporated code including LLVM/libunwind-derived components and other listed dependencies. Keep both license and notice files. |
-| PuppeteerSharp.Cdp 25.14.0 | MIT license from repository commit `7ee221b6b9b4286ccc400bbc2537e4ec9a315dcd`, the commit recorded in its NuGet metadata. Keep copyright and permission notice. |
-| ReactiveExtensionsSharp 0.3.0 | MIT license from NuGet's repository commit `787712268f4bedf5945d43082d450042be275bce`. Keep copyright and permission notice. |
-| Microsoft.IO.RecyclableMemoryStream 3.0.1 | MIT license from NuGet's repository commit `e29a28387da9018fa9605a1dcb3f7a0435aa9974`. Keep copyright and permission notice. |
+| Browser host bundle (`browser-host.bundle.cjs`) | A JavaScript bundle of puppeteer-core and its dependencies that runs under the user's installed Node.js; it is not embedded in the executable. The `.LEGAL.txt` file generated with the bundle preserves the bundled projects' license comments and ships beside it. |
 | musl | The installed version's complete COPYRIGHT file contains MIT and incorporated-code notices; retain it. |
 | ICU and embedded full culture data | The matching ICU release license includes Unicode/data and third-party terms; retain the complete file, not just a generic Unicode license identifier. |
 | OpenSSL | The matching release's Apache 2.0 license and copyright notice must accompany copies; preserve any additional applicable upstream attribution. The package does not modify OpenSSL. |

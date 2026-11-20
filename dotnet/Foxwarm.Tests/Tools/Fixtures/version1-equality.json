@@ -1,0 +1,685 @@
+{
+ "description": "Version-1 decision equality (operation authorization phase 3). outcomes: recorded at the base revision with FOXWARM_V1_CORPUS_OUT. scheduled: the exact phase-3 changes, with the current outcome.",
+ "outcomes": {
+  "empty": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "ok",
+   "script-nested-read": "ok",
+   "script-file": "ok",
+   "script-model": "error: RuntimeError: Unknown model: missing",
+   "runs-list": "ok",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
+   "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
+   "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "session-status": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "task-list": "ok",
+   "view": "ok: Session `opaque` · active indices [0,0) of 0; historyVersion:0.\nSession execution state: idle.\nNo older eligible page.\n0 matches from 0 selected eligible source records.\n\nNo eligible content in this range.\n\nDetails: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range.",
+   "visible:run_script": true,
+   "visible:start_toolscript_run": true,
+   "visible:continue_script": true,
+   "visible:list_toolscript_runs": true,
+   "visible:artifact": true,
+   "visible:submit_compact_plan": true,
+   "visible:cancel_transfer": true,
+   "visible:image_crop": true,
+   "visible:wait": true,
+   "visible:node": true,
+   "visible:session": true,
+   "visible:task": true,
+   "visible:view_session": true,
+   "visible:create_session": true,
+   "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
+   "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
+   "help:script --help": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "deny-default": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. The default action of the global policy denied `builtin:run_script`, called as `run_script`.",
+   "script-nested-read": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. The default action of the global policy denied `builtin:run_script`, called as `run_script`.",
+   "script-file": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. The default action of the global policy denied `builtin:run_script`, called as `run_script`.",
+   "script-model": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. The default action of the global policy denied `builtin:run_script`, called as `run_script`.",
+   "runs-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `list_toolscript_runs`. The default action of the global policy denied `builtin:list_toolscript_runs`, called as `list_toolscript_runs`.",
+   "run-get": "tool_authorization_denied: Tool authorization rule denies builtin capability `get_toolscript_run`. The default action of the global policy denied `builtin:get_toolscript_run`, called as `get_toolscript_run`.",
+   "transfer-cancel": "tool_authorization_denied: Tool authorization rule denies builtin capability `cancel_transfer`. The default action of the global policy denied `builtin:cancel_transfer`, called as `cancel_transfer`.",
+   "node-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `node`. The default action of the global policy denied `builtin:node`, called as `ctl node list`.",
+   "node-select-spelled": "tool_authorization_denied: Tool authorization rule denies builtin capability `node`. The default action of the global policy denied `builtin:node`, called as `node`.",
+   "session-default": "tool_authorization_denied: Tool authorization rule denies builtin capability `session`. The default action of the global policy denied `builtin:session`, called as `session`.",
+   "session-status": "tool_authorization_denied: Tool authorization rule denies builtin capability `session`. The default action of the global policy denied `builtin:session`, called as `ctl session status`.",
+   "task-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `task`. The default action of the global policy denied `builtin:task`, called as `task`.",
+   "view": "tool_authorization_denied: Tool authorization rule denies builtin capability `view_session`. The default action of the global policy denied `builtin:view_session`, called as `view_session`.",
+   "visible:run_script": false,
+   "visible:start_toolscript_run": false,
+   "visible:continue_script": false,
+   "visible:list_toolscript_runs": false,
+   "visible:artifact": false,
+   "visible:submit_compact_plan": false,
+   "visible:cancel_transfer": false,
+   "visible:image_crop": false,
+   "visible:wait": false,
+   "visible:node": false,
+   "visible:session": false,
+   "visible:task": false,
+   "visible:view_session": false,
+   "visible:create_session": false,
+   "help:node --help": "error: Unknown command `node`.\n\nRun `help` for the available commands.",
+   "help:session --help": "error: Unknown command `session`.\n\nRun `help` for the available commands.",
+   "help:script --help": "error: Unknown command `script`.\n\nRun `help` for the available commands."
+  },
+  "deny-scripts": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`.",
+   "script-nested-read": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`.",
+   "script-file": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`.",
+   "script-model": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`.",
+   "runs-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `list_toolscript_runs`. Rule `no-scripts` (#1) in the global policy denied `builtin:list_toolscript_runs`, called as `list_toolscript_runs`.",
+   "run-get": "tool_authorization_denied: Tool authorization rule denies builtin capability `get_toolscript_run`. Rule `no-scripts` (#1) in the global policy denied `builtin:get_toolscript_run`, called as `get_toolscript_run`.",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
+   "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
+   "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "session-status": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "task-list": "ok",
+   "view": "ok: Session `opaque` · active indices [0,0) of 0; historyVersion:0.\nSession execution state: idle.\nNo older eligible page.\n0 matches from 0 selected eligible source records.\n\nNo eligible content in this range.\n\nDetails: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range.",
+   "visible:run_script": false,
+   "visible:start_toolscript_run": false,
+   "visible:continue_script": false,
+   "visible:list_toolscript_runs": false,
+   "visible:artifact": true,
+   "visible:submit_compact_plan": true,
+   "visible:cancel_transfer": true,
+   "visible:image_crop": true,
+   "visible:wait": true,
+   "visible:node": true,
+   "visible:session": true,
+   "visible:task": true,
+   "visible:view_session": true,
+   "visible:create_session": true,
+   "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
+   "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
+   "help:script --help": "error: Unknown command `script`.\n\nRun `help` for the available commands."
+  },
+  "deny-self-tools": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "ok",
+   "script-nested-read": "ok",
+   "script-file": "ok",
+   "script-model": "error: RuntimeError: Unknown model: missing",
+   "runs-list": "ok",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "tool_authorization_denied: Tool authorization rule denies builtin capability `cancel_transfer`. Rule `no-self` (#1) in the global policy denied `builtin:cancel_transfer`, called as `cancel_transfer`.",
+   "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
+   "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
+   "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "session-status": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "task-list": "ok",
+   "view": "ok: Session `opaque` · active indices [0,0) of 0; historyVersion:0.\nSession execution state: idle.\nNo older eligible page.\n0 matches from 0 selected eligible source records.\n\nNo eligible content in this range.\n\nDetails: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range.",
+   "visible:run_script": true,
+   "visible:start_toolscript_run": true,
+   "visible:continue_script": true,
+   "visible:list_toolscript_runs": true,
+   "visible:artifact": false,
+   "visible:submit_compact_plan": false,
+   "visible:cancel_transfer": false,
+   "visible:image_crop": false,
+   "visible:wait": false,
+   "visible:node": true,
+   "visible:session": true,
+   "visible:task": true,
+   "visible:view_session": true,
+   "visible:create_session": true,
+   "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
+   "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
+   "help:script --help": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "deny-node-select-raw": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "ok",
+   "script-nested-read": "ok",
+   "script-file": "ok",
+   "script-model": "error: RuntimeError: Unknown model: missing",
+   "runs-list": "ok",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
+   "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
+   "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "session-status": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "task-list": "ok",
+   "view": "ok: Session `opaque` · active indices [0,0) of 0; historyVersion:0.\nSession execution state: idle.\nNo older eligible page.\n0 matches from 0 selected eligible source records.\n\nNo eligible content in this range.\n\nDetails: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range.",
+   "visible:run_script": true,
+   "visible:start_toolscript_run": true,
+   "visible:continue_script": true,
+   "visible:list_toolscript_runs": true,
+   "visible:artifact": true,
+   "visible:submit_compact_plan": true,
+   "visible:cancel_transfer": true,
+   "visible:image_crop": true,
+   "visible:wait": true,
+   "visible:node": true,
+   "visible:session": true,
+   "visible:task": true,
+   "visible:view_session": true,
+   "visible:create_session": true,
+   "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
+   "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
+   "help:script --help": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "node-list-only": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "ok",
+   "script-nested-read": "ok",
+   "script-file": "ok",
+   "script-model": "error: RuntimeError: Unknown model: missing",
+   "runs-list": "ok",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "node-list": "ok: Current node: `master`.\n- `master` (master) — ready",
+   "node-select-spelled": "tool_authorization_denied: Tool authorization rule denies builtin capability `node`. Rule `no-node` (#2) in the global policy denied `builtin:node`, called as `node`.",
+   "session-default": "tool_authorization_denied: Tool authorization rule denies builtin capability `session`. Rule `no-session` (#4) in the global policy denied `builtin:session`, called as `session`.",
+   "session-status": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "task-list": "ok",
+   "view": "ok: Session `opaque` · active indices [0,0) of 0; historyVersion:0.\nSession execution state: idle.\nNo older eligible page.\n0 matches from 0 selected eligible source records.\n\nNo eligible content in this range.\n\nDetails: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range.",
+   "visible:run_script": true,
+   "visible:start_toolscript_run": true,
+   "visible:continue_script": true,
+   "visible:list_toolscript_runs": true,
+   "visible:artifact": true,
+   "visible:submit_compact_plan": true,
+   "visible:cancel_transfer": true,
+   "visible:image_crop": true,
+   "visible:wait": true,
+   "visible:node": true,
+   "visible:session": true,
+   "visible:task": true,
+   "visible:view_session": true,
+   "visible:create_session": true,
+   "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
+   "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
+   "help:script --help": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "ask-exec-deny-read": {
+   "write": "ok: written",
+   "read": "tool_authorization_denied: Tool authorization rule denies node capability `read`. Rule `no-read` (#2) in the global policy denied `node:master/read`, called as `read`.",
+   "script-inline": "ok",
+   "script-nested-read": "error: RuntimeError: Tool authorization rule denies node capability `read`. Rule `no-read` (#2) in the global policy denied `node:master/read`, called as `call_tool`.",
+   "script-file": "tool_authorization_denied: Tool authorization rule denies node capability `read`. Rule `no-read` (#2) in the global policy denied the read of the script source file on its Node (`node:master/read`) for `builtin:run_script`, called as `run_script`.",
+   "script-model": "error: RuntimeError: Unknown model: missing",
+   "runs-list": "ok",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
+   "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
+   "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "session-status": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
+   "task-list": "ok",
+   "view": "ok: Session `opaque` · active indices [0,0) of 0; historyVersion:0.\nSession execution state: idle.\nNo older eligible page.\n0 matches from 0 selected eligible source records.\n\nNo eligible content in this range.\n\nDetails: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range.",
+   "visible:run_script": true,
+   "visible:start_toolscript_run": true,
+   "visible:continue_script": true,
+   "visible:list_toolscript_runs": true,
+   "visible:artifact": true,
+   "visible:submit_compact_plan": true,
+   "visible:cancel_transfer": true,
+   "visible:image_crop": true,
+   "visible:wait": true,
+   "visible:node": true,
+   "visible:session": true,
+   "visible:task": true,
+   "visible:view_session": true,
+   "visible:create_session": true,
+   "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
+   "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
+   "help:script --help": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "local-deny-all": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "script-nested-read": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "script-file": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "script-model": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "runs-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `list_toolscript_runs`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:list_toolscript_runs`, called as `list_toolscript_runs`.",
+   "run-get": "tool_authorization_denied: Tool authorization rule denies builtin capability `get_toolscript_run`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:get_toolscript_run`, called as `get_toolscript_run`.",
+   "transfer-cancel": "tool_authorization_denied: Tool authorization rule denies builtin capability `cancel_transfer`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:cancel_transfer`, called as `cancel_transfer`.",
+   "node-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `node`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:node`, called as `ctl node list`.",
+   "node-select-spelled": "tool_authorization_denied: Tool authorization rule denies builtin capability `node`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:node`, called as `node`.",
+   "session-default": "tool_authorization_denied: Tool authorization rule denies builtin capability `session`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:session`, called as `session`.",
+   "session-status": "tool_authorization_denied: Tool authorization rule denies builtin capability `session`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:session`, called as `ctl session status`.",
+   "task-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `task`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:task`, called as `task`.",
+   "view": "tool_authorization_denied: Tool authorization rule denies builtin capability `view_session`. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:view_session`, called as `view_session`.",
+   "visible:run_script": false,
+   "visible:start_toolscript_run": false,
+   "visible:continue_script": false,
+   "visible:list_toolscript_runs": false,
+   "visible:artifact": false,
+   "visible:submit_compact_plan": false,
+   "visible:cancel_transfer": false,
+   "visible:image_crop": false,
+   "visible:wait": false,
+   "visible:node": false,
+   "visible:session": false,
+   "visible:task": false,
+   "visible:view_session": false,
+   "visible:create_session": false,
+   "help:node --help": "error: Unknown command `node`.\n\nRun `help` for the available commands.",
+   "help:session --help": "error: Unknown command `session`.\n\nRun `help` for the available commands.",
+   "help:script --help": "error: Unknown command `script`.\n\nRun `help` for the available commands."
+  },
+  "local-deny-scripts": {
+   "write": "ok: written",
+   "read": "ok: seed\n---\nFile has 1 line.\nFile size: 4 bytes.\nFile has no trailing newline.",
+   "script-inline": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "script-nested-read": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "script-file": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "script-model": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
+   "runs-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `list_toolscript_runs`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:list_toolscript_runs`, called as `list_toolscript_runs`.",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
+   "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/alpha`.",
+   "session-default": "ok: 📊 *Session Status*\n\n- session id: `opaque`\n- name: unset\n- agent id/name: `alpha`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/alpha`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/alpha`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, e",
+   "session-status": "ok: 📊 *Session Status*\n\n- session id: `opaque`\n- name: unset\n- agent id/name: `alpha`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/alpha`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/alpha`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, e",
+   "task-list": "ok",
+   "view": "ok: Session `opaque` · active indices [0,0) of 0; historyVersion:0.\nSession execution state: idle.\nNo older eligible page.\n0 matches from 0 selected eligible source records.\n\nNo eligible content in this range.\n\nDetails: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range.",
+   "visible:run_script": false,
+   "visible:start_toolscript_run": true,
+   "visible:continue_script": true,
+   "visible:list_toolscript_runs": false,
+   "visible:artifact": true,
+   "visible:submit_compact_plan": true,
+   "visible:cancel_transfer": true,
+   "visible:image_crop": true,
+   "visible:wait": true,
+   "visible:node": true,
+   "visible:session": true,
+   "visible:task": true,
+   "visible:view_session": true,
+   "visible:create_session": true,
+   "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
+   "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
+   "help:script --help": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  }
+ },
+ "scheduled": {
+  "deny-default / script-inline": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "deny-default / script-nested-read": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "deny-default / script-model": {
+   "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
+   "now": "error: RuntimeError: Model request `missing` was not sent. The default action of the global policy denied `builtin:run_script`, called as `run_script`."
+  },
+  "deny-default / runs-list": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "deny-default / run-get": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "error: ToolScript run not found: tsr-<id>"
+  },
+  "deny-default / transfer-cancel": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "error: No background copy with that transfer ID belongs to this Session, or it has already finished."
+  },
+  "deny-default / visible:run_script": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:start_toolscript_run": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:continue_script": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:list_toolscript_runs": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:artifact": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:submit_compact_plan": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:cancel_transfer": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:image_crop": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / visible:wait": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-default / help:node --help": {
+   "reason": "self exemption: commands of self-scoped capabilities are listed",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node cancel-transfer <transfer-id>\n      Cancel a background copy started by `node copy`.\n\nRun `node <verb> --help` for a command's arguments."
+  },
+  "deny-default / help:script --help": {
+   "reason": "self exemption: commands of self-scoped capabilities are listed",
+   "now": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "deny-scripts / script-inline": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "deny-scripts / script-nested-read": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "deny-scripts / script-model": {
+   "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
+   "now": "error: RuntimeError: Model request `missing` was not sent. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`."
+  },
+  "deny-scripts / runs-list": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "deny-scripts / run-get": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "error: ToolScript run not found: tsr-<id>"
+  },
+  "deny-scripts / visible:run_script": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-scripts / visible:start_toolscript_run": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-scripts / visible:continue_script": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-scripts / visible:list_toolscript_runs": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-scripts / help:script --help": {
+   "reason": "self exemption: commands of self-scoped capabilities are listed",
+   "now": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "deny-self-tools / transfer-cancel": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "error: No background copy with that transfer ID belongs to this Session, or it has already finished."
+  },
+  "deny-self-tools / visible:artifact": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-self-tools / visible:submit_compact_plan": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-self-tools / visible:cancel_transfer": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-self-tools / visible:image_crop": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-self-tools / visible:wait": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "deny-node-select-raw / help:node --help": {
+   "reason": "per-command help: a command is listed only when its capability might be allowed with the command's fixed arguments; node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> "
+  },
+  "node-list-only / help:node --help": {
+   "reason": "per-command help: a command is listed only when its capability might be allowed with the command's fixed arguments",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a file between Nodes, including master.\n  node cancel-transfer <transfer-id>\n      Cancel a background copy started by `node copy`.\n  node token <node-id> --file-path <text> [options]\n      Reserve a Node ID and write its auth token to a private file on master.\n  node remove <node-id> [options]\n      Revoke an approved Node's credentials and disconnect it.\n  node bootstrap-info --file-path <text>\n"
+  },
+  "node-list-only / help:session --help": {
+   "reason": "per-command help: a command is listed only when its capability might be allowed with the command's fixed arguments",
+   "now": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session view <session-id> [options]\n      Read a Session's current conversation and execution state.\n  session create <agent-name> <session-name> [options]\n      Create a Session under an existing Agent.\n  session move [<session-id>] [<new-session-id>] [options]\n      Rename a Session or move it to another Agent.\n  session delete <session-id>\n      Delete another Session's live record, keeping its arch"
+  },
+  "local-deny-all / script-inline": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "local-deny-all / script-nested-read": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "local-deny-all / script-model": {
+   "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
+   "now": "error: RuntimeError: Model request `missing` was not sent. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`."
+  },
+  "local-deny-all / runs-list": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "local-deny-all / run-get": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "error: ToolScript run not found: tsr-<id>"
+  },
+  "local-deny-all / transfer-cancel": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "error: No background copy with that transfer ID belongs to this Session, or it has already finished."
+  },
+  "local-deny-all / visible:run_script": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:start_toolscript_run": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:continue_script": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:list_toolscript_runs": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:artifact": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:submit_compact_plan": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:cancel_transfer": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:image_crop": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / visible:wait": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-all / help:node --help": {
+   "reason": "self exemption: commands of self-scoped capabilities are listed",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node cancel-transfer <transfer-id>\n      Cancel a background copy started by `node copy`.\n\nRun `node <verb> --help` for a command's arguments."
+  },
+  "local-deny-all / help:script --help": {
+   "reason": "self exemption: commands of self-scoped capabilities are listed",
+   "now": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "local-deny-scripts / script-inline": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "local-deny-scripts / script-nested-read": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "local-deny-scripts / script-model": {
+   "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
+   "now": "error: RuntimeError: Model request `missing` was not sent. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`."
+  },
+  "local-deny-scripts / runs-list": {
+   "reason": "self exemption: a self-scoped call passes valid deny layers",
+   "now": "ok"
+  },
+  "local-deny-scripts / visible:run_script": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-scripts / visible:list_toolscript_runs": {
+   "reason": "self exemption: a capability with a self-scoped branch stays visible",
+   "now": true
+  },
+  "local-deny-scripts / help:script --help": {
+   "reason": "self exemption: commands of self-scoped capabilities are listed",
+   "now": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
+  },
+  "empty / help:node --help": {
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
+  },
+  "deny-default / help:session --help": {
+   "reason": "ctl help reports a noun whose commands are all hidden as unavailable, not unknown",
+   "now": "error: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
+  },
+  "deny-scripts / help:node --help": {
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
+  },
+  "deny-self-tools / help:node --help": {
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
+  },
+  "ask-exec-deny-read / help:node --help": {
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
+  },
+  "local-deny-all / help:session --help": {
+   "reason": "ctl help reports a noun whose commands are all hidden as unavailable, not unknown",
+   "now": "error: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
+  },
+  "local-deny-scripts / help:node --help": {
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
+  },
+  "empty / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "empty / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "empty / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "empty / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "node-list-only / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "node-list-only / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  }
+ }
+}

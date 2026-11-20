@@ -37,6 +37,7 @@ __export(extension_exports, {
   FOXWARM_OPEN_SESSION_COMMAND: () => FOXWARM_OPEN_SESSION_COMMAND,
   FOXWARM_SETUP_EDITOR_VIEW_TYPE: () => FOXWARM_SETUP_EDITOR_VIEW_TYPE,
   FOXWARM_SIDEBAR_VIEW_ID: () => FOXWARM_SIDEBAR_VIEW_ID,
+  FOXWARM_WAIT_FOR_EDITOR_RESTORE_COMMAND: () => FOXWARM_WAIT_FOR_EDITOR_RESTORE_COMMAND,
   FoxwarmWebUiController: () => FoxwarmWebUiController,
   activate: () => activate,
   buildAgentsEditorUri: () => buildAgentsEditorUri,
@@ -55,6 +56,7 @@ var FOXWARM_CHAT_EDITOR_VIEW_TYPE = "foxwarm-webui.chatEditor";
 var FOXWARM_AGENTS_EDITOR_VIEW_TYPE = "foxwarm-webui.agentsEditor";
 var FOXWARM_SETUP_EDITOR_VIEW_TYPE = "foxwarm-webui.setupEditor";
 var FOXWARM_OPEN_SESSION_COMMAND = "foxwarm-webui.openSession";
+var FOXWARM_WAIT_FOR_EDITOR_RESTORE_COMMAND = "foxwarm-webui.waitForEditorRestore";
 var FOXWARM_EMBED_CHANNEL = "foxwarm-webui-embed";
 var FOXWARM_EMBED_HOST_CHANNEL = "foxwarm-webui-host";
 var FOXWARM_EMBED_VERSION = 1;
@@ -431,9 +433,10 @@ function activate(context) {
     }),
     vscode.window.tabGroups.onDidChangeTabGroups(() => controller.publishActiveTarget())
   );
-  globalThis.setTimeout(() => {
-    void controller.restoreTargets();
-  }, 0);
+  const restoration = controller.restoreTargets();
+  context.subscriptions.push(
+    vscode.commands.registerCommand(FOXWARM_WAIT_FOR_EDITOR_RESTORE_COMMAND, () => restoration)
+  );
   console.log(`Foxwarm WebUI integration registered. webUiBase=${deriveWebUiBaseUrl(context.extensionUri)}`);
 }
 //# sourceMappingURL=extension.js.map

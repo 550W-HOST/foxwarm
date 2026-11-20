@@ -59,9 +59,15 @@ public sealed class SessionEntry
         Task<ChatResult>
     >? ExternalTurn { get; set; }
     internal Action? RevokeExternalRun { get; set; }
+
+    // Owned by the active turn; never part of a persisted snapshot.
+    internal bool ProviderContinuationPending { get; set; }
     internal bool HasProcessor => Volatile.Read(ref processorClaim) != 0;
     internal Action<JsonObject, bool>? ToolProgress { get; set; }
     internal Action<Foxwarm.Channels.ChannelTurnProgress>? StructuredProgress { get; set; }
+
+    /// <summary>Who started the current turn: the latest committed input that names a starter.</summary>
+    internal ToolEffectInitiator? ActivityInitiator { get; set; }
     internal Func<Task>? TurnStopped { get; set; }
     internal Func<JsonObject, Task>? AssistantCommitted { get; set; }
     internal Func<Foxwarm.Models.ModelRetryEvent, bool, bool, Task>? RetryPresented { get; set; }
@@ -199,7 +205,27 @@ public sealed class SessionEntry
         }
     }
 
+    /// <summary>Runs after a processor has been fully released; see <see cref="NotifyProcessorReleased"/>.</summary>
+    internal Action? ProcessorReleased { get; set; }
+
     public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
+
+    /// <summary>
+    /// Runs the release observer once the releasing owner has finished its own bookkeeping, so the
+    /// observer never widens the window in which a new processor could claim this entry while the
+    /// previous one is still registered. Observer failures are recorded, not propagated.
+    /// </summary>
+    internal void NotifyProcessorReleased()
+    {
+        try
+        {
+            ProcessorReleased?.Invoke();
+        }
+        catch (Exception error)
+        {
+            RecordBestEffortFailure(error);
+        }
+    }
 
     internal T WithState<T>(Func<SessionState, T> action)
     {
@@ -366,6 +392,19 @@ public sealed class SessionEntry
         HistoryAppended?.Invoke(messages);
 
     internal void InvokeCommitted(SessionSnapshot snapshot) => Committed?.Invoke(snapshot);
+
+    /// <summary>Notifies observers of an already durable change; an observer failure is recorded, never rolled back.</summary>
+    internal void InvokePostCommitNotification(SessionSnapshot snapshot)
+    {
+        try
+        {
+            Committed?.Invoke(snapshot);
+        }
+        catch (Exception error)
+        {
+            RecordPostCommitNotificationFailure(error);
+        }
+    }
 
     internal void InvokeQueuedCommitted(
         SessionSnapshot snapshot,

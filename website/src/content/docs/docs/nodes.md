@@ -14,7 +14,7 @@ Selecting a Node changes where tools execute. It does not move the Session's con
 From a Foxwarm Session, request bootstrap instructions:
 
 ```text
-/node pair-help
+/node bootstrap-info
 ```
 
 Run the appropriate bootstrap on the target machine. Use a master URL that the target can actually reach; its `localhost` is usually not the Foxwarm server. Keep the pairing token private.
@@ -23,7 +23,7 @@ Back in Foxwarm, inspect the pending request and approve the Node you intended t
 
 ```text
 /node list
-/node approve <pending-id> worker-one
+/node approve <pending-id> --node-id worker-one
 ```
 
 The approved Node receives its own credentials for subsequent connections. Save any credentials shown by the pairing flow securely.
@@ -49,20 +49,20 @@ Use the extension popup to share a tab or an entire window with **Ask** or **Aut
 
 Page operations show Chrome's debugging banner. Pressing **Cancel** or the extension's **Stop** stops Browser Node until you deliberately Connect again. Debugger permission is broad and the extension enforces sharing; Chrome does not isolate this permission by window. Avoid editing the same tab at the same time as an Agent. The first distribution supports unpacked Chrome/Chromium, not Firefox or a browser store.
 
-Browser tools have short Node-local names such as `list_tabs`, `get_tab_content`, `fill` and `screenshot`. They control your shared logged-in tabs. The separate `browse_*` tools use a process-owned browser. You can leave a development Node selected and explicitly target Browser Node through tool discovery and `call_tool`.
+Browser Node uses the same `browser_*` tools as a machine's headless browser (`browser_tabs`, `browser_read`, `browser_fill`, `browser_screenshot` and so on). They control your shared logged-in tabs. You can leave a development Node selected and explicitly target Browser Node with `ctl tool search` and `ctl tool call`.
 
 ## Select the execution Node
 
 To select an approved or provider-created Node for the current Session:
 
 ```text
-/node worker-one
+/node select worker-one
 ```
 
 To return to local execution:
 
 ```text
-/node master
+/node select master
 ```
 
 Tools that use the Session's current Node will execute there. A tool with an explicit Node argument can target a different permitted Node. An Agent's rules still decide which Nodes it may use; selecting a Node does not grant access to it. An Agent's default Node only sets where its new Sessions start.

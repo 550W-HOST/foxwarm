@@ -266,12 +266,12 @@ public sealed partial class NodeAuthorizationTreeTests
         Denied(await f.Call("node_create_auth_token", deniedArgs, delegated));
         Denied(
             await f.Call(
-                "call_tool",
-                new JsonObject
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject
                 {
                     ["toolId"] = "builtin:node_create_auth_token",
                     ["args"] = f.Credential("unified-denied", "parent"),
-                },
+                }),
                 delegated
             )
         );

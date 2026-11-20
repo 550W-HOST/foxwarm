@@ -1,4 +1,4 @@
-import { getRuntimeStatusView } from './runtimeStatus'
+import { getRuntimeActivityText, getRuntimeStatusView } from './runtimeStatus'
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle' | 'llm-failed'
 export type SessionRuntimeWaitingFor = 'question' | 'all-sessions' | 'any-session' | 'exec' | 'input' | 'fallback'
 
@@ -29,6 +29,8 @@ export interface SessionRuntimeState {
   compaction?: SessionRuntimeCompactionDetails
   queueLength: number
   busy: boolean
+  /** The latest reasoning heading and tool summary since the latest input; the owner omits it when unknown. */
+  activity?: SessionRuntimeActivity
   active?: {
     iteration?: number
     phase?: 'normal-turn' | 'compaction' | 'managed-step' | 'unknown'
@@ -47,6 +49,8 @@ export interface SessionRuntimeState {
     total?: number
     executionNode?: string
     argsPreview?: string
+    /** Set while the call waits for a tool approval decision. */
+    approval?: { id: string; status: 'pending' }
     startedAt: number
   }
   waiting?: {
@@ -63,6 +67,12 @@ export interface SessionRuntimeState {
     waitQuestionIds?: string[]
     waitForInput?: true
   }
+}
+
+export interface SessionRuntimeActivity {
+  reasoning?: string
+  tool?: string
+  latest: 'reasoning' | 'tool'
 }
 
 export interface RuntimeStateSessionLike {
@@ -103,4 +113,9 @@ export function getSessionRuntimeTone(session: RuntimeStateSessionLike): 'accent
 
 export function getSessionRuntimeSummary(session: RuntimeStateSessionLike): string {
   return getRuntimeStateSummary(session.runtimeState, !!session.busy)
+}
+
+/** What a requesting or executing Session is doing, when its owner reports it. */
+export function getSessionRuntimeActivity(session: RuntimeStateSessionLike): string | undefined {
+  return getRuntimeActivityText(session.runtimeState, getRuntimeStatusView(session.runtimeState, !!session.busy))
 }

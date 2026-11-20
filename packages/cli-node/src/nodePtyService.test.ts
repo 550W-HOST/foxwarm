@@ -5,7 +5,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import test from 'node:test';
-import { NodePtyService, type NodePtyServiceEvent } from './nodePtyService';
+import { NodePtyService, loadNodePtyService, type NodePtyServiceEvent } from './nodePtyService';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +14,9 @@ class FakePtyProcess {
   writes: string[] = [];
   sizes: Array<[number, number]> = [];
   killed = false;
+  signals: string[] = [];
+  ignoredSignals = new Set<string>();
+  private exited = false;
   private dataListeners: Array<(data: string) => void> = [];
   private exitListeners: Array<(event: { exitCode: number; signal?: number }) => void> = [];
 
@@ -27,9 +30,17 @@ class FakePtyProcess {
   }
   write(data: string) { this.writes.push(data); }
   resize(cols: number, rows: number) { this.sizes.push([cols, rows]); }
-  kill() { this.killed = true; }
+  kill(signal = 'SIGHUP') {
+    this.killed = true;
+    this.signals.push(signal);
+    if (!this.ignoredSignals.has(signal)) setImmediate(() => this.emitExit(0, signal));
+  }
   emitData(data: string) { for (const listener of this.dataListeners) listener(data); }
-  emitExit(exitCode: number) { for (const listener of this.exitListeners) listener({ exitCode }); }
+  emitExit(exitCode: number, signal?: string) {
+    if (this.exited) return;
+    this.exited = true;
+    for (const listener of this.exitListeners) listener({ exitCode, ...(signal ? { signal: os.constants.signals[signal as NodeJS.Signals] } : {}) });
+  }
 }
 
 test('node PTY service manages create, attach, stream, input, resize, and close', async () => {
@@ -146,6 +157,61 @@ test('node PTY launch removes hosting tmux context and preserves normal environm
     assert.equal(environment.TMUX_TMPDIR, root);
     assert.equal(environment.FOXWARM_ENV_PROBE, 'ordinary value');
     for (const [key, value] of Object.entries(values)) assert.equal(process.env[key], value);
+  } finally {
+    await service.dispose();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fs.remove(root);
+  }
+});
+
+test('node PTY close escalates past ignored hangup and replies after the shell exits', async () => {
+  if (globalThis.process.platform === 'win32') return;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-pty-close-'));
+  const fakeProcess = new FakePtyProcess();
+  fakeProcess.ignoredSignals = new Set(['SIGHUP', 'SIGTERM']);
+  const events: NodePtyServiceEvent[] = [];
+  const service = new NodePtyService({ spawn: () => fakeProcess }, tempDir, (event) => events.push(event));
+  try {
+    const { terminal } = await service.execute('create', { cwd: tempDir });
+    await service.execute('close', { terminalId: terminal.id });
+    assert.deepEqual(fakeProcess.signals, ['SIGHUP', 'SIGTERM', 'SIGKILL']);
+    assert.equal(await service.execute('get', { terminalId: terminal.id }).then((result) => result.terminal), null);
+    assert.deepEqual(events, []);
+  } finally {
+    await service.dispose();
+    await fs.remove(tempDir);
+  }
+});
+
+test('node PTY close ends a real interactive shell that ignores SIGHUP', async () => {
+  if (globalThis.process.platform === 'win32' || !await fs.pathExists('/bin/bash')) return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-pty-hup-'));
+  const home = path.join(root, 'home');
+  await fs.ensureDir(home);
+  // A user shell configuration may ignore hangup; bash can also drop one that arrives during PROMPT_COMMAND.
+  await fs.writeFile(path.join(home, '.bashrc'), "trap '' HUP\n");
+  const previous = { HOME: process.env.HOME, FOXWARM_NODE_PTY_SHELL: process.env.FOXWARM_NODE_PTY_SHELL };
+  Object.assign(process.env, { HOME: home, FOXWARM_NODE_PTY_SHELL: '/bin/bash' });
+  let output = '';
+  let marker: () => void;
+  const ready = new Promise<void>((resolve) => { marker = resolve; });
+  const loaded = loadNodePtyService({ stateDir: root, emitEvent: (event) => {
+    if (event.type !== 'output') return;
+    output += event.data;
+    if (output.includes('HUP-IGNORED-READY')) marker();
+  } });
+  assert.ok(loaded.service, String(loaded.error));
+  const service = loaded.service;
+  try {
+    const { terminal } = await service.execute('create', { cwd: root });
+    await service.execute('attach', { terminalId: terminal.id });
+    await service.execute('input', { terminalId: terminal.id, data: "printf 'HUP-IGNORED-%s\\n' READY\n" });
+    await ready;
+    await service.execute('close', { terminalId: terminal.id });
+    assert.throws(() => process.kill(terminal.pid, 0), { code: 'ESRCH' });
   } finally {
     await service.dispose();
     for (const [key, value] of Object.entries(previous)) {

@@ -15,7 +15,7 @@ internal static class NodeCodeServices
         args ??= new();
         if (service == "vscode-fs")
         {
-            var path = AbsolutePath(args["path"], "path");
+            var path = AbsolutePath(args["path"], "path", allowVirtualRoot: true);
             try
             {
                 switch (operation)
@@ -55,7 +55,7 @@ internal static class NodeCodeServices
                     case "rename":
                         return CodeFileOperations.Rename(
                             path,
-                            AbsolutePath(args["newPath"], "newPath"),
+                            AbsolutePath(args["newPath"], "newPath", allowVirtualRoot: true),
                             Bool(args["overwrite"])
                         );
                     default:
@@ -73,20 +73,25 @@ internal static class NodeCodeServices
         if (service == "vscode-git")
         {
             var workspace = AbsolutePath(args["workspace"], "workspace");
+            // A Code workspace sent in the mapped /C:/... form gets mapped paths back.
+            var mapped = CodeNativePaths.IsMapped(Text(args, "workspace") ?? "");
             try
             {
                 switch (operation)
                 {
                     case "status":
-                        return await CodeGitOperations.StatusAsync(
-                            workspace,
-                            CancellationToken.None
+                        return Present(
+                            await CodeGitOperations.StatusAsync(workspace, CancellationToken.None),
+                            mapped
                         );
                     case "commit":
-                        return await CodeGitOperations.CommitAsync(
-                            workspace,
-                            Text(args, "id"),
-                            CancellationToken.None
+                        return Present(
+                            await CodeGitOperations.CommitAsync(
+                                workspace,
+                                Text(args, "id"),
+                                CancellationToken.None
+                            ),
+                            mapped
                         );
                     case "content":
                         return Content(
@@ -122,6 +127,13 @@ internal static class NodeCodeServices
         );
     }
 
+    private static JsonObject Present(JsonObject value, bool mapped)
+    {
+        if (mapped)
+            CodeNativePaths.TransportWorkspace(value);
+        return value;
+    }
+
     private static JsonObject Content(byte[] bytes) =>
         new() { ["contentBase64"] = Convert.ToBase64String(bytes) };
 
@@ -135,13 +147,25 @@ internal static class NodeCodeServices
             || json.TryGetValue<string>(out var text) && text is "1" or "true"
         );
 
-    internal static string AbsolutePath(JsonNode? value, string name)
+    internal static string AbsolutePath(
+        JsonNode? value,
+        string name,
+        bool allowVirtualRoot = false
+    )
     {
         var text = NodeFileTools.Text(value);
         if (string.IsNullOrWhiteSpace(text))
             throw new CodeServiceException("InvalidPath", name + " is required.");
         if (text.Contains('\0'))
             throw new CodeServiceException("InvalidPath", name + " must not contain NUL bytes.");
+        // Main sends Windows Code paths as `/` and `/C:/...`; other forms keep their meaning.
+        if (CodeNativePaths.IsMapped(text))
+        {
+            var native = CodeNativePaths.Native(text);
+            if (CodeNativePaths.IsVirtualRoot(native) && !allowVirtualRoot)
+                throw new CodeServiceException("InvalidPath", name + " must be an absolute path.");
+            return native;
+        }
         if (!Path.IsPathFullyQualified(text))
             throw new CodeServiceException("InvalidPath", name + " must be an absolute path.");
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(text));

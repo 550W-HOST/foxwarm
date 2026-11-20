@@ -1,4 +1,6 @@
 import { API_BASE_PATH } from './config'
+import type { ToolApprovalRecord } from './sessionApprovals'
+import { ctlAsUnified } from './ctlCall'
 
 /** One `ask_user` option as stored by the Session. */
 export interface QuestionOption {
@@ -7,16 +9,32 @@ export interface QuestionOption {
   recommended?: true
 }
 
+/** A question that asks for a credential, which the answer stores as a new secret. */
+export interface QuestionSecret {
+  name: string
+  description?: string
+}
+
 export interface QuestionItem {
   question: string
   options?: QuestionOption[]
   multiSelect?: true
+  secret?: QuestionSecret
 }
 
 export interface QuestionAnswerEntry {
   selected?: string[]
   text?: string
+  /** Name of the secret the answer stored; the value itself is never kept. */
+  secret?: string
+  stored?: true
 }
+
+/**
+ * Values typed into secret questions, by question index. They live only in the answer form's
+ * memory: never in the shared draft, browser storage or Session state.
+ */
+export type SecretAnswerValues = Readonly<Record<number, string>>
 
 export type QuestionStatus = 'open' | 'answered' | 'skipped' | 'closed'
 
@@ -36,11 +54,16 @@ export interface SessionQuestionsView {
   revision: number
   waitingQuestionIds: string[]
   questions: QuestionRecord[]
+  /** Tool approval requests, pending and recently settled. */
+  approvals?: ToolApprovalRecord[]
 }
 
 /** Bounded list/catalog projection carried by Session rows and Session state. */
 export interface SessionQuestionsProjection {
+  /** Open questions plus pending tool approvals. */
   open: number
+  /** Pending tool approvals; the Session waits on each of them. */
+  approvals?: number
   revision?: number
   waiting?: true
 }
@@ -53,7 +76,8 @@ export function getSessionQuestionAttention(session: { questions?: SessionQuesti
   return projection.waiting ? 'waiting' : 'open'
 }
 
-export function questionAttentionLabel(attention: SessionQuestionAttention, open = 1): string {
+export function questionAttentionLabel(attention: SessionQuestionAttention, open = 1, approvals = 0): string {
+  if (approvals > 0) return approvals === 1 ? 'Tool call waiting for approval' : `${approvals} tool calls waiting for approval`
   if (attention === 'waiting') return 'Waiting for your answer'
   if (attention === 'open') return open === 1 ? 'Has an open question' : `Has ${open} open questions`
   return ''
@@ -81,18 +105,27 @@ export function isQuestionDraftEntryAnswered(entry: QuestionDraftEntry | undefin
   return !!entry && (entry.selected.length > 0 || entry.text.trim().length > 0)
 }
 
-export function canSubmitQuestionDraft(draft: readonly QuestionDraftEntry[]): boolean {
-  return draft.some(isQuestionDraftEntryAnswered)
+/** Whether one question has an answer: a choice, text, or for a secret question a typed value. */
+export function isQuestionAnswered(question: QuestionItem | undefined, entry: QuestionDraftEntry | undefined, secretValue: string | undefined): boolean {
+  return question?.secret ? !!secretValue : isQuestionDraftEntryAnswered(entry)
 }
 
+export function canSubmitQuestionDraft(draft: readonly QuestionDraftEntry[], questions?: readonly QuestionItem[], secretValues: SecretAnswerValues = {}): boolean {
+  return draft.some((entry, index) => isQuestionAnswered(questions?.[index], entry, secretValues[index]))
+}
+
+/** One answer as sent: a secret question carries its value, which the server stores. */
+export type QuestionAnswerBodyEntry = QuestionAnswerEntry | { value?: string }
+
 export interface QuestionAnswerBody {
-  answers?: QuestionAnswerEntry[]
+  answers?: QuestionAnswerBodyEntry[]
   note?: string
   skip?: true
 }
 
-export function buildQuestionAnswerBody(draft: readonly QuestionDraftEntry[], note: string): QuestionAnswerBody {
-  const answers = draft.map(entry => {
+export function buildQuestionAnswerBody(draft: readonly QuestionDraftEntry[], note: string, questions?: readonly QuestionItem[], secretValues: SecretAnswerValues = {}): QuestionAnswerBody {
+  const answers = draft.map((entry, index): QuestionAnswerBodyEntry => {
+    if (questions?.[index]?.secret) return secretValues[index] ? { value: secretValues[index] } : {}
     const result: QuestionAnswerEntry = {}
     if (entry.selected.length) result.selected = [...entry.selected]
     if (entry.text.trim()) result.text = entry.text.trim()
@@ -100,6 +133,9 @@ export function buildQuestionAnswerBody(draft: readonly QuestionDraftEntry[], no
   })
   return note.trim() ? { answers, note: note.trim() } : { answers }
 }
+
+/** Display text of a stored secret answer. */
+export const storedSecretLabel = (name: string) => `Stored as secret ${name}`
 
 export function buildQuestionSkipBody(note: string): QuestionAnswerBody {
   return note.trim() ? { skip: true, note: note.trim() } : { skip: true }
@@ -111,6 +147,7 @@ export function describeQuestionAnswer(record: QuestionRecord, index: number): s
   if (!answer) return ''
   if (answer.viaMessage) return answer.text || ''
   const entry = answer.answers?.[index]
+  if (entry?.secret) return storedSecretLabel(entry.secret)
   return [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
 }
 
@@ -131,13 +168,15 @@ export function askUserQuestionId(args: Record<string, unknown> | undefined, res
   return null
 }
 
-export function isAskUserCall(call: { name: string; args?: Record<string, unknown> } | undefined): boolean {
-  if (!call) return false
+export function isAskUserCall(original: { name: string; args?: Record<string, unknown> } | undefined): boolean {
+  if (!original) return false
+  const call = ctlAsUnified(original)
   if (call.name === 'ask_user') return true
   return call.name === 'call_tool' && (call.args?.toolId === 'builtin:ask_user' || call.args?.source === 'builtin' && call.args?.name === 'ask_user')
 }
 
-export function askUserArgs(call: { name: string; args?: Record<string, unknown> }): Record<string, unknown> | undefined {
+export function askUserArgs(original: { name: string; args?: Record<string, unknown> }): Record<string, unknown> | undefined {
+  const call = ctlAsUnified(original)
   if (call.name === 'call_tool') return call.args?.args && typeof call.args.args === 'object' ? call.args.args as Record<string, unknown> : undefined
   return call.args
 }

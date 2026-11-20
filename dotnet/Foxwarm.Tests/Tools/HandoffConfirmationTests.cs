@@ -85,9 +85,9 @@ public sealed partial class HandoffConfirmationTests
             args["handoffRecall"] = recall;
             Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
         }
-        var trailingAfterSend = Args(Review());
-        trailingAfterSend["afterSend"] = "finish";
-        HandoffConfirmation.Validate(trailingAfterSend);
+        var trailingTurnAction = Args(Review());
+        trailingTurnAction["currentSessionTurnAction"] = "end_turn";
+        HandoffConfirmation.Validate(trailingTurnAction);
         var wrongOrder = Args(Review());
         wrongOrder["fork"] = true;
         Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(wrongOrder));
@@ -110,18 +110,21 @@ public sealed partial class HandoffConfirmationTests
             ["message"] = "task",
             ["handoffRecall"] = Recall(),
             ["handoffConfirmation"] = Review(),
-            ["afterSend"] = "finish",
+            ["currentSessionTurnAction"] = "end_turn",
             ["fork"] = true,
         };
         var error = Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
-        Assert.Contains("confirmation must follow every argument except afterSend", error.Message);
+        Assert.Contains(
+            "confirmation must follow every argument except currentSessionTurnAction",
+            error.Message
+        );
         Assert.Contains("recall must be before the message argument", error.Message);
         Assert.Contains(
-            "Received argument order: sessionId, message, handoffRecall, handoffConfirmation, afterSend, fork.",
+            "Received argument order: sessionId, message, handoffRecall, handoffConfirmation, currentSessionTurnAction, fork.",
             error.Message
         );
         Assert.Contains(
-            "Resend in this order: sessionId, handoffRecall, message, fork, afterSend, handoffConfirmation.",
+            "Resend in this order: sessionId, handoffRecall, message, fork, currentSessionTurnAction, handoffConfirmation.",
             error.Message
         );
 
@@ -168,10 +171,9 @@ public sealed partial class HandoffConfirmationTests
                     .AsObject()
                     .Select(pair => pair.Key)
                     .ToArray();
-                Assert.Equal(
-                    new[] { "handoffConfirmation", "__cancelTool", "__cancelAllToolsThisTurn" },
-                    modelKeys.TakeLast(3)
-                );
+                Assert.Equal("handoffConfirmation", modelKeys.Last());
+                Assert.DoesNotContain("__cancelTool", modelKeys);
+                Assert.DoesNotContain("__cancelAllToolsThisTurn", modelKeys);
             }
         }
     }
@@ -203,10 +205,7 @@ public sealed partial class HandoffConfirmationTests
             [Call("send_to_session", missing), Call("create_child_session", good), malformed],
             true
         );
-        Assert.Equal(
-            HandoffConfirmation.ErrorCode,
-            direct[0].Preset!["error"]!["type"]!.GetValue<string>()
-        );
+        Assert.NotNull(direct[0].Preset.FailureMessage());
         Assert.True(direct[1].Preset!["canceled"]!.GetValue<bool>());
         Assert.Null(direct[2].Preset);
         Assert.True(good.ContainsKey("__cancelTool"));
@@ -218,13 +217,13 @@ public sealed partial class HandoffConfirmationTests
         );
         Assert.Null(ToolCallControls.Plan([Call("send_to_session", missing)], false)[0].Preset);
         var unified = Call(
-            "call_tool",
-            new JsonObject { ["toolId"] = "builtin:send_to_session", ["args"] = Args(Review()) }
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:send_to_session", ["args"] = Args(Review()) })
         );
         Assert.Null(ToolCallControls.Plan([unified], true)[0].Preset);
-        unified["args"]!["args"]!["__cancelTool"] = true;
+        unified["args"]!["values"]!["args"]!["__cancelTool"] = true;
         Assert.True(
-            ToolCallControls.Plan([unified], true)[0].Call["args"]!["args"]!
+            ToolCallControls.Plan([unified], true)[0].Call["args"]!["values"]!["args"]!
                 .AsObject()
                 .ContainsKey("__cancelTool")
         );
@@ -257,6 +256,60 @@ public sealed partial class HandoffConfirmationTests
             await File.WriteAllTextAsync(appPath, "handoffConfirmation: " + invalid);
             Assert.Throws<InvalidDataException>(() => new ModelConfiguration(root));
         }
+    }
+
+    [Fact]
+    public async Task Old_order_afterSend_call_gets_the_rename_instead_of_an_ordering_error()
+    {
+        // The former required order: everything, then handoffConfirmation, then afterSend.
+        JsonObject OldCall()
+        {
+            var args = Args(Review());
+            args["afterSend"] = "finish";
+            return args;
+        }
+        var planned = ToolCallControls.Plan(
+            [
+                new JsonObject
+                {
+                    ["id"] = "old-order",
+                    ["name"] = "send_to_session",
+                    ["args"] = OldCall(),
+                },
+            ],
+            true
+        )[0];
+        var message = planned.Preset!.FailureMessage()!;
+        Assert.Contains("afterSend was renamed to currentSessionTurnAction", message);
+        Assert.DoesNotContain("must follow every argument", message);
+        Assert.DoesNotContain("Resend in this order", message);
+
+        using var temp = new TempDirectory();
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        var models = HostModels.Parse(
+            Obj(
+                """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://127.0.0.1:1","models":["wire"]}}}"""
+            ),
+            new JsonObject { ["handoffConfirmation"] = true }
+        );
+        await using var manager = new SessionManager(
+            Path.Combine(temp.Path, "data"),
+            work,
+            new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713),
+            models
+        );
+        await manager.LoadAsync();
+        var parent = await manager.CreateNamedAsync("main", "parent", null, null);
+        var target = await manager.CreateNamedAsync("main", "target", null, null);
+        target.Registry.TriggerOverride = _ => Task.CompletedTask;
+        // Unified and ToolScript calls skip the model preflight and reach the handler's checks.
+        var handled = await manager.ExecuteAgentToolAsync(parent, "send_to_session", OldCall());
+        var error = handled.Response["error"]!.ToJsonString();
+        Assert.Contains("afterSend was renamed to currentSessionTurnAction", error);
+        Assert.DoesNotContain("must follow every argument", error);
+        Assert.False(handled.Finish);
+        Assert.Empty(target.Entry.Snapshot().Queue);
     }
 
     [Fact]
