@@ -252,7 +252,19 @@ public sealed class SessionTurnRunner
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
                     turnSelected = false;
                     suspended = result.Suspended;
-                    FoxwarmTraces.End(span, suspended ? "suspended" : "completed");
+                    if (span is not null)
+                    {
+                        var stopped = entry.WithState(state =>
+                            state.Stopping || entry.ShutdownCancellationRequested
+                        );
+                        FoxwarmTraces.End(
+                            span,
+                            stopped ? "cancelled"
+                                : suspended ? "suspended"
+                                : "completed",
+                            stopped ? nameof(OperationCanceledException) : null
+                        );
+                    }
                     if (result.Terminal || closing)
                         break;
                 }

@@ -172,21 +172,41 @@ public sealed class PersistentSessionTurnTests
     public async Task StopCancelsBeforeHeldAssistantAppendCompletesAndPersistsFinalState()
     {
         using var temp = new TempDirectory();
+        var sessionId = "stop-while-committing-" + Guid.NewGuid().ToString("N");
         var hook = new AsyncCommitBarrier(2, failAfterRelease: false);
         var store = new PersistentSessionAuthorityStore(
             temp.Path,
-            "s",
+            sessionId,
             canonicalCommitBarrier: hook.InvokeAsync
         );
         var chat = new ControlledChat();
         chat.QueueResult("answer");
-        var registry = new SessionRegistry(store, chat);
-        var entry = registry.Add("s");
+        string? outcome = null;
+        using var observer = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Foxwarm",
+            ActivityStopped = activity =>
+            {
+                if (Equals(activity.GetTagItem("gen_ai.conversation.id"), sessionId))
+                    outcome = activity.GetTagItem("foxwarm.outcome") as string;
+            },
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(observer);
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(
+            Path.Combine(temp.Path, "state", "config.yaml"),
+            "otlp: {endpoint: 'http://127.0.0.1:1/v1/traces'}"
+        );
+        using var traces = Foxwarm.Telemetry.FoxwarmTraces.Open(
+            new Foxwarm.Models.ModelConfiguration(temp.Path)
+        );
+        var registry = new SessionRegistry(store, chat) { Traces = traces };
+        var entry = registry.Add(sessionId);
         entry.State.Queue.Add(QueueItem.UserText("A"));
 
-        var runner = registry.Runner.ProcessQueueAsync("s");
+        var runner = registry.Runner.ProcessQueueAsync(sessionId);
         await hook.Reached.WaitAsync(TimeSpan.FromSeconds(5));
-        var stop = registry.Control.StopAsync("s");
+        var stop = registry.Control.StopAsync(sessionId);
         Assert.False(stop.IsCompleted);
         Assert.True(entry.Snapshot().Stopping);
 
@@ -194,8 +214,9 @@ public sealed class PersistentSessionTurnTests
         var stopResult = await stop;
         await runner;
         Assert.True(stopResult.AbortedInFlight);
+        Assert.Equal("cancelled", outcome);
         var hot = entry.Snapshot();
-        var stored = await store.LoadAsync("s");
+        var stored = await store.LoadAsync(sessionId);
         Assert.NotNull(stored);
         Assert.False(hot.Busy);
         Assert.False(hot.Stopping);
