@@ -501,18 +501,70 @@ internal sealed partial class SessionToolExecutor(
         using var span = traces?.StartTool(hosted.Id, call);
         try
         {
-            var result = await ExecuteInvocationAsync(
-                call,
-                token,
-                index,
-                total,
-                scriptDelivery,
-                approved,
-                command,
-                span
-            );
-            traces?.CompleteTool(span, result, result.Timing is not null);
-            return result;
+            await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
+            hosted.Entry.RequireIdentityAuthority();
+            var previous = invocation.Value;
+            var placement = sessions.ExecutionPlacement(hosted);
+            var captured =
+                (!Programmatic ? execSnapshot.Value : null)
+                ?? new ExecSnapshot(placement.Node, placement.Cwd);
+            var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? "")
+            {
+                Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null,
+                Node = captured.Node,
+                Cwd = captured.Cwd,
+                Index = index,
+                Total = total,
+                // Only a model batch call has a committed anchor; a script subcall inherits its parent's ID.
+                AnchorSeq = index is null ? null : foregroundBatch,
+                InheritedDelivery = scriptDelivery,
+                Approval = (JsonObject?)approved?.Approval?.DeepClone(),
+                Command = command,
+            };
+            invocation.Value = current;
+            // Each invocation gets its own approval scope; nested calls never inherit a grant.
+            var scope = new ToolApprovalScope(hosted);
+            if (approved?.Grant is { } prepared)
+                scope.Add(prepared);
+            using var approvalScope = ToolApprovalScope.Enter(scope);
+            try
+            {
+                JsonNode? response;
+                try
+                {
+                    response = await ExecuteCoreAsync(call, token, span);
+                }
+                catch when (scope is { Grant: not null, Dispatched: false })
+                {
+                    foreach (var grant in scope.Grants)
+                        await AbandonApprovalAsync(grant, token);
+                    throw;
+                }
+                if (scope is { Grant: not null, Dispatched: false })
+                    foreach (var grant in scope.Grants)
+                        current.Approval = await AbandonApprovalAsync(grant, token) ?? current.Approval;
+                if (!unattended && !Programmatic && current.Receipt is not null)
+                    turnReceipts.Add(current.Receipt);
+                var result = new TurnToolExecution(
+                    response,
+                    current.Timing,
+                    (response as JsonObject)?["error"] is null ? current.ResolvedPaths : null,
+                    current.DeferredCwd,
+                    current.ToolScriptSubCalls,
+                    current.Receipt,
+                    current.SessionMessages,
+                    current.DeferredCwdNode,
+                    current.ExecPlacement,
+                    current.Approval,
+                    current.Target
+                );
+                traces?.CompleteTool(span, result, current.Timing is not null);
+                return result;
+            }
+            finally
+            {
+                invocation.Value = previous;
+            }
         }
         catch (Exception error)
         {
@@ -532,81 +584,6 @@ internal sealed partial class SessionToolExecutor(
         var traces = hosted.Registry.Traces;
         using var span = traces?.StartTool(hosted.Id, call);
         traces?.CompleteTool(span, result, started: false);
-    }
-
-    private async Task<TurnToolExecution> ExecuteInvocationAsync(
-        JsonObject call,
-        CancellationToken token,
-        int? index,
-        int? total,
-        string? scriptDelivery,
-        TurnToolPreparation? approved,
-        string? command,
-        Activity? span
-    )
-    {
-        await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
-        hosted.Entry.RequireIdentityAuthority();
-        var previous = invocation.Value;
-        var placement = sessions.ExecutionPlacement(hosted);
-        var captured =
-            (!Programmatic ? execSnapshot.Value : null)
-            ?? new ExecSnapshot(placement.Node, placement.Cwd);
-        var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? "")
-        {
-            Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null,
-            Node = captured.Node,
-            Cwd = captured.Cwd,
-            Index = index,
-            Total = total,
-            // Only a model batch call has a committed anchor; a script subcall inherits its parent's ID.
-            AnchorSeq = index is null ? null : foregroundBatch,
-            InheritedDelivery = scriptDelivery,
-            Approval = (JsonObject?)approved?.Approval?.DeepClone(),
-            Command = command,
-        };
-        invocation.Value = current;
-        // Each invocation gets its own approval scope; nested calls never inherit a grant.
-        var scope = new ToolApprovalScope(hosted);
-        if (approved?.Grant is { } prepared)
-            scope.Add(prepared);
-        using var approvalScope = ToolApprovalScope.Enter(scope);
-        try
-        {
-            JsonNode? response;
-            try
-            {
-                response = await ExecuteCoreAsync(call, token, span);
-            }
-            catch when (scope is { Grant: not null, Dispatched: false })
-            {
-                foreach (var grant in scope.Grants)
-                    await AbandonApprovalAsync(grant, token);
-                throw;
-            }
-            if (scope is { Grant: not null, Dispatched: false })
-                foreach (var grant in scope.Grants)
-                    current.Approval = await AbandonApprovalAsync(grant, token) ?? current.Approval;
-            if (!unattended && !Programmatic && current.Receipt is not null)
-                turnReceipts.Add(current.Receipt);
-            return new(
-                response,
-                current.Timing,
-                (response as JsonObject)?["error"] is null ? current.ResolvedPaths : null,
-                current.DeferredCwd,
-                current.ToolScriptSubCalls,
-                current.Receipt,
-                current.SessionMessages,
-                current.DeferredCwdNode,
-                current.ExecPlacement,
-                current.Approval,
-                current.Target
-            );
-        }
-        finally
-        {
-            invocation.Value = previous;
-        }
     }
 
     internal void BeginBatch(JsonObject canonicalAssistant)

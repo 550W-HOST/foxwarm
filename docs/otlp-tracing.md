@@ -17,7 +17,7 @@ The existing `set_config` permission covers OTLP settings. An enabled destinatio
 
 ## What is exported
 
-A `foxwarm.run` span describes a foreground Session turn. Model spans (`chat <model>` or `generate_content <model>`) describe concrete model attempts, including retry and failover. `execute_tool <name>` spans describe local, Node and MCP invocations and calls settled before dispatch. The trace carries the Session ID as `gen_ai.conversation.id`, with one root per turn. Independent model or tool work has its own trace. Span timestamps, status, `error.type` where available and `foxwarm.outcome` describe settlement. Traces appear as spans finish.
+A `foxwarm.run` span describes a foreground Session turn. Model spans (`chat <model>` or `generate_content <model>`) describe concrete model attempts, including retry and failover. `execute_tool <name>` spans describe local, Node and MCP invocations and calls settled before dispatch. The trace carries the Session ID as `gen_ai.conversation.id`, with one root per turn. Independent Session model or tool work has its own trace. Setup’s Test Connection request is outside Session tracing. Span timestamps, status, `error.type` where available and `foxwarm.outcome` describe settlement. Traces appear as spans finish.
 
 All `captureContent` switches default to `true` when tracing is enabled. Set any of the following to `false` in `otlp.captureContent`:
 
