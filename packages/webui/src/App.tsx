@@ -77,6 +77,7 @@ const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
+const TERMINAL_REGISTRY_POLL_MS = 30_000
 const mainHost = document.querySelector('meta[name="foxwarm-host"]')?.getAttribute('content') === 'dotnet'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
 
@@ -747,19 +748,35 @@ function App() {
     }
   }
 
+  // Lifecycle refreshes and the background poll can overlap; only the latest request applies.
+  const terminalFetchSequence = useRef(0)
   const fetchActiveTerminals = async () => {
+    const sequence = ++terminalFetchSequence.current
     try {
       const res = await fetch(`${API_BASE_PATH}/terminals`)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         throw new Error(data.error || 'Failed to fetch terminals')
       }
-      setActiveTerminals(parseTerminalRegistry(data))
+      if (sequence === terminalFetchSequence.current) setActiveTerminals(parseTerminalRegistry(data))
     } catch (error) {
       console.error('Failed to fetch terminals:', error)
-      setActiveTerminals(current => current ?? [])
+      if (sequence === terminalFetchSequence.current) setActiveTerminals(current => current ?? [])
     }
   }
+
+  // This window's own lifecycle events refresh the registry immediately. Terminals started,
+  // killed or exited elsewhere (another window, a detached shell) have no event source, so a
+  // modest poll keeps the sidebar count current while the page is visible.
+  useEffect(() => {
+    const refreshVisible = () => { if (document.visibilityState === 'visible') void fetchActiveTerminals() }
+    const timer = window.setInterval(refreshVisible, TERMINAL_REGISTRY_POLL_MS)
+    document.addEventListener('visibilitychange', refreshVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshVisible)
+    }
+  }, [])
 
   const fetchNodeTargets = async () => {
     try {

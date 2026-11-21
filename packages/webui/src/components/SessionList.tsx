@@ -10,7 +10,7 @@ import CodeLaunchButton from './CodeLaunchButton'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
-import type { TerminalListOptions } from './TerminalList'
+import { RunningTerminalCount, type TerminalListOptions } from './TerminalList'
 
 type HomeTab = 'sessions' | 'tasks' | 'search' | 'setup'
 interface SessionListProps {
@@ -107,7 +107,7 @@ export default function SessionList({
   const moreEntries: ContextMenuEntry[] = [
     { key: 'agents', label: 'System', icon: <Network size={16} />, onSelect: onSelectArchitecture },
     { key: 'code', label: 'Code', icon: <Code2 size={16} />, onSelect: () => setUtility('code') },
-    { key: 'terminal', label: 'Terminal', icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
+    { key: 'terminal', label: <span className="flex min-w-0 items-center gap-2" data-workspace-tool="terminal"><span className="min-w-0 truncate">Terminal</span><RunningTerminalCount terminals={terminalList?.terminals} className="ml-auto" /></span>, icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
     ...(onSelectLogs ? [{ key: 'logs', label: 'Logs', icon: <FileText size={16} />, onSelect: onSelectLogs }] : []),
   ]
   const navClass = 'flex min-h-12 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-2 text-xs hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring'

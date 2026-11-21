@@ -346,7 +346,9 @@ test('the mobile terminal tool lists running terminals with touch-sized controls
     await page.waitForSelector('button[aria-label="Workspace tools"]', { visible: true })
     await page.click('button[aria-label="Workspace tools"]')
     await page.waitForSelector('[role="menuitem"]', { visible: true })
-    await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent.trim() === 'Terminal').click())
+    assert.deepEqual(await page.$eval('[role="menuitem"] [data-workspace-tool="terminal"] [data-running-terminal-count]', count => [count.dataset.runningTerminalCount, count.title]), ['2', '2 running terminals'], 'the Terminal tool shows the running count')
+    if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/terminal-count-mobile.png`, captureBeyondViewport: false })
+    await page.evaluate(() => document.querySelector('[role="menuitem"] [data-workspace-tool="terminal"]').closest('[role="menuitem"]').click())
     await page.waitForSelector('dialog [data-terminal-list] [data-terminal-row]', { visible: true })
     const sizes = await page.$$eval('dialog [data-terminal-row="term-alpha"] button', buttons => buttons.map(button => { const box = button.getBoundingClientRect(); return { width: box.width, height: box.height } }))
     assert.ok(sizes.every(size => size.height >= 44), JSON.stringify(sizes))
@@ -356,5 +358,44 @@ test('the mobile terminal tool lists running terminals with touch-sized controls
     await waitReady(page)
     assert.equal(await page.$('dialog[open]'), null)
     assert.deepEqual((await terminalTabs(page)).map(tab => tab.terminalId), ['term-beta'])
+  } finally { await page.close() }
+})
+
+const sidebarCount = page => page.evaluate(() => {
+  const count = document.querySelector('[data-sidebar-nav="terminal"] [data-running-terminal-count]')
+  return count ? { value: count.dataset.runningTerminalCount, visible: count.querySelector('[aria-hidden="true"]').textContent, label: count.title } : null
+})
+const visibilityChange = page => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+
+test('the sidebar Terminal entry shows the running count without opening the list, hidden at zero', async () => {
+  const page = await openFixture()
+  const dialogs = []
+  page.on('dialog', dialog => { dialogs.push(dialog.message()); void dialog.accept() })
+  try {
+    await page.waitForFunction(() => document.querySelector('[data-sidebar-nav="terminal"] [data-running-terminal-count]'))
+    assert.deepEqual(await sidebarCount(page), { value: '2', visible: '2', label: '2 running terminals' })
+    assert.equal(await page.$('[data-terminal-list]'), null, 'the count needs no open dropdown')
+    if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/terminal-count-desktop.png`, clip: { x: 0, y: 0, width: 320, height: 260 }, captureBeyondViewport: false })
+
+    // Starting a terminal from this window refreshes through its lifecycle.
+    await page.click('[data-sidebar-nav="terminal"] button[title="Create terminal tab"]')
+    await waitReady(page)
+    await page.waitForFunction(() => document.querySelector('[data-sidebar-nav="terminal"] [data-running-terminal-count]')?.dataset.runningTerminalCount === '3')
+
+    // Terminals that start or end elsewhere appear on the next background refresh.
+    await page.evaluate(() => { window.__terminals = window.__terminals.filter(row => row.id !== 'term-beta') })
+    await visibilityChange(page)
+    await page.waitForFunction(() => document.querySelector('[data-sidebar-nav="terminal"] [data-running-terminal-count]')?.dataset.runningTerminalCount === '2')
+    assert.equal((await sidebarCount(page)).label, '2 running terminals')
+    await page.evaluate(() => { window.__terminals = window.__terminals.filter(row => row.id === 'term-alpha') })
+    await visibilityChange(page)
+    await page.waitForFunction(() => document.querySelector('[data-sidebar-nav="terminal"] [data-running-terminal-count]')?.dataset.runningTerminalCount === '1')
+    assert.equal((await sidebarCount(page)).label, '1 running terminal')
+
+    // Killing the last one from the list hides the count.
+    await openTerminalMenu(page)
+    await page.click('[data-terminal-row="term-alpha"] button[aria-label="Kill terminal"]')
+    await page.waitForFunction(() => !document.querySelector('[data-sidebar-nav="terminal"] [data-running-terminal-count]'))
+    assert.equal(dialogs.length, 1)
   } finally { await page.close() }
 })

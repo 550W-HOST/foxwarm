@@ -97,6 +97,32 @@ public sealed class LocalExecRegistryTests
         );
     }
 
+    [Fact]
+    public async Task Recovered_record_keeps_the_exec_call_summary_for_listing()
+    {
+        using var temp = new TempDirectory();
+        var described = Record(temp.Path);
+        described["summary"] = "Build the release";
+        described["notifyOnCompletion"] = true;
+        var plain = Record(temp.Path, "exec_source_record_5678");
+        plain["notifyOnCompletion"] = true;
+        plain["startedAt"] = described["startedAt"]!.GetValue<long>() + 1;
+        await Seed(temp.Path, described, plain);
+        await using var manager = new LocalExecManager(
+            temp.Path,
+            _ => temp.Path,
+            (_, _, _) => Task.CompletedTask
+        );
+        await manager.RegisterRecordsAsync(_ => true);
+        var running = manager.Running("main/owned");
+        Assert.Equal(["Build the release", null], running.Select(exec => exec.Summary));
+        var tracked = manager.Tracked.Single(record => record["id"]!.GetValue<string>() == "exec_source_record_1234");
+        Assert.Equal("Build the release", tracked["summary"]!.GetValue<string>());
+        Assert.False(
+            manager.Tracked.Single(record => record["id"]!.GetValue<string>() == "exec_source_record_5678").ContainsKey("summary")
+        );
+    }
+
     private static async Task<(LocalExecManager Manager, Func<int> Notified)> RecoveredCompletion(
         string root
     )

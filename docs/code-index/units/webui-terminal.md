@@ -19,6 +19,7 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 - `terminalShortcutAction(...)` / `attachTerminalUnloadGuard(...)` / `copyTerminalText(...)` — Terminal-owned physical shortcuts and the focused-terminal page-close prompt
 - `parseTerminalRegistry(...)` / `requestTerminalKill(...)` / `terminalKillConfirmation(...)` — running-terminal list data and the shared kill request
 - `default` (TerminalList) — running-terminal rows with open and kill actions, rendered inside the Terminal launcher
+- `RunningTerminalCount` — the running-terminal count beside the sidebar Terminal entry and the mobile Terminal tool
 
 ## Function Index
 
@@ -47,6 +48,7 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 | `parseTerminalRegistry(...)` / `terminalShellName(...)` / `formatTerminalAge(...)` | terminalRegistry.ts | Normalize `/terminals` rows and format list details |
 | `requestTerminalKill(...)` | terminalRegistry.ts | Sends the terminal DELETE; an already missing terminal counts as ended |
 | `TerminalList(props)` | TerminalList.tsx | Renders running terminals (cwd, Node, PID, shell, age, Open badge) with always-visible kill controls |
+| `RunningTerminalCount(props)` | TerminalList.tsx | Muted count of running terminals for a Terminal entry; nothing at zero or before the first list |
 | `startNewTerminal()` / `killTerminal()` | TerminalView.tsx | Closed-state New terminal action and the confirmed header kill |
 
 ## Dependencies
@@ -85,7 +87,9 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 
 ## Running-terminal list
 
-`TerminalList` renders inside the sidebar Terminal launcher dropdown (`CreateTabButton` `terminalList`) and the mobile Terminal tool dialog, below the new-terminal form. App supplies the registry, refreshed whenever the dropdown or dialog opens and after lifecycle events; there is no polling and no new backend route. Rows are newest first and show the cwd (truncated from the start), Node, PID, shell name and age, plus an Open badge for terminals a tab of this window shows. Selecting a row opens or focuses that terminal's single tab through the ordinary terminal placement and closes the dropdown or dialog. Each row's always-visible kill control (44px on coarse pointers) confirms and kills; the list stays open. Lifecycle contract: [D-code-terminal-lifecycle](../threads/code-integration.md#d-code-terminal-lifecycle).
+`TerminalList` renders inside the sidebar Terminal launcher dropdown (`CreateTabButton` `terminalList`) and the mobile Terminal tool dialog, below the new-terminal form. App supplies the registry, refreshed whenever the dropdown or dialog opens and after this window's lifecycle events (create, PTY exit, kills). Terminals that start or end elsewhere (another window or device, a detached shell exiting) have no event source, so App also refreshes every 30 seconds and when the page becomes visible again, skipping hidden pages; a sequence number keeps an older response from overwriting a newer one. There is no new backend route. Rows are newest first and show the cwd (truncated from the start), Node, PID, shell name and age, plus an Open badge for terminals a tab of this window shows. Selecting a row opens or focuses that terminal's single tab through the ordinary terminal placement and closes the dropdown or dialog. Each row's always-visible kill control (44px on coarse pointers) confirms and kills; the list stays open. Lifecycle contract: [D-code-terminal-lifecycle](../threads/code-integration.md#d-code-terminal-lifecycle).
+
+**Directly requested (2026-11-22).** The sidebar Terminal entry shows the number of running terminals before its chevron (`RunningTerminalCount` through `SidebarNavItem` `trailing`), styled like the Session group counts and hidden at zero, so the count is visible without opening the dropdown. The mobile Workspace tools menu shows the same count on its Terminal item; the dialog's list heading keeps its own `· N`.
 
 ## Integration
 
@@ -110,6 +114,6 @@ The normal sole-tab header controls and empty-header pane movement use [Single-t
 
 `workbenchPreview.e2e.mjs` exercises controlled socket drops, compact red after-PID placement at wide/narrow sizes, retry failure, stale events, remembered IDs for existing and newly created remote terminals, single input forwarding, backlog query suppression, resize recovery, and PTY exit. Resize recovery compares the reconnected narrow grid with the original fitted wide grid, then requires that exact wide grid on the current socket rather than assuming a fixed column count. Its existing collapse/Close and pane-movement cases cover the unchanged resource lifecycle.
 
-`terminalList.e2e.mjs` drives the built App against a fixture registry: no automatic tabs, list rows and Open badges, open/focus of a single tab, detach-only Close with backlog reattachment, confirmed and dismissed kills from the list and header, the ended-terminal state with New terminal, exit-code tab handling, the copy/paste/^C/^W shortcuts through real Chromium key input and clipboard, the `beforeunload` guard (focused only; not on macOS or with a Desktop host frame; a real reload prompt), and the touch-sized mobile list. `terminalShortcuts.test.mjs` covers the shortcut and guard decisions and registry formatting.
+`terminalList.e2e.mjs` drives the built App against a fixture registry: no automatic tabs, list rows and Open badges, open/focus of a single tab, detach-only Close with backlog reattachment, confirmed and dismissed kills from the list and header, the ended-terminal state with New terminal, exit-code tab handling, the copy/paste/^C/^W shortcuts through real Chromium key input and clipboard, the `beforeunload` guard (focused only; not on macOS or with a Desktop host frame; a real reload prompt), the touch-sized mobile list with the count on the Terminal tool, and the sidebar count (shown without opening the list, updated by a local create, by a visibility refresh after terminals end elsewhere, singular label, hidden after the last kill). `terminalShortcuts.test.mjs` covers the shortcut and guard decisions and registry formatting.
 
 `terminalPinchZoom.e2e.mjs` exercises the original pinch helper against real xterm instances with native Chromium touch input. Offscreen control hosts clip their unfitted screens, and each pinch verifies that both contact points hit the active terminal. The corpus covers baseline scaling, pinch containment against a control terminal, global preference reload, 5–24px bounds, desktop shortcut persistence and PTY-input suppression, and ordinary single-touch scrolling after pinch.

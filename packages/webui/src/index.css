@@ -2305,6 +2305,8 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   .foxwarm-terminal-kill { width: 28px; height: 28px; }
   .foxwarm-terminal-list-open { min-height: 44px; }
   .foxwarm-terminal-list-kill { width: 44px; height: 44px; }
+  .foxwarm-running-command-toggle { min-height: 40px; }
+  .foxwarm-running-command-stop { height: 40px; }
 }
 
 /* Full width only removes the Timeline cap, not the shared outer gutters. */

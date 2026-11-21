@@ -17,9 +17,12 @@ public sealed partial class ProviderFileConsumerTests
             )
             .ToArray();
 
-    private static async Task<string> BackgroundId(Fixture f, string command)
+    private static async Task<string> BackgroundId(Fixture f, string command, string? summary = null)
     {
-        var started = await f.Call("exec", Exec(command, 1));
+        var args = Exec(command, 1);
+        if (summary is not null)
+            args["summary"] = summary;
+        var started = await f.Call("exec", args);
         Success(started);
         return ExecReceipt.Id(ExecReceipt.Header(started["output"]!.GetValue<string>()));
     }
@@ -31,12 +34,13 @@ public sealed partial class ProviderFileConsumerTests
             return;
         await using var f = await Fixture.Create();
         Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
-        var id = await BackgroundId(f, "sleep 30");
+        var id = await BackgroundId(f, "sleep 30", "Wait for the fixture");
         var listed = await f.Manager.ListExecsToolAsync(f.Owner, new JsonObject(), default);
         var row = Assert.Single(listed["execs"]!.AsArray())!;
         Assert.Equal(id, row["execId"]!.GetValue<string>());
         Assert.Equal(f.Node, row["nodeId"]!.GetValue<string>());
         Assert.Equal("sleep 30", row["command"]!.GetValue<string>());
+        Assert.Equal("Wait for the fixture", row["summary"]!.GetValue<string>());
         Assert.Equal("opaque://logs", Path.GetDirectoryName(row["logPath"]!.GetValue<string>())!.Replace("opaque:/", "opaque://"));
 
         var (result, node, _) = await f.Manager.StopExecAsync(f.Owner, id, default);

@@ -4,7 +4,7 @@ import { SidebarNavItem } from './SidebarNav'
 import NodeTargetSelect from './NodeTargetSelect'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
 import { selectLauncherDraftNode } from '../launcherDraft'
-import TerminalList, { type TerminalListOptions } from './TerminalList'
+import TerminalList, { RunningTerminalCount, type TerminalListOptions } from './TerminalList'
 
 interface CreateTabButtonProps {
   defaultNodeId: string
@@ -98,6 +98,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
           onClick={handleDefaultCreate}
           disabled={!defaultCreateAvailable}
           title={defaultCreateAvailable ? `Create ${label.toLowerCase()} tab` : defaultAvailability.reason}
+          trailing={terminalList ? <RunningTerminalCount terminals={terminalList.terminals} className="ml-auto" /> : undefined}
           options={{ open, label: terminalList ? 'Terminals' : `Custom ${label.toLowerCase()} tab`, onToggle: toggleOptions }}
         />
       )}

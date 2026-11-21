@@ -11,6 +11,19 @@ export interface TerminalListOptions {
   onRefresh: () => void
 }
 
+/** Number of running terminals beside a Terminal entry, like the Session group counts; nothing at zero or before the first list. */
+export function RunningTerminalCount({ terminals, className = '' }: { terminals: readonly TerminalRegistryRecord[] | null | undefined; className?: string }) {
+  const count = terminals?.length ?? 0
+  if (count <= 0) return null
+  const label = count === 1 ? '1 running terminal' : `${count} running terminals`
+  return (
+    <span data-running-terminal-count={count} title={label} className={`shrink-0 text-xs font-normal tabular-nums text-fw-text-muted ${className}`}>
+      <span aria-hidden="true">{count}</span>
+      <span className="sr-only">{label}</span>
+    </span>
+  )
+}
+
 /** Running terminals with open and kill actions. Controls stay visible for touch use. */
 export default function TerminalList({ terminals, openTerminalIds, onOpen, onKill }: Omit<TerminalListOptions, 'onRefresh'>) {
   const now = Date.now()
