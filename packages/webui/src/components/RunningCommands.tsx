@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { formatCompactDuration } from '../usageTiming'
 import { ExecCommandText } from './ToolExecText'
+import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
 
 export interface RunningCommand {
   execId: string
@@ -130,8 +131,37 @@ export const RunningCommandList = memo(function RunningCommandList({ sessionId, 
 /** Compact trigger for Chat's status row; the list opens above it. */
 const RunningCommands = memo(function RunningCommands({ sessionId, count }: { sessionId: string; count: number }) {
   const [open, setOpen] = useState(false)
+  const [placement, setPlacement] = useState<{ offset: number; maxWidth: number; anchorTop: number } | null>(null)
   const root = useRef<HTMLDivElement>(null)
+  const popup = useRef<HTMLDivElement>(null)
   useEffect(() => { if (count <= 0) setOpen(false) }, [count])
+  // The trigger can sit anywhere in Chat's status row: shift the popover sideways to stay inside
+  // the Chat pane and the viewport, and cap its height at the room above the trigger.
+  useLayoutEffect(() => {
+    if (!open) { setPlacement(null); return }
+    let frame = 0
+    let last = ''
+    const update = () => {
+      const anchor = root.current, menu = popup.current
+      if (anchor && menu) {
+        const viewport = readHorizontalViewportBounds()
+        const chat = anchor.closest<HTMLElement>('.foxwarm-chat-root')?.getBoundingClientRect()
+        const clipped = chat ? { left: Math.max(viewport.left, chat.left), right: Math.min(viewport.right, chat.right) } : viewport
+        const bounds = clipped.right > clipped.left ? clipped : viewport
+        const anchorRect = anchor.getBoundingClientRect()
+        const width = menu.getBoundingClientRect().width
+        const geometry = [anchorRect.left, anchorRect.right, anchorRect.top, width, bounds.left, bounds.right].join(':')
+        if (geometry !== last) {
+          last = geometry
+          const next = clampAnchoredMenuHorizontally({ anchorLeft: anchorRect.left, anchorRight: anchorRect.right, menuWidth: width, viewport: bounds, align: 'start' })
+          setPlacement({ offset: next.offset, maxWidth: next.maxWidth, anchorTop: anchorRect.top })
+        }
+      }
+      frame = window.requestAnimationFrame(update)
+    }
+    update()
+    return () => window.cancelAnimationFrame(frame)
+  }, [open])
   useEffect(() => {
     if (!open) return
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false) }
@@ -146,7 +176,14 @@ const RunningCommands = memo(function RunningCommands({ sessionId, count }: { se
       className="inline-flex h-8 shrink-0 items-center rounded-md px-2 text-sm text-fw-text-muted transition-colors hover:bg-fw-hover hover:text-fw-text-strong focus-visible:underline">
       {count === 1 ? '1 running command' : `${count} running commands`}
     </button>
-    {open && <div role="dialog" aria-label="Running commands" className="absolute bottom-full left-0 z-[60] mb-2 max-h-[min(24rem,60dvh)] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-fw-border bg-fw-surface px-4 py-2 text-sm text-fw-text shadow-xl">
+    {open && <div ref={popup} role="dialog" aria-label="Running commands" data-running-commands-popover
+      style={{
+        transform: `translateX(${placement?.offset ?? 0}px)`,
+        visibility: placement ? 'visible' : 'hidden',
+        maxWidth: placement ? placement.maxWidth : undefined,
+        maxHeight: placement ? `min(24rem, 60dvh, calc(${Math.round(placement.anchorTop)}px - var(--foxwarm-safe-area-top) - ${MENU_VIEWPORT_GUTTER * 2}px))` : undefined,
+      }}
+      className="absolute bottom-full left-0 z-[60] mb-2 w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-fw-border bg-fw-surface px-4 py-2 text-sm text-fw-text shadow-xl">
       <RunningCommandList sessionId={sessionId} active={open} revision={count} emptyText="No commands are running." />
     </div>}
   </div>

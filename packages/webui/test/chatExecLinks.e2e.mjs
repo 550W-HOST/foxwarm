@@ -228,3 +228,35 @@ test('running command rows show the summary; expanding shows the highlighted com
   await page.tap('[data-running-command="warm-lynx"] [data-running-command-toggle]')
   assert.equal((await commandRow('warm-lynx')).text, null, 'a tap collapses the row again')
 })
+
+// The popover stays inside the viewport on phones in portrait and landscape, collapsed and with a
+// row expanded, also when the trigger sits at the right edge of the status row.
+test('the running commands popover stays inside a phone viewport', async () => {
+  const bounds = () => page.$eval('[data-running-commands-control] [role="dialog"]', element => {
+    const rect = element.getBoundingClientRect()
+    return { left: Math.round(rect.left), right: Math.round(rect.right), top: Math.round(rect.top), bottom: Math.round(rect.bottom), width: innerWidth, height: innerHeight, visible: getComputedStyle(element).visibility }
+  })
+  const inside = async label => {
+    await wait(100)
+    const box = await bounds()
+    await screenshot(`running-commands-mobile-${label.replace(' ', '-')}`)
+    assert.equal(box.visible, 'visible', label)
+    assert.ok(box.left >= 0 && box.right <= box.width && box.top >= 0 && box.bottom <= box.height, `${label}: ${JSON.stringify(box)}`)
+  }
+  for (const [name, viewport] of [['portrait', { width: 360, height: 780 }], ['landscape', { width: 844, height: 390 }]]) {
+    await page.setViewport({ ...viewport, isMobile: true, hasTouch: true, deviceScaleFactor: 2 })
+    await page.goto(`${fixtureUrl}/?view=detailed`, { waitUntil: 'load' })
+    await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('Reference answer'))
+    // Push the trigger to the right edge, where a long runtime caption can leave it.
+    await page.$eval('[data-running-commands-control]', element => {
+      element.style.position = 'relative'
+      element.style.left = `${innerWidth - element.getBoundingClientRect().right - 4}px`
+    })
+    await page.tap('[data-running-commands-control] button')
+    await page.waitForSelector('[data-running-command="warm-lynx"]')
+    await inside(`${name} collapsed`)
+    await page.tap('[data-running-command="warm-lynx"] [data-running-command-toggle]')
+    await page.waitForSelector('[data-running-command="warm-lynx"] [data-running-command-text]')
+    await inside(`${name} expanded`)
+  }
+})
