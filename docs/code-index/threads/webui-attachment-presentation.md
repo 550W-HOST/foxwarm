@@ -32,7 +32,7 @@ Only successful delivery receipts qualify, never arbitrary file writes, model-au
 
 Safe raster files support lazy thumbnails and a keyboard-accessible preview with Download. Large known images skip automatic thumbnails. Other formats are download-only. Path downloads retain original-name disposition, HEAD support, no-sniff raster-only inline responses, and attachment disposition for active formats. Explicit download actions use [short-lived download capabilities](../modules/webui.md#d-webui-download-capabilities), while unsigned authenticated previews remain supported. A missing/unavailable download reports an inline error without navigating away. Refresh and timeline-mode changes reconstruct file grids from loaded canonical records; source files can still become unavailable. Shared gallery keys preserve an open preview when a live reply finishes.
 
-Implementation is owned by [reply files](../units/webui-reply-files.md), [file delivery](../units/src-file-delivery.md), and [WebUI channel](../units/src-channels-webui.md).
+Implementation is owned by [reply files](../units/webui-reply-files.md), [file delivery](../units/shared-file-delivery.md), and [WebUI channel](../units/dotnet-webui-core.md).
 
 ## Verification
 

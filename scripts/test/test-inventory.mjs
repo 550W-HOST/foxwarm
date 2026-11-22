@@ -35,11 +35,6 @@ export const nativeMainSmoke = [
   'packages/webui/test/toolApproval.e2e.mjs',
 ]
 
-export const standaloneSelftests = [
-  'lib/selftest/queueDrainSelfTest.js',
-  'lib/selftest/toolLoopStallSelfTest.js',
-]
-
 // Driven by test/app-e2e/run-app-e2e.mjs with a live application and a scripted
 // provider, so they are never run standalone by the routine unit groups.
 export const appHarnessE2e = [
@@ -78,8 +73,6 @@ function classify(file) {
   // Source tests exercise the retired Main, even when their subject is a Node.
   if (/^test\/node-bootstrap\/.*\.test\.mjs$/.test(file)) return 'node-bootstrap'
   if (/^packages\/artifact-runtime\/test\/.*\.test\.mjs$/.test(file)) return 'runtime-helpers'
-  if (/^src\/.*\.test\.ts$/.test(file)) return 'reference-backend'
-  if (file === 'scripts/test/reference-isolation.test.mjs') return 'reference-isolation'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
   if (/^packages\/cli-node\/src\/.*\.test\.ts$/.test(file)) return 'cli-node'
   if (/^packages\/browser-(?:node|host)\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
@@ -116,7 +109,6 @@ export function loadTestInventory(repoRoot) {
 }
 
 export function compiledPath(file) {
-  if (file.startsWith('src/') && file.endsWith('.ts')) return `lib/${file.slice(4, -3)}.js`
   const packageMatch = file.match(/^packages\/(shared|cli-node)\/src\/(.*)\.ts$/)
   if (packageMatch) return `packages/${packageMatch[1]}/dist/${packageMatch[2]}.js`
   return file
@@ -135,11 +127,7 @@ export const routineUnitGroups = [
   'python',
 ]
 
-export const referenceGroups = ['reference-backend', 'reference-isolation']
-
 export const deferredGroups = {
-  'reference-backend': 'Retired TypeScript Main tests; explicit test:reference only.',
-  'reference-isolation': 'Nested retired Main test isolation regressions; explicit test:reference only.',
   'managed': 'Compiled and executed by dotnet test through test:managed or test:unit.',
   'managed-delivery': 'Complete owned publish and original App proof through test:published.',
   'generated-test-artifact': 'Covered through its classified source test.',

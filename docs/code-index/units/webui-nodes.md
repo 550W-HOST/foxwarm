@@ -24,7 +24,7 @@ Owns the Nodes section of the [System page](./webui-system-view.md): connected N
 
 ## Existing Node actions
 
-[Restart/revocation](../modules/nodes.md#d-node-restart-and-revocation) governs the actions. Approved CLI and Shell cards open Start command; all native approved cards offer Delete. Master, Provider-owned and unavailable placement cards do not expose native credential actions. Opening a command reads only non-secret launch facts and the credential-free restart suggestion. Method, address and relevant paths remain editable until explicit reissue. Changing an input clears the stale command until Update command; no edit rotates credentials.
+[Restart/revocation](./external-nodes.md#d-node-restart-and-revocation) governs the actions. Approved CLI and Shell cards open Start command; all native approved cards offer Delete. Master, Provider-owned and unavailable placement cards do not expose native credential actions. Opening a command reads only non-secret launch facts and the credential-free restart suggestion. Method, address and relevant paths remain editable until explicit reissue. Changing an input clears the stale command until Update command; no edit rotates credentials.
 
 Reissue requires a second explicit confirmation. Its one-time response and copyable token live only in the mounted dialog, with input controls frozen to the issued command. Closing aborts pending requests and discards late responses without retry or implicit revocation. It tells the operator that the old token no longer works and the replacement is shown once. The native dialog supplies focus confinement and Escape cancellation; close restores the invoking control. No token enters browser storage or a request URL.
 

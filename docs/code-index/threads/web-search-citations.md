@@ -36,10 +36,18 @@ The Raw view and stored history are not rewritten. A historical response without
 - [C# Anthropic native search](../units/model-anthropic-completions.md#native-hosted-web-search)
 - [C# Responses request, streaming and replay](../units/model-responses.md)
 - [C# concrete request history](../units/model-common-wire.md)
-- [LLM routing and normalization](../units/src-llm.md)
-- [Responses conversion and streaming](../units/src-llm-openai.md)
 - [Shared Markdown rendering](../units/webui-chat-shared.md)
 - [Chat timeline](../units/webui-chat-timeline.md)
+
+## Design decisions
+
+- [2026-11-10] Each call's evidence depends only on its own stored output item: there is no request-wide byte, source or call budget and no recency preference, so a later search never changes evidence already sent with an older message. A single call is capped at 64 sources and 16 KiB of serialized call data. Deduplication keeps the first occurrence. User decision and rationale: [D-hosted-search-evidence-prefix-stability](#d-hosted-search-evidence-prefix-stability), serving [D-request-prefix-stability](../overview.md#d-request-prefix-stability).
+- URLs and titles have individual limits; whole records are omitted rather than truncating JSON or URL strings. Reprojection is deterministic and does not append duplicate evidence.
+- Canonical messages, native output metadata, and source request journals are not rewritten by projection. The helper neither fetches URLs nor interprets page content.
+
+### D-skills-web-search-fallback-boundary
+
+[2026-08-11] The bundled `web-search` skill is a fallback for recent/public web lookup, not a competing path for provider-native search. Its direct helper is trusted-host-only and forbidden from isolated environments.
 
 ## Verification boundary
 

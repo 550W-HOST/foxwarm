@@ -44,10 +44,6 @@ The WebUI block endpoint expands exactly one layer into structured timeline mess
 
 ## Modules and units
 
-- [src-session-archive-store](../units/src-session-archive-store.md)
-- [src-jsonl](../units/src-jsonl.md)
-- [src-vector](../units/src-vector.md)
-- [src-tools-session-agent](../units/src-tools-session-agent.md)
 
 ## Invariants
 
@@ -97,7 +93,7 @@ Exact selection (`target`), bounded one-Session literal lookup (`text_query`), s
 
 [2026-08-29; historical stage, partly superseded by later opt-in owner wiring] The first persistent-lexical implementation slice was library-only. Its contract still holds: it may create a separate derived SQLite FTS5 database at an explicit caller path and prove strict schema validation, exact canonical synchronization-trigger definitions, tokenizer, safe identifier/prose query compilation, deduplicated restrictive lineage scope, source-family metadata, repairable selective deletion/checkpoints, transactional rollback, rebuild-required, and Lance-directory coexistence behavior. The derivative is rebuildable and is never authoritative for Archive data.
 
-The slice's original prohibition on bootstrap opening, live Archive reads, scheduling or backfill, and recall or dense changes applied only until later confirmed slices. Those slices superseded it. The exact selected Vector owner now opens `state/db/archive-search.sqlite` only under opt-in `vector.lexicalIndex`, with independent backfill and scheduling; borrowed facades never open it, and disabled startup performs no lexical file, open, or scheduling side effect. Opt-in `vector.hybridSearch` adds dense-required hybrid reads, and committed rename/fork lifecycle plus incompatible-schema shadow rebuild are owned by that same owner. Current rules: [D-vector-dark-lexical-owner-indexing](../units/src-vector.md#d-vector-dark-lexical-owner-indexing), [D-vector-persistent-hybrid-read-rollout](../units/src-vector.md#d-vector-persistent-hybrid-read-rollout), and [D-vector-lexical-lifecycle-and-shadow-recovery](../units/src-vector.md#d-vector-lexical-lifecycle-and-shadow-recovery).
+The slice's original prohibition on bootstrap opening, live Archive reads, scheduling or backfill, and recall or dense changes applied only until later confirmed slices. Those slices superseded it. The exact selected Vector owner now opens `state/db/archive-search.sqlite` only under opt-in `vector.lexicalIndex`, with independent backfill and scheduling; borrowed facades never open it, and disabled startup performs no lexical file, open, or scheduling side effect. Opt-in `vector.hybridSearch` adds dense-required hybrid reads, and committed rename/fork lifecycle plus incompatible-schema shadow rebuild are owned by that same owner. Current rules: [D-vector-dark-lexical-owner-indexing](../units/vector-lexical.md#d-vector-dark-lexical-owner-indexing), [D-vector-persistent-hybrid-read-rollout](../units/vector-recall.md#d-vector-persistent-hybrid-read-rollout), and [D-vector-lexical-lifecycle-and-shadow-recovery](../units/vector-lexical.md#d-vector-lexical-lifecycle-and-shadow-recovery).
 
 ### D-context-optional-vector
 

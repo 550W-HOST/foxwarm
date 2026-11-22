@@ -2,7 +2,7 @@
 
 Files: `dotnet/Foxwarm/Tools/Authorization/IsolationMigrationRules.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IsolationMigration.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IsolationStartup.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.Migration.cs`
 
-Mechanics of the [user-decided removal of legacy Agent isolation](../modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). R1 added generic replacements and an explicit per-Agent migration while legacy isolation stayed enforced. R2 migrates every remaining isolated Agent at startup and stops enforcing legacy isolation. The generated layer is an ordinary [Agent-local layer](./tool-authorization.md#agent-local-authorization-layers).
+Mechanics of the [user-decided removal of legacy Agent isolation](#d-tools-legacy-isolation-deprecation). R1 added generic replacements and an explicit per-Agent migration while legacy isolation stayed enforced. R2 migrates every remaining isolated Agent at startup and stops enforcing legacy isolation. The generated layer is an ordinary [Agent-local layer](./tool-authorization.md#agent-local-authorization-layers).
 
 ## Contract
 
@@ -133,6 +133,36 @@ The marker is computed per level: each level counts only data that earlier reade
 - Node ancestry is not covered.
 
 A catalog write raises the marker to the level its metadata requires before writing that metadata, and never lowers it. The R2 startup migration writes metadata through the same check. Binaries older than the marker ignore it, so it protects only later downgrades. Agents relying solely on local rules are not downgrade-supported.
+
+## Design decisions
+
+### D-session-core-isolated-relations
+
+Historical until R2: explicit direct parent/child relations were the only inter-session targets of an isolated sender, including within its own Agent. This exception does not grant tool, filesystem, or node permissions.
+
+[2026-11-09] User decision: only the outgoing direction remains a legacy isolation boundary. Delivery and wait dependencies from an isolated Agent's Session are limited to itself and its direct parent or child; the maintained C# Main enforces this in `SessionManager.SendAsync` (every sender path, including Task notifications) and `ValidateWait`. The incoming guard is retired: whether another Session may message, wait on, or view an isolated Agent's Sessions is decided by that caller's own policy. Removal of the outgoing check follows the [legacy isolation migration](#d-tools-legacy-isolation-deprecation).
+
+[2026-11-10] R2 retires the remaining guard. The generated local layer of each migrated Agent allows `send_to_session` only to itself, its parent or its children (`session.self` / `relation` matchers), which covers direct, unified and ToolScript sends. Notifications produced by other tools, such as Task completion, follow the policy of the tool that produces them. The wait-dependency guard is retired without a replacement (coordinator decision for R2). `SessionManager.SendAsync` and `ValidateWait` no longer check isolation.
+
+### D-tools-legacy-isolation-deprecation
+
+**Directly selected migration direction; removal completed in R2 except fence cleanup.** Generic policy must eventually separate tool authorization from [environment isolation](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries). Current guards remain operative until their replacement/retirement is decided; implementation history does not make every legacy guard a permanent product constraint.
+
+[2026-10-10] The legacy Agent `isolated` authorization mode is deprecated and planned for removal. At that point the invariants above described implemented behavior, and deprecation did not itself disable guards or migrate an installation; R2 (below) did both. Generic tool authorization is the migration direction, not a permanent second layer alongside legacy isolation.
+
+The generated layer provides a conservative migration baseline, not a requirement to reproduce every legacy behavior. During removal, remaining differences require explicit decisions: express a boundary through generic policy, retain an independent invariant, or retire the old restriction. No removal date or complete migration contract is established by this decision.
+
+[2026-11-09] **User decisions for the removal.** Removal runs in two releases. R1 adds the generic replacements and an explicit, per-Agent migration while legacy isolation stays enforced (dual enforcement); R2, one release later, migrates remaining isolated Agents automatically and fails closed, then retires the legacy checks. Accepted choices: a generic `inheritable: false` Agent flag replaces the isolated-source inheritance ban; the bound Node becomes a soft `defaultNode` placement, not an access boundary; migrated Agents cannot send to channels directly (replies and own-Session file delivery remain); inbound channel files go to Main Agent storage; the generated layer includes the legacy-parity baseline (ToolScript run family, `ask_user`, `cancel_transfer`, `image_crop`, default-self status); channel guest policy comes from a creator-template Agent; Agents that rely only on local rules are not downgrade-supported, and an installation `minimumReaderVersion` marker refuses newer data in older readers that understand it. Of the Session relation guards only the outgoing one is kept ([D-session-core-isolated-relations](#d-session-core-isolated-relations)). The R1 mechanics are in [legacy isolation migration]().
+
+[2026-11-10] **R2: legacy isolation is no longer enforced.** User decisions for this release:
+- At startup, before Main accepts work, every Agent still marked isolated without a migration marker is migrated automatically. When that cannot be done safely the Agent receives a fail-closed layer that denies every call until an administrator replaces its rules. Results are logged and shown in the System view ([R2 startup migration](#r2-startup-migration)).
+- The legacy setters are removed without aliases: `set_agent_isolated`, `create_agent` `isolatedNode`/`toolRules`, `/agent isolated`, `/agent create --isolated` and the WebUI isolation field. The remaining surface is `set_agent_rules`, `defaultNode` and the restricted-worker template.
+- Persisted `isolated`, `isolatedNode` and `toolRules` stay written and are read only by the startup migration and by older releases after a downgrade, which keep enforcing them. Removing them is R3.
+- Migrated Agents cannot use `send_to_channel` or channel-target `send_file`; there is no attached-channel matcher.
+- Inbound channel and WebUI files are stored on master in the Agent directory.
+- Channel guests take their policy from `guestAgent.template`; a guest configuration without a template refuses to provision new guests unless it sets `isolated: false`. Existing guests migrate like other isolated Agents.
+- `inheritable: false` stays on migrated Agents. New restricted Agents get no legacy fence, and the installation reader-level marker is unchanged.
+- The wait-dependency relation guard retires; `send_to_session` limits are expressed by the generated layer ([D-session-core-isolated-relations](#d-session-core-isolated-relations)).
 
 ## Tests
 

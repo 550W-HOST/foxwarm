@@ -25,7 +25,7 @@ Session metadata, DTOs, status and bounded global/descendant summaries project o
 
 ## Metadata search lowercasing
 
-`SessionListQueries.MetadataMatcher` is the shared metadata keyword matcher for WebUI `Search` and the model-facing `session` list `query` ([D-session-tool-list-scope](./src-tools-session-agent.md#d-session-tool-list-scope)). It lowercases both query and metadata candidates through `SourceStringLower`. Its generated mapping, Cased and Case_Ignorable tables use Unicode 17.0 data from Node 24.21.0, including supplementary case pairs and contextual final sigma. Original metadata remains unchanged; candidate normalization happens at query time. The existing generator and the full-scalar `String.prototype.toLowerCase` oracle (`Fixtures/lowercase-oracle.mjs`) require Unicode 17.0 input, while ordinary managed execution uses the checked-in tables independently of the host Node runtime. `SourceStringLowerParityTests` retains full-scalar and contextual comparison, and `WebUiStartupTests.UnicodeSearch.cs` covers authenticated creation/name-setting/search with new case pairs, contextual sigma, existing casing controls and an absent query.
+`SessionListQueries.MetadataMatcher` is the shared metadata keyword matcher for WebUI `Search` and the model-facing `session` list `query` ([D-session-tool-list-scope](./session-manager-operations.md#d-session-tool-list-scope)). It lowercases both query and metadata candidates through `SourceStringLower`. Its generated mapping, Cased and Case_Ignorable tables use Unicode 17.0 data from Node 24.21.0, including supplementary case pairs and contextual final sigma. Original metadata remains unchanged; candidate normalization happens at query time. The existing generator and the full-scalar `String.prototype.toLowerCase` oracle (`Fixtures/lowercase-oracle.mjs`) require Unicode 17.0 input, while ordinary managed execution uses the checked-in tables independently of the host Node runtime. `SourceStringLowerParityTests` retains full-scalar and contextual comparison, and `WebUiStartupTests.UnicodeSearch.cs` covers authenticated creation/name-setting/search with new case pairs, contextual sigma, existing casing controls and an absent query.
 
 ## Tool argument parsing
 
@@ -88,6 +88,20 @@ Compaction builds a new root while retaining unchanged immutable records; preser
 `CanonicalMessage` owns one private JSON tree; its part views borrow children of that tree and expose only detached JSON values. Validation/visibility inspection does not require creating a canonical copy. This is distinct from history structural sharing: caller-owned request JSON still needs an ownership boundary.
 
 Agent removal has two catalog outcomes after exact Session cleanup: operator command deletion retains the metadata row, while WebUI deletion removes it. Retained non-main membership is removed in either case using the existing v2 writer. Directory removal precedes the metadata write, and a later writer failure remains a real partial effect. Canonical main has its exclusive directory; command deletion of main in the retained shared-workspace layout refuses before any Session/file effects. Identity recovery's owned-destination cleanup remains a separate authority.
+
+## Design decisions
+
+- [2026-07-06/2026-07-07] Inter-session source headers use a single `<foxwarm-message type="inter-agent" ...>raw body</foxwarm-message>` system part instead of literal `[SYSTEM:]` text or split body parts. Attribute values are escaped, but the message body is intentionally left raw per user decision; existing `[SYSTEM:]` histories remain compatible.
+- [2026-07-07] Child-session missing-handoff reminders should be structured as `kind="child-reminder" event="missing-handoff"` metadata with the human reminder in the same foxwarm-system body, not as `<foxwarm-system hint="Reminder: ..." />` or a split `systemPayload` part.
+- The persisted reminder-boundary contract is canonical in [D-pipeline-persisted-child-handoff-boundary](../threads/message-processing-pipeline.md#d-pipeline-persisted-child-handoff-boundary).
+
+### D-session-channels-read-old-write-current
+
+Persisted attachment compatibility belongs in normalization. Runtime APIs expose only current names, and canonical writes remove legacy fields.
+
+### D-session-channels-source-reader
+
+Best-channel selection keeps narrow readers for persisted source wrappers while every new inbound message uses the current channel wrapper.
 
 ## Tests
 

@@ -70,7 +70,7 @@ A completed script's result `parts` may carry `inlineDataRef` image references, 
 
 ## Reader marker
 
-`AgentCatalog.RequiredReaderLevel` is 2 when any Agent row's stored `rules` contain an operation rule, and `ReaderVersion` is 2. Every catalog index write raises `installation.json` `minimumReaderVersion` first (`EnsureReaderVersion` in `AtomicIndexWrite`), which covers `set_agent_rules`, `create_agent` with initial rules and the administrator routes. A failed marker write prevents the metadata write; a later metadata failure leaves the higher marker. Older readers reject `op`: the phase-2 C# global YAML reader with `Unknown or oversized policy mapping.`, its Agent-local reader with `Unsupported policy field.`, and the retained TypeScript reader with `unsupported field: op`, including on disabled rules.
+`AgentCatalog.RequiredReaderLevel` is 2 when any Agent row's stored `rules` contain an operation rule, and `ReaderVersion` is 2. Every catalog index write raises `installation.json` `minimumReaderVersion` first (`EnsureReaderVersion` in `AtomicIndexWrite`), which covers `set_agent_rules`, `create_agent` with initial rules and the administrator routes. A failed marker write prevents the metadata write; a later metadata failure leaves the higher marker. Older readers reject `op`: the phase-2 C# global YAML reader with `Unknown or oversized policy mapping.` and its Agent-local reader with `Unsupported policy field.`, including on disabled rules.
 
 ## Generated layers
 

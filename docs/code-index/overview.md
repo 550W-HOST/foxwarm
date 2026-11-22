@@ -46,7 +46,7 @@ Behavior pages own the observable contracts within their stated scope, not end-u
 
 ## Overview
 
-Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapters, durable Session state, local tools, optional remote Nodes, and compatibility packages that are still being retired or replaced. The .NET solution is the active Main architecture being developed in this branch. The intended end state is a .NET Main with the existing platform packages connected to its public contracts; the repository still contains TypeScript Main source, retained TypeScript CLI/reference build entries, and remote-platform implementations, so this index does not describe those components as deleted, fully integrated, or publicly promoted. Existing package/npm/tmux/Windows source Main entries now select the managed host; see [source startup](./units/source-main-entry.md) and [public Docker delivery](./units/public-main-docker.md) for the candidate boundaries.
+Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapters, durable Session state, local tools and optional remote Nodes. The .NET solution is the Main architecture; the TypeScript Main backend was removed after its data readers and migrations moved to .NET. The repository keeps the TypeScript CLI Node, shared TypeScript protocols/utilities and the remote-platform implementations. Package/npm/tmux/Windows source Main entries select the managed host; see [source startup](./units/source-main-entry.md) and [public Docker delivery](./units/public-main-docker.md) for the candidate boundaries.
 
 ## Start here
 
@@ -88,7 +88,7 @@ Current integration boundaries:
 
 Optional remote and compatibility components:
   CLI Node, browser extension, Android Node, sandbox runtime, VS Code Web assets,
-  shared TypeScript protocols/utilities, and the older TypeScript Main source tree.
+  and shared TypeScript protocols/utilities.
 ```
 
 ## Project-wide contracts
@@ -128,8 +128,7 @@ Optional remote and compatibility components:
 |---|---|
 | [WebUI timeline](./modules/webui-timeline.md) | Browser rendering modes, pane-local Search, Reasoning presentation, and Activity accounting. |
 | [React WebUI](./modules/webui.md) | Current browser client. The .NET host serves its built assets when configured; route and payload compatibility is shared across the boundary. |
-| [Shared and Nodes](./modules/shared-and-nodes.md) | TypeScript protocol/utilities plus CLI, browser, Android, and sandbox Node implementations. These remain real execution components while the .NET Main migration proceeds. |
-| [TypeScript compatibility source](./modules/typescript-compatibility.md) | Older Main implementation and migration readers. It is not the active .NET architecture, but selected files still explain persisted or external compatibility. |
+| [Shared and Nodes](./modules/shared-and-nodes.md) | TypeScript protocol/utilities plus CLI, browser, Android, and sandbox Node implementations. These remain real execution components. |
 | [VS Code Web and website](./modules/adjacent-products.md) | Code workbench assets, static site, installer/docs surface, and related build boundaries. |
 
 ## Cross-module threads
@@ -154,7 +153,6 @@ Optional remote and compatibility components:
 - **Vector boundary:** optional dense/lexical indexing, semantic recall and administrator History use the [derived Vector owner](./units/vector-owner.md) after authoritative migrations/publication. Disabled configuration remains lazy; child failure is unavailable without local fallback. [Source selection](./units/vector-recall.md) reloads Archive and rechecks canonical model scope. Dense rename does not migrate old Lance rows.
 - **Qualification boundary:** .NET implements the shared runtime/control, typed-notice and communication producers through its existing exact owners. [The WebUI boundary](./threads/dotnet-webui-boundary.md#runtime-controls-notices-and-communications) maps the concrete consumer paths; a shared frontend build or merge alone does not establish complete feature parity.
 - **Intentional exclusions:** the platforms listed in [delivery scope](#d-dotnet-delivery-scope) are not remaining milestones. Ordinary external Nodes, remote exec/completion, file transfer/delivery, fixed Code/PTY services and exec-only Shell HTTP remain supported.
-- **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.
 
 ## D-request-prefix-stability
 
@@ -163,7 +161,7 @@ Optional remote and compatibility components:
 - Content generated per request is not placed before, between or after persisted history rows. A trailing per-request block becomes the cache breakpoint: the stored entry includes it, and the next request, which has moved that block further on, cannot reuse the entry. Provider lookback from a new breakpoint is limited, so tool-heavy turns then fall back to a much older entry. [2026-11-10] With one asynchronous question open, the per-request open-question reminder held cache reads flat for several hours; they recovered as soon as the question closed.
 - State the model must see enters persisted history once, when it changes, rather than being re-sent with every request.
 - Every design that adds request-time content (reminders, status, environment or policy summaries, per-request instructions) is checked against this goal before approval. An exception needs an explicit user decision recorded at its owner.
-- Derived designs: [memory snapshots, leading instructions and shared declarations](./threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability), [Node-independent default tool declarations](./units/tools-registry.md#d-tools-node-independent-default-declarations), [persisted Task reminders](./units/src-session-task-context.md#d-tasks-reminder-history), [unbudgeted per-call hosted-search evidence](./threads/web-search-citations.md#d-hosted-search-evidence-prefix-stability), compaction requests, which keep the older history prefix and append their planning instruction, and BTW requests, which append after unchanged history. Prefix alignment permits reuse; it does not guarantee a provider cache hit.
+- Derived designs: [memory snapshots, leading instructions and shared declarations](./threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability), [Node-independent default tool declarations](./units/tools-registry.md#d-tools-node-independent-default-declarations), [persisted Task reminders](./units/tasks-timers.md#d-tasks-reminder-history), [unbudgeted per-call hosted-search evidence](./threads/web-search-citations.md#d-hosted-search-evidence-prefix-stability), compaction requests, which keep the older history prefix and append their planning instruction, and BTW requests, which append after unchanged history. Prefix alignment permits reuse; it does not guarantee a provider cache hit.
 
 ## D-dotnet-delivery-scope
 

@@ -11,8 +11,6 @@ import {
   loadTestInventory,
   nativeMainSmoke,
   routineUnitGroups,
-  referenceGroups,
-  standaloneSelftests,
 } from './test-inventory.mjs'
 import { parseTestResultCounts } from './test-result-counts.mjs'
 import testEnvironment from './test-process-env.cjs'
@@ -23,7 +21,7 @@ const repoRoot = path.resolve(scriptDir, '../..')
 // Keep this runner-local: retries do not apply to preparation, other groups, or shards.
 const BROWSER_FIXTURE_RETRY_COUNT = 8
 const target = process.argv[2] || 'unit'
-const validTargets = new Set(['inventory', 'unit', 'unit-components', 'reference', 'managed', 'published', 'browser', 'app', 'native', 'all'])
+const validTargets = new Set(['inventory', 'unit', 'unit-components', 'managed', 'published', 'browser', 'app', 'native', 'all'])
 let shard = null
 let browserWorkers = 1
 let managedFilter = null
@@ -66,7 +64,7 @@ if (target === 'native' && !fs.statSync(process.env.FOXWARM_TEST_MAIN_EXECUTABLE
 
 const inventory = loadTestInventory(repoRoot)
 const unclassified = inventory.unclassified || []
-const missingGroups = [...routineUnitGroups, ...referenceGroups].filter(group => !(inventory[group]?.length))
+const missingGroups = routineUnitGroups.filter(group => !(inventory[group]?.length))
 if (unclassified.length || missingGroups.length) {
   if (unclassified.length) console.error(`Unclassified tests:\n${unclassified.map(file => `  ${file}`).join('\n')}`)
   if (missingGroups.length) console.error(`Empty required test groups: ${missingGroups.join(', ')}`)
@@ -84,7 +82,6 @@ function printInventory() {
     const note = deferredGroups[group] ? ` — ${deferredGroups[group]}` : ''
     console.log(`${group.padEnd(20)} ${String(files.length).padStart(3)} file(s)${note}`)
   }
-  console.log(`standalone-selftests ${String(standaloneSelftests.length).padStart(3)} executable(s) — Retired Main programs; explicit test:reference only.`)
 }
 
 if (target === 'inventory') {
@@ -98,7 +95,7 @@ const artifactParent = process.env.FOXWARM_TEST_ARTIFACT_DIR
 const runId = `${target}${shard ? `-shard-${shard.index}-of-${shard.total}` : ''}-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
 const runBase = path.join(artifactParent, runId)
 await fsp.mkdir(path.join(runBase, 'logs'), { recursive: true })
-await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, standaloneSelftests, browserSelection, ...(target === 'managed' ? { managedFilter } : {}) }, null, 2)}\n`)
+await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, browserSelection, ...(target === 'managed' ? { managedFilter } : {}) }, null, 2)}\n`)
 const shortTempBase = path.join(os.tmpdir(), `fw-${process.pid}`)
 await fsp.rm(shortTempBase, { recursive: true, force: true })
 await fsp.mkdir(shortTempBase, { recursive: true })
@@ -129,10 +126,6 @@ function nodeTestStep(name, files, { concurrency, timeoutMs = 180_000 } = {}) {
 
 function directStep(name, command, args, timeoutMs = 180_000, env = {}) {
   return { name, command, args, timeoutMs, env }
-}
-
-function chunks(values, size) {
-  return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size))
 }
 
 function managedGroup() {
@@ -193,30 +186,6 @@ function unitGroups() {
     {
       name: 'python',
       steps: python.map(file => directStep(path.basename(file), 'python3', [file], 180_000)),
-    },
-  ]
-}
-
-function referenceTestGroups() {
-  const backend = requireFiles(inventory['reference-backend'].map(compiledPath), 'reference backend tests')
-  const isolation = requireFiles(inventory['reference-isolation'], 'reference isolation tests')
-  requireFiles(standaloneSelftests, 'standalone selftests')
-  const vectorFailure = backend.find(file => file.endsWith('/vector.indexFailure.test.js'))
-  const shards = chunks(backend.filter(file => file !== vectorFailure), 8)
-  return [
-    {
-      name: 'reference-backend',
-      // The async logger regression clears this setting in its own child.
-      env: { FOXWARM_SYNC_FILE_LOG: process.env.FOXWARM_SYNC_FILE_LOG ?? '1' },
-      steps: [
-        ...shards.map((files, index) => nodeTestStep(`backend-${String(index + 1).padStart(2, '0')}`, files, { concurrency: 8, timeoutMs: 600_000 })),
-        ...(vectorFailure ? [nodeTestStep('vector.indexFailure', [vectorFailure], { timeoutMs: 120_000 })] : []),
-      ],
-    },
-    { name: 'reference-isolation', steps: [nodeTestStep('reference-isolation', isolation, { timeoutMs: 240_000 })] },
-    {
-      name: 'standalone-selftests',
-      steps: standaloneSelftests.map(file => directStep(path.basename(file, '.js'), process.execPath, [file], 240_000)),
     },
   ]
 }
@@ -394,7 +363,6 @@ const groups = [
   ...(target === 'managed' || target === 'unit' || target === 'all' ? [managedGroup()] : []),
   ...(target === 'published' || target === 'all' ? [publishedGroup()] : []),
   ...(target === 'unit' || target === 'unit-components' || target === 'all' ? unitGroups() : []),
-  ...(target === 'reference' ? referenceTestGroups() : []),
   ...(target === 'browser' || target === 'all' ? [browserGroup()] : []),
   ...(target === 'app' || target === 'all' ? [appGroup()] : []),
   ...(target === 'native' ? nativeGroups() : []),

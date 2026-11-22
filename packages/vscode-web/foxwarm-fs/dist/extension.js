@@ -4,6 +4,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -25,6 +26,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
 // src/extension.ts
 var extension_exports = {};
@@ -310,9 +312,9 @@ ${uri.toString()}` : uri;
 }
 var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
   constructor(apiBase) {
-    this.apiBase = apiBase;
-    this.changeEmitter = new vscode.EventEmitter();
-    this.onDidChangeFile = this.changeEmitter.event;
+    __publicField(this, "apiBase", apiBase);
+    __publicField(this, "changeEmitter", new vscode.EventEmitter());
+    __publicField(this, "onDidChangeFile", this.changeEmitter.event);
   }
   static fromExtensionContext(context) {
     return new _FoxwarmFileSystemProvider(deriveApiBase(context.extensionUri));

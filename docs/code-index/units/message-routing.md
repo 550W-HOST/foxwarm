@@ -19,6 +19,36 @@ Normalizes Main-local and external-channel message ingress, handles commands, re
 
 The router returns `202` for accepted ordinary input with a non-durable-completion note; queue persistence semantics remain in `SessionSaveLane.Wait`. It never edits active JSON, Archive, or catalog directly. Unknown slash-prefixed text follows ordinary message admission; recognized commands retain their handler validation/replies, including explicit `422` for unsupported correlated controls. Busy/history mutation conflicts preserve retryable statuses.
 
+## Design decisions
+
+- [2026-07-02] `/status` and the model-facing `session({ action: "status" })` tool share one status information source/formatter (`dotnet/Foxwarm/Sessions/SessionObservation.cs`) so command and tool output stay field-equivalent.
+- [2026-07-10] `/session list` should hide `webui:` attachment entries from its user-facing channel line while preserving Telegram, WeWork, Discord, and other channel entries. This is display-only filtering and must not mutate channel attachment state or affect WebUI routing.
+- [2026-08-11] `/session create` owns one strict serial flag grammar after `<agent> <session>`: one optional `--model`, one optional canonical `--effort`, and repeatable `--system-prompt-file`. Reject malformed or extra tokens before any resolution or creation side effect rather than combining independent scans.
+- [2026-09-05] Bare `/node` is an operator-oriented authenticated Node summary, not a second view of generic provider discovery. Show `master` first in one `Nodes` section, then approved remote Nodes; reserve `✅` for online status and keep generic provider topology on the model-facing `node({ action: "list" })` surface.
+- [2026-07-12] The user-facing fork command syntax is `/fork [suffix] [message]`: suffix is an optional ASCII-safe child-session suffix, and message is all remaining raw text after the suffix delimiter, including internal spaces and newlines. Omitted suffix uses the existing generated-session suffix behavior; there is no ambiguous legacy `/fork [message]` interpretation.
+
+### D-prompt-wrapper-boundary
+
+Foxwarm prompt wrappers are XML-like metadata envelopes, not full XML
+serialization of message bodies. Generated attributes are escaped while the
+outer `<foxwarm-message>` body remains raw. Code that introduces a nested
+structured subgrammar inside that raw body must explicitly escape its untrusted
+text nodes with `escapeFoxwarmTextContent`; this does not make arbitrary outer
+message content XML. New system parts use canonical wrappers; supported legacy
+system text and split `systemPayload` are read compatibility only.
+
+### D-routing-prompt-ready-queue
+
+Channel source wrappers are added once when a queued user item is constructed. Queue processing consumes prompt-ready parts and does not regenerate source prefixes.
+
+### D-routing-runtime-state
+
+The runner publishes transient `requesting-model` and `running-tool` phases separately from channel-specific progress payloads.
+
+### D-routing-final-broadcast
+
+Final replies carry a generic `turnFinal` signal. Channels may use it to close an aggregate response; the runner does not embed platform-specific completion logic.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `SessionPresentationTests.cs`; `SessionDeletionTests.cs`; `SessionIdentityMoveTests.cs`; `DeferredInputTests.cs`; `dotnet/Foxwarm.Tests/scripts/qualify-attempt-input.mjs` (actual HTTP ingress and delayed input).

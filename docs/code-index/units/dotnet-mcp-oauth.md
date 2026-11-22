@@ -5,7 +5,7 @@ Secondary files: `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/M
 
 ## Purpose and governing contract
 
-One administrator-selected third-party account authorizes the named server for this instance. Caller permissions and trusted Session-specific MCP contexts remain in their original owners. The canonical decision and Source contract are [outbound instance OAuth](./src-mcp-oauth.md#d-mcp-outbound-instance-oauth). This unit does not implement inbound authorization, notifications or restricted identities.
+One administrator-selected third-party account authorizes the named server for this instance. Caller permissions and trusted Session-specific MCP contexts remain in their original owners. The canonical decision and Source contract are [outbound instance OAuth](#d-mcp-outbound-instance-oauth). This unit does not implement inbound authorization, notifications or restricted identities.
 
 The pinned official Core SDK 2.2.0 exposes OAuth only through per-transport `HttpClientTransportOptions.OAuth`; its reusable discovery, exchange and refresh helpers are internal/private. That provider can start interactive consent and replay insufficient-scope responses, and its refresh lock belongs to a transport. The .NET service therefore implements the required standard OAuth requests through an injected `HttpClient` handler. The SDK continues to own MCP serialization, initialization, transport selection, request dispatch and remote Session termination. There is no reflection or replacement protocol implementation.
 
@@ -29,6 +29,14 @@ Authorization initiation is an administrator-only JSON POST, never a GET. Consen
 `state/mcp-oauth.json` is a Source-compatible version-1 named-server registration/grant store, separate from ephemeral SDK transports. It uses the existing synced atomic replacement primitive with owner-only creation permissions and publishes committed authority even when a post-rename durability step fails. Token scope is reported only when supplied by the AS; same-grant renewal preserves an omitted refresh token and previously reported scope.
 
 Ordinary calls never initiate consent or registration. A standard Bearer HTTP 401 permits one refresh/resend of the same request bytes before dispatch. Network failures, 404 and unknown-effect tool failures are not replayed. A scope 403 records a reviewable scope request without replay or loss of the still-valid remote context. Authorization failures throw before the SDK's auto fallback can mask them. Renewal retains caller contexts; a new browser grant, disconnect, invalid grant or changed configuration fences stale publication and affected bindings.
+
+## Design decisions
+
+### D-mcp-outbound-instance-oauth
+
+**Selected credential-ownership design with external OAuth protocol constraints.** Outbound connection credentials belong to the configured instance/server connection, not each Session that uses [authorized MCP capabilities](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-live-configuration). Callback/storage mechanics implement that ownership; they do not create an inbound identity or broaden tool grants.
+
+[2026-10-14, initial implementation; Setup entry later withdrawn as noted above] Administrators originally configured OAuth through Setup Authorizations and explicitly share the selected named server's third-party account with the instance. Existing callers use it only through their original tool permissions; they keep independent remote MCP contexts. Use startup `config.url` for public callback and client metadata URLs. Provide outbound OAuth before any inbound consent/scopes service, keep current 2025 MCP transports, and do not add generic users, roles or a credential-vault interface.
 
 ## Tests
 

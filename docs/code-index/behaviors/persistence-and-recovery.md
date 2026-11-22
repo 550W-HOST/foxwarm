@@ -1,6 +1,6 @@
 # Behavior: persistence and recovery
 
-For developers and Agents changing durable state, restart behavior, or failure handling. This page describes the current TypeScript Main and its optional Session-worker placement, not a blanket compatibility claim for another runtime. Persistence preserves particular committed records; it does not preserve every in-memory phase, prove external side effects, or make all stores one transaction.
+For developers and Agents changing durable state, restart behavior, or failure handling. This page describes managed Main. Persistence preserves particular committed records; it does not preserve every in-memory phase, prove external side effects, or make all stores one transaction.
 
 ## Identify the authority before interpreting a restart
 
@@ -11,26 +11,20 @@ For developers and Agents changing durable state, restart behavior, or failure h
 | Per-Session JSON | Full semantic Session authority: active history, queue, wait/managed metadata, prompt/cache state, settings, provenance, and Worker mailbox cursor where present. | A catalog stub's empty history is an empty conversation, or Archive should be used to repair missing active authority. |
 | Main catalog | Durable identity/topology/list state plus bounded Session presentation/projections and recovery indexes. | Every displayed phase is live execution, or the catalog is a second full semantic Session copy. |
 | Archive and request journal | Historical originals/blocks and recorded canonical model requests/attempts, respectively. | Archive is the current model context, or an attempt-start row proves a request reached the provider. |
-| Queue or Worker mailbox intent | Accepted input still to be applied/consumed at the relevant boundary. | The Agent answered it, a tool effect completed, or a recipient human saw output. |
+| Queue item | Accepted input still to be applied/consumed at the relevant boundary. | The Agent answered it, a tool effect completed, or a recipient human saw output. |
 | Wait and timeout timer | Persisted wait conditions; separately persisted scheduled wake where configured. | A model request remains open, or the waited-for dependency will necessarily finish. |
 | Task store | Shared Task ownership, status, notes/results, and notification bookkeeping in its own database. | Task status is Session runtime state, or committing a Task mutation proves notification delivery. |
 | ToolScript run/snapshot | Owner-scoped run record and, when saved at a supported pause, versioned VM continuation. | A `running` record is a continuously surviving interpreter or an automatically replayable external call. |
 | Persistent exec registry/artifacts | Tracked execution identity, owner, backend observation, and available capture/status. | The OS process necessarily survived, or missing status means exit zero. |
 | Active tool/model phase, stream draft, socket/cache reuse, failover health | Process-local working/presentation state. | These are a durable checkpoint or can be restored merely from an old UI view. |
 
-[Messages and turns](messages-and-turns.md) owns input admission and consumption; [conversation and history](conversation-and-history.md) owns the active/Archive/memory distinction. [Execution and waiting](execution-and-waiting.md) owns exec, wait, Continue, Stop, and ToolScript continuation semantics. Use those rules rather than redefining their complete lifecycles here.
+[Messages and turns](./messages-and-turns.md) owns input admission and consumption; [conversation and history](./conversation-and-history.md) owns the active/Archive/memory distinction. [Execution and waiting](./execution-and-waiting.md) owns exec, wait, Continue, Stop, and ToolScript continuation semantics. Use those rules rather than redefining their complete lifecycles here.
 
 ## Restart resumes recorded work, not the last machine instruction
 
 A normal Main-local restart examines indexed busy/queued/managed candidates and hydrates those exact authorities. A previously busy owner has stale busy fields cleared and receives a deduplicated `session-resumed` event so ordinary processing can reassess the interruption. Triggering queued work resumes through the normal runner. Passive-only queued input remains passive; its presence does not start work merely because the process restarted.
 
-This is not a scan of historical error text. A Session already durably idle with no triggering queue does not become startup work just because an old tool or provider error remains in history. Nor is restart a regenerate action for a completed answer. [Session recovery](../units/src-session-manager.md#d-session-restart-recovery) and [active turn/restart](../threads/session-lifecycle.md#active-turn-and-restart) own candidate and event rules.
-
-With Session workers enabled, the exact Worker owns semantic recovery. Main does not hydrate and execute residual local queues as a fallback. Startup ensures eligible pending-mailbox and stale-busy owners through the Worker path; per-Session recovery failures are logged and leave durable work available for a later attempt. Residual local queued/managed work can remain until later durable Worker ingress. Switching placement is therefore not a promise that every old local queue immediately executes.
-
-Worker input processing commits full Session JSON, including the applied mailbox cursor, before acknowledging the prefix in the coordination database. Recovery can recognize JSON committed before a lost acknowledgement without applying that prefix again. This guards that internal handoff; it does not make provider requests, shell commands, or other external effects exactly once. A coordination cursor ahead of authoritative JSON fails closed rather than being copied into the authority as a repair. See [Session-state authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
-
-The original “durable before Worker spawn/wake” ordering has a recorded implementation/intent discrepancy: ordinary ingress currently ensures the owner before appending its intent, while input remains durable before accepted-input processing. Do not turn either historical intent or this implementation ordering into an unqualified public guarantee; [Worker ingress durability ordering](../threads/process-topology-and-rpc.md#worker-ingress-durability-ordering) retains the unresolved question.
+This is not a scan of historical error text. A Session already durably idle with no triggering queue does not become startup work just because an old tool or provider error remains in history. Nor is restart a regenerate action for a completed answer. [Session recovery](../units/session-manager-bootstrap.md#d-session-restart-recovery) and [active turn/restart](../threads/session-lifecycle.md#active-turn-and-restart) own candidate and event rules.
 
 ### Graceful shutdown and crash are not interchangeable
 
@@ -48,7 +42,7 @@ Session workers retain their separate generation/incarnation fencing and drain/h
 | ToolScript paused for Agent input or safe timeout | A compatible saved snapshot can resume with the matching continuation under its owner Session. | Continuation resumes the snapshot, not current file source. Incompatible snapshots fail clearly while retaining historical evidence; an in-progress host effect is not a saved safe pause. |
 | Persistent exec tracked at restart | Registry reconciliation observes the recorded backend and routes completion to its exact owner when supported. | Process survival, log availability, notification retention, and transport capabilities remain separate. Lost status produces an unknown outcome, not synthetic success. |
 
-Message-timer versus quiet-script invocation and its observable completion/wake behavior are owned by [scheduled work](automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script); schedule persistence entry points remain in [timers](../units/src-timers.md). Task commit/notification outcomes are owned by [collaboration and Tasks](collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session); notification bookkeeping remains in [Tasks](../units/src-tasks.md#actions). Compatible/incompatible VM snapshots and owner checks remain in [ToolScript](../units/src-toolscript.md#behavior). Exec's retention and uncertain-start boundaries remain in [persistent exec](../units/shared-persistent-exec.md#shared-tracking-and-provider-observations).
+Message-timer versus quiet-script invocation and its observable completion/wake behavior are owned by [scheduled work](./automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script); schedule persistence entry points remain in [timers](../units/tasks-timers.md). Task commit/notification outcomes are owned by [collaboration and Tasks](./collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session); notification bookkeeping remains in [Tasks](../units/tasks-timers.md). Compatible/incompatible VM snapshots and owner checks remain in [ToolScript](../units/toolscript.md). Exec's retention and uncertain-start boundaries remain in [persistent exec](../units/shared-persistent-exec.md#shared-tracking-and-provider-observations).
 
 ## Unknown outcomes require evidence, not automatic repetition
 
@@ -73,7 +67,7 @@ Configured Vector initialization failure is nonfatal to Main startup in local an
 
 Raw Archive, exact recall, and active Session authority are independent of semantic indexing. Asynchronous indexing can lag without erasing the underlying messages. This does not mean every derived artifact can be rebuilt identically: dedicated compact-fact indexing has its own disabled-period limitation documented in [optional Vector](../threads/archive-and-recall.md#d-context-optional-vector).
 
-Catalog/Archive initialization, identity-recovery validation, and required data migrations are outside that optional boundary. Their failure can reject startup. Invalid Agent authorization metadata must not become an empty permissive map. Missing or malformed per-Session authority fails that semantic load rather than manufacturing empty history from a catalog/Archive fallback. Some older noncritical save paths still log errors best-effort; do not describe all existing writes as strictly acknowledged durable commits. Strict owner paths distinguish known precommit failure from authority committed but catalog/publication follow-up failed, retaining/resynchronizing committed state in the latter case. See [critical persistence](../units/src-session-manager.md#internal-sections) and [active-history authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority).
+Catalog/Archive initialization, identity-recovery validation, and required data migrations are outside that optional boundary. Their failure can reject startup. Invalid Agent authorization metadata must not become an empty permissive map. Missing or malformed per-Session authority fails that semantic load rather than manufacturing empty history from a catalog/Archive fallback. Some older noncritical save paths still log errors best-effort; do not describe all existing writes as strictly acknowledged durable commits. Strict owner paths distinguish known precommit failure from authority committed but catalog/publication follow-up failed, retaining/resynchronizing committed state in the latter case. See [critical persistence](../units/session-manager-bootstrap.md) and [active-history authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority).
 
 ## Code rollback is not state rollback
 
@@ -85,8 +79,7 @@ Identity moves have their own pending recovery journal and committed ID-reservat
 
 ## Change entry points
 
-- `src/sessionManager.ts`, `src/session/metadataStore.ts`, and [catalog storage](../threads/main-catalog-storage-and-indexed-queries.md) connect loading, authority commits, projections, and indexed recovery selection.
-- `src/sessionWorkerIngress.ts` and `src/sessionWorkerPersistence.ts` implement pending-intent recovery and JSON-before-ack reconciliation; `src/sessionWorkerPersistence.test.ts` covers the commit/ack crash window and cursor failures.
-- `src/index.ts` orders authoritative startup before optional Vector and establishes recovery callbacks; `src/vectorStartup.integration.test.ts` exercises optional initialization failure.
-- `src/session/sessionResumeDedup.test.ts`, `src/toolscript.test.ts`, and `packages/shared/src/persistentExec.test.ts` locate restart-event, compatible-pause, and tracked-exec recovery regressions.
-- [Configuration and activation](configuration-and-activation.md) owns saved/applied/restart distinctions; [models and requests](models-and-requests.md) owns routing, request identity, and provider-sensitive history.
+- [Session manager bootstrap](../units/session-manager-bootstrap.md), [persistent Session authority](../units/session-authority-store.md) and [catalog storage](../threads/main-catalog-storage-and-indexed-queries.md) connect loading, authority commits, projections, restart events and indexed recovery selection.
+- [Host startup](../units/host-runtime.md) orders authoritative startup before optional Vector; [Vector owner](../units/vector-owner.md) owns optional initialization failure.
+- [Main ToolScript runtime](../units/toolscript.md) and `packages/shared/src/persistentExec.test.ts` locate compatible-pause and tracked-exec recovery regressions.
+- [Configuration and activation](./configuration-and-activation.md) owns saved/applied/restart distinctions; [models and requests](./models-and-requests.md) owns routing, request identity, and provider-sensitive history.

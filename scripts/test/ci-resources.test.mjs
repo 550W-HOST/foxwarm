@@ -259,7 +259,6 @@ test('managed and component jobs preserve the unit environment and diagnostics w
   assert.equal(tests.env.FOXWARM_TEST_ARTIFACT_DIR, '${{ runner.temp }}/foxwarm-test-artifacts')
   for (const job of [core, managed]) {
     assert.ok(job.steps.some(step => step.run === 'npm run build'))
-    assert.equal(job.steps.some(step => /build:reference/.test(step.run || '')), false)
     assert.equal(job.steps.some(step => step.run === 'npm run test:unit'), false)
   }
   assert.equal(managed.steps.find(step => step.uses?.startsWith('actions/checkout@')).with['fetch-depth'], 0)

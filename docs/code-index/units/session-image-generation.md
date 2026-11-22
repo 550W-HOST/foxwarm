@@ -53,3 +53,27 @@ A failed separate request, local preparation failure or journal preparation fail
 ### D-image-generation-failure-is-tool-result
 
 [2026-11-16, user] A failed `generate_image` always yields a persisted tool error and the turn continues like any other tool error. Previously a `ModelRequestException` from the one-attempt image request escaped tool dispatch (neither the tool executor nor the turn host maps that type), ended the turn as a model failure and left the function call without a function response. Among tool handlers, only `generate_image` awaits a `ModelRequestOwner` request inside dispatch: ToolScript `request_model_without_context` failures become a script `RuntimeError`, and compaction, BTW and automatic titles are scheduled or user-command paths.
+
+### D-llm-image-generation-tool-declaration
+
+[2026-09-19] Hosted image generation is declared as a Responses tool object built only from the effective normalized config. Foxwarm does not hardcode a default hosted image model, size, or enablement field, so provider defaults stay authoritative and a future provider field can be adopted without a schema migration.
+
+### D-llm-image-generation-binary-boundary
+
+[2026-09-19] Provider image base64 is accepted only inside generated-image normalization (`GeneratedImageNormalization` in `HostedResponsesTools`), which validates the bytes, writes a content-addressed blob, and reduces the item to a reference plus safe metadata. Replay needs the same concrete model and locally verified bytes; a missing or unreadable blob is an explicit failure, never a dangling native call id or a silent regeneration.
+
+### D-llm-image-replay-local-failure
+
+[2026-09-19] A generated image that cannot be replayed from local storage raises a dedicated local replay failure rather than a generic error. The failure is local, so it is reported as non-retryable and non-countable against model health: the provider was not asked for anything, retrying cannot restore the bytes, and a failover could pay twice for the same image. Canonical history is never rewritten to work around it.
+
+### D-openai-generated-image-replay
+
+[2026-09-19] Assistant history may carry a hosted generated image as a reference-only part with safe native metadata. Responses request conversion replays it as one complete `image_generation_call` only when the part's source concrete model matches the destination model and the local blob bytes are readable; that replay runs before the generic inline-image branch and consumes the part. Any other destination model or protocol receives one bounded text note instead of native metadata or a dangling call id, and canonical history is never mutated. Only final images are represented; `partial_images` stays at 0 and preview payloads are never persisted.
+
+### D-llm-hosted-image-generation
+
+[2026-09-19; updated 2026-09-23] OpenAI Responses models may opt into the provider-hosted `image_generation` tool through the `imageGeneration` provider/model config, which defaults off and is rejected on Chat Completions, Anthropic, and virtual providers. Output images are durable blobs referenced from canonical message parts; provider base64 never enters canonical history, the request journal, logs, WebUI transport, or error diagnostics. Raw stream content capture is disabled for every physical request that can carry or receive image bytes, keyed on the effective config and on whether the Responses input replays a native generated-image call rather than on the UI-level toggle alone.
+
+Only the exact concrete model that produced an image may replay it natively, and only when locally verified bytes are available; another concrete model or protocol receives one bounded text note instead, while the originating model with unreadable local bytes fails the request. Unrecoverable local bytes are a non-retryable, non-countable failure: the provider was never asked to redo the work, a retry cannot restore the bytes, and a failover could pay twice for the same image. An attempt that has already begun a hosted image call is not excluded from the ordinary retry classification or budget: a regenerated image is a fresh artifact rather than a recovery of the first one, and the product accepts a normal retry window instead of an unretried failure. A successful image counts as real response content, so a text-free image turn is not retried as empty. Hosted image generation is excluded from compact-plan and setup-test purposes, like hosted web search.
+
+The optional onAttempt hook runs after local retry/effective-selection preparation and before a prepared physical request, only when the plan is not already cancelled. Callback failures remain outside provider retry classification. Cancellation after plan preparation, including during an awaited callback, retains the established attempt-start/abort-result journal path without dispatching a provider request. Runtime consumers use the hook to clear backoff without obscuring compaction preparation. The journal boundary is canonical in [request flow](../threads/llm-request-journal.md#request-flow).

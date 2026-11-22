@@ -35,9 +35,15 @@ When required workbench assets are missing, authenticated `/vscode-web` returns 
 
 The authenticated static route adapts only `out/vs/workbench/workbench.web.main.internal.js` from the selected packed or loose Code resource store. `PatchWorkbench` matches the Source-supported webview-origin hash helper and clipboard-probe bodies, capturing current generated identifiers rather than pinning minifier names. Only the first supported helper/probe is rewritten; changed shapes fail with an explicit unavailable response. The original asset bytes are not modified. Capability bootstrap/CSP rewriting, normal auth and deployment-relative URLs keep their existing owners.
 
-The .NET bootstrap installs `workbenchFrame.js` before Code loads. Only a top-level document with a Desktop frame provider adapts Code's Window Controls Overlay API and title-bar spacer widths to the physical left/right host reservations. The adapter also accepts the first `foxwarm-frame` event for WebView2 opener popups. It sends the existing rectangle-only frame report and active Code theme brightness, with native drag excluded over title controls and floating layers. In WebView2 the open menu’s title-bar grid cell is raised above the editor so the menu paints and receives clicks. Ordinary browsers and embedded Code keep their normal layout; the reference TypeScript route has no Desktop caller and does not install the adapter. See [the app-window decision](./host-runtime.md#d-desktop-app-windows) and [frame protocol](./webui-window-frame.md#d-window-frame).
+The .NET bootstrap installs `workbenchFrame.js` before Code loads. Only a top-level document with a Desktop frame provider adapts Code's Window Controls Overlay API and title-bar spacer widths to the physical left/right host reservations. The adapter also accepts the first `foxwarm-frame` event for WebView2 opener popups. It sends the existing rectangle-only frame report and active Code theme brightness, with native drag excluded over title controls and floating layers. In WebView2 the open menu’s title-bar grid cell is raised above the editor so the menu paints and receives clicks. Ordinary browsers and embedded Code keep their normal layout. See [the app-window decision](./host-runtime.md#d-desktop-app-windows) and [frame protocol](./webui-window-frame.md#d-window-frame).
 
 The source preparation pin is Code-OSS 1.141.0; route-shape tests do not prove a prepared or running asset version. The owned normal-host Workbench fixture has qualified the pinned source-built 1.141.0 payload for filesystem saves, immutable SCM content/diff rendering, local terminal extension effects, embedded iframe reuse and standalone launch. This does not qualify every optional workbench feature. Optional YAML assistance requires its separately prepared vendor payload and its own browser qualification; neither asset preparation nor route registration establishes that behavior.
+
+## Design decisions
+
+### D-code-routes-auth-boundary
+
+Workbench, static, extension, filesystem, and Git routes use WebUI authentication. The unauthenticated webview route is restricted to one unguessable process capability and official bootstrap assets only.
 
 ## Tests
 

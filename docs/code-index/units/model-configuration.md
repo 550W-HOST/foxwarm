@@ -79,6 +79,40 @@ An adoption-only history refresh preserves the running monotonic response timer 
 
 Structured Models saves accept a `providers` array or the retained single-provider body. Array drafts choose the first JavaScript-truthy `id`, `providerKey`, or `provider`, then the positional `providerN` fallback, before trimming the chosen key. Single-provider bodies use `providerKey`, `provider`, or `openai` (not top-level `id`), and normalize `models || model` plus the connection/routing fields through the same draft builder. The submitted provider set replaces the old set; each retained provider and model inherits its prior overrides, while top-level extension fields survive. Converting a retained concrete provider to `session-hash` or `failover` removes its concrete-only settings, including `sameProviderAs`, before candidate validation. Single-provider normalization includes omitted connection fields as empty values, matching the TypeScript setup builder's clearing behavior; array drafts retain omitted connection fields. Structured defaults choose the first JavaScript-truthy `defaultModel` or `default`, convert it to a string and trim it, then fall back to the first submitted provider/model if the result is empty. Generated candidates use the ordinary validation/install lane. Raw-YAML saves bypass draft normalization and remain byte-preserving.
 
+## Design decisions
+
+### D-config-models-data-path
+
+The mutable models configuration has one active location: `<data-root>/state/models.yaml`. Runtime reads, Setup diagnostics/OOBE, raw and structured Setup writes, and normal model resolution all use that path. The packaged example may be read only when the active file is missing; it is never the write target. The former `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override remain removed rather than becoming compatibility readers.
+
+### D-config-feature-toggle-shorthand
+
+[2026-08-11] User-approved feature toggles with explicitly designated tuning fields may accept `true`, `false`, or an options object. `true` enables the feature with defaults, `false` disables it, and an object opts in unless it explicitly sets `enabled:false`; normalizers run before inheritance, merge, or runtime use. Model-level `webSearch` and `imageGeneration` booleans override only the inherited enabled state while retaining inherited tuning, and an object without `enabled` opts in while merging its tuning. This shorthand is not generalized to connection or credential objects.
+
+[2026-09-19] Hosted image generation is a normalized provider/model toggle with `model`, `action`, `size`, `quality`, `background`, `output_format`, and `output_compression` tuning. Validation rejects unknown enum values, a non-integer or out-of-range compression, an empty model string, and the contradictory `output_format: jpeg` with `background: transparent` combination. Each side is normalized on its own and the merged configuration is validated again, so a combination that only becomes contradictory through provider-to-model inheritance fails resolution instead of sending an unsupported request, while a legitimate model override that resolves the combination still wins. The normalized form participates in concrete and virtual routing fingerprints and is rejected on virtual provider entries, while the raw value stays byte-preserving for Models Setup. The runtime rejects an effective enabled config on a protocol that cannot carry the hosted tool.
+
+`vector` therefore deliberately does not accept `true`: it is a connection object requiring `baseUrl`, with only `false` as the disable shorthand.
+
+### D-config-default-max-output
+
+[2026-10-14] The resolved concrete leaf `maxOutput` uses the five-layer model-default contract above; `llm.maxOutput` remains a startup-owned legacy fallback, with `32768` as the built-in default. The default applies as `max_output_tokens` for OpenAI Responses requests and `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests; provider/model `extraFields` retain their existing later override position.
+
+### D-config-provider-image-output
+
+[2026-10-14] The resolved concrete leaf `providerImageOutputFormat` uses the same five-layer model-default contract, retaining `llm.providerImageOutputFormat` as a startup-owned legacy fallback: `webp` by default, or `jpeg` for opaque images with PNG selected on actual transparency. JPEG mode converts incoming WebP even below size/dimension thresholds so an endpoint lacking WebP support never receives it as ordinary vision input. It does not change hosted image-generation tool settings, original canonical blobs or the fixed optimization thresholds. Each concrete attempt uses its own resolved format, including cross-format failover. The selected format participates in the derived-cache policy key.
+
+### D-config-chat-history-reasoning-field
+
+[2026-08-31] A concrete `openai-completions` provider may select `historyReasoningField: reasoning_content | reasoning`, with omission defaulting to `reasoning_content`; a model object may override the provider value. Other concrete protocols reject the field and virtual providers forbid it. The resolved concrete value participates directly in route fingerprints so a request always serializes from its current destination configuration rather than persisted per-message field-name metadata.
+
+### D-llm-provider-router
+
+Provider type selects one current request protocol: Responses, Chat Completions, or Anthropic Messages. Provider-specific message/stream code is separated where it has a stable boundary.
+
+### D-llm-reject-unknown-provider-type
+
+[2026-10-12] An unset or empty `providerType` keeps the OpenAI default. Each supported concrete type uses its own protocol, and only `anthropic` uses the Anthropic serializer. Any other non-empty type is rejected at models-config expansion and, for entries that bypass that path, before request headers, auth, or body are built. Third-party compatible services select a supported protocol and set `baseUrl`; they do not get a catch-all protocol.
+
 ## Tests
 
 `ModelUsageCostTests*.cs` (raw authenticated Setup `pricing` saves at both concrete placements through subsequent normal HTTP requests and persisted costs, captured prices, normalized protocols, aliases/failover, journal, persistence, status, cumulative scope and combined durable failure-state lifecycle); `ModelConnectionFallbackTests.cs` (empty connection fallback, explicit provider precedence, startup-versus-reopened app settings, and real Responses/Completions/Anthropic endpoint and authentication headers); `dotnet/Foxwarm.Tests/Models/RoutingAttemptsTests.cs`; `ModelUpstreamIdTests.cs` (model-only scope/validation, shared upstream names with distinct internal identity/options/prices, final HTTP/WS/Completions/Anthropic wire names, strict native-history filtering, WS partitioning and ToolScript one-shot); `ModelHistoryCompatibilityTests.cs` (whole local/qualified slash IDs, provider/model chains and precedence, missing counterparts, validation/install durability, current versus captured mapping, retry and detached/planning/one-shot request scopes); `ModelBehaviorOptionsTests.cs` (built-in/provider/model flags, resolved route fingerprints, captured selected-model empty policy through HTTP/WS/Completions/Anthropic consumers and failover); `CompactLifecycleTests.cs` (model-selected automatic background/awaited planning and busy manual admission); `ProcessRestartTests.cs`; `RetryPreparationTests.cs` (including changed-input timing reset); `EffectiveSelectionTests.cs` (including failover timing in persisted assistant/first tool response/success journal and independent continuation/turn/selection timing boundaries); `dotnet/Foxwarm.Tests/Channels/AppConfigurationRulesTests.cs`; `ModelConfigurationInstallationTests.cs`; `ModelConfigurationFormTests.cs` (structured key precedence, retained overrides, real HTTP save/catalog and subsequent normal request, invalid saves, concrete-to-virtual conversion with retained compatibility settings, raw model-override saves/catalog adoption and raw-byte controls); setup/model configuration tests.

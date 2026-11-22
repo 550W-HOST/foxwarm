@@ -109,3 +109,44 @@ A delivery is a `Trigger` queue item admitted through strict external save-lane 
 
 `WebhookActivity` keeps per-identity diagnostics in process memory: the newest 20 verified deliveries with outcome, HTTP status, event/action/delivery ID, Session and handler run ID/error, plus the count and time of failed verifications, which are never listed individually. Administrator `GET /api/webhooks` projects configured webhook identities with their public URL, target resolution, verification kind, events, action and script summary, never secrets or script `args`; `GET /api/webhooks/{id}/runs/{runId}` returns a handler run record only when that identity's history references it. Changes raise the realtime `webhooks-changed` notice, coalesced to at most one per second; requests that fail verification only update the counter and raise none, so unauthenticated traffic does not reach administrator clients. This is status for System › Webhooks, not an audit log, and it resets on restart. Session manager shutdown drains handler lanes after the timer scheduler and before ToolScript closes.
 
+### D-config-one-resolution-path
+
+**Derived consistency design for [validated configuration installation](../behaviors/configuration-and-activation.md#supported-saves-install-a-complete-validated-candidate).** Shared resolution keeps startup, tools and UI from inventing different effective values. Reader aliases and defaults follow real configuration consumers, not a second configuration authority.
+
+Server, setup, and one-shot model CLI use the same config/path/model resolution code. A UI or CLI writer validates through current readers instead of maintaining a second schema.
+
+### D-config-selected-env-overrides
+
+Environment support is limited to explicit path/data-root overrides. It does not imply general `.env` import or automatic migration into YAML.
+
+### D-config-read-old-write-current
+
+**Independent persisted/external configuration compatibility constraint.** Existing supported files must remain readable while writers use the current shape. This constrains [one resolution path](#d-config-one-resolution-path); it does not require permanent runtime aliases for unused internal names or automatic rewriting of raw YAML.
+
+Persisted external configuration keeps narrow legacy readers while generated setup output uses current `providers`/`models` fields.
+
+### D-config-live-install
+
+**Derived installer design; proposed and approved for [live supported saves](../behaviors/configuration-and-activation.md#supported-saves-install-a-complete-validated-candidate).** Tool/UI entry points share validation, exact-byte publication and scope-specific application under existing authorization. Candidate parsing and apply receipts are mechanisms; direct file edits do not acquire installer side effects automatically.
+
+[2026-10-10] WebUI Setup and the hidden discoverable Main-management `set_config({ target, filePath })` share the serialized Main-owned configuration installer. Targets are `config`, `models`, and `tool-rules`; the tool reads one complete master-side regular-file candidate under the current setter and `node:master/read` permissions, then repeats those permissions at installation admission. Invalid candidates do not change files or live snapshots. All targets use a synced same-directory temporary file and atomic replacement, preserving raw bytes rather than parsing and redumping them. Weixin login and structured Models edits run their complete read/merge/build inside the same installation queue, after prior saves finish applying. Structured Models keeps its existing provider-set replacement contract: providers absent from the submitted form are removed, while the submitted providers inherit their latest retained overrides and custom fields, and top-level extension fields are preserved. Weixin edits preserve the latest unrelated app settings and channels; raw full-document saves retain complete replacement semantics. Structured Models compatibility generates YAML and uses this same validation/install path. Policy limits remain policy-specific; there is no new app/models limit borrowed from tool rules.
+
+[Installation outcomes and activation boundaries](../behaviors/configuration-and-activation.md#interpret-the-installation-result-by-scope) own the saved/applied/not-applied/restart matrix and direct-file-edit distinction. The installer compares pending fields against the captured startup configuration, not the previous save, and publishes access/fences transports before awaiting cleanup. Model readers retain request-local snapshots; channel activation invokes the managed lifecycle rather than changing exported startup constants.
+
+Real Setup HTTP regressions hold a local Weixin getupdates response during actual managed-channel stop, then queue full Config, raw/structured Models, and QR-login saves. They verify the later section edit retains the preceding save's token, URL, raw surrounding text, unrelated channels, submitted-provider overrides, and extension fields without changing queue internals. The Models regression also checks that an omitted provider is removed under the existing provider-set replacement contract.
+
+Postcommit cleanup failures retain the installed bytes/live snapshot and are reported through the scoped receipt, never rolled back by pretending installation failed. Tool output does not echo YAML or secret-bearing validation details; Setup retains its administrator-only response fields. The installer provides no file watcher, service orchestrator, or cross-window model-cache synchronization.
+
+### D-infrastructure-external-data
+
+**Governing deployment/data constraint; directly selected separation of installation code and owned data.** It supports [persistent authority](../behaviors/persistence-and-recovery.md#identify-the-authority-before-interpreting-a-restart) across code updates. The data-root resolver and startup variables are mechanisms; building or replacing code does not authorize replacing live state.
+
+Program code and mutable user data have separate ownership. Installations may place data outside the checkout, and runtime path resolution must consistently honor the selected data root.
+
+### D-infrastructure-template-ownership
+
+Templates initialize user-owned files once. Package upgrades do not silently replace initialized configuration or prompt files.
+
+### D-infrastructure-bundled-skills
+
+Bundled skills are program assets. They ship with source and runtime images rather than being copied into the mutable data directory.

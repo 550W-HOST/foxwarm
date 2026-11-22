@@ -67,6 +67,12 @@ Removal owns only the named Agent's process-local membership admission. Create/c
 
 Ordinary POST/DELETE behavior and command deletion's metadata retention remain unchanged. These modes use existing administrator access checks; scoped WebUI credentials remain denied. Creator references intentionally continue to protect ancestors until the administrator restores or explicitly cleans retained descendants.
 
+## Design decisions
+
+### D-session-core-child-identity
+
+[2026-09-08] Same-Agent child creation replaces an Agent `main` leaf or retains append-style IDs for non-main parents. A fresh child explicitly assigned to another Agent uses that target Agent's main-leaf namespace while preserving the actual caller as its parent. Cross-Agent forks are rejected; fork state inheritance and ID construction remain separate concerns.
+
 ## Tests
 
 `packages/webui/test/mainHostIdentityMove.e2e.mjs` retains normal same-owner model/command moves, alias chains and retained deletion audit. `ProcessRestartTests.Actual_identity_copy_or_alias_crash_recovers_only_recorded_direction_and_preserves_sources` uses fixed modes in the existing DevTools restart harness, kills the actual child at before/after-copy or finishing checkpoints, then checks directional recovery and source preservation across two fresh processes. `SessionIdentityMoveTests` and `SessionIdentityRecoveryTests` retain actual reverse-SQL failure, unavailable-owner fences, independent callers and persisted evidence.

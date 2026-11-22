@@ -1,7 +1,7 @@
 # Unit: WebUI Logs
 
-Files: src/channels/webuiLogs.ts, src/channels/webuiLogs.test.ts, packages/webui/src/components/LogsView.tsx
-Secondary files: src/common.ts, src/channels/webuiChannel.ts, src/channels/webuiRealtime.ts, packages/webui/src/realtime.ts, packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, test/app-e2e/logs.e2e.mjs
+Files: packages/webui/src/components/LogsView.tsx
+Secondary files: packages/webui/src/realtime.ts, packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, test/app-e2e/logs.e2e.mjs
 
 ## Purpose
 

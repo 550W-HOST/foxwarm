@@ -21,6 +21,11 @@ Callers: `SessionManager` lifecycle/identity/deletion methods, `SessionObservati
 
 This unit cannot reconstruct active history, authorize a Session mutation, or bypass the exact owner. Its SQLite writes update the Main projection only. Presentation changes can race a semantic JSON save; the catalog mutation's transaction and `PublishAuthority` overlay rules determine which Main-owned fields remain visible, while the authority store remains the source for semantic fields. Parent presentation changes synchronize any live owner’s cached parent field before state-change notification. Routing and turn-reminder consumers read the catalog-overlay metadata resolver rather than treating that cache as a second parent authority, so a concurrent presentation update cannot leave those supported paths using an older hot parent shadow.
 
+## Design decisions
+
+- [2026-07-09] WebUI sidebar ordering belongs to the Main catalog, not per-session history JSON; drag reorder must not risk stale semantic history/queue/context rewrites.
+- [2026-07-10] WebUI session pin state follows the same catalog-only boundary as `sidebarOrder`; current history payloads intentionally never contain `pinned`.
+
 ## Tests
 
 `packages/webui/test/mainHostPresentation.e2e.mjs` drives zero-owner cold presentation commands, missing-authority versus offline-Node reads, immutable JSON/Archive controls, real SQLite rollback, original Sidebar/Architecture actions and catalog fields surviving a held semantic save and restart.

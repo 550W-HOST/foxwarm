@@ -4,7 +4,7 @@
 
 The CLI node is the full remote worker client. It connects to the master over WebSocket, pairs or authenticates, executes shared node tools, transfers files, advertises versioned Code services, optionally hosts node-local PTYs, exposes a localhost session-event trigger, and provides an Ink/React approval TUI.
 
-The separate [.NET headless CLI Node](../units/dotnet-cli-node.md) implements headless connection/authentication, file tools, persistent native exec for Session and external owners, fixed Code filesystem/read-only Git and optional terminal services, a loopback trigger, the client Session list/history/send API and process-owned browser tools. Its browser/Native AOT limits and Main image boundary are documented in that unit. The [native-aware bootstrap](../units/native-node-bootstrap.md) selects qualified published packages, with retained TypeScript fallback on unsupported or unpublished Windows/macOS targets. This page otherwise maps the retained full TypeScript client.
+The separate [.NET headless CLI Node](../units/dotnet-cli-node.md) implements headless connection/authentication, file tools, persistent native exec for Session and external owners, fixed Code filesystem/read-only Git and optional terminal services, a loopback trigger, the client Session list/history/send API and process-owned browser tools. Its browser/Native AOT limits and Main image boundary are documented in that unit. The [native-aware bootstrap](../units/native-node-bootstrap.md) selects qualified published packages, with the TypeScript CLI Node as fallback on unsupported or unpublished Windows/macOS targets. This page otherwise maps the retained full TypeScript client.
 
 The `--stdio` mode serves only the Code/Terminal service frames over a caller-owned pipe for executable-Provider channels; see the [.NET CLI Node unit](../units/dotnet-cli-node.md).
 
@@ -63,6 +63,6 @@ Proxy behavior is centralized and follows standard environment variables, includ
 
 ## Canonical ownership
 
-Bootstrap artifact ownership: [D-node-bootstrap-bundle](./nodes.md#d-node-bootstrap-bundle). Model tool/backend service separation: [D-node-thread-tool-service-split](../threads/node-communication.md#d-node-thread-tool-service-split).
+Bootstrap artifact ownership: [D-node-bootstrap-bundle](../units/native-node-bootstrap.md#d-node-bootstrap-bundle). Model tool/backend service separation: [D-node-thread-tool-service-split](../threads/node-communication.md#d-node-thread-tool-service-split).
 
 Official launcher environment facts are attached to authenticated registration for [administrator restart suggestions](../units/external-nodes.md#administrator-node-maintenance). They contain no credentials and do not alter capability or authorization negotiation.

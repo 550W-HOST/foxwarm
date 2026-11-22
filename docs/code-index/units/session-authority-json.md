@@ -36,6 +36,14 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 - Directory sync may be unsupported on a platform, but the result is recorded; the host still distinguishes publication from durability-finalization failure.
 - Session authority uses the helper's defaults: no owner-only creation mode and no backups. The helper's own contract, its other callers and its platform behavior are owned by [NodePrimitives](./dotnet-node-primitives.md#durable-state-files).
 
+## Design decisions
+
+- [2026-08-13] Persist only `history` as active timeline authority. Ignore old standalone/top-level `contextFrontier` and per-message `__meta.contextFrontierItem`, omit them from current writes, and exclude standalone frontier files from metadata recovery scans. Preserve `__meta.contextBlock` as current semantic history metadata.
+
+### D-disk-json-durability
+
+`DiskJsonData` owns the durable JSON algorithm: serialized/coalesced writes use same-directory temp files, file sync, atomic replace, and directory sync. Each store explicitly selects its backup rotation count; readers try the primary then configured backups.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `AuthorityStreamingTests.cs` (streamed/document value equivalence including raw and compacted history, open values, bounded chunks, invalid immutable history and partial-stream cleanup); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `dotnet/Foxwarm.Tests/Storage/JavaScriptJsonParityTests.cs` (`EcmaJson`/`EcmaNumber` against platform `JSON.stringify` through `Fixtures/json-stringify-oracle.mjs`); `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `LegacyBlockAuthorityTests.cs`.

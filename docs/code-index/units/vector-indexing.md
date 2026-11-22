@@ -35,9 +35,27 @@ Before enabling dense searches, `VectorTable.RepairSourceTimesAsync` repairs exi
 
 ## SDK and platform boundary
 
-The native dependency is exactly `LanceDB` NuGet `2.5.0` (community SDK/native Lance 8.0.0), with Apache Arrow 22.1.0. Managed and native Main use the same [source-built C# binding](dotnet-lancedb-binding.md), whose pinned source and focused metadata patch are maintained locally. Its builder/RecordBatch API replaces the Node binding, not the storage engine. New-table format 2.0 is explicit because the bindings' defaults differ. Existing tables remain intact.
+The native dependency is exactly `LanceDB` NuGet `2.5.0` (community SDK/native Lance 8.0.0), with Apache Arrow 22.1.0. Managed and native Main use the same [source-built C# binding](./dotnet-lancedb-binding.md), whose pinned source and focused metadata patch are maintained locally. Its builder/RecordBatch API replaces the Node binding, not the storage engine. New-table format 2.0 is explicit because the bindings' defaults differ. Existing tables remain intact.
 
 The package's Linux x64 asset requires glibc 2.39; release packages replace it with a build of the same pinned source on glibc 2.34 (see [release packages](./release-packages.md#native-linux-package)), and other builds keep it; the package has no Linux-musl or Linux-arm64 native asset. Windows x64 requires system Visual C++/Universal C runtime dependencies; qualification versions do not establish their minimum. Disabled Vector does not instantiate the native owner or create vector/FTS storage. Build success alone is not platform runtime qualification.
+
+## Design decisions
+
+### D-vector-fact-same-table
+
+Compact facts share the current table and carry source ranges so ordinary lineage clipping applies without a second fact store.
+
+### D-vector-max-latency-and-lag-status
+
+**Engineering scheduling and observability design under [best-effort indexing](#d-session-context-best-effort-index).** Bounded scheduling latency and honest lag status keep continuous indexing observable. A timer or status threshold must not be repurposed as permission to truncate the source or report unindexed rows as complete.
+
+[2026-08-28] Preserve the existing message/token/block thresholds but bound ordinary raw-index lag with one transient, non-sliding five-minute timer per Session. Only the active Vector owner holds the unref'd timer; firing enters the canonical serialized index path, while immediate/forced/lifecycle cleanup cancels it. Status reads the archive/checkpoint SQLite authority directly and reports local message/block maxima, pending counts, and the armed deadline without hydrating Session authority.
+
+### D-session-context-best-effort-index
+
+**Governing failure distinction with a directly selected optional-service boundary.** Durable [Archive evidence](../threads/archive-and-recall.md#d-context-sqlite-archive-authority) must not be undone by [optional Vector work](../threads/archive-and-recall.md#d-context-optional-vector). Queueing, retries and checkpoints implement derived indexing, not a second commit authority.
+
+Archive durability does not depend on vector availability. Backfill and compact-fact embedding may be disabled, lag, or fail without pretending that source archive data was lost. Optional/default-disabled behavior is canonical in [D-context-optional-vector](../threads/archive-and-recall.md#d-context-optional-vector).
 
 ## Tests
 

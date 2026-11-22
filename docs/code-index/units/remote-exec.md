@@ -36,6 +36,12 @@ A CLI Node that registered `features.execControl` accepts `exec_control_request 
 
 [Ordinary inbound MCP](./dotnet-inbound-mcp.md) owns a separate `ExternalExecOwnership` record set and actual v3 external wire owner. `RemoteExecAuthority.IssueExternal`/`VerifyExternal` reuse the persisted capability secret with the Source v2 external-completion payload; internal Session claims and completion ownership remain unchanged.
 
+## Design decisions
+
+### D-node-session-event-scope
+
+The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/RemoteExecProtocolTests.cs` uses real authenticated WebSockets and actual Session save lanes for strict pre/post-rename faults, duplicate ACK, exact registration, supported/unsupported Stop, explicit legacy/collision rejection, actual CLI definite-versus-unknown error projection and claim settlement, Session rename/delete and restart receipt-versus-new-authority evidence. `packages/webui/test/mainHostRemoteExec.e2e.mjs` uses owned real .NET hosts, unchanged official CLI processes and real Monty dispatch. Each official-client launch requires that process's registration acknowledgement and Main's executable online record before selection; an older retiring proxy connection cannot satisfy launch readiness. Selection checks the committed tool receipt as well as saved placement. It verifies side-effect counts, canonical pairs, Archive/authority, foreground/timeout/background, bounded direct parallel calls, concrete authorization, current/explicit/default cwd, switch/wait, strict-save retry, dropped ACK, official pre-start collision, interactive pre-start Stop, post-start Stop, Run queued, Session/Node lifecycle, official pending-event replay, Main restart uncertainty, creation/fork/timer placement and genuine ordinary background/trigger/onboot producers.

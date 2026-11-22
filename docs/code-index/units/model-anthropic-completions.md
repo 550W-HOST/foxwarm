@@ -45,13 +45,22 @@ Protocol references: official [web search](https://platform.claude.com/docs/en/a
 
 ## Design Decisions
 
-- [2026-10-30] Chat Completions opaque objects deliberately accumulate recursively across streaming deltas, retaining earlier keys for continuation and replay. This differs from the retained TypeScript collector's latest-`provider_specific_fields`-object assignment.
+- [2026-10-30] Chat Completions opaque objects deliberately accumulate recursively across streaming deltas, retaining earlier keys for continuation and replay.
 
 ### D-anthropic-text-runs
 
 [2026-11-15] Consecutive Anthropic text content blocks become one canonical `part.text` by exact concatenation, without inserted separators, trimming or Markdown rewriting. Every nontext block bounds the run, including thinking/redacted thinking, hosted search calls/results, local calls and unsupported future content. Search-turn or cited runs retain the original blocks and producing model identity in part-level `providerMeta.anthropic.{sourceModelId,contentBlocks}`. Ordinary non-search tagged-thinking parsing runs once over the concatenated text run.
 
 Compatible native serialization expands those arrays in place, preserving citations and encrypted evidence in original order, including a single text-only native run. It omits zero-length native text blocks from outgoing Messages requests, which reject them. Their original citation metadata remains in canonical history and the Archive. Enabled [text redaction](./model-text-redaction.md#d-model-text-redaction) transforms ordinary text on request copies and restores it in canonical output; it leaves block ordering and nontext metadata intact. Incompatible destinations use the merged ordinary text through existing metadata filtering. Markdown, copy, Search and timeline rows consume canonical text runs; they do not group protocol blocks independently. Native citation readers aggregate only the run's saved text-block citations into one deduplicated Sources footer, without inventing inline IDs or offsets. JSON retains native metadata. The initial hosted-search singular-block metadata shape is replaced without a compatibility reader or migration; unrelated persisted reasoning and other provider formats are unchanged.
+
+### D-llm-anthropic-default-ephemeral-cache
+
+[2026-10-12] Every Anthropic Messages request built by the Anthropic-format serializer carries the top-level `cache_control: { type: 'ephemeral' }` by default, using the protocol's automatic caching with the provider's default lifetime. The default is part of the attempt-local payload before the ordinary `extraFields` merge, so an explicit `extraFields.cache_control` replaces it. The serializer adds no `prompt_cache_key`, no per-block breakpoints, and no TTL policy; OpenAI Responses and Chat Completions payloads are unchanged.
+
+### D-llm-anthropic-messages-streaming
+
+[2026-10-12] Anthropic Messages requests stream by default. `extraFields.stream: false` is the only opt-out and selects the JSON path with a matching body and parser; no official-domain detection or separate streaming configuration exists. Streamed and JSON responses converge on one canonical response shape, so stop reasons, usage, and thinking handling are identical on both paths. Streaming never dispatches tools before `content_block_stop`, and a stream that ends without `message_stop` or a final `stop_reason` is a failed attempt. Pings do not extend the watchdog; only an open thinking block widens the inactivity window to 10 minutes. Tests use mock or loopback transports only, so real provider behavior remains unverified in this batch.
+
 
 ## Tests
 

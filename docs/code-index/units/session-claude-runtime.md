@@ -48,11 +48,11 @@ The driver never spawns a model subprocess in automated tests. The controlled ex
 
 ## Integration references
 
-- [Session turns](session-turns.md): foreground claim, canonical publication and final assistant/handoff controls.
-- [Unified tool registry](tools-registry.md): concrete resolution, attribution, authorization and output guards.
-- [Inbound MCP](dotnet-inbound-mcp.md): separate ordinary external identity boundary.
-- [Authority JSON](session-authority-json.md) and [catalog projections](session-catalog-projection.md): format gate and cold metadata.
-- [WebUI core](dotnet-webui-core.md): creation API, history DTO and model/runtime presentation.
+- [Session turns](./session-turns.md): foreground claim, canonical publication and final assistant/handoff controls.
+- [Unified tool registry](./tools-registry.md): concrete resolution, attribution, authorization and output guards.
+- [Inbound MCP](./dotnet-inbound-mcp.md): separate ordinary external identity boundary.
+- [Authority JSON](./session-authority-json.md) and [catalog projections](./session-catalog-projection.md): format gate and cold metadata.
+- [WebUI core](./dotnet-webui-core.md): creation API, history DTO and model/runtime presentation.
 
 ## Tests
 

@@ -9,7 +9,7 @@ Persists current task authority/notifications and progress checkpoints, parses c
 
 ## Stable methods and callers
 
-- `TaskProgress.Sequences` and `TaskProgress.IsOrdinaryVisible` define the ordinary-visible sequence input used by model requests and compaction checkpoints. `TaskStore.Execute` owns task records, owner/assignee, parent linkage, title/status/result/description, notification state, and durable CRUD. `TaskStore.MigrateLegacyGoal` creates/updates one legacy Goal task; `TaskStore.TaskContext` checkpoints reminder progress and, when consuming, returns and resets due task context; it appends no Session history or queue rows itself. `SessionChatService` turns consumed context into the persisted reminder row ([D-tasks-reminder-history](src-session-task-context.md#d-tasks-reminder-history)). The method accepts an optional live `anchorSeq` to create/claim/self-assignment/open/active/reset updates so reminder progress is anchored to the source Session message sequence.
+- `TaskProgress.Sequences` and `TaskProgress.IsOrdinaryVisible` define the ordinary-visible sequence input used by model requests and compaction checkpoints. `TaskStore.Execute` owns task records, owner/assignee, parent linkage, title/status/result/description, notification state, and durable CRUD. `TaskStore.MigrateLegacyGoal` creates/updates one legacy Goal task; `TaskStore.TaskContext` checkpoints reminder progress and, when consuming, returns and resets due task context; it appends no Session history or queue rows itself. `SessionChatService` turns consumed context into the persisted reminder row ([D-tasks-reminder-history](#d-tasks-reminder-history)). The method accepts an optional live `anchorSeq` to create/claim/self-assignment/open/active/reset updates so reminder progress is anchored to the source Session message sequence.
 - `TaskService.ExecuteAsync` resolves a live actor anchor when available; tool execution passes `source.Entry.Snapshot().NextMessageSeq - 1`, while the HTTP/API path reads the persisted Session authority anchor and does not hydrate a cold catalog member. `ExecuteAsUserAsync` handles authenticated WebUI create/comment/assign actions without inventing a Session actor. The service keeps the full mutation result for trusted completion/assignment facts while model-facing task mutations expose only the short receipt; task notification delivery remains service-owned.
 - `MainTimers.CreateAsync`, `UpdateAsync`, `MainTimers.Store.LoadAsync`, and the scheduler’s `RunClockAsync` create/update/load and deliver timer records; delivery enqueues the declared Session operation after due-time/schedule validation.
 - `RunClockAsync` starts with suppressed execution-context flow, before synchronous or delayed delivery. Independently fired timers cannot borrow the registering model turn, cancellation, mutation admission or Agent-command settlement scope. Normal message queue delivery and clock/completion tracking retain their owners.
@@ -64,6 +64,36 @@ The scheduler reserves one script invocation per timer ID before owner admission
 At normal scheduler start, the existing loaded timer snapshot supplies aggregate loaded/scheduled/inactive counts. An unavailable store reports scheduling disabled. No timer content or new persistence/statistics scan is needed for this diagnostic.
 
 Session-local recovery failures follow the [bootstrap isolation boundary](./session-manager-bootstrap.md#local-recovery-failure-boundary): healthy clocks can start while an unavailable required owner rejects timer admission without creating history or replacement authority. Existing message-timer failure semantics remain: a failed once attempt consumes its captured timer, while a failed cron delivery retains the record and previous `lastTriggeredAt`. Global startup failures still prevent service activation.
+
+## Design decisions
+
+- [2026-06-29] Add `update_timer` so agents can modify timer message, schedule, and new-session target fields without delete+create. Updating must refresh scheduler state and persist atomically; on scheduling failure, restore the previous valid timer/job.
+- [2026-06-29] Document and test cron syntax against the actual installed runtime, not stale package README wording: `L` is supported by current `node-schedule`/`cron-parser`, while `W` remains unsupported.
+- [2026-07-06/2026-07-07] Timer-fired user content is a source-wrapped inbound event, not a bracketed system header: use one `<foxwarm-message type="timer" timerId="..." mode="..." firedAt="..." localTime="..." hint="...">raw body</foxwarm-message>` system part. Wait timeouts remain pure metadata but carry the human message in the body: `<foxwarm-system kind="event" type="wait-timeout" seconds="...">...</foxwarm-system>`.
+
+### D-tasks-replace-goal
+
+[2026-10-06] Retire Goal writes and its model tool in favor of self-created, self-owned active tasks. Preserve legacy Goal text through an idempotent Main mapping at the existing exact-owner authority save. Use fixed-30 reminders with persisted visible-message progress and no idle wake; their delivery is now owned by [D-tasks-reminder-history](#d-tasks-reminder-history), which superseded the original request-only delivery. Keep historical compact Goal rows readable; new compact completion has only its lifecycle marker.
+
+### D-tasks-reminder-history
+
+[2026-11-10] User decision: a due Task reminder is a persisted system history row, as the earlier Goal reminder was, not request-only context. A per-request block after history becomes the request's cache breakpoint and its cache entry cannot be reused, which conflicts with [request-prefix stability](../overview.md#d-request-prefix-stability). The row is appended once through the canonical append path before the normal owner request that consumes it; eligibility, the fixed-30 interval, text, progress persistence, no idle wake and the exclusion of auxiliary/detached requests are unchanged. The row does not count towards the next interval and is transparent to Continue/idle classification.
+
+### D-tasks-small-session-owned-work
+
+**Selected service design under the directly requested [lightweight work-tracking scope](../behaviors/collaboration-and-tasks.md#do-i-need-a-child-a-task-or-a-message).** The single action surface and creator/owner distinction were adopted for that scope. Persistence, child attachment and notifications implement it without making delivery and task mutation one atomic external transaction.
+
+[2026-10-06] Use one builtin with create/list/get/claim/assign/update/complete/cancel actions for explicit Session-coordinated work, not a scheduling, review or workspace platform. Actor/creator identity comes from ToolContext; an explicit owner is a catalog-resolved assignee. ParentTaskId is immutable and may reference only an existing task at creation, so the supported interface cannot construct self-links or cycles. Task fields and progress stay in the task store, not Session.history/Archive. Completion notification uses ordinary inter-session delivery; attached-child completion resolves the existing handoff boundary. No separate notification transport or scheduler is introduced.
+
+### D-task-list-scopes
+
+[2026-10-09] Model-facing `list` defaults to tasks created by or assigned to the current Session, with explicit `owned`, `current-agent` and `all` scopes. `owned` filters only the canonical current owner, preserving the creator-or-owner default. Current-Agent membership comes from Session catalog Agent metadata, not Session ID naming. The authenticated WebUI list route retains its global listing behavior.
+
+### D-task-note-notification-opt-in
+
+**Directly selected notification boundary for [Task communication](../behaviors/collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session).** Saving progress need not wake its recipient. Shared postcommit delivery is the mechanism; it does not convert a silent note into a handoff or authorize automatic self-notification.
+
+[2026-10-10] [Task notification behavior](../behaviors/collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session) owns explicit note/comment opt-in and self/unowned skips. Both entry points use the shared postcommit helper; WebUI forwards its checkbox value explicitly.
 
 ## Tests
 

@@ -83,6 +83,34 @@ Manual `/compact --tools` calls `PruneToolsManuallyAsync` on the same response-o
 
 Plan operations may carry an integer `frictionScore` from 0 through 100. Missing/invalid scores are omitted without rejecting an otherwise valid plan. Accepted scores flow through immutable Archive block records, active context-block metadata, candidate prompts, exact recall, expansion, and previews; existing unscored blocks remain unscored. This is diagnostic metadata, not a changed pruning or retention policy.
 
+## Design decisions
+
+### D-compact-plan-policy-input
+
+Candidate eligibility and quotas are explicit run policy inputs shared by prompt and validator. The schema does not hide a second set of thresholds.
+
+### D-compact-plan-preserve-exact
+
+Exact raw preservation/removal uses top-level sequence arrays. It never changes immutable archive records or asks the model to manufacture partial raw ranges.
+
+### D-compact-plan-unconfirmed-text
+
+Summary guidance preserves the source range's state without importing outside outcomes, including force-kept context. It retains requester intent, constraints and authorization scope, consequential decisions and reasons, active or blocked work, open questions, and next steps. Confirmed results stay distinct from hypotheses or proposals; important corrections, superseded decisions, and rejected approaches retain their reasons. Unclear terms keep their original wording or explicit uncertainty. Compact, natural summaries support continuation alongside retained context and identify when recall is needed. Evidence pointers may replace recoverable detail, not essential decisions or constraints; no fixed style examples or word-count template is prescribed.
+
+### D-history-compatible-prefix-commit
+
+A compact job may replace only the live history snapshot prefix that still matches its snapshot. Concurrent incompatible change converts the result into a safe non-commit.
+
+### D-history-failed-planning-noncommit
+
+A failed planning request cannot submit or partially apply a compact plan. Provider request error semantics are canonical in [D-llm-request-errors](./model-common-wire.md#d-llm-request-errors).
+
+### D-history-independent-goal-reminder
+
+Historical compact completions and Goal reminders remain separately identifiable structured system parts for read compatibility. New compaction emits only its one lifecycle marker; Task reminders are separate persisted rows under [D-tasks-reminder-history](./tasks-timers.md#d-tasks-reminder-history).
+
+Compact operations publish planning/enqueueing/ready/committing metadata and request retries without acquiring foreground runtime ownership. Owner-safe failure application emits a typed display-only event; temporary planner transcripts are not foreground conversation content.
+
 ## Tests
 
 `CompactLifecycleTests.Idle.cs` uses a deterministic clock with the real compactor/provider fixture: provider-start deadlines, arming/rearming, stale timer callbacks, lifecycle cancellation, fire-time skip conditions, current configuration, awaited/background commits, pruning-first behavior and ordinary input during held planning. `IdleCompactConfigurationTests.cs` covers application/provider/model precedence, zero disablement and invalid values. Setup's `configEditor.test.mjs` covers the shared schema scopes.
@@ -95,7 +123,7 @@ Plan operations may carry an integer `frictionScore` from 0 through 100. Missing
 
 `ViewSessionTests`, `LiteralRecallTests` and `ViewSessionPolicyTests` cover structural-before-count live selection, post-page filters, logical-call summaries, exact/truncated previews, append versus stale structural boundaries, direct/unified/native ToolScript dispatch, bounded literal hit/no-hit continuation, fork caps and legacy policy/MCP boundaries.
 
-`LegacyHistoryAuthorityTests.Compaction.cs` exercises missing-identity barriers, partial-identity raw/preserved tool exchanges, ordinary pruning and planner commits with retained Source history and immutable Archive controls.
+`LegacyHistoryAuthorityTests.Compaction.cs` exercises missing-identity barriers, partial-identity raw/preserved tool exchanges, ordinary pruning and planner commits with legacy history and immutable Archive controls.
 
 `ContextPreviewFilterTests` exercises the real message observation handler and exact Archive recall with CRLF literal/include/exclude filters, unchanged canonical text and bounded output, plus folded tool-result match notices. `mainHostObservation.e2e.mjs` filters original hidden call arguments and results through a real model turn, follows the compact preview's Archive example to full content, and checks that live/full retrieval leaves the observed history unchanged without locking editorial fold notices.
 

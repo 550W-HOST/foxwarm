@@ -7,14 +7,14 @@ Secondary files: `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/MainHost.cs`, `
 
 Provides initialized external tool access on Main's existing deployment-relative `/mcp` listener. It does not create internal Agents or Sessions, use an administrator cookie as external authority, or execute Main builtins through an invented Session.
 
-| TypeScript behavioral Source | .NET owner and actual callers |
+| Area | .NET owner and actual callers |
 | --- | --- |
-| `accessConfig.ts`, `mcpInboundHttp.ts` | `McpExternalPrincipal.Authenticate`, `McpExternalContext`, `McpInboundHttp.HandleAsync`: Main-authenticated identity plus a random, process-local context; independent POST/GET/DELETE checks and selected cleanup. |
-| `mcpInboundCatalog.ts` | `McpInboundCatalog.Tools`, `DiscoverAsync`, `CallAsync`: the five original wrappers, concrete external-default-deny discovery/dispatch and bounded raw MCP results. The embedded JSON preserves the wrapper schemas/copy. |
-| `mcpExternalService.ts`, `mcpCallerConnections.ts` | [Outbound client](./mcp.md) external list/call seams and real external-context connection keys; no Session-shaped connection authority or internal result normalization. |
-| `mcpInboundSessionService.ts` | `McpInboundSessions.ListAsync`, `ReadAsync`, `SendAsync`, actual `SessionRuntime` and its existing owner/save lane: bounded metadata/preview and strictly durable User input. |
-| `mcpInboundPairingService.ts`, existing Node tools | `PairAsync`, `ApprovedNodeRegistry.Approve`, `NodeConnectionHub.ApproveAsync`: existing pending trust flow with a final policy/context assertion immediately before registry mutation. |
-| `mcpInboundNodeService.ts`, `nodes/externalExecOwnership.ts`, `nodes/sessionEventCapability.ts` | `McpInboundNodes`, `NodeConnectionHub.External`, `ExternalExecOwnership`, external capability signing in `RemoteExecAuthority`: actual v3 external wire owner, bounded ownership/results and context release. |
+| Authentication and HTTP | `McpExternalPrincipal.Authenticate`, `McpExternalContext`, `McpInboundHttp.HandleAsync`: Main-authenticated identity plus a random, process-local context; independent POST/GET/DELETE checks and selected cleanup. |
+| Tool catalog | `McpInboundCatalog.Tools`, `DiscoverAsync`, `CallAsync`: the five original wrappers, concrete external-default-deny discovery/dispatch and bounded raw MCP results. The embedded JSON preserves the wrapper schemas/copy. |
+| External service and caller connections | [Outbound client](./mcp.md) external list/call seams and real external-context connection keys; no Session-shaped connection authority or internal result normalization. |
+| Sessions | `McpInboundSessions.ListAsync`, `ReadAsync`, `SendAsync`, actual `SessionRuntime` and its existing owner/save lane: bounded metadata/preview and strictly durable User input. |
+| Node pairing | `PairAsync`, `ApprovedNodeRegistry.Approve`, `NodeConnectionHub.ApproveAsync`: existing pending trust flow with a final policy/context assertion immediately before registry mutation. |
+| Node files and exec | `McpInboundNodes`, `NodeConnectionHub.External`, `ExternalExecOwnership`, external capability signing in `RemoteExecAuthority`: actual v3 external wire owner, bounded ownership/results and context release. |
 
 ## HTTP and context lifetime
 
@@ -40,7 +40,7 @@ The seam intentionally depends on SDK 2.2.0 writing each complete SSE event in o
 
 `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`, `foxwarm_exec_result` and `foxwarm_session` are transport wrappers, not blanket grants. Discovery exposes only permitted configured MCP tools, compatible external Node tools and the two existing pairing builtins. Node list returns deduplicated permitted Node ID strings, never raw capability descriptors. Execution reconstructs concrete builtin/MCP/Node policy facts, including the real external identity/context, original arguments and remote path facts. It never grants local workspace/Agent/path ancestry to an external principal.
 
-Discovery also lists bounded JSON-quoted tool IDs in its text content for clients that do not render `structuredContent`; the existing structured catalog and result budgets remain authoritative. External Node descriptors replace Agent-specific path/environment guidance with connection-local cwd and process-environment semantics. Calls accept the fixed file/exec parameter names; unknown fields and malformed patch envelopes fail before dispatch with safe, actionable errors. Already-dispatched failures retain unknown-outcome/partial-effect semantics. External exec timeout results direct callers to `foxwarm_exec_result` in the same MCP context rather than promising an internal Session notification; both retained TypeScript and managed CLI Nodes keep their actual completion owners.
+Discovery also lists bounded JSON-quoted tool IDs in its text content for clients that do not render `structuredContent`; the existing structured catalog and result budgets remain authoritative. External Node descriptors replace Agent-specific path/environment guidance with connection-local cwd and process-environment semantics. Calls accept the fixed file/exec parameter names; unknown fields and malformed patch envelopes fail before dispatch with safe, actionable errors. Already-dispatched failures retain unknown-outcome/partial-effect semantics. External exec timeout results direct callers to `foxwarm_exec_result` in the same MCP context rather than promising an internal Session notification; both the TypeScript and the managed CLI Nodes keep their actual completion owners.
 
 `McpInboundSessions.ListAsync` reuses the existing bounded catalog page query, not the unbounded legacy Session listing. Read shares `SessionOwner.ViewPage` and `ContextPreviewRenderer.RenderLive` with internal `view_session`: newest 10 eligible records by default, chronological display, structural `parts` selection before count, then page-local literal/regex filters. Explicit `start` reads forward (negative indices count from the end); exclusive `before` reads backward, and the two cannot be combined. Counts are nonnegative safe integers without a separate read ceiling; count 0 returns only runtime/page information. Preview length uses the shared default/zero/clamping behavior, independently of record count. The page reader materializes only the traversed active-history rows, without `owner.History()` or an unrelated full-history projection.
 
@@ -87,3 +87,9 @@ The existing service transfers whole-file base64 within its 30-second deadline; 
 Vector and Windows-local tools have independent accepted owners; this unit does not implement external chat adapters. Session Worker hosting, managed controllers and Node Provider environment lifecycle remain explicit whole-delivery exclusions in the [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
 Unified edit and old/new resident compatibility follow [D-node-thread-unified-edit](../threads/node-communication.md#d-node-thread-unified-edit): native Nodes support all forms; legacy external Nodes retain single/patch forms and reject batch or `replaceAll:true` before effects without extra file-read authority.
+
+## Design decisions
+
+### D-mcp-inbound-http-transport
+
+[2026-09-19] Use the pinned MCP SDK's stateful Streamable HTTP transport on the existing listener (`ModelContextProtocol.Core` `StreamableHttpServerTransport` in managed Main). Authenticate each HTTP request, fence transport handles to verified external identity and retain an ephemeral external context; neither ClientInfo nor the session header conveys internal Agent or Session authority. Start HTTP/Node bootstrap/WS if WebUI, Trigger or inbound MCP is enabled; create WebUIChannel only for WebUI/Trigger. The transport is bounded and in-memory, not a durable operation platform. The approved callable outbound MCP surface is owned by [D-dispatch-mcp-inbound-bridge](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-inbound-bridge).

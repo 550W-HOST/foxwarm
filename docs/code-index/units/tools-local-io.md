@@ -26,6 +26,35 @@ Ordinary native `write(overwrite:true)`, `edit` and patch updates truncate and w
 
 Path/cwd checks are security and data-loss boundaries, not convenience validation. Reads/writes are bounded; patch/write retries retain artifact lifetime and do not assume a failed transport erased a successful filesystem change. Exec output is truncation-aware and process termination is explicit. Lifecycle cancellation ends a launched local exec's foreground wait with a process-shutdown receipt; explicit Stop/Run queued retain their own cause. Neither cancellation kills the independent process, reverses its effects, or replaces its actual finished result. The executor stays available until foreground turn owners settle. File delivery exposes deployment-relative/authenticated references, not local absolute paths.
 
+## Design decisions
+
+- [2026-09-05] Master, CLI remote, and provider-composed file reads share one byte-level LF/CRLF/bare-CR physical-line scanner and footer formatter in `fileToolCore`; wrapper-specific split/join or warning behavior is prohibited. Retained ordinary text keeps existing UTF-8 decoding, while bounded excerpts keep existing invalid-byte conversion and binary-preview safeguards.
+
+### D-tools-write-contentref-target-reuse
+
+[2026-08-19] A pending `contentRef` is a short-lived cached payload capability scoped to one exact session and agent, not to the path whose failed write created it. A retry may choose any `filePath` that independently passes ordinary resolution, isolation/path authorization, overwrite/createDirs policy, structural service placement, and the selected target-local file backend before any filesystem effect. A failed retry retains the ref for another attempt; only a successful write consumes it. Do not extend refs across sessions, agents, processes, or content replacement.
+
+### D-tools-write-contentref-retry-guidance
+
+[2026-07-24, updated 2026-08-19] Pending-write retry guidance must show a directly executable cached retry `write({ ... })` call containing the actual JSON-escaped failing `filePath`, `contentRef`, `overwrite: true`, and `createDirs: true` when required. State directly that the attempted content is already cached, that the same-session/same-agent ref may instead target another independently authorized `filePath`, and that the model must not include or pass the mutually exclusive `content` argument when using `contentRef`. If the model intentionally corrects or replaces the attempted content, instruct it to omit `contentRef` and call `write` with only the newly generated content plus the desired path and required flags. Never permit both content sources in one call, and do not rely only on indirect wording about generating or sending content again.
+
+- [2026-07-22] Model-facing archive retrieval schemas must distinguish `target`, `vector_query`, and `contentFilter`; do not retain the old ambiguous `query` field for `recall` or `get_session_messages`.
+
+- [2026-07-11] Keep the exec schema's minimum of 1 second but remove its hard maximum. Document 60 seconds as the maximum effective timeout, clamp larger finite requests at runtime, and keep the warning outside truncatable command output.
+- [2026-06-05] Ordinary fixed-schema tools no longer expose generic `node` arguments. Session current-node routing and explicit target-bearing tools determine the execution node; special multi-node tools keep explicit source/target node arguments.
+- [2026-07-02] `list_sessions` remains removed rather than compatibility-wrapped; current resource-action ownership is canonical in [D-tools-resource-action-consolidation](./tools-registry.md#d-tools-resource-action-consolidation).
+- [2026-08-26] Keep the tool name `wait`, remove the model-facing `timeoutSeconds` argument without an alias, and require every new call to declare at least one valid progress source or fallback. Preserve read compatibility for legacy persisted wait state only.
+
+### D-tools-write-parent-policy
+
+**Selected side-effect constraint for [environment-local file operations](../behaviors/nodes-workspaces-and-permissions.md#paths-belong-to-an-environment-and-an-operation).** Parent creation and replacement must follow the requested flags. Filesystem helpers implement that behavior; a convenience retry cannot silently create directories or overwrite unrelated content.
+
+Normal writes attempt the real filesystem operation first. Missing/non-directory parent diagnostics are fallback error enrichment, preserving normal symlink behavior while requiring explicit directory creation.
+
+### D-tools-exec-timeout
+
+Master and node execution use one timeout resolver. Finite values above the effective maximum are clamped with a warning kept outside truncatable command output; invalid and below-minimum values fail.
+
 ## Tests
 
 `packages/webui/test/mainHostExecLogicalCwd.e2e.mjs` drives normal Main and real TypeScript/.NET CLI processes through Session exec: output and final sidecars retain a symlink cwd without `cd` and follow a real relative `cd`. Main also verifies unchanged versus updated persisted Session cwd under the [logical cwd contract](./shared-persistent-exec.md#d-persistent-exec-logical-cwd).
@@ -58,7 +87,7 @@ Artifact archival is separate from active tracking and uses the actual [date-dir
 
 ### D-exec-list-stop
 
-**Directly requested (2026-11-18).** A Session can see which of its commands still run in the background and end one, instead of waiting for a completion it no longer needs or finding a PID by hand. The model reaches this through `ctl exec list` and `ctl exec stop <exec-id>` (hidden builtins `exec_list` and `exec_stop`, so policy can allow listing and deny stopping), users through `/exec list` and `/exec stop`, and the WebUI through [its running-commands control](./webui-running-commands.md#running-background-commands). The retained TypeScript runtime has neither.
+**Directly requested (2026-11-18).** A Session can see which of its commands still run in the background and end one, instead of waiting for a completion it no longer needs or finding a PID by hand. The model reaches this through `ctl exec list` and `ctl exec stop <exec-id>` (hidden builtins `exec_list` and `exec_stop`, so policy can allow listing and deny stopping), users through `/exec list` and `/exec stop`, and the WebUI through [its running-commands control](./webui-running-commands.md#running-background-commands).
 
 - **Ownership** is the `waitExecIds` rule: `LocalExecManager.Running`/`IsOwnedActive` for native and Provider records of the Session's lifetime, `RemoteExecAuthority.Active(owner)` for CLI claims. A command whose completion was already delivered (queued, or its receipt in `acceptedExternalEventIds`) answers "already finished"; any other ID gets the same refusal, so the answer never reveals another Session's command.
 - **Listing** comes from Main's own records. CLI rows use the claim's command, dispatch time and placement cwd/log; the Node is not queried. Remote claims are transient by design, so after a Main restart CLI commands are neither listed nor stoppable, as for `waitExecIds`.

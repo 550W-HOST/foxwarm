@@ -4,6 +4,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -25,6 +26,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
 // src/extension.ts
 var extension_exports = {};
@@ -225,19 +227,20 @@ function normalizeHostMessage(value) {
 }
 var FoxwarmDocument = class {
   constructor(uri, target) {
-    this.uri = uri;
-    this.target = target;
+    __publicField(this, "uri", uri);
+    __publicField(this, "target", target);
   }
   dispose() {
   }
 };
 var FoxwarmWebUiController = class {
   constructor(context) {
-    this.context = context;
-    this.sessionTitles = /* @__PURE__ */ new Map();
-    this.sidebarBridge = null;
-    this.setupBridge = null;
-    this.pendingModelsFocus = false;
+    __publicField(this, "context", context);
+    __publicField(this, "webUiBaseUrl");
+    __publicField(this, "sessionTitles", /* @__PURE__ */ new Map());
+    __publicField(this, "sidebarBridge", null);
+    __publicField(this, "setupBridge", null);
+    __publicField(this, "pendingModelsFocus", false);
     this.webUiBaseUrl = deriveWebUiBaseUrl(context.extensionUri);
   }
   getStoredTargets() {

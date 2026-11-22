@@ -30,6 +30,12 @@ Only one live opt-in `control=code` client owns helper requests. Ordinary stream
 
 Terminal routes require normal host auth and deployment-relative identifiers. PTY exit may hold a snapshot of browser clients while ordinary detach disposes one of them. Finishing that snapshot synchronizes lifetime cancellation with disposal; a retired client must not throw and prevent PTY cleanup. PTY failure/exit produces explicit terminal events; it does not mutate Session queue or report a model turn completion. Code helper file/Git capabilities remain bounded by the Code server and Main tool/path policy.
 
+## Design decisions
+
+- [2026-07-09] Terminal backend sessions must not bind to Foxwarm chat sessions. Terminal creation is cwd-based (`cwd`, plus optional `nodeId`, `cols`, `rows`), and close semantics are kill-the-backend-PTY.
+- [2026-07-14] The terminal helper uses terminal-scoped local IPC and a single most-recent Code-capable control owner. It must not broadcast open requests to multiple restored browser terminals or treat ordinary main-WebUI terminal clients as Code owners.
+- [2026-07-14] Keep the browser REST/WebSocket terminal contract and master-local terminal manager unchanged at the boundary; add node routing behind the same API so Code and the main WebUI terminal do not need platform-specific transports.
+
 ## Tests
 
 `packages/webui/test/mainHostCode.e2e.mjs` proves the shell's `cd`/`pwd` file effect and waits within the same bound for the same terminal PID to report its prompt-published cwd before testing reload, detach-only tab Close and kill from the sidebar terminal list.

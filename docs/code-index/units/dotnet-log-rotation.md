@@ -2,7 +2,7 @@
 
 Files: `dotnet/Foxwarm/LogRotation.cs`, `dotnet/Foxwarm.Tests/LogRotationTests.cs`
 
-Secondary/integration references: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.cs`, `src/logRotation.ts`, `src/index.ts`, `packages/webui/test/mainHostNativeExec.e2e.mjs`
+Secondary/integration references: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.cs`, `packages/webui/test/mainHostNativeExec.e2e.mjs`
 
 ## Contract and rationale
 

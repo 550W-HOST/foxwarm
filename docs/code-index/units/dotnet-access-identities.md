@@ -5,7 +5,7 @@ Secondary files: `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/WebhookHttp.cs`
 
 ## Purpose and source contract
 
-Implements the shared [access identity decision](./src-access-config.md#d-config-shared-access-identities) and [Session scope contract](../modules/webui.md#d-webui-identity-session-scope) at the .NET Main boundary. A scoped browser identity is not an administrator or an internal Session principal. The built original React entry mounts `WebUiIdentityApp`, not an administrator workbench leaf.
+Implements the shared [access identity decision](#d-config-shared-access-identities) and [Session scope contract](../modules/webui.md#d-webui-identity-session-scope) at the .NET Main boundary. A scoped browser identity is not an administrator or an internal Session principal. The built original React entry mounts `WebUiIdentityApp`, not an administrator workbench leaf.
 
 The empty MCP surface is validated and persisted by the same snapshot owner. Normal Main registers the [ordinary inbound MCP service](./dotnet-inbound-mcp.md), and successful live installation reports `access.surfaces.mcp` applied, including first/last identity activation without restart. When no HTTP runtime was started, a newly declared MCP surface is saved but reported not applied and requiring restart. Inbound MCP remains separate from browser/admin authority and outbound administrator OAuth routes.
 
@@ -22,6 +22,16 @@ The `webhook` surface is exclusive: an identity declaring it declares no other s
 | `webuiChannel.ts` request tracking, scope checks, uploads | `WebUiRequest`, `WebUIChannel` partials, `WebUiUploadedFiles`: captured identity values, post-await checks, identity/Session-owned staging, final pre-admission assertion through the existing save lane. |
 | `webuiRealtime.ts`, Session SSE | `WebUiRealtime`, compatibility SSE and tracked HTTP contexts: scope checks before payload writes, selective credential/scope revocation and stale canonical-stream fencing. |
 | Session blob/reference and download routes | `WebUiSessionImages`, image store and existing `WebUiDownloadSignatures`: active or committed effective Archive references, Session route grants, existing byte/MIME/HEAD/prefix delivery. |
+
+## Design decisions
+
+### D-config-shared-access-identities
+
+**Selected identity configuration design; proposed and approved for shared MCP/WebUI entry identities.** It serves [independent authentication and tool authority](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries) and [scoped browser Sessions](../modules/webui.md#d-webui-identity-session-scope). Surface-specific grants share identity data without making their scopes interchangeable or narrowing administrator authority.
+
+[2026-10-08] Replace the unused separate inbound MCP identity block and persisted WebUI guest-token store with one top-level `access.identities.<identityId>` map. Each identity declares one token and one or both entry surfaces: `webui: { sessions: [...] }` and `mcp: {}`. Surface declaration is an entry-point capability, not a permission tier. The HTTP/WebUI instance token remains a superuser and is not automatically a valid MCP identity. WebUI exact bindings and Agent scopes use the canonical [WebUI Session scope contract](../modules/webui.md#d-webui-identity-session-scope); MCP still requires Bearer-only transport and its existing concrete tool policy.
+
+[2026-11-08] A third, exclusive entry surface `webhook: { session, verify, events?, action?, script?, wake? }` admits verified third-party events into one fixed Session through `POST /webhooks/<identityId>`. An identity declaring it may not declare `webui` or `mcp`, because its secret is shared with the sending service; the distinct-token and instance-token rules are unchanged. Route, verification, bounds and framing are owned by [D-host-inbound-webhooks](./host-runtime.md#d-host-inbound-webhooks).
 
 ## Validation and live installation
 

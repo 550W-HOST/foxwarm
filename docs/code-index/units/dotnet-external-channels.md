@@ -6,7 +6,7 @@ Secondary files: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm.Tests/Channels/Ma
 
 ## Purpose and current boundary
 
-Provides the shared external-channel authorization, routing, persisted attachment, delivery, transient progress and managed-lifecycle path, with Telegram Bot API polling, the [Matrix/Weixin transports](./dotnet-matrix-weixin.md) and [WeWork callback/WebSocket/stream/media transport](./dotnet-wework.md). The [official QQ Bot gateway and media adapter](./dotnet-qqbot.md) shares these owners. Main TUI and the final entry/service cutover are separate work. Public administration is mapped in [command administration](./dotnet-command-administration.md). The TypeScript [channel module](../modules/channels.md) remains a compatibility/reference map, not a claim that those adapters run in .NET.
+Provides the shared external-channel authorization, routing, persisted attachment, delivery, transient progress and managed-lifecycle path, with Telegram Bot API polling, the [Matrix/Weixin transports](./dotnet-matrix-weixin.md) and [WeWork callback/WebSocket/stream/media transport](./dotnet-wework.md). The [official QQ Bot gateway and media adapter](./dotnet-qqbot.md) shares these owners. Main TUI and the final entry/service cutover are separate work. Public administration is mapped in [command administration](./dotnet-command-administration.md). The TypeScript [channel module](./dotnet-external-channels.md) remains a compatibility/reference map, not a claim that those adapters run in .NET.
 
 ## Stable symbols and callers
 
@@ -40,7 +40,7 @@ Unauthorized `/whoami` reports only the current sender/target, without attachmen
 
 Failed channel-candidate compensation keeps ordinary creation publication unchanged. It claims the exact candidate through the existing deletion/mutation admission owners, waits for accepted mutations, revalidates current ownership and ordinary attachment blockers, and checks direct-child membership, queue, active history and foreground state before retirement. A still-unused candidate is retired on its existing save lane; active JSON/frontier, its owned new Archive branch, catalog membership and live ownership are removed without persisting unrelated exec tracking. This restores cleanup under a denied top-level state-directory temporary write when the nested Session directory and existing SQLite owners remain writable. It is not an atomic rollback promise for arbitrary storage failures. Successful cleanup rethrows the original bind error; actual cleanup failure reports both errors and the candidate ID. After retirement starts, failed cleanup retains the existing same-host partial-delete receipt, exact owner and completed cleanup stages. An explicit null-source, nonrecursive `DeleteAsync` can continue that lifetime after storage access is restored. This manual path uses ordinary deletion and retains any remaining Archive; it does not resume creation compensation or automatically repair state after restart.
 
-A candidate may already be visible to another normal ingress before binding. If it has a direct child or accepted queued or consumed/active work, compensation leaves its usable owner and accepted work intact and reports a cleanup conflict alongside the bind failure. Child membership is checked from the existing claimed and revalidated catalog selection after admitted mutations drain. Accepted child relationships are not detached, and the original parent lifetime remains reserved and usable for `<parent>` delivery. This deliberately differs from the reference creation rollback, which can remove such independently admitted work. Claim release retains ordinary processing admission; it does not retry the failed channel binding. Explicit published-Session deletion still uses its own queue/Stop and retained-Archive policy. Existing detach-then-attach command partial effects are unchanged.
+A candidate may already be visible to another normal ingress before binding. If it has a direct child or accepted queued or consumed/active work, compensation leaves its usable owner and accepted work intact and reports a cleanup conflict alongside the bind failure. Child membership is checked from the existing claimed and revalidated catalog selection after admitted mutations drain. Accepted child relationships are not detached, and the original parent lifetime remains reserved and usable for `<parent>` delivery. Creation rollback does not remove such independently admitted work. Claim release retains ordinary processing admission; it does not retry the failed channel binding. Explicit published-Session deletion still uses its own queue/Stop and retained-Archive policy. Existing detach-then-attach command partial effects are unchanged.
 
 Unknown slash text follows ordinary authorization and configured guest admission on all external channels; [catalog classification](./dotnet-command-administration.md#d-slash-catalog-classification) also gates Telegram's direct hook before command authorization. The generic Router command gate protects override-only conversations from administrative slash commands. Telegram's Source direct command hook is a distinct earlier entry path and is preserved as such; it is not described as a stronger common command middleware. Single/inherited guest allocation uses the existing Agent and Session creation owners, with their Node validation and partial-effect semantics. [2026-11-10] Guests take their policy from `guestAgent.template`: an inherited guest is created by the template (its creator), and a single-mode guest Agent must be the template or created by it and use the configured Node as `defaultNode`. The template must exist and have local rules on its creator chain. Without a template, provisioning refuses unless the configuration sets `isolated: false`.
 
@@ -77,6 +77,77 @@ Outbound text/photo/document sends use Markdown with one plain fallback for the 
 ### Telegram timeout policy
 
 **Selected implementation policy.** [2026-10-29] Keep the current separate 500-second API header/body budgets and stop-cancellable downloads without a fixed application deadline. A 100-second managed timeout for both API calls and downloads had previously been accepted; the later Source-parity correction changed that implementation. The current decision retains the resulting behavior after reviewing this history. Exact timeout values remain implementation defaults. Cancellation, polling server wait and final offset-sync budgets are independent contracts.
+
+## Design decisions
+
+### D-channel-identity-vocabulary
+
+Keep adapter type, configured instance, conversation target, and actual sender as separate concepts. Direct delivery accepts one `channelTargetId` rather than ambiguous legacy argument names.
+
+### D-channel-multiple-instances
+
+**Selected configuration design for independently addressable channel connections.** It serves [channel/instance/binding identity](../behaviors/channels-and-replies.md#which-identity-or-binding-should-i-change). Instance IDs and adapter factories implement that distinction; type names alone do not identify a connection or conversation.
+
+One adapter type may have multiple configured instances. Runtime constructs each from the canonical config object plus instance ID.
+
+### D-channel-managed-reload
+
+Configuration reload restarts the complete managed channel set; it is not a field-level unchanged-instance diff.
+
+### D-channel-fire-and-forget-broadcast
+
+Session broadcast has no aggregate failure promise. It dispatches to eligible channels, logs asynchronous errors, and carries generic turn metadata.
+
+### D-channel-ordinary-text-progress
+
+**Directly selected delivery behavior.** Ordinary intermediate text should reach attached conversations as progress while [canonical input and presentation remain distinct](../behaviors/channels-and-replies.md#is-progress-another-reply-or-another-model-input). Adapter throttling/editing is a derived mechanism, not a new model input or evidence of final completion.
+
+[2026-09-01, updated 2026-09-06] The observable enablement, cadence, target exclusions, silent wait and delivery consequences are owned by [Channel progress](../behaviors/channels-and-replies.md#is-progress-another-reply-or-another-model-input).
+
+Main's transient coordinator is keyed by turn, configured instance and conversation. It consumes only provider-neutral top-level tool start/finish facts, storing bounded sanitized names/counts/running IDs. Sanitization preserves underscores while removing controls/Channel markup. Fixed non-sliding timers and independent target baselines determine standalone summaries versus prepends; terminal cleanup flushes only pending unreported activity and reload/TTL fences remove stale timers. It writes no Session history, Archive, catalog or recovery state. Delivery failure does not poison the semantic turn. Explicit tool-owned sends/files/typing bypass decoration; QQ/WeWork resolve passive context inside the adapter. The silent-tool matcher is the exact builtin `wait`, not an alias or suffix match. Detailed scheduled/in-flight cleanup races remain in [Channel core](./dotnet-external-channels.md).
+
+### D-channel-conversation-latest-passive-context
+
+**Directly selected ownership boundary for passive replies.** Each adapter resolves its latest eligible conversation context under [ordinary reply routing](../behaviors/channels-and-replies.md#where-should-the-agents-ordinary-reply-go). Historical QueueSource metadata remains evidence about input, not a command to deliver output to an old platform reply target.
+
+[2026-09-21] [Latest passive-context behavior](../behaviors/channels-and-replies.md#why-can-a-newer-inbound-message-change-where-a-passive-reply-appears) is adapter-local per instance/conversation; no Router, queue, Worker RPC or tool-context receipt fields select automatic replies.
+
+QQ keeps a bounded in-memory latest-message map; normal Session/tool producers do not carry or persist QQ message IDs. Explicit request-level replies retain their original inbound ID, generic direct text is proactive unless real call options select passive delivery, and file sends independently prefer adapter-local latest context. WeWork keeps latest-card aggregation or a bounded latest `response_url` map. Superseding a card removes transient status while preserving substantive text; ordinary text uses the latest unfinished card without requiring turn metadata. `turnFinal` controls completion and structured progress controls progress content; card completion/expiry selects the existing proactive route. A terminal non-stream attachment delivery takes and removes its callback before awaiting send, so the older attempt cannot delete a newer inbound callback. Explicit webhook overrides/proactive sends retain their dedicated routes. These mechanisms add no persisted delivery state, ledger, outbox, or strategy registry.
+
+### D-channel-file-descriptor
+
+**Selected cross-channel representation under [separate file-delivery authority](../behaviors/files-images-and-attachments.md#preview-download-and-delivery-have-separate-authority).** Adapter-local descriptors preserve the source needed by the actual transport. Descriptor shape is a shared protocol mechanism; a successful preparation or WebUI reference is not proof that every channel transmitted bytes.
+
+[2026-08-15] Current inbound attachment context uses one self-closing metadata line with ordered, XML-escaped attributes: images write `<foxwarm-image name="..." node="..." path="..." />`; generic files write `<foxwarm-file name="..." node="..." path="..." mime="..." />`. Every attribute uses the shared Foxwarm attribute normalization/escaping boundary, so quotes, ampersands, angle brackets, controls, and newlines cannot alter the tag grammar. A caption/body remains ordinary text before the descriptor with the existing blank-line separation. The descriptor reports node plus path without prescribing a tool or assuming every file is text. WebUI optimistic previews use the same tag formatter but omit node/path until canonical server reconciliation rather than exposing the temporary upload spool. Existing persisted bracket descriptors require no special handling: they remain ordinary message text and are neither parsed nor migrated.
+
+### D-channel-current-group-trigger-metadata
+
+[2026-08-16] A channel adapter may provide an ephemeral structured metadata
+part when it has a reliable native signal about the **current** group trigger.
+The Router detects slash commands from the original user text first, then
+places the metadata part inside the canonical direct-channel
+`<foxwarm-message>` wrapper so the tag survives queueing, Worker serialization,
+history, provider formatting, and authorization-gated media materialization
+without persisting a parallel flag. A command receives neither the metadata as
+arguments nor a queued metadata row. Channels without a reliable signal emit
+nothing and must not guess `false`.
+
+QQ group ingress uses exactly:
+
+- Mention trigger: `<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />`
+- Ordinary trigger: `<foxwarm-metadata kind="group-message" mentioned="false" hint="The current group message is ordinary group chat and did not mention this agent." />`
+
+QQ treats the current trigger as mentioned only when the native event is
+`GROUP_AT_MESSAGE_CREATE` or a bounded structured `mentions` entry has
+`is_you === true`. The latter is authoritative for all-message mode, where QQ
+can deliver a real self-mention as `GROUP_MESSAGE_CREATE`. `bot: true` alone,
+content `<@...>` tokens, configured app IDs, READY identities, display names,
+and learned/persisted IDs are not mention signals. Missing, malformed, or
+false `is_you` remains an ordinary QQ group trigger.
+
+The marker describes only the current trigger, never buffered/local/platform
+history. It is lightweight direct-user metadata in WebUI, not a heavy system
+card.
 
 ## Verification
 

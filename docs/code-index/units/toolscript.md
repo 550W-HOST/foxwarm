@@ -11,7 +11,7 @@ Runs Main-local Monty ToolScript slices, routes the supported host calls, persis
 - `MainToolScript.NormalizeStartArgs` validates and normalizes starter intent without source I/O for ordinary starts and [script timer registration](./tasks-timers.md#owner-bound-toolscript-timers).
 - `MainToolScript.ExecuteAsync` admits one operation while shutdown is open; `StartAsync`, `ContinueAsync`, `RequiredAsync`, `CancelAsync`, `CancelForegroundForShutdown`, `BeginShutdown`, `DrainAsync`, and `DisposeAsync` own start/continue/read/cancel/process-lifecycle behavior.
 - `MainToolScript.RunAsync` and its `ProjectSlice` closure (the Execution partial) drive one configured worker or snapshot continuation and publish trusted current-slice subcalls, including an empty list, with the lean outer execution result; `MainToolScript.HostCallAsync` (the HostCalls partial) admits `call_tool`, `ask_agent`, and `request_model_without_context`, records subcalls, and returns progress/results through `ToolScriptContext`.
-- `MontyWorker.ConfigureAsync`, `TurnAsync`, `Kill`, and `DisposeAsync` own the native Linux/Windows x64 and macOS x64/ARM64 Monty 1.6.0 subprocess protocol and watchdog; waiting runs retain snapshots rather than a live worker. `IsSupported` gates Main ToolScript discovery on Linux/Windows x64 and macOS x64/ARM64. Worker creation is lazy; startup does not launch Monty. Standard build/publish acquires the exact official standalone worker for the [delivery target RID](./core-delivery-cli.md#build-and-resource-boundary), defaulting to the SDK's portable RID, into build-only intermediate output and ships it under `ToolScript/native/`, with the existing notices. Release packages instead ship a worker built from the upstream source pinned in `monty-source.json` (tag, commit, archive digest, Rust toolchain) with `monty-no-type-check.patch`, which replaces the type-checking crate by a stub of the same API so the executable links no checker: Foxwarm configures the worker without `type_check`, so a request for it would only report that checking is unavailable. The patched build keeps the protocol, snapshot format and limits of the pinned 1.6.0 source; the release build is described under [Native libraries](release-packages.md#native-libraries). Normal runtime selects the packaged worker only; isolated in-process callers may pass the existing binary constructor argument. There is no experiment environment selection or historical private-prefix fallback. Windows retains only SystemRoot in the otherwise empty worker environment. macOS acquisition selects the exact official Darwin package for the target architecture and applies the same registry-integrity, version, protocol and resource-limit checks.
+- `MontyWorker.ConfigureAsync`, `TurnAsync`, `Kill`, and `DisposeAsync` own the native Linux/Windows x64 and macOS x64/ARM64 Monty 1.6.0 subprocess protocol and watchdog; waiting runs retain snapshots rather than a live worker. `IsSupported` gates Main ToolScript discovery on Linux/Windows x64 and macOS x64/ARM64. Worker creation is lazy; startup does not launch Monty. Standard build/publish acquires the exact official standalone worker for the [delivery target RID](./core-delivery-cli.md#build-and-resource-boundary), defaulting to the SDK's portable RID, into build-only intermediate output and ships it under `ToolScript/native/`, with the existing notices. Release packages instead ship a worker built from the upstream source pinned in `monty-source.json` (tag, commit, archive digest, Rust toolchain) with `monty-no-type-check.patch`, which replaces the type-checking crate by a stub of the same API so the executable links no checker: Foxwarm configures the worker without `type_check`, so a request for it would only report that checking is unavailable. The patched build keeps the protocol, snapshot format and limits of the pinned 1.6.0 source; the release build is described under [Native libraries](./release-packages.md#native-libraries). Normal runtime selects the packaged worker only; isolated in-process callers may pass the existing binary constructor argument. There is no experiment environment selection or historical private-prefix fallback. Windows retains only SystemRoot in the otherwise empty worker environment. macOS acquisition selects the exact official Darwin package for the target architecture and applies the same registry-integrity, version, protocol and resource-limit checks.
 - `MontyFrameBudget.Parse`/`Preflight` inspect the fixed protobuf envelope before generated materialization: each frame is capped at 256 MiB and message nesting at depth 100 (value depth is bounded by `MontyValues`: 48 nested containers).
 - `ToolScriptDataBudget.Charge`, `Retain`, `JsonPreflight`, `ParseJson`, `JsonValue`, and `ReadRecordAsync` charge conservative per-activity materialization; `ToolScriptStdout.Append` enforces the cumulative 64 MiB UTF-8 stdout limit. `ToolScriptBudgetBuffer` charges incremental JSON tokens while serializing opaque values.
 - `ToolScriptRecordJson.Write` streams bounded record JSON; `ToolScriptRunStore.AcquireAsync`, `ReadAsync`, `ListAsync`, `WriteAsync`, `RequireOwned`, and `RequireUnmanaged` serialize per-run access, owner checks, durable record writes, and managed-run refusal.
@@ -34,13 +34,12 @@ These budgets account for allocations Foxwarm materializes or retains; they do n
 - **Host policy (user, 2026-11-19).** Scripts read the worker's clock (UTC) and entropy. Sleeps use `call_host` (the worker never charges sleeps to its budget; `system` truncates them): `RunAsync` waits until the sleep's end instant within the slice's `timeoutSecs` (detachable: unlimited). A longer sleep waits to the limit and pauses as a timeout continuation (`pendingResume.mode: sleep`, `untilUnixMs`) that later waits only for the rest. Cancellation ends the wait; foreground Stop raises `RuntimeError` at the sleep. Other OS requests get "not handled".
 - **Output.** A `print` to stderr joins the captured stdout in order (it raised before 1.x).
 - **Limits.** The protocol still has no allocation-count limit. `max_suspensions` is client-enforced; Foxwarm sets and checks none.
-- **Retained TypeScript backend.** It keeps its 0.0.19 pin and identity; see [src-toolscript](./src-toolscript.md).
 
 ## Record numbers and timings
 
 [2026-11-12] ToolScript JSON values carry the [Archive number contract](./session-authority-json.md): integers that fit Int64 stay integers, and every other number is a finite binary64 value, as `JSON.parse` reads it. `ToolScriptDataBudget.ParseJson`/`ReadRecordAsync` therefore never produce CLR decimals. Stored run records reach tool results through `get_toolscript_run`, `list_toolscript_runs`, cancellation of a finished run and timer run inspection, and `argsJson` reaches script timer rows, so a decimal there would make the Session's canonical tool-row append fail.
 
-Recorded durations are whole milliseconds (rounded half away from zero) where they are produced: `subCalls[].durationMs`, `lastHostCall.durationMs` and `waiting.timeout.elapsedMs`, matching the integer timings of the retained TypeScript runtime. Existing stored records keep their earlier fractional values; they are read as binary64.
+Recorded durations are whole milliseconds (rounded half away from zero) where they are produced: `subCalls[].durationMs`, `lastHostCall.durationMs` and `waiting.timeout.elapsedMs`. Existing stored records keep their earlier fractional values; they are read as binary64.
 
 ## Detached background runs
 
@@ -74,11 +73,105 @@ Timeout checkpoints persist `pendingSessionWait` only in `waiting.timeout`, besi
 
 Final result objects promote top-level `inlineData`, nonempty `inlineDataItems` and canonical image-reference `parts` through the existing outer image pipeline. A reference part is promoted only when the run may return it: its blob is in the caller's history or came back from a nested call or model request of the same run ([script results](./tool-operation-rules.md#script-results)); any other fails the run. Records completed before admission (no `resultImages`), and runs checkpointed before it (no `producedImages`) when they complete, keep promoting every reference. Only promoted entries receive bounded text placeholders; other result data and persisted native results remain intact. Nested normal reads/MCP image normalization still externalize bytes to canonical parts before returning them to the VM. Blob validation, Session-visible image IDs and provider hydration retain the image owner.
 
-The per-context delivery capture and actual run ID are installed only around the real native unified host call and restored afterward. The run ID reaches `SessionToolExecutor.ScriptScope` and the canonical send handler separately from arguments/results, permitting self-notification from real run/continue/scheduled execution only. Direct model self-send and argument/result forgeries remain denied; ordinary authorization, isolation and configured handoff validation remain authoritative. Self-origin messages use a `type="toolscript"` wrapper with the actual run ID and no self reply route. Other-Session wrappers and typed receipt handling are unchanged. See the canonical [self-notification contract](./src-session-misc.md#d-script-self-notification).
+The per-context delivery capture and actual run ID are installed only around the real native unified host call and restored afterward. The run ID reaches `SessionToolExecutor.ScriptScope` and the canonical send handler separately from arguments/results, permitting self-notification from real run/continue/scheduled execution only. Direct model self-send and argument/result forgeries remain denied; ordinary authorization, isolation and configured handoff validation remain authoritative. Self-origin messages use a `type="toolscript"` wrapper with the actual run ID and no self reply route. Other-Session wrappers and typed receipt handling are unchanged. See the canonical [self-notification contract](#d-script-self-notification).
 
 The per-context delivery capture is installed only around the actual unified host call and restored afterward. A successful builtin send attaches bounded canonical destination/body to that completed subcall; a started exec attaches its [placement record](../threads/tools-permissions-and-exec.md#d-exec-placement-record) as `exec` through the same scoped capture. Nested run contexts cannot overwrite outer captures; current-slice projection retains the existing start/continuation boundaries. No send is inferred from source, stdout or result fields.
 
 Calls of unattended slices (timer and webhook runs) have no Session tool row, so each is recorded directly in the [activity index](./activity-index.md) with its origin, run ID and target; attended subcalls are indexed from their `toolScriptSubCalls` record.
+
+## Design decisions
+
+### D-script-self-notification
+
+[2026-10-20] Only real ToolScript host execution (`run_script`, `continue_script`, and scheduled slices) may send to its own canonical Session through `send_to_session`. The actual run ID is trusted invocation context carried separately from model arguments through the fixed Main-management DTO; caller arguments, script results, generic programmatic hints, and missing source identities cannot grant this exception. Generic authorization, isolation/target relations, and configured handoff recall/confirmation checks still apply. Direct model self-send remains rejected. A self-origin wrapper identifies ToolScript provenance without a reply route to itself; other-Session delivery is unchanged. This supports explicit asynchronous notifications without automatically inserting timer/history messages or waking a model for normal checks.
+
+### D-toolscript-skill-current-state-guidance
+
+[2026-08-03] The bundled ToolScript automation skill is written as concise current-state guidance for a first-time reader. It does not teach removed entry points or migration history, and its canonical example must remain executable against the registered builtin tool surface.
+
+### D-toolscript-dynamic-dispatch
+
+Nested `call_tool` and `ctl` host calls (`MainToolScript.HostCalls.cs`) dispatch dynamically through the ordinary tool dispatcher one call at a time. They do not go through the model-batch executor and do not maintain a parallel registry.
+
+### D-toolscript-safe-timeout
+
+A slice timeout pauses only at a host-call checkpoint with a persisted pending return/exception, allowing exact continuation instead of restarting the script.
+
+### D-toolscript-owner-bound-run
+
+**Derived ownership design for [one logical run](#d-toolscript-one-run-model) under [caller authority](../threads/tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization).** Saved run identity and owner checks prevent continuation from silently adopting another Session's effects. Snapshot formats are implementation/persistence contracts, not independent orchestration goals.
+
+A run and its snapshot belong to one session. Cross-session inspection/resume is rejected, while managed-session access requires explicit leases.
+
+### D-toolscript-unknown-call-diagnostic
+
+Unknown external calls are not described as supported host APIs. The runtime lists only the actual Foxwarm host functions; ordinary helpers may appear anywhere in the loaded module.
+
+### D-toolscript-versioned-snapshot-runtime
+
+[2026-08-03] Every new run persists the Monty engine version and snapshot-format identity. Continuation accepts only an exact current-format match because Monty snapshots are version-specific. An incompatible waiting run becomes a clearly failed historical record without attempting conversion or deleting its snapshot; completed historical records remain readable. Before terminalizing an incompatible controller, Foxwarm best-effort releases its managed leases; failed release references are retained so a later terminal `cancel_toolscript_run` call can retry cleanup.
+
+### D-toolscript-os-effects-through-tools
+
+**Governing implementation constraint; directly selected.** ToolScript OS effects must remain within the [authorized-tool composition model](../behaviors/automation-and-scheduled-work.md#execute-a-program-using-authorized-tools). Runtime bridge/helper choices implement that boundary; language compatibility does not justify exposing an unrestricted alternate OS API.
+
+[2026-08-03] Foxwarm does not expose Monty OS functions or filesystem mounts. All filesystem, environment, clock, and process effects must pass through `call_tool` so normal session, node, path, and isolation checks remain authoritative.
+
+### D-toolscript-process-lifetime-pool
+
+[2026-08-10] Each Foxwarm OS process owns its lazily created native/WASM Monty pool for that process lifetime. Supported graceful shutdown must await the pool close before process exit or teardown of services used by ToolScript host calls. The close is idempotent, owns a pending creation exactly once, does not create an unused runtime, and leaves persisted runs/snapshots intact; later runtime use may lazily create a new pool.
+
+### D-toolscript-one-shot-parts
+
+[2026-09-19] `request_model_without_context` keeps its existing text behavior and additionally returns the canonical parts of the low-level result, so a script can hand a model-produced image back to the outer tool result instead of dropping it. The parts carry text and image parts whose bytes stay in the image Blob store; reasoning, function calls, provider metadata, and transport-only reference fields are not projected, and no image bytes enter the script value, the run record, or the model-visible text. A final result returning those parts promotes only the image parts through the shared tool-result image boundary, keeps other parts in place, and replaces the promoted entries with a bounded placeholder, while JSON that does not match the canonical reference shape is never treated as an image.
+
+### D-toolscript-top-level-source
+
+[2026-10-03] New runs feed ordinary top-level source directly to Monty with `args` as input, without requiring `main(args)`. Native top-level return, final-expression behavior and normal host suspensions are preserved. Explicitly permitted legacy compatibility retains the existing multiline regex for a source that looks like `def main(args)` and appends `main(args)` only for that form. Installed MontySession has no direct named-function invocation API; there is no second feed or new persistence lifecycle. Existing waiting snapshots continue their recorded execution without source rewrite or reparse. Current small examples favor top-level source; real legacy file-backed generator coverage remains. Local/neighbor module import is not implemented.
+
+### D-toolscript-authorized-file-source
+
+**Selected source-input design under [ordinary tool authorization](../threads/tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization) and [endpoint-local paths](../behaviors/nodes-workspaces-and-permissions.md#paths-belong-to-an-environment-and-an-operation).** A file selector locates code; it does not move the VM or change execution authority. The read and run boundaries below implement that distinction.
+
+[2026-10-15] `run_script` and the hidden compatibility starter accept `node` plus `filePath`. Omitted, blank, or `current` Node selectors use the Session's selected Node at invocation; explicit `master` reads Main. Source selection does not move the Monty VM, mutate the Session Node/cwd, or alter nested tools' default Node. Nonblank inline code still wins over filePath, but an explicit Node selector with inline code is rejected. Inline execution retains the existing master builtin-policy target without acquiring a fictional file source.
+
+A file-backed starter is authorized as its own builtin against the actual source `targetNode` and source-aware filePath facts, then independently requires that Node's canonical `read` permission and existing structural restrictions before loading any source. Main source paths reuse Agent/cwd/home/token resolution and generic realpath containment; only this source entry trims surrounding path whitespace, identically for authorization and I/O. Remote path facts retain exact Node identity without imposing Main containment on an opaque namespace. Optional-source discovery remains conservative for explicit permitted Nodes.
+
+The resolved starter captures one source-only Node/cwd tuple before outer authorization. Both model preflight and canonical starter checks derive file facts from that tuple without rewriting raw arguments; the loader uses the same tuple for read permission and I/O. A concurrent Session cwd settings update can change the live VM/nested-tool context but cannot retarget an already resolved source. This transient capture is consumed only by source loading and is not persisted as VM routing, a lock, or a filesystem snapshot.
+
+Main reads complete UTF-8 source directly. Non-master reads use the source-fenced `node-execution` readonly file facade. Primitive providers supply complete filesystem bytes. Authenticated CLI source reads first execute canonical `read`, retaining its local approval hook; denial or error never proceeds to transfer. Programmatic content is used only when metadata proves full-file coverage (`selectedBytes == sizeBytes` and `truncated: false`); otherwise the same source is obtained through existing complete-file transfer, using the actual resolved path when available. Display text and partial content are never executed. Read capability, availability, provider restrictions and complete-transfer/primitive-result checks remain authoritative; unsupported backends fail without fallback. There is no new shared source-size limit, distribution cache or remote VM. Snapshot continuation resumes the owner-scoped saved VM state without reopening or reauthorizing historical source; newly executed nested tool calls retain their own current authorization.
+
+Legacy CLI peers without resolved-path metadata retain target-native absolute/rooted/home/Agent-token handling and same-target cwd for ordinary relative source paths. A Windows cwd plus a drive-relative path on another drive is ambiguous without the target runtime's per-drive cwd; source loading fails with a request for a drive-absolute path instead of guessing. A colon in a POSIX or provider-owned path does not imply Windows semantics.
+
+Completed builtin send subcalls retain a bounded `sessionMessage` presentation record on their existing UI activity metadata. A local delivery callback records the actual destination without changing the script-visible result, control or send semantics; exact-target post-actions provide the existing Worker fallback. See [Session communication presentation](../threads/session-communication-presentation.md).
+
+### D-toolscript-terminal-session-wait
+
+**Selected terminal-control design; the last-host-call rule was directly clarified.** It serves [explicit waiting](../behaviors/execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn) without treating returned dictionaries as control. Host-call order and trusted receipts implement the rule; finishing a script does not itself mean waiting or finishing the caller.
+
+Observable semantics and rationale are owned by [ToolScript completion](../behaviors/automation-and-scheduled-work.md#end-the-callers-turn-deliberately). The execution-scoped hook and dedicated checkpoint field above connect to existing Main/Worker owner context, dispatcher, timer/liveness services and outer batch cleanup; they add no controller or background scheduler.
+
+### D-toolscript-one-run-model
+
+**Derived execution design; adopted for [composable authorized programs](../behaviors/automation-and-scheduled-work.md#execute-a-program-using-authorized-tools).** Foreground, background and continuation refer to one run rather than separate execution products. Run identifiers/snapshots implement that continuity; no form gains wider authority.
+
+One persisted engine implements both modes. The observable initial-slice, pause and caller-wait distinctions are canonical in [ToolScript and scheduled work](../behaviors/automation-and-scheduled-work.md#end-the-callers-turn-deliberately).
+
+### D-toolscript-agent-pause
+
+ToolScript exposes `ask_agent`, not a separate direct-user prompt primitive. The current agent receives the question and resumes the run through `continue_script`.
+
+### D-toolscript-history-boundary
+
+**Directly selected presentation boundary for [native script values](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers).** Keep nested activity inspectable without pretending every inner call was an outer model call. Persisted activity metadata and lean rendering implement visibility, not another canonical conversation.
+
+Nested calls remain observable in presentation metadata and run diagnostics without separate outer-session tool calls. The lean result projection is canonical in [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
+
+### D-toolscript-minimal-host-api
+
+**Selected API design under [ordinary tool authorization](../behaviors/automation-and-scheduled-work.md#execute-a-program-using-authorized-tools).** Reusing discovery and invocation prevents a parallel capability surface. The minimal host API is the chosen composition mechanism, not permission to bypass tool policy through Python helpers.
+
+The host API stays small and composable. Tool discovery remains the agent's responsibility through the normal Foxwarm tool surfaces rather than a ToolScript-only discovery helper.
 
 ## Tests
 

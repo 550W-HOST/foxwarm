@@ -87,13 +87,6 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 
 ## Modules and units
 
-- [LLM module](../modules/llm.md)
-- [src-llm](../units/src-llm.md)
-- [src-llm-request-journal](../units/src-llm-request-journal.md)
-- [src-jsonl](../units/src-jsonl.md)
-- [src-session-history](../units/src-session-history.md)
-- [src-btw](../units/src-btw.md)
-- [src-toolscript](../units/src-toolscript.md)
 - [model-cli](../units/model-cli.md)
 - [model-journal](../units/model-journal.md)
 - [usage-overview](../units/usage-overview.md)

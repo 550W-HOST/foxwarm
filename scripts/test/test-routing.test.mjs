@@ -38,8 +38,6 @@ require('node:test')(${JSON.stringify(title)}, () => {
 });\n`
   }
   const sources = {
-    'src/legacy.test.ts': ['lib/legacy.test.js', 'reference-backend'],
-    'src/vector.indexFailure.test.ts': ['lib/vector.indexFailure.test.js', 'reference-vector'],
     'packages/shared/src/example.test.ts': ['packages/shared/dist/example.test.js', 'shared'],
     'packages/cli-node/src/example.test.ts': ['packages/cli-node/dist/example.test.js', 'cli-node'],
   }
@@ -52,14 +50,11 @@ require('node:test')(${JSON.stringify(title)}, () => {
     ['packages/artifact-runtime/test/example.test.mjs', 'runtime-helpers'],
     ['packages/browser-node/test/example.test.mjs', 'browser-node'],
     ['scripts/example.test.js', 'scripts'],
-    ['scripts/test/reference-isolation.test.mjs', 'reference-isolation'],
     ['skills/example/example.test.js', 'skill-node'],
     ['packages/webui/test/example.test.mjs', 'webui-unit'],
     ...browsers.map(name => [`packages/webui/test/${name}`, name === 'example.e2e.mjs' ? 'webui-browser' : name]),
     ['packages/webui/test/publishedCore.e2e.mjs', 'published-app'],
     ['test/app-e2e/run-app-e2e.mjs', 'app-browser'],
-    ['lib/selftest/queueDrainSelfTest.js', 'queue-selftest'],
-    ['lib/selftest/toolLoopStallSelfTest.js', 'loop-selftest'],
   ]) {
     // mjs fixtures use createRequire solely to reuse the tiny CJS test program.
     await write(file, (file.endsWith('.mjs') ? "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\n" : '') + program(label))
@@ -104,7 +99,7 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
   await write('chromium', 'fixture executable path only\n')
   await execute('git', ['init', '-q'], { cwd: root })
   // Keep compiled artifacts outside discovery, like the real checkout.
-  await execute('git', ['add', 'src', 'scripts', 'packages', 'skills', 'dotnet', 'test'], { cwd: root })
+  await execute('git', ['add', 'scripts', 'packages', 'skills', 'dotnet', 'test'], { cwd: root })
   await execute('git', ['rm', '-q', '--cached', '-r', 'packages/shared/dist', 'packages/cli-node/dist'], { cwd: root })
   return {
     root, journal, write,
@@ -136,11 +131,8 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
 }
 
 for (const target of ['unit', 'all']) {
-  test(`${target} executes maintained components without requiring retired Main artifacts`, unix, async t => {
+  test(`${target} executes every maintained component group`, unix, async t => {
     const f = await fixture(t)
-    for (const file of ['lib/legacy.test.js', 'lib/vector.indexFailure.test.js', 'lib/selftest']) {
-      await fs.rm(path.join(f.root, file), { recursive: true, force: true })
-    }
     const result = await f.run(target)
     assert.equal(result.code, 0, result.stdout + result.stderr)
     const calls = await f.calls()
@@ -150,8 +142,7 @@ for (const target of ['unit', 'all']) {
     }
     assert.ok(calls.some(call => call.startsWith('dotnet:test ')))
     assert.ok(calls.some(call => call.startsWith('npm:--prefix packages/vscode-web test')))
-    assert.equal(calls.some(call => /reference|selftest/.test(call)), false)
-    if (target === 'all') {
+        if (target === 'all') {
       for (const component of ['published-bin', 'published-app', 'browser-prepare', 'webui-browser', 'app-browser']) assert.ok(calls.includes(component), component)
     }
   })
@@ -170,16 +161,6 @@ test('separate managed and component targets execute exactly the default unit se
   assert.deepEqual([...calls.managed, ...calls['unit-components']].sort(), calls.unit.sort())
 })
 
-test('reference runs only retired Main, nested isolation and both selftests without maintained builds', unix, async t => {
-  const f = await fixture(t)
-  await fs.rm(path.join(f.root, 'packages/shared/dist'), { recursive: true })
-  const result = await f.run('reference')
-  assert.equal(result.code, 0, result.stdout + result.stderr)
-  const calls = await f.calls()
-  t.diagnostic(`reference child execution: ${calls.join(', ')}`)
-  assert.deepEqual(calls.sort(), ['reference-backend', 'reference-vector', 'reference-isolation', 'queue-selftest', 'loop-selftest'].sort())
-})
-
 test('default unit routing still propagates managed failures', unix, async t => {
   const f = await fixture(t)
   const result = await f.run('unit', true)
@@ -187,8 +168,7 @@ test('default unit routing still propagates managed failures', unix, async t => 
   const calls = await f.calls()
   assert.ok(calls.some(call => call.startsWith('dotnet:test ')))
   assert.ok(calls.includes('runtime-helpers'))
-  assert.equal(calls.some(call => /reference|selftest/.test(call)), false)
-})
+  })
 
 test('browser preparation completes before isolated fixtures start', unix, async t => {
   const f = await fixture(t)

@@ -6,7 +6,7 @@ Files: `dotnet/Foxwarm/Channels/WebUi/WebUiMessageTransport.cs`
 
 `WebUiMessageTransport.Message`, `ProjectMessage`, and `ProjectMessages` project detached canonical messages for WebUI. History and its range modes, continuous Archive pages, exact archived message/JSON reads, History search/window, CTX expansion (both message copies), Debug history/queued messages, WebSocket message/history-append and compatibility SSE use this boundary. Known compact-planner message transcripts use the same projection. The HTTP image converter remains independent; internal tools, Archive records, authority files, request journals and provider replay retain their original values.
 
-Successful function calls follow [D-webui-message-tool-args-transport](./src-channels-webui.md#d-webui-message-tool-args-transport). Projection visits real message parts and known first-party transcript containers, never arbitrary nested call arguments or function-response data. A present `argsParseError`, including null or an empty string in retained input, keeps raw arguments; only an absent property permits trimming.
+Successful function calls follow [D-webui-message-tool-args-transport](#d-webui-message-tool-args-transport). Projection visits real message parts and known first-party transcript containers, never arbitrary nested call arguments or function-response data. A present `argsParseError`, including null or an empty string in retained input, keeps raw arguments; only an absent property permits trimming.
 
 ## D-webui-opaque-thinking-transport
 
@@ -22,13 +22,21 @@ Successful function calls follow [D-webui-message-tool-args-transport](./src-cha
 
 Visible thinking and summaries, usage, annotations, hosted-tool display metadata, unrelated provider fields and arbitrary nested application values remain available. Complete canonical encrypted/signature/replay data remains available for the next same-model provider request. The browser recognizes encrypted/redacted length presence, including zero, alongside retained legacy string inputs. It never treats these lengths as tokens or visible summary text; existing reasoning cards, badges and usage ownership continue to apply.
 
-This extends ordinary WebUI transport beyond the retained TypeScript behavior. TypeScript's separate History viewer already discarded selected replay-only fields, while its normal Chat message projection only trimmed successful raw tool arguments.
+The History viewer and the Chat message projection share this transport.
 
 ## History hosted display projection
 
-`ProjectHistoryViewerMessage` and `ProjectHistoryViewerMessages` add a view-specific allowlist only to known `web_search_call` replay items in History search source messages and exact/adjacent viewer windows. Within that part's `openaiResponses`, retain `sourceModelId`, annotations, and a display output item: `search` keeps a string query and at most 20 string queries; `open_page` keeps its string URL. Other actions have no display output item. Replay IDs, status, source lists and additional hosted replay fields are not forwarded to this viewer. This restores the hosted display projection from the retained TypeScript channel without applying every historical materializer deletion.
+`ProjectHistoryViewerMessage` and `ProjectHistoryViewerMessages` add a view-specific allowlist only to known `web_search_call` replay items in History search source messages and exact/adjacent viewer windows. Within that part's `openaiResponses`, retain `sourceModelId`, annotations, and a display output item: `search` keeps a string query and at most 20 string queries; `open_page` keeps its string URL. Other actions have no display output item. Replay IDs, status, source lists and additional hosted replay fields are not forwarded to this viewer. This is the hosted display projection without every historical materializer deletion.
 
 The ordinary WebUI projection runs first. Its approved opaque-length locations, unrelated message metadata, other output-item variants, citations, visible reasoning and arbitrary nested tool/user values retain their existing behavior. Ordinary Chat and other Archive/Debug routes do not use this narrower allowlist. Canonical converter output, Archive and same-model replay remain complete. `ResponsesCanonicalConverter` retains provider hosted items; the History route applies the allowlist after bounded reads. `HistorySearchView` passes returned rows to `ChatTimeline`, whose `getWebSearchAction` and citation links consume these display fields rather than replay sources.
+
+## Design decisions
+
+### D-webui-message-tool-args-transport
+
+[2026-09-25] WebUI message responses omit `rawArgsText` from a real function-call part unless that call has `argsParseError`. Parse failures retain the raw text alongside structured args and the error. Apply this only when projecting WebUI transport messages, never to canonical Session history, archive/replay, provider requests, or arbitrary nested data fields.
+
+The managed implementation and its additional opaque-reasoning length contract are mapped in [WebUI message transport]().
 
 ## Tests
 

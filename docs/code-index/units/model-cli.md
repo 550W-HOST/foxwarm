@@ -16,7 +16,13 @@ The installable `foxwarm` bin is a thin JavaScript frontend over existing C# con
 
 `runCoreCli` and `CliCommands` own the child operation, native request behavior, stdout/exit contracts and captured settings; see [the canonical Core CLI contract](./core-delivery-cli.md#cli-behavior). The obsolete production-runtime loaders and in-frontend provider invocation are removed rather than retained as fallbacks. The frontend does not parse flags a second time in C#.
 
-Root `npm run build` prepares Core plus the retained TypeScript reference/default-launcher lane. Help/version/flag usage paths remain independent of Core/configuration. Complete build/publish resources and prerequisites are owned by [Core delivery](./core-delivery-cli.md#build-and-resource-boundary); this phase does not switch default service/TUI launchers or package `main`.
+Root `npm run build` prepares Core and its delivery assets. Help/version/flag usage paths remain independent of Core/configuration. Complete build/publish resources and prerequisites are owned by [Core delivery](./core-delivery-cli.md#build-and-resource-boundary); this phase does not switch default service/TUI launchers or package `main`.
+
+## Design decisions
+
+### D-infrastructure-production-model-cli
+
+Shell automation uses the production one-shot model request stack through `foxwarm model`, preserving provider routing, retries, compression, sanitization, and parsing behavior.
 
 ## Tests and consumers
 

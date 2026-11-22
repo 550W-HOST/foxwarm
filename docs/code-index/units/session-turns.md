@@ -70,6 +70,16 @@ Owner timers are fenced by the current draft and timer identity under the draft 
 
 `SessionTurnRunner.ProcessQueueAsync` optionally signals admission after continuation validation and busy claim, before waiting for a provider answer or tool settlement. Its failure callback permits canonical notices for safe ordinary failures, but passes model-request failures as temporary presentation candidates: terminal retry persistence may already have failed best-effort without propagating that save exception. Existing terminal retry delivery/tail detection still suppresses represented failures. Escaped persistence failures use temporary typed presentation from the owner. Independent strict busy release remains required. This does not change processor, queue, launched-effect or journal semantics.
 
+## Design decisions
+
+- [2026-08-26, updated 2026-08-27] Canonical runtime state retains four top-level states while current waits expose five source kinds. Successful `afterSend:"wait"` records the resolved target as non-filtering `waitAnySessions` metadata; `afterSend:"finish"` creates no wait and leaves the completed Session idle.
+- [2026-08-10, updated 2026-08-11] Queue count has one effective derivation: catalog count only for a marked lightweight stub, actual queue length for a hydrated owner, and Worker projection count after overlay. Queue count is activity-independent: with no transient active phase, no recognized persisted wait, and `busy:false`, positive queued work is canonical `idle`/`busy:false` with its real queue count. It must not fabricate `requesting-model`, thinking/Stop UI, active sidebar treatment, or an idle notification transition. A real legacy `session.busy:true` without transient phase still falls back to `requesting-model`.
+- Strict Session-worker publication and malformed-tool recovery are canonical in [D-process-topology-session-events](../threads/process-topology-and-rpc.md#d-process-topology-session-events).
+
+### D-session-core-runtime-state
+
+Active provider/tool phases are transient. Wait state persists. Legacy busy fields remain compatibility/concurrency data rather than the display taxonomy.
+
 ## Tests
 
 `SessionProcessorContextTests` uses ordinary real-Monty child creation and sends, a later child report, and loopback provider turns to verify that the report-triggered parent declares a direct wait with an exact persisted ID and fallback without a surplus request. Direct child creation is the non-script control; existing ToolScript terminal-wait tests cover legitimate nested wait arming.
