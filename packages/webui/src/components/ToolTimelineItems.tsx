@@ -173,7 +173,7 @@ export const getToolCallSearchText = (stored: FunctionCall): string => {
   if (call.name === 'exec' || call.name === 'run_script') return executionArgumentsSearchText(call)
   if (call.name === 'send_to_session') return [args.sessionId, formatToolArgumentValue(args.message)].join('\u0000')
   if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.currentSessionTurnAction ?? args.afterSend, typeof args.model === 'object' ? formatToolArgumentValue(args.model) : args.model, typeof args.forceModel === 'object' ? formatToolArgumentValue(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
-  return formatToolArguments(call.name === 'session' ? call.args || { action: 'status' } : call.args)
+  return formatToolArguments(call.name === 'session' ? call.args || { action: 'status' } : mcpToolArgs(call) ?? call.args)
 }
 
 export const getToolResponseSearchText = (stored: FunctionResponse, call?: FunctionCall): string => {
@@ -389,6 +389,15 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
+/** The arguments of the MCP tool a unified call names, shown as a direct call shows its own. */
+const mcpToolArgs = (call: FunctionCall): Record<string, unknown> | undefined => {
+  if (call.name !== 'call_tool' || !call.args || typeof call.args !== 'object') return undefined
+  const toolId = typeof call.args.toolId === 'string' ? call.args.toolId.trim() : ''
+  if (!(toolId ? toolId.startsWith('mcp:') : call.args.source === 'mcp')) return undefined
+  const target = toolActivityTarget(call)
+  return target === call ? undefined : target.args ?? {}
+}
+
 const renderToolCallPreview = (original: FunctionCall, options: { partial?: boolean; purposeOnly?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
   const call = options.partial ? original : ctlAsUnified(original)
   if (call.name === 'ctl' && typeof call.args?.command === 'string') {
@@ -400,12 +409,17 @@ const renderToolCallPreview = (original: FunctionCall, options: { partial?: bool
     return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
   }
   if (options.partial) {
-    const argsFormatted = typeof call.args === 'string' ? call.args : formatToolArguments(call.args, { singleLine: true })
+    const argsFormatted = typeof call.args === 'string' ? call.args : formatToolArguments(mcpToolArgs(call) ?? call.args, { singleLine: true })
     const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
     return <span className="truncate break-all text-fw-text-muted">{preview || 'streaming tool call…'}</span>
   }
 
   const target = toolActivityTarget(call)
+  const mcpArgs = mcpToolArgs(call)
+  if (mcpArgs) {
+    const argsFormatted = formatToolArguments(mcpArgs, { singleLine: true })
+    return <span className="truncate break-all">{argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted}</span>
+  }
   if (call.name === 'call_tool' && target.name !== 'call_tool') {
     const summary = target.name === 'exec' || target.name === 'run_script' ? executionCallPreview(target, !!options.purposeOnly) : toolActivitySummary(target)
     if (original.name === 'ctl' && target.name !== 'exec' && target.name !== 'run_script') {
@@ -525,7 +539,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     return <pre className="whitespace-pre-wrap break-all text-xs font-mono text-fw-text-muted">{call.rawArgsText}</pre>
   }
   if (options.partial) {
-    return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : formatToolArguments(call.args)}</pre>
+    return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : formatToolArguments(mcpToolArgs(call) ?? call.args)}</pre>
   }
 
   if (call.name === 'read') {
@@ -657,7 +671,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  return <div className="whitespace-pre-wrap break-all">{formatToolArguments(call.args)}</div>
+  return <div className="whitespace-pre-wrap break-all">{formatToolArguments(mcpToolArgs(call) ?? call.args)}</div>
 }
 
 const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, call?: FunctionCall): ReactNode | null => {

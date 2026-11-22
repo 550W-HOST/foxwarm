@@ -18,7 +18,7 @@ const { slimCtlRegistry } = await load('../build/ctlRegistry.ts', 'slim.mjs')
 const slim = { name: 'slim', setup(b) { b.onLoad({ filter: /CtlCommands\.json$/ }, async args => ({ contents: JSON.stringify(slimCtlRegistry(JSON.parse(await readFile(args.path, 'utf8')))), loader: 'json' })) } }
 const corpus = JSON.parse(await readFile(new URL('../../../dotnet/Foxwarm.Tests/Tools/Fixtures/ctl-conformance.json', import.meta.url), 'utf8'))
 globalThis.window ??= { location: { pathname: '/', origin: 'http://localhost' } }
-const { ctlDescriptor, ctlAsUnified, ctlConcrete, ctlCommandName } = await load('../src/ctlCall.ts', 'ctl.mjs')
+const { ctlDescriptor, ctlAsUnified, ctlConcrete, ctlCommandName, ctlCommandText, partialJson } = await load('../src/ctlCall.ts', 'ctl.mjs')
 const slimCtl = await load('../src/ctlCall.ts', 'ctl-slim.mjs', [slim])
 
 // The same corpus is checked by the C# parser (CtlCommandTests.Conformance_corpus_matches_the_parser).
@@ -39,6 +39,47 @@ test('ctl calls render as the concrete call they run', () => {
   const help = { name: 'ctl', args: { command: 'help' } }
   assert.equal(ctlConcrete(help), help)
 })
+test('tool call of an MCP tool names the tool arguments in every argument spelling', () => {
+  const args = { repo: 'octo-org/demo', sort: { by: 'updated', labels: ['bug', 'ui'] } }
+  const descriptor = { toolId: 'mcp:github/search_issues', args }
+  const json = JSON.stringify(args)
+  for (const call of [
+    { command: 'tool call mcp:github/search_issues --args @args', values: { args } },
+    { command: 'tool call mcp:github/search_issues --args=@args', values: { args } },
+    { command: 'ctl tool call mcp:github/search_issues --args @args', valuesJson: JSON.stringify({ args }) },
+    { command: `tool call mcp:github/search_issues --args '${json}'` },
+    { command: `tool call mcp:github/search_issues --args='${json}'` },
+    { command: `tool call --source mcp --server github --name search_issues --args '${json}'` },
+  ]) {
+    const expected = call.command.includes('--source') ? { source: 'mcp', server: 'github', name: 'search_issues', args } : descriptor
+    assert.deepEqual(ctlConcrete({ name: 'ctl', args: call }), { name: 'call_tool', args: expected }, call.command)
+  }
+  // An unbound @name leaves the tool without arguments, as Main reports it.
+  assert.deepEqual(ctlConcrete({ name: 'ctl', args: { command: 'tool call mcp:github/search_issues --args @args' } }).args, { toolId: 'mcp:github/search_issues', args: {} })
+})
+
+test('partial JSON keeps what has arrived', () => {
+  const cases = [
+    ['{"a":1}', { a: 1 }],
+    ['', undefined],
+    ['{', {}],
+    ['{"a', {}],
+    ['{"a"', {}],
+    ['{"a":', {}],
+    ['{"a":"x', { a: 'x' }],
+    ['{"a":"x\\', { a: 'x' }],
+    ['{"a":"x\\"y', { a: 'x"y' }],
+    ['{"a":"\\u00', { a: '' }],
+    ['{"a":1,"b":tr', { a: 1 }],
+    ['{"a":1,"b":12', { a: 1, b: 12 }],
+    ['{"a":1,"b":1.', { a: 1 }],
+    ['{"a":[1,"b', { a: [1, 'b'] }],
+    ['{"a":{"b":["c"],"d":{', { a: { b: ['c'], d: {} } }],
+    ['{"a":"}{]["', { a: '}{][' }],
+  ]
+  for (const [text, expected] of cases) assert.deepEqual(partialJson(text), expected, text)
+})
+
 const questions = await load('../src/sessionQuestions.ts', 'questions.mjs')
 const communications = await load('../src/components/sessionCommunications.ts', 'communications.mjs')
 
@@ -143,4 +184,19 @@ test('collapsed tag summaries count ctl calls by command path with the target ic
     ['ctl', 'ctl ×1'],
     ['edit_memory', 'edit_memory ×1'],
   ])
+})
+
+test('a streaming ctl call shows the call it runs with the values received so far', () => {
+  const command = 'tool call mcp:github/search_issues --args @args'
+  const streaming = `{"command":${JSON.stringify(command)},"values":{"args":{"repo":"octo-org/demo","sort":{"labels":["bu`
+  assert.deepEqual(ctlConcrete({ name: 'ctl', args: streaming }), { name: 'call_tool', args: { toolId: 'mcp:github/search_issues', args: { repo: 'octo-org/demo', sort: { labels: ['bu'] } } } })
+  assert.equal(ctlCommandText({ name: 'ctl', args: streaming }), command)
+  assert.equal(shared.formatToolLabel('ctl', streaming), 'tool:mcp:github/search_issues')
+  // Values not yet arriving leave the bound argument empty; builtin commands stream the same way.
+  assert.deepEqual(ctlConcrete({ name: 'ctl', args: `{"command":${JSON.stringify(command)},"val` }).args, { toolId: 'mcp:github/search_issues', args: {} })
+  assert.deepEqual(ctlConcrete({ name: 'ctl', args: '{"command":"memory write a.md @body","values":{"body":"line one\\nline' }), { name: 'write_memory', args: { filePath: 'a.md', content: 'line one\nline' } })
+  // A command still arriving stays a plain ctl call until it names one.
+  const early = { name: 'ctl', args: '{"command":"tool call mcp:github/search_issues --ar' }
+  assert.equal(ctlConcrete(early), early)
+  assert.equal(ctlCommandName(early.args), 'ctl')
 })
