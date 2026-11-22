@@ -1,15 +1,15 @@
 # Managed tests and source oracles
 
-The [maintained test runner](../../docs/testing.md) owns the ordinary managed, reference, browser and full-application lanes. Run commands below from the repository root with a .NET 10 SDK selected. Build the retained TypeScript reference before source-backed tests:
+The [maintained test runner](../../docs/testing.md) owns the ordinary managed, browser and full-application lanes. Run commands below from the repository root with a .NET 10 SDK selected, after `npm run build`:
 
 ```sh
-npm run build:reference
+npm run build
 npm run test:managed
 ```
 
-For a focused managed check, use `FOXWARM_TS_ROOT="$PWD" dotnet test dotnet/Foxwarm.Tests/Foxwarm.Tests.csproj --filter FullyQualifiedName~TestClass`. Tests use owned temporary data; `FOXWARM_TS_ROOT` identifies the built reference checkout, not an installation data root. See the [test contract map](../../docs/code-index/units/dotnet-tests.md) for subsystem navigation.
+For a focused managed check, use `FOXWARM_REPO_ROOT="$PWD" dotnet test dotnet/Foxwarm.Tests/Foxwarm.Tests.csproj --filter FullyQualifiedName~TestClass`. Tests use owned temporary data; `FOXWARM_REPO_ROOT` identifies the built repository checkout (Node packages, WebUI output, Skills and frozen-source Git history), not an installation data root. See the [test contract map](../../docs/code-index/units/dotnet-tests.md) for subsystem navigation.
 
-The reference checkout also needs Git history: nine fixture producers read pinned ancestor revisions with `git show` (session creation, task policy, tool authorization, onboot, command administration, canonical entry, session command effects, inbound channel files and session presentation; the last two are pinned to the final TypeScript revision `80f740477c25d3b42165bb0d201e74ebc5fd4479`). Use a full-history clone, or run `git fetch --unshallow` in an existing shallow clone before these comparisons. The managed CI checkout uses `fetch-depth: 0`. Building the current reference supplies shared packages and retained runtime readers; it does not supply historical Git objects. Missing revisions fail the comparisons.
+The reference checkout also needs Git history: nine fixture producers read pinned ancestor revisions with `git show` (session creation, task policy, tool authorization, onboot, command administration, canonical entry, session command effects, inbound channel files and session presentation; the last two are pinned to the final TypeScript revision `80f740477c25d3b42165bb0d201e74ebc5fd4479`). Use a full-history clone, or run `git fetch --unshallow` in an existing shallow clone before these comparisons. The managed CI checkout uses `fetch-depth: 0`. The current build supplies shared packages and the `typescript` compiler the fixtures use to transpile frozen sources; it does not supply historical Git objects. Missing revisions fail the comparisons.
 
 The full-Unicode lowercase oracle and `dotnet/scripts/generate-source-lowercase.mjs` require a Node runtime with Unicode 17.0 data; use Node 24.21.0, matching CI. Both entry points reject other Unicode versions before comparison or generation. With that runtime on PATH, `node dotnet/scripts/generate-source-lowercase.mjs` regenerates all three checked-in lowercase/property tables; then run the repository C# formatter with `(cd dotnet && dotnet csharpier format .)`. Ordinary builds use those tables without rewriting metadata or generating from the host runtime. The full-scalar/contextual comparison and normal Main HTTP metadata-search controls exercise the same lowerer.
 
@@ -17,31 +17,15 @@ The full-Unicode lowercase oracle and `dotnet/scripts/generate-source-lowercase.
 
 - Feature directories contain xUnit tests and feature-local fixtures such as MCP peers, Python exec peers and ToolScript JSON. Their project copy rules remain local to those consumers.
 - `Fixtures/` contains frozen-source and platform JavaScript oracles, controlled SDK/channel/browser peers, schema-level seeds, recorded state snapshots (`snapshots/`, restored by `state-snapshot.mjs`) and parity corpora. Session, catalog, image, tool, timer and Vector tests invoke these files directly; original-App drivers also use the Archive, Worker-store and snapshot seeds. Some oracles execute frozen `git show` source. Their recorded revision/path pairs continue to identify historical source, not the current directory layout.
-- `scripts/` contains differential runners/comparators, the standalone HTTP/restart driver, and `qualify-*.mjs` controlled-host checks. These are focused entry points, separate from the normal suite's discovery.
+- `scripts/` contains the standalone HTTP/restart driver and `qualify-*.mjs` controlled-host checks. These are focused entry points, separate from the normal suite's discovery.
 - `../Foxwarm.DevTools/` implements managed probe commands. Its build copies `Fixtures/parity-corpus.json` and `Fixtures/responses-stream-corpus.json` under their existing output names so the commands also work without an explicit corpus argument.
 - `../scripts/` contains build/publish/source-generation helpers. Optional HEIC preparation is documented in [native image prerequisites](../../docs/native-image-prerequisites.md).
 
 TypeScript-era data comes from schema-level seeds and snapshots recorded at the final TypeScript revision; no test runs the TypeScript backend to write it. Results recorded from TypeScript owners (`Vector/Fixtures/`, `Channels/Fixtures/webui-logs-source.json`, `Fixtures/vision-input-fixture.mjs`) carry the inputs they apply to. Returning current installation data to retired TypeScript Main is outside the [compatibility boundary](../../docs/code-index/units/dotnet-tests.md#contract-boundary).
 
-## Differential checks
+## Probe corpora
 
-Build the solution and reference first:
-
-```sh
-dotnet build dotnet/Foxwarm.sln
-npm run build:reference
-export FOXWARM_TS_ROOT="$PWD"
-python3 dotnet/Foxwarm.Tests/scripts/run-parity.py
-python3 dotnet/Foxwarm.Tests/scripts/responses-request-parity-compare.py
-python3 dotnet/Foxwarm.Tests/scripts/responses-stream-parity-compare.py --self-test-negative
-python3 dotnet/Foxwarm.Tests/scripts/parity_compare_checks.py
-```
-
-The conditional-memory/argument differential uses `Fixtures/parity-corpus.json` and the actual TypeScript owners. Its comparator distinguishes semantic JSON, generated JSON, exact raw text and compatible native parse diagnostics. The Responses request differential invokes the actual reference converter and compares request input, including exact field presence and tool-output formatting. The streaming differential uses real string/Buffer chunks, including split UTF-8/CRLF framing, and compares completion, cumulative progress, safety, raw text, SSE blocks and normalized errors. Provider terminal messages are checked against the source-derived message, while native malformed-parser/read diagnostics retain their compatibility categories. Negative comparator checks reject missing fields, wrong counts, bool/number substitutions, missing completion and late errors.
-
-The managed stream probe omits null defaults only from its typed progress parts, retaining zero indices and empty strings. Provider-owned final/unknown JSON keeps exact field presence, including explicit null. The comparator also checks part lifecycle: a part created before its text exists remains observable rather than being discarded as a serialization difference.
-
-The TypeScript runners for conditional memory and streaming use `FOXWARM_TSX` when supplied; otherwise they invoke the pinned `tsx@4.19.2` through npx. The Responses request oracle uses the built reference directly. Responses wrappers establish owned temporary data, suppress console logging, require successful whole-stdout JSON and bound the subprocess lifetime. These checks do not contact a model provider.
+`Fixtures/parity-corpus.json` (conditional memory and model arguments) and `Fixtures/responses-stream-corpus.json` (Responses SSE framing) are the default inputs of the DevTools `conditional-memory` and `responses-stream` probes. Their TypeScript differential runners were removed with the TypeScript backend; the corpora remain inputs for managed probes and tests.
 
 ## Controlled-host checks
 

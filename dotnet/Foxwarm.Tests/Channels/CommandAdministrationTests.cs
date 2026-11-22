@@ -33,8 +33,8 @@ public sealed partial class CommandAdministrationTests
     internal static async Task<JsonObject> SourceAsync(JsonObject input)
     {
         var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required");
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
+            ?? throw new InvalidOperationException("FOXWARM_REPO_ROOT is required");
         var start = new ProcessStartInfo(
             "node",
             Path.Combine(

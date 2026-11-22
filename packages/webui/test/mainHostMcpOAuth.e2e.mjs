@@ -206,7 +206,7 @@ try {
   })
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   await writeModelFixture(data, { default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  await writeFile(join(data, 'state/config.yaml'), JSON.stringify({ url: url.replace(/\/$/, ''), bot: { enableWebUI: true, httpPort: port }, llm: { ollamaBaseUrl: 'http://127.0.0.1:1' } }))
+  await writeFile(join(data, 'state/config.yaml'), JSON.stringify({ url: url.replace(/\/$/, ''), bot: { enableWebUI: true, httpPort: port }, llm: { ollamaBaseUrl: 'http://127.0.0.1:1' }, access: { identities: { reader: { token: 'synthetic-scoped-reader', surfaces: { webui: { sessions: ['main/*'] } } } } } }))
   await writeFile(join(data, 'state/mcp.json'), JSON.stringify({ servers: { 'Fixture MCP': { url: peer.resource, transport: 'streamable-http' } } }), { mode: 0o600 })
   await start()
   // Public exceptions are exact GET documents, not a broad path or an exchange exemption.
@@ -217,6 +217,14 @@ try {
   assert.equal((await anonymous('/api/mcp/oauth/callback', 'POST', {})).status, 401)
   const fixed = await (await anonymous('/api/mcp/oauth/callback?code=never-reflect-code&state=unused')).text()
   assert(!fixed.includes('never-reflect-code')); assert.equal(peer.state.exchanges, 0)
+  // A scoped WebUI identity cannot read, start or complete outbound authorizations.
+  const scoped = async (path, method = 'GET', body) => fetch(`http://127.0.0.1:${port}${apiPrefix}${path}`, { method,
+    headers: { authorization: 'Bearer synthetic-scoped-reader', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  assert.equal((await scoped('/api/auth/session')).status, 200)
+  assert.equal((await scoped('/api/setup/authorizations')).status, 403)
+  assert.equal((await scoped('/api/setup/authorizations/Fixture%20MCP/authorize', 'POST', {})).status, 403)
+  assert.equal((await scoped('/api/mcp/oauth/complete', 'POST', { state: 'cannot-create-authority', code: 'not-a-code' })).status, 403)
+  assert.equal(peer.state.exchanges, 0)
   assert.equal((await api('PUT', '/api/setup/authorizations/Fixture%20MCP', { authentication: 'oauth' }, { Origin: 'https://evil.example' })).status, 400)
   assert.equal((await api('POST', '/api/setup/authorizations/Fixture%20MCP/authorize', {}, { 'Sec-Fetch-Site': 'cross-site' })).status, 400)
   assert.equal((await api('POST', '/api/setup/authorizations/Fixture%20MCP/authorize', {}, { 'Content-Type': 'text/plain' })).status, 400)

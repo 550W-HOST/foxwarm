@@ -21,9 +21,9 @@ public sealed partial class SessionCreationParityTests
     private static async Task<JsonArray> SourceAsync(JsonArray cases)
     {
         var repository =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? throw new InvalidOperationException(
-                "FOXWARM_TS_ROOT is required for the Source allocator."
+                "FOXWARM_REPO_ROOT is required for the Source allocator."
             );
         using var process = Process.Start(
             new ProcessStartInfo("node")

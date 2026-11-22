@@ -33,7 +33,7 @@ Deletion previews descendants and requires a checked cascade confirmation when c
 ## Tests
 
 - `workbenchPreview.e2e.mjs` covers 15 directory entries with nine online (including one incompatible online Node), full-list order and native scrolling, no additional directory requests, theme contrast, both status-preview entries, dismissal, empty/failed previews, System reuse, collapsed-pane activation of a saved Nodes tab, route hydration, persistence/reload of the section, mobile rendering and sole-tab headers.
-- `nodeOnboarding.e2e.mjs` covers the section switch, per-section summaries, unavailable placement cards, authenticated onboarding, pending pagination/approval, visibility pause, credential lifecycle and abort tests, and polling cleanup after unmount.
+- `nodeOnboarding.e2e.mjs` runs `SystemView` against managed Main behind a recording proxy (`mainHostProxy.mjs`), with pending pairings from the official CLI Node client. It covers the section switch, per-section summaries, authenticated onboarding, pending pagination/approval, visibility pause, credential lifecycle and abort tests, and polling cleanup after unmount.
 - `mainHostNodeActions.e2e.mjs` covers real native/JavaScript launch reports, stored-credential copy, Shell reissue, copy failure, cancel/reissue, secret disposal after close and an accepted delayed response, edited paths, single/cascade deletion and Provider exclusion.
 - `popupMove.e2e.mjs` covers moving System on Nodes to the `nodes` leaf and in-place section switching in popup and embedded leaves. `mainHostSystem.e2e.mjs` covers the sections, Session placement and every former entry point against a real C# Main.
 

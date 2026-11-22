@@ -22,7 +22,6 @@ Install the .NET 10 SDK and the root/WebUI npm dependencies first. From the repo
 
 ```sh
 npm run build             # Complete managed Main delivery and assets
-npm run build:reference   # Retained TypeScript oracle used by differential tests
 npm run test:managed      # Managed suite, also included in test:unit and CI
 npm run publish:core -- -r linux-x64 -o /path/to/empty/output
 ```

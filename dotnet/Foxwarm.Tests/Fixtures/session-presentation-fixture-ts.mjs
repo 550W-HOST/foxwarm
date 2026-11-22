@@ -6,7 +6,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 
 const [inputPath, outputPath] = process.argv.slice(2)
-const root = process.env.FOXWARM_TS_ROOT
+const root = process.env.FOXWARM_REPO_ROOT
 if (!root || !inputPath || !outputPath) throw new Error('Source root and owned fixture paths are required')
 const revision = '80f740477c25d3b42165bb0d201e74ebc5fd4479'
 const show = file => execFileSync('git', ['show', `${revision}:${file}`], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })

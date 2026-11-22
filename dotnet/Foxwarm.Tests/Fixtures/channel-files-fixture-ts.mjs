@@ -5,7 +5,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import vm from 'node:vm'
-const repository = process.env.FOXWARM_TS_ROOT, require = createRequire(join(repository, 'package.json'))
+const repository = process.env.FOXWARM_REPO_ROOT, require = createRequire(join(repository, 'package.json'))
 const ts = require('typescript'), fs = require('fs-extra'), source = execFileSync('git', ['show', '80f740477c25d3b42165bb0d201e74ebc5fd4479:src/channelFiles.ts'], { cwd: repository, encoding: 'utf8' })
 const root = process.argv[2], inputs = JSON.parse(await readFile(process.argv[3], 'utf8')), results = []
 await mkdir(root, { recursive: true })

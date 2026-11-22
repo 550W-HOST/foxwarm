@@ -87,17 +87,6 @@ export function functionCall(id, name, args = {}) {
   return { type: 'function_call', call_id: id, name: call.name, arguments: JSON.stringify(call.args) }
 }
 
-/** A Responses `function_call` item with the name and arguments exactly as given. */
-export function directFunctionCall(id, name, args = {}) {
-  return { type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) }
-}
-
-/**
- * The call builder for a Main runtime: the retained TypeScript reference (`source`) still
- * declares the former tools directly; the C# Main reaches them through ctl.
- */
-export const functionCallFor = runtime => (runtime === 'source' ? directFunctionCall : functionCall)
-
 /** Maps `{ id, name, args }` call plans written in the former direct form to their model calls. */
 export const ctlCalls = calls => calls.map(call => ({ ...call, ...modelCall(call.name, call.args) }))
 

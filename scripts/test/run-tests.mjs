@@ -145,7 +145,7 @@ function managedGroup() {
         ...(managedFilter ? ['--filter', managedFilter] : []),
         '--', 'RunConfiguration.TreatNoTestsAsError=true'], 2_400_000),
     ],
-    env: { FOXWARM_TS_ROOT: repoRoot },
+    env: { FOXWARM_REPO_ROOT: repoRoot },
   }
 }
 

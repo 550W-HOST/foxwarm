@@ -8,13 +8,13 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
-import { functionCallFor } from './ctlModelCalls.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
-for (const runtime of ['source', 'dotnet']) {
-  const workbenchDir = runtime === 'source' ? resolve('packages/vscode-web/assets/vscode-web') : resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
+for (const runtime of ['dotnet']) {
+  const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
   const assets = await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js')).then(() => true, () => false)
   const env = {}, fixture = await createHostFixture('cli-code-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
@@ -36,7 +36,7 @@ for (const runtime of ['source', 'dotnet']) {
     for (const [source, target] of [[downstream, upstream], [upstream, downstream]]) { source.on('close', () => { sockets.delete(source); if (target.readyState === WebSocket.OPEN) target.close() }); source.on('error', () => {}) }
   })
   let round = 0, page, cli, cliOutput = ''
-  const call = functionCallFor(runtime)
+  const call = functionCall
   const model = createServer(async (request, response) => {
     try {
       let raw = ''; for await (const bytes of request) raw += bytes

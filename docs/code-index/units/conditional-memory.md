@@ -32,4 +32,4 @@ Runtime is fixed when a Session is created, and external-runtime snapshots are b
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Memory/ConditionalMemoryTests.cs` covers lists, negation, combined attributes and literal fallbacks; `ClaudeRuntimeTests.Runtime_conditions_select_Claude_Code_memory_blocks` verifies the runtime selection in actual Claude Code and Foxwarm snapshots. `Fixtures/parity-corpus.json` remains the shared-grammar differential.
+`dotnet/Foxwarm.Tests/Memory/ConditionalMemoryTests.cs` covers lists, negation, combined attributes and literal fallbacks; `ClaudeRuntimeTests.Runtime_conditions_select_Claude_Code_memory_blocks` verifies the runtime selection in actual Claude Code and Foxwarm snapshots. `Fixtures/parity-corpus.json` remains the shared-grammar corpus for the DevTools `conditional-memory` probe.

@@ -12,9 +12,9 @@ internal static class CanonicalSourceFixture
     internal static async Task<JsonObject> RunAsync(JsonObject input)
     {
         var repository =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? throw new InvalidOperationException(
-                "FOXWARM_TS_ROOT is required for frozen Source fixtures."
+                "FOXWARM_REPO_ROOT is required for frozen Source fixtures."
             );
         using var process = Process.Start(
             new ProcessStartInfo("node")

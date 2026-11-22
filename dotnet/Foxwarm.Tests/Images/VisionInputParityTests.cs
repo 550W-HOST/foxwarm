@@ -12,7 +12,7 @@ public sealed class VisionInputParityTests
     public async Task Real_Source_images_preflight_provider_file_descriptors_and_canonical_persistence_agree()
     {
         using var temp = new TempDirectory();
-        var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
+        var root = Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!;
         var output = Path.Combine(temp.Path, "source.json");
         var start = new ProcessStartInfo("node")
         {

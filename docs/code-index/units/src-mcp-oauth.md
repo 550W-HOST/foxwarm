@@ -1,7 +1,7 @@
 # Unit: outbound MCP OAuth
 
 Files: `src/mcpOAuth.ts`, `src/mcpOAuthHttp.ts`, `src/mcpOAuthRoutes.ts`, `src/mcpOAuth.test.ts`, `src/mcpOAuthTestFixture.ts`, `src/mcpOAuthUiTestMain.ts`
-Secondary files: `src/mcpClient.ts`, `src/mcpCallerConnections.ts`, `src/mcpExternalService.ts`, `src/index.ts`, `src/configFile.ts`, `packages/webui/src/components/AuthorizationsPanel.tsx`, `packages/webui/test/authorizationsHarness.html`, `packages/webui/test/authorizations.e2e.mjs`, `packages/webui/test/backendIsolation.e2e.mjs`
+Secondary files: `src/mcpClient.ts`, `src/mcpCallerConnections.ts`, `src/mcpExternalService.ts`, `src/index.ts`, `src/configFile.ts`, `packages/webui/src/components/AuthorizationsPanel.tsx`, `packages/webui/test/backendIsolation.e2e.mjs`
 
 ## Purpose
 

@@ -135,8 +135,8 @@ public sealed partial class OperationDeclarationCoverageTests
     public void Obligation_inventory_matches_every_authorization_call_site()
     {
         var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required.");
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
+            ?? throw new InvalidOperationException("FOXWARM_REPO_ROOT is required.");
         var sources = Path.Combine(root, "dotnet", "Foxwarm");
         var found = CallSites(sources).ToArray();
         var plumbing = OperationDeclarations
@@ -235,8 +235,8 @@ public sealed partial class OperationDeclarationCoverageTests
     public void Inbound_inventory_matches_every_external_enforcement_site()
     {
         var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required.");
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
+            ?? throw new InvalidOperationException("FOXWARM_REPO_ROOT is required.");
         var sources = Path.Combine(root, "dotnet", "Foxwarm");
         var found = CallSites(sources, InboundCalls).ToArray();
         var plumbing = OperationDeclarations

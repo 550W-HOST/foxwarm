@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import ts from 'typescript'
 
 const [root, inputPath, outputPath] = process.argv.slice(2)
-const repository = process.env.FOXWARM_TS_ROOT
+const repository = process.env.FOXWARM_REPO_ROOT
 if (!repository || !root || !inputPath || !outputPath) throw new Error('Explicit source root and owned fixture paths are required')
 // Establish synthetic state before any source module is evaluated. Do not import instance config.
 process.env.FOXWARM_DATA_DIR = path.join(root, 'data')

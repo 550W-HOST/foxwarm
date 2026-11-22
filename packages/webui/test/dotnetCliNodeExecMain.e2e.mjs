@@ -8,15 +8,15 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
-import { functionCallFor } from './ctlModelCalls.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
 let call
 const exists = path => access(path).then(() => true, () => false)
-for (const runtime of ['source', 'dotnet']) {
-  call = functionCallFor(runtime)
+for (const runtime of ['dotnet']) {
+  call = functionCall
   const env = {}, fixture = await createHostFixture('cli-exec-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'), registry = join(cwd, 'agents/main/.temp/exec/running-exec.json')
@@ -135,7 +135,7 @@ for (const runtime of ['source', 'dotnet']) {
     assert.equal((await saved(stopped)).cwd, undefined)
     await begin(stopped, 'stopped', [[call('stopped', 'exec', { command: 'printf start > stopped-count; sleep 3; printf done >> stopped-count', timeout: 30 })]])
     await until(() => exists(join(cwd, 'agents/main/stopped-count')), 'new CLI starts before real Stop')
-    assert.equal((await fixture.api('POST', route(stopped) + (runtime === 'source' ? '/message' : '/stop'), runtime === 'source' ? { text: '/stop' } : {})).status, 200)
+    assert.equal((await fixture.api('POST', route(stopped) + '/stop', {})).status, 200)
     await until(async () => pair(await saved(stopped), 'stopped'), 'Stop saves actual background tool result')
     state = await saved(stopped); assert.match(good(state, 'stopped').output, /not killed/)
     const stoppedRequest = execCalls(stopped)[0]

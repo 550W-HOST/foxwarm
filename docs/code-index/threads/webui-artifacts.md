@@ -47,5 +47,5 @@ Charts provide readable metrics and direct controls. The footer omits provenance
 - `packages/artifact-runtime/test/runtimeHelpers.test.mjs`: maintained schema validation, compiler import restrictions and raster metadata for managed Main helpers.
 - `src/artifacts/artifacts.test.ts`: historical Source immutable revisions, concurrent conflict, owner checks and HTTP access; explicit reference execution.
 - `packages/webui/test/artifacts.test.mjs`: structured projection, exact scope, deduplication and input-boundary ownership.
-- `packages/webui/test/artifacts.e2e.mjs`: actual timeline, responsive chart, sandbox interaction, stable expansion/reply updates, reload and blocked host/fetch access.
+- `packages/webui/test/artifacts.e2e.mjs`: React documents compiled by the artifact runtime's `managedPrepare.js`; actual timeline, responsive chart, sandbox interaction, stable expansion/reply updates, reload and blocked host/fetch access.
 - Skills contain synthetic training and insertion-sort examples, also exercised by tests.

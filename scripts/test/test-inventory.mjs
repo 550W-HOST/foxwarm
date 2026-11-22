@@ -62,13 +62,6 @@ const manualGroups = new Map([
   ['dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs', 'manual-smoke'],
   ['packages/webui/test/dotnetCliNodeAotLinux.e2e.mjs', 'manual-smoke'],
   ['packages/webui/test/dotnetCliNodeAot.e2e.mjs', 'manual-smoke'],
-  ['test/managedSessionLiveSmoke.js', 'manual-smoke'],
-  ['test/pushOnlyBroadcastSmoke.js', 'manual-smoke'],
-  ['test/sessionMetadataSafetySmoke.js', 'manual-smoke'],
-  ['test/stopAbortSmoke.js', 'manual-smoke'],
-  ['test/toolscriptPhase1Smoke.js', 'manual-smoke'],
-  ['test/llmToolSerializationTest.js', 'manual-regression'],
-  ['test/toolscriptSkillAgentTrial.js', 'manual-skill-trial'],
 ])
 
 function normalize(value) {
@@ -153,7 +146,5 @@ export const deferredGroups = {
   'vscode-assets-e2e': 'Requires prepared VS Code and YAML extension assets.',
   'website-owned': 'Owned by the website test workflow.',
   'manual-smoke': 'Stateful standalone smoke checks; run only with an explicitly assigned disposable environment.',
-  'manual-regression': 'Standalone historical regression script; not part of the routine runner.',
-  'manual-skill-trial': 'Historical interactive trial; isolated state but no maintained synthetic provider fixture.',
   'manual-hardware-smoke': 'Live-device smoke driver; requires explicitly assigned Android hardware and is never routine CI.',
 }

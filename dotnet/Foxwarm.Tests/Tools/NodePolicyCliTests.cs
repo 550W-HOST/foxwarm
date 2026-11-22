@@ -20,7 +20,7 @@ public sealed class NodePolicyCliTests
         if (OperatingSystem.IsWindows())
             return; // This fixture qualifies the official POSIX CLI; native Windows has its own corpus.
         await using var f = await InboundMcpFixture.CreateAsync(allow: false);
-        var repository = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
+        var repository = Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!;
         var remote = Path.Combine(f.Temp.Path, "cli-agent");
         var cliCwd = Path.Combine(f.Temp.Path, "cli-cwd");
         Directory.CreateDirectory(remote);

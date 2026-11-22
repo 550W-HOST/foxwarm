@@ -30,9 +30,9 @@ Fixed identity crash/restart cases use the existing DevTools child harness. Laun
 
 ## Solution
 
-`dotnet/Foxwarm.sln` includes `Foxwarm.Tests` and `Foxwarm.DevTools`. Cross-runtime producers, controlled peers, SQL seeds and corpora belong to `dotnet/Foxwarm.Tests/Fixtures/`; differential/comparison and controlled-host entry points belong to `dotnet/Foxwarm.Tests/scripts/`. Feature-local test assets stay beside their consuming tests. DevTools links the conditional-memory and streaming corpora from that test-owned source directory, preserving their output filenames and default command lookup. Build/publish/source-generation helpers remain in `dotnet/scripts/`.
+`dotnet/Foxwarm.sln` includes `Foxwarm.Tests` and `Foxwarm.DevTools`. Oracles, controlled peers, seeds, snapshots and corpora belong to `dotnet/Foxwarm.Tests/Fixtures/`; controlled-host entry points belong to `dotnet/Foxwarm.Tests/scripts/`. Feature-local test assets stay beside their consuming tests. DevTools links the conditional-memory and streaming corpora from that test-owned source directory, preserving their output filenames and default command lookup. Build/publish/source-generation helpers remain in `dotnet/scripts/`.
 
-See `dotnet/Foxwarm.Tests/README.md` for direct differential entry points and [the maintained runner](./test-runner.md) for ordinary suite discovery. Frozen source-oracle revision/path pairs remain historical references; moving today's helper does not rename files in those recorded revisions.
+See `dotnet/Foxwarm.Tests/README.md` for direct entry points and [the maintained runner](./test-runner.md) for ordinary suite discovery. Frozen source-oracle revision/path pairs remain historical references; moving today's helper does not rename files in those recorded revisions.
 
 The original-App/local-peer `packages/webui/test/mainHostOctoberAlignment.e2e.mjs` covers the fixed Testing `4f9b9198` Main-local alignment: task scopes/trusted Activity, exec wait fallbacks, qualified native ToolScript calls, explicit JSON-opt-out Anthropic evidence/cache accounting, exact config installation, bounded patch errors, relative pruning, and scored compact/recall restart. It runs only disposable owned hosts and synthetic provider peers; it is not evidence for remote Node/Worker, inbound MCP, restricted access, or external channel runtime parity.
 

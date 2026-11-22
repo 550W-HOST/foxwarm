@@ -664,7 +664,7 @@ public sealed class SessionDeletionTests
 
     private static async Task Worker(string file, string mode)
     {
-        var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
+        var root = Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!;
         var start = new ProcessStartInfo("node")
         {
             UseShellExecute = false,
