@@ -14,6 +14,9 @@ const wrapperBodies = {
   legacy: 'LEGACY_BEFORE\n<foxwarm-system kind="time" time="legacy-example" />\n<foxwarm-system kind="event">\nLEGACY_QUOTED\n</foxwarm-system>\nLEGACY_AFTER',
   split: '<foxwarm-message type="channel" note="SPLIT_CHANNEL_XML">\nSPLIT_BODY\n</foxwarm-message>\n<foxwarm-system kind="time" time="split-example" />',
 }
+// WebUI channel framing as the Main server writes it (SessionBoundary.ChannelInput).
+const channelOpen = '<foxwarm-message type="channel" channelType="webui" time="METADATA_ONLY" hint="direct user message via channel">'
+const channelClose = '</foxwarm-message>'
 
 before(async () => {
   const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
@@ -23,7 +26,6 @@ before(async () => {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import Chat from ${JSON.stringify(chatEntry)}
-    import { formatFoxwarmMessage, formatFoxwarmMessageOpen, formatFoxwarmMessageClose } from '../../src/utils/promptWrappers'
     const old = Array.from({length: 108}, (_, i) => ({ role: i % 2 ? 'model' : 'user', parts: [{text: i === 4 ? 'OLD_ONLY_MATCH' : 'Earlier ordinary message ' + i}], __meta: { seq: i + 1, timestamp: 1700000000000 + i } }))
     old[10].parts[0].text = '<pasted-text>' + 'P'.repeat(95) + 'PASTED_DEEP_SEARCH <foxwarm-system kind="opaque" note="OPAQUE_TAG_TARGET">literal</foxwarm-system>' + '</pasted-text>'
     old[12].parts[0].text = 'See <attachment-ref ref="attachment1" />\\n<foxwarm-file name="attachment1_attachment-marker-only.txt" mime="text/plain" />'
@@ -55,13 +57,14 @@ before(async () => {
       { functionResponse: { tool_use_id: 'script-inline', name: 'run_script', response: { status: 'completed', result: 1 } } },
       { functionResponse: { tool_use_id: 'script-file', name: 'run_script', response: { status: 'completed', result: 2 } } },
     )
-    const channelAttrs = {type:'channel',channelType:'webui',time:'METADATA_ONLY',hint:'direct user message via channel'}
+    const channelOpen = ${JSON.stringify(channelOpen)}, channelClose = ${JSON.stringify(channelClose)}
+    const channelMessage = body => channelOpen + '\\n' + body + '\\n' + channelClose
     const wrapperBodies = ${JSON.stringify(wrapperBodies)}
     // Text-only channel ingress stores the complete envelope in one system part; attachments use split boundaries.
     const wrappedHistory = [
-      {role:'user',parts:[{system:'<foxwarm-system kind="time" time="OUTER_TIME_METADATA" />'},{system:formatFoxwarmMessage(channelAttrs,wrapperBodies.full)}],__meta:{seq:501}},
-      {role:'user',parts:[{text:formatFoxwarmMessage(channelAttrs,wrapperBodies.legacy)}],__meta:{seq:502}},
-      {role:'user',parts:[{system:formatFoxwarmMessageOpen(channelAttrs)},{text:wrapperBodies.split},{system:formatFoxwarmMessageClose()}],__meta:{seq:503}},
+      {role:'user',parts:[{system:'<foxwarm-system kind="time" time="OUTER_TIME_METADATA" />'},{system:channelMessage(wrapperBodies.full)}],__meta:{seq:501}},
+      {role:'user',parts:[{text:channelMessage(wrapperBodies.legacy)}],__meta:{seq:502}},
+      {role:'user',parts:[{system:channelOpen},{text:wrapperBodies.split},{system:channelClose}],__meta:{seq:503}},
     ]
     window.fixture = { archiveRequests:0, get history(){return history}, emitStream(text){this.socket?.onmessage?.({data:JSON.stringify({type:'session-event',sessionId:'fixture/main',event:{type:'model-stream-update',streamId:'fixture-search-stream',text}})})} }
     window.fetch = async input => {
