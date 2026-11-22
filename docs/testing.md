@@ -85,7 +85,7 @@ Complete output, the resolved inventory, ordered step results with durations, br
 
 ## Retained source and current consumers
 
-Source location and language do not determine retirement. The maintained `node-bootstrap` group runs `src/nodes/runSh.test.ts` and `runPs1.test.ts` against templates still served by managed Main. The `runtime-helpers` group runs the extracted artifact validation, React compiler/import restrictions, and raster metadata checks against the helpers shipped with managed Main. Retired Source artifact store/routes checks remain historical reference tests.
+Source location and language do not determine retirement. The maintained `node-bootstrap` group runs `src/nodes/runSh.test.ts` and `runPs1.test.ts` against templates still served by managed Main. The `runtime-helpers` group runs `packages/artifact-runtime/test/*.test.mjs`: artifact validation, React compiler/import restrictions and raster metadata checks against the compiled preparation runtime shipped with managed Main (`npm run build:artifacts`). Retired Source artifact store/routes checks remain historical reference tests.
 
 Other Source Node tests exercise the old Main registry, transports, command generator or tool catalog; current Main implements those owners in C#, and current CLI/browser clients have their own maintained package tests. For example, `bootstrapInfo.test.ts` tests the old generator/catalog, while `runSh.test.ts` uses its generated commands as fixture inputs to execute the still-shipped templates. The optional Source SSH adapter integration exercises the retired Main execution/RPC owners; current adapter checks in Python and the managed suite remain maintained.
 

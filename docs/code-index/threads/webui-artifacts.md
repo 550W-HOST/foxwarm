@@ -6,7 +6,7 @@
 
 [2026-10-18] Interactive content uses a common versioned envelope, immutable resource snapshots and a frontend host, with separate trusted modules for image snapshot/preview, chart validation/rendering and React preparation/sandboxing. Skills teach authoring and publication; they do not install renderers or grant execution authority. Adding a module registers a validator, preparation adapter and lazy renderer rather than adding content-type branches throughout ChatTimeline. Protocol version, module schema version and artifact revision are independent.
 
-Implementation: [shared contract](../units/shared-artifacts.md), [TypeScript Main publication](../units/src-artifacts.md), [WebUI rendering](../units/webui-artifacts.md). Managed Main publication is mapped in [managed artifacts](../units/dotnet-artifacts.md); both producers use the same validators, raster metadata operation, data-only React compiler and unchanged WebUI consumer.
+Implementation: [shared contract](../units/shared-artifacts.md), [TypeScript Main publication](../units/src-artifacts.md), [WebUI rendering](../units/webui-artifacts.md). Managed Main publication is mapped in [managed artifacts](../units/dotnet-artifacts.md); both producers use the same validators, the [artifact preparation runtime](../units/artifact-runtime.md) (raster metadata and data-only React compiler) and the unchanged WebUI consumer.
 
 ## D-artifact-publication
 
@@ -44,7 +44,7 @@ Charts provide readable metrics and direct controls. The footer omits provenance
 
 ## Verification
 
-- `src/artifacts/runtimeHelpers.test.ts`: maintained schema validation, compiler import restrictions and raster metadata for managed Main helpers.
+- `packages/artifact-runtime/test/runtimeHelpers.test.mjs`: maintained schema validation, compiler import restrictions and raster metadata for managed Main helpers.
 - `src/artifacts/artifacts.test.ts`: historical Source immutable revisions, concurrent conflict, owner checks and HTTP access; explicit reference execution.
 - `packages/webui/test/artifacts.test.mjs`: structured projection, exact scope, deduplication and input-boundary ownership.
 - `packages/webui/test/artifacts.e2e.mjs`: actual timeline, responsive chart, sandbox interaction, stable expansion/reply updates, reload and blocked host/fetch access.

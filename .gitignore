@@ -47,3 +47,6 @@ __pycache__/
 /runtime/
 /packages/browser-host/dist
 /packages/browser-host/node_modules
+
+# Artifact preparation runtime build output
+/packages/artifact-runtime/dist

@@ -9,7 +9,7 @@ Test Compose and local `docker build` use one root recipe whose default target b
 
 The recipe prepares assets then publishes the [existing resource graph](./core-delivery-cli.md#build-and-resource-boundary); it has no separate asset copier. Docker context excludes host dependencies/build outputs, installation data and caches. Ordinary npm locks, pinned NuGet packages and pinned Monty acquisition run inside build layers. The runtime retains resources/native helpers/notices and has no baked experiment settings. Large optional Code workbench assets and optional HEIF remain external prerequisites.
 
-After the dependency-install layer, the build stage explicitly copies `tsconfig.artifacts.json`, its extended root `tsconfig.json` and the three Main artifact helper sources (`managedPrepare.ts`, `reactCompiler.ts`, `rasterMetadata.ts`). These are the bounded Main inputs to `build:artifacts`; its Shared validator imports come from the preceding `build:node` output. Neither host-generated helpers nor the full Source Main tree are compiler inputs to this recipe.
+After the dependency-install layer, the build stage copies `packages/artifact-runtime` with the other packages. It is the only Main input to `build:artifacts` ([artifact preparation runtime](./artifact-runtime.md)); its Shared validator imports come from the preceding `build:node` output. No host-generated helpers are compiler inputs to this recipe.
 
 ## Consumers and side effects
 

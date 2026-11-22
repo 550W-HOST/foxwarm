@@ -4,7 +4,7 @@ Files: packages/shared/src/artifacts/types.ts, packages/shared/src/artifacts/reg
 
 ## Purpose
 
-Defines the common display receipt and closed, independently versioned authoring schemas. This package builds with its own declared dependency closure, including the Node bootstrap source fallback; Main-only esbuild/sharp preparation belongs to [Main artifacts](./src-artifacts.md), not the whole-source Shared compilation. Canonical decisions: [interactive artifacts](../threads/webui-artifacts.md).
+Defines the common display receipt and closed, independently versioned authoring schemas. This package builds with its own declared dependency closure, including the Node bootstrap source fallback; Main-only esbuild/sharp preparation belongs to the [artifact preparation runtime](./artifact-runtime.md), not the whole-source Shared compilation. Canonical decisions: [interactive artifacts](../threads/webui-artifacts.md).
 
 ## Symbols
 

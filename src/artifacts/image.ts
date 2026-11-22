@@ -1,1 +1,1 @@
-export { describeImage } from './rasterMetadata';
+export { describeImage } from '../../packages/artifact-runtime/dist/rasterMetadata';

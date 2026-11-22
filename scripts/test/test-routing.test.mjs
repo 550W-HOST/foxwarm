@@ -39,7 +39,6 @@ require('node:test')(${JSON.stringify(title)}, () => {
   }
   const sources = {
     'src/nodes/runSh.test.ts': ['lib/nodes/runSh.test.js', 'node-bootstrap'],
-    'src/artifacts/runtimeHelpers.test.ts': ['lib/artifacts/runtimeHelpers.test.js', 'runtime-helpers'],
     'src/legacy.test.ts': ['lib/legacy.test.js', 'reference-backend'],
     'src/vector.indexFailure.test.ts': ['lib/vector.indexFailure.test.js', 'reference-vector'],
     'packages/shared/src/example.test.ts': ['packages/shared/dist/example.test.js', 'shared'],
@@ -50,6 +49,7 @@ require('node:test')(${JSON.stringify(title)}, () => {
     await write(compiled, program(label))
   }
   for (const [file, label] of [
+    ['packages/artifact-runtime/test/example.test.mjs', 'runtime-helpers'],
     ['packages/browser-node/test/example.test.mjs', 'browser-node'],
     ['scripts/example.test.js', 'scripts'],
     ['scripts/test/reference-isolation.test.mjs', 'reference-isolation'],
@@ -173,7 +173,6 @@ test('separate managed and component targets execute exactly the default unit se
 test('reference runs only retired Main, nested isolation and both selftests without maintained builds', unix, async t => {
   const f = await fixture(t)
   await fs.rm(path.join(f.root, 'lib/nodes'), { recursive: true })
-  await fs.rm(path.join(f.root, 'lib/artifacts'), { recursive: true })
   await fs.rm(path.join(f.root, 'packages/shared/dist'), { recursive: true })
   const result = await f.run('reference')
   assert.equal(result.code, 0, result.stdout + result.stderr)

@@ -84,7 +84,7 @@ function classify(file) {
   // These tests execute resources/helpers still shipped by managed Main. Other
   // Source tests exercise the retired Main, even when their subject is a Node.
   if (['src/nodes/runSh.test.ts', 'src/nodes/runPs1.test.ts'].includes(file)) return 'node-bootstrap'
-  if (file === 'src/artifacts/runtimeHelpers.test.ts') return 'runtime-helpers'
+  if (/^packages\/artifact-runtime\/test\/.*\.test\.mjs$/.test(file)) return 'runtime-helpers'
   if (/^src\/.*\.test\.ts$/.test(file)) return 'reference-backend'
   if (file === 'scripts/test/reference-isolation.test.mjs') return 'reference-isolation'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'

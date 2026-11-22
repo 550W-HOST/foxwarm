@@ -1,0 +1,10 @@
+{
+  "name": "@foxwarm/artifact-runtime",
+  "private": true,
+  "type": "commonjs",
+  "description": "Data-only artifact preparation child for managed Main: Shared validation, React compilation and raster metadata. Builds with the repository root's typescript, esbuild and sharp.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs"
+  }
+}

@@ -39,7 +39,7 @@ async function validateBundle() {
   assert((await stat(executable)).mode & 0o111, 'The bundle executable is not executable')
   for (const file of [
     packName, 'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
-    'skills/code-index/SKILL.md', 'packages/cli-node/dist/client.bundle.js', 'lib/artifacts/managedPrepare.js',
+    'skills/code-index/SKILL.md', 'packages/cli-node/dist/client.bundle.js', 'packages/artifact-runtime/dist/managedPrepare.js',
     'ToolScript/native/monty', 'liblancedb_ffi.dylib', 'libfoxwarm-pty.dylib',
     'node_modules/esbuild/lib/main.js', 'node_modules/sharp/lib/index.js',
     'node_modules/@img/sharp-darwin-arm64/lib/sharp-darwin-arm64.node', 'foxwarm-pty-helper',

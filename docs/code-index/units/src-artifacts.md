@@ -1,6 +1,6 @@
 # Unit: Main-owned artifact publication
 
-Files: src/artifacts/tool.ts, src/artifacts/store.ts, src/artifacts/prepare.ts, src/artifacts/reactBuildWorker.ts, src/artifacts/reactCompiler.ts, src/artifacts/rasterMetadata.ts, src/artifacts/managedPrepare.ts, src/artifacts/routes.ts, src/artifacts/image.ts, src/artifacts/artifacts.test.ts, src/artifacts/runtimeHelpers.test.ts, src/artifacts/artifactTools.test.ts
+Files: src/artifacts/tool.ts, src/artifacts/store.ts, src/artifacts/prepare.ts, src/artifacts/reactBuildWorker.ts, src/artifacts/routes.ts, src/artifacts/image.ts, src/artifacts/artifacts.test.ts, src/artifacts/artifactTools.test.ts
 Secondary files: src/mainManagementToolService.ts, src/mainManagementTools.ts, src/tools.ts, src/tools/definitions.ts, src/tools/placement.ts, src/channels/webuiChannel.ts
 
 ## Purpose
@@ -14,8 +14,7 @@ Owns source ingestion, immutable persistent snapshots, module preparation and au
 - `describeImage`: original raster magic/header, pixel/frame bounds and canonical sharp metadata operation; `image.ts` retains the Source preparation entry.
 - `prepareArtifact`, `ArtifactPreparer`: registered preparation adapters; charts need no compilation.
 - `reactBuildWorker`: a child-process compilation entry. Calls the Main `compileReact` operation with the fixed WebUI runtime root; virtual source import resolution plus trusted fixed React packages; no evaluation of artifact code. Parent bounds duration and output.
-- `compileReact`, `rasterMetadata`: Main-only preparation shared by Source and managed data transports. Shared retains only dependency-independent artifact schemas/validators.
-- `managedPrepare`: one bounded stdin/stdout data request per managed child, without Session, source-file or HTTP authority. `build:artifacts` compiles these three Main helpers from `tsconfig.artifacts.json` independently of the retained Source Main reference build.
+- `compileReact`, `describeImage`: Main-only preparation owned by the [artifact preparation runtime](./artifact-runtime.md), which Source imports from its compiled `dist/` and managed Main runs through `managedPrepare`. Shared retains only dependency-independent artifact schemas/validators.
 - `registerArtifactRoutes`: Session-scoped metadata/resource routes, injectable store for tests, no-store JSON response and unavailable fallback without leaking private paths.
 
 ## Ownership and persistence
@@ -24,4 +23,4 @@ Publication runs through the existing Main-management RPC facade, including Sess
 
 ## Verification
 
-`runtimeHelpers.test.ts` keeps shared schema validation, direct compiler import restrictions/no execution, and raster metadata checks in maintained tests because these helpers ship with managed Main. `artifacts.test.ts` retains historical Source store revisions, concurrent publication, ownership and HTTP scope under the explicit reference runner. `artifactTools.test.ts` verifies direct/unified/ToolScript dispatch, the reverse-source fence and remote source CWD capture. The primitive ingestion regression uses honest 8 MiB manifest and 16 MiB image sources, read accounting, a growing source, denied read policy and a 193-character qualified Node ID. Tests use temporary data roots, never the live state store. The React compiler requires backend and WebUI dependencies to be installed.
+The shipped helpers' own tests belong to the [artifact preparation runtime](./artifact-runtime.md#verification). `artifacts.test.ts` retains historical Source store revisions, concurrent publication, ownership and HTTP scope under the explicit reference runner. `artifactTools.test.ts` verifies direct/unified/ToolScript dispatch, the reverse-source fence and remote source CWD capture. The primitive ingestion regression uses honest 8 MiB manifest and 16 MiB image sources, read accounting, a growing source, denied read policy and a 193-character qualified Node ID. Tests use temporary data roots, never the live state store. The React compiler requires backend and WebUI dependencies to be installed.
