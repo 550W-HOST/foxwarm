@@ -19,13 +19,13 @@ public sealed class DeliverySeqTests
             ["arguments"] = args.ToJsonString(),
         };
 
-    private static JsonObject Final() =>
+    private static JsonObject Final(string text = "done") =>
         new()
         {
             ["type"] = "message",
             ["role"] = "assistant",
             ["content"] = new JsonArray(
-                new JsonObject { ["type"] = "output_text", ["text"] = "done" }
+                new JsonObject { ["type"] = "output_text", ["text"] = text }
             ),
         };
 
@@ -85,8 +85,13 @@ public sealed class DeliverySeqTests
             async (_, stream, request) =>
                 await Respond(
                     stream,
-                    // The created child runs its own first turn against the same provider.
-                    !request.Body.Contains("deliver everything", StringComparison.Ordinal)
+                    // The created child runs its own first turn against the same provider and
+                    // resolves its handoff, so it gets no completion reminders and its parent,
+                    // the owner, no child-report-missing notice.
+                    request.Body.Contains("child start", StringComparison.Ordinal)
+                    && !request.Body.Contains("deliver everything", StringComparison.Ordinal)
+                        ? new JsonArray(Final("[NO_ACTION]"))
+                    : !request.Body.Contains("deliver everything", StringComparison.Ordinal)
                         ? new JsonArray(Final())
                         : Interlocked.Increment(ref ownerRequests) switch
                         {
@@ -168,8 +173,9 @@ public sealed class DeliverySeqTests
             new[] { $"{batch}.2.1", $"{batch}.2.2", $"{script}.1.1" },
             Wrappers(targetB).Select(item => item.DeliverySeq)
         );
+        // The idle child leaves the volatile local projections; the catalog keeps it.
         var child = f
-            .Manager.LocalProjections()
+            .Manager.Catalog.List()
             .Select(row => SessionWait.Text(row["id"])!)
             .Single(id => id.EndsWith("kid", StringComparison.Ordinal));
         var childOwner = await f.Manager.RequiredAsync(child);
