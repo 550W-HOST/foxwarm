@@ -64,7 +64,7 @@ Nested calls remain observable in presentation metadata and run diagnostics with
 
 **Retained TypeScript capability, not a current managed-host requirement.** The earlier orchestration design used explicit primitives; later [delivery-scope decisions](../overview.md#d-dotnet-delivery-scope) exclude Session Worker hosting and managed ToolScript/controllers from C#. The reference mechanics below must not be used to infer missing managed work or reopen the paused product scope.
 
-Managed-session orchestration is available through explicit host primitives. The runtime does not depend on source-rewrite macros or a second controller framework.
+The retained TypeScript runtime provides managed-session orchestration through explicit host primitives. No bundled skill ships for this capability.
 
 ### D-toolscript-minimal-host-api
 

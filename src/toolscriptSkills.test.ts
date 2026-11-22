@@ -14,7 +14,6 @@ test('global ToolScript skills are visible and loadable', async () => {
   const names = skills.map(skill => skill.name);
 
   assert.ok(names.includes('toolscript-automation'));
-  assert.ok(names.includes('toolscript-managed-controller'));
   assert.ok(!names.includes('isolated-worker'));
   assert.ok(names.includes('node-setup'));
   assert.ok(names.includes('agent-skill-creator'));
@@ -53,16 +52,6 @@ test('global ToolScript skills are visible and loadable', async () => {
     'ToolScript skill/examples must not reference removed builtin tools',
   );
   assert.doesNotMatch(automationExample, /builtin:list_files/);
-
-  const managed = await loadSkillDocuments('toolscript-managed-controller', { agentName: 'main' });
-  assert.ok(managed.info.resourceFiles.includes('examples/managed_controller_basic.py'));
-  assert.ok(await fs.pathExists(path.join(managed.info.dir, 'examples', 'managed_controller_basic.py')));
-  const loadedManaged = await tool_skill({ action: 'load', skillName: 'toolscript-managed-controller' });
-  assert.ok(loadedManaged.includes('examples/managed_controller_basic.py'));
-  const managedText = managed.documents.map(doc => doc.content).join('\n\n');
-  assert.match(managedText, /open_managed_session/);
-  assert.match(managedText, /wait_for_managed_event/);
-  assert.match(managedText, /session_step/);
 
   const nodeSetup = await loadSkillDocuments('node-setup', { agentName: 'main' });
   assert.ok(nodeSetup.info.resourceFiles.includes('examples/development_workflow.py'));

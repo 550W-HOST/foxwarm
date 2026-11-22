@@ -5,8 +5,6 @@ Explore the required tools in the normal agent loop first, then encode the verif
 
 `automation_basic.py` reads a directory and this text file, pauses for agent input, and returns structured data. Pass the resolved path of this examples directory as `args.baseDir`. The file is a resource of the `toolscript-automation` skill and is listed when that skill is loaded.
 
-For a controller that waits for one managed-session event, processes it, and releases the session, load `toolscript-managed-controller` and read its `examples/managed_controller_basic.py` resource.
-
 ToolScript accepts ordinary top-level code with `args` as input:
 
 ```python

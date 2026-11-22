@@ -1475,7 +1475,7 @@ test('background ToolScript controller run can wait for managed inbox events and
   const originalChat = llm.chat;
   const parentId = makeId('toolscript_bg_parent');
   const childId = makeId('toolscript_bg_child');
-  const examplePath = path.join(__dirname, '..', 'skills', 'toolscript-managed-controller', 'examples', 'managed_controller_basic.py');
+  const examplePath = path.join(__dirname, '..', 'src', 'test-fixtures', 'managed_controller_basic.py');
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
   (llm as any).chat = async (_parts: any, activeSession: Session) => {

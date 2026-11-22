@@ -282,8 +282,6 @@ Follow-up tool calls after `status: "running"`:
 
 Background mode detaches only when a model turn calls `run_script` or `continue_script` itself. Timer and webhook scripts, scripts started from another script, and `start_toolscript_run` keep the foreground slice contract. Agent-input pauses require `continue_script(...)` in either mode.
 
-The managed controller APIs are documented in the `toolscript-managed-controller` skill.
-
 ### Safe-checkpoint timeout
 
 Each foreground `run_script` or `continue_script` slice has a 30-second timeout budget unless `timeoutSecs` is provided. Foxwarm checks this budget at host-call boundaries:
@@ -317,8 +315,6 @@ Run management uses the `ctl script` commands:
 - actionable waiting fields when paused.
 
 Agent-input waits return `waitingReason: "agent"`, `continuationId`, and `question`. Timeout waits return `waitingReason: "timeout"` and `continuationId`. Use `continue_script` for these waits.
-
-Managed-event waits return `waitingReason: "managed_event"` and `waitingFor` identifying the target session, supplied condition, and `autoResume`. Only background managed-event waits resume automatically; these are not `continue_script` waits. Use the managed-controller skill for this flow.
 
 The execution response does not include internal paths, owner/VM details, timestamps, or tool-activity diagnostics. Nested-call activity remains available in the UI, including after reloading history. Fields inside the script's own `result` are preserved.
 
