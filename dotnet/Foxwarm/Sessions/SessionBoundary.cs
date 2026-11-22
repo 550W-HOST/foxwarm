@@ -78,7 +78,113 @@ internal static class SessionBoundary
         )
             return false;
         state["resolved"] = true;
+        ResetChildReminders(state);
         return true;
+    }
+
+    /// <summary>Consecutive completion reminders allowed before the parent is told instead.</summary>
+    internal const int MaxConsecutiveChildReminders = 2;
+
+    private const string ChildReminderOpening =
+        "<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\"";
+
+    private const int ChildReplyExcerptLimit = 1200;
+
+    internal static bool IsChildReminder(QueueItem item) =>
+        item.Type == QueueItemType.Background
+        && item.Parts is { Count: > 0 } parts
+        && parts.Any(part =>
+            SessionWait
+                .Text(part["system"])
+                ?.StartsWith(ChildReminderOpening, StringComparison.Ordinal) == true
+        );
+
+    /// <summary>
+    /// Applies one consumed queue item to the boundary in queue order: user and peer input
+    /// replace it, a completion reminder adds to the run of consecutive reminders, and any
+    /// other input ends that run.
+    /// </summary>
+    internal static void ApplyConsumedInput(JsonObject envelope, QueueItem item)
+    {
+        if (ApplyChildHandoff(envelope, item))
+            return;
+        if (envelope["childHandoffState"] is not JsonObject state)
+            return;
+        if (IsChildReminder(item))
+        {
+            if (NeedsChildHandoff(envelope))
+                state["consecutiveReminders"] = ConsecutiveChildReminders(envelope) + 1;
+            return;
+        }
+        if (item.Message is not null || item.Parts is { Count: > 0 })
+            ResetChildReminders(state);
+    }
+
+    /// <summary>A model reply that calls any tool ends the run of unanswered reminders.</summary>
+    internal static void ApplyModelMessage(JsonObject envelope, JsonObject message)
+    {
+        if (
+            envelope["childHandoffState"] is JsonObject state
+            && SessionWait.Text(message["role"]) == "model"
+            && (message["parts"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Any(part => part["functionCall"] is not null)
+        )
+            ResetChildReminders(state);
+    }
+
+    internal static int ConsecutiveChildReminders(JsonObject envelope) =>
+        envelope["childHandoffState"]?["consecutiveReminders"] is JsonValue value
+        && value.TryGetValue<int>(out var count)
+            ? count
+            : 0;
+
+    internal static bool ChildReminderCapNotified(JsonObject envelope) =>
+        envelope["childHandoffState"]?["parentNotified"] is JsonValue value
+        && value.TryGetValue<bool>(out var notified)
+        && notified;
+
+    /// <summary>Records that the parent was told about the current reminder run.</summary>
+    internal static bool MarkChildReminderCapNotified(JsonObject envelope)
+    {
+        if (
+            !NeedsChildHandoff(envelope)
+            || ChildReminderCapNotified(envelope)
+            || envelope["childHandoffState"] is not JsonObject state
+        )
+            return false;
+        state["parentNotified"] = true;
+        return true;
+    }
+
+    private static void ResetChildReminders(JsonObject state)
+    {
+        state.Remove("consecutiveReminders");
+        state.Remove("parentNotified");
+    }
+
+    /// <summary>
+    /// The event the parent receives when its child is no longer reminded. The excerpt is
+    /// the child's own text, so framing look-alikes are neutralized.
+    /// </summary>
+    internal static string ChildReportMissing(string childSessionId, string lastReply)
+    {
+        var reply = lastReply.Trim();
+        if (reply.Length > ChildReplyExcerptLimit)
+        {
+            var end = ChildReplyExcerptLimit;
+            if (char.IsHighSurrogate(reply[end - 1]))
+                end--;
+            reply = reply[..end].TrimEnd() + " […]";
+        }
+        var excerpt =
+            reply.Length == 0
+                ? "Its last reply had no text."
+                : "Its last reply:\n" + NeutralizeFraming(reply);
+        return $"<foxwarm-system kind=\"event\" type=\"child-report-missing\" childSessionId=\"{Escape(childSessionId)}\">\n"
+            + $"Child Session {Escape(childSessionId)} ended its turn twice after completion reminders without reporting to you, completing its Task or replying [NO_ACTION]. It won't be reminded again until it receives new input. Nothing was reported or completed on its behalf.\n"
+            + excerpt
+            + "\n</foxwarm-system>";
     }
 
     internal static bool NeedsChildHandoff(JsonObject envelope) =>
@@ -91,6 +197,7 @@ internal static class SessionBoundary
         && SessionGoal.Trim(text) is { Length: > 0 } trimmed
         && (
             trimmed.Equals("NO_ACTION", StringComparison.Ordinal)
+            || trimmed.StartsWith("[NO_ACTION]", StringComparison.Ordinal)
             || trimmed.EndsWith("[NO_ACTION]", StringComparison.Ordinal)
         );
 

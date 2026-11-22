@@ -762,12 +762,38 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                 ? Task.CompletedTask
                 : hosted.Compactor.SafePointAsync(propagateFailure: true);
+        registry.OnChildReportMissing = (_, parent, reply) =>
+            DeliverChildReportMissingAsync(hosted.Id, parent, reply);
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
         registry.TriggerOverride = _ =>
             Accepting && !IsDeletionClaimed(hosted.Id) && !hosted.Entry.Retired
                 ? hosted.StartProcessing()
                 : Task.CompletedTask;
         return hosted;
+    }
+
+    // A persisted runtime event in the parent, like a background completion; it is
+    // transparent to the parent's own report boundary and wakes an idle parent.
+    private async Task DeliverChildReportMissingAsync(string childId, string parentId, string reply)
+    {
+        var parent = await RequiredAsync(parentId);
+        var item = new QueueItem(
+            QueueItemType.Background,
+            [new JsonObject { ["system"] = SessionBoundary.ChildReportMissing(childId, reply) }]
+        );
+        try
+        {
+            await parent.Entry.SaveLane.AdmitAsync(item, SaveKind.Strict);
+        }
+        finally
+        {
+            if (
+                Accepting
+                && !parent.Entry.WithState(state => state.Busy || state.Stopping)
+                && parent.Registry.HasRunnableWork(parent.Entry)
+            )
+                parent.Registry.Trigger(parent.Id);
+        }
     }
 
     internal MainBrowserTools Browser { get; } = new();

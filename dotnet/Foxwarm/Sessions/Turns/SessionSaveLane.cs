@@ -196,11 +196,17 @@ public sealed partial class SessionSaveLane
     public Task CommitInterSessionAsync(QueueItem item) => AdmitAsync(item, SaveKind.Strict);
 
     internal Task ResolveChildHandoffAsync() =>
+        UpdateChildHandoffAsync(SessionBoundary.ResolveChildHandoff);
+
+    internal Task MarkChildReminderCapNotifiedAsync() =>
+        UpdateChildHandoffAsync(SessionBoundary.MarkChildReminderCapNotified);
+
+    private Task UpdateChildHandoffAsync(Func<JsonObject, bool> change) =>
         EnqueueOperationAsync(async () =>
         {
             var snapshot = entry.Snapshot();
             var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-            if (!SessionBoundary.ResolveChildHandoff(envelope))
+            if (!change(envelope))
                 return;
             var staged = snapshot with { AuthorityEnvelope = envelope };
             staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);

@@ -15,7 +15,7 @@ const LEGACY_NO_ACTION_MARKER = 'NO_ACTION';
 export function isNoActionSignalText(text: string): boolean {
   const trimmed = text.trim();
   return trimmed === LEGACY_NO_ACTION_MARKER
-    || trimmed === NO_ACTION_MARKER
+    || trimmed.startsWith(NO_ACTION_MARKER)
     || trimmed.endsWith(NO_ACTION_MARKER);
 }
 

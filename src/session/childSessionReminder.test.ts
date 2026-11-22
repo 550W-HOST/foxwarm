@@ -15,6 +15,13 @@ test('detects exact legacy and bracketed no-action markers', () => {
   assert.equal(isNoActionSignalText(`done\n${NO_ACTION_MARKER}`), true);
 });
 
+test('detects the bracketed marker at the start of a reply', () => {
+  assert.equal(isNoActionSignalText(`${NO_ACTION_MARKER}\n\nTask is still blocked.`), true);
+  assert.equal(isNoActionSignalText(`  \n${NO_ACTION_MARKER} nothing further\n `), true);
+  assert.equal(isNoActionSignalText('NO_ACTION follows'), false);
+  assert.equal(isNoActionSignalText('   '), false);
+});
+
 test('does not treat ordinary mentions as no-action signals', () => {
   assert.equal(isNoActionSignalText('Please do not literally print [NO_ACTION] here.'), false);
   assert.equal(isNoActionSignalText('prefix [NO_ACTION] suffix'), false);
