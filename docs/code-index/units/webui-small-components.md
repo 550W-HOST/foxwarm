@@ -9,7 +9,7 @@ A collection of small, reusable React UI components and utility functions for th
 
 ## Key Exports
 
-- `MobilePageHeader` — Transparent progressive-blur mobile heading with positive-height parent-local measurement.
+- `MobilePageHeader` — Transparent progressive-blur mobile heading with positive-height parent-local measurement; an optional `leading` slot (System's Back action) precedes the title.
 - `ContentHeader` — Page/section header with icon, title, optional back button and actions; its sole-tab Workbench close/icon controls and empty-header pane drag entry are owned by [Single-tab headers](./webui-workbench.md#single-tab-headers)
 - `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal, section headers, separators and checked radio/toggle items
 - `CollapsedSidebar` — Fixed-width collapsed sidebar rail: expand, stacked Setup gear/settings dropdown, System/Tasks/Search icons, then New session and root-session avatar buttons

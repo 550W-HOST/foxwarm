@@ -25,7 +25,7 @@ function NodeOverviewCard({ node, sessions, onSelectSession, onAction }: { node:
   const incompatible = node.protocolStatus === 'upgrade-required'
   const shown = expanded ? sessions : getArchitectureNodePreview(sessions, new Set())
   const active = sessions.filter(isSessionRuntimeActive).length
-  return <article data-system-node-id={node.id} className="flex flex-col rounded-xl border border-fw-border bg-fw-surface p-4">
+  return <article data-system-node-id={node.id} className="flex min-w-0 flex-col rounded-xl border border-fw-border bg-fw-surface p-4">
     <div className="flex items-center justify-between gap-2">
       <h3 className="truncate font-semibold text-fw-text-strong">{node.displayName}</h3>
       {node.unavailable ? <StatusBadge tone="warning">Unavailable</StatusBadge> : <NodeStatusBadge online={node.online} />}
@@ -92,7 +92,7 @@ export default function SystemNodes({ nodes, error, sessions, onNodesChanged, on
       </div>
     </div>
     {error || pendingApprovals.error ? <p role="alert" className="text-sm text-fw-danger">{error || pendingApprovals.error}</p> : null}
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{cards.map(node => <NodeOverviewCard key={node.id} node={node} sessions={placed.get(node.id) || []} onSelectSession={onSelectSession} onAction={action => setNodeAction({ node, action })} />)}</div>
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{cards.map(node => <NodeOverviewCard key={node.id} node={node} sessions={placed.get(node.id) || []} onSelectSession={onSelectSession} onAction={action => setNodeAction({ node, action })} />)}</div>
     {nodeAction ? <NodeActionsModal key={`${nodeAction.node.id}:${nodeAction.action}`} {...nodeAction} onClose={() => setNodeAction(null)} onNodesChanged={onNodesChanged} /> : null}
     {onboardingOpen ? <NodeOnboardingModal pending={pendingApprovals} onClose={closeOnboarding} onNodesChanged={onNodesChanged} /> : null}
   </div>

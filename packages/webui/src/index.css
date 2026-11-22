@@ -2680,6 +2680,10 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 
 .mobile-tasks-page .tasks-main, .mobile-history-page > [data-history-search-view], .mobile-setup-page [data-setup-section] { padding-top: calc(var(--mobile-page-header-height, 64px) + 8px); }
 .mobile-setup-page .foxwarm-setup-navigation { display: none; }
+/* System on phones: content scrolls under the floating header and clears the bottom safe band. */
+.mobile-system-page [data-system-scroll] { padding-top: calc(var(--mobile-page-header-height, 64px) + 8px); padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 24px); }
+.mobile-system-tabs { scrollbar-width: none; }
+.mobile-system-tabs::-webkit-scrollbar { display: none; }
 .mobile-history-page form { border: 0; background: transparent; padding: 0; }
 .mobile-header-circle[data-filtered]::after { content: ""; width: 5px; height: 5px; position: absolute; top: 6px; right: 6px; border-radius: 50%; background: var(--foxwarm-color-accent); }
 

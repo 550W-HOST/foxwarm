@@ -23,6 +23,8 @@ import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathF
 import { webUiRealtime } from '../realtime'
 import { filterArchitectureSessions, getArchitectureSessionModel, getArchitectureSessionNodeId, groupArchitectureSessionsByNode, orderArchitectureAgents, type ArchitectureStatusFilter } from '../architectureOperations'
 import { makeVscodeWebUrl } from '../vscodeWeb'
+import { useMobileChatViewport } from '../chatPreferences'
+import MobilePageHeader from './MobilePageHeader'
 
 // The Timeline shares Chat rendering pieces; load them only when it is opened.
 const SessionSequenceView = lazy(() => import('./SessionSequenceView'))
@@ -83,6 +85,8 @@ export default function SystemView({
   usageRequest,
 }: SystemViewProps) {
   const tabHeader = useWorkbenchTabHeader()
+  const phone = useMobileChatViewport() && !tabHeader
+  const sectionTabsRef = useRef<HTMLDivElement>(null)
   const [sessions, setSessions] = useState<Session[]>([])
   const [rootIds, setRootIds] = useState<string[]>([])
   const [rootCursor, setRootCursor] = useState<string | null>(null)
@@ -104,6 +108,15 @@ export default function SystemView({
   const [section, setSectionState] = useState<SystemSection>(requestedSection || 'sessions')
   useEffect(() => { if (requestedSection) setSectionState(requestedSection) }, [requestedSection])
   const onSectionChangeRef = useRef(onSectionChange); onSectionChangeRef.current = onSectionChange
+  // The phone section strip scrolls sideways; keep the selected section in view.
+  useEffect(() => {
+    const strip = sectionTabsRef.current
+    const tab = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    if (!phone || !strip || !tab) return
+    const bounds = strip.getBoundingClientRect(), rect = tab.getBoundingClientRect()
+    if (rect.left < bounds.left + 16) strip.scrollLeft -= bounds.left + 16 - rect.left
+    else if (rect.right > bounds.right - 16) strip.scrollLeft += rect.right - (bounds.right - 16)
+  }, [phone, section])
   const setSection = useCallback((next: SystemSection) => { setSectionState(next); onSectionChangeRef.current?.(next) }, [])
   const [agentRegistry, setAgentRegistry] = useState<AgentRegistryEntry[]>([])
   const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>(agentRequest?.agent || 'main')
@@ -458,10 +471,149 @@ export default function SystemView({
     setSection('sessions')
     inspectSession(sessionId)
   }
-  const tabClass = (active: boolean, kind = 'foxwarm-system-tab') => `${kind} rounded-md px-3 py-1 text-xs font-medium ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
+  const tabClass = (active: boolean, kind = 'foxwarm-system-tab', touch = false) => `${kind} shrink-0 whitespace-nowrap rounded-md font-medium ${touch ? 'min-h-9 px-3.5 text-[13px]' : 'px-3 py-1 text-xs'} ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
+
+  const sectionTabs = (
+    <div ref={sectionTabsRef} className={phone ? 'mobile-system-tabs -mx-4 overflow-x-auto px-4' : undefined}>
+      <div className={`inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5 ${phone ? 'mobile-glass-surface' : ''}`} role="tablist">
+        {SYSTEM_SECTIONS.map(item => (
+          <button key={item.id} type="button" role="tab" aria-selected={section === item.id} data-active={section === item.id} data-system-tab={item.id} onClick={() => setSection(item.id)} className={tabClass(section === item.id, 'foxwarm-system-tab', phone)}>{item.label}</button>
+        ))}
+      </div>
+    </div>
+  )
+  const headerBadges = summary.managedCount > 0 || nodeTargetsError ? <>
+    {summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
+    {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
+  </> : null
+  const content = (
+    section === 'sessions' ? (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+          <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Session view">
+            <button type="button" aria-pressed={sessionsView === 'list'} data-sessions-view="list" data-active={sessionsView === 'list'} onClick={() => setSessionsView('list')} className={tabClass(sessionsView === 'list', 'foxwarm-system-view-tab')}>List</button>
+            <button type="button" aria-pressed={sessionsView === 'timeline'} data-sessions-view="timeline" data-active={sessionsView === 'timeline'} onClick={() => setSessionsView('timeline')} className={tabClass(sessionsView === 'timeline', 'foxwarm-system-view-tab')}>Timeline</button>
+          </div>
+          <div className="flex flex-wrap items-center gap-1 text-xs" data-system-summary="sessions">
+            {sessionsSummary.map(item => (
+              <button key={item.id} type="button" aria-pressed={sessionsView === 'list' && statusFilter === item.id}
+                onClick={() => { setSessionsView('list'); setStatusFilter(statusFilter === item.id ? 'all' : item.id) }}
+                className={`rounded-md px-2 py-1 ${sessionsView === 'list' && statusFilter === item.id ? 'bg-fw-accent-section text-fw-accent' : 'text-fw-text-muted hover:bg-fw-hover'}`}>
+                <strong className="font-semibold tabular-nums text-fw-text-strong">{item.value}</strong> {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {sessionsView === 'timeline' ? <Suspense fallback={<div className="p-6 text-sm text-fw-text-muted">Loading timeline…</div>}><SessionSequenceView currentSession={currentSession} onSelectSession={onSelectSession} /></Suspense> : <>
+          <div className="border-b border-fw-border-muted pb-4">
+            <SessionFilterBar
+              filters={{ query: searchQuery, status: statusFilter, agent: selectedAgent, nodeId: nodeFilter, model: modelFilter }}
+              onChange={patch => {
+                if (patch.query !== undefined) setSearchQuery(patch.query)
+                if (patch.status !== undefined) setStatusFilter(patch.status)
+                if (patch.agent !== undefined) setSelectedAgent(patch.agent)
+                if (patch.nodeId !== undefined) setNodeFilter(patch.nodeId)
+                if (patch.model !== undefined) setModelFilter(patch.model)
+              }}
+              statusOptions={statusFilters}
+              agents={agents}
+              totalSessions={summary.sessionCount}
+              nodes={nodeOptions}
+              models={modelOptions}
+              usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens, cost: summary.cost }}
+            />
+          </div>
+          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <main className="min-w-0 space-y-2" data-system-session-list>
+              <div className="flex items-center justify-between px-1 text-xs text-fw-text-muted">
+                <span>{visibleSessions.length} of {sessions.length} loaded sessions</span>
+                <span>{summary.sessionCount} total</span>
+              </div>
+              {visibleSessions.map(session => (
+                <SessionOperationRow
+                  key={session.id}
+                  session={session}
+                  selected={inspectedSession?.id === session.id}
+                  current={currentSession === session.id}
+                  now={now}
+                  nodeLabel={nodeMap.get(getArchitectureSessionNodeId(session))?.displayName}
+                  onInspect={() => inspectSession(session.id)}
+                  onOpen={() => onSelectSession(session.id)}
+                />
+              ))}
+              {visibleSessions.length === 0 ? <div className="rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">No matching sessions.</div> : null}
+              {rootCursor ? (
+                <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full rounded-xl border border-dashed border-fw-border-strong bg-fw-section/60 px-3 py-2.5 text-sm font-medium text-fw-accent hover:bg-fw-section">
+                  Load 50 more root sessions…
+                </button>
+              ) : null}
+            </main>
+            <SessionInspector
+              session={inspectedSession}
+              parent={inspectedParent}
+              children={inspectedChildren}
+              childTotal={inspectedChildTotal}
+              hasMoreChildren={!!(inspectedSession && childCursors.get(inspectedSession.id))}
+              now={now}
+              current={!!inspectedSession && inspectedSession.id === currentSession}
+              node={inspectedNode}
+              onInspect={inspectSession}
+              onOpen={onSelectSession}
+              onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
+              extra={inspectedSession ? <>
+                <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} />
+                <section className="mt-4 flex items-center justify-between gap-2 border-t border-fw-border-muted pt-4" data-session-activity={inspectedSession.id}>
+                  <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
+                  <button type="button" onClick={() => showActivity({ sessionId: inspectedSession.id, tree: true })} className="text-xs font-medium text-fw-accent hover:underline" data-session-activity-open>View activity</button>
+                </section>
+              </> : null}
+            />
+          </div>
+        </>}
+      </div>
+    ) : section === 'agents' ? (
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <main className="min-w-0">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
+            <div><h2 className="text-sm font-semibold text-fw-text-strong">Agent registry</h2><p className="mt-0.5 text-xs text-fw-text-muted">Manage persistent workspace owners and open self-owned memory in Code.</p></div>
+            <div className="flex items-center gap-2"><span className="text-xs text-fw-text-muted" data-system-summary="agents">{agentRegistry.length || summary.agentCount} agents</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
+          </div>
+          {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger">{agentRegistryError}</div> : null}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} usage={loadedAgentUsage.get(agent.id)} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
+            {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">No agents found.</div> : null}
+          </div>
+        </main>
+        <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} installDefaultNode={agentDefaultNode} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
+      </div>
+    ) : section === 'webhooks' ? (
+      <SystemWebhooks onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
+    ) : section === 'usage' ? (
+      <SystemUsage request={usageRequest} onOpenSession={onSelectSession} />
+    ) : section === 'activity' ? (
+      <SystemActivity request={activityRequest} onOpenSession={onSelectSession} />
+    ) : section === 'timers' ? (
+      <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
+    ) : (
+      <SystemNodes nodes={nodeTargets} error={nodeTargetsError} sessions={sessions} onNodesChanged={reloadNodes} onSelectSession={showSessionFromNode} />
+    )
+  )
+
+  // Phones use the mobile page frame: a floating header with Back, the title and the section
+  // switch, over content that scrolls beneath it and clears the bottom safe area.
+  if (phone) return (
+    <div className="mobile-page-root mobile-system-page h-full min-h-0 overflow-hidden bg-fw-canvas" data-system-section={section}>
+      <MobilePageHeader title="System"
+        leading={onBack ? <button type="button" onClick={onBack} aria-label="Back" className="mobile-header-circle"><ArrowLeft size={20} /></button> : null}
+        actions={headerBadges ? <div className="flex flex-wrap justify-end gap-1">{headerBadges}</div> : null}>
+        {sectionTabs}
+      </MobilePageHeader>
+      <div className="h-full overflow-y-auto overflow-x-hidden px-4" data-system-scroll>{content}</div>
+    </div>
+  )
 
   return (
-    <div className="h-full overflow-y-auto bg-fw-canvas" data-system-section={section}>
+    <div className="h-full overflow-y-auto bg-fw-canvas" data-system-section={section} data-system-scroll>
       <div className="mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6">
         <header className="mb-4">
           <WorkbenchHeaderDragArea className="flex flex-wrap items-start justify-between gap-4">
@@ -478,130 +630,16 @@ export default function SystemView({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-fw-text-muted">
-              {summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
-              {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
+              {headerBadges}
               <WorkbenchPaneControls />
             </div>
           </WorkbenchHeaderDragArea>
           <nav className="mt-4 flex items-center gap-1 border-b border-fw-border-muted pb-3" aria-label="System sections">
-            <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="tablist">
-              {SYSTEM_SECTIONS.map(item => (
-                <button key={item.id} type="button" role="tab" aria-selected={section === item.id} data-active={section === item.id} data-system-tab={item.id} onClick={() => setSection(item.id)} className={tabClass(section === item.id)}>{item.label}</button>
-              ))}
-            </div>
+            {sectionTabs}
           </nav>
         </header>
 
-        {section === 'sessions' ? (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-              <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Session view">
-                <button type="button" aria-pressed={sessionsView === 'list'} data-sessions-view="list" data-active={sessionsView === 'list'} onClick={() => setSessionsView('list')} className={tabClass(sessionsView === 'list', 'foxwarm-system-view-tab')}>List</button>
-                <button type="button" aria-pressed={sessionsView === 'timeline'} data-sessions-view="timeline" data-active={sessionsView === 'timeline'} onClick={() => setSessionsView('timeline')} className={tabClass(sessionsView === 'timeline', 'foxwarm-system-view-tab')}>Timeline</button>
-              </div>
-              <div className="flex flex-wrap items-center gap-1 text-xs" data-system-summary="sessions">
-                {sessionsSummary.map(item => (
-                  <button key={item.id} type="button" aria-pressed={sessionsView === 'list' && statusFilter === item.id}
-                    onClick={() => { setSessionsView('list'); setStatusFilter(statusFilter === item.id ? 'all' : item.id) }}
-                    className={`rounded-md px-2 py-1 ${sessionsView === 'list' && statusFilter === item.id ? 'bg-fw-accent-section text-fw-accent' : 'text-fw-text-muted hover:bg-fw-hover'}`}>
-                    <strong className="font-semibold tabular-nums text-fw-text-strong">{item.value}</strong> {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {sessionsView === 'timeline' ? <Suspense fallback={<div className="p-6 text-sm text-fw-text-muted">Loading timeline…</div>}><SessionSequenceView currentSession={currentSession} onSelectSession={onSelectSession} /></Suspense> : <>
-              <div className="border-b border-fw-border-muted pb-4">
-                <SessionFilterBar
-                  filters={{ query: searchQuery, status: statusFilter, agent: selectedAgent, nodeId: nodeFilter, model: modelFilter }}
-                  onChange={patch => {
-                    if (patch.query !== undefined) setSearchQuery(patch.query)
-                    if (patch.status !== undefined) setStatusFilter(patch.status)
-                    if (patch.agent !== undefined) setSelectedAgent(patch.agent)
-                    if (patch.nodeId !== undefined) setNodeFilter(patch.nodeId)
-                    if (patch.model !== undefined) setModelFilter(patch.model)
-                  }}
-                  statusOptions={statusFilters}
-                  agents={agents}
-                  totalSessions={summary.sessionCount}
-                  nodes={nodeOptions}
-                  models={modelOptions}
-                  usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens, cost: summary.cost }}
-                />
-              </div>
-              <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <main className="min-w-0 space-y-2" data-system-session-list>
-                  <div className="flex items-center justify-between px-1 text-xs text-fw-text-muted">
-                    <span>{visibleSessions.length} of {sessions.length} loaded sessions</span>
-                    <span>{summary.sessionCount} total</span>
-                  </div>
-                  {visibleSessions.map(session => (
-                    <SessionOperationRow
-                      key={session.id}
-                      session={session}
-                      selected={inspectedSession?.id === session.id}
-                      current={currentSession === session.id}
-                      now={now}
-                      nodeLabel={nodeMap.get(getArchitectureSessionNodeId(session))?.displayName}
-                      onInspect={() => inspectSession(session.id)}
-                      onOpen={() => onSelectSession(session.id)}
-                    />
-                  ))}
-                  {visibleSessions.length === 0 ? <div className="rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">No matching sessions.</div> : null}
-                  {rootCursor ? (
-                    <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full rounded-xl border border-dashed border-fw-border-strong bg-fw-section/60 px-3 py-2.5 text-sm font-medium text-fw-accent hover:bg-fw-section">
-                      Load 50 more root sessions…
-                    </button>
-                  ) : null}
-                </main>
-                <SessionInspector
-                  session={inspectedSession}
-                  parent={inspectedParent}
-                  children={inspectedChildren}
-                  childTotal={inspectedChildTotal}
-                  hasMoreChildren={!!(inspectedSession && childCursors.get(inspectedSession.id))}
-                  now={now}
-                  current={!!inspectedSession && inspectedSession.id === currentSession}
-                  node={inspectedNode}
-                  onInspect={inspectSession}
-                  onOpen={onSelectSession}
-                  onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
-                  extra={inspectedSession ? <>
-                    <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} />
-                    <section className="mt-4 flex items-center justify-between gap-2 border-t border-fw-border-muted pt-4" data-session-activity={inspectedSession.id}>
-                      <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
-                      <button type="button" onClick={() => showActivity({ sessionId: inspectedSession.id, tree: true })} className="text-xs font-medium text-fw-accent hover:underline" data-session-activity-open>View activity</button>
-                    </section>
-                  </> : null}
-                />
-              </div>
-            </>}
-          </div>
-        ) : section === 'agents' ? (
-          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <main className="min-w-0">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
-                <div><h2 className="text-sm font-semibold text-fw-text-strong">Agent registry</h2><p className="mt-0.5 text-xs text-fw-text-muted">Manage persistent workspace owners and open self-owned memory in Code.</p></div>
-                <div className="flex items-center gap-2"><span className="text-xs text-fw-text-muted" data-system-summary="agents">{agentRegistry.length || summary.agentCount} agents</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
-              </div>
-              {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger">{agentRegistryError}</div> : null}
-              <div className="grid gap-3 md:grid-cols-2">
-                {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} usage={loadedAgentUsage.get(agent.id)} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
-                {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">No agents found.</div> : null}
-              </div>
-            </main>
-            <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} installDefaultNode={agentDefaultNode} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
-          </div>
-        ) : section === 'webhooks' ? (
-          <SystemWebhooks onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
-        ) : section === 'usage' ? (
-          <SystemUsage request={usageRequest} onOpenSession={onSelectSession} />
-        ) : section === 'activity' ? (
-          <SystemActivity request={activityRequest} onOpenSession={onSelectSession} />
-        ) : section === 'timers' ? (
-          <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
-        ) : (
-          <SystemNodes nodes={nodeTargets} error={nodeTargetsError} sessions={sessions} onNodesChanged={reloadNodes} onSelectSession={showSessionFromNode} />
-        )}
+        {content}
       </div>
     </div>
   )
