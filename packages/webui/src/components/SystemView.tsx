@@ -600,45 +600,44 @@ export default function SystemView({
   )
 
   // Phones use the mobile page frame: a floating header with Back, the title and the section
-  // switch, over content that scrolls beneath it and clears the bottom safe area.
-  if (phone) return (
-    <div className="mobile-page-root mobile-system-page h-full min-h-0 overflow-hidden bg-fw-canvas" data-system-section={section}>
-      <MobilePageHeader title="System"
-        leading={onBack ? <button type="button" onClick={onBack} aria-label="Back" className="mobile-header-circle"><ArrowLeft size={20} /></button> : null}
-        actions={headerBadges ? <div className="flex flex-wrap justify-end gap-1">{headerBadges}</div> : null}>
-        {sectionTabs}
-      </MobilePageHeader>
-      <div className="h-full overflow-y-auto overflow-x-hidden px-4" data-system-scroll>{content}</div>
-    </div>
-  )
-
+  // switch, over content that scrolls beneath it and clears the bottom safe area. Both frames
+  // share one element tree with `content` at the same position, so crossing the phone
+  // breakpoint restyles the page without remounting the open section, its modals or its state.
   return (
-    <div className="h-full overflow-y-auto bg-fw-canvas" data-system-section={section} data-system-scroll>
-      <div className="mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6">
-        <header className="mb-4">
-          <WorkbenchHeaderDragArea className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex items-center gap-3">
-              {tabHeader ? <WorkbenchTabClose className="inline-flex items-center justify-center rounded-lg p-2 text-fw-text hover:bg-fw-hover" /> : onBack ? (
-                <button onClick={onBack} className="inline-flex items-center gap-1 rounded-lg border border-fw-border bg-fw-section px-3 py-1.5 text-sm text-fw-text hover:bg-fw-hover md:hidden">
-                  <ArrowLeft className="h-4 w-4" /> Back
-                </button>
-              ) : null}
-              <WorkbenchTabIcon className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></WorkbenchTabIcon>
-              <div>
-                <h1 className="text-2xl font-bold text-fw-text-strong">System</h1>
-                <p className="mt-0.5 text-sm text-fw-text-muted">{SECTION_SUBTITLES[section]}</p>
+    <div className={phone ? 'mobile-page-root mobile-system-page h-full min-h-0 overflow-hidden bg-fw-canvas' : 'h-full overflow-y-auto bg-fw-canvas'} data-system-section={section} data-system-scroll={phone ? undefined : ''}>
+      {phone ? (
+        <MobilePageHeader title="System"
+          leading={onBack ? <button type="button" onClick={onBack} aria-label="Back" className="mobile-header-circle"><ArrowLeft size={20} /></button> : null}
+          actions={headerBadges ? <div className="flex flex-wrap justify-end gap-1">{headerBadges}</div> : null}>
+          {sectionTabs}
+        </MobilePageHeader>
+      ) : null}
+      <div className={phone ? 'h-full overflow-y-auto overflow-x-hidden px-4' : 'mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6'} data-system-scroll={phone ? '' : undefined}>
+        {phone ? null : (
+          <header className="mb-4">
+            <WorkbenchHeaderDragArea className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                {tabHeader ? <WorkbenchTabClose className="inline-flex items-center justify-center rounded-lg p-2 text-fw-text hover:bg-fw-hover" /> : onBack ? (
+                  <button onClick={onBack} className="inline-flex items-center gap-1 rounded-lg border border-fw-border bg-fw-section px-3 py-1.5 text-sm text-fw-text hover:bg-fw-hover md:hidden">
+                    <ArrowLeft className="h-4 w-4" /> Back
+                  </button>
+                ) : null}
+                <WorkbenchTabIcon className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></WorkbenchTabIcon>
+                <div>
+                  <h1 className="text-2xl font-bold text-fw-text-strong">System</h1>
+                  <p className="mt-0.5 text-sm text-fw-text-muted">{SECTION_SUBTITLES[section]}</p>
+                </div>
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-fw-text-muted">
-              {headerBadges}
-              <WorkbenchPaneControls />
-            </div>
-          </WorkbenchHeaderDragArea>
-          <nav className="mt-4 flex items-center gap-1 border-b border-fw-border-muted pb-3" aria-label="System sections">
-            {sectionTabs}
-          </nav>
-        </header>
-
+              <div className="flex flex-wrap items-center gap-2 text-xs text-fw-text-muted">
+                {headerBadges}
+                <WorkbenchPaneControls />
+              </div>
+            </WorkbenchHeaderDragArea>
+            <nav className="mt-4 flex items-center gap-1 border-b border-fw-border-muted pb-3" aria-label="System sections">
+              {sectionTabs}
+            </nav>
+          </header>
+        )}
         {content}
       </div>
     </div>
