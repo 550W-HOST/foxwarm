@@ -85,9 +85,11 @@ public sealed partial class SessionCommandEffectsTests
         var ready = Path.Combine(effects.Path, "ready");
         var release = Path.Combine(effects.Path, "release");
         var completed = Path.Combine(effects.Path, "completed");
+        // The marker is renamed into place: a redirect creates the file before it writes, and
+        // the poll below would otherwise read it empty.
         var command = OperatingSystem.IsWindows()
-            ? $"New-Item -ItemType Directory changed | Out-Null; Set-Location changed; Set-Content -LiteralPath '{ready}' -Value ready; while (!(Test-Path -LiteralPath '{release}')) {{ Start-Sleep -Milliseconds 20 }}; Set-Content -NoNewline -LiteralPath '{completed}' -Value settled"
-            : $"mkdir changed && cd changed && touch '{ready}'; while [ ! -f '{release}' ]; do sleep 0.02; done; printf settled > '{completed}'";
+            ? $"New-Item -ItemType Directory changed | Out-Null; Set-Location changed; Set-Content -LiteralPath '{ready}' -Value ready; while (!(Test-Path -LiteralPath '{release}')) {{ Start-Sleep -Milliseconds 20 }}; Set-Content -NoNewline -LiteralPath '{completed}.part' -Value settled; Move-Item -LiteralPath '{completed}.part' -Destination '{completed}'"
+            : $"mkdir changed && cd changed && touch '{ready}'; while [ ! -f '{release}' ]; do sleep 0.02; done; printf settled > '{completed}.part' && mv '{completed}.part' '{completed}'";
         await using var peer = new ConcurrentPeer(
             1,
             (_, stream, _) =>
