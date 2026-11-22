@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
@@ -238,50 +237,35 @@ internal sealed class VectorFixture : IAsyncDisposable
         throw new DirectoryNotFoundException("Repository root is unavailable.");
     }
 
-    internal static async Task<JsonNode> SourceAsync(
-        string mode,
-        string root,
-        string input,
-        string output
-    )
+    /// <summary>
+    /// Results of the TypeScript owners (vectorRuntime, archiveSearchIndex, config,
+    /// archiveRecall and archiveLexicalRecall) recorded at the final TypeScript revision
+    /// 80f740477c25d3b42165bb0d201e74ebc5fd4479 for the exact input the test writes; the input
+    /// digest guards against comparing a changed input with an old recording.
+    /// </summary>
+    internal static async Task<JsonNode> RecordedSourceAsync(string mode, string input)
     {
-        var repository = Repository();
-        var source =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException(
-                "Set FOXWARM_TS_ROOT to the frozen, built Source checkout."
-            );
-        var start = new ProcessStartInfo("node")
-        {
-            WorkingDirectory = source,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        foreach (
-            var arg in new[]
-            {
-                Path.Combine(
-                    repository,
-                    "dotnet",
-                    "Foxwarm.Tests",
-                    "Fixtures",
-                    "vector-fixture-source.mjs"
-                ),
-                mode,
-                root,
-                input,
-                output,
-            }
-        )
-            start.ArgumentList.Add(arg);
-        start.Environment["FOXWARM_DATA_DIR"] = root;
-        start.Environment["FOXWARM_TS_ROOT"] = source;
-        using var process = Process.Start(start)!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(40));
-        Assert.True(process.ExitCode == 0, await stderr + "\n" + await stdout);
-        return JsonNode.Parse(await File.ReadAllTextAsync(output))!;
+        var recorded = JsonNode
+            .Parse(
+                await File.ReadAllTextAsync(
+                    Path.Combine(
+                        AppContext.BaseDirectory,
+                        "Vector",
+                        "Fixtures",
+                        "vector-source-" + mode + ".json"
+                    )
+                )
+            )!
+            .AsObject();
+        var digest = Convert
+            .ToHexString(
+                System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(input))
+            )
+            .ToLowerInvariant();
+        Assert.True(
+            recorded["inputSha256"]!.GetValue<string>() == digest,
+            $"The {mode} input changed (sha256 {digest}); the recorded TypeScript result no longer applies."
+        );
+        return recorded["output"]!.DeepClone();
     }
 }

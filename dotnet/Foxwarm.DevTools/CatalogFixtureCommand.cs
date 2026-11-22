@@ -15,6 +15,9 @@ internal static class CatalogFixtureCommand
             .AsArray()
             .Select(row => row!.AsObject())
             .ToArray();
+        var file = Path.Combine(args[1], "state", "catalog.sqlite");
+        if (!File.Exists(file))
+            CreateEmpty(file);
         using var catalog = new SessionCatalog(args[1]);
         catalog.Initialize();
         if (args[0] == "replace")
@@ -29,5 +32,23 @@ internal static class CatalogFixtureCommand
             }
         }
         catalog.Upsert(rows);
+    }
+
+    // Fixture roots may already hold Session authority files that ordinary startup would refuse
+    // to admit without a catalog; the fixture's rows define the membership instead.
+    private static void CreateEmpty(string file)
+    {
+        var empty = Path.Combine(Path.GetTempPath(), "foxwarm-catalog-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (var catalog = new SessionCatalog(empty))
+                catalog.Initialize();
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.Copy(Path.Combine(empty, "state", "catalog.sqlite"), file);
+        }
+        finally
+        {
+            Directory.Delete(empty, true);
+        }
     }
 }

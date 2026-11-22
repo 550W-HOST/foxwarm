@@ -2,13 +2,12 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 
 const fixture = await createHostFixture('presentation-app'), route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -40,10 +39,7 @@ await seed('foreign', { currentNode: 'unsupported-node' }, { currentNode: 'unsup
 await seed('self', { parentSessionId: 'self' }); await seed('x', { parentSessionId: 'y' }); await seed('y', { parentSessionId: 'x' })
 await seed('A'); await seed('B', { aliases: ['A', 'shared'] }); await seed('C', { aliases: ['shared'] }); await seed('alias-child', { parentSessionId: 'A' }); await seed('ambiguous-child', { parentSessionId: 'shared' })
 for (let index = 0; index < 1000; index++) await seed('cold-' + String(index).padStart(4, '0'), { parentSessionId: 'root', archived: index === 500, pinned: index === 700 })
-const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
-const catalog = new catalogModule.SessionCatalogStore(join(state, 'catalog.sqlite')); catalog.initializeEmpty(); catalog.replaceAll(rows); catalog.close()
-const seedFile = join(fixture.root, 'seed.json'); await writeFile(seedFile, JSON.stringify(rows))
-execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedFile], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+await seedCatalog(fixture.data, rows); seedArchiveBranches(fixture.data, rows)
 const database = join(state, 'catalog.sqlite')
 function sql(text, args = []) { const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare(text).all(...args) } finally { db.close() } }
 function retained() { const db = new DatabaseSync(join(state, 'archive-store.sqlite'), { readOnly: true }); try { return ['archive_messages', 'archive_blocks', 'archive_branches'].map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY 1,2').all()) } finally { db.close() } }

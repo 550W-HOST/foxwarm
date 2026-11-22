@@ -17,6 +17,7 @@
     <None Update="Mcp/Fixtures/*.mjs" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Images/Fixtures/*.heic" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Channels/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Vector/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="ToolScript/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../packages/shared/src/toolResponseFormatting.fixtures.json" Link="Tools/Fixtures/toolResponseFormatting.fixtures.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../Foxwarm/Foxwarm.csproj" />

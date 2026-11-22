@@ -27,4 +27,4 @@ SessionManager bootstrap/admission or SessionSaveLane commit
 
 ## Representative tests
 
-`SessionCatalogPublicationTests`; `SessionCatalogSourceTests`; `SessionCatalogTests`; `SessionIdentityBoundaryTests`; WebUI list/architecture route tests.
+`SessionCatalogPublicationTests`; `SessionCatalogTests`; `SessionIdentityBoundaryTests`; WebUI list/architecture route tests.

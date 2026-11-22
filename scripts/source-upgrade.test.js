@@ -13,7 +13,7 @@ const repository = path.resolve(__dirname, '..');
 const output = path.join(repository, 'runtime/current');
 
 for (const scenario of ['retained-mailbox', 'active-worker', 'global-catalog']) {
-  test(`source promotion inspects candidate readers before selection: ${scenario}`, t => {
+  test(`source promotion inspects candidate readers before selection: ${scenario}`, async t => {
     assert(fs.existsSync(path.join(output, 'Foxwarm.dll')), 'Build managed source output first.');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-upgrade-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -33,10 +33,12 @@ for (const scenario of ['retained-mailbox', 'active-worker', 'global-catalog']) 
     }
     fs.symlinkSync(old, path.join(app, 'runtime/current'), process.platform === 'win32' ? 'junction' : 'dir');
     fs.writeFileSync(path.join(app, 'data_dir'), '../owned data\n');
-    const env = { ...process.env, FOXWARM_DATA_DIR: '', FOXWARM_TS_ROOT: repository };
-    const seeded = spawnSync(process.execPath, [path.join(repository, 'dotnet/Foxwarm.Tests/Fixtures/session-upgrade-fixture-ts.mjs'), data,
-      scenario === 'active-worker' ? 'candidate' : 'inactive'], { env, encoding: 'utf8' });
-    assert.equal(seeded.status, 0, seeded.stdout + seeded.stderr);
+    const env = { ...process.env, FOXWARM_DATA_DIR: '' };
+    // A retained Session Worker handback as the TypeScript backend left it: one applied and one
+    // pending mailbox row, with the Worker inactive or already starting its next generation.
+    const { restoreStateSnapshot } = await import('../dotnet/Foxwarm.Tests/Fixtures/state-snapshot.mjs');
+    await restoreStateSnapshot(path.join(repository, 'dotnet/Foxwarm.Tests/Fixtures/snapshots',
+      scenario === 'active-worker' ? 'session-upgrade-candidate.json.gz' : 'session-upgrade-inactive.json.gz'), data);
     const authority = path.join(data, 'state/sessions/retained.json');
     const before = fs.readFileSync(authority, 'utf8');
     const worker = new DatabaseSync(path.join(data, 'state/session-runtime.sqlite'));

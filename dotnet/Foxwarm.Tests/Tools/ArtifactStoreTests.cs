@@ -38,25 +38,23 @@ public sealed class ArtifactStoreTests
             ["files"] = new JsonObject { ["App.tsx"] = source },
         };
 
-    internal static async Task<JsonObject> Source(JsonObject request)
+    private static async Task<JsonObject> AnimatedGifs()
     {
-        var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException(
-                "FOXWARM_TS_ROOT is required for Source records"
-            );
         var info = new ProcessStartInfo("node")
         {
-            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
         info.ArgumentList.Add(
-            Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "artifact-fixture-ts.mjs")
+            Path.Combine(
+                VectorFixture.Repository(),
+                "dotnet",
+                "Foxwarm.Tests",
+                "Fixtures",
+                "animated-gif-fixture.mjs"
+            )
         );
         using var child = Process.Start(info)!;
-        await child.StandardInput.WriteAsync(request.ToJsonString());
-        child.StandardInput.Close();
         var output = child.StandardOutput.ReadToEndAsync();
         var errors = child.StandardError.ReadToEndAsync();
         await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
@@ -65,75 +63,11 @@ public sealed class ArtifactStoreTests
     }
 
     [Fact]
-    public async Task Original_Source_records_and_resources_support_managed_updates_and_Source_reads_of_both_revisions()
+    public async Task Pinned_ownership_type_and_concurrent_revision_conflicts_keep_immutable_revisions()
     {
         using var temp = new TempDirectory();
         var store = new ArtifactStore(temp.Path);
-        var image = ImageCodecTests.Raster(SKEncodedImageFormat.Png);
-        var source = await Source(
-            new JsonObject
-            {
-                ["root"] = temp.Path,
-                ["action"] = "publish",
-                ["sessionId"] = "owner",
-                ["image"] = Convert.ToBase64String(image),
-            }
-        );
-        var id = SessionWait.Text(source["receipt"]?["artifactId"])!;
-        Assert.True(JsonNode.DeepEquals(source, await store.ReadAsync(id, 1, "owner")));
-        Assert.Equal(image, (await store.ResourceAsync(id, 1, "owner", "image")).Bytes);
-        var changed = ImageCodecTests.Raster(SKEncodedImageFormat.Jpeg);
-        var document = await new ArtifactPreparer().ImageAsync(
-            changed,
-            "Managed image",
-            null,
-            default
-        );
-        await store.PublishAsync("owner", document, id, 1, changed);
-        var original = await Source(
-            new JsonObject
-            {
-                ["root"] = temp.Path,
-                ["action"] = "read",
-                ["sessionId"] = "owner",
-                ["artifactId"] = id,
-                ["revision"] = 1,
-            }
-        );
-        var updated = await Source(
-            new JsonObject
-            {
-                ["root"] = temp.Path,
-                ["action"] = "read",
-                ["sessionId"] = "owner",
-                ["artifactId"] = id,
-                ["revision"] = 2,
-            }
-        );
-        Assert.Equal(image, Convert.FromBase64String(SessionWait.Text(original["resource"])!));
-        Assert.Equal(changed, Convert.FromBase64String(SessionWait.Text(updated["resource"])!));
-        Assert.True(JsonNode.DeepEquals(await store.ReadAsync(id, 2, "owner"), updated["record"]));
-        var digest = SessionWait.Text(source["resources"]?["image"]?["sha256"])!;
-        await File.WriteAllBytesAsync(Path.Combine(temp.Path, id, "resources", digest), [1, 2, 3]);
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            store.ResourceAsync(id, 1, "owner", "image")
-        );
-    }
-
-    [Fact]
-    public async Task Pinned_ownership_type_and_concurrent_revision_conflicts_match_immutable_Source_layout()
-    {
-        using var temp = new TempDirectory();
-        var store = new ArtifactStore(temp.Path);
-        var first = await Source(
-            new JsonObject
-            {
-                ["root"] = temp.Path,
-                ["action"] = "publish",
-                ["sessionId"] = "owner",
-                ["document"] = Chart("Original"),
-            }
-        );
+        var first = await store.PublishAsync("owner", Chart("Original"));
         var id = SessionWait.Text(first["receipt"]?["artifactId"])!;
         await Assert.ThrowsAsync<InvalidDataException>(() => store.ReadAsync(id, 1, "other"));
         await Assert.ThrowsAsync<InvalidDataException>(() =>
@@ -215,9 +149,7 @@ public sealed class ArtifactStoreTests
     public async Task Real_GIF_animation_retains_original_bytes_and_rejects_the_original_frame_bound()
     {
         using var temp = new TempDirectory();
-        var generated = await Source(
-            new JsonObject { ["root"] = temp.Path, ["action"] = "animated" }
-        );
+        var generated = await AnimatedGifs();
         var allowed = Convert.FromBase64String(SessionWait.Text(generated["images"]![0])!);
         var oversized = Convert.FromBase64String(SessionWait.Text(generated["images"]![1])!);
         var prepare = new ArtifactPreparer();

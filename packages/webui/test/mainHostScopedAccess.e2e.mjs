@@ -2,13 +2,13 @@
 import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, readdir, access } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import WebSocket from 'ws'
 import sharp from 'sharp'
 import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
+import { restoreStateSnapshot, stateSnapshot } from './stateSeeds.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
@@ -47,9 +47,7 @@ await writeFile(host.modelPath, JSON.stringify({ default: 'local', providers: { 
 await mkdir(join(host.work, 'memory'), { recursive: true }); await writeFile(join(host.work, 'memory/ONBOOT.md'), ' \n'); await writeFile(join(host.work, 'memory/MEMORY.md'), 'PRIVATE-PROMPT-SNAPSHOT')
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 20, g: 110, b: 180, alpha: 1 } } }).png().toBuffer()
 await writeFile(join(host.work, 'reference.png'), png)
-await writeFile(join(host.work, 'unreferenced.png'), await sharp({ create: { width: 2, height: 3, channels: 4, background: { r: 180, g: 20, b: 110, alpha: 1 } } }).png().toBuffer())
-const seeded = execFileSync(process.execPath, [resolve('dotnet/Foxwarm.Tests/Fixtures/continuous-history-fixture-ts.mjs'), host.data, join(host.work, 'reference.png'), join(host.work, 'unreferenced.png')], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
-const seed = JSON.parse(seeded.split('\n').find(line => line.startsWith('CONTINUOUS_FIXTURE:')).slice('CONTINUOUS_FIXTURE:'.length))
+const seed = await restoreStateSnapshot(stateSnapshot('continuous-history-unreferenced'), host.data)
 const config = (token = aliceToken, extra = {}) => ({
   url: host.origin + '/nested/app', bot: { httpPort: host.port }, llm: { maxOutput: 713, compactKeepPercent: 0.3 }, channels: { webui: {} },
   access: { identities: { alice: { token, surfaces: { webui: { sessions: ['continuous-alias', 'chat'] }, mcp: {} } }, bob: { token: 'synthetic-bob', surfaces: { webui: { sessions: ['main/*'] } } }, ...extra } },

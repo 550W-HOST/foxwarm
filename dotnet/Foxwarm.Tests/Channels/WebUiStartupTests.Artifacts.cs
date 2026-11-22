@@ -172,14 +172,10 @@ public sealed partial class WebUiStartupTests
         }
         var root = Path.Combine(h.Data, "state", "artifacts");
         var image = ImageCodecTests.Raster(SKEncodedImageFormat.Png);
-        var source = await ArtifactStoreTests.Source(
-            new JsonObject
-            {
-                ["root"] = root,
-                ["action"] = "publish",
-                ["sessionId"] = "artifact-owner",
-                ["image"] = Convert.ToBase64String(image),
-            }
+        var source = await new ArtifactStore(root).PublishAsync(
+            "artifact-owner",
+            await new ArtifactPreparer().ImageAsync(image, "Source image", "Original bytes", default),
+            image: image
         );
         var artifactId = SessionWait.Text(source["receipt"]?["artifactId"])!;
         var route = $"/nested/main/api/sessions/artifact-owner/artifacts/{artifactId}/1";

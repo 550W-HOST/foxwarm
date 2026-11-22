@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
@@ -13,48 +12,6 @@ public sealed class CommittedArchiveIdentityTests
 
     private static SessionManager Manager(string root, string work) =>
         new(root, work, Options, HostModels.ForTest(Options));
-
-    internal static async Task<JsonObject> SourceFixture(string mode, string root)
-    {
-        var repo =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("Owned source fixture root is required.");
-        Console.WriteLine("Owned Archive fixture root: " + root);
-        using var process = Process.Start(
-            new ProcessStartInfo("node")
-            {
-                WorkingDirectory = repo,
-                ArgumentList =
-                {
-                    Path.Combine(
-                        repo,
-                        "dotnet",
-                        "Foxwarm.Tests",
-                        "Fixtures",
-                        "archive-identity-fixture-ts.mjs"
-                    ),
-                    mode,
-                    root,
-                },
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            }
-        )!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var text = await stdout;
-        var error = await stderr;
-        Assert.True(process.ExitCode == 0, text + error);
-        return JsonNode
-            .Parse(
-                text.Split('\n')
-                    .Single(line => line.StartsWith("ARCHIVE_FIXTURE:", StringComparison.Ordinal))[
-                    "ARCHIVE_FIXTURE:".Length..
-                ]
-            )!
-            .AsObject();
-    }
 
     private static SqliteConnection Open(string file, bool readOnly = false)
     {
@@ -78,29 +35,6 @@ public sealed class CommittedArchiveIdentityTests
         command.ExecuteNonQuery();
     }
 
-    private static JsonArray AuditRows(string file)
-    {
-        using var connection = Open(file, true);
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT session_id,agent,seq,timestamp,role,message_json FROM archive_messages ORDER BY session_id,seq";
-        using var rows = command.ExecuteReader();
-        var result = new JsonArray();
-        while (rows.Read())
-            result.Add(
-                new JsonObject
-                {
-                    ["session_id"] = rows.GetString(0),
-                    ["agent"] = rows.GetString(1),
-                    ["seq"] = rows.GetInt64(2),
-                    ["timestamp"] = rows.GetDouble(3),
-                    ["role"] = rows.GetString(4),
-                    ["message_json"] = rows.GetString(5),
-                }
-            );
-        return result;
-    }
-
     private static JsonArray Records(IEnumerable<ArchiveMessageRecord> records) =>
         new(
             records
@@ -119,13 +53,6 @@ public sealed class CommittedArchiveIdentityTests
                 .ToArray()
         );
 
-    private static void Stats(JsonNode expected, ArchiveStats actual)
-    {
-        Assert.Equal(expected["count"]!.GetValue<long>(), actual.Count);
-        Assert.Equal(expected["minSeq"]?.GetValue<long>(), actual.First);
-        Assert.Equal(expected["maxSeq"]?.GetValue<long>(), actual.Last);
-    }
-
     private static void Blocks(JsonArray expected, IReadOnlyList<ArchiveBlockRecord> actual)
     {
         Assert.Equal(expected.Count, actual.Count);
@@ -141,137 +68,6 @@ public sealed class CommittedArchiveIdentityTests
             Assert.Equal(row["sourceStart"]!.GetValue<long>(), block.SourceStart);
             Assert.Equal(row["sourceEnd"]!.GetValue<long>(), block.SourceEnd);
         }
-    }
-
-    [Fact]
-    public async Task Real_source_move_fork_delete_restart_matches_pure_canonical_readers_payloads_agents_caps_and_stats()
-    {
-        using var temp = new TempDirectory();
-        var root = Path.Combine(temp.Path, "data");
-        var expected = await SourceFixture("seed", root);
-        var reopened = await SourceFixture("verify", root);
-        Assert.True(JsonNode.DeepEquals(expected, reopened));
-        var database = Path.Combine(root, "state", "archive-store.sqlite");
-        var ledger = Path.Combine(root, "state", "session-id-reservations.jsonl");
-        var beforeDatabase = await File.ReadAllBytesAsync(database);
-        var beforeLedger = await File.ReadAllBytesAsync(ledger);
-        foreach (var (id, value) in expected["expected"]!.AsObject())
-        {
-            var reader = new SqliteArchiveMessageStore(database, id);
-            var rows = value!.AsObject();
-            Assert.True(
-                JsonNode.DeepEquals(rows["local"], Records(reader.ReadMessages())),
-                id + " local"
-            );
-            Assert.True(
-                JsonNode.DeepEquals(
-                    rows["local"],
-                    Records(reader.ReadMessagesRange(1, 9007199254740991))
-                ),
-                id + " local range"
-            );
-            Assert.True(
-                JsonNode.DeepEquals(
-                    rows["effective"],
-                    Records(reader.ReadEffectiveMessagesRange(1, 9007199254740991))
-                ),
-                id + " effective"
-            );
-            Stats(rows["localStats"]!, reader.MessageStats());
-            Stats(rows["effectiveStats"]!, reader.EffectiveMessageStats());
-            Blocks(rows["blocks"]!.AsArray(), reader.ReadBlocks());
-            Blocks(
-                rows["effectiveBlocks"]!.AsArray(),
-                reader.ReadEffectiveBlocksRange(1, 9007199254740991)
-            );
-            foreach (var record in reader.ReadMessages())
-                Assert.True(
-                    JsonNode.DeepEquals(
-                        Records([record]),
-                        Records([reader.ReadMessageBySeq(record.Seq)!])
-                    )
-                );
-            Assert.Equal(
-                reader
-                    .ReadEffectiveBlocksRange(1, 9007199254740991)
-                    .Select(block => block.Id)
-                    .DefaultIfEmpty()
-                    .Max(),
-                reader.EffectiveBlockHighWater()
-            );
-            Assert.Equal(
-                reader.ReadEffectiveBlocksRange(1, 9007199254740991).Count,
-                reader.EffectiveBlockTopology().Count
-            );
-            if (rows["branch"] is JsonObject sourceBranch)
-            {
-                var branch = reader.ReadBranch()!;
-                Assert.Equal(sourceBranch["sessionId"]!.GetValue<string>(), branch.SessionId);
-                Assert.Equal(sourceBranch["forkMessageSeq"]!.GetValue<long>(), branch.MessageCap);
-                Assert.Equal(sourceBranch["forkBlockId"]!.GetValue<long>(), branch.BlockCap);
-            }
-        }
-        Assert.True(JsonNode.DeepEquals(expected["rows"], AuditRows(database)));
-        Assert.Equal(beforeDatabase, await File.ReadAllBytesAsync(database));
-        Assert.Equal(beforeLedger, await File.ReadAllBytesAsync(ledger));
-        var zero = new SqliteArchiveMessageStore(database, "archive_zero_zero");
-        Assert.Equal(0, zero.ReadBranch()!.MessageCap);
-        Assert.DoesNotContain(
-            zero.ReadEffectiveMessagesRange(1, 100),
-            row =>
-                row.MessageJson.Contains("Excluded by genuine zero cap", StringComparison.Ordinal)
-        );
-        Assert.Contains(
-            new SqliteArchiveMessageStore(database, "archive_old").ReadMessages(),
-            row => row.Agent == "main"
-        );
-        Assert.Contains(
-            new SqliteArchiveMessageStore(database, "archive_old").ReadMessages(),
-            row => row.Agent == "archive-target"
-        );
-        var absent = Path.Combine(temp.Path, "absent", "archive.sqlite");
-        Assert.Empty(new SqliteArchiveMessageStore(absent, "unknown").ReadMessages());
-        Assert.False(File.Exists(absent));
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Startup_repairs_missing_or_malformed_independent_ledger_from_real_committed_sqlite_without_hydration(
-        bool malformed
-    )
-    {
-        using var temp = new TempDirectory();
-        var data = Path.Combine(temp.Path, "data");
-        var fixture = await SourceFixture("seed", data);
-        var work = Path.Combine(temp.Path, "work");
-        Directory.CreateDirectory(work);
-        var ledger = Path.Combine(data, "state", "session-id-reservations.jsonl");
-        if (malformed)
-            await File.AppendAllTextAsync(ledger, "{\"v\":1,\"sessionId\":");
-        else
-            File.Delete(ledger);
-        var database = Path.Combine(data, "state", "archive-store.sqlite");
-        var before = AuditRows(database);
-        await using var manager = Manager(data, work);
-        await manager.LoadAsync();
-        Assert.Empty(manager.Owners());
-        Assert.True(JsonNode.DeepEquals(before, AuditRows(database)));
-        Assert.True(File.Exists(ledger));
-        foreach (var node in fixture["ids"]!.AsArray())
-        {
-            var id = node!.GetValue<string>();
-            var split = id.Split('/');
-            var agent = split.Length == 1 ? "main" : split[0];
-            var name = split[^1];
-            if (agent != "main")
-                Directory.CreateDirectory(Path.Combine(work, "agents", agent, "memory"));
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
-                manager.CreateNamedAsync(agent, name, null, null)
-            );
-        }
-        Assert.Empty(manager.Owners());
-        Assert.True(JsonNode.DeepEquals(before, AuditRows(database)));
     }
 
     [Fact]

@@ -16,12 +16,12 @@ The full-Unicode lowercase oracle and `dotnet/scripts/generate-source-lowercase.
 ## Source assets and consumers
 
 - Feature directories contain xUnit tests and feature-local fixtures such as MCP peers, Python exec peers and ToolScript JSON. Their project copy rules remain local to those consumers.
-- `Fixtures/` contains the cross-runtime TypeScript producers, controlled SDK/channel/browser peers, SQL seeds and parity corpora. Session/Archive, catalog, image, tool, timer and Vector tests invoke these files directly; original-App drivers also use the catalog/history/Archive seeds. Some oracles execute frozen `git show` source. Their recorded revision/path pairs continue to identify historical source, not the current directory layout.
+- `Fixtures/` contains frozen-source and platform JavaScript oracles, controlled SDK/channel/browser peers, schema-level seeds, recorded state snapshots (`snapshots/`, restored by `state-snapshot.mjs`) and parity corpora. Session, catalog, image, tool, timer and Vector tests invoke these files directly; original-App drivers also use the Archive, Worker-store and snapshot seeds. Some oracles execute frozen `git show` source. Their recorded revision/path pairs continue to identify historical source, not the current directory layout.
 - `scripts/` contains differential runners/comparators, the standalone HTTP/restart driver, and `qualify-*.mjs` controlled-host checks. These are focused entry points, separate from the normal suite's discovery.
 - `../Foxwarm.DevTools/` implements managed probe commands. Its build copies `Fixtures/parity-corpus.json` and `Fixtures/responses-stream-corpus.json` under their existing output names so the commands also work without an explicit corpus argument.
 - `../scripts/` contains build/publish/source-generation helpers. Optional HEIC preparation is documented in [native image prerequisites](../../docs/native-image-prerequisites.md).
 
-Legacy Session/Archive producers qualify migration into managed Main. Save/reopen checks use the maintained implementation; returning current installation data to retired TypeScript Main is outside the [compatibility boundary](../../docs/code-index/units/dotnet-tests.md#contract-boundary). Source-only reopen and algorithm/protocol comparisons remain useful against original Source data.
+TypeScript-era data comes from schema-level seeds and snapshots recorded at the final TypeScript revision; no test runs the TypeScript backend to write it. Results recorded from TypeScript owners (`Vector/Fixtures/`, `Channels/Fixtures/webui-logs-source.json`, `Fixtures/vision-input-fixture.mjs`) carry the inputs they apply to. Returning current installation data to retired TypeScript Main is outside the [compatibility boundary](../../docs/code-index/units/dotnet-tests.md#contract-boundary).
 
 ## Differential checks
 

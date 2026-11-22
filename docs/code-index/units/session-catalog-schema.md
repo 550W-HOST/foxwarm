@@ -24,7 +24,7 @@ Schema v3 adds nullable REAL request-cost subtotals and maintained known-cost an
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionCatalogMigrationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionCatalogPublicationTests.cs`; `dotnet/Foxwarm.Tests/Storage/TypeScriptFixtureTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionCatalogMigrationTests.cs`; `SessionCatalogPublicationTests.cs`.
 
 `packages/webui/test/mainHostCatalog.e2e.mjs` uses the actual Source catalog migration before Archive branch seeding. Its ambiguous presentation aliases, Unicode identities and parent cycles qualify the catalog-first persisted boundary without presenting those aliases as committed pre-catalog Archive moves. The real Main/browser scenarios retain bounded list queries, publication failures, pre-effect ordering and missing cold authority admission.
 

@@ -38,10 +38,10 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `AuthorityStreamingTests.cs` (streamed/document value equivalence including raw and compacted history, open values, bounded chunks, invalid immutable history and partial-stream cleanup); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `LegacyBlockAuthorityTests.cs` with the actual Source fixture `dotnet/Foxwarm.Tests/Fixtures/legacy-block-fixture-ts.mjs`.
+`dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `AuthorityStreamingTests.cs` (streamed/document value equivalence including raw and compacted history, open values, bounded chunks, invalid immutable history and partial-stream cleanup); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `dotnet/Foxwarm.Tests/Storage/JavaScriptJsonParityTests.cs` (`EcmaJson`/`EcmaNumber` against platform `JSON.stringify` through `Fixtures/json-stringify-oracle.mjs`); `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `LegacyBlockAuthorityTests.cs`.
 
 `SessionUpgradeCompatibilityTests` and `WebUiStartupTests.SessionRecovery.cs` exercise cursor preservation, local unavailable members, safe recoverable/fatal diagnostics through real Main/API callers, and strict recovery-save commit classification.
 
 `SessionQueuedContentTests` and the real Main queued-content case in `WebUiStartupTests.SessionRecovery.cs` exercise both persisted queue content forms: shared inspection diagnostics, healthy startup/HTTP, no failed-owner publication, no image publication before a later malformed part, retained bad authority bytes and ordinary admission after repair. Image I/O and later persistence/global failures remain outside the local shape-error boundary.
 
-`LegacyHistoryAuthorityTests*.cs` with `Fixtures/legacy-history-fixture-ts.mjs` exercises actual Source hydration/save and managed inspection, cold load, normal save, fork, exact recall, provider replay, new canonical append and reopen with missing metadata. Compaction/pruning checks retain unaddressable history and its partial-identity tool exchanges while numbered work remains usable.
+`LegacyHistoryAuthorityTests*.cs` cover history with missing metadata: catalog topology for null parents, unrelaxed Archive admission, and compaction/pruning that retains unaddressable history and its partial-identity tool exchanges while numbered work remains usable.

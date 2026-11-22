@@ -3,18 +3,16 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
 import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 
-const repo = resolve('.')
 const options = {}
 const fixture = await createHostFixture('execution-context', options)
 Object.assign(process.env, testEnvironment.isolatedApplicationEnv(fixture.data))
-const { SessionCatalogStore } = await import('../../../lib/session/catalogStore.js')
 options.cwd = fixture.root
 const counts = new Map(), requests = [], failures = []
 const message = text => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
@@ -55,13 +53,7 @@ for (const [id, patch, queued] of variants) {
   await writeFile(join(sessions, id + '.json'), serialized); originals.set(id, serialized)
   rows.push({ id, agent: 'main', busy: false, queueLength: queued ? 1 : 0, model: 'a', meta: raw.meta, ...patch })
 }
-const catalog = new SessionCatalogStore(join(state, 'catalog.sqlite'))
-catalog.initializeEmpty(); catalog.replaceAll(rows); catalog.close()
-function seedBranches(name, rows) {
-  const seed = join(fixture.root, name + '.json')
-  return writeFile(seed, JSON.stringify(rows)).then(() => execFileSync(process.execPath, [join(repo, 'dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seed], { env: { ...process.env, FOXWARM_TS_ROOT: repo } }))
-}
-await seedBranches('seed', rows)
+await seedCatalog(fixture.data, rows); seedArchiveBranches(fixture.data, rows)
 const exists = path => access(path).then(() => true, () => false)
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const authority = id => readFile(join(sessions, id + '.json'), 'utf8').then(JSON.parse)
@@ -119,13 +111,7 @@ try {
     await writeFile(join(sessions, id + '.json'), JSON.stringify(raw))
     bootRows.push({ id, agent: 'main', model: 'a', busy: false, queueLength: 1, meta: raw.meta, currentNode: node })
   }
-  const bootSeed = join(fixture.root, 'boot-catalog.json')
-  await writeFile(bootSeed, JSON.stringify(bootRows))
-  execFileSync(join(process.env.DOTNET_ROOT, 'dotnet'), [
-    resolve('dotnet/Foxwarm.DevTools/bin/Debug/net10.0/Foxwarm.DevTools.dll'),
-    'catalog-fixture', 'upsert', fixture.data, bootSeed,
-  ], { stdio: 'pipe' })
-  await seedBranches('boot-seed', bootRows)
+  await seedCatalog(fixture.data, bootRows, 'upsert'); seedArchiveBranches(fixture.data, bootRows)
   const badBefore = await readFile(join(sessions, 'mandatory-bad.json'), 'utf8'), requestCount = requests.length
   await fixture.start()
   await done('mandatory-good')
