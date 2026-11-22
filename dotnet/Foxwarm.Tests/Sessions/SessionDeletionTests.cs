@@ -679,7 +679,7 @@ public sealed class SessionDeletionTests
                     "dotnet",
                     "Foxwarm.Tests",
                     "Fixtures",
-                    "session-delete-worker-fixture-ts.mjs"
+                    "session-worker-store-seed.mjs"
                 ),
                 file,
                 mode,
@@ -692,7 +692,7 @@ public sealed class SessionDeletionTests
         if (!process.WaitForExit(30000))
         {
             process.Kill(true);
-            throw new TimeoutException("Owned source Worker fixture timed out.");
+            throw new TimeoutException("Owned Session Worker store seed timed out.");
         }
         Assert.True(process.ExitCode == 0, await output + await error);
     }

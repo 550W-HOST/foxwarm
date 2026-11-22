@@ -83,7 +83,7 @@ function classify(file) {
   if (/^(?:lib|packages\/[^/]+\/dist)\/.*\.test\.js$/.test(file)) return 'generated-test-artifact'
   // These tests execute resources/helpers still shipped by managed Main. Other
   // Source tests exercise the retired Main, even when their subject is a Node.
-  if (['src/nodes/runSh.test.ts', 'src/nodes/runPs1.test.ts'].includes(file)) return 'node-bootstrap'
+  if (/^test\/node-bootstrap\/.*\.test\.mjs$/.test(file)) return 'node-bootstrap'
   if (/^packages\/artifact-runtime\/test\/.*\.test\.mjs$/.test(file)) return 'runtime-helpers'
   if (/^src\/.*\.test\.ts$/.test(file)) return 'reference-backend'
   if (file === 'scripts/test/reference-isolation.test.mjs') return 'reference-isolation'

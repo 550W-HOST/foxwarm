@@ -27,7 +27,7 @@ public sealed class VisionInputParityTests
                     "dotnet",
                     "Foxwarm.Tests",
                     "Fixtures",
-                    "vision-input-fixture-ts.mjs"
+                    "vision-input-fixture.mjs"
                 ),
                 temp.Path,
                 output,

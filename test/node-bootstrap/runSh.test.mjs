@@ -1,24 +1,47 @@
-import '../testEnvironment';
+import testEnvironment from '../../scripts/test/test-process-env.cjs';
+testEnvironment.initializeTestEnvironment();
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import type { AddressInfo } from 'node:net';
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { NODE_SOURCE_FILES, NODE_SOURCE_TAR_EXCLUDES } from './httpRoutes';
-import { buildNodeBootstrapCommands } from './bootstrapInfo';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// The `/node/source.tar.gz` payload of managed Main (NodeBootstrap.Sources plus the sandbox start script).
+const NODE_SOURCE_FILES = ['packages/shared', 'packages/cli-node', 'packages/cli-node-runtime', 'scripts/start-sandbox-node.sh'];
+const NODE_SOURCE_TAR_EXCLUDES = ['packages/shared/node_modules', 'packages/cli-node/node_modules', 'packages/cli-node-runtime/node_modules'];
+
+const shellQuote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
+
+// The literal commands managed Main returns for these options (NodeBootstrap.Commands without a launch
+// profile): download a template and pipe it to bash with quoted host, credential, Node ID and directory.
+function buildNodeBootstrapCommands({ baseUrl, pairingToken, authToken, nodeId, installDir }) {
+  const download = name => `curl -fsSL ${shellQuote(`${baseUrl}/node/${name}`)} | bash -s --`;
+  const args = ` --host=${shellQuote(baseUrl)}`
+    + (authToken ? ` --auth-token=${shellQuote(authToken)}` : ` --pairing=${shellQuote(pairingToken)}`)
+    + ` --node-id=${shellQuote(nodeId)}`;
+  return {
+    bareMetal: `${download('run.sh')} --dir=${shellQuote(installDir)}${args}`,
+    bareMetalInstall: `${download('run.sh')} --dir=${shellQuote(installDir)}${args} --install`,
+    docker: `${download('run-docker.sh')}${args}`,
+    interactive: `${download('run-interactive.sh')}${args}`,
+  };
+}
 
 const execFileAsync = promisify(execFile);
 const RUN_SH = path.resolve(__dirname, '../../templates/node/run.sh');
 
-async function writeExecutable(filePath: string, content: string): Promise<void> {
+async function writeExecutable(filePath, content) {
   await fs.writeFile(filePath, content, { mode: 0o755 });
 }
 
-async function makeFixture(options: { isolatedPath?: boolean; tmux?: boolean; userSystemd?: boolean } = {}) {
+async function makeFixture(options = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-run-sh-'));
   const bin = path.join(root, 'bin');
   const calls = path.join(root, 'calls');
@@ -97,7 +120,7 @@ exit 0
   return { root, bin, calls, env };
 }
 
-async function runScript(args: string[], env: NodeJS.ProcessEnv) {
+async function runScript(args, env) {
   return execFileAsync('/bin/sh', [RUN_SH, ...args], { env, timeout: 15_000 });
 }
 
@@ -106,7 +129,7 @@ test('run.sh requires an explicit --dir before doing bootstrap work', async () =
   try {
     await assert.rejects(
       runScript(['--host=http://master', '--pairing=TOKEN'], fixture.env),
-      (error: any) => {
+      (error) => {
         assert.match(error.stderr, /--dir is required/);
         return true;
       },
@@ -252,7 +275,7 @@ if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
         assert.ok(!args.includes(authToken ? '--token' : '--auth-token'));
         assert.ok(args.includes(token));
       };
-      for (const method of ['bareMetal', 'bareMetalInstall', 'interactive', 'docker'] as const) {
+      for (const method of ['bareMetal', 'bareMetalInstall', 'interactive', 'docker']) {
         const cwd = path.join(fixture.root, `${mode}-${method}`);
         await fs.ensureDir(cwd);
         await execFileAsync('/bin/sh', ['-c', commands[method]], { cwd, env, timeout: 5000 });
@@ -332,7 +355,7 @@ test('run.sh -d prefers tmux and records session, pid, log, and stop guidance', 
 test('run.sh -d falls back to nohup when tmux is unavailable', async () => {
   const fixture = await makeFixture({ isolatedPath: true });
   const installDir = path.join(fixture.root, 'nohup install');
-  let pid: number | undefined;
+  let pid;
   try {
     const result = await runScript([
       `--dir=${installDir}`,
@@ -361,8 +384,8 @@ test('run.sh starts the real prebuilt node bundle from a clean source archive wi
   const installDir = path.join(fixture.root, 'clean distribution');
   const archivePath = path.join(fixture.root, 'source.tar.gz');
   const repoRoot = path.resolve(__dirname, '../..');
-  let nodePid: number | undefined;
-  let server: http.Server | undefined;
+  let nodePid;
+  let server;
   try {
     await execFileAsync('tar', [
       '-czf', archivePath,
@@ -395,11 +418,11 @@ test('run.sh starts the real prebuilt node bundle from a clean source archive wi
       res.statusCode = 404;
       res.end('not found');
     });
-    await new Promise<void>((resolve, reject) => {
-      server!.once('error', reject);
-      server!.listen(0, '127.0.0.1', resolve);
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
     });
-    const port = (server.address() as AddressInfo).port;
+    const port = server.address().port;
     const result = await runScript([
       `--dir=${installDir}`,
       `--host=http://127.0.0.1:${port}`,
@@ -420,7 +443,7 @@ test('run.sh starts the real prebuilt node bundle from a clean source archive wi
     if (nodePid) {
       try { process.kill(nodePid, 'SIGTERM'); } catch {}
     }
-    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
     await fs.remove(fixture.root);
   }
 });
@@ -441,11 +464,11 @@ test('run.sh --install selects a user service for non-root and starts foreground
     assert.match(result.stdout, /does\s+not create a second tmux\/nohup daemon layer/);
     const unitName = 'foxwarm-node-service-node.service';
     const generated = path.join(installDir, 'systemd', unitName);
-    const installed = path.join(fixture.env.XDG_CONFIG_HOME!, 'systemd/user', unitName);
+    const installed = path.join(fixture.env.XDG_CONFIG_HOME, 'systemd/user', unitName);
     assert.equal(await fs.pathExists(generated), true);
     assert.equal(await fs.pathExists(installed), true);
     const unit = await fs.readFile(generated, 'utf8');
-    const systemdPath = (value: string) => value
+    const systemdPath = value => value
       .replace(/ /g, '\\x20')
       .replace(/\$/g, '\\x24')
       .replace(/%/g, '\\x25')
@@ -510,7 +533,7 @@ fi
 `);
       const args = [`--dir=${install}`, '--host=http://master/base', '--auth-token=direct token', '--node-id=apple', '--prepare-only'];
       if (status === '503') {
-        await assert.rejects(runScript(args, fixture.env), (error: any) => {
+        await assert.rejects(runScript(args, fixture.env), (error) => {
           assert.match(error.stderr, /HTTP 503/);
           return true;
         });

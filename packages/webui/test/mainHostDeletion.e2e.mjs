@@ -149,13 +149,13 @@ try {
   // Real primary empty authority takes precedence over selected older migration evidence.
   await writeFile(channelsFile, JSON.stringify({ channels: {} })); await writeFile(join(state, 'sessions.json.pre-catalog-sqlite-v1.bak'), JSON.stringify({ channelAttachments: { 'discord:old': 'worker-target' } }))
   const workerFile = join(state, 'session-runtime.sqlite')
-  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-delete-worker-fixture-ts.mjs'), workerFile, 'active', 'worker-target'], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-worker-store-seed.mjs'), workerFile, 'active', 'worker-target'], { stdio: 'pipe' })
   const activeWorker = await remove('worker-target', false, 409); assert.equal(activeWorker.code, 'SESSION_DELETE_WORKER_UNSUPPORTED'); assert(await dto('worker-target'))
   let db = new DatabaseSync(workerFile); db.exec("UPDATE session_worker_ownership SET state='inactive',incarnation_id=NULL WHERE session_id='worker-target'; PRAGMA user_version=1"); db.close()
   await remove('worker-target', false, 500); db = new DatabaseSync(workerFile); assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1); db.exec('PRAGMA user_version=2; DROP INDEX idx_session_worker_mailbox_pending'); db.close()
   await remove('worker-target', false, 500); db = new DatabaseSync(workerFile); assert(!db.prepare("SELECT name FROM sqlite_master WHERE name='idx_session_worker_mailbox_pending'").get()); db.exec('CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE applied_at IS NULL'); db.close()
   const inactive = await remove('worker-target'); assert.deepEqual(inactive.workerRowsRemovedSessionIds, ['worker-target'])
-  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-delete-worker-fixture-ts.mjs'), workerFile, 'orphan', 'worker-orphan'], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-worker-store-seed.mjs'), workerFile, 'orphan', 'worker-orphan'], { stdio: 'pipe' })
   const orphan = await remove('worker-orphan'); assert.deepEqual(orphan.workerRowsRemovedSessionIds, [])
   db = new DatabaseSync(workerFile, { readOnly: true }); assert.equal(db.prepare("SELECT COUNT(*) n FROM session_worker_mailbox WHERE session_id='worker-orphan'").get().n, 1); assert(!db.prepare("SELECT * FROM session_worker_ownership WHERE session_id='worker-orphan'").get()); db.close()
   // Launched shell/output are preserved while only exact tracking/callback ownership retires.

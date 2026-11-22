@@ -85,7 +85,7 @@ try {
     assert.equal((await fixture.api('POST', route(id) + '/message', { text: 'IMAGES:' + key + '-next' })).status, 202); await done(id, key + '-next')
     assert(!JSON.stringify(await authority(id)).includes(png.toString('base64')))
   }
-  const heic = await readFile(resolve('src/testFixtures/synthetic-alpha-3x2.heic')), heicUpload = await upload(heic, 'input.heic', ''); assert.equal(heicUpload.status, 200)
+  const heic = await readFile(resolve('dotnet/Foxwarm.Tests/Images/Fixtures/synthetic-alpha-3x2.heic')), heicUpload = await upload(heic, 'input.heic', ''); assert.equal(heicUpload.status, 200)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'IMAGES:heic-next', uploadedFiles: [heicUpload.body] })).status, 202); await done('main', 'heic-next')
   const heicRef = imageRefs(await authority('main')).at(-1).inlineDataRef, heicBlob = await fetch(fixture.origin + '/api/blobs/' + heicRef.blobId, { headers }); assert.equal(heicBlob.headers.get('content-type'), 'application/octet-stream'); assert(heicBlob.headers.get('content-disposition').includes('attachment')); assert.deepEqual(Buffer.from(await heicBlob.arrayBuffer()), heic)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'IMAGES:corrupt' })).status, 202); await done('main', 'corrupt')

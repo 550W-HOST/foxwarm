@@ -1,7 +1,7 @@
 # Unit: src-image-blobs
 
 Files: src/imageBlobs.ts, src/imageBlobs.test.ts, src/imageBlobsSession.test.ts, src/imageBlobsLazySession.test.ts, src/providerImageOptimization.ts, src/providerImageOptimization.test.ts, src/imageInputPolicy.ts
-Secondary files: src/providerImageRequest.test.ts, src/testFixtures/visionImages.ts, src/testFixtures/synthetic-3x2.heic, src/testFixtures/synthetic-alpha-3x2.heic, src/testFixtures/README.md
+Secondary files: src/providerImageRequest.test.ts, src/testFixtures/visionImages.ts
 
 ## Purpose
 

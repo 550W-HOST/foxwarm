@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels.WebUi;
@@ -32,7 +31,7 @@ public sealed class WebUiLogsTests
             .AsArray();
         operations.Add(new JsonObject { ["time"] = start + 8000 * 1000 });
         operations.Add(new JsonObject { ["time"] = start - 86400000 });
-        await Compare(path, operations);
+        await Compare(path, operations, 0);
         var character = Encoding.UTF8.GetBytes("🦊");
         await File.WriteAllBytesAsync(
             path,
@@ -42,7 +41,8 @@ public sealed class WebUiLogsTests
             path,
             JsonNode
                 .Parse("""[{"direction":"latest"},{"direction":"after","offset":"end"}]""")!
-                .AsArray()
+                .AsArray(),
+            1
         );
         await File.WriteAllTextAsync(
             path,
@@ -55,7 +55,8 @@ public sealed class WebUiLogsTests
             new JsonArray(
                 new JsonObject { ["direction"] = "latest" },
                 new JsonObject { ["time"] = start + 1000 }
-            )
+            ),
+            2
         );
         await using (var sparse = File.OpenWrite(path))
             sparse.SetLength(384 * 1024 * 1024);
@@ -64,40 +65,44 @@ public sealed class WebUiLogsTests
             path,
             JsonNode
                 .Parse("""[{"direction":"latest"},{"direction":"before","offset":"start"}]""")!
-                .AsArray()
+                .AsArray(),
+            3
         );
     }
 
-    private static async Task Compare(string path, JsonArray operations)
+    /// <summary>
+    /// Original TypeScript reader results (channels/webuiLogs.ts) recorded at the final TypeScript
+    /// revision 80f740477c25d3b42165bb0d201e74ebc5fd4479, one array per Compare call in order.
+    /// Window text is recorded as its UTF-8 SHA-256 and byte count.
+    /// </summary>
+    private static readonly JsonArray Recorded = JsonNode
+        .Parse(
+            File.ReadAllText(
+                Path.Combine(AppContext.BaseDirectory, "Channels", "Fixtures", "webui-logs-source.json")
+            )
+        )!
+        .AsArray();
+
+    private static JsonObject WithTextDigest(JsonObject result)
     {
-        var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException(
-                "Set FOXWARM_TS_ROOT for the original reader oracle."
-            );
-        var info = new ProcessStartInfo("node")
+        if (result["window"] is JsonObject window && window["text"] is JsonNode text)
         {
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        info.ArgumentList.Add(
-            Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "webui-logs-fixture-ts.mjs")
-        );
-        using var child = Process.Start(info)!;
-        await child.StandardInput.WriteAsync(
-            new JsonObject
-            {
-                ["path"] = path,
-                ["operations"] = operations.DeepClone(),
-            }.ToJsonString()
-        );
-        child.StandardInput.Close();
-        var output = child.StandardOutput.ReadToEndAsync();
-        var errors = child.StandardError.ReadToEndAsync();
-        await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.True(child.ExitCode == 0, await errors);
-        var expected = JsonNode.Parse(await output)!.AsArray();
+            var bytes = Encoding.UTF8.GetBytes(text.GetValue<string>());
+            window.Remove("text");
+            window["textSha256"] = Convert
+                .ToHexString(System.Security.Cryptography.SHA256.HashData(bytes))
+                .ToLowerInvariant();
+            window["textBytes"] = bytes.Length;
+        }
+        return result;
+    }
+
+    private static Task Compare(string path, JsonArray operations, int scenario) =>
+        CompareRecorded(path, operations, Recorded[scenario]!.AsArray());
+
+    private static async Task CompareRecorded(string path, JsonArray operations, JsonArray expected)
+    {
+        Assert.Equal(operations.Count, expected.Count);
         using var logs = new WebUiLogFile(path);
         LogWindow? cursor = null;
         for (var index = 0; index < operations.Count; index++)
@@ -133,6 +138,7 @@ public sealed class WebUiLogsTests
             {
                 result = new() { ["error"] = true };
             }
+            result = WithTextDigest(result);
             Assert.True(
                 JsonNode.DeepEquals(expected[index], result),
                 $"Operation {index}: expected {expected[index]}, actual {result}"

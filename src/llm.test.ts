@@ -1792,7 +1792,7 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
 
 test('all provider protocols receive the same provider-safe HEIC hydration clone', async t => {
   const originalPost = axios.post;
-  const fixturePath = path.resolve(__dirname, '..', 'src', 'testFixtures', 'synthetic-3x2.heic');
+  const fixturePath = path.resolve(__dirname, '..', 'dotnet', 'Foxwarm.Tests', 'Images', 'Fixtures', 'synthetic-3x2.heic');
   const originalBytes = await fs.readFile(fixturePath);
   const ref = await putImageBlob({ buffer: originalBytes, mimeType: 'image/heif', imageId: 'provider_heif#1' });
   const canonical: Message[] = [{

@@ -1,0 +1,167 @@
+[
+ [
+  {
+   "window": {
+    "fileId": "file",
+    "size": 1425905,
+    "startOffset": 1323507,
+    "endOffset": 1425905,
+    "lineCount": 1530,
+    "startsMidLine": true,
+    "endsMidLine": true,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "01d0754e9f87e86e4fe24df4e5a0bd444df32f511bcb69478c1da77919a83228",
+    "textBytes": 102398
+   }
+  },
+  {
+   "window": {
+    "fileId": "file",
+    "size": 1425905,
+    "startOffset": 1221107,
+    "endOffset": 1323507,
+    "lineCount": 1529,
+    "startsMidLine": true,
+    "endsMidLine": true,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "0764ab8bb0f5479dbfc8258182fc9ff21690f49d13436fa49ef2fb3cd2c4b9e8",
+    "textBytes": 102400
+   }
+  },
+  {
+   "window": {
+    "fileId": "file",
+    "size": 1425905,
+    "startOffset": 1323507,
+    "endOffset": 1425905,
+    "lineCount": 1530,
+    "startsMidLine": true,
+    "endsMidLine": true,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "01d0754e9f87e86e4fe24df4e5a0bd444df32f511bcb69478c1da77919a83228",
+    "textBytes": 102398
+   }
+  },
+  {
+   "window": {
+    "fileId": "file",
+    "size": 1425905,
+    "startOffset": 757890,
+    "endOffset": 860290,
+    "lineCount": 1552,
+    "startsMidLine": false,
+    "endsMidLine": true,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "443da19bc95085914168f2077f3287781f73b03a6210f2bd87717858a03b3a4e",
+    "textBytes": 102400
+   },
+   "locatedTime": "2026-01-02T02:13:20.000Z",
+   "approximate": true
+  },
+  {
+   "error": true
+  }
+ ],
+ [
+  {
+   "window": {
+    "fileId": "file",
+    "size": 7,
+    "startOffset": 0,
+    "endOffset": 5,
+    "lineCount": 1,
+    "startsMidLine": false,
+    "endsMidLine": true,
+    "pendingBytes": 2,
+    "missing": false,
+    "textSha256": "8115ebe0db029b42b05ce2cd03b1cb793ead614ebb8ebce128ea13b60532dcf2",
+    "textBytes": 5
+   }
+  },
+  {
+   "window": {
+    "fileId": "file",
+    "size": 7,
+    "startOffset": 5,
+    "endOffset": 5,
+    "lineCount": 0,
+    "startsMidLine": true,
+    "endsMidLine": false,
+    "pendingBytes": 2,
+    "missing": false,
+    "textSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "textBytes": 0
+   }
+  }
+ ],
+ [
+  {
+   "window": {
+    "fileId": "file",
+    "size": 89,
+    "startOffset": 0,
+    "endOffset": 89,
+    "lineCount": 2,
+    "startsMidLine": false,
+    "endsMidLine": false,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "3bc05e88080ff8a0dea2968990cf2307946bb31eb3965f1e562fb02378310404",
+    "textBytes": 89
+   }
+  },
+  {
+   "window": {
+    "fileId": "file",
+    "size": 89,
+    "startOffset": 53,
+    "endOffset": 89,
+    "lineCount": 1,
+    "startsMidLine": false,
+    "endsMidLine": false,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "c90c44fafd7d52bfeb2a1290af7fbc1d553e7808b5b34d6fecf1ce460bdcfa12",
+    "textBytes": 36
+   },
+   "locatedTime": "2026-01-02T00:00:01.000Z",
+   "approximate": true
+  }
+ ],
+ [
+  {
+   "window": {
+    "fileId": "file",
+    "size": 402653196,
+    "startOffset": 402550796,
+    "endOffset": 402653196,
+    "lineCount": 1,
+    "startsMidLine": true,
+    "endsMidLine": false,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "7bc1b5303e2e936d4a45acaa67625e13ad242e8916bc226020bf2db853d30094",
+    "textBytes": 102400
+   }
+  },
+  {
+   "window": {
+    "fileId": "file",
+    "size": 402653196,
+    "startOffset": 402448396,
+    "endOffset": 402550796,
+    "lineCount": 1,
+    "startsMidLine": true,
+    "endsMidLine": true,
+    "pendingBytes": 0,
+    "missing": false,
+    "textSha256": "f627ca4c2c322f15db26152df306bd4f983f0146409b81a4341b9b340c365a16",
+    "textBytes": 102400
+   }
+  }
+ ]
+]

@@ -514,14 +514,7 @@ public sealed partial class MainLocalToolsTests
     [Fact]
     public async Task Image_crop_decodes_heif_original_to_png_at_original_coordinates()
     {
-        var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException(
-                "HEIF crop test requires the assigned Source root."
-            );
-        var bytes = await File.ReadAllBytesAsync(
-            Path.Combine(root, "src", "testFixtures", "synthetic-3x2.heic")
-        );
+        var bytes = await File.ReadAllBytesAsync(ImageCodecTests.HeifPath("synthetic-3x2.heic"));
         await using var f = await Fixture.Create();
         var reference = await f.Manager.Images.PutAsync(bytes, "image/heic", "heif-source");
         await ForkClearLifecycleTests.AppendAsync(

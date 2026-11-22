@@ -1,10 +1,15 @@
-import '../testEnvironment';
+import testEnvironment from '../../scripts/test/test-process-env.cjs';
+testEnvironment.initializeTestEnvironment();
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import fs from 'fs-extra';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const execFileAsync = promisify(execFile);
 const RUN_PS1 = path.resolve(__dirname, '../../templates/node/run.ps1');

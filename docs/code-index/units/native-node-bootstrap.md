@@ -1,7 +1,7 @@
 # Unit: Native-aware Node bootstrap
 
 Files: `templates/node/run.sh`, `templates/node/run-interactive.sh`, `templates/node/run-docker.sh`, `templates/node/run.ps1`, `templates/node/docker-compose.yaml`, `scripts/start-sandbox-node.sh`, `dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs`
-Secondary/integration references: `dotnet/Foxwarm/Nodes/NodeBootstrap.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.cs`, `src/nodes/httpRoutes.ts`, `src/nodes/runSh.test.ts`, `src/nodes/runPs1.test.ts`, `dotnet/Foxwarm.Tests/Tools/NodeOnboardingHttpTests.cs`
+Secondary/integration references: `dotnet/Foxwarm/Nodes/NodeBootstrap.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.cs`, `test/node-bootstrap/runSh.test.mjs`, `test/node-bootstrap/runPs1.test.mjs`, `dotnet/Foxwarm.Tests/Tools/NodeOnboardingHttpTests.cs`
 
 ## Selection and delivery
 

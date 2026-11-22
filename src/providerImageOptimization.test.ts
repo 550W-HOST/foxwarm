@@ -153,7 +153,7 @@ test('JPEG mode converts even small WebP input for endpoints without WebP suppor
 
 test('cache hits skip decode and encode, policy changes invalidate, corruption rebuilds, and in-flight requests coalesce', async () => withCache(async root => {
   const { decodeHeifForProvider } = await import('./imageInputPolicy');
-  const buffer = await fs.readFile(path.join(__dirname, '../src/testFixtures/synthetic-3x2.heic'));
+  const buffer = await fs.readFile(path.join(__dirname, '../dotnet/Foxwarm.Tests/Images/Fixtures/synthetic-3x2.heic'));
   let decodes = 0;
   const decoder = async () => { decodes += 1; return decodeHeifForProvider(buffer, 'cache-fixture'); };
   const options = { buffer, mimeType: 'image/heif', decodeHeif: decoder, cacheDir: root };
@@ -273,7 +273,7 @@ test('competing processes share the derived directory and stale cleanup lease re
 
 test('real HEIF metadata preflight does not invoke its pixel decoder', async () => {
   const { inspectImageInput } = await import('./imageInputPolicy');
-  const buffer = await fs.readFile(path.join(__dirname, '../src/testFixtures/synthetic-3x2.heic'));
+  const buffer = await fs.readFile(path.join(__dirname, '../dotnet/Foxwarm.Tests/Images/Fixtures/synthetic-3x2.heic'));
   const libheif = require('libheif-js/wasm-bundle');
   const original = libheif.heif_js_decode_image2;
   let decoded = false;

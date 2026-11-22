@@ -9,14 +9,12 @@ import { once } from 'node:events'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { createRequire } from 'node:module'
 import puppeteer from 'puppeteer-core'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { mainHostLaunch } from './mainHostFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
-const require = createRequire(import.meta.url)
-const { createMcpOAuthFixture } = require(resolve('lib/mcpOAuthTestFixture.js'))
+import { createMcpOAuthFixture } from '../../../dotnet/Foxwarm.Tests/Mcp/Fixtures/mcp-oauth-fixture.mjs'
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-dotnet-oauth-'))
 const data = join(root, 'data'), work = join(data, 'agents', 'main')

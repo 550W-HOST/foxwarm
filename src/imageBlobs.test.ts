@@ -16,7 +16,7 @@ import {
 import { convertToOpenAIFormat } from './llmProviders/openai';
 import type { Message } from './types';
 
-const TEST_FIXTURES_DIR = path.resolve(__dirname, '..', 'src', 'testFixtures');
+const TEST_FIXTURES_DIR = path.resolve(__dirname, '..', 'dotnet', 'Foxwarm.Tests', 'Images', 'Fixtures');
 const SYNTHETIC_HEIC_FIXTURE = path.join(TEST_FIXTURES_DIR, 'synthetic-3x2.heic');
 const SYNTHETIC_ALPHA_HEIC_FIXTURE = path.join(TEST_FIXTURES_DIR, 'synthetic-alpha-3x2.heic');
 

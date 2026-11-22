@@ -617,9 +617,8 @@ public sealed class MainFileDeliveryTests
     public async Task Byte_export_of_owned_HEIC_needs_no_decoder_and_postwrite_failure_reports_existing_effect_without_retry()
     {
         await using var f = await Fixture.Create();
-        var repository = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
         var bytes = await File.ReadAllBytesAsync(
-            Path.Combine(repository, "src", "testFixtures", "synthetic-alpha-3x2.heic")
+            ImageCodecTests.HeifPath("synthetic-alpha-3x2.heic")
         );
         var reference = await f.Manager.Images.PutAsync(bytes, "image/heic", "heic");
         await ForkClearLifecycleTests.AppendAsync(f.Owner, Image(reference));

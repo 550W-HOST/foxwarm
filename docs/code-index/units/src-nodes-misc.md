@@ -1,6 +1,6 @@
 # Unit: src-nodes-misc
 
-Files: src/nodes/websocket.ts, src/nodes/websocketProtocol.test.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/runSh.test.ts, src/nodes/runPs1.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts
+Files: src/nodes/websocket.ts, src/nodes/websocketProtocol.test.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts
 Secondary/integration references: templates/node/run.sh, templates/node/run-docker.sh, templates/node/run-interactive.sh, templates/node/run.ps1, templates/node/docker-compose.yaml, scripts/start-sandbox-node.sh
 
 ## Purpose
