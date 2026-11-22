@@ -18,7 +18,7 @@ const { slimCtlRegistry } = await load('../build/ctlRegistry.ts', 'slim.mjs')
 const slim = { name: 'slim', setup(b) { b.onLoad({ filter: /CtlCommands\.json$/ }, async args => ({ contents: JSON.stringify(slimCtlRegistry(JSON.parse(await readFile(args.path, 'utf8')))), loader: 'json' })) } }
 const corpus = JSON.parse(await readFile(new URL('../../../dotnet/Foxwarm.Tests/Tools/Fixtures/ctl-conformance.json', import.meta.url), 'utf8'))
 globalThis.window ??= { location: { pathname: '/', origin: 'http://localhost' } }
-const { ctlDescriptor, ctlAsUnified, ctlConcrete, ctlCommandName, ctlCommandText, partialJson } = await load('../src/ctlCall.ts', 'ctl.mjs')
+const { ctlDescriptor, ctlAsUnified, ctlConcrete, ctlCommandName, ctlCommandText, ctlSummary, partialJson } = await load('../src/ctlCall.ts', 'ctl.mjs')
 const slimCtl = await load('../src/ctlCall.ts', 'ctl-slim.mjs', [slim])
 
 // The same corpus is checked by the C# parser (CtlCommandTests.Conformance_corpus_matches_the_parser).
@@ -199,4 +199,21 @@ test('a streaming ctl call shows the call it runs with the values received so fa
   const early = { name: 'ctl', args: '{"command":"tool call mcp:github/search_issues --ar' }
   assert.equal(ctlConcrete(early), early)
   assert.equal(ctlCommandName(early.args), 'ctl')
+})
+
+test('a ctl summary is shown unless the tool it runs states its own', () => {
+  const exec = (own, summary) => ({ name: 'ctl', args: { command: 'tool call node:worker/exec --args @args', values: { args: { command: 'make', ...(own ? { summary: own } : {}) } }, ...(summary !== undefined ? { summary } : {}) } })
+  assert.equal(ctlSummary(exec(undefined, 'Run make')), 'Run make')
+  assert.equal(ctlSummary(exec('Build the project', 'Run make')), undefined)
+  assert.equal(ctlSummary(exec(undefined, '  ')), undefined)
+  assert.equal(ctlSummary(exec(undefined)), undefined)
+  // An MCP tool's own summary argument is not a stated summary.
+  assert.equal(ctlSummary({ name: 'ctl', args: { command: 'tool call mcp:server/exec --args @args', values: { args: { summary: 'MCP text' } }, summary: 'Ask the server' } }), 'Ask the server')
+  assert.equal(ctlSummary({ name: 'ctl', args: { command: 'skill load code-index', summary: 'Load the skill' } }), 'Load the skill')
+  assert.equal(ctlSummary({ name: 'ctl', args: { command: 'node --help', summary: 'Look up flags' } }), 'Look up flags')
+  assert.equal(ctlSummary({ name: 'exec', args: { command: 'make', summary: 'Build' } }), undefined)
+  // While the call streams, the summary appears once its string is received.
+  assert.equal(ctlSummary({ name: 'ctl', args: '{"command":"timer list","summary":"Show tim' }), 'Show tim')
+  // The stored summary never changes the call it runs.
+  assert.deepEqual(ctlConcrete(exec(undefined, 'Run make')).args, { command: 'make' })
 })

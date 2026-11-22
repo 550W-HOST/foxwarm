@@ -29,6 +29,10 @@ internal static class UnifiedToolDefinitions
         "valuesJson": {
           "type": "string",
           "description": "`values` as a JSON object string when `values` cannot be supplied."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Briefly describe what this call is for; shown to the user while it runs. State its purpose, not an expected result. Omit it when the called tool takes its own summary."
         }
       },
       "required": ["command"],

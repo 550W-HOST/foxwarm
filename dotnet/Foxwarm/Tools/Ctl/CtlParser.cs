@@ -403,11 +403,16 @@ internal static partial class CtlParser
 
     private static CtlInvocation ParseCore(JsonObject args, string ingress)
     {
+        // summary is display metadata of the call (ToolActivity); it never reaches the command.
         foreach (var key in args.Select(pair => pair.Key))
-            if (key is not ("command" or "values" or "valuesJson"))
+            if (key is not ("command" or "values" or "valuesJson" or "summary"))
                 throw new InvalidDataException(
-                    "Unsupported ctl argument `" + key + "`; use command, values or valuesJson."
+                    "Unsupported ctl argument `"
+                        + key
+                        + "`; use command, values, valuesJson or summary."
                 );
+        if (args.ContainsKey("summary") && SessionWait.Text(args["summary"]) is null)
+            throw new InvalidDataException("summary must be a string.");
         var command =
             SessionWait.Text(args["command"])
             ?? throw new InvalidDataException("command must be a string.");

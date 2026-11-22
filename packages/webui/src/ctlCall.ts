@@ -270,6 +270,24 @@ export const ctlCommandText = (call: { name: string; args?: any } | undefined): 
   return typeof command === 'string' ? command.replace(/\s+/g, ' ').trim() : undefined
 }
 
+/**
+ * The summary a ctl call shows: its own `summary`, unless the tool it runs states one itself
+ * (Node `exec`, builtin `run_script`), which the concrete card already shows. Display only, like
+ * `ToolActivity.CaptionSummary` on Main.
+ */
+export function ctlSummary(call: { name: string; args?: any } | undefined): string | undefined {
+  if (call?.name !== 'ctl') return undefined
+  const summary = ctlArguments(call.args)?.summary
+  if (typeof summary !== 'string' || !summary.trim()) return undefined
+  const descriptor = ctlDescriptor(call.args)
+  if (descriptor) {
+    const { source, name, args } = target(descriptor)
+    const own = (source === 'node' && name === 'exec') || (source === 'builtin' && name === 'run_script')
+    if (own && typeof args.summary === 'string' && args.summary.trim()) return undefined
+  }
+  return summary
+}
+
 /** A ctl call naming a capability, shown through the former unified-call projection. */
 export function ctlAsUnified<T extends { name: string; args?: any }>(call: T): T {
   if (call.name !== 'ctl') return call
