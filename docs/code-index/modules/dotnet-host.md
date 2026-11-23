@@ -15,6 +15,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Host startup, configuration, and HTTP ingress](../units/host-runtime.md)
 - [Packed and loose HTTP resources](../units/http-assets.md)
 - [macOS Desktop host](../units/desktop-macos.md)
+- [Desktop instances](../units/desktop-instances.md)
 - [Main JSON and frontmatter serialization](../units/dotnet-serialization.md)
 - [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [Secret store, references and redaction](../units/dotnet-secrets.md)

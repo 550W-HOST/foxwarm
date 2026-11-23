@@ -6,20 +6,25 @@ namespace Foxwarm.Desktop;
 
 /// <summary>
 /// The web views of every Desktop window share one WebView2 environment and profile, so
-/// cookies and storage carry over, and one policy (<see cref="DesktopNavigation"/>): the
-/// app's origin stays in the app, a same-origin new-window request opens an app window that
-/// keeps <c>window.opener</c>, and other web pages go to the default browser.
+/// cookies and storage carry over (each origin keeps its own), and one policy
+/// (<see cref="DesktopNavigation"/>): the selected instance's scope stays in the app, a
+/// new-window request in it opens an app window that keeps <c>window.opener</c>, and other
+/// web pages go to the default browser.
 /// </summary>
-internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri endpoint)
+internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri scope)
 {
     private readonly List<DesktopPopupWindow> popups = [];
     private bool closing;
 
     internal CoreWebView2Environment Environment => environment;
 
-    internal Uri Endpoint => endpoint;
+    /// <summary>The selected instance: its origin and base path. Switching closes the app windows first.</summary>
+    internal Uri Scope { get; set; } = scope;
 
-    internal bool IsAppUri(string? text) => DesktopNavigation.IsApp(endpoint, text);
+    /// <summary>Opens the host's instance menu for a framed window's brand row.</summary>
+    internal Action<Window, FrameRect>? InstanceMenu { get; init; }
+
+    internal bool IsAppUri(string? text) => DesktopNavigation.IsApp(Scope, text);
 
     /// <summary>
     /// Applies the policy to a web view before its first navigation. <paramref name="owner"/>
@@ -31,7 +36,7 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri e
         core.Settings.AreHostObjectsAllowed = false;
         core.NavigationStarting += (_, e) =>
         {
-            var target = DesktopNavigation.Classify(endpoint, e.Uri);
+            var target = DesktopNavigation.Classify(Scope, e.Uri);
             if (target is DesktopTarget.App or DesktopTarget.Blank)
                 return;
             e.Cancel = true;
@@ -57,6 +62,12 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri e
     internal void CloseAll()
     {
         closing = true;
+        CloseWindows();
+    }
+
+    /// <summary>Closes every app window except the main one, e.g. before switching instances.</summary>
+    internal void CloseWindows()
+    {
         foreach (var popup in popups.ToArray())
             popup.Close();
         popups.Clear();
@@ -64,7 +75,7 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri e
 
     private async void OpenWindow(CoreWebView2NewWindowRequestedEventArgs e, Window owner)
     {
-        var target = DesktopNavigation.Classify(endpoint, e.Uri);
+        var target = DesktopNavigation.Classify(Scope, e.Uri);
         if (closing || target is DesktopTarget.Browser or DesktopTarget.Ignore)
         {
             // Handled without a new window: window.open returns a window that never loads.
@@ -81,7 +92,7 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri e
             popup = new DesktopPopupWindow(
                 this,
                 owner,
-                DesktopNavigation.FrameFor(endpoint, e.Uri),
+                DesktopNavigation.FrameFor(Scope, e.Uri),
                 target == DesktopTarget.Blank,
                 features.HasSize ? features.Width : null,
                 features.HasSize ? features.Height : null

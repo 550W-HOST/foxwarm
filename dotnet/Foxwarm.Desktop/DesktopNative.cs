@@ -15,12 +15,14 @@ internal sealed class DesktopNative : IDisposable
     private readonly Action open;
     private readonly Action exit;
     private readonly Action shutdown;
+    private readonly Action instances;
     private readonly nint icon;
     private NotifyIconData tray;
     private bool disposed;
 
-    internal DesktopNative(DesktopWindow window, Action open, Action exit, Action shutdown)
+    internal DesktopNative(DesktopWindow window, Action open, Action exit, Action shutdown, Action instances)
     {
+        this.instances = instances;
         this.open = open;
         this.exit = exit;
         this.shutdown = shutdown;
@@ -105,6 +107,8 @@ internal sealed class DesktopNative : IDisposable
         try
         {
             AppendMenu(menu, 0, 1, "Open");
+            AppendMenu(menu, 0, 3, "Switch instance…");
+            AppendMenu(menu, 0x800, 0, null); // MF_SEPARATOR
             AppendMenu(menu, 0, 2, "Exit");
             GetCursorPos(out var point);
             SetForegroundWindow(hwnd);
@@ -114,6 +118,8 @@ internal sealed class DesktopNative : IDisposable
                 open();
             else if (selected == 2)
                 exit();
+            else if (selected == 3)
+                instances();
         }
         finally
         {
@@ -193,7 +199,7 @@ internal sealed class DesktopNative : IDisposable
 
     [DllImport("user32.dll", EntryPoint = "AppendMenuW", CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AppendMenu(nint menu, uint flags, nuint id, string text);
+    private static extern bool AppendMenu(nint menu, uint flags, nuint id, string? text);
 
     [DllImport("user32.dll")]
     private static extern uint TrackPopupMenu(nint menu, uint flags, int x, int y, int reserved, nint hwnd, nint rect);
