@@ -66,7 +66,7 @@ test.after(async () => {
   if (demo?.owned) await rm(demo.dir, { recursive: true, force: true })
 })
 
-async function open({ width = 1280, height = 800, layout = 'tabs', collapsed = false, host = null, overlay = null, dark = false, query = '' }) {
+async function open({ width = 1280, height = 800, layout = 'tabs', collapsed = false, host = null, overlay = null, dark = false, query = '', settings = null }) {
   const context = await browser.createBrowserContext()
   const page = await context.newPage()
   const errors = []
@@ -78,9 +78,20 @@ async function open({ width = 1280, height = 800, layout = 'tabs', collapsed = f
     [WORKBENCH_KEY]: JSON.stringify({ state: { version: 4, tabsById: Object.fromEntries(layoutTabs.map(t => [t.id, t])), root, focusedPaneId: 'p1' }, version: 1 }),
     [COLLAPSED_KEY]: String(collapsed),
   }
-  await page.evaluateOnNewDocument((storage, host, overlay) => {
+  await page.evaluateOnNewDocument((storage, host, overlay, settings) => {
     for (const [key, value] of Object.entries(storage)) localStorage.setItem(key, value)
     window.__frameMessages = []
+    if (settings) {
+      // WebUI settings (instance name and tab icon) on top of the demo's own fetch shim.
+      const native = window.fetch
+      let demo = null
+      const answer = (input, init) => {
+        const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
+        if (url.pathname.endsWith('/webui/settings') && (init?.method ?? 'GET').toUpperCase() === 'GET') return Promise.resolve(new Response(JSON.stringify({ settings }), { headers: { 'Content-Type': 'application/json' } }))
+        return demo(input, init)
+      }
+      Object.defineProperty(window, 'fetch', { configurable: true, get: () => demo ? answer : native, set: value => { demo = value } })
+    }
     if (host) {
       window.chrome = { webview: { postMessage: message => window.__frameMessages.push(JSON.parse(JSON.stringify(message))) } }
       window.foxwarmFrame = host
@@ -94,7 +105,7 @@ async function open({ width = 1280, height = 800, layout = 'tabs', collapsed = f
       const css = `html[data-foxwarm-frame="overlay"]{--foxwarm-frame-left:${overlay.left}px;--foxwarm-frame-right:${overlay.right}px;--foxwarm-frame-top:${overlay.top}px}`
       document.addEventListener('DOMContentLoaded', () => { const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style) })
     }
-  }, storage, host, overlay)
+  }, storage, host, overlay, settings)
   await page.goto(base + query, { waitUntil: 'networkidle0' })
   await page.waitForFunction(() => document.documentElement.hasAttribute('data-foxwarm-boot-ready') && !document.getElementById('foxwarm-boot'))
   await settle(page)
@@ -107,7 +118,7 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
 function inspect(page) {
   return page.evaluate(() => {
     const box = element => { if (!element) return null; const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }
-    const messages = window.__frameMessages
+    const messages = window.__frameMessages.filter(message => message.type === 'frame-regions')
     const last = messages[messages.length - 1] || null
     const root = document.documentElement
     const style = getComputedStyle(root)
@@ -204,9 +215,12 @@ test('Windows host: title rows clear the caption buttons and drag surfaces reach
       assert.ok(inRegion(info.regions, gapRight - 20, 0) && inRegion(info.regions, gapRight - 20, 30), 'gap beside the caption buttons')
       assert.ok(inRegion(info.regions, info.width - 1, 40), 'gap extends to the right window edge')
       if (!collapsed) {
-        // Brand row: through the shell gutter and panel padding to the top and left edges.
+        // Brand row: through the shell gutter and panel padding to the top and left edges, and
+        // beside the brand, which opens the instance menu under a host.
         const middle = Math.round((info.brand.top + info.brand.bottom) / 2)
-        for (const [x, y] of [[0, 0], [0, middle], [Math.round(info.brand.left) + 4, 0], [Math.round(info.brand.left) + 4, middle]]) assert.ok(inRegion(info.regions, x, y), `brand row drag at ${x},${y}`)
+        const brandEnd = await page.evaluate(() => Math.round(document.querySelector('[data-instance-menu]').getBoundingClientRect().right))
+        for (const [x, y] of [[0, 0], [0, middle], [Math.round(info.brand.left) + 4, 0], [brandEnd + 4, middle]]) assert.ok(inRegion(info.regions, x, y), `brand row drag at ${x},${y}`)
+        assert.ok(!inRegion(info.regions, Math.round(info.brand.left) + 4, middle), 'the brand itself is a button')
       } else {
         // Rail top above the expand button.
         assert.ok(inRegion(info.regions, 0, 0) && inRegion(info.regions, 24, 4) && inRegion(info.regions, 4, 24), 'rail title row around the toggle')
@@ -255,7 +269,7 @@ function frameLayout(page) {
       sidebar: { box: box(sidebar), background: style(sidebar).backgroundColor, border: style(sidebar).borderRightWidth },
       brandRow: box(brandRow),
       brandMid: brandRow ? mid(brandRow.querySelector('h1')) : null,
-      brandLogo: box(brandRow?.querySelector('h1 > svg')),
+      brandLogo: box(brandRow?.querySelector('h1 svg')),
       wordmark: brandRow ? style(brandRow.querySelector('.foxwarm-sidebar-wordmark')).display : null,
       brandButtons: brandButtons.map(button => ({ mid: mid(button), border: style(button).borderTopColor, background: style(button).backgroundColor })),
       toggle: toggle ? { ...box(toggle), mid: mid(toggle) } : null,
@@ -425,7 +439,8 @@ test('macOS host: the brand row and the rail toggle start after the lights, full
       if (!collapsed) {
         assert.ok(layout.brandLogo.left >= MACOS.left, 'logo after the lights')
         assert.equal(layout.wordmark, 'none', 'logo only; the app name is in the menu bar')
-        assert.ok(inRegion(info.regions, MACOS.left + 30, MACOS.top / 2), 'brand row blank drags')
+        const brandEnd = await page.evaluate(() => Math.round(document.querySelector('[data-instance-menu]').getBoundingClientRect().right))
+        assert.ok(inRegion(info.regions, brandEnd + 4, MACOS.top / 2), 'brand row blank drags beside the brand')
       } else {
         assert.ok(layout.toggle.left >= MACOS.left, 'rail toggle after the lights')
         assert.ok(Math.abs(layout.toggle.mid - MACOS.top / 2) <= 1)
@@ -823,5 +838,102 @@ test('drag overlays draw the real tab and a compact pane summary, framed or not,
       await release('[data-pane-drag-overlay]')
       assert.deepEqual(errors, [], label)
     } finally { await close() }
+  }
+})
+
+const BRANDED = { instanceName: 'Lab server', tabIcon: '🧪' }
+
+/** The brand row as rendered: logo or emoji, the name and whether it is the instance-menu button. */
+function brandState(page) {
+  return page.evaluate(() => {
+    const brand = document.querySelector('[data-instance-brand]')
+    const visible = element => !!element && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0
+    const button = brand.querySelector('[data-instance-menu]')
+    const box = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height } }
+    return {
+      logo: visible(brand.querySelector('svg')),
+      icon: visible(brand.querySelector('.foxwarm-sidebar-brand-icon')) ? brand.querySelector('.foxwarm-sidebar-brand-icon').textContent : null,
+      name: visible(brand.querySelector('.foxwarm-sidebar-wordmark')) ? brand.querySelector('.foxwarm-sidebar-wordmark').textContent : null,
+      button: button ? { ...box(button), haspopup: button.getAttribute('aria-haspopup'), title: button.getAttribute('title') } : null,
+      menuMessages: window.__frameMessages.filter(message => message.type === 'instance-menu'),
+    }
+  })
+}
+
+async function brandShot(page, name) {
+  const dir = process.env.FOXWARM_BRAND_SHOTS
+  if (!dir) return
+  const { mkdir } = await import('node:fs/promises')
+  await mkdir(dir, { recursive: true })
+  const row = await page.$('.foxwarm-sidebar-brand-row')
+  await row.screenshot({ path: join(dir, `${name}.png`) })
+}
+
+test('brand row: the instance emoji and name when set, otherwise the logo and name; a plain heading without a host', async () => {
+  for (const [settings, expected] of [[null, { logo: true, icon: null, name: 'Foxwarm' }], [BRANDED, { logo: false, icon: '🧪', name: 'Lab server' }], [{ instanceName: 'Lab server', tabIcon: '' }, { logo: true, icon: null, name: 'Lab server' }], [{ instanceName: '', tabIcon: '🧪' }, { logo: false, icon: '🧪', name: 'Foxwarm' }]]) {
+    for (const dark of [false, true]) {
+      const { page, errors, close } = await open({ settings, dark })
+      try {
+        await page.waitForFunction(name => document.querySelector('[data-instance-brand] .foxwarm-sidebar-wordmark')?.textContent === name, {}, expected.name)
+        const state = await brandState(page)
+        assert.deepEqual({ logo: state.logo, icon: state.icon, name: state.name }, expected, `browser settings=${JSON.stringify(settings)}`)
+        assert.equal(state.button, null, 'no host channel: no instance-menu button')
+        assert.match(await page.evaluate(() => document.title), settings?.instanceName ? /(^|\] )Lab server · Foxwarm$/ : /(^|\] )Foxwarm$/)
+        if (!settings || settings === BRANDED) await brandShot(page, `browser-${settings ? 'branded' : 'default'}-${dark ? 'dark' : 'light'}`)
+        assert.deepEqual(errors, [])
+      } finally { await close() }
+    }
+  }
+})
+
+test('brand row under a Desktop host: a button that sends only the instance-menu message with its rectangle', async () => {
+  for (const dark of [false, true]) {
+    const { page, errors, close } = await open({ host: WINDOWS, settings: BRANDED, dark })
+    try {
+      await page.waitForFunction(() => document.querySelector('[data-instance-brand] .foxwarm-sidebar-wordmark')?.textContent === 'Lab server')
+      await settle(page)
+      let state = await brandState(page)
+      assert.deepEqual({ logo: state.logo, icon: state.icon, name: state.name }, { logo: false, icon: '🧪', name: 'Lab server' })
+      assert.ok(state.button, 'instance-menu button')
+      assert.equal(state.button.haspopup, 'menu')
+      assert.equal(state.button.title, 'Switch instance')
+      assert.deepEqual(state.menuMessages, [], 'nothing is sent before a click')
+      // Centred on the title row and outside every drag rectangle.
+      assert.ok(Math.abs(state.button.top + state.button.height / 2 - WINDOWS.top / 2) <= 1, 'button centred on the title row')
+      const info = await inspect(page)
+      assertHostContract(info, `windows brand dark=${dark}`)
+      await brandShot(page, `windows-branded-${dark ? 'dark' : 'light'}`)
+      await page.click('[data-instance-menu]')
+      await settle(page)
+      state = await brandState(page)
+      assert.equal(state.menuMessages.length, 1, 'one message per click')
+      const [message] = state.menuMessages
+      assert.deepEqual(Object.keys(message).sort(), ['anchor', 'type'], 'message schema')
+      assert.deepEqual(message.anchor, [state.button.left, state.button.top, state.button.width, state.button.height].map(Math.round), 'anchor is the button rectangle')
+      // The page opens nothing of its own.
+      assert.equal(await page.$('[role="menu"], [role="dialog"]'), null)
+      assert.deepEqual(errors, [])
+    } finally { await close() }
+  }
+})
+
+test('brand row after the macOS lights: logo only by default, the instance emoji and name when set', async () => {
+  for (const dark of [false, true]) {
+    for (const settings of [null, BRANDED]) {
+      const { page, errors, close } = await open({ host: MACOS, settings, dark })
+      try {
+        if (settings) await page.waitForFunction(() => document.querySelector('[data-instance-brand] .foxwarm-sidebar-wordmark')?.textContent === 'Lab server')
+        await settle(page)
+        const state = await brandState(page)
+        const label = `macos settings=${!!settings} dark=${dark}`
+        if (settings) assert.deepEqual({ logo: state.logo, icon: state.icon, name: state.name }, { logo: false, icon: '🧪', name: 'Lab server' }, label)
+        else assert.deepEqual({ logo: state.logo, icon: state.icon, name: state.name }, { logo: true, icon: null, name: null }, label)
+        const glyph = await page.evaluate(() => document.querySelector('[data-instance-brand] :is(svg, .foxwarm-sidebar-brand-icon)').getBoundingClientRect().left)
+        assert.ok(glyph >= MACOS.left, `${label}: brand after the lights`)
+        assertHostContract(await inspect(page), label)
+        await brandShot(page, `macos-${settings ? 'branded' : 'default'}-${dark ? 'dark' : 'light'}`)
+        assert.deepEqual(errors, [])
+      } finally { await close() }
+    }
   }
 })

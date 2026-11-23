@@ -288,11 +288,28 @@ function opaqueBackground(target: Element | null): string | null {
 
 /** Page-to-host channel; present only inside a Desktop host's top-level document. */
 function hostChannel(): HostChannel | undefined {
+  if (typeof window === 'undefined' || window.parent !== window) return undefined
   const w = window as Window & {
     chrome?: { webview?: HostChannel }
     webkit?: { messageHandlers?: Record<string, HostChannel> }
   }
   return w.chrome?.webview ?? w.webkit?.messageHandlers?.foxwarmFrame
+}
+
+/** Whether a Desktop host listens to this document, so the brand row can open its instance menu. */
+export function hasHostChannel(): boolean {
+  return !!hostChannel()
+}
+
+/**
+ * Asks the Desktop host to open its instance menu below `anchor` (viewport CSS px). The
+ * host owns the list, adding, switching and stopping; the page only says where to anchor.
+ */
+export function requestInstanceMenu(anchor: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>): boolean {
+  const channel = hostChannel()
+  if (!channel) return false
+  channel.postMessage({ type: 'instance-menu', anchor: [anchor.left, anchor.top, anchor.width, anchor.height].map(Math.round) })
+  return true
 }
 
 const frameListeners = new Set<() => void>()

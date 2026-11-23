@@ -2255,6 +2255,7 @@ function App() {
             unreadSessionIds={unreadSessionIds}
             onToggleIdleNotificationMode={toggleIdleNotificationMode}
             bounded={boundedPresentation}
+            branding={webUiSettings}
           />
           <div
             className="foxwarm-sidebar-resize absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"

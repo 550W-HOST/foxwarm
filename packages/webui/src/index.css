@@ -2824,8 +2824,16 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail-
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel [data-session-list-toolbar] { background: transparent; }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-frame { gap: 0; padding-left: 2px; }
 
+/* The instance's emoji in place of the logo, as tall as the logo. */
+.foxwarm-sidebar-brand-icon {
+  display: inline-block; max-width: 3em; overflow: hidden; white-space: nowrap;
+  font-size: 20px; line-height: 24px; font-weight: 400;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
 /* Brand row: one title row tall. Controls at the top left (macOS lights): it starts after
- * them and shows the logo only; the app name is in the menu bar. */
+ * them and shows the logo only, as the app name is in the menu bar; an instance's own
+ * emoji and name stay. */
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row {
   display: flex; align-items: center;
   height: var(--foxwarm-frame-title-height);
@@ -2833,9 +2841,14 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand
 }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] { flex: 1; min-width: 0; height: 100%; margin: 0; padding-left: 0; }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] h1 { gap: 8px; font-size: 15px; }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] h1 > svg { width: 20px; height: 20px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] .foxwarm-sidebar-brand-mark { width: 20px; height: 20px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] .foxwarm-sidebar-brand-icon { font-size: 17px; line-height: 20px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-instance-menu] { height: 32px; border-radius: 6px; border-color: transparent; background-color: transparent; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-instance-menu]:hover { background-color: color-mix(in srgb, var(--foxwarm-color-text-strong) 9%, transparent); }
 html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row { padding-left: max(12px, var(--foxwarm-frame-left, 0px)); }
-html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-wordmark { display: none; }
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-wordmark[data-brand-default] { display: none; }
+/* Its hover fill stays clear of the lights. */
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell [data-instance-menu] { margin-left: 0; }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-nav { padding-top: 6px; }
 
 /* Rail: the expand toggle is the rail's title row; after the lights when they sit at the top left. */
