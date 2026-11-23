@@ -12,6 +12,7 @@ Renders the global sidebar settings split button (gear opens Setup; attached dro
 - `SessionUiSettingsMenu` — per-Chat header menu for send behavior, timeline view, usage badges, Full width, minimap visibility, direct-user metadata visibility, and Debug
 - `clampAnchoredMenuHorizontally` — pure preferred-alignment + viewport-gutter clamp helper
 - `readHorizontalViewportBounds` — intersects the layout/body bounds with the current visual viewport
+- `placeAnchoredMenuVertically`, `menuPortalContainer`, `useMenuDismissal` — shared vertical flip/clamp-or-shrink, modal-dialog-aware portal target, and outside-press/Escape/resize/scroll dismissal used by `ContextMenu` and `Select` ([webui-small-components](./webui-small-components.md#d-webui-shared-select))
 - Both menus use the existing send-mode union (`'modEnter' | 'enter'`) at their component boundary.
 - `TimelineView` — the single display-mode union shared by every Timeline consumer; `readChatPreferences` defaults to Conversation, reads valid viewport-specific modes before the supported desktop legacy grouping boolean, and `setTimelineView` writes only the current viewport family's key (`foxwarm_timeline_view_v1` or `foxwarm_mobile_timeline_view_v1`). App, popup, embedded and scoped identity Chat roots all use this hook; standalone Chat also defaults to Conversation. See [D-webui-timeline-view](../modules/webui-timeline.md#d-webui-timeline-view).
 - `GlobalUiSettingsMenuProps` — props interface for the required Setup action, optional Logs action, `setupActive`, `toolbar`/`rail` variant, and preferred menu alignment/side
@@ -24,6 +25,9 @@ Renders the global sidebar settings split button (gear opens Setup; attached dro
 | `SessionUiSettingsMenu(props)` | `SessionUiSettingsMenu.tsx` | Session-header Input/Chat preference menu with local minimap synchronization |
 | `clampAnchoredMenuHorizontally(options)` | (menuPositioning.ts) | Keeps the preferred start/end placement when possible and otherwise clamps both horizontal edges |
 | `readHorizontalViewportBounds()` | (menuPositioning.ts) | Reads body/layout/visual-viewport horizontal bounds for zoom-aware placement |
+| `placeAnchoredMenuVertically(options)` | (menuPositioning.ts) | Below, else above, else clamped (or, with `shrinkToFit`, limited to the larger side) |
+| `menuPortalContainer(anchor)` | (menuPositioning.ts) | The open modal `<dialog>` containing the anchor, otherwise `document.body` |
+| `useMenuDismissal(options)` | (menuPositioning.ts) | Closes an anchored menu on outside press, optional Escape, resize and outside scroll (unless `keepOnScroll`; with `scrollAnchor`, only when that element moved) |
 
 ## Dependencies
 
