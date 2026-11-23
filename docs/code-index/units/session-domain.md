@@ -21,6 +21,8 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 
 These are value/domain boundaries, not persistence writers. JSON authority owns active history/queue/wait semantic instances; catalog owns Main identity/topology/presentation summaries. Agent memory selection can affect a prompt but does not mutate Session history until a turn save commits its canonical result.
 
+`AgentMemory.BuildAsync` ends the memory blocks with the skill catalog: a fixed introduction, then one `<skill>` line per listed skill with its XML-escaped name, description and source type. A skill with a valid [`run` block](./host-runtime.md#runnable-skills) gains `<run>` with its escaped effect after `<source>`, and when at least one listed skill is runnable, `AgentMemory.RunnableSkillsSentence` (approved copy, 2026-11-23) goes between the `ctl skill load` sentence and the line that introduces the list. A catalog without a runnable skill keeps its earlier bytes exactly, so adding the feature changes no existing prompt ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)); a Session that lists one sees the change once, at its next snapshot rebuild. Args schemas stay out of the catalog (`ctl skill run <name> --help` shows them).
+
 Session metadata, DTOs, status and bounded global/descendant summaries project optional recorded cost with presence-aware live overlays; the end-to-end contract is [D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost).
 
 ## Metadata search lowercasing
@@ -104,6 +106,8 @@ Persisted attachment compatibility belongs in normalization. Runtime APIs expose
 Best-channel selection keeps narrow readers for persisted source wrappers while every new inbound message uses the current channel wrapper.
 
 ## Tests
+
+`RunnableSkillTests` holds the catalog prefix guard (the exact text of a catalog without a runnable skill, including one with an invalid `run` block) and checks the `<run>` element, its escaping and the sentence's single placement.
 
 `AgentDeletionTests*.cs` covers deletion layouts, retained selection/membership and reopen behavior. `CanonicalPathsTests.cs` covers frozen Source metadata, Session serialization and directory membership, unknown fields, missing-only bootstrap after an explicit Agents-root change, fallback memory, retained physical layouts and exact identity recovery. `dotnet/Foxwarm.Tests/Sessions/*` (including `SessionHistoryOwnershipTests.cs`); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `ConditionalMemoryTests.cs`; presentation/list/identity tests.
 

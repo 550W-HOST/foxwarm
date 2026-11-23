@@ -32,7 +32,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 | `history.read` | target Session | `mode: exact\|vector` | archive tools, exact recall, Session-scoped vector recall |
 | `history.search` | target Agent (always the caller's own) | — | vector `recall` with `scope: current-agent`; `recall` rejects `agentName` |
 | `agent.list` | — | — | rows filtered |
-| `agent.view` | target Agent | — | `skill` (an omitted target is the caller's Agent); the inherited Agent of `create_agent` / `set_agent_inherit` |
+| `agent.view` | target Agent | — | `skill` and `run_skill` (an omitted target is the caller's Agent); the inherited Agent of `create_agent` / `set_agent_inherit` |
 | `agent.create` | prospective Agent | — | `create_agent`, `move_session(createAgent)` |
 | `agent.manage` | target Agent | `change: rules\|inherit` | `set_agent_rules`, `set_agent_inherit` |
 | `task.create` | — | `assigned` | normalized `task` action and owner presence |
@@ -95,6 +95,7 @@ Notation:
 | `node:browser_*`; custom Node tool; MCP tool | `env.browser`; `env.tool`; `mcp.call` | P |
 | `run_script`, `start_toolscript_run` | from a file: `env.read(source)`; inline: **Self** | P; S `node:read` of the file source (master and remote); N each `call_tool`/`ctl()`; R `model-request`: `model.request` per host call, assessed as this invocation |
 | `continue_script` | **Self** | N; R `model-request` |
+| `run_skill` | `agent.view(skill-agent)`: the skill subsystem discloses the entry, as `skill load` discloses `SKILL.md` | P; N each `call_tool`/`ctl()`; R `model-request`, assessed as this invocation. No source-read sub-request. |
 | `list/get/cancel_toolscript_run`, `cancel_transfer`, `wait`, `image_crop` | **Self** (owner-scoped) | — |
 | `submit_compact_plan` | **Self** | S `argsFilePath` read, invalid-plan save and repair edit as Node read/write/edit |
 | `ctl` | front end | resolves to the target capability |

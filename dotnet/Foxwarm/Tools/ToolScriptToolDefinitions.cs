@@ -161,6 +161,43 @@ internal static class ToolScriptToolDefinitions
   },
   {
     "type": "function",
+    "name": "run_skill",
+    "description": "Run a runnable skill's entry script as a ToolScript run, with arguments checked against the skill's schema.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skillName"],
+      "properties": {
+        "skillName": {
+          "type": "string",
+          "description": "Skill to run."
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Arguments for the skill, as its run schema describes."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "foreground",
+            "background"
+          ],
+          "description": "Run mode. Defaults to the skill's own mode."
+        },
+        "timeoutSecs": {
+          "type": "number",
+          "description": "Time budget in seconds, as for run_script. Defaults to the skill's own budget, otherwise 30."
+        },
+        "agentName": {
+          "type": "string",
+          "description": "Agent whose available skills to use. Defaults to this Session's Agent."
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
     "name": "get_toolscript_run",
     "description": "Inspect a ToolScript run, including its status, pause details, accumulated output, and tool activity.",
     "parameters": {

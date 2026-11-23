@@ -1,4 +1,5 @@
 using System.Text;
+using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
@@ -316,6 +317,69 @@ internal static class CtlHelp
                     }
                 )
         );
+
+    // `skill run <name> --help`: the command's help, then what running that skill does and the
+    // arguments --args takes, read from its run schema.
+    internal static string Skill(string commandHelp, SkillInfo info, SkillRun run)
+    {
+        var builder = new StringBuilder(commandHelp.TrimEnd())
+            .Append("\n\nSkill `")
+            .Append(info.Name)
+            .Append("` (")
+            .Append(info.SourceLabel)
+            .Append(")\nEffect: ")
+            .Append(run.Effect)
+            .Append("\nMode: ")
+            .Append(run.Mode);
+        if (run.TimeoutSecs is { } seconds)
+            builder
+                .Append(", time budget ")
+                .Append(seconds.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                .Append(" s");
+        if (run.Args["properties"] is System.Text.Json.Nodes.JsonObject { Count: > 0 })
+        {
+            builder.Append("\nArguments (--args):");
+            SchemaProperties(builder, run.Args, "  ");
+        }
+        else
+            builder.Append("\nArguments: none.");
+        return Bound(builder.ToString());
+    }
+
+    private static void SchemaProperties(
+        StringBuilder builder,
+        System.Text.Json.Nodes.JsonObject schema,
+        string indent
+    )
+    {
+        var required = (schema["required"] as System.Text.Json.Nodes.JsonArray)
+            ?.Select(SessionWait.Text)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal) ?? [];
+        foreach (var (name, node) in (System.Text.Json.Nodes.JsonObject)schema["properties"]!)
+        {
+            var property = node as System.Text.Json.Nodes.JsonObject ?? [];
+            builder.Append('\n').Append(indent).Append(name).Append(" (").Append(SchemaType(property));
+            if (required.Contains(name))
+                builder.Append(", required");
+            builder.Append(')');
+            if (SessionWait.Text(property["description"]) is { Length: > 0 } description)
+                builder.Append(": ").Append(description);
+            var inner = property["properties"] is not null ? property : property["items"] as System.Text.Json.Nodes.JsonObject;
+            if (inner?["properties"] is System.Text.Json.Nodes.JsonObject { Count: > 0 })
+                SchemaProperties(builder, inner, indent + "  ");
+        }
+    }
+
+    private static string SchemaType(System.Text.Json.Nodes.JsonObject schema)
+    {
+        if (schema["enum"] is System.Text.Json.Nodes.JsonArray options)
+            return "one of " + string.Join(", ", options.Select(option => SessionWait.Text(option) ?? option?.ToJsonString() ?? "null"));
+        var type = SessionWait.Text(schema["type"]) ?? "any";
+        return type == "array" && schema["items"] is System.Text.Json.Nodes.JsonObject items
+            ? "array of " + SchemaType(items)
+            : type;
+    }
 
     private static string Bound(string text) =>
         text.Length <= MaxLength

@@ -12,7 +12,10 @@ internal sealed record SkillInfo(
     string SourceType,
     string? SourceAgent,
     string[] Resources,
-    bool ResourcesTruncated
+    bool ResourcesTruncated,
+    // The validated `run` block of a runnable skill; RunError says why a present block is not.
+    SkillRun? Run = null,
+    string? RunError = null
 )
 {
     internal string SourceLabel =>
@@ -89,7 +92,22 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         return result.Values.OrderBy(info => info.Name, StringComparer.CurrentCulture).ToArray();
     }
 
-    internal async Task<(SkillInfo Info, string Content)> LoadAsync(string name, string agent)
+    internal async Task<(SkillInfo Info, string Content)> LoadAsync(string name, string agent) =>
+        await FindAsync(
+            name,
+            agent,
+            true,
+            async info => (info, await File.ReadAllTextAsync(info.MetadataPath))
+        );
+
+    // Resolution shared by load and run: Agent-local, inherited, then global; the first valid
+    // match wins.
+    private async Task<T> FindAsync<T>(
+        string name,
+        string agent,
+        bool resources,
+        Func<SkillInfo, Task<T>> read
+    )
     {
         ValidateName(name);
         Exception? last = null;
@@ -99,8 +117,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
                 continue;
             try
             {
-                var info = await BuildAsync(name, root, true);
-                return (info, await File.ReadAllTextAsync(info.MetadataPath));
+                return await read(await BuildAsync(name, root, resources));
             }
             catch (Exception error)
                 when (error
@@ -165,7 +182,9 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         var entry = Path.Combine(dir, "SKILL.md");
         if (!File.Exists(entry))
             throw new InvalidDataException($"Skill '{name}' not found. Expected: {entry}.");
-        var description = Description(await File.ReadAllTextAsync(entry));
+        var content = await File.ReadAllTextAsync(entry);
+        var description = Description(content);
+        var (run, runError) = Run(content, dir);
         var (files, truncated) = resources ? Resources(dir) : (Array.Empty<string>(), false);
         return new SkillInfo(
             name,
@@ -175,7 +194,9 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
             root.Type,
             root.Agent,
             files,
-            truncated
+            truncated,
+            run,
+            runError
         );
     }
 

@@ -1312,6 +1312,7 @@ internal sealed partial class SessionToolExecutor(
         )
             handlers[name] = (owner, args, token) =>
                 owner.ExecuteToolScriptAsync(name, args, token);
+        handlers["run_skill"] = (owner, args, token) => owner.ExecuteRunSkillAsync(args, token);
         foreach (
             var name in new[] { "create_timer", "list_timers", "update_timer", "delete_timer" }
         )

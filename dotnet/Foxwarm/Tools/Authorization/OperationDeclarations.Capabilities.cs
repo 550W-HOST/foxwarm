@@ -105,6 +105,13 @@ internal static partial class OperationDeclarations
             [SelfBranch("call", null, "continues a run owned by the caller")],
             [Primary(), Nested("each call_tool or ctl() call under its own gate"), ModelRequest()]
         ),
+        // A runnable skill's entry: the skill subsystem reads it (as `skill load` reads
+        // SKILL.md), then it runs as the caller's inline script.
+        Declare(
+            "builtin:run_skill",
+            [Call(Op("agent.view", "targetAgent=skill-agent"))],
+            [Primary(), Nested("each call_tool or ctl() call under its own gate"), ModelRequest()]
+        ),
         Declare(
             "builtin:list_toolscript_runs",
             [SelfBranch("call", null, "lists runs owned by the caller")],

@@ -115,9 +115,17 @@ internal sealed partial class AgentMemory(
         if (catalog.Count > 0)
         {
             blocks.Append(
-                "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, run `ctl skill load <name>`\nto load its full instructions and resource list.\nRead listed resources only when the loaded skill or current task needs them:\n<available_skills>\n"
+                "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, run `ctl skill load <name>`\nto load its full instructions and resource list.\n"
+            );
+            // Only a catalog that lists a runnable skill gains the sentence and <run> elements;
+            // any other catalog keeps its bytes (D-request-prefix-stability).
+            if (catalog.Any(skill => skill.Run is not null))
+                blocks.Append(RunnableSkillsSentence).Append('\n');
+            blocks.Append(
+                "Read listed resources only when the loaded skill or current task needs them:\n<available_skills>\n"
             );
             foreach (var skill in catalog)
+            {
                 blocks
                     .Append("  <skill><name>")
                     .Append(Xml(skill.Name))
@@ -125,7 +133,11 @@ internal sealed partial class AgentMemory(
                     .Append(Xml(skill.Description ?? ""))
                     .Append("</description><source>")
                     .Append(skill.SourceType)
-                    .Append("</source></skill>\n");
+                    .Append("</source>");
+                if (skill.Run is { } run)
+                    blocks.Append("<run>").Append(Xml(run.Effect)).Append("</run>");
+                blocks.Append("</skill>\n");
+            }
             blocks.Append("</available_skills>\n");
         }
         var directory = $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}";
@@ -144,6 +156,9 @@ internal sealed partial class AgentMemory(
         );
         return snapshot + "\n\n" + size.Notice();
     }
+
+    internal const string RunnableSkillsSentence =
+        "A skill with a `<run>` element can also be run directly, without loading it, with `ctl skill run <name> --args @args`. `<run>` says what running it does; `ctl skill run <name> --help` shows its arguments.";
 
     private static string Xml(string value) =>
         value

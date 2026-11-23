@@ -36,6 +36,8 @@ Resource references above are relative to the skill directory for reading docume
 
 Or run a small inline script with the `code` argument. The default mode is `foreground`.
 
+A skill listed with a `<run>` element ships its own entry script: `ctl skill run <name> --args @args` starts it as an ordinary run, so the results, pauses and modes below apply to it unchanged.
+
 ## Recommended workflow
 
 1. Discover and test the required tools in the normal agent loop.

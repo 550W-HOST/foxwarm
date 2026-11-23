@@ -93,7 +93,9 @@ internal sealed partial class SessionToolExecutor
     private async Task<JsonObject> ExecuteToolScriptAsync(
         string name,
         JsonObject args,
-        CancellationToken token
+        CancellationToken token,
+        // A runnable skill's entry, for run_skill: inline source plus provenance.
+        SkillEntry? skill = null
     )
     {
         var rootCall = invocation.Value;
@@ -110,7 +112,7 @@ internal sealed partial class SessionToolExecutor
         // Only an attended top-level call can hand a background run off; timer, webhook and
         // nested runs keep the slice contract.
         var detach =
-            !nested && !unattended && name is "run_script" or "continue_script"
+            !nested && !unattended && name is "run_script" or "continue_script" or "run_skill"
                 ? new ToolScriptDetach
                 {
                     // One event identity per detached segment; a run can detach again after
@@ -394,10 +396,17 @@ internal sealed partial class SessionToolExecutor
         {
             WaitScope = waitScope,
             Detach = detach,
+            SourceSkill = skill,
         };
         try
         {
-            var result = await sessions.ToolScript.ExecuteAsync(name, args, context, token);
+            // A skill entry starts as an inline run_script run.
+            var result = await sessions.ToolScript.ExecuteAsync(
+                name == "run_skill" ? "run_script" : name,
+                args,
+                context,
+                token
+            );
             if (SessionWait.Text(result["status"]) != "completed")
                 waitScope.Pending = null;
             else if (!unattended && !nested && waitScope.Pending is { } pending)

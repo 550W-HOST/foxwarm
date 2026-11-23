@@ -221,7 +221,8 @@ internal static partial class OperationDeclarations
             Assess,
             "builtin:run_script#model-request",
             "builtin:start_toolscript_run#model-request",
-            "builtin:continue_script#model-request"
+            "builtin:continue_script#model-request",
+            "builtin:run_skill#model-request"
         ),
         Site(Output, "SaveToolOutputAsync", 1, File, "*#output-spill"),
         Site(Output, "SaveToolOutputAsync", 2, File, "*#output-spill"),

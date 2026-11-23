@@ -24,6 +24,10 @@ internal sealed record ToolScriptContext(
     // Present only for an attended top-level run_script/continue_script call, whose background
     // run may outlast the call's wait and continue on its own.
     internal ToolScriptDetach? Detach { get; init; }
+
+    // The runnable skill whose entry this run starts (`ctl skill run`); its record keeps the
+    // provenance. Continuations resume the snapshot and never reread the entry.
+    internal SkillEntry? SourceSkill { get; init; }
     internal Action<JsonObject>? SessionMessageDelivered { get; set; }
     internal Action<JsonObject>? ExecPlacementObserved { get; set; }
     internal Action<JsonObject>? TargetObserved { get; set; }

@@ -37,7 +37,7 @@
     },
     {
       "name": "skill",
-      "summary": "List and load skills.",
+      "summary": "List, load and run skills.",
       "copy": {
         "user": "List skills and show their instructions."
       }
@@ -2530,6 +2530,55 @@
           "ingress": [
             "user"
           ]
+        }
+      ]
+    },
+    {
+      "path": "skill run",
+      "summary": "Run a skill's entry script without loading the skill.",
+      "help": "Only a skill listed with a `<run>` element can be run. `ctl skill run <name> --help` shows what running it does and the arguments --args takes. The entry runs as an ordinary ToolScript run: it returns the script's result, pauses for `continue_script` at its time budget, and each tool call it makes is checked as yours.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "run_skill"
+      },
+      "params": [
+        {
+          "name": "skillName",
+          "type": "string",
+          "kind": "positional",
+          "help": "Skill to run.",
+          "required": true
+        },
+        {
+          "name": "args",
+          "type": "object",
+          "kind": "flag",
+          "help": "Arguments for the skill, usually @args. `ctl skill run <name> --help` lists them."
+        },
+        {
+          "name": "mode",
+          "type": "enum",
+          "values": [
+            "foreground",
+            "background"
+          ],
+          "kind": "flag",
+          "help": "Run mode. Defaults to the skill's own mode."
+        },
+        {
+          "name": "timeoutSecs",
+          "type": "number",
+          "kind": "flag",
+          "help": "Time budget in seconds, as for run_script. Defaults to the skill's own budget, otherwise 30."
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent whose available skills to use. Defaults to this Session's Agent."
         }
       ]
     },

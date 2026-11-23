@@ -162,6 +162,8 @@ Minimum requirements:
 
 For executable skills, prefer one clear command or script entry point. If several scripts must run in order, add an orchestrator such as `scripts/run_pipeline.py` rather than making the agent sequence steps from prose.
 
+A self-contained ToolScript entry that reaches one stated outcome from its arguments alone, with bounded side effects and no `ask_agent`, can be declared runnable in the frontmatter (`run:` with `entry`, a one-line `effect`, optional `mode` and `timeoutSecs`, and an `args` JSON Schema using `type`, `properties`, `required`, `enum`, `items`, `description` and `additionalProperties`), so agents run it with `ctl skill run <name>` without loading `SKILL.md`; `ctl skill run <name> --help` shows whether the block is valid.
+
 ## Validation
 
 Validate the changed behavior and structure. For description or documentation edits, check frontmatter, relevant links, and the intended activation scope. For executable changes, run the affected script or representative end-to-end path. Reuse valid results from the same revision and environment; repeat or broaden checks only for changed behavior, a required gate, or unresolved evidence.
