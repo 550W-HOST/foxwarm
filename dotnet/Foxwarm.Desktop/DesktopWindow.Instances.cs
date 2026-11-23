@@ -43,6 +43,7 @@ internal sealed partial class DesktopWindow
         };
         AutomationProperties.SetName(panel, "Instances");
         var running = host is not null && !stoppingLocal;
+        Control? current = null;
         panel.Children.Add(MenuRow(
             flyout,
             "\uE80F",
@@ -51,6 +52,8 @@ internal sealed partial class DesktopWindow
             () => _ = SwitchAsync(null),
             running ? ("\uE7E8", "Stop local instance", () => _ = StopLocalAsync()) : null
         ));
+        if (instances.Selected is null)
+            current = (Control)((Grid)panel.Children[^1]).Children[0];
         foreach (var remote in instances.Remotes)
         {
             var selected = instances.Selected == remote;
@@ -62,6 +65,8 @@ internal sealed partial class DesktopWindow
                 () => _ = SwitchAsync(remote),
                 selected ? null : ("\uE711", "Remove", () => instances.Remove(remote))
             ));
+            if (selected)
+                current = (Control)((Grid)panel.Children[^1]).Children[0];
         }
         panel.Children.Add(new Border
         {
@@ -78,12 +83,16 @@ internal sealed partial class DesktopWindow
                 openMenu = null;
         };
         openMenu = flyout;
+        // Focus starts on the current instance. A click on the brand row or a button shows no
+        // focus rectangle; the keyboard entries (shortcut, tray) do.
+        var focus = anchor is null && button is null ? FocusState.Keyboard : FocusState.Pointer;
+        flyout.Opened += (_, _) => current?.Focus(focus);
         if (button is not null)
             flyout.ShowAt(button, new FlyoutShowOptions { Placement = FlyoutPlacementMode.Bottom });
         else
             flyout.ShowAt(root, new FlyoutShowOptions
             {
-                Position = anchor is { } rect ? new Point(rect.X, rect.Bottom + 4) : new Point(12, 44),
+                Position = anchor is { } rect ? new Point(rect.X, rect.Bottom + 4) : new Point(6, 44),
                 Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft,
             });
     }

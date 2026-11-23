@@ -19,6 +19,7 @@ internal sealed class DesktopNative : IDisposable
     private readonly nint icon;
     private NotifyIconData tray;
     private bool disposed;
+    private const int ShortcutId = 1;
 
     internal DesktopNative(DesktopWindow window, Action open, Action exit, Action shutdown, Action instances)
     {
@@ -65,6 +66,20 @@ internal sealed class DesktopNative : IDisposable
 
     internal void Foreground() => SetForegroundWindow(hwnd);
 
+    private bool shortcut;
+
+    /// <summary>Ctrl+Shift+F1 opens the instance menu while the window is active; another app may own it.</summary>
+    internal void ActivateShortcut(bool active)
+    {
+        if (disposed || active == shortcut)
+            return;
+        shortcut = active;
+        if (active)
+            RegisterHotKey(hwnd, ShortcutId, 0x2 | 0x4 | 0x4000, 0x70); // MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_F1
+        else
+            UnregisterHotKey(hwnd, ShortcutId);
+    }
+
     internal static void ShowMessage(string text) => MessageBox(0, text, "Foxwarm", 0x40);
 
     private nint WindowProcedure(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)
@@ -90,6 +105,9 @@ internal sealed class DesktopNative : IDisposable
                 var scale = GetDpiForWindow(hwnd) / 96.0;
                 bounds.MinTrackSize = new Point { X = (int)(800 * scale), Y = (int)(600 * scale) };
                 Marshal.StructureToPtr(bounds, lParam, false);
+                return 0;
+            case 0x312 when wParam == ShortcutId: // WM_HOTKEY
+                instances();
                 return 0;
             case 0x11: // WM_QUERYENDSESSION: do not veto Windows shutdown.
                 return 1;
@@ -131,6 +149,7 @@ internal sealed class DesktopNative : IDisposable
     {
         if (disposed)
             return;
+        ActivateShortcut(false);
         disposed = true;
         ShellNotifyIcon(2, ref tray);
         RemoveWindowSubclass(hwnd, procedure, 1);
@@ -196,6 +215,14 @@ internal sealed class DesktopNative : IDisposable
 
     [DllImport("user32.dll")]
     private static extern nint CreatePopupMenu();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RegisterHotKey(nint window, int id, uint modifiers, uint key);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnregisterHotKey(nint window, int id);
 
     [DllImport("user32.dll", EntryPoint = "AppendMenuW", CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]

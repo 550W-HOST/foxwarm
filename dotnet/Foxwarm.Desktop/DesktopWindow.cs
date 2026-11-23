@@ -6,7 +6,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Windowing;
-using Windows.System;
 
 namespace Foxwarm.Desktop;
 
@@ -67,19 +66,10 @@ internal sealed partial class DesktopWindow : Window
         Content = content;
         native = new DesktopNative(this, OpenWindow, ExitApplication, Shutdown, OpenInstanceMenuFromTray);
         frame = new DesktopFrame(this, view, IsAppUri, DesktopWindowFrame.WebUi, anchor => OpenInstanceMenu(this, anchor));
-        // The fallback entry, also for a page without the brand row (an older WebUI, an error page).
-        var shortcut = new KeyboardAccelerator
-        {
-            Key = VirtualKey.F1,
-            Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
-        };
-        shortcut.Invoked += (_, e) =>
-        {
-            e.Handled = true;
-            OpenInstanceMenu(this, null);
-        };
-        content.KeyboardAccelerators.Add(shortcut);
-        content.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
+        // The fallback entry, also for a page without the brand row (an older WebUI, an error
+        // page). A hot key while the window is active: the web view keeps key presses from XAML
+        // keyboard accelerators.
+        Activated += (_, e) => native.ActivateShortcut(e.WindowActivationState != WindowActivationState.Deactivated);
         AppWindow.Closing += (_, e) =>
         {
             e.Cancel = true;
