@@ -3954,7 +3954,7 @@
     {
       "path": "tool call",
       "summary": "Call an MCP or Node tool by its tool ID.",
-      "help": "Give a <tool-id> from `ctl tool search`, or identify the tool with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. `ctl tool call <tool-id> --help` shows the tool's description and arguments. The target tool's normal checks apply.",
+      "help": "Give a <tool-id> from `ctl tool search`, or identify the tool with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. `ctl tool call <tool-id> --help` shows the tool's description and arguments. The target tool's normal checks apply. In ToolScript, call a tool ID directly with `call_tool(\"<tool-id>\", args)`.",
       "ingress": [
         "model",
         "external"
