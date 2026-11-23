@@ -4,6 +4,7 @@ import { readFile, writeFile, unlink, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { chooseSelectOption, readSelectOptions } from './selectDriver.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('session-creation', options)
@@ -18,6 +19,7 @@ await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', provi
 const roots = async () => (await fixture.api('GET', '/api/session-list/sidebar?limit=50')).body.sessions.map(row => row.id)
 const saved = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'))
 let page
+const claudeOption = async () => (await readSelectOptions(page, '[role="combobox"][aria-label="Session runtime"]')).find(option => option.value === 'claude-code')
 async function openDialog() {
   await waitForWebUiReady(page)
   await page.click(NEW_SESSION_DIALOG_TRIGGER)
@@ -44,8 +46,8 @@ try {
   const checked = page.waitForResponse(response => new URL(response.url()).pathname === '/api/setup/status')
   await openDialog()
   await checked
-  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
-  assert.match(await page.$eval('option[value="claude-code"]', option => option.textContent), /unavailable/)
+  assert.equal((await claudeOption()).disabled, true)
+  assert.match((await claudeOption()).label, /unavailable/)
   await page.click('[role="dialog"] button[title="main"]')
   const ordinary = await submit('/api/sessions')
   assert.match(ordinary, /^\d{4}_[a-z0-9]{5}$/)
@@ -78,8 +80,8 @@ try {
   // The original App discovers a wrapper installed after startup without executing it.
   await writeFile(launcher, `#!/bin/sh\nprintf invoked > '${launched}'\n`, { mode: 0o700 })
   await openDialog()
-  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
-  await page.select('select[aria-label="Session runtime"]', 'claude-code')
+  await until(async () => !(await claudeOption()).disabled, 'Claude Code available')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session runtime"]', 'claude-code')
   const external = await submit('/api/sessions')
   assert.equal((await saved(external)).runtime, 'claude-code')
   await assert.rejects(access(launched))
@@ -89,13 +91,13 @@ try {
   await page.goto(fixture.origin + '/?foxwarmEmbed=sidebar&foxwarmEmbedNonce=owned-runtime-availability', { waitUntil: 'networkidle0' })
   await page.waitForSelector('button[aria-label="New session"]')
   await openDialog()
-  await page.waitForFunction(() => document.querySelector('option[value="claude-code"]')?.textContent.includes('unavailable'))
-  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
+  await until(async () => (await claudeOption()).label.includes('unavailable'), 'Claude Code unavailable')
+  assert.equal((await claudeOption()).disabled, true)
   await page.keyboard.press('Escape')
   await writeFile(launcher, `#!/bin/sh\nprintf invoked > '${launched}'\n`, { mode: 0o700 })
   await openDialog()
-  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
-  await page.select('select[aria-label="Session runtime"]', 'claude-code')
+  await until(async () => !(await claudeOption()).disabled, 'Claude Code available')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session runtime"]', 'claude-code')
   const embeddedExternal = await submit('/api/sessions')
   assert.equal((await saved(embeddedExternal)).runtime, 'claude-code')
   await assert.rejects(access(launched))

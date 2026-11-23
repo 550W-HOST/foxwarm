@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('system-page', options)
@@ -33,9 +34,9 @@ try {
   assert.match(await page.$eval('[data-system-summary="sessions"]', element => element.textContent), /0 active.*0 waiting.*0 queued/)
   // No global summary-card row and no Topology surface.
   assert.equal(await page.evaluate(() => document.body.innerText.includes('Execution topology') || document.body.innerText.includes('in loaded window')), false)
-  for (const label of ['Filter by status', 'Filter by agent', 'Filter by node', 'Filter by model']) assert.ok(await page.$(`select[aria-label="${label}"]`), label)
+  for (const label of ['Filter by status', 'Filter by agent', 'Filter by node', 'Filter by model']) assert.ok(await page.$(`[role="combobox"][aria-label="${label}"]`), label)
   assert.ok(await page.$('button[aria-label="Global token usage"]'))
-  await page.select('select[aria-label="Filter by node"]', 'master')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter by node"]', 'master')
   await until(async () => (await page.$$('[data-architecture-session-id]')).length === 3, 'master holds every Session')
   await page.type('input[aria-label="Search sessions, models, tools"]', 'review')
   await until(async () => (await page.$$eval('[data-architecture-session-id]', rows => rows.map(row => row.getAttribute('data-architecture-session-id')))).join() === 'reviewer', 'search narrows the list')

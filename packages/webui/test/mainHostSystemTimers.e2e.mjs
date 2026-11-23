@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('system-timers', options)
@@ -50,12 +51,12 @@ try {
   assert.match(await page.$eval('[data-system-summary="timers"]', element => element.textContent), /3 timers · 0 paused · 1 failing/)
 
   // Filters and search.
-  await page.select('select[aria-label="Filter timers by action"]', 'toolscript')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by action"]', 'toolscript')
   await until(async () => (await listed(page)).join() === 'script1', 'action filter')
-  await page.select('select[aria-label="Filter timers by action"]', '')
-  await page.select('select[aria-label="Filter timers by state"]', 'failing')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by action"]', '')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by state"]', 'failing')
   await until(async () => (await listed(page)).join() === 'script1', 'state filter')
-  await page.select('select[aria-label="Filter timers by state"]', 'all')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by state"]', 'all')
   await page.type('input[aria-label="Search timers"]', 'nightly')
   await until(async () => (await listed(page)).join() === 'once1', 'search')
   await page.click('input[aria-label="Search timers"]', { clickCount: 3 }); await page.keyboard.press('Backspace')
@@ -85,7 +86,7 @@ try {
   // Edit: schedule and message, validated by the server.
   await page.locator('[data-system-timer-inspector="msg1"] button::-p-text(Edit)').click()
   await page.waitForSelector('[data-system-timer-editor]')
-  await page.select('[data-system-timer-editor] select[aria-label="Schedule"]', 'cron')
+  await chooseSelectOption(page, '[data-system-timer-editor] [role="combobox"][aria-label="Schedule"]', 'cron')
   const cron = await page.$('[data-system-timer-editor] input[aria-label="Cron schedule"]')
   await cron.click({ clickCount: 3 }); await cron.type('not a cron')
   await page.click('[data-system-timer-editor] button[type="submit"]')

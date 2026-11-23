@@ -22,13 +22,10 @@
 .tasks-search { display: flex; align-items: center; gap: 7px; width: 180px; color: var(--foxwarm-color-text-muted); }
 .tasks-search input { min-width: 0; width: 100%; font-size: 12px; background: transparent; padding: 7px 0; color: var(--foxwarm-color-text); outline: none; }
 .tasks-search:focus-within { color: var(--foxwarm-color-accent); }
-.tasks-agent-select { display: inline-flex; align-items: center; min-width: 0; position: relative; border: 1px solid var(--foxwarm-color-border); border-radius: 7px; background: var(--foxwarm-color-surface); }
-.tasks-agent-select select { appearance: none; background: transparent; font-size: 12px; width: 150px; max-width: 100%; padding: 7px 26px 7px 9px; text-overflow: ellipsis; color: var(--foxwarm-color-text); }
-.tasks-agent-select svg { pointer-events: none; position: absolute; right: 8px; color: var(--foxwarm-color-text-muted); }
+.tasks-agent-select.foxwarm-select { width: 150px; max-width: 100%; height: 34px; }
 .tasks-filter-control { position: relative; }
 .tasks-filter-popover { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: 220px; padding: 12px; border: 1px solid var(--foxwarm-color-border); border-radius: 9px; background: var(--foxwarm-color-surface); box-shadow: 0 6px 24px #00000018; }
 .tasks-filter-popover label { display: block; font-size: 11px; color: var(--foxwarm-color-text-muted); margin-bottom: 7px; }
-.tasks-filter-popover select { width: 100%; border: 1px solid var(--foxwarm-color-border); background: var(--foxwarm-color-canvas); font-size: 12px; padding: 6px; border-radius: 5px; }
 .tasks-view-toggle { display: inline-flex; padding: 3px; border-radius: 7px; background: var(--foxwarm-color-canvas); border: 1px solid var(--foxwarm-color-border-muted); }
 .tasks-view-toggle button { color: var(--foxwarm-color-text-muted); border-radius: 4px; padding: 4px 7px; }
 .tasks-view-toggle button[aria-pressed="true"] { color: var(--foxwarm-color-text); background: var(--foxwarm-color-surface); box-shadow: 0 1px 3px #00000010; }
@@ -98,7 +95,7 @@
   .tasks-toolbar-actions { flex-basis: 100%; justify-content: flex-start; padding-bottom: 12px; }
   .tasks-scope-tabs { gap: 26px; }
   .tasks-search { flex: 1; min-width: 90px; }
-  .tasks-agent-select select { width: 115px; }
+  .tasks-agent-select.foxwarm-select { width: 115px; }
   .tasks-status-counts { gap: 8px; }
   .tasks-table, .tasks-table tbody { display: block; }
   .tasks-table thead { display: none; }

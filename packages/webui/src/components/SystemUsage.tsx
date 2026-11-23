@@ -5,6 +5,7 @@ import { useMobileChatViewport } from '../chatPreferences'
 import { formatUsdCost } from '../usageCost'
 import TokenUsageDetails, { formatUsageNumber } from './TokenUsageDetails'
 import SystemUsageRedaction from './SystemUsageRedaction'
+import Select from './Select'
 import { USAGE_TABLE_FIRST_COLUMN as STICKY_FIRST } from './SystemShared'
 import {
   MAX_USAGE_DAYS, USAGE_GROUPINGS, USAGE_PERIODS, toDateInput, usageBucketLabel, usageGroupDetail,
@@ -115,7 +116,6 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
   const groupingLabel = USAGE_GROUPINGS.find(item => item.id === (shown?.report.groupBy || grouping))!.label
 
   const segment = (active: boolean) => `rounded-md px-3 py-1 text-xs font-medium ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
-  const select = 'h-9 min-w-0 rounded-lg border border-transparent bg-transparent px-3 text-xs font-medium text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border'
   const dateInput = 'h-9 rounded-lg border border-fw-border bg-fw-surface px-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border'
   const card = 'rounded-xl border border-fw-border bg-fw-surface p-4'
   const coverage = current?.coverage
@@ -141,9 +141,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
           ) : null}
           <label className="flex items-center gap-1 text-xs text-fw-text-muted">
             <span>Group by</span>
-            <select aria-label="Group usage by" value={grouping} onChange={event => setGrouping(event.target.value as UsageGrouping)} className={select}>
-              {USAGE_GROUPINGS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
+            <Select variant="toolbar" aria-label="Group usage by" value={grouping} onChange={value => setGrouping(value as UsageGrouping)} options={USAGE_GROUPINGS.map(item => ({ value: item.id, label: item.label }))} />
           </label>
           {agent ? (
             <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-fw-accent-surface px-2.5 py-1 text-xs text-fw-accent" data-usage-agent-filter={agent}>

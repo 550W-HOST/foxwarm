@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import Select from './Select'
 import type { WebUiNodeTarget } from '../nodeTargets'
 
 type Launch = Record<string, string>
@@ -13,6 +14,7 @@ const methods = [
   ['interactive', 'Interactive CLI'], ['docker', 'Docker'],
   ['shell', 'Linux Shell'], ['windowsShell', 'Windows Shell'],
 ]
+const SERVICE_SCOPES = [{ value: 'user', label: 'Current user' }, { value: 'system', label: 'System' }]
 const fieldClass = 'mt-1 w-full rounded-lg border border-fw-border bg-fw-canvas px-3 py-2 text-sm text-fw-text-strong'
 const buttonClass = 'rounded-lg border border-fw-border px-3 py-2 text-sm hover:bg-fw-hover disabled:opacity-50'
 
@@ -126,10 +128,10 @@ export default function NodeActionsModal({ node, action, onClose, onNodesChanged
       <div className="flex justify-end gap-2"><button className={buttonClass} onClick={onClose}>Cancel</button><button className={`${buttonClass} text-fw-danger`} disabled={busy || !removal?.canDelete || (removal.nodes.length > 1 && !cascade)} onClick={() => void remove()}>Delete Node</button></div>
     </div> : <div className="space-y-4">
       <fieldset disabled={busy || issued} className="space-y-3 disabled:opacity-70">
-        <label className="block text-sm">Launch method<select aria-label="Launch method" className={fieldClass} value={launch.method || ''} onChange={event => { setLaunch({ method: event.target.value, installDir: event.target.value === 'windows' ? 'C:\\foxwarm-node' : '/opt/foxwarm-node' }); setCommand(null); setCopied(''); setConfirmReissue(false) }}>{methods.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+        <label className="block text-sm">Launch method<Select aria-label="Launch method" className={fieldClass} value={launch.method || ''} onChange={method => { setLaunch({ method, installDir: method === 'windows' ? 'C:\\foxwarm-node' : '/opt/foxwarm-node' }); setCommand(null); setCopied(''); setConfirmReissue(false) }} options={methods.map(([value, label]) => ({ value, label }))} /></label>
         <label className="block text-sm">Main server address<input aria-label="Main server address" className={fieldClass} value={address} onChange={event => { setAddress(event.target.value); setCommand(null); setConfirmReissue(false) }} /></label>
         {!shell ? <label className="block text-sm">Installation directory<input aria-label="Installation directory" className={fieldClass} value={launch.installDir || ''} onChange={event => update('installDir', event.target.value)} /></label> : null}
-        {launch.method === 'bareMetalInstall' ? <label className="block text-sm">Service scope<select aria-label="Service scope" className={fieldClass} value={launch.serviceScope || 'user'} onChange={event => update('serviceScope', event.target.value)}><option value="user">Current user</option><option value="system">System</option></select></label> : null}
+        {launch.method === 'bareMetalInstall' ? <label className="block text-sm">Service scope<Select aria-label="Service scope" className={fieldClass} value={launch.serviceScope || 'user'} onChange={value => update('serviceScope', value)} options={SERVICE_SCOPES} /></label> : null}
         {extraPaths.length ? <details><summary className="cursor-pointer text-sm text-fw-text-muted">Custom paths</summary>{extraPaths.map(([key, label]) => <label key={key} className="mt-2 block text-sm">{label}<input aria-label={label} className={fieldClass} value={launch[key] || ''} placeholder="Launcher default" onChange={event => update(key, event.target.value)} /></label>)}</details> : null}
         {!command ? <button type="button" className={buttonClass} onClick={() => void generate(false)}>Update command</button> : null}
       </fieldset>

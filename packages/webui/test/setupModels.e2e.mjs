@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import puppeteer from 'puppeteer-core'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webuiRoot = path.resolve(__dirname, '..')
@@ -2150,7 +2151,7 @@ test('first-run Setup completes a provider through the model form, list, connect
     assert.equal(await formPage.$eval('[data-save-feedback="models"]', node => node.textContent), 'Replace the placeholder API key with your key.')
     assert.deepEqual(modelsSaveRequests, [], 'an unfinished key is not sent')
 
-    await formPage.select('[data-model-setup-field="service"]', 'openrouter')
+    await chooseSelectOption(formPage, '[data-model-setup-field="service"]', 'openrouter')
     assert.equal(await formPage.$eval('[data-model-setup-field="baseUrl"]', input => input.value), 'https://openrouter.ai/api/v1')
     await formPage.type('[data-model-setup-field="apiKey"]', 'sk-or-test')
     await formPage.click('button::-p-text(Load models)')

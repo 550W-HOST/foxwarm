@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { CheckCircle2, Download, Eye, EyeOff, Plus, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import Select from './Select'
 import {
   addModel,
   connectionTestRequest,
@@ -68,7 +69,7 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
   const [testFeedback, setTestFeedback] = useState<Feedback | null>(null)
   const listAbort = useRef<AbortController | null>(null)
   const testAbort = useRef<AbortController | null>(null)
-  const serviceRef = useRef<HTMLSelectElement | null>(null)
+  const serviceRef = useRef<HTMLElement | null>(null)
   const connectionKey = JSON.stringify(providerConnection(form))
 
   // Listed models and test results describe one connection; a changed connection retires them.
@@ -144,34 +145,32 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
     <div data-model-setup-form className="w-full max-w-2xl space-y-5">
       <div>
         <label className={labelClass} htmlFor={`${id}-service`}>Service</label>
-        <select
+        <Select
           ref={serviceRef}
           id={`${id}-service`}
           data-model-setup-field="service"
           value={preset.id}
-          onChange={(event) => {
+          onChange={(value) => {
             setShowKey(false)
-            onChange({ ...formFromPreset(event.target.value), ...(event.target.value === 'custom' ? { providerType: form.providerType } : {}) })
+            onChange({ ...formFromPreset(value), ...(value === 'custom' ? { providerType: form.providerType } : {}) })
           }}
           className={inputClass}
-        >
-          {PROVIDER_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-        </select>
+          options={PROVIDER_PRESETS.map((item) => ({ value: item.id, label: item.label }))}
+        />
         {preset.id === 'ollama' && <p className={hintClass}>Uses Ollama on the machine where Foxwarm is installed.</p>}
       </div>
 
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
           <label className={labelClass} htmlFor={`${id}-type`}>API type</label>
-          <select
+          <Select
             id={`${id}-type`}
             data-model-setup-field="providerType"
             value={form.providerType}
-            onChange={(event) => update({ providerType: event.target.value as ModelProviderType })}
+            onChange={(value) => update({ providerType: value as ModelProviderType })}
             className={inputClass}
-          >
-            {MODEL_PROVIDER_TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>
+            options={MODEL_PROVIDER_TYPES}
+          />
         </div>
         <div>
           <label className={labelClass} htmlFor={`${id}-name`}>Provider name</label>
@@ -275,17 +274,18 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
 
       <div>
         <label className={labelClass} htmlFor={`${id}-default`}>Default model</label>
-        <select
+        <Select
           id={`${id}-default`}
           data-model-setup-field="defaultModel"
           value={form.defaultModel}
           disabled={form.models.length === 0}
-          onChange={(event) => update({ defaultModel: event.target.value })}
+          onChange={(defaultModel) => update({ defaultModel })}
           className={inputClass}
-        >
-          {!selectedIds.includes(form.defaultModel) && <option value={form.defaultModel}>Choose a model</option>}
-          {selectedIds.map((model) => <option key={model} value={model}>{model}</option>)}
-        </select>
+          options={[
+            ...(selectedIds.includes(form.defaultModel) ? [] : [{ value: form.defaultModel, label: 'Choose a model' }]),
+            ...selectedIds.map((model) => ({ value: model, label: model })),
+          ]}
+        />
         <p className={hintClass}>New conversations use this model. You can switch models in any chat.</p>
       </div>
 

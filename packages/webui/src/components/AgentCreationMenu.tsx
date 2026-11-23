@@ -5,6 +5,7 @@ import { makeApiUrl } from '../config'
 import { RANDOM_SESSION_ID_PLACEHOLDER, agentStartLocation, validateAgentId, validateSessionId, type AgentSettingsChanges, type AgentSummary } from '../agentCreation'
 import { parseAgentDefaultNode, parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
 import AgentSettingsFields, { EMPTY_AGENT_SETTINGS, agentSettingsChanges, nodeDisplayName, type AgentSettingsDraft } from './AgentSettingsFields'
+import Select from './Select'
 
 type CreationMode = 'agent' | 'session'
 /** Opens the New session dialog for a child of an existing Session. */
@@ -340,10 +341,10 @@ export default function AgentCreationMenu({
                 </label>
                 <label className="block text-sm font-medium text-fw-text-strong">
                   Runtime
-                  <select aria-label="Session runtime" value={runtime} onChange={event => setRuntime(event.target.value as 'foxwarm' | 'claude-code')} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2">
-                    <option value="foxwarm">Foxwarm</option>
-                    <option value="claude-code" disabled={!claudeAvailable}>Claude Code{claudeAvailable ? '' : ' — unavailable'}</option>
-                  </select>
+                  <Select aria-label="Session runtime" value={runtime} onChange={value => setRuntime(value as 'foxwarm' | 'claude-code')} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 font-normal text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" options={[
+                    { value: 'foxwarm', label: 'Foxwarm' },
+                    { value: 'claude-code', label: `Claude Code${claudeAvailable ? '' : ' — unavailable'}`, disabled: !claudeAvailable },
+                  ]} />
                 </label>
               </div>
             )}

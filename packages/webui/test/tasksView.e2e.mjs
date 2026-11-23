@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { readFile, readdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { chooseSelectOption, readSelectOptions } from './selectDriver.mjs'
 
 const statuses = ['open', 'active', 'completed', 'cancelled']
 const timestamp = 1_780_000_000_000
@@ -161,16 +162,16 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
   assert.ok(await page.$eval('[data-task-row="task-active"] td:nth-child(3)', cell => cell.getBoundingClientRect().width <= 400), 'owner cell stays bounded')
   assert.match(await page.$eval('[data-task-summary]', element => element.textContent), /2 tasks.*Work.*Open 1.*Active 1/)
   assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /2 additional tasks not loaded/)
-  assert.match(await page.$eval('[data-task-filters]', element => element.textContent), /Agent/)
-  assert.deepEqual(await page.$$eval('[data-task-agent-filter] option', options => options.map(option => option.value)), ['', 'creator', 'worker'])
-  await page.select('[data-task-agent-filter]', 'worker')
+  assert.ok(await page.$('[data-task-filters] [role="combobox"][aria-label="Agent"]'))
+  assert.deepEqual((await readSelectOptions(page, '[data-task-agent-filter]')).map(option => option.value), ['', 'creator', 'worker'])
+  await chooseSelectOption(page, '[data-task-agent-filter]', 'worker')
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 1)
   await page.click('[aria-label="Relationship filter"]')
-  await page.select('[data-task-agent-relation]', 'creator')
+  await chooseSelectOption(page, '[data-task-agent-relation]', 'creator')
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 0)
-  await page.select('[data-task-agent-relation]', 'owner')
+  await chooseSelectOption(page, '[data-task-agent-relation]', 'owner')
   assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /1 hidden by filters.*2 additional tasks not loaded/)
-  await page.select('[data-task-agent-filter]', '')
+  await chooseSelectOption(page, '[data-task-agent-filter]', '')
   assert.deepEqual(requests.filter(request => request.status).map(request => [request.status, request.limit]), statuses.map(status => [status, '50']))
   assert.ok(requests.every(request => request.method === 'GET' && request.pathname.startsWith('/prefix/ui/api/tasks')))
   await click('All')

@@ -10,6 +10,7 @@ import sharp from 'sharp'
 import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
 import { restoreStateSnapshot, stateSnapshot } from './stateSeeds.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
 options.cwd = host.root
@@ -213,9 +214,9 @@ try {
   await page.goto(host.origin + '/nested/app/#setup', { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', aliceToken); await page.click('button[type="submit"]')
   await page.waitForSelector('[data-webui-role="webui"] .foxwarm-chat-root')
   assert.equal(await page.$('#setup-tab-config'), null); assert.equal(await page.$('.foxwarm-model-selector-trigger'), null)
-  await page.select('select[aria-label="Session"]', moved)
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
   await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.select('select[aria-label="Session"]', moved)
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
   await page.waitForSelector('[data-continuous-history]')
   await page.evaluate(() => { const element = document.querySelector('.foxwarm-chat-messages'); element.scrollTop = 0; element.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); element.dispatchEvent(new Event('scroll')) })
   await page.waitForFunction(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))

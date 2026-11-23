@@ -3,6 +3,7 @@ import { AlarmClock, Bot, ChevronRight, Code2, ExternalLink, ListFilter, Message
 import { API_BASE_PATH } from '../config'
 import { webUiRealtime } from '../realtime'
 import JsonInspectorDialog from './JsonInspectorDialog'
+import Select from './Select'
 import {
   TIMER_OUTCOME_LABELS, TIMER_STATE_OPTIONS, buildTimerUpdate, filterTimers, formatTimerTime, lastTimerRun, orderTimers, timerAction,
   timerOutcomeTone, timerOwnerAgent, timerState, timerSummary, timerTarget, toLocalInput,
@@ -15,6 +16,19 @@ async function timerRequest<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) throw new Error(payload.error || `Timer request failed (${response.status})`)
   return payload as T
 }
+
+const SCHEDULE_KINDS = [
+  { value: 'keep', label: 'Keep current schedule' },
+  { value: 'cron', label: 'Repeat on a cron schedule' },
+  { value: 'at', label: 'Once at a date and time' },
+  { value: 'after', label: 'Once after a delay' },
+]
+
+const TIMER_ACTION_OPTIONS = [
+  { value: '', label: 'All actions' },
+  { value: 'message', label: 'Message' },
+  { value: 'toolscript', label: 'ToolScript' },
+]
 
 const loadTimers = (sessionId?: string) =>
   timerRequest<{ timers: TimerRow[] }>(`/timers${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`).then(payload => payload.timers || [])
@@ -140,12 +154,7 @@ function TimerEditor({ timer, onCancel, onSave }: { timer: TimerRow; onCancel: (
     <form onSubmit={submit} className={sectionClass} data-system-timer-editor>
       <h3 className={headingClass}>Edit timer</h3>
       <label className="mt-2 block text-xs text-fw-text-muted">Schedule
-        <select aria-label="Schedule" value={kind} onChange={event => setKind(event.target.value as typeof kind)} className={`${input} mt-1`}>
-          <option value="keep">Keep current schedule</option>
-          <option value="cron">Repeat on a cron schedule</option>
-          <option value="at">Once at a date and time</option>
-          <option value="after">Once after a delay</option>
-        </select>
+        <Select aria-label="Schedule" value={kind} onChange={value => setKind(value as typeof kind)} className={`${input} mt-1`} options={SCHEDULE_KINDS} />
       </label>
       {kind === 'cron' ? <input aria-label="Cron schedule" value={cron} onChange={event => setCron(event.target.value)} placeholder="0 9 * * 1-5" className={`${input} mt-2 font-mono`} /> : null}
       {kind === 'at' ? <input aria-label="Date and time" type="datetime-local" value={local} onChange={event => setLocal(event.target.value)} className={`${input} mt-2`} /> : null}
@@ -348,7 +357,7 @@ export default function SystemTimers({ sessionFilter: sessionId, onSessionFilter
   const selected = timers.find(timer => timer.id === selectedId) || null
   const pausedCount = timers.filter(timer => timer.paused).length
   const failingCount = timers.filter(timer => lastTimerRun(timer)?.outcome === 'failed').length
-  const select = 'h-9 w-full min-w-0 rounded-lg border sm:w-auto border-transparent bg-transparent px-3 text-xs font-medium text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border'
+  const select = 'w-full sm:w-auto'
 
   return (
     <div className="space-y-4" data-system-timers>
@@ -359,18 +368,9 @@ export default function SystemTimers({ sessionFilter: sessionId, onSessionFilter
             <input value={query} onChange={event => setQuery(event.target.value)} aria-label="Search timers" placeholder="Search timers…" className="h-9 w-full rounded-lg border border-fw-border bg-fw-surface py-0 pl-9 pr-3 text-xs text-fw-text-strong outline-none hover:bg-fw-hover focus:border-fw-accent-border" />
           </label>
           <div className="grid w-full grid-cols-3 gap-1 sm:flex sm:w-auto sm:items-center">
-          <select aria-label="Filter timers by agent" value={agent || ''} onChange={event => setAgent(event.target.value || null)} className={select}>
-            <option value="">All agents</option>
-            {agents.map(item => <option key={item} value={item}>{item}</option>)}
-          </select>
-          <select aria-label="Filter timers by action" value={action || ''} onChange={event => setAction((event.target.value || null) as TimerAction | null)} className={select}>
-            <option value="">All actions</option>
-            <option value="message">Message</option>
-            <option value="toolscript">ToolScript</option>
-          </select>
-          <select aria-label="Filter timers by state" value={state} onChange={event => setState(event.target.value as TimerStateFilter)} className={select}>
-            {TIMER_STATE_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </select>
+          <Select variant="toolbar" aria-label="Filter timers by agent" value={agent || ''} onChange={value => setAgent(value || null)} className={select} options={[{ value: '', label: 'All agents' }, ...agents.map(item => ({ value: item, label: item }))]} />
+          <Select variant="toolbar" aria-label="Filter timers by action" value={action || ''} onChange={value => setAction((value || null) as TimerAction | null)} className={select} options={TIMER_ACTION_OPTIONS} />
+          <Select variant="toolbar" aria-label="Filter timers by state" value={state} onChange={value => setState(value as TimerStateFilter)} className={select} options={TIMER_STATE_OPTIONS.map(option => ({ value: option.id, label: option.label }))} />
           </div>
           {sessionId ? (
             <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-fw-accent-surface px-2.5 py-1 text-xs text-fw-accent" data-system-timers-session-filter={sessionId}>

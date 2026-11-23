@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import Chat from './components/Chat'
+import Select from './components/Select'
 import { WebUiImageSessionContext } from './components/ImageParts'
 import { API_BASE_PATH } from './config'
 import { useChatPreferences } from './chatPreferences'
@@ -37,9 +38,7 @@ export default function WebUiIdentityApp({ auth }: { auth: WebUiAuth }) {
       {available.length > 1 && (
         <label className="flex shrink-0 items-center gap-3 border-b border-fw-border px-4 py-2 text-sm text-fw-text">
           <span>Session</span>
-          <select aria-label="Session" value={sessionId} onChange={event => setSelectedId(event.currentTarget.value)} className="min-w-0 flex-1 rounded border border-fw-border bg-fw-surface px-2 py-1 text-fw-text">
-            {available.map(session => <option key={session.id} value={session.id}>{session.displayName || session.id}</option>)}
-          </select>
+          <Select aria-label="Session" value={sessionId} onChange={setSelectedId} options={available.map(session => ({ value: session.id, label: session.displayName || session.id }))} className="flex-1 rounded border border-fw-border bg-fw-surface px-2 py-1 text-fw-text" />
         </label>
       )}
       <div className="min-h-0 flex-1 overflow-hidden">

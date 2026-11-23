@@ -8,6 +8,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const PERSON = 'Alice Zhang'
 const EMAIL = ['ming.zhang', 'example.test'].join('@')
@@ -151,7 +152,7 @@ try {
   // System › Usage: the redaction section, grouped like the rest of the page.
   await page.evaluate(() => { localStorage.setItem('foxwarm.systemUsage.period', 'today'); location.hash = 'usage' })
   await page.waitForSelector('[data-usage-redaction]')
-  await page.select('select[aria-label="Group usage by"]', 'model')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Group usage by"]', 'model')
   await page.waitForSelector('[data-usage-redaction-row="guarded/wire"]')
   const section = await page.$eval('[data-usage-redaction]', item => item.textContent)
   assert.match(section, /Redacted requests2/)

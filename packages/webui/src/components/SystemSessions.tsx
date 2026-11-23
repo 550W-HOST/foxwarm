@@ -5,6 +5,7 @@ import { RunningCommandList } from './RunningCommands'
 import { formatUsdCost } from '../usageCost'
 import type { TokenUsage } from './TokenUsageDetails'
 import type { WebUiNodeTarget } from '../nodeTargets'
+import Select from './Select'
 import { getRuntimeStateSummary, getSessionRuntimeStateName, isRuntimeStateInactiveName } from '../sessionRuntimeState'
 import { getArchitectureSessionModel, getArchitectureSessionNodeId, type ArchitectureStatusFilter } from '../architectureOperations'
 import { UsagePie, formatBusyDuration, formatRelativeTime, formatTokenCount, getStatusTone, renderMetaBadge } from './SystemShared'
@@ -222,13 +223,7 @@ function FilterSelect({ label, icon, value, onChange, options }: {
   options: Array<{ value: string; label: string }>
 }) {
   return (
-    <label className="relative min-w-0 flex-1 sm:w-44 sm:flex-none">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fw-text-muted">{icon}</span>
-      <select aria-label={label} value={value} onChange={event => onChange(event.target.value)} className="h-9 w-full appearance-none truncate rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border dark:text-fw-text-strong">
-        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-      <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
-    </label>
+    <Select variant="toolbar" aria-label={label} icon={icon} value={value} onChange={onChange} options={options} className="flex-1 sm:w-44 sm:flex-none" />
   )
 }
 

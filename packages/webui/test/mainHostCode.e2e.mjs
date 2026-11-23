@@ -11,6 +11,9 @@ import sharp from 'sharp'
 import { WebSocket } from 'ws'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { chooseSelectOption, readSelectOptions } from './selectDriver.mjs'
+
+const NODE_SELECT = '[role="combobox"][aria-label="Node"]'
 
 const startedAt = Date.now()
 let currentStage
@@ -211,8 +214,8 @@ try {
   const launch = async (nodeId, path) => {
     const firstResult = await page.evaluate(() => window.codeOpenResults.length)
     await page.click('button[aria-label="Open code options"]')
-    await page.waitForFunction(nodeId => [...document.querySelectorAll('select option')].some(option => option.value === nodeId && !option.disabled), {}, nodeId)
-    await page.select('select', nodeId)
+    await until(async () => (await readSelectOptions(page, NODE_SELECT)).some(option => option.value === nodeId && !option.disabled), 'Node ' + nodeId + ' is available')
+    await chooseSelectOption(page, NODE_SELECT, nodeId)
     await page.click('input[placeholder="/"]', { clickCount: 3 }); await page.type('input[placeholder="/"]', path)
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Open code')?.click())
     // Completion includes the workspace write and Explorer focus. Starting the next

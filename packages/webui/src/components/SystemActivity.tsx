@@ -7,6 +7,7 @@ import {
   type ActivityFilters, type ActivityItem, type ActivityPage,
 } from '../activity'
 import { openSessionAtSeq } from '../chatViewportState'
+import Select from './Select'
 
 type ActivityPeriod = 'day' | 'week' | 'month' | 'all'
 
@@ -229,7 +230,6 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
   const narrow = (patch: Scope) => setScope(value => ({ ...value, ...patch }))
   const chips = SCOPE_LABELS.filter(entry => typeof scope[entry.key] === 'string' && scope[entry.key])
   const segment = (active: boolean) => `rounded-md px-3 py-1 text-xs font-medium ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
-  const select = 'h-9 min-w-0 rounded-lg border border-transparent bg-transparent px-3 text-xs font-medium text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border'
   const cellLink = 'min-w-0 truncate text-left hover:text-fw-accent hover:underline'
 
   return (
@@ -241,15 +241,9 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
               <button key={item.id} type="button" aria-pressed={period === item.id} data-activity-period={item.id} onClick={() => setPeriod(item.id)} className={segment(period === item.id)}>{item.label}</button>
             ))}
           </div>
-          <select aria-label="Kind of activity" value={kind} onChange={event => setKind(event.target.value as typeof kind)} className={select}>
-            {ACTIVITY_KINDS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-          <select aria-label="Result" value={outcome} onChange={event => setOutcome(event.target.value)} className={select}>
-            {ACTIVITY_OUTCOMES.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-          <select aria-label="Source" value={origin} onChange={event => setOrigin(event.target.value)} className={select}>
-            {ACTIVITY_ORIGINS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
+          <Select variant="toolbar" aria-label="Kind of activity" value={kind} onChange={value => setKind(value as typeof kind)} options={ACTIVITY_KINDS.map(item => ({ value: item.id, label: item.label }))} />
+          <Select variant="toolbar" aria-label="Result" value={outcome} onChange={setOutcome} options={ACTIVITY_OUTCOMES.map(item => ({ value: item.id, label: item.label }))} />
+          <Select variant="toolbar" aria-label="Source" value={origin} onChange={setOrigin} options={ACTIVITY_ORIGINS.map(item => ({ value: item.id, label: item.label }))} />
           <label className="relative flex items-center">
             <Search className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-fw-text-muted" />
             <input type="search" aria-label="Search activity" placeholder="Search" value={text} onChange={event => setText(event.target.value)} className="h-9 w-36 rounded-lg sm:w-44 border border-fw-border bg-fw-surface pl-7 pr-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border" />

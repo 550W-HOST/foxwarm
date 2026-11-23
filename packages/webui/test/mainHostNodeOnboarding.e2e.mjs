@@ -10,6 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const env = { FOXWARM_SYNC_FILE_LOG: '0' }
 const options = { env }
@@ -123,12 +124,12 @@ try {
   await page.waitForFunction(token => document.querySelector('[aria-label="Browser pairing token"]')?.value === token, {}, pairingToken)
   assert.equal(await page.$eval('ol li:nth-child(2)', item => item.textContent.includes('Load unpacked')), true)
   await screenshot('browser-onboarding-chrome.png')
-  await page.select('[aria-label="Browser package"]', 'firefox')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Browser package"]', 'firefox')
   assert.equal(await page.$eval('a[download]', link => new URL(link.href).pathname), prefix + '/node/browser-extension-firefox.zip')
   assert.equal((await fetch(host + '/node/browser-extension-firefox.zip')).status, 200)
   assert.equal(await page.$eval('ol li:nth-child(2)', item => item.textContent.includes('about:debugging') && item.textContent.includes('manifest.json') && !item.textContent.includes('Load unpacked')), true)
   await screenshot('browser-onboarding-firefox.png')
-  await page.select('[aria-label="Browser package"]', 'chrome')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Browser package"]', 'chrome')
   assert.equal(await page.$eval('a[download]', link => new URL(link.href).pathname), prefix + '/node/browser-extension.zip')
   await page.waitForSelector('[aria-label="Browser pairing token"]')
   assert.equal(await page.$eval('[aria-label="Browser pairing token"]', input => input.value), pairingToken)
