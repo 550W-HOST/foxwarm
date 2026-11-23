@@ -11,6 +11,7 @@ import { createHostFixture, requiredCompactOperations, until } from './mainHostF
 import { restoreStateSnapshot, stateSnapshot } from './stateSeeds.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 import { chooseSelectOption } from './selectDriver.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
 options.cwd = host.root
@@ -212,10 +213,10 @@ try {
   const context = await browser.createBrowserContext(), page = await context.newPage()
   page.on('pageerror', error => browserErrors.push(error.message)); page.on('request', request => { if (new URL(request.url()).pathname.includes('/api/')) scopedRequests.push(new URL(request.url()).pathname) })
   await page.goto(host.origin + '/nested/app/#setup', { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', aliceToken); await page.click('button[type="submit"]')
-  await page.waitForSelector('[data-webui-role="webui"] .foxwarm-chat-root')
+  await page.waitForSelector('[data-webui-role="webui"] .foxwarm-chat-root'); await waitForWebUiReady(page)
   assert.equal(await page.$('#setup-tab-config'), null); assert.equal(await page.$('.foxwarm-model-selector-trigger'), null)
   await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
-  await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page)
   await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
   await page.waitForSelector('[data-continuous-history]')
   await page.evaluate(() => { const element = document.querySelector('.foxwarm-chat-messages'); element.scrollTop = 0; element.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); element.dispatchEvent(new Event('scroll')) })

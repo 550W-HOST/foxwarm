@@ -9,13 +9,18 @@ const expandedList = (page, trigger, timeout) => page.waitForFunction(element =>
 async function openList(page, selector) {
   const trigger = await page.waitForSelector(selector)
   const wasOpen = await trigger.evaluate(element => element.getAttribute('aria-expanded') === 'true')
-  let listId = null
-  // The list closes when focus leaves the trigger, so a page that is still moving
-  // focus while it loads can close it right away; press again, as a user would.
-  for (let attempt = 0; !listId; attempt += 1) {
-    if (!wasOpen || attempt > 0) await trigger.click()
-    listId = await expandedList(page, trigger, attempt < 4 ? 1500 : 30000).catch(error => { if (attempt >= 4) throw error; return null })
+  if (!wasOpen) {
+    // A press only opens the list when it reaches the trigger; report what covers it otherwise.
+    const cover = await trigger.evaluate(element => {
+      element.scrollIntoView({ block: 'nearest' })
+      const rect = element.getBoundingClientRect()
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      return hit && !element.contains(hit) ? hit.outerHTML.slice(0, 160) : null
+    })
+    if (cover) throw new Error(`Select ${selector} is covered by ${cover}`)
+    await trigger.click()
   }
+  const listId = await expandedList(page, trigger, 5000)
   await page.waitForSelector(listSelector(listId))
   return { trigger, listId, wasOpen }
 }
