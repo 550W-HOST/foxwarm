@@ -442,9 +442,9 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: android-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ hashFiles('packages/android-node/**/*.gradle.kts', 'packages/android-node/gradle.properties', 'packages/android-node/gradle/wrapper/gradle-wrapper.properties') }}
+          key: android-release-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ hashFiles('packages/android-node/**/*.gradle.kts', 'packages/android-node/gradle.properties', 'packages/android-node/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
-            android-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-
+            android-release-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-
       - name: Assemble the release variant
         run: |
           args=()
