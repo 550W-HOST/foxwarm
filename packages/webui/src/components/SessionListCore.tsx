@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { usePrimaryPointerCoarse } from '../pointerQueries'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
 import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ChevronDown, ChevronUp, Copy, SquarePlus } from 'lucide-react'
@@ -486,7 +487,7 @@ function DraggableSessionRow({
 export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarActions, onSearchMessages, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, onStartSession, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
-  const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
+  const primaryPointerCoarse = usePrimaryPointerCoarse()
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [filterText, setFilterText] = useState('')
@@ -532,14 +533,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const autoExpandedCurrentSessionIdRef = useRef<string | undefined>(undefined)
   const manuallyCollapsedSessionsRef = useRef<Set<string>>(new Set())
   const sessionDragEnabled = shouldEnableSessionListDrag(dragEnabled, primaryPointerCoarse)
-
-  useEffect(() => {
-    if (!window.matchMedia) return
-    const mediaQuery = window.matchMedia('(pointer: coarse)')
-    const handleChange = (event: MediaQueryListEvent) => setPrimaryPointerCoarse(event.matches)
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [])
 
   const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
   const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null

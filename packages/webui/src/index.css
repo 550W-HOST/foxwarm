@@ -1006,7 +1006,8 @@ html[data-foxwarm-component-treatment="console"] :is(
   button,
   input,
   textarea,
-  select
+  select,
+  .foxwarm-select
 ) {
   font-family: var(--foxwarm-console-font) !important;
 }
@@ -1021,7 +1022,7 @@ html[data-foxwarm-component-treatment="console"] :is(
   font-family: var(--foxwarm-console-code-font-family) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] :is(button, input, select) {
+html[data-foxwarm-component-treatment="console"] :is(button, input, select, .foxwarm-select) {
   font-size: var(--foxwarm-console-font-control);
   line-height: var(--foxwarm-console-line-ui);
 }
@@ -1905,7 +1906,7 @@ html[data-foxwarm-component-treatment="console"][data-foxwarm-header-treatment="
 html[data-foxwarm-control-treatment="plain"] { --foxwarm-effective-control-radius: 2px; }
 html[data-foxwarm-control-treatment="pill"] { --foxwarm-effective-control-radius: 999px; }
 
-:is([data-theme-control], [data-tool-tag-tone], input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
+:is([data-theme-control], [data-tool-tag-tone], input:not([type="checkbox"]):not([type="radio"]), textarea, select, .foxwarm-select) {
   border-radius: var(--foxwarm-effective-control-radius) !important;
 }
 
@@ -2383,9 +2384,9 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   .foxwarm-setup-section-list [role="tab"] { padding: 10px 12px; font-size: 12px; }
 }
 
-/* Text-entry controls share compact, legible workbench typography. The code
+/* Text-entry controls and the Select trigger share compact, legible workbench typography. The code
  * editor and its fallback retain their independent code-font contract. */
-html[data-foxwarm-theme] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea):not(.monaco-editor *):not([data-editor-fallback] *) {
+html[data-foxwarm-theme] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea, .foxwarm-select):not(.monaco-editor *):not([data-editor-fallback] *) {
   border-radius: min(4px, var(--foxwarm-control-radius-px)) !important;
   font-size: var(--foxwarm-control-font-size-px) !important;
   font-weight: 400;
@@ -2403,6 +2404,7 @@ html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
   html[data-foxwarm-theme] :is(input, select, textarea, .foxwarm-chat-composer-textarea):not(.monaco-editor *):not([data-editor-fallback] *) { font-size: max(16px, var(--foxwarm-control-font-size-px)) !important; }
 }
 
+.foxwarm-select-sizer::before { content: attr(data-label); }
 .foxwarm-sidebar-frame { z-index: 40; }
 .status-badge { display: inline-flex; align-items: center; flex-shrink: 0; gap: 5px; border-radius: 5px; padding: 3px 7px; font-size: 11px; line-height: 18px; white-space: nowrap; color: var(--foxwarm-color-text-muted); background: var(--foxwarm-color-canvas); }
 .status-badge > span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; flex: none; background: currentColor; }
