@@ -143,7 +143,7 @@ export function AgentRegistryInspector({ agent, allAgents, nodes, installDefault
         />
         <div className="mt-4 flex gap-2">
           <button type="button" data-agent-settings-reset disabled={!dirty || saving} onClick={() => setDraft(agentSettingsDraft(agent))} className="rounded-lg px-3 py-2 text-xs text-fw-text hover:bg-fw-hover disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-fw-hover">Reset</button>
-          <button type="button" disabled={!dirty || saving} onClick={() => { void save() }} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-fw-accent px-3 py-2 text-xs font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
+          <button type="button" data-agent-settings-save disabled={!dirty || saving} onClick={() => { void save() }} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-fw-accent px-3 py-2 text-xs font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
         </div>
 
         <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
