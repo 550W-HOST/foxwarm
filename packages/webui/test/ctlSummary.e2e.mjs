@@ -70,7 +70,14 @@ before(async () => {
   await page.setViewport({ width: 800, height: 1400 })
   await page.goto(`http://127.0.0.1:${server.address().port}`)
   await page.waitForSelector(`#${ids.at(-1)} .foxwarm-tool-card`)
-  for (const id of ids.filter(id => id.endsWith('-expanded'))) await page.click(`#${id} .foxwarm-tool-card`)
+  // Expanding a card animates its height and moves every card below it, so a click aimed while an
+  // earlier card still grows can land on the card or label above its target. Without motion each
+  // expansion lays out at once; each click is still checked before the next one is aimed.
+  await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
+  for (const id of ids.filter(id => id.endsWith('-expanded'))) {
+    await page.click(`#${id} .foxwarm-tool-card`)
+    await page.waitForSelector(`#${id} .foxwarm-tool-call-args`)
+  }
   if (screenshotDir) {
     await new Promise(resolve => setTimeout(resolve, 600))
     await mkdir(screenshotDir, { recursive: true })
