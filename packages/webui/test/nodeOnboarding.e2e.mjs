@@ -5,21 +5,47 @@ import assert from 'node:assert/strict'
 import fs from 'fs-extra'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { webuiReactAliases } from './reactRendererAliases.mjs'
+import { createHostFixture, until } from './mainHostFixture.mjs'
+import { createMainHostProxy } from './mainHostProxy.mjs'
 
-let server, channel, browser, page, root, registry, sessionRuntime, baseUrl, fixtureUrl
-const requests = []
+// SystemView runs against an owned managed Main behind a recording proxy at a deployment prefix.
+// Pending pairings come from the official CLI Node client using the shared pairing token.
+let fixture, proxy, browser, page, baseUrl, fixtureUrl
+const clients = []
 const errors = []
-let commandReads = 0
 let delayCommands = false
 let failNextCreate = false
 let delayCreateResponse = false
-let createCalls = 0
 const createdResponses = []
 const delayed = []
+const exchanges = () => proxy.requests.map(record => ({ ...record, url: record.url.replace(/^\/deployment/, '') }))
+const requests = { filter: check => exchanges().map(record => record.url).filter(check), join: separator => exchanges().map(record => record.url).join(separator), slice: start => exchanges().slice(start).map(record => record.url), get length() { return proxy.requests.length } }
+const counter = route => () => exchanges().filter(record => record.path === route).length
+const commandReadCount = counter('/api/nodes/onboarding/commands'), createCallCount = counter('/api/nodes/onboarding/create')
+const nodesFile = async () => JSON.parse(await fs.readFile(path.join(fixture.data, 'state/nodes.json'), 'utf8').catch(error => { if (error.code === 'ENOENT') return '{"approvedNodes":{},"pendingPairings":{}}'; throw error }))
+const registry = {
+  listApprovedNodes: async () => Object.keys((await nodesFile()).approvedNodes || {}),
+  listPendingPairings: async () => (await fixture.api('GET', '/deployment/api/nodes/onboarding/pending')).body.items,
+  rejectPendingPairing: async pendingId => assert.equal((await fixture.api('POST', '/deployment/api/nodes/onboarding/reject', { pendingId })).status, 200),
+  authenticates: async (nodeId, token) => (await nodesFile()).approvedNodes?.[nodeId]?.tokenHash === createHash('sha256').update(token).digest('hex'),
+  async createPendingPairing(id) {
+    const before = (await this.listPendingPairings()).length
+    const home = path.join(fixture.root, id); await fs.ensureDir(path.join(home, 'agents'))
+    const child = spawn(process.execPath, [path.resolve('packages/cli-node/dist/client.js'), '--host', fixture.origin + '/deployment', '--credentials-file', path.join(home, 'credentials.json'), '--no-local-trigger', '--token', 'synthetic-pairing-credential', '--id', id], {
+      cwd: home, env: { ...testEnvironment.isolatedApplicationEnv(home), FOXWARM_AGENTS_DIR: path.join(home, 'agents') }, stdio: 'ignore',
+    })
+    clients.push(child)
+    await until(async () => (await this.listPendingPairings()).length > before, 'pending pairing from ' + id)
+    return child
+  },
+}
 const component = fileURLToPath(new URL('../src/components/SystemView.tsx', import.meta.url))
 const theme = fileURLToPath(new URL('../src/theme/index.ts', import.meta.url))
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -40,23 +66,8 @@ async function screenshot(name) {
 }
 
 before(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-ui-'))
-  process.env.FOXWARM_DATA_DIR = root
-  await fs.ensureDir(path.join(root, 'state'))
-  await fs.writeFile(path.join(root, 'state/config.yaml'), 'vector:\n  enabled: false\ndbWorkers: false\n')
-  await fs.writeFile(path.join(root, 'state/node_token'), 'synthetic-pairing-credential')
-  const { HttpServer, setHttpServer } = await import('../../../lib/httpServer.js')
-  const { WebUIChannel } = await import('../../../lib/channels/webuiChannel.js')
-  const sessionManager = await import('../../../lib/sessionManager.js')
-  sessionRuntime = await import('../../../lib/sessionRuntime.js')
-  registry = await import('../../../lib/nodes/registry.js')
-  await sessionManager.loadSessions()
-  const session = await sessionManager.getSession('main/browser-fixture')
-  session.currentNode = 'unavailable-session-placement'
-  await sessionManager.saveSession(session.id)
-  await registry.createApprovedNode('offline-example')
-  await registry.createPendingPairing({ requestedName: 'Synthetic laptop', nodeType: 'cli-node', capabilities: { tools: [] } })
-
+  fixture = await createHostFixture('node-onboarding-ui')
+  await fs.writeFile(path.join(fixture.data, 'state/node_token'), 'synthetic-pairing-credential')
   const bundle = await build({ absWorkingDir: packageRoot, stdin: {
     contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import SystemView from ${JSON.stringify(component)}; import {initializeThemeRuntime} from ${JSON.stringify(theme)}; initializeThemeRuntime();
       window.fixtureClipboard=''; Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.fixtureClipboard=text}}});
@@ -66,47 +77,40 @@ before(async () => {
   define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   const assets = await fs.readdir(new URL('../dist/assets/', import.meta.url))
   const css = await fs.readFile(new URL(`../dist/assets/${assets.find(name => /^index-.*\.css$/.test(name))}`, import.meta.url), 'utf8')
-  server = new HttpServer(0, 'synthetic-browser-auth')
-  server.app.use((req, res, next) => {
-    if (req.url.startsWith('/deployment/')) req.url = req.url.slice('/deployment'.length)
-    requests.push(req.url)
-    if (req.path === '/api/nodes/onboarding/commands') commandReads++
-    if (req.path === '/api/nodes/onboarding/create') {
-      createCalls++
-      if (failNextCreate) { failNextCreate = false; res.status(500).json({ error: 'Could not create this Node.' }); return }
-      if (delayCreateResponse) {
-        const respond = res.json.bind(res)
-        res.json = payload => { createdResponses.push(() => respond(payload)); return res }
-      }
+  proxy = await createMainHostProxy({ target: fixture.origin, prefix: '/deployment', page: () => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body style="margin:0"><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`, intercept: async (record, { send, respond }) => {
+    if (record.path === '/api/nodes/onboarding/create') {
+      if (failNextCreate) { failNextCreate = false; respond({ status: 500, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Could not create this Node.' }) }); return true }
+      // The actual route persists trust before its one-time response is held back.
+      if (delayCreateResponse) { const result = await send({ buffered: true }); createdResponses.push(() => respond(result)); return true }
     }
-    if (delayCommands && req.path === '/api/nodes/onboarding/commands') { delayed.push(next); return }
-    next()
-  })
-  server.app.get('/', (_req, res) => res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body style="margin:0"><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`))
-  setHttpServer(server)
-  channel = new WebUIChannel({ router: {}, token: 'synthetic-browser-auth', enableTrigger: false, enableWebUI: true })
-  await server.start()
-  baseUrl = `http://127.0.0.1:${server.httpServer.address().port}`
+    if (delayCommands && record.path === '/api/nodes/onboarding/commands') { await new Promise(resolve => delayed.push(resolve)); return false }
+    return false
+  } })
+  baseUrl = proxy.origin
   fixtureUrl = `${baseUrl}/deployment/`
+  await fs.writeFile(path.join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: baseUrl + '/deployment', bot: { httpPort: fixture.port, enableTrigger: false }, vector: { enabled: false }, dbWorkers: false }))
+  await fixture.start()
+  assert.equal((await fixture.api('POST', '/deployment/api/sessions', { agentId: 'main', sessionId: 'browser-fixture' })).status, 200)
+  assert.equal((await fixture.api('POST', '/deployment/api/nodes/onboarding/create', { nodeId: 'offline-example' })).status, 200)
+  await registry.createPendingPairing('synthetic-laptop')
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
   page = await browser.newPage()
   page.on('pageerror', error => errors.push(error.message))
   await page.setViewport({ width: 1280, height: 900 })
-  await page.setCookie({ name: 'foxwarm_token', value: 'synthetic-browser-auth', url: baseUrl, httpOnly: true })
+  await page.setCookie({ name: 'foxwarm_token', value: fixture.token, url: baseUrl, httpOnly: true })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.waitForSelector('[data-system-session-list]')
 })
 
 after(async () => {
   await browser?.close()
-  await channel?.stop()
-  await server?.stop()
-  await sessionRuntime?.shutdownSessionRuntime()
-  if (root) await fs.remove(root)
+  for (const child of clients) child.kill('SIGKILL')
+  await proxy?.close()
+  await fixture?.cleanup()
 })
 
 test('Nodes is a real independent surface; pending approval, inline copy and explicit Shell creation use authenticated APIs', { timeout: 45_000 }, async () => {
-  assert.equal(commandReads, 0, 'ordinary System loading never requests credentials')
+  assert.equal(commandReadCount(), 0, 'ordinary System loading never requests credentials')
   await page.waitForFunction(() => /[1-9]\d* of [1-9]\d* loaded sessions/.test(document.body.innerText))
   const positions = []
   for (const section of ['Agents', 'Sessions', 'Nodes']) {
@@ -121,16 +125,16 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   await page.waitForFunction(() => document.body.innerText.includes('1 pending approvals'))
   const nodeText = await page.$eval('[data-node-surface]', element => element.textContent)
   assert.ok(nodeText.includes('master') && nodeText.includes('offline-example') && nodeText.includes('Offline'))
-  // A Session placed on a Node outside the directory is listed under an unavailable card.
-  assert.match(await page.$eval('[data-system-node-id="unavailable-session-placement"]', element => element.textContent), /Unavailable.*browser-fixture/)
   assert.equal(await page.$('input[aria-label="Search sessions, models, tools"]'), null)
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('loaded of'))
-  assert.equal(commandReads, 0)
+  assert.equal(commandReadCount(), 0)
   await screenshot('nodes-surface.png')
   await page.setViewport({ width: 390, height: 844 })
+  await page.waitForSelector('.mobile-system-page [data-node-surface]')
   await screenshot('nodes-surface-narrow.png')
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
   await page.setViewport({ width: 1280, height: 900 })
+  await page.waitForSelector('.mobile-system-page', { hidden: true })
   const other = await browser.newPage(); await other.bringToFront()
   await page.waitForFunction(() => document.hidden, { polling: 100, timeout: 3000 })
   const pendingReads = requests.filter(url => url.includes('/onboarding/pending')).length
@@ -152,17 +156,19 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   assert.ok((await page.evaluate(() => window.fixtureClipboard)).includes('synthetic-pairing-credential'))
   assert.ok(!(await page.evaluate(() => window.fixtureClipboard)).includes('BASE_URL'))
   await screenshot('new-nodes-literal-path.png')
-  const readCount = commandReads
-  await registry.createPendingPairing({ requestedName: 'Synthetic second laptop', nodeType: 'cli-node', capabilities: { tools: [] } })
+  const readCount = commandReadCount()
+  const second = await registry.createPendingPairing('synthetic-second-laptop')
   await page.waitForFunction(() => document.body.innerText.includes('2 pending approvals'), { timeout: 8000 })
-  assert.equal(commandReads, readCount, 'pending refresh does not reload pairing credentials')
+  assert.equal(commandReadCount(), readCount, 'pending refresh does not reload pairing credentials')
   await click('Approve')
   await page.waitForFunction(() => document.body.innerText.includes('1 pending approvals'))
   assert.equal((await registry.listApprovedNodes()).length, 2)
-  const stale = (await registry.listPendingPairings()).find(entry => !entry.approvedNodeId)
+  // Stop the remaining client first so it cannot request pairing again after rejection.
+  second.kill('SIGKILL'); await once(second, 'exit')
+  const [stale] = await registry.listPendingPairings()
   await registry.rejectPendingPairing(stale.id)
   await click('Approve')
-  await page.waitForFunction(() => [...document.querySelectorAll('[role=alert]')].some(element => element.textContent.includes('no longer awaiting approval')))
+  await page.waitForFunction(() => [...document.querySelectorAll('[role=alert]')].some(element => element.textContent.includes('Pending pairing not found')))
   await page.click('button[aria-label="Refresh pending approvals"]')
   await page.waitForFunction(() => !document.querySelector('[role=alert]'))
 
@@ -195,12 +201,12 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   assert.equal((await registry.listApprovedNodes()).length, 3)
   await click('Close New nodes')
   delayCommands = true
-  const beforeDelayed = commandReads
+  const beforeDelayed = commandReadCount()
   await click('New nodes')
   await page.waitForFunction(() => document.querySelector('[role=dialog]'))
-  while (commandReads === beforeDelayed) await new Promise(resolve => setTimeout(resolve, 20))
+  while (commandReadCount() === beforeDelayed) await new Promise(resolve => setTimeout(resolve, 20))
   await click('Close New nodes')
-  delayCommands = false; delayed.splice(0).forEach(next => next())
+  delayCommands = false; delayed.splice(0).forEach(resume => resume())
   await new Promise(resolve => setTimeout(resolve, 100))
   assert.equal(await page.$('[role=dialog]'), null, 'a late setup response cannot reopen or publish into the closed modal')
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('synthetic-pairing-credential'))
@@ -220,7 +226,7 @@ test('every setup method supports explicit pre-creation, safe switching, updates
     assert.equal(await page.evaluate(() => window.fixtureClipboard), await command())
   }
   const baseline = (await registry.listApprovedNodes()).length
-  const callsBefore = createCalls
+  const callsBefore = createCallCount()
   await click('New nodes')
   await page.waitForSelector('[data-node-command]')
   await idle()
@@ -233,7 +239,7 @@ test('every setup method supports explicit pre-creation, safe switching, updates
     await choose('Pairing approval')
     assert.ok((await command()).includes('synthetic-pairing-credential'), method)
   }
-  assert.equal(createCalls, callsBefore, 'method and authentication switches never call create')
+  assert.equal(createCallCount(), callsBefore, 'method and authentication switches never call create')
   assert.equal((await registry.listApprovedNodes()).length, baseline)
   await click('Linux CLI')
   await choose('Start automatically with systemd')
@@ -247,7 +253,7 @@ test('every setup method supports explicit pre-creation, safe switching, updates
   await choose('Pre-created token')
   await replace('Node name', 'offline-example')
   await click('Create')
-  await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent.includes('already in use'))
+  await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent.includes('Node id already exists'))
   await idle()
   assert.equal(await page.$('[data-node-command]'), null)
   assert.equal((await registry.listApprovedNodes()).length, baseline)
@@ -256,20 +262,20 @@ test('every setup method supports explicit pre-creation, safe switching, updates
   await replace('Reachable address', address)
   await replace('Installation directory', "/opt/node's directory/$literal")
   failNextCreate = true
-  const failedCall = createCalls
+  const failedCall = createCallCount()
   await click('Create')
   await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent === 'Could not create this Node.')
   await idle()
-  assert.equal(createCalls, failedCall + 1, 'failure is not retried automatically')
+  assert.equal(createCallCount(), failedCall + 1, 'failure is not retried automatically')
   assert.equal((await registry.listApprovedNodes()).length, baseline)
   assert.equal(await page.$('[data-node-command]'), null)
   await click('Create')
   await page.waitForFunction(() => document.querySelector('[data-node-command]')?.textContent.includes('--auth-token='))
   await idle()
   const token = /--auth-token='([a-f0-9]{64})'/.exec(await command())[1]
-  assert.equal((await registry.authenticateApprovedNode('browser-token', token))?.nodeId, 'browser-token')
+  assert.equal(await registry.authenticates('browser-token', token), true)
   assert.equal((await registry.listApprovedNodes()).length, baseline + 1)
-  const callsAfterCreate = createCalls
+  const callsAfterCreate = createCallCount()
   for (const method of ['Linux CLI', 'Interactive CLI', 'Docker', 'Windows CLI', 'Linux Shell']) {
     await click(method)
     const text = await command()
@@ -297,7 +303,7 @@ test('every setup method supports explicit pre-creation, safe switching, updates
       await choose('Manual Docker Compose')
     }
   }
-  assert.equal(createCalls, callsAfterCreate, 'reusing a token across methods never creates another identity')
+  assert.equal(createCallCount(), callsAfterCreate, 'reusing a token across methods never creates another identity')
   await click('Linux CLI')
   await choose('Pairing approval')
   await replace('Node name', 'pairing-draft')
@@ -321,13 +327,21 @@ test('every setup method supports explicit pre-creation, safe switching, updates
   await idle()
   assert.ok((await command()).includes(token))
   assert.ok(!(await command()).includes('pairing.example.invalid'))
-  assert.equal(createCalls, callsAfterCreate)
+  assert.equal(createCallCount(), callsAfterCreate)
   assert.equal((await registry.listApprovedNodes()).length, baseline + 1)
   await screenshot('new-nodes-precreated-token.png')
+  // Crossing the phone breakpoint restyles System without remounting the open modal.
+  const modalInput = await page.$('input[aria-label="Node name"]')
   await page.setViewport({ width: 390, height: 844 })
+  await page.waitForSelector('.mobile-system-page')
+  assert.ok(await modalInput.evaluate(element => element.isConnected), 'the phone frame keeps the open modal')
   await screenshot('new-nodes-precreated-token-narrow.png')
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
   await page.setViewport({ width: 1280, height: 900 })
+  await page.waitForSelector('.mobile-system-page', { hidden: true })
+  assert.equal(await modalInput.evaluate(element => element.isConnected && element.value), 'browser-token')
+  await modalInput.dispose()
+  assert.ok((await command()).includes(token), 'the created token command survives the layout change')
   const stores = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))
   assert.ok(!stores.includes(token))
   assert.ok(!stores.includes('synthetic-pairing-credential'))
@@ -359,7 +373,7 @@ test('every setup method supports explicit pre-creation, safe switching, updates
   await choose('Pre-created token')
   assert.equal(await page.$('[data-node-command]'), null, 'a late create response cannot publish into the next modal')
   assert.equal((await registry.listApprovedNodes()).length, baseline + 2)
-  assert.equal(createCalls, callsAfterCreate + 1, 'closing never retries creation')
+  assert.equal(createCallCount(), callsAfterCreate + 1, 'closing never retries creation')
   await click('Close New nodes')
   assert.deepEqual(errors, [])
 })

@@ -134,12 +134,7 @@ public sealed class VectorSearchQualityTests
             input,
             EcmaJson.Stringify(new JsonObject { ["cases"] = cases })
         );
-        var source = await VectorFixture.SourceAsync(
-            "quality",
-            Path.Combine(f.Temp.Path, "source-quality"),
-            input,
-            Path.Combine(f.Temp.Path, "quality-result.json")
-        );
+        var source = await VectorFixture.RecordedSourceAsync("quality", input);
         // The managed projection now retains the fusion score and merged lexical rank.
         // Compare the original fields/order against Source; new score fields are covered
         // through real recall in StructuredRecallTests.

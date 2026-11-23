@@ -66,7 +66,7 @@ Defines governed code-index maintenance and two first-draft initialization paths
 
 ## Tests
 
-The generator tests cover absolute/parent/unscanned path rejection, malicious output names, exact grouping assignment, source filtering, empty/failed model output, cache invalidation, preserved documents, force behavior, phase preservation, atomic writes, and output symlink escapes. `src/toolscriptSkills.test.ts` additionally loads the bundled ToolScript source with the locked Monty runtime and drives mocked `call_tool` suspensions through relative-path resolution, home expansion, output-directory setup, and the first source scan.
+The generator tests cover absolute/parent/unscanned path rejection, malicious output names, exact grouping assignment, source filtering, empty/failed model output, cache invalidation, preserved documents, force behavior, phase preservation, atomic writes, and output symlink escapes. 
 
 ## Integration
 

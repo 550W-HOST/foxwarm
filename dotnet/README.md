@@ -14,7 +14,7 @@ The .NET 10 solution contains managed Main, a standalone CLI Node, shared native
 | `Foxwarm.Tests/` | xUnit tests, source fixtures/corpora and qualification scripts |
 | `scripts/` | Build, publish and source-generation helpers |
 
-The solution, common build/format configuration and this entry document stay at the root. See the [Code Index](../docs/code-index/overview.md) for architecture and current contracts, and the [test layout and differential commands](Foxwarm.Tests/README.md) for fixture consumers.
+The solution, common build/format configuration and this entry document stay at the root. See the [Code Index](../docs/code-index/overview.md) for architecture and current contracts, and the [test layout and differential commands](./Foxwarm.Tests/README.md) for fixture consumers.
 
 ## Build, publish and public CLI
 
@@ -22,7 +22,6 @@ Install the .NET 10 SDK and the root/WebUI npm dependencies first. From the repo
 
 ```sh
 npm run build             # Complete managed Main delivery and assets
-npm run build:reference   # Retained TypeScript oracle used by differential tests
 npm run test:managed      # Managed suite, also included in test:unit and CI
 npm run publish:core -- -r linux-x64 -o /path/to/empty/output
 ```
@@ -44,4 +43,4 @@ Linux x64 and Windows x64 are the source candidate targets; cross-publishing doe
 
 - [CLI Node contract and invocation](../docs/code-index/units/dotnet-cli-node.md), including browser and interactive behavior.
 - [CLI-only Linux Native AOT recipe](../scripts/native-aot/README.md) and [measured compatibility](../docs/code-index/units/dotnet-cli-linux-aot.md).
-- [Windows Desktop](Foxwarm.Desktop/README.md), packaged with the server releases by [`scripts/release/package.mjs`](../docs/releasing.md).
+- [Windows Desktop](./Foxwarm.Desktop/README.md), packaged with the server releases by [`scripts/release/package.mjs`](../docs/releasing.md).

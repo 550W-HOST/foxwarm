@@ -4,7 +4,7 @@ import { build } from 'esbuild'
 
 const sourcePath = new URL('../src/nodeTargets.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
-const { parseWebUiNodeTargets, parseAgentDefaultNode, getNodeTargetAvailability, formatNodeTargetLabel } = await import(
+const { parseWebUiNodeTargets, parseAgentDefaultNode, getNodeTargetAvailability, formatNodeTargetLabel, describeExecutionNodeProblem } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -85,4 +85,19 @@ test('the installation Agent default Node is read beside the directory', () => {
   assert.equal(parseAgentDefaultNode({ nodes: [], agentDefaultNode: 'example-node' }), 'example-node')
   assert.equal(parseAgentDefaultNode({ nodes: [] }), null)
   assert.equal(parseAgentDefaultNode({ agentDefaultNode: 'bad node' }), null)
+})
+
+test('execution Node status names offline, incompatible and missing placements', () => {
+  const nodes = parseWebUiNodeTargets({ nodes: [
+    { id: 'ready-node', online: true },
+    { id: 'offline-node', online: false },
+    { id: 'old-node', online: true, protocolCompatibility: { status: 'upgrade-required', client: {}, master: {} } },
+    { id: 'provider/stopped', online: false, availability: 'offline' },
+  ] })
+  assert.equal(describeExecutionNodeProblem(nodes, 'master'), null)
+  assert.equal(describeExecutionNodeProblem(nodes, 'ready-node'), null)
+  assert.equal(describeExecutionNodeProblem(nodes, 'offline-node'), 'Offline')
+  assert.equal(describeExecutionNodeProblem(nodes, 'provider/stopped'), 'Offline')
+  assert.equal(describeExecutionNodeProblem(nodes, 'old-node'), 'Update required')
+  assert.equal(describeExecutionNodeProblem(nodes, 'removed-node'), 'Unavailable')
 })

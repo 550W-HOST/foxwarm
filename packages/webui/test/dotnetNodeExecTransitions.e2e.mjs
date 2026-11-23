@@ -1,5 +1,4 @@
 // Actual Main and supported CLI processes across exec ownership transitions.
-// FOXWARM_TS_ROOT selects the unchanged TypeScript comparison checkout.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
@@ -9,7 +8,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
-import { functionCallFor } from './ctlModelCalls.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -17,10 +16,9 @@ initializeTestEnvironment()
 let call
 const exists = path => access(path).then(() => true, () => false)
 const coreRoot = resolve('.')
-const sourceRoot = resolve(process.env.FOXWARM_TS_ROOT || '.')
-for (const runtime of ['source', 'dotnet']) for (const clientRuntime of ['source', 'dotnet']) {
-  call = functionCallFor(runtime)
-  process.chdir(runtime === 'source' ? sourceRoot : coreRoot)
+// The retained TypeScript CLI Node and the C# CLI against managed Main.
+for (const runtime of ['dotnet']) for (const clientRuntime of ['source', 'dotnet']) {
+  call = functionCall
   const env = {}, fixture = await createHostFixture('cli-exec-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'), execCwd = clientRuntime === 'dotnet' ? join(cwd, 'agents/main') : cwd, registry = join(cwd, 'agents/main/.temp/exec/running-exec.json')
@@ -70,7 +68,7 @@ for (const runtime of ['source', 'dotnet']) for (const clientRuntime of ['source
   async function launch() {
     const source = clientRuntime === 'source'
     const executable = !source && process.env.FOXWARM_CLI_EXECUTABLE
-    const child = spawn(executable || (source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet')), [...(executable ? [] : [source ? join(sourceRoot, 'packages/cli-node/dist/client.js') : join(coreRoot, 'dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')]), '--host', host, ...(credential ? ['--id', credential.nodeId, '--auth-token', credential.authToken] : ['--id', 'exec-cli', '--token', (await readFile(join(fixture.data, 'state/node_token'), 'utf8')).trim()]), '--credentials-file', join(cwd, 'credentials.json'), '--no-local-trigger'], { cwd, env: { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: join(cwd, 'agents') }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(executable || (source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet')), [...(executable ? [] : [source ? join(coreRoot, 'packages/cli-node/dist/client.js') : join(coreRoot, 'dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')]), '--host', host, ...(credential ? ['--id', credential.nodeId, '--auth-token', credential.authToken] : ['--id', 'exec-cli', '--token', (await readFile(join(fixture.data, 'state/node_token'), 'utf8')).trim()]), '--credentials-file', join(cwd, 'credentials.json'), '--no-local-trigger'], { cwd, env: { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: join(cwd, 'agents') }, stdio: ['ignore', 'pipe', 'pipe'] })
     const handle = { child, output: '' }; clients.push(handle)
     for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { handle.output += bytes })
     if (!credential) {

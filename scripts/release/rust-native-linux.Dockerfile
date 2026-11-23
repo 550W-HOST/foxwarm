@@ -7,7 +7,7 @@ FROM ${BUILD_IMAGE}
 # Each toolchain must match its pinned source: pinvoke/rust-toolchain.toml of the LanceDB source
 # (first) and the "rust" field of dotnet/Foxwarm/ToolScript/monty-source.json (second).
 ARG RUST_VERSION=1.93.1
-ARG RUST_VERSION_WORKER=1.95.0
+ARG RUST_VERSION_WORKER=1.100.0
 ARG RUSTUP_VERSION=1.29.3
 ARG RUSTUP_SHA256=b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
 ARG PROTOC_VERSION=36.2

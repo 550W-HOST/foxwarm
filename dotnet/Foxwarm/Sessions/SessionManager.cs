@@ -184,14 +184,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                         "Exec completion owner is unavailable; retry after recovery."
                     );
                 var current = await RequiredAsync(sessionId);
-                var detail = message.StartsWith(
-                    "Background Process Finished\n",
-                    StringComparison.Ordinal
-                )
-                    ? message["Background Process Finished\n".Length..]
-                    : message;
-                var eventPart =
-                    $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{detail}\n</foxwarm-system>";
+                var eventPart = CompletionEvent(message);
                 try
                 {
                     if (
@@ -225,6 +218,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 ?? throw new InvalidDataException("Exec Session membership is missing.")
         );
         executor.ResolveProviderBackend = NodeProviders.ResolveExecBackend;
+        executor.ResolveProviderStop = NodeProviders.ExecStopBackendAsync;
+        executor.Untracked = session => Find(session)?.PublishStateChanged();
         executor.RemoteIdentityReserved = (session, id) =>
             Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
         Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
@@ -253,6 +248,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in SecretToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in FileDeliveryDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
+        foreach (var definition in ExecControlDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in MainLocalToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
@@ -663,6 +660,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ResolveAncestry = CatalogMetadata,
             MainMetadata = OverlayMainMetadata,
         };
+        hosted.RunningExecCount = () => RunningExecs(hosted).Length;
         hosted.Archive = store.Archive;
         hosted.AuthorityStore = store;
         hosted.Executor = executor;
@@ -764,12 +762,38 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                 ? Task.CompletedTask
                 : hosted.Compactor.SafePointAsync(propagateFailure: true);
+        registry.OnChildReportMissing = (_, parent, reply) =>
+            DeliverChildReportMissingAsync(hosted.Id, parent, reply);
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
         registry.TriggerOverride = _ =>
             Accepting && !IsDeletionClaimed(hosted.Id) && !hosted.Entry.Retired
                 ? hosted.StartProcessing()
                 : Task.CompletedTask;
         return hosted;
+    }
+
+    // A persisted runtime event in the parent, like a background completion; it is
+    // transparent to the parent's own report boundary and wakes an idle parent.
+    private async Task DeliverChildReportMissingAsync(string childId, string parentId, string reply)
+    {
+        var parent = await RequiredAsync(parentId);
+        var item = new QueueItem(
+            QueueItemType.Background,
+            [new JsonObject { ["system"] = SessionBoundary.ChildReportMissing(childId, reply) }]
+        );
+        try
+        {
+            await parent.Entry.SaveLane.AdmitAsync(item, SaveKind.Strict);
+        }
+        finally
+        {
+            if (
+                Accepting
+                && !parent.Entry.WithState(state => state.Busy || state.Stopping)
+                && parent.Registry.HasRunnableWork(parent.Entry)
+            )
+                parent.Registry.Trigger(parent.Id);
+        }
     }
 
     internal MainBrowserTools Browser { get; } = new();
@@ -817,6 +841,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await waitLiveness.DrainAsync();
         // Planners are independently owned. Release foreground waits first, then
         // cancel/drain planning without reclassifying interruption as user Stop.
+        await Task.WhenAll(current.Select(session => session.Compactor.DrainIdleAsync()));
         await Task.WhenAll(current.Select(session => session.Compactor.StopAsync()));
         await Task.WhenAll(current.Select(session => session.DrainAsync()));
         ToolScript.BeginShutdown();
@@ -845,7 +870,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             accepting = false;
             foreach (var session in sessions.Values)
+            {
                 session.Registry.Runner.CloseAdmission();
+                session.Compactor.StopIdleScheduling();
+            }
         }
         admissionStop.Cancel();
         waitTimeouts.Stop();

@@ -3,12 +3,12 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile, unlink, access } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { pathToFileURL } from 'node:url'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, saveModelsInOriginalApp } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog as writeCatalog } from './stateSeeds.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
 const fixtures = [], requests = [], failures = []
@@ -51,10 +51,13 @@ async function done(fixture, marker, id = 'main') {
 async function send(fixture, task, id = 'main') { assert.equal((await fixture.api('POST', route(id) + '/message', { text: 'ON-TASK:' + task })).status, 202) }
 function bootRows(raw) { return raw.history.filter(row => row.role === 'user' && row.parts?.some(part => part.system?.includes('ONBOOT: '))) }
 async function seedCatalog(fixture, rows, archiveOnly = []) {
-  const module = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
-  const store = new module.SessionCatalogStore(join(fixture.data, 'state', 'catalog.sqlite')); store.initializeEmpty(); store.replaceAll(rows); store.close()
-  const file = join(fixture.root, 'catalog-seed.json'); await writeFile(file, JSON.stringify([...rows, ...archiveOnly]))
-  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, file], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  await writeCatalog(fixture.data, rows); seedArchiveBranches(fixture.data, [...rows, ...archiveOnly])
+}
+// Managed Main's conditional-memory filter, through Foxwarm.DevTools.
+async function filterConditionalMemorySource(root, source, modelId) {
+  const corpus = join(root, 'conditional-memory.json'); await writeFile(corpus, JSON.stringify([{ op: 'filter', source, modelId }]))
+  const output = execFileSync(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm.DevTools/bin/Debug/net10.0/Foxwarm.DevTools.dll'), 'conditional-memory', corpus], { encoding: 'utf8' })
+  return JSON.parse(output)[0].value
 }
 const row = (id, extra = {}) => ({ id, agent: 'main', busy: false, queueLength: 0, model: 'a', meta: { messageCount: 0, lastMessageTime: 0 }, ...extra })
 const authority = (id, extra = {}) => ({ sessionStateVersion: 1, id, agent: 'main', busy: false, verbose: false, history: [], queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0 }, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: randomUUID(), persistentMemorySnapshot: 'Existing user snapshot bytes.', ...extra })
@@ -85,7 +88,7 @@ try {
   assert.equal(bootRows(await saved(oldQueue)).length, 1)
   assert.equal((await saved(oldQueue)).queue.length, 0)
   await assert.rejects(access(join(oldQueue.work, 'forbidden-onboot-effect')))
-  assert((await saved(oldQueue)).history.some(value => value.parts?.some(part => part.functionResponse?.response?.error?.type === 'tool_authorization_denied')))
+  assert((await saved(oldQueue)).history.some(value => value.parts?.some(part => part.functionResponse?.response?.code === 'tool_authorization_denied')))
   await oldQueue.stop(); const settledRequests = requests.length
   await oldQueue.start(); await send(oldQueue, 'legacy-restart'); await done(oldQueue, 'legacy-restart')
   assert.equal(bootRows(await saved(oldQueue)).length, 1)
@@ -100,7 +103,12 @@ try {
   const emptyHistory = await empty.api('GET', route('main') + '/history'); assert.equal(emptyHistory.status, 200); assert.equal(emptyHistory.body.session.modelKey, ''); assert.equal(emptyHistory.body.session.defaultModelKey, ''); assert.equal(emptyHistory.body.session.effortDefault, 'high'); assert.equal(emptyHistory.body.session.effectiveCompactThresholdTokens, Math.floor(200000 * 0.85))
   assert.equal((await empty.api('GET', route('main') + '/state')).status, 200)
   const frames = [], ws = new WebSocket(empty.origin.replace('http:', 'ws:') + '/api/webui/stream', { headers: { authorization: 'Bearer synthetic-onboot-empty-setup-api' } }); ws.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(ws, 'open'); ws.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionIds: ['main'], sessionListIds: ['main'], sessionListActive: true })); await until(() => frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 1), 'unconfigured Main state/draft/context subscription applies'); assert(frames.some(frame => frame.type === 'session-state' && frame.session?.modelKey === '')); assert(!frames.some(frame => frame.type === 'session-error')); ws.close(); await once(ws, 'close')
-  const framework = await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/agents/00_SYSTEM.md'), 'utf8')
+  const frameworkSource = await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/agents/00_SYSTEM.md'), 'utf8')
+  // The Session sees the bundled source after conditional filtering for its concrete model.
+  const framework = await filterConditionalMemorySource(empty.root, frameworkSource, 'a/wire')
+  assert(frameworkSource.includes('<foxwarm-if '), 'The bundled framework source has conditional blocks')
+  assert(!framework.includes('<foxwarm-if') && !framework.includes('</foxwarm-if>'), 'Filtering leaves no conditional markup')
+  assert(framework.length < frameworkSource.length, 'Filtering removes the non-matching blocks')
   await assert.rejects(access(join(empty.data, 'agents', '00_SYSTEM.md')), { code: 'ENOENT' })
   for (const name of ['MEMORY.md', 'SOUL.md', 'USER.md']) assert.deepEqual(await readFile(join(empty.work, 'memory', name)), await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/main/memory', name)))
   await assert.rejects(access(join(empty.work, 'memory/BOOTSTRAP.md')), { code: 'ENOENT' })

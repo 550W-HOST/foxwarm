@@ -137,7 +137,7 @@ internal sealed partial class LocalExecManager
                     await notify(
                         record.SessionId,
                         record.Id,
-                        ExecOutput.Completion(record.ToJson(), status!)
+                        await CompletionMessageAsync(record, status!)
                     );
                 await MutateAsync(() => Remove(record));
             }
@@ -145,6 +145,8 @@ internal sealed partial class LocalExecManager
             {
                 gate.Release();
             }
+            if (record.Notify)
+                Untracked?.Invoke(resolveLifetime(record.SessionId));
         }
         catch (Exception)
         {

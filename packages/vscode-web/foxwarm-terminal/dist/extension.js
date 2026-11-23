@@ -4,6 +4,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -25,6 +26,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
 // src/extension.ts
 var extension_exports = {};
@@ -192,18 +194,21 @@ async function deleteBackendTerminal(terminalId) {
 }
 var FoxwarmPseudoterminal = class {
   constructor(target, existingTerminal) {
-    this.target = target;
-    this.existingTerminal = existingTerminal;
-    this.writeEmitter = new vscode.EventEmitter();
-    this.closeEmitter = new vscode.EventEmitter();
-    this.changeNameEmitter = new vscode.EventEmitter();
-    this.closed = false;
-    this.started = false;
-    this.killRequested = false;
-    this.controlResponses = /* @__PURE__ */ new Map();
-    this.onDidWrite = this.writeEmitter.event;
-    this.onDidClose = this.closeEmitter.event;
-    this.onDidChangeName = this.changeNameEmitter.event;
+    __publicField(this, "target", target);
+    __publicField(this, "existingTerminal", existingTerminal);
+    __publicField(this, "writeEmitter", new vscode.EventEmitter());
+    __publicField(this, "closeEmitter", new vscode.EventEmitter());
+    __publicField(this, "changeNameEmitter", new vscode.EventEmitter());
+    __publicField(this, "socket");
+    __publicField(this, "terminalId");
+    __publicField(this, "lastDimensions");
+    __publicField(this, "closed", false);
+    __publicField(this, "started", false);
+    __publicField(this, "killRequested", false);
+    __publicField(this, "controlResponses", /* @__PURE__ */ new Map());
+    __publicField(this, "onDidWrite", this.writeEmitter.event);
+    __publicField(this, "onDidClose", this.closeEmitter.event);
+    __publicField(this, "onDidChangeName", this.changeNameEmitter.event);
     this.terminalId = existingTerminal?.id;
     if (this.terminalId) representedBackendIds.add(this.terminalId);
   }

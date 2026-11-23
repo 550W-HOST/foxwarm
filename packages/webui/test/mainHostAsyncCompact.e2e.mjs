@@ -28,7 +28,7 @@ function record(body, full, kind, headers, complete) {
     value.operations = requiredCompactOperations(input, 'Exact ordered prior dialogue and paired effects.')
     assert(value.operations.length, 'required retention operations'); value.valid = () => complete([tool('valid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: value.operations })])
     value.invalid = () => complete([tool('invalid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid range.' }] })])
-    if (JSON.stringify(full).includes('compact_plan_invalid')) {
+    if (input.includes('Compact plan rejected') && input.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=999999, sourceEnd=1000000) is not a required operation')) {
       if (mode === 'reload') { assert(!body.previous_response_id); assert.equal(headers['x-generation'], 'two') }
       else assert(body.previous_response_id, 'real background transient suffix')
       value.valid(); return value
@@ -131,7 +131,7 @@ try {
   const target = await create(); await seed(target, 'target'); const caller = await create(); crossTarget = target
   held.delete('plan'); await send(caller, 'cross-tool'); await until(() => held.has('plan'), 'cross idle existing target'); assert.equal(held.get('plan').body.prompt_cache_key, sha(target + '--compact-plan')); await command(target, '/stop --compaction')
   await command(target, 'CASE:held-target'); await until(() => held.has('held-target'), 'busy cross target'); const crossBefore = records.filter(row => row.planning).length
-  const rejectedCaller = await create(); await send(rejectedCaller, 'cross-tool'); assert.equal(records.filter(row => row.planning).length, crossBefore); assert((await history(rejectedCaller)).messages.some(row => row.parts?.some(part => part.functionResponse?.response?.error?.message?.includes('must be idle')))); await fixture.api('POST', route(target) + '/stop')
+  const rejectedCaller = await create(); await send(rejectedCaller, 'cross-tool'); assert.equal(records.filter(row => row.planning).length, crossBefore); assert((await history(rejectedCaller)).messages.some(row => row.parts?.some(part => part.functionResponse?.response?.error?.includes?.('must be idle')))); await fixture.api('POST', route(target) + '/stop')
   const countBeforeMissing = (await fixture.api('GET', '/api/sessions')).body.sessions.length; await send(caller, 'missing-tool'); assert.equal((await fixture.api('GET', '/api/sessions')).body.sessions.length, countBeforeMissing)
 
   const queued = await create(); await seed(queued, 'dequeue'); await selectSession(page, queued); await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:held-dequeue'))

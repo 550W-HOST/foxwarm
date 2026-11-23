@@ -16,6 +16,32 @@ public sealed partial class HandoffConfirmationTests
         Assert.False(SessionBoundary.IsNoAction("summary only"));
     }
 
+    [Theory]
+    [InlineData("[NO_ACTION]\n\nTask is still blocked; nothing further to report.")]
+    [InlineData("[NO_ACTION] nothing further")]
+    [InlineData("Nothing further is needed. [NO_ACTION]")]
+    [InlineData("  \n[NO_ACTION]\n\nstill blocked\n  ")]
+    [InlineData("\n\tsummary\n[NO_ACTION] \n")]
+    [InlineData(" \u00a0NO_ACTION\n")]
+    public void NoActionSignalAcceptsMarkerAtStartOrEnd(string text)
+    {
+        Assert.True(SessionBoundary.IsNoAction(text));
+    }
+
+    [Theory]
+    [InlineData("Please do not literally print [NO_ACTION] here.")]
+    [InlineData("prefix [NO_ACTION] suffix")]
+    [InlineData("Reminder: if nothing remains, reply [NO_ACTION] instead.\nDone.")]
+    [InlineData("NO_ACTION follows")]
+    [InlineData("[NO_ACTION")]
+    [InlineData("   ")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void NoActionSignalRejectsMarkerInsideText(string? text)
+    {
+        Assert.False(SessionBoundary.IsNoAction(text));
+    }
+
     private static JsonObject Obj(string raw) => JsonNode.Parse(raw)!.AsObject();
 
     private static string Review(
@@ -205,10 +231,7 @@ public sealed partial class HandoffConfirmationTests
             [Call("send_to_session", missing), Call("create_child_session", good), malformed],
             true
         );
-        Assert.Equal(
-            HandoffConfirmation.ErrorCode,
-            direct[0].Preset!["error"]!["type"]!.GetValue<string>()
-        );
+        Assert.NotNull(direct[0].Preset.FailureMessage());
         Assert.True(direct[1].Preset!["canceled"]!.GetValue<bool>());
         Assert.Null(direct[2].Preset);
         Assert.True(good.ContainsKey("__cancelTool"));
@@ -282,7 +305,7 @@ public sealed partial class HandoffConfirmationTests
             ],
             true
         )[0];
-        var message = planned.Preset!["error"]!["message"]!.GetValue<string>();
+        var message = planned.Preset!.FailureMessage()!;
         Assert.Contains("afterSend was renamed to currentSessionTurnAction", message);
         Assert.DoesNotContain("must follow every argument", message);
         Assert.DoesNotContain("Resend in this order", message);

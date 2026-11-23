@@ -284,6 +284,8 @@ internal sealed partial class HostModels
                     "effort",
                     "historyReasoningField",
                     "asyncCompact",
+                    "idleCompactMinutes",
+                    "idleCompactMinContextPercent",
                     "disallowEmptyResponse",
                     "keepReasoningOnError",
                     "webSearch",

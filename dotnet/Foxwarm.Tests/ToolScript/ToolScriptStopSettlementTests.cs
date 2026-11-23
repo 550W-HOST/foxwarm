@@ -203,7 +203,8 @@ public sealed class ToolScriptStopSettlementTests
             item => item.OpenFields?["execId"]?.ToString() == execId
         );
         var completionText = JsonSerializer.Serialize(completion);
-        Assert.Contains("Exit code: 0", completionText);
+        var system = completion.Parts![0]["system"]!.GetValue<string>();
+        ExecReceipt.ExitCode(system[(system.IndexOf('\n') + 1)..], 0);
         Assert.Contains(log, completionText);
     }
 

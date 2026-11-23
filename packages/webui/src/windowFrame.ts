@@ -14,8 +14,9 @@
  * draws the framed layout (one title row, the sidebar and status row on the window
  * background, panes as cards). This module adds what CSS can't express: per-row
  * avoidance of the control zones (`data-frame-row`), fills that extend title-row drag
- * surfaces through the shell gutter and panel padding to the window edges, the
- * narrow-layout strip, and for the Desktop hosts the `frame-regions` report, because
+ * surfaces through the shell gutter and panel padding to the window edges, no-drag
+ * holes for overlay controls that a later drag surface covers, the narrow-layout
+ * strip, and for the Desktop hosts the `frame-regions` report, because
  * neither WinUI's WebView2 control nor WKWebView honours app-region.
  */
 
@@ -56,6 +57,7 @@ export const FRAME_INTERACTIVE = 'button, a[href], input, select, textarea, summ
 /** Floating layers that may cover a drag surface; they always keep their clicks. */
 export const FRAME_FLOATING = '[role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag]'
 const FILL_CLASS = 'foxwarm-frame-fill'
+const HOLE_CLASS = 'foxwarm-frame-hole'
 
 export function readHostFrame(value: unknown = typeof window === 'undefined' ? undefined : window.foxwarmFrame): HostFrameState | null {
   if (!value || typeof value !== 'object') return null
@@ -209,6 +211,37 @@ export function computeFrameEdgeFills(doc: Document = document): FrameRect[] {
   return fills
 }
 
+const boxesOverlap = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) >= 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) >= 1
+
+/**
+ * No-drag boxes for the PWA overlay: title-row controls that a later drag surface covers.
+ * Chromium applies app-region boxes in document order and the last box containing a point
+ * decides, so a control placed over a surface that follows it in the document (the collapsed
+ * rail's toggle, which floats over the first pane's strip after the lights on macOS) would
+ * drag the window. The holes are rendered after the page content, so they decide last. The
+ * Desktop hosts need none: their rectangles subtract every control from every surface.
+ */
+export function computeFrameNoDragHoles(doc: Document = document): FrameRect[] {
+  const surfaces = activeDragSurfaces(doc).filter(surface => !surface.classList.contains(FILL_CLASS))
+  const boxes = new Map(surfaces.map(surface => [surface, surface.getBoundingClientRect()]))
+  const holes: FrameRect[] = []
+  for (const surface of surfaces) {
+    for (const control of surface.querySelectorAll(FRAME_INTERACTIVE)) {
+      // A nested control lies inside its outer control's hole.
+      const outer = control.parentElement?.closest(FRAME_INTERACTIVE)
+      if (outer && surface.contains(outer)) continue
+      const box = control.getBoundingClientRect()
+      if (box.width < 1 || box.height < 1) continue
+      const covered = surfaces.some(other => other !== surface
+        && !control.contains(other)
+        && !!(control.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING)
+        && boxesOverlap(boxes.get(other)!, box))
+      if (covered) holes.push(toRect(box))
+    }
+  }
+  return holes
+}
+
 type HostChannel = { postMessage(message: unknown): void }
 
 type Rgba = [number, number, number, number]
@@ -324,6 +357,12 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
   fills.setAttribute('aria-hidden', 'true')
   fills.className = 'foxwarm-frame-fills'
   document.body.prepend(fills)
+  const overlay = root.dataset.foxwarmFrame === 'overlay'
+  // No-drag holes come after the page content (computeFrameNoDragHoles); only app-region needs them.
+  const holes = document.createElement('div')
+  holes.setAttribute('aria-hidden', 'true')
+  holes.className = 'foxwarm-frame-holes'
+  if (overlay) document.body.appendChild(holes)
   let strip: HTMLDivElement | null = null
   let frame = 0
   let layoutDirty = true
@@ -375,6 +414,20 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     }))
   }
 
+  let lastHoles = ''
+  const renderHoles = (pieces: FrameRect[]) => {
+    if (!overlay) return
+    const key = JSON.stringify(pieces)
+    if (key === lastHoles) return
+    lastHoles = key
+    holes.replaceChildren(...pieces.map(piece => {
+      const element = document.createElement('div')
+      element.className = HOLE_CLASS
+      element.style.cssText = `left:${piece.x}px;top:${piece.y}px;width:${piece.w}px;height:${piece.h}px`
+      return element
+    }))
+  }
+
   const layout = () => {
     const zones = readZones()
     const isNarrow = !!narrow?.matches
@@ -395,6 +448,7 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     if (isNarrow) {
       rows.forEach(clearRow)
       renderFills([])
+      renderHoles([])
       return
     }
     // Read every row before writing so that one pass needs one layout.
@@ -411,6 +465,7 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       element.style.setProperty('--foxwarm-frame-pad-right', `${plan.right}px`)
     }
     renderFills(computeFrameEdgeFills(document))
+    renderHoles(computeFrameNoDragHoles(document))
   }
 
   const report = () => {
@@ -425,7 +480,6 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     channel.postMessage({ type: 'frame-regions', regions, colorScheme })
   }
 
-  const overlay = root.dataset.foxwarmFrame === 'overlay'
   // The theme runtime re-reads this on every theme change; layout changes refresh it below.
   if (overlay) setFrameChromeColor(() => frameSurfaceColor(document, readZones()))
 
@@ -489,6 +543,7 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       root.removeAttribute('data-foxwarm-frame-leading')
       probe.remove()
       fills.remove()
+      holes.remove()
       strip?.remove()
     },
   }

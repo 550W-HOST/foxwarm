@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { unpackSnapshot } from '../../packages/webui/demo/src/pack.mjs';
+import { detectPlatform } from '../src/scripts/platform.mjs';
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = path.resolve(websiteRoot, '..');
@@ -164,9 +165,9 @@ test('in-site links to page sections point at existing headings', async () => {
   assert.deepEqual(missing, []);
 });
 
-test('installer downloads are byte-exact copies of repository scripts', async () => {
-  for (const name of ['install-foxwarm.sh', 'install-foxwarm.ps1']) {
-    const source = await readFile(path.join(repositoryRoot, name));
+test('installer downloads are byte-exact copies of repository files', async () => {
+  for (const [name, sourcePath] of [['install-foxwarm.sh', 'install-foxwarm.sh'], ['install-foxwarm.ps1', 'install-foxwarm.ps1'], ['seccomp-chromium.json', 'docker/seccomp-chromium.json']]) {
+    const source = await readFile(path.join(repositoryRoot, sourcePath));
     const staged = await readFile(path.join(publicRoot, name));
     const built = await readFile(path.join(distRoot, name));
     assert.deepEqual(staged, source, `${name} staged copy differs`);
@@ -365,6 +366,133 @@ test('public content has no unresolved installer host placeholders', async () =>
   }
 });
 
+
+// The release files that release.yml publishes: its PACKAGE_ARTIFACTS list of brace and * patterns.
+function releasePackagePatterns(workflow) {
+  const list = workflow.match(/^\s*PACKAGE_ARTIFACTS:\s*'([^']+)'/m)?.[1];
+  assert.ok(list, 'the release workflow lists its package artifacts');
+  const expand = (text) => {
+    const open = text.indexOf('{');
+    if (open < 0) return [text];
+    const parts = [];
+    let depth = 0, start = open + 1, close = -1;
+    for (let i = open; i < text.length && close < 0; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}' && --depth === 0) close = i;
+      if ((text[i] === ',' && depth === 1) || close === i) { parts.push(text.slice(start, i)); start = i + 1; }
+    }
+    return parts.flatMap((part) => expand(text.slice(0, open) + part + text.slice(close + 1)));
+  };
+  return expand(list).map((glob) => new RegExp(`^${glob.split('*').map(escapeRegExp).join('[^/]*')}$`));
+}
+
+// Homepage downloads use stable latest-release URLs (the APK through /android). The page marks no
+// option as this device's until the browser reports its platform.
+test('the homepage downloads each app from the latest release and marks none before the platform is known', async () => {
+  const latest = 'https://github.com/550W-HOST/foxwarm/releases/latest/download';
+  const downloads = [
+    {
+      platform: 'windows', file: 'foxwarm-desktop-win-x64-setup.exe', href: `${latest}/foxwarm-desktop-win-x64-setup.exe`,
+      alternative: { file: 'foxwarm-desktop-win-x64.zip', href: `${latest}/foxwarm-desktop-win-x64.zip` }
+    },
+    { platform: 'macos', file: 'foxwarm-desktop-osx-arm64.zip', href: `${latest}/foxwarm-desktop-osx-arm64.zip` },
+    { platform: 'android', file: 'foxwarm-android-node.apk', href: '/android' }
+  ];
+  // Each file is uploaded as its own workflow artifact and is in the list the release publishes.
+  const releaseWorkflow = await readFile(path.join(repositoryRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+  const published = releasePackagePatterns(releaseWorkflow);
+  assert.ok(published.some((pattern) => pattern.test('foxwarm-code-0.9.7.fwassets')) && !published.some((pattern) => pattern.test('SHA256SUMS')), 'the package list patterns expand');
+  for (const file of downloads.flatMap((download) => [download.file, download.alternative?.file]).filter(Boolean)) {
+    assert.ok(published.some((pattern) => pattern.test(file)), `the release publishes ${file}`);
+    assert.match(releaseWorkflow, new RegExp(`path: dist/${escapeRegExp(file)}\\n\\s+archive: false\\n`), `the release workflow uploads ${file}`);
+  }
+  const redirect = await readFile(routeToFile('/android/'), 'utf8');
+  assert.ok(redirect.includes(`${latest}/foxwarm-android-node.apk`), '/android serves the latest APK');
+
+  for (const [route, label] of [['/', 'Download'], ['/zh/', '下载']]) {
+    const homepage = await readFile(routeToFile(route), 'utf8');
+    const section = homepage.match(/<section class="downloads" id="download"[\s\S]*?<\/section>/)?.[0];
+    assert.ok(section, `${route} has a download section`);
+    const options = [...section.matchAll(/<div class="download-option" data-platform="([^"]+)">([\s\S]*?)<\/div>/g)]
+      .map(([, platform, body]) => {
+        const alternative = body.match(/<p class="download-alternative"><a href="([^"]+)">[^<]+<\/a><code>([^<]+)<\/code><\/p>/);
+        return {
+          platform,
+          href: body.match(/<a class="download-button" href="([^"]+)"/)?.[1],
+          file: body.match(/<code>([^<]+)<\/code>/)?.[1],
+          ...(alternative ? { alternative: { file: alternative[2], href: alternative[1] } } : {}),
+          markedHidden: /<span class="download-current" hidden>/.test(body)
+        };
+      });
+    assert.deepEqual(options.map(({ markedHidden, ...option }) => option), downloads, `${route} download targets`);
+    assert.ok(options.every((option) => option.markedHidden), `${route} marks no download as this device's in the HTML`);
+    assert.doesNotMatch(section, /class="download-option current"/, `${route} emphasizes no download in the HTML`);
+    // The server row carries its own commands, so visitors arriving from other pages can install from here.
+    const commandsIn = (html) => [...html.matchAll(/data-copy="([^"]*)"/g)].map((match) => decodeEntities(match[1]));
+    const serverCommands = commandsIn(section);
+    for (const command of ['https://foxwarm.net/install-foxwarm.sh', 'https://foxwarm.net/install-foxwarm.ps1', 'docker run']) {
+      assert.ok(serverCommands.some((copied) => copied.includes(command)), `${route} downloads include ${command}`);
+    }
+    // Each download shows its platform's mark; the marks and schematics are decorative.
+    for (const { platform } of downloads) {
+      assert.ok(options.find((option) => option.platform === platform), `${route} ${platform} option`);
+      assert.match(section, new RegExp(`data-platform="${platform}"><p class="download-name"><svg class="platform-mark platform-mark-${platform}"`), `${route} ${platform} mark`);
+    }
+    for (const mark of ['linux', 'docker']) assert.match(section, new RegExp(`platform-mark-${mark}`), `${route} ${mark} mark`);
+    for (const svg of section.match(/<svg class="(?:platform-mark|schematic)[^>]*>/g) ?? []) assert.match(svg, /aria-hidden="true"/, `${route} decorative ${svg}`);
+    assert.equal((section.match(/<svg class="schematic /g) ?? []).length, 3, `${route} one schematic per kind`);
+    // The Android robot's license requires this attribution wherever the robot appears.
+    assert.match(section, /Creative Commons 3\.0|知识共享署名 3\.0/, `${route} attributes the Android robot`);
+
+    const nav = homepage.match(/<nav class="primary-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? '';
+    assert.match(nav, new RegExp(`<a class="nav-download" href="${escapeRegExp(route)}#download">${label}</a>`), `${route} navigation opens the downloads`);
+    const footer = homepage.match(/<footer class="site-footer">([\s\S]*?)<\/footer>/)?.[1] ?? '';
+    assert.match(footer, new RegExp(`<a href="${escapeRegExp(route)}#download">${label}</a>`), `${route} footer opens the downloads`);
+    const start = homepage.match(/<div class="hero-start" id="install">[\s\S]*?<\/p>\s*<\/div>/)?.[0] ?? '';
+    const heroCommands = commandsIn(start);
+    assert.ok(heroCommands.some((copied) => copied.includes('install-foxwarm.sh')) && heroCommands.some((copied) => copied.includes('install-foxwarm.ps1')), `${route} hero offers the install commands`);
+    assert.match(start, /<a class="hero-more" href="#download">/, `${route} hero points at the other downloads`);
+    assert.match(start, /<a class="hero-demo" href="\/demo\/#session\/tidepool%2Ffix-ci">/, `${route} hero opens the demo`);
+  }
+});
+
+// The installing guide owns the Docker steps (data owned by the container's uid, Chromium's seccomp
+// profile); the quick starts, the homepage and the repository README repeat them verbatim.
+test('every Docker quick-install command is the installing guide\'s', async () => {
+  const docsRoot = path.join(websiteRoot, 'src', 'content', 'docs');
+  const dockerBlock = async (file) => {
+    const markdown = await readFile(path.isAbsolute(file) ? file : path.join(docsRoot, file), 'utf8');
+    return [...markdown.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]).find((code) => code.includes('docker run'));
+  };
+  const guide = await dockerBlock('docs/installing.md');
+  assert.match(guide ?? '', /chown 1000:1000[\s\S]*https:\/\/foxwarm\.net\/seccomp-chromium\.json[\s\S]*docker run/, 'the guide has the Docker steps and downloads the site\'s seccomp profile');
+  for (const file of ['zh/docs/installing.md', 'docs/quick-start.md', 'zh/docs/quick-start.md', path.join(repositoryRoot, 'README.md')]) {
+    assert.equal(await dockerBlock(file), guide, `${path.isAbsolute(file) ? path.relative(repositoryRoot, file) : file} Docker command`);
+  }
+  for (const route of ['/', '/zh/']) {
+    const homepage = await readFile(routeToFile(route), 'utf8');
+    const copied = [...homepage.matchAll(/data-copy="([^"]*)"/g)].map((match) => decodeEntities(match[1])).find((command) => command.includes('docker run'));
+    assert.equal(copied, guide, `${route} Docker command`);
+  }
+});
+
+test('the visitor platform is read from what the browser reports', () => {
+  const cases = [
+    [{ userAgentData: { platform: 'Windows' }, platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/142.0' }, 'windows'],
+    [{ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0' }, 'windows'],
+    [{ userAgentData: { platform: 'macOS' }, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/142.0', maxTouchPoints: 0 }, 'macos'],
+    [{ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15', maxTouchPoints: 0 }, 'macos'],
+    [{ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15', maxTouchPoints: 5 }, 'ios'],
+    [{ platform: 'iPhone', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) Mobile/15E148', maxTouchPoints: 5 }, 'ios'],
+    [{ userAgentData: { platform: 'Android' }, platform: 'Linux armv81', userAgent: 'Mozilla/5.0 (Linux; Android 10; K) Chrome/142.0 Mobile' }, 'android'],
+    [{ platform: 'Linux aarch64', userAgent: 'Mozilla/5.0 (Android 15; Mobile; rv:145.0) Gecko/145.0 Firefox/145.0' }, 'android'],
+    [{ userAgentData: { platform: 'Linux' }, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/142.0' }, 'linux'],
+    [{ userAgentData: { platform: 'Chrome OS' }, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; CrOS x86_64 16000.0.0) Chrome/142.0' }, ''],
+    [{ platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; CrOS x86_64 16000.0.0) Chrome/142.0' }, ''],
+    [{}, '']
+  ];
+  for (const [browser, expected] of cases) assert.equal(detectPlatform(browser), expected, JSON.stringify(browser));
+});
 
 test('Android download redirects to the release APK and both install locales include its QR and certificate', async () => {
   const redirect = await readFile(routeToFile('/android/'), 'utf8');

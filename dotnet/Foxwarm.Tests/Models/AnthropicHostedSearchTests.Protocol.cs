@@ -14,6 +14,8 @@ public sealed partial class AnthropicHostedSearchTests
         bool streaming
     )
     {
+        var emptyCited = Cited();
+        emptyCited["text"] = "";
         var response = Reply(
             "tool_use",
             Text("Before "),
@@ -28,6 +30,7 @@ public sealed partial class AnthropicHostedSearchTests
             Cited(),
             Text("\n- "),
             Cited(),
+            emptyCited,
             Text("\n"),
             Obj("""{"type":"redacted_thinking","data":"opaque-redacted"}"""),
             Text("After "),
@@ -75,7 +78,9 @@ public sealed partial class AnthropicHostedSearchTests
         );
         Assert.NotNull(parts[5]!["providerMeta"]!["redactedThinking"]);
         Assert.NotNull(parts[7]!["functionCall"]);
-        Assert.Equal(6, parts[4]!["providerMeta"]!["anthropic"]!["contentBlocks"]!.AsArray().Count);
+        var savedRun = parts[4]!["providerMeta"]!["anthropic"]!["contentBlocks"]!.AsArray();
+        Assert.Equal(7, savedRun.Count);
+        Assert.True(JsonNode.DeepEquals(emptyCited, savedRun[5]));
         Assert.Equal("a/wire", parts[4]!["providerMeta"]!["anthropic"]!["sourceModelId"]!.ToString());
         if (streaming)
             Assert.Equal(
@@ -94,11 +99,11 @@ public sealed partial class AnthropicHostedSearchTests
         Assert.True(JsonNode.DeepEquals(canonical, reopened));
         var expected = new JsonArray(
             response["content"]!.AsArray()
-                .Where(block => SessionWait.Text(block?["type"]) != "future")
+                .Where(block => SessionWait.Text(block?["type"]) != "future" && !JsonNode.DeepEquals(block, emptyCited))
                 .Select(block => block!.DeepClone())
                 .ToArray()
         );
-        // Unknown provider blocks are already omitted by the adapter; they still bound text runs.
+        // Unknown blocks still bound text runs. Empty cited text remains in history, not the wire request.
         var native = AnthropicRequestSerializer.BuildRequest(
             ConcreteRequestHistory.Prepare([reopened], "a/wire"),
             options

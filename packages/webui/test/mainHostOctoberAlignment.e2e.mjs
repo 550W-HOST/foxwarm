@@ -5,6 +5,7 @@ import { once } from 'node:events'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { requireReceiptExecId } from './execReceipt.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
@@ -145,7 +146,7 @@ try {
     const id = await create('wait-' + key), release = join(own, 'release-' + key); releases.add(release)
     await send(id, 'wait-' + key, [
       [call('wait-exec-' + key, 'exec', { command: `touch born-${key}; while [ ! -f release-${key} ]; do sleep 0.02; done; printf once-${key}`, timeout: 1 })],
-      body => { const output = received(body, 'wait-exec-' + key).output; const execId = /execId: ([\w-]+)/.exec(output)?.[1]; assert(execId); return [call('wait-' + key, 'wait', { waitExecIds: [execId], ...extra })] }
+      body => { const output = received(body, 'wait-exec-' + key).output; const execId = requireReceiptExecId(output); return [call('wait-' + key, 'wait', { waitExecIds: [execId], ...extra })] }
     ])
     const waiting = await until(async () => { const value = await saved(id); return value.meta.wait && value.history.some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'wait-' + key)) ? value : null }, 'actual exec wait ' + key)
     assert.equal(waiting.meta.wait.timeoutSeconds, expected)
@@ -174,7 +175,7 @@ try {
   const rawModels = '# retained model comments\r\n' + JSON.stringify(models) + '\r\n'
   await writeFile(join(own, 'app-candidate'), appRaw); await writeFile(join(own, 'model-candidate'), rawModels)
   state = await turn(actor, 'install', [call('install-app', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'config', filePath: 'app-candidate' } }), call('install-models', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'models', filePath: 'model-candidate' } })])
-  const appResult = JSON.parse(pair(state, 'install-app').response.output), modelResult = JSON.parse(pair(state, 'install-models').response.output)
+  const appResult = pair(state, 'install-app').response, modelResult = pair(state, 'install-models').response
   assert.equal(appResult.saved, true); assert.deepEqual(appResult.applied, ['access.identities', 'access.surfaces.mcp', 'channels']); assert.deepEqual(appResult.notApplied, ['channels.webui']); assert(appResult.restartRequired.includes('llm'))
   assert.deepEqual(modelResult.applied, ['models']); assert.equal(await readFile(join(fixture.data, 'state/config.yaml'), 'utf8'), appRaw); assert.equal(await readFile(fixture.modelPath, 'utf8'), rawModels)
   await writeFile(join(own, 'invalid-model'), 'providers: null\ndefault: absent\n')

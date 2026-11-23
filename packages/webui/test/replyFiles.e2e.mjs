@@ -6,17 +6,16 @@ import { createServer } from 'node:http'
 import { readFile, readdir, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { createRequire } from 'node:module'
-import express from 'express'
 import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
-const require=createRequire(import.meta.url)
-const {HttpServer}=require('../../../lib/httpServer.js')
-const {registerWebUiFileDownloads}=require('../../../lib/channels/webuiFileDownloads.js')
+import { createHostFixture } from './mainHostFixture.mjs'
+import { createMainHostProxy } from './mainHostProxy.mjs'
+// The ChatTimeline component runs against an owned managed Main behind a recording proxy.
 const dir=await mkdtemp(path.join(tmpdir(),'reply-file-browser-'))
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64')
-const downloadRequests=[],signRequests=[]
-let server,browser,url
+let fixture,proxy,browser,url
+const downloadRequests=()=>proxy.requests.filter(record=>record.path==='/download')
+const signRequests=()=>proxy.requests.filter(record=>record.path==='/api/download/sign')
 const receipt=(id,name='report.png',extra={})=>({version:1,deliveryId:id,targetKind:'session',targetId:'demo/main',fileName:name,mimeType:name.endsWith('.png')?'image/png':'application/pdf',sizeBytes:2048,downloadPath:path.join(dir,name),downloadNodeId:'master',sourceNodeId:'remote-a',...extra})
 const messages=[
  {role:'user',parts:[{text:'Create a report.'}],__meta:{seq:1}},
@@ -38,24 +37,15 @@ before(async()=>{
  `,loader:'tsx',resolveDir:new URL('..',import.meta.url).pathname},bundle:true,platform:'browser',format:'esm',write:false,jsx:'automatic'})
  await writeFile(path.join(dir,'report.png'),png)
  await writeFile(path.join(dir,'notes.pdf'),'downloaded supporting notes')
- const backend=new HttpServer(0,'synthetic-browser-download')
- backend.app.use((req,_res,next)=>{
-  const record={method:req.method,cookie:req.headers.cookie||'',url:req.originalUrl}
-  if(req.path==='/download')downloadRequests.push(record)
-  if(req.path==='/api/download/sign')signRequests.push(record)
-  next()
- })
- registerWebUiFileDownloads(backend,'synthetic-browser-download')
- backend.app.get('/fixture.css',(_req,res)=>res.type('css').send(css))
- backend.app.get('/fixture.js',(_req,res)=>res.type('js').send(bundle.outputFiles[0].text))
- backend.app.get('/',(_req,res)=>res.type('html').send('<!doctype html><html><head><link rel="stylesheet" href="fixture.css"></head><body style="margin:0;background:var(--foxwarm-color-canvas);color:var(--foxwarm-color-text)"><main id="root" style="padding:16px;max-width:1000px"></main><script type="module" src="fixture.js"></script></body></html>'))
- const app=express();app.use('/nested',backend.app)
- server=createServer(app)
- await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));url=`http://127.0.0.1:${server.address().port}/nested/`
+ fixture=await createHostFixture('reply-files')
+ proxy=await createMainHostProxy({target:fixture.origin,prefix:'/nested',page:()=>`<!doctype html><html><head><style>${css}</style><script type="module">${bundle.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></head><body style="margin:0;background:var(--foxwarm-color-canvas);color:var(--foxwarm-color-text)"><main id="root" style="padding:16px;max-width:1000px"></main></body></html>`})
+ await writeFile(path.join(fixture.data,'state/config.yaml'),JSON.stringify({url:proxy.origin+'/nested',bot:{httpPort:fixture.port,enableTrigger:false},vector:{enabled:false}}))
+ await fixture.start()
+ url=proxy.url
  browser=await puppeteer.launch({executablePath:process.env.FOXWARM_E2E_CHROMIUM||'/usr/bin/chromium',headless:true,args:['--no-sandbox']})
 })
-after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve));await rm(dir,{recursive:true,force:true})})
-async function newPage(){const page=await browser.newPage();await page.setCookie({name:'foxwarm_token',value:'synthetic-browser-download',url});return page}
+after(async()=>{await browser?.close();await proxy?.close();await fixture?.cleanup();await rm(dir,{recursive:true,force:true})})
+async function newPage(){const page=await browser.newPage();await page.setCookie({name:'foxwarm_token',value:fixture.token,url});return page}
 
 test('reply files remain visible outside Conversation process, in their own turns, on desktop/mobile and after reload/view changes',async()=>{
  for(const width of[1100,390]){
@@ -105,7 +95,7 @@ test('page issuance leads to an actual native browser download with no authentic
  await client.send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloads,eventsEnabled:true})
  try{
   await page.goto(url);await page.waitForSelector('[aria-label="Download notes.pdf"]')
-  const before=signRequests.length
+  const before=signRequests().length
   // Deliver the authenticated issuance response only after removing the cookie,
   // reproducing a browser download context that does not carry login credentials.
   await network.send('Fetch.enable',{patterns:[{urlPattern:'*/api/download/sign',requestStage:'Response'}]})
@@ -120,9 +110,9 @@ test('page issuance leads to an actual native browser download with no authentic
   })
   await page.click('[aria-label="Download notes.pdf"]');await completed
   assert.equal(await readFile(path.join(downloads,'notes.pdf'),'utf8'),'downloaded supporting notes')
-  assert.equal(signRequests.length,before+1)
-  assert.ok(signRequests.at(-1).cookie.includes('foxwarm_token=synthetic-browser-download'))
-  const request=downloadRequests.findLast(item=>item.url.includes('signature=')&&item.method==='GET')
+  assert.equal(signRequests().length,before+1)
+  assert.ok(signRequests().at(-1).cookie.includes('foxwarm_token='+fixture.token))
+  const request=downloadRequests().findLast(item=>item.url.includes('signature=')&&item.method==='GET')
   // The non-secret theme cookie is path-scoped and may accompany any same-path request; no other cookie, in particular no login token, may.
   assert.ok(request);assert.deepEqual(request.cookie.split(';').map(part=>part.split('=')[0].trim()).filter(name=>name&&name!=='foxwarm_canvas'),[]);assert.ok(request.url.startsWith('/nested/download?'))
   assert.equal(page.url(),url)
@@ -137,10 +127,10 @@ test('the expanded tool download action also requests a fresh signed URL',async(
   await page.evaluate(()=>window.fixture.setView('detailed'))
   await page.waitForSelector('button[title="Download notes.pdf"]')
   await page.evaluate(()=>{HTMLAnchorElement.prototype.click=function(){window.downloaded={href:this.href,name:this.download}}})
-  const before=signRequests.length
+  const before=signRequests().length
   await page.click('button[title="Download notes.pdf"]')
   await page.waitForFunction(()=>window.downloaded?.href.includes('signature='))
-  assert.equal(signRequests.length,before+1)
+  assert.equal(signRequests().length,before+1)
   const signed=await page.evaluate(()=>window.downloaded.href)
   const response=await fetch(signed)
   assert.equal(response.status,200);assert.equal(await response.text(),'downloaded supporting notes')

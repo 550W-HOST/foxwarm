@@ -95,12 +95,12 @@ public sealed partial class ToolAuthorizationEffectsTests
 
     private static string StagingOutcome(JsonObject response, string root)
     {
-        if (response["error"] is not JsonObject error)
+        if (response["error"] is null)
             return "ok";
         var text =
-            SessionWait.Text(error["type"])
+            (response.FailureCode() ?? "error")
             + ": "
-            + (SessionWait.Text(error["message"]) ?? "").Replace(root, "<root>", StringComparison.Ordinal);
+            + (response.FailureMessage() ?? "").Replace(root, "<root>", StringComparison.Ordinal);
         return Regex.Replace(text, "(ap|tmr|tsr)[-_][A-Za-z0-9]+", "$1-<id>");
     }
 

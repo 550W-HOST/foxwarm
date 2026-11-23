@@ -28,7 +28,8 @@ public sealed partial class ToolAuthorizationEffectsTests
     {
         var response = await Call(tools, "explain_tool_authorization", args);
         Assert.Null(response["error"]);
-        return JsonNode.Parse(response["output"]!.GetValue<string>())!.AsObject();
+        Assert.Null(response["output"]);
+        return response;
     }
 
     [Fact]
@@ -434,7 +435,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Contains(
             "Invalid tool-rules candidate",
-            invalid["error"]!["message"]!.GetValue<string>()
+            invalid.FailureMessage()!
         );
         Assert.NotNull(
             Error(

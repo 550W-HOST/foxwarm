@@ -205,7 +205,27 @@ public sealed class SessionEntry
         }
     }
 
+    /// <summary>Runs after a processor has been fully released; see <see cref="NotifyProcessorReleased"/>.</summary>
+    internal Action? ProcessorReleased { get; set; }
+
     public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
+
+    /// <summary>
+    /// Runs the release observer once the releasing owner has finished its own bookkeeping, so the
+    /// observer never widens the window in which a new processor could claim this entry while the
+    /// previous one is still registered. Observer failures are recorded, not propagated.
+    /// </summary>
+    internal void NotifyProcessorReleased()
+    {
+        try
+        {
+            ProcessorReleased?.Invoke();
+        }
+        catch (Exception error)
+        {
+            RecordBestEffortFailure(error);
+        }
+    }
 
     internal T WithState<T>(Func<SessionState, T> action)
     {

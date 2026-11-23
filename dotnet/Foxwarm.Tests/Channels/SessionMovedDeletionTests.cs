@@ -73,7 +73,7 @@ public sealed class SessionMovedDeletionTests
             {
                 Assert.Equal(
                     "SESSION_STATE_UNAVAILABLE",
-                    (await Tool(id))["error"]!["type"]!.GetValue<string>()
+                    (await Tool(id)).FailureCode()!
                 );
                 foreach (var endpoint in endpoints)
                 {

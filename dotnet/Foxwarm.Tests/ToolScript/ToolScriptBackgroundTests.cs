@@ -358,14 +358,16 @@ public sealed class ToolScriptBackgroundTests
         Assert.Equal(!detach, tools.ConsumeFinishAfterBatch());
     }
 
-    [Fact]
-    public async Task Explicit_cancellation_ends_a_detached_run_and_reports_it()
+    [Theory]
+    [InlineData("while True:\n    pass\n")]
+    [InlineData("import time\ntime.sleep(600)\n")]
+    public async Task Explicit_cancellation_ends_a_detached_run_and_reports_it(string code)
     {
         if (!Supported)
             return;
         await using var f = await ScriptFixture.Create();
-        // Pure computation outlasting the wait: a detached run has no execution-time budget.
-        var receipt = await Call(f, "run_script", Background("while True:\n    pass\n"));
+        // Computation or a sleep outlasting the wait: a detached run has no execution-time budget.
+        var receipt = await Call(f, "run_script", Background(code));
         Assert.Equal("running", SessionWait.Text(receipt["status"]));
         var runId = SessionWait.Text(receipt["runId"])!;
         await Task.Delay(1500);
@@ -375,7 +377,9 @@ public sealed class ToolScriptBackgroundTests
         );
         var cancel = await Call(f, "cancel_toolscript_run", new JsonObject { ["runId"] = runId });
         Assert.True(cancel["cancellationRequested"]!.GetValue<bool>());
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         var text = Text(await Event(f.Owner, runId));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), watch.Elapsed.ToString());
         Assert.Contains("status: cancelled", text);
         var record = await f.Manager.ToolScript.Store.ReadAsync(runId, default);
         Assert.Equal("cancelled", SessionWait.Text(record!["status"]));

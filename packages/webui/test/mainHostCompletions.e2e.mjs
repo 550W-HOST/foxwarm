@@ -72,7 +72,7 @@ function peer(label) {
       if (plan) {
         assert(!input.includes('COMPACT A THOUGHT')); assert(!input.includes('compact-a-opaque')); plannerRound++; assert(body.tools.find(tool => tool.function.name === 'submit_compact_plan'))
         if (plannerRound === 1) { call(response, 'plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid range.' }] }); return }
-        assert(input.includes('compact_plan_invalid'))
+        assert(input.includes('Compact plan rejected') && input.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=99999, sourceEnd=100000) is not a required operation'))
         const ranges = [...plan.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
         assert(ranges.length > 0, plan)
         call(response, 'plan-valid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Source-bound Completions summary retaining the accepted local workflow.' }] }); return
@@ -97,7 +97,7 @@ function peer(label) {
         assert.equal(model.reasoning, 'Preferred reasoning '); assert(!('reasoning_content' in model)); assert.deepEqual(model.provider_specific_fields, opaque)
         assert.deepEqual(model.tool_calls.map(call => call.id), ['call_write', 'call_read', 'call_bad'])
         const toolRows = body.messages.filter(message => message.role === 'tool'); assert.deepEqual(toolRows.slice(-3).map(message => message.tool_call_id), ['call_write', 'call_read', 'call_bad'])
-        assert(Array.isArray(toolRows.at(-3).content)); assert.match(textOf(toolRows.at(-3).content), /<foxwarm-system kind="time"/); assert(textOf(toolRows.at(-2).content).includes('héllo')); assert(textOf(toolRows.at(-1).content).includes('invalid_tool_arguments'))
+        assert(Array.isArray(toolRows.at(-3).content)); assert.match(textOf(toolRows.at(-3).content), /<foxwarm-system kind="time"/); assert(textOf(toolRows.at(-2).content).includes('héllo')); assert.match(textOf(toolRows.at(-1).content), /^error: '?Invalid tool arguments JSON: /m)
         const authority = JSON.parse(await readFile(join(data, 'state/sessions', current + '.json'), 'utf8')); const pair = authority.history.at(-1)
         assert.equal(pair.role, 'tool'); assert.equal(pair.parts.length, 3); assert(pair.parts[0].functionResponse.previousLlmRequest); assert.equal(await readFile(effectPath, 'utf8'), 'héllo')
         assert.equal(record.body.turn, flowHold.record.body.turn); assert.equal(record.body.cache, flowHold.record.body.cache)

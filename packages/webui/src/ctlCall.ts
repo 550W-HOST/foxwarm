@@ -63,17 +63,67 @@ const typed = (parameter: Parameter, value: unknown, element = false): unknown =
   return value
 }
 
+/**
+ * The value of JSON text that may still be arriving: complete text as it is, otherwise the
+ * longest readable prefix with its open strings, arrays and objects closed. A string value
+ * keeps the characters received so far; an unfinished key, number or literal is dropped.
+ */
+export function partialJson(text: string): unknown {
+  try { return JSON.parse(text) } catch { /* Read the received prefix. */ }
+  const stack: Array<{ close: '}' | ']'; key: boolean }> = []
+  const closers = () => stack.map(frame => frame.close).reverse().join('')
+  let safe = '', inString = false, isKey = false, escaped = false
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    const top = stack[stack.length - 1]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') {
+        inString = false
+        if (!isKey) safe = text.slice(0, index + 1) + closers()
+      }
+    } else if (char === '"') {
+      inString = true
+      isKey = top?.close === '}' && top.key
+    } else if (char === '{' || char === '[') {
+      stack.push({ close: char === '{' ? '}' : ']', key: char === '{' })
+      safe = text.slice(0, index + 1) + closers()
+    } else if (char === '}' || char === ']') {
+      stack.pop()
+      safe = text.slice(0, index + 1) + closers()
+    } else if (char === ',') {
+      safe = text.slice(0, index) + closers()
+      if (top?.close === '}') top.key = true
+    } else if (char === ':' && top) top.key = false
+  }
+  const candidates = inString && !isKey
+    ? [text.slice(0, escaped ? -1 : undefined).replace(/\\u[0-9a-fA-F]{0,3}$/, '') + '"' + closers()]
+    : [text + closers()]
+  for (const candidate of [...candidates, safe]) {
+    try { return JSON.parse(candidate) } catch { /* Try the last complete prefix. */ }
+  }
+  return undefined
+}
+
+/** The arguments object of a ctl call, also while its JSON text is still streaming. */
+const ctlArguments = (args: unknown): Record<string, unknown> | undefined => {
+  const value = typeof args === 'string' ? partialJson(args) : args
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
 /** The unified descriptor (toolId plus args) a ctl call names, or undefined for help and malformed commands. */
-export function ctlDescriptor(args: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+export function ctlDescriptor(args: Record<string, unknown> | string | undefined): Record<string, unknown> | undefined {
   return parse(args)?.descriptor
 }
 
 /** The registry command a ctl call runs and the descriptor it names; undefined for help, discovery and malformed commands. */
-function parse(args: Record<string, unknown> | undefined): { entry: Command; descriptor: Record<string, unknown> } | undefined {
+function parse(stored: Record<string, unknown> | string | undefined): { entry: Command; descriptor: Record<string, unknown> } | undefined {
+  const args = ctlArguments(stored)
   if (!args || typeof args.command !== 'string') return undefined
   let values: Record<string, unknown> = {}
   if (args.values && typeof args.values === 'object' && !Array.isArray(args.values)) values = args.values as Record<string, unknown>
-  else if (typeof args.valuesJson === 'string') { try { values = JSON.parse(args.valuesJson) || {} } catch { /* Display the command without bound values. */ } }
+  else if (typeof args.valuesJson === 'string') values = ctlArguments(args.valuesJson) ?? {}
   let command = args.command.trimStart()
   if (/^ctl(\s|$)/.test(command)) command = command.slice(3).trimStart()
   const head = command.match(/^(\S+)\s+(\S+)/)
@@ -181,7 +231,7 @@ function commandFor(builtin: string, args: Record<string, unknown>): Command | u
  * an MCP or Node tool, which is shown like a direct call. `ctl` for help, discovery and
  * malformed commands. Display only, like `CtlParser.DisplayName` on Main.
  */
-export function ctlCommandName(args: Record<string, unknown> | undefined): string | undefined {
+export function ctlCommandName(args: Record<string, unknown> | string | undefined): string | undefined {
   const parsed = parse(args)
   if (!parsed) return 'ctl'
   if (parsed.entry.target.local !== 'tool-call') return parsed.entry.path
@@ -215,8 +265,28 @@ export function ctlConcrete<T extends { name: string; args?: any }>(call: T): T 
 }
 
 /** The command of a stored ctl call, shown beside the concrete call it runs. */
-export const ctlCommandText = (call: { name: string; args?: any } | undefined): string | undefined =>
-  call?.name === 'ctl' && typeof call.args?.command === 'string' ? call.args.command.replace(/\s+/g, ' ').trim() : undefined
+export const ctlCommandText = (call: { name: string; args?: any } | undefined): string | undefined => {
+  const command = call?.name === 'ctl' ? ctlArguments(call.args)?.command : undefined
+  return typeof command === 'string' ? command.replace(/\s+/g, ' ').trim() : undefined
+}
+
+/**
+ * The summary a ctl call shows: its own `summary`, unless the tool it runs states one itself
+ * (Node `exec`, builtin `run_script`), which the concrete card already shows. Display only, like
+ * `ToolActivity.CaptionSummary` on Main.
+ */
+export function ctlSummary(call: { name: string; args?: any } | undefined): string | undefined {
+  if (call?.name !== 'ctl') return undefined
+  const summary = ctlArguments(call.args)?.summary
+  if (typeof summary !== 'string' || !summary.trim()) return undefined
+  const descriptor = ctlDescriptor(call.args)
+  if (descriptor) {
+    const { source, name, args } = target(descriptor)
+    const own = (source === 'node' && name === 'exec') || (source === 'builtin' && name === 'run_script')
+    if (own && typeof args.summary === 'string' && args.summary.trim()) return undefined
+  }
+  return summary
+}
 
 /** A ctl call naming a capability, shown through the former unified-call projection. */
 export function ctlAsUnified<T extends { name: string; args?: any }>(call: T): T {

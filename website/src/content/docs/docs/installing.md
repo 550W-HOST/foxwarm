@@ -24,20 +24,21 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 
 | Package | Use |
 | --- | --- |
-| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux server compiled to native code; needs no .NET runtime (default on Linux) |
+| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux server compiled to native code (default on Linux) |
 | [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac server compiled to native code; needs no .NET runtime (default on macOS) |
+| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac server compiled to native code (default on macOS) |
 | [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows server compiled to native code; needs no .NET runtime (default on Windows) |
+| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows server compiled to native code (default on Windows) |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows desktop app, .NET runtime included |
-| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac desktop app compiled to native code; needs no .NET runtime |
+| [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe) | Windows x64 desktop app installer; see [Windows desktop app](#windows-desktop-app) |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | The same Windows desktop app as a portable ZIP |
+| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac desktop app; macOS 15 or later, see [macOS desktop app](#macos-desktop-app) |
 | [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node app; Android 11 or later, sideload installation; see [Android Node](#android-node) |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Checksums of the release files |
 
 Each release also includes:
 
-- `foxwarm-code-<version>.fwassets`: the Code editor for server packages. The Windows desktop app already includes it. When Code is missing, the WebUI's Code page shows the command that installs it.
+- `foxwarm-code-<version>.fwassets`: the Code editor for server packages. The desktop apps already include it. When Code is missing, the WebUI's Code page shows the command that installs it.
 - `native-cli-node-*`: the standalone [Node](/docs/nodes/) client for Linux, macOS and Windows. Node bootstrap commands download it for you.
 - The Docker image `ghcr.io/550w-host/foxwarm`, tagged with the version (for example `0.9.4`), the minor version (`0.9`) and `latest`; see [Docker](#docker).
 
@@ -154,7 +155,17 @@ Since 0.9.6 the native package replaces `foxwarm-win-x64-self-contained.zip`, th
 
 ## Windows desktop app
 
-Download [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) from the [latest release](https://github.com/550W-HOST/foxwarm/releases/latest), extract it and open **Foxwarm.Desktop.exe**. It runs Foxwarm inside a window with a tray icon and keeps its data under `%LOCALAPPDATA%\Foxwarm\Desktop`. It needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 normally include. The desktop app listens only on this computer; install the server if other devices should connect.
+Download [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe) from the [latest release](https://github.com/550W-HOST/foxwarm/releases/latest) and run it. It installs Foxwarm for your Windows account, without administrator rights, into `%LOCALAPPDATA%\Programs\Foxwarm`, and adds it to the Start menu and to **Settings → Apps**. Select **Start Foxwarm when I sign in to Windows** if Foxwarm should start in the tray when you sign in.
+
+Foxwarm runs inside a window with a tray icon. Closing the window keeps it running in the tray; **Exit** in the tray icon's menu stops it. It keeps its data under `%LOCALAPPDATA%\Foxwarm\Desktop`. It needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 normally include; if it is missing, Setup says so and offers Microsoft's download page. The desktop app listens only on this computer; install the server if other devices should connect.
+
+To update, run the setup of the new release. It exits the running Foxwarm first and keeps your data and the sign-in choice.
+
+To uninstall, select Foxwarm in **Settings → Apps** and uninstall it. This exits Foxwarm if it is running and removes the program, its Start menu entry and the sign-in start. Your data stays in `%LOCALAPPDATA%\Foxwarm\Desktop`; delete that folder to remove it too.
+
+### Portable ZIP
+
+[`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) contains the same app without installation: extract it and open **Foxwarm.Desktop.exe**. To update, exit Foxwarm from the tray and replace the extracted folder. The portable app and an installed one use the same data, and only one of them runs at a time; exit one before starting the other.
 
 ## macOS desktop app
 
@@ -167,7 +178,7 @@ ditto -x -k foxwarm-desktop-osx-arm64.zip /Applications
 
 If you already extracted the app and Gatekeeper blocks it, clear quarantine only on the app with `xattr -dr com.apple.quarantine /Applications/Foxwarm.app`.
 
-Foxwarm.app runs Foxwarm inside a window and keeps its data under `~/Library/Application Support/Foxwarm/Desktop`. Closing the window keeps Foxwarm running; **Quit Foxwarm** in its menu stops it. Like the Windows app, it listens only on this computer.
+Foxwarm.app runs Foxwarm inside a window and keeps its data under `~/Library/Application Support/Foxwarm/Desktop`. Closing the window keeps Foxwarm running; **Quit Foxwarm** in its menu stops it. Like the Windows app, it listens only on this computer and includes the Code editor.
 
 ## Open the WebUI
 
@@ -213,17 +224,19 @@ Logs are under `state/logs/` in the data directory.
 
 ## Docker
 
-The image runs the native Linux build of Foxwarm, without a .NET runtime, and includes Node.js and Chromium:
+The image runs the native Linux build of Foxwarm and includes Node.js and Chromium:
 
 ```bash
-mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data
-curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
+mkdir -p foxwarm-data
+sudo chown 1000:1000 foxwarm-data
+curl -fsSLO https://foxwarm.net/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
-  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
-  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+  --security-opt seccomp=seccomp-chromium.json \
+  --shm-size 1g -v "$PWD/foxwarm-data:/data" \
+  ghcr.io/550w-host/foxwarm:latest
 ```
 
-The container runs Foxwarm as the non-root `node` user (uid 1000) with passwordless `sudo`, so Agents can still install packages. The mounted data directory must be writable by uid 1000; Foxwarm does not change its ownership and refuses to start otherwise. A data directory written by an earlier image that ran as root needs a one-time `sudo chown -R 1000:1000 foxwarm-data` before upgrading. The seccomp profile is Docker's default plus the namespace calls Chromium's sandbox needs, so browser tools work with the sandbox on and without extra capabilities. Without it, the first browser call fails with a sandbox error.
+The container runs Foxwarm as the non-root `node` user (uid 1000) with passwordless `sudo`, so Agents can still install packages. The mounted data directory must be writable by uid 1000; Foxwarm does not change its ownership and refuses to start otherwise. A data directory written by an earlier image that ran as root needs a one-time `sudo chown -R 1000:1000 foxwarm-data` before upgrading. The seccomp profile, a copy of the repository's [`docker/seccomp-chromium.json`](https://github.com/550W-HOST/foxwarm/blob/main/docker/seccomp-chromium.json), is Docker's default plus the namespace calls Chromium's sandbox needs, so browser tools work with the sandbox on and without extra capabilities. Without it, the first browser call fails with a sandbox error.
 
 Open `http://localhost:3001/` using the token from `foxwarm-data/state/token`. Tags follow releases, such as `0.9.0`, `0.9` and `latest`; to update, pull the new image and recreate the container. First-run model setup works the same way as a local installation.
 
@@ -242,7 +255,7 @@ If you change `bot.httpPort`, update the port mapping and healthcheck as well. L
 ## Optional components
 
 - **Semantic history search:** disabled by default. It needs an embedding service; see [search requirements](/docs/history-search/#enable-semantic-search).
-- **Code workbench:** the large editor assets are not included in the packages or the image. See the [workbench setup](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md).
+- **Code workbench:** the desktop apps include the editor; the server packages and the Docker image don't. Each release publishes it as `foxwarm-code-<version>.fwassets` (see [Packages](#packages)). On a server installation without Code, the WebUI's Code page shows a command to run on the computer running Foxwarm: it downloads that file, checks it against the release's `SHA256SUMS` and installs it, and Code works after a page reload. To build the workbench from source instead, see the [workbench setup](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md).
 - **HEIC/HEIF images:** require additional native decoders. See [image prerequisites](https://github.com/550W-HOST/foxwarm/blob/main/docs/native-image-prerequisites.md). PNG/JPEG use the bundled image support.
 
 ## Running from source

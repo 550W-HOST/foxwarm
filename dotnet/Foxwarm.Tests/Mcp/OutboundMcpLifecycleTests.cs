@@ -55,10 +55,10 @@ public sealed class OutboundMcpLifecycleTests
         await WaitFileAsync(root, "effect", "stopped");
         cancel.Cancel();
         var response = await stopped.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal("tool_call_cancelled", response!["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_call_cancelled", response!.FailureCode());
         Assert.Equal("stdio", Id(await f.CallAsync(f.First, "probe", Args("after-stop"))));
         var timed = await f.CallAsync(f.First, "hold", Args("timeout"));
-        Assert.Contains("timed out", timed!["error"]!["message"]!.GetValue<string>());
+        Assert.Contains("timed out", timed!.FailureMessage()!);
         await WaitFileAsync(root, "cancelled", "timeout");
         Assert.Equal("stdio", Id(await f.CallAsync(f.First, "probe", Args("after-timeout"))));
         var events = await FileEventsAsync(root);
@@ -140,10 +140,7 @@ public sealed class OutboundMcpLifecycleTests
         var surviving = f.CallAsync(f.First, "hold", Args("two"));
         await peer.WaitAsync("effect", "two");
         cancel.Cancel();
-        Assert.Equal(
-            "tool_call_cancelled",
-            (await cancelled)!["error"]!["type"]!.GetValue<string>()
-        );
+        Assert.Equal("tool_call_cancelled", (await cancelled)!.FailureCode());
         Assert.False(surviving.IsCompleted);
         Assert.DoesNotContain(
             (await peer.EventsAsync()),

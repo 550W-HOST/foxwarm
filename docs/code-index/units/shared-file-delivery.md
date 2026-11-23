@@ -1,7 +1,7 @@
 # Unit: Shared file-delivery receipt
 
 Files: packages/shared/src/fileDelivery.ts
-Secondary files: packages/shared/src/index.ts, packages/shared/src/nodeIdentity.ts, src/nodes/providerTransfer.test.ts, src/toolsSessionAgent/helpers.ts, src/fileDeliveryService.ts, packages/webui/src/components/replyFiles.ts
+Secondary files: packages/shared/src/index.ts, packages/shared/src/nodeIdentity.ts, packages/webui/src/components/replyFiles.ts
 
 ## Purpose
 

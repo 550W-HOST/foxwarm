@@ -333,10 +333,7 @@ internal sealed partial class McpInboundCatalog
                     tool,
                     null,
                     failed
-                        ? new JsonObject
-                        {
-                            ["error"] = new JsonObject { ["type"] = "external_call_failed" },
-                        }
+                        ? ToolFailure.Result("The external call failed.", "external_call_failed")
                         : new JsonObject(),
                     SessionToolExecutor.ActivitySummary(manager, tool, callArgs, null),
                     new(0, "mcp-client", context.ExternalId),

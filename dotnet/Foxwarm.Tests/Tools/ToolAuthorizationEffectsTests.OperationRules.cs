@@ -94,19 +94,11 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.True(manager.ToolVisible(owner, "builtin", "artifact"));
         Assert.True(manager.ToolVisible(owner, "builtin", "wait"));
         Assert.False(manager.ToolVisible(owner, "builtin", "node"));
-        var explained = JsonNode
-            .Parse(
-                SessionWait.Text(
-                    (
-                        await Call(
+        var explained = (await Call(
                             execution.Tools,
                             "explain_tool_authorization",
                             Obj("""{"probes":[{"sessionId":"self","toolId":"builtin:list_toolscript_runs","args":{}}]}""")
-                        )
-                    )["output"]
-                )!
-            )!
-            .AsObject();
+                        ));
         var active = explained["probes"]![0]!["active"]!;
         Assert.Equal("allow", active["decision"]!.GetValue<string>());
         Assert.Equal("lists runs owned by the caller", active["self"]!.GetValue<string>());
@@ -229,19 +221,11 @@ public sealed partial class ToolAuthorizationEffectsTests
             manager,
             "version: 1\nrules:\n- {id: v1-node, tool: {source: builtin, name: node}, action: allow}\n- {id: no-select, op: node.select, action: deny}\n"
         );
-        var explained = JsonNode
-            .Parse(
-                SessionWait.Text(
-                    (
-                        await Call(
+        var explained = (await Call(
                             execution.Tools,
                             "explain_tool_authorization",
                             Obj("""{"probes":[{"sessionId":"self","command":"node select master"}]}""")
-                        )
-                    )["output"]
-                )!
-            )!
-            .AsObject();
+                        ));
         var layer = explained["probes"]![0]!["active"]!["layers"]![0]!;
         var operation = layer["operations"]![0]!;
         Assert.Equal("node.select", operation["op"]!.GetValue<string>());

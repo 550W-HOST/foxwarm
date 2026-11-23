@@ -75,7 +75,7 @@ try {
     invoke('mcp-denied', 'mcp:policy-peer/hidden', { tag: 'hidden' }), invoke('mcp-allowed', 'mcp:policy-peer/probe', { tag: 'allowed' }),
     tool('write-denied', 'write', { filePath: 'forbidden/new', content: 'denied' }), tool('write-allowed', 'write', { filePath: 'allowed/new', content: 'allowed' }),
     tool('patch-denied', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: allowed/existing\n@@\n-unchanged\n+changed\n*** Update File: forbidden/second\n@@\n-unchanged\n+changed\n*** End Patch' })])
-  for (const call of ['direct-denied', 'neutral-denied', 'mcp-denied', 'write-denied', 'patch-denied']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
+  for (const call of ['direct-denied', 'neutral-denied', 'mcp-denied', 'write-denied', 'patch-denied']) assert.equal((await paired(current, call)).code, 'tool_authorization_denied')
   // Denied exec on the current Node is neither listed as the declared tool nor by its tool ID.
   const nodeSearch = (await paired(current, 'search-node')).output; assert(!nodeSearch.includes('node:master/exec') && !nodeSearch.includes('exec (declared tool)'), nodeSearch); assert(!(await paired(current, 'search-mcp')).output.includes('policy-peer/hidden')); assert((await paired(current, 'search-mcp')).output.includes('policy-peer/probe'))
   assert(!await exists(join(own, 'forbidden-exec'))); assert(!await exists(join(own, 'forbidden/new'))); assert.equal(await readFile(join(own, 'allowed/new'), 'utf8'), 'allowed')
@@ -87,7 +87,7 @@ try {
     tool('after-loss', 'write', { filePath: 'allowed/after-loss', content: 'never' }), tool('preset-loss', 'write', { filePath: 'allowed/preset-loss', content: 'never', __cancelTool: true })])
   await send(current, 'midbatch-loss'); await until(() => exists(join(peerRoot, 'started-expiry')), 'real MCP effect held before cache expiry')
   await send(current, 'retained-queue'); await until(async () => (await authority(current)).queue.length === 1, 'owned retained queued input')
-  assert.equal((await paired(current, 'at-loss')).error.type, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert((await paired(current, 'after-loss')).error); assert.equal((await paired(current, 'preset-loss')).canceled, true); await idle(current)
+  assert.equal((await paired(current, 'at-loss')).code, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert((await paired(current, 'after-loss')).error); assert.equal((await paired(current, 'preset-loss')).canceled, true); await idle(current)
   assert.equal((await authority(current)).queue.length, 1); assert.equal((await authority(current)).stopping, false)
   const failedCount = records.length; await sleep(400); assert.equal(records.length, failedCount); assert(!records.some(row => row.key === 'midbatch-loss' && row.followup)); assert(!records.some(row => row.key === 'retained-queue'))
   assert(!await exists(join(own, 'allowed/at-loss'))); assert(!await exists(join(own, 'allowed/after-loss')))
@@ -96,7 +96,7 @@ try {
   await replace('version: 1\nrules: [{id: read, action: deny, match: {tool: {source: node, name: read}}}]')
   const candidate = join(own, 'candidate.yaml'), original = await readFile(policy)
   await writeFile(candidate, '# exact captured policy\r\nversion: 1\r\nrules: []\r\n')
-  await run(current, 'setter-read-denied', [tool('setter-read-denied', 'set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert.equal((await paired(current, 'setter-read-denied')).error.type, 'tool_authorization_denied'); assert.deepEqual(await readFile(policy), original)
+  await run(current, 'setter-read-denied', [tool('setter-read-denied', 'set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert.equal((await paired(current, 'setter-read-denied')).code, 'tool_authorization_denied'); assert.deepEqual(await readFile(policy), original)
   await replace('version: 1\n')
   await run(current, 'setter', [tool('discover-setter', 'search_tools', { sources: ['builtin'], query: 'set_config', limit: 5 }), invoke('install-policy', 'builtin:set_config', { target: 'tool-rules', filePath: 'candidate.yaml' })]); assert(listsBuiltin((await paired(current, 'discover-setter')).output, 'set_config')); assert.deepEqual(await readFile(policy), await readFile(candidate))
   await writeFile(candidate, 'version: 1\nrules: null\n'); const installed = await readFile(policy)
@@ -142,7 +142,7 @@ try {
     tool('isolated-management', 'create_agent', { agentName: 'forbidden-agent' }), tool('isolated-own-read', 'read', { filePath: 'after-invalid' }),
     tool('isolated-foreign-read', 'read', { filePath: join(fixture.data, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
     tool('isolated-skill', 'skill', { action: 'list', agentName: 'other' }), tool('isolated-recall', 'recall', { sessionId: 'other/main' }), tool('isolated-history', 'view_session', { sessionId: current })])
-  for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
+  for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).code, 'tool_authorization_denied')
   assert(!(await paired(current, 'isolated-own-read')).error); assert(!(await paired(current, 'isolated-status')).error)
   assert(!await exists(join(own, 'forbidden-isolated-exec'))); assert(!await exists(join(fixture.data, 'agents/forbidden-agent')))
   assert.deepEqual(await readFile(agentPath), migratedBytes); assert.deepEqual(failures, [])

@@ -1,0 +1,64 @@
+---
+// A small drawing beside each way to run Foxwarm. The orange part is where Foxwarm runs; gray lines are
+// the devices that can reach it. Decorative: the text beside it says the same.
+interface Props { kind: 'desktop' | 'server' | 'android' }
+const { kind } = Astro.props;
+---
+<svg class:list={['schematic', `schematic-${kind}`]} viewBox="0 0 240 120" width="240" height="120" aria-hidden="true" focusable="false">
+  {kind === 'desktop' && (
+    <>
+      {/* One computer: Foxwarm in an app window. */}
+      <rect class="sch-device" x="58" y="12" width="104" height="70" rx="5" />
+      <path class="sch-device" d="M44 88h132l-6 8H50z" />
+      <rect class="sch-foxwarm" x="72" y="24" width="76" height="46" rx="3" />
+      <path class="sch-foxwarm-line" d="M72 33h76" />
+      <circle class="sch-dot" cx="78.5" cy="28.5" r="1.8" />
+      <path class="sch-detail" d="M82 44h40M82 52h52M82 60h30" />
+      {/* Other devices can't reach it. */}
+      <path class="sch-faint" d="M168 50h22" />
+      <path class="sch-stop" d="M195 44v12" />
+      <rect class="sch-faint" x="204" y="32" width="22" height="40" rx="4" />
+    </>
+  )}
+  {kind === 'server' && (
+    <>
+      {/* An always-on server with a laptop, a phone, a Node and a group chat connected to it. */}
+      <path class="sch-wire" d="M96 46c-14 0-16-18-30-18M96 74c-16 0-22 14-38 14M144 46c14 0 16-18 30-18M144 74c16 0 18 14 32 14" />
+      <rect class="sch-foxwarm" x="96" y="32" width="48" height="26" rx="3" />
+      <rect class="sch-foxwarm" x="96" y="62" width="48" height="26" rx="3" />
+      <circle class="sch-dot" cx="105" cy="45" r="2" />
+      <circle class="sch-dot" cx="105" cy="75" r="2" />
+      <path class="sch-foxwarm-line" d="M114 45h20M114 75h20" />
+      <rect class="sch-device" x="16" y="13" width="48" height="30" rx="3" />
+      <path class="sch-device" d="M10 47h60" />
+      <rect class="sch-device" x="40" y="68" width="18" height="34" rx="3.5" />
+      <path class="sch-detail" d="M47 97h4" />
+      <rect class="sch-device" x="176" y="13" width="48" height="32" rx="3" />
+      <path class="sch-detail" d="m184 24 5 4-5 4M193 33h8" />
+      <path class="sch-device" d="M178 73h44v22h-30l-8 7v-7h-6z" />
+      <path class="sch-detail" d="M186 81h28M186 87h18" />
+    </>
+  )}
+  {kind === 'android' && (
+    <>
+      {/* A phone joined to a server as a Node; agents on the server tap and type on it. */}
+      <path class="sch-wire" d="M98 60h58" />
+      <circle class="sch-wire-end" cx="98" cy="60" r="2.5" />
+      <circle class="sch-wire-end" cx="156" cy="60" r="2.5" />
+      <rect class="sch-device" x="44" y="10" width="52" height="100" rx="8" />
+      <rect class="sch-screen" x="50" y="20" width="40" height="78" rx="2" />
+      <rect class="sch-tile" x="55" y="27" width="12" height="12" rx="2.5" />
+      <rect class="sch-tile" x="73" y="27" width="12" height="12" rx="2.5" />
+      <rect class="sch-tile" x="55" y="45" width="12" height="12" rx="2.5" />
+      <rect class="sch-tile" x="73" y="45" width="12" height="12" rx="2.5" />
+      <path class="sch-detail" d="M66 104h8" />
+      <circle class="sch-tap-ring" cx="79" cy="51" r="9" />
+      <circle class="sch-dot" cx="79" cy="51" r="3.5" />
+      <rect class="sch-foxwarm" x="158" y="34" width="52" height="24" rx="3" />
+      <rect class="sch-foxwarm" x="158" y="62" width="52" height="24" rx="3" />
+      <circle class="sch-dot" cx="167" cy="46" r="2" />
+      <circle class="sch-dot" cx="167" cy="74" r="2" />
+      <path class="sch-foxwarm-line" d="M176 46h24M176 74h24" />
+    </>
+  )}
+</svg>

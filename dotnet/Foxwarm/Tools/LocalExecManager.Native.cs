@@ -266,8 +266,7 @@ internal sealed partial class LocalExecManager
         Regex.IsMatch(id, "^[a-z]+-[a-z]+$", RegexOptions.CultureInvariant)
         || Regex.IsMatch(id, "^exec_[A-Za-z0-9_-]{8,160}$", RegexOptions.CultureInvariant);
 
-    private static JsonObject Error(string kind, string message) =>
-        UnsupportedTurnToolExecutor.ToolError(kind, message);
+    private static JsonObject Error(string message) => ToolFailure.Result(message);
 
     private static async Task AtomicWriteAsync(string path, string text)
     {

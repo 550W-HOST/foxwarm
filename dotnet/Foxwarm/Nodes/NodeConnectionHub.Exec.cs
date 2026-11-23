@@ -279,6 +279,9 @@ internal sealed partial class NodeConnectionHub
             {
                 request["backgroundExecId"] = claim.ExecId;
                 request["completionCapability"] = claim.Grant;
+                claim.Command = SessionWait.Text(args["command"]);
+                claim.Summary = ToolActivity.CaptionSummary("exec", args);
+                claim.DispatchedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             }
             if (currentNode == connection.Id && cwd is not null)
                 request["sessionCwd"] = cwd;
@@ -414,7 +417,17 @@ internal sealed partial class NodeConnectionHub
         if (success)
         {
             if (call.Claim is not null)
+            {
                 ExecClaims.Settle(call.Claim, call.SupportsRegistration);
+                if (
+                    message["result"] is JsonObject started
+                    && ExecPlacement.Parse(started[ExecPlacement.Field]) is { } placement
+                )
+                {
+                    call.Claim.Cwd = SessionWait.Text(placement["cwd"]);
+                    call.Claim.LogPath = SessionWait.Text(placement["logPath"]);
+                }
+            }
             call.PathMetadata?.Invoke(message["result"]);
             call.Result.TrySetResult(RemoteNodeResult.Normalize(message["result"]));
         }

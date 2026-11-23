@@ -424,7 +424,7 @@ public sealed class WebUiUploadedFilesTests
         var inFile = Path.Combine(f.Temp.Path, "input.json");
         var output = Path.Combine(f.Temp.Path, "output.json");
         await File.WriteAllTextAsync(inFile, input.ToJsonString());
-        var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
+        var root = Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!;
         var info = new ProcessStartInfo("node")
         {
             UseShellExecute = false,
@@ -447,7 +447,7 @@ public sealed class WebUiUploadedFilesTests
             }
         )
             info.ArgumentList.Add(arg);
-        info.Environment["FOXWARM_TS_ROOT"] = root;
+        info.Environment["FOXWARM_REPO_ROOT"] = root;
         using var process = Process.Start(info)!;
         var stderr = process.StandardError.ReadToEndAsync();
         var stdout = process.StandardOutput.ReadToEndAsync();

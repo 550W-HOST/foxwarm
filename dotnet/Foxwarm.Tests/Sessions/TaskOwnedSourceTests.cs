@@ -162,7 +162,7 @@ public sealed class TaskOwnedSourceTests
                 checks.Add(new JsonObject { ["error"] = error.Code });
             }
         }
-        var repository = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
+        var repository = Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!;
         var input = Path.Combine(temp.Path, "input.json");
         var output = Path.Combine(temp.Path, "output.json");
         await File.WriteAllTextAsync(input, steps.ToJsonString());

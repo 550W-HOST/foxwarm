@@ -10,6 +10,7 @@ Owns what a compaction plan may summarize and what it records: triggers, respons
 
 - `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is `llm.compactThresholdPercent` (85%) of the resolved model context window; a positive per-session threshold overrides it.
 - The runner's continuation trigger compares the previous provider result's total usage with that same threshold. A completed job committed at that safe point satisfies the trigger, and a measurement that strictly exceeds the resolved model context limit waits for pending compact planning before the next provider request. Wait, commit, and Stop rules are canonical in [compaction lifecycle](./compaction-lifecycle.md#commit-and-safe-points).
+- Optional C# idle compaction uses the last main-turn provider request start and context measurement under [D-context-idle-compaction](#d-context-idle-compaction).
 - Explicit compact requests enter `processSessionCompactionRequest()`.
 - The recent raw tail stays out of compaction: the newest raw rows within `llm.compactKeepPercent` (default `0.3`) of the effective compact threshold, or of the raw region present when that is smaller, by estimated tokens. See [D-context-recent-raw-tail](#d-context-recent-raw-tail).
 
@@ -32,15 +33,23 @@ The [memory warning](./conditional-memory-snapshots.md#d-memory-size-warning) id
 
 ## Modules and units
 
-- [src-session-history](../units/src-session-history.md)
-- [src-session-compact-plan](../units/src-session-compact-plan.md)
-- [src-session-layered-context](../units/src-session-layered-context.md)
 
 ## Invariants
 
 - Outside in-context compaction, every committed operation is one the retention policy required for that snapshot; summarized sources are never split across operations, and non-source rows inside a range survive after the new block (except retired preserved rows).
 
 ## Design decisions
+
+### D-context-idle-compaction
+
+**Directly selected by the user (2026-11-17).** An opt-in idle trigger can compact a large Session while its provider prompt cache is still warm, reducing the context that a later turn must resend after cache expiry. Cache lifetimes vary by provider; the feature neither detects a TTL nor sends keepalive requests.
+
+- The settings live in the models configuration (user, 2026-11-17): `idleCompactMinutes` is a finite nonnegative number; absent or `0` disables idle compaction (the default). `idleCompactMinContextPercent` is a fraction in `(0, 1]`, default `0.5`. Each resolves independently in model → provider → `defaults` order, like other model settings, so a model or provider delay of `0` disables an inherited trigger and edits apply live. Application `llm` has no idle settings.
+- The deadline is the start of the last main-turn provider request (`__meta.llmRequestTiming.startedAt`) plus the configured delay, not the latest message or turn-completion timestamp. Its context measurement uses `contextTokens` when present, otherwise cached + input + output tokens, divided by the current concrete model's context limit. The ratio must be strictly above the configured fraction. A different current concrete model skips the trigger. Side requests and planner requests do not move this deadline.
+- One in-memory timer belongs to each hosted exact Session owner. Turn/processor release arms it; input, active history mutation/compaction, clear, retirement and shutdown cancel or invalidate it. Owner settings changes can re-evaluate an already armed timer; every firing resolves current configuration and rechecks owner eligibility and the deadline before admission. No pending timer is persisted, and startup does not scan the Session catalog: a later turn release arms new work.
+- An eligible Session uses the Foxwarm runtime, is idle and not stopping, has no processor, ordinary queued input, active compact operation or history mutation, and has a provider request since its last compact commit. A later provider result supplies a new measurement.
+- The trigger uses automatic tool-response pruning first and layered planning only when pruning does not commit. Admission, background/awaited selection through `asyncCompact`, cancellation, concurrent input and authority commit all use the existing idle explicit compaction path. It adds no queue kind or second engine. Compaction's existing commit-time memory reread remains the adoption boundary; ordinary next-turn inactivity refresh is unchanged.
+- Scheduling adds no request-time prompt content. The existing persisted compact-completion notice is unchanged, preserving [request-prefix stability](../overview.md#d-request-prefix-stability).
 
 ### D-context-historical-tool-response-pruning
 
@@ -58,7 +67,7 @@ Compact completion is a single self-closing `<foxwarm-system kind="session-bound
 
 Only the newest pure compact-completion notice remains in active model-visible history after a later successful compact. Older current/legacy completion notices are transparent to planning, never become summary text, and are removed from the complete compatible active history at commit time (including force-kept tail items); durable archive records are never rewritten. Other session-boundary events and messages containing real user/tool/content remain protected. Failed or non-committing compaction leaves active history unchanged.
 
-Continuation identity and skill-reload consequences are owned by [conversation and history](../behaviors/conversation-and-history.md#actions-and-consequences). `extractCompactedSkillNames` scans only the consumed snapshot prefix for direct `skill(action:"load")` and persisted legacy `load_skill` calls; arbitrary wrapper output is not skill-load evidence. Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/src-session-history.md). [2026-11-14] The C# owner (`SessionCompactor.CompactedSkillNames`, and the pruning exemption in `SessionCompactor.Prune`) also counts `ctl skill load <name>` calls, resolved through the [command registry](../units/ctl-command-registry.md); the hint tells the model to run `ctl skill load <name>` again.
+Continuation identity and skill-reload consequences are owned by [conversation and history](../behaviors/conversation-and-history.md#actions-and-consequences). `extractCompactedSkillNames` scans only the consumed snapshot prefix for direct `skill(action:"load")` and persisted legacy `load_skill` calls; arbitrary wrapper output is not skill-load evidence. Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/session-compaction.md). [2026-11-14] The C# owner (`SessionCompactor.CompactedSkillNames`, and the pruning exemption in `SessionCompactor.Prune`) also counts `ctl skill load <name>` calls, resolved through the [command registry](../units/ctl-command-registry.md); the hint tells the model to run `ctl skill load <name>` again.
 
 ### D-context-compact-planner-debug
 
@@ -74,7 +83,7 @@ The diagnostics use ordinary Session-history and Archive persistence and the exi
 
 ### D-context-compact-runtime-gate
 
-**Derived design for directly requested file-based correction and general file submission.** Node routing is the engineering choice that makes those operations available through existing authorized file capabilities. It serves economical plan repair under the [shared schema](../modules/llm.md#d-llm-stable-tool-schema), [ordinary authorization](./tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization), and [active-source authority](./context-compaction-and-recall.md#d-context-active-history-authority). Artifact lifecycle and dispatch details below are mechanisms, not additional product restrictions.
+**Derived design for directly requested file-based correction and general file submission.** Node routing is the engineering choice that makes those operations available through existing authorized file capabilities. It serves economical plan repair under the [shared schema](../units/tools-registry.md#d-llm-stable-tool-schema), [ordinary authorization](./tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization), and [active-source authority](./context-compaction-and-recall.md#d-context-active-history-authority). Artifact lifecycle and dispatch details below are mechanisms, not additional product restrictions.
 
 The goal is to submit and correct a compact plan without repeatedly regenerating a large argument object. File input is another representation of the same plan, not a separate validator or an authorization bypass. Normal and compact requests retain the same model-facing tool definitions under [request-prefix stability](./conditional-memory-snapshots.md#d-memory-request-prefix-stability); execution eligibility is checked separately.
 
@@ -82,7 +91,7 @@ The maintained host accepts direct plan fields or `argsFilePath`, with the file 
 
 Dedicated planning permits one plan submission, or an exact pending-file `edit` (including a single-update patch), within its existing round budget. Rejected arguments preserve available raw text, or an identified structured serialization fallback, in an operation-owned artifact on the captured Node. Feedback identifies the error and file; successful replacement staging can replace an earlier rejected artifact. Cleanup is best-effort on that same Node, with no Main fallback or replay of an accepted plan. Ordinary in-context rejection instead produces an ordinary repairable file without a new pending-operation registry; normal file tools repair it before resubmission. Acceptance and application remain distinct, and current active-source validation still applies.
 
-The maintained implementation, failure classifications and supported call paths are in [Session compaction](../units/session-compaction.md#deliberate-in-context-submission). The retained TypeScript implementation still has its older Main-only, invocation-bound descriptor repair path; its [reference unit](../units/src-session-compact-plan.md#reference-repair-file-semantics) describes those mechanics. That reference limitation does not constrain the maintained Node-routed file-input contract.
+The maintained implementation, failure classifications and supported call paths are in [Session compaction](../units/session-compaction.md#deliberate-in-context-submission). That reference limitation does not constrain the maintained Node-routed file-input contract.
 
 ### D-context-log-retention
 
@@ -148,4 +157,4 @@ Durable compact facts belong only in the `memoryFacts` array of their matching `
 
 **Directly selected constraint under [active-history authority](./context-compaction-and-recall.md#d-context-active-history-authority).** [2026-10-29] Candidate ranges and complete tool exchanges follow present active-history order. Valid forward allocation gaps are empty space, not intervening content. Existing display-only and pure compact-completion transparency applies whether those rows are still present or have been removed by ordinary cleanup. Raw identities remain positive, unique and increasing; missing, duplicate or reversed identities, unsequenced exchanges, protected/preserved rows, and block source/level boundaries retain their structural rules.
 
-The maintained engine shares this adjacency rule across candidate segmentation, recent-tail exchange splitting, plan validation and preserved-exchange removal. Preservation expands to actual present members, never an integer interval containing absent IDs. Quotas use candidate tokens/counts, not numeric range width. No Archive read, renumbering or gap record is required. The retained TypeScript reference still has its older numeric-gap segmentation; it is not a second maintained runtime target.
+The maintained engine shares this adjacency rule across candidate segmentation, recent-tail exchange splitting, plan validation and preserved-exchange removal. Preservation expands to actual present members, never an integer interval containing absent IDs. Quotas use candidate tokens/counts, not numeric range width. No Archive read, renumbering or gap record is required.

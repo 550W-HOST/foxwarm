@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
     <EmbeddedResource Include="Code/workbench.html" />
+    <EmbeddedResource Include="Code/workbenchFrame.js" />
     <EmbeddedResource Include="McpInboundTools.json" />
     <EmbeddedResource Include="Tools/Ctl/CtlCommands.json" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
@@ -71,7 +72,7 @@
     <MontyExecutable
       Condition="'$(MontyTargetRid)' == 'linux-x64' or '$(MontyTargetRid)' == 'osx-x64' or '$(MontyTargetRid)' == 'osx-arm64'"
       >monty</MontyExecutable>
-    <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-0.0.19/$(MontyTargetRid)</MontyNativePrefix>
+    <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-1.6.0/$(MontyTargetRid)</MontyNativePrefix>
     <MontyPython Condition="'$(OS)' != 'Windows_NT'">python3</MontyPython>
     <MontyPython Condition="'$(OS)' == 'Windows_NT'">python</MontyPython>
     <MontyExecutablePath>$(MontyNativePrefix)/bin/$(MontyExecutable)</MontyExecutablePath>

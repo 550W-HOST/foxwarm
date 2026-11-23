@@ -380,6 +380,28 @@ internal sealed partial class NodeProviderRegistry
         return ResolveExecBackend(node[..node.IndexOf('/')], node);
     }
 
+    // Stopping a tracked command needs the Node's current declaration of exec-stop; a Node that
+    // does not declare it, or cannot be discovered now, cannot stop commands.
+    internal async Task<ProviderExecBackend?> ExecStopBackendAsync(
+        string providerId,
+        string node,
+        CancellationToken token
+    )
+    {
+        JsonObject? descriptor;
+        try
+        {
+            descriptor = await ResolveAsync(node, token);
+        }
+        catch (Exception error) when (error is NodeProviderException or IOException)
+        {
+            return null;
+        }
+        return descriptor?["execStop"]?.GetValue<bool>() == true
+            ? ResolveExecBackend(providerId, node)
+            : null;
+    }
+
     // An admitted persistent reference belongs to the exact configured backend, not live discovery.
     internal ProviderExecBackend ResolveExecBackend(string providerId, string node)
     {

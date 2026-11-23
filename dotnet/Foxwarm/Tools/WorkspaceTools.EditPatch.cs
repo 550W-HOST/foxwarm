@@ -22,7 +22,7 @@ public sealed partial class WorkspaceTools
             }
             var input = edit.Patch;
             if (string.IsNullOrEmpty(input))
-                return Error("invalid_tool_arguments", "Patch text is required.");
+                return Error("Patch text is required.");
             PatchOperation[] operations;
             try
             {
@@ -30,7 +30,7 @@ public sealed partial class WorkspaceTools
             }
             catch (InvalidDataException error)
             {
-                return Error("patch_failed", error.Message);
+                return Error(error.Message);
             }
             // Syntax/path expansion of every header precedes effects; filesystem failures retain partial application.
             try
@@ -40,7 +40,7 @@ public sealed partial class WorkspaceTools
             }
             catch (ArgumentException)
             {
-                return Error("invalid_path", "Invalid patch path.");
+                return Error("Invalid patch path.");
             }
             var applied = new List<string>();
             for (var index = 0; index < operations.Length; index++)
@@ -103,16 +103,13 @@ public sealed partial class WorkspaceTools
                                 + string.Join("\n", applied.Select(value => "- " + value))
                                 + "\n";
                     var remaining = operations.Length - index - 1;
-                    return Error(
-                        "patch_failed",
-                        error.Message
+                    return Error(error.Message
                             + completed
                             + (
                                 remaining == 0
                                     ? ""
                                     : $"\n{remaining} remaining operation(s) were not applied."
-                            )
-                    );
+                            ));
                 }
             }
             ReportPaths(
@@ -133,7 +130,7 @@ public sealed partial class WorkspaceTools
         }
         catch (ArgumentException)
         {
-            return Error("invalid_path", "Invalid path.");
+            return Error("Invalid path.");
         }
         catch (Exception error)
             when (error
@@ -144,7 +141,7 @@ public sealed partial class WorkspaceTools
                         or EncoderFallbackException
             )
         {
-            return Error("tool_io_error", error.Message);
+            return Error(error.Message);
         }
     }
 

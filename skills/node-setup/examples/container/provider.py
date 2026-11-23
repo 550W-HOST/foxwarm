@@ -227,7 +227,7 @@ def descriptor(item):
     availability = "ready" if status == "running" else "error" if status == "dead" else "offline"
     node = {"id": item["node"], "label": item["node"], "kind": "sandbox", "type": "container",
             "availability": availability, "defaultCwd": item["workdir"], "filesystem": "read-write", "exec": True,
-            "execEnv": True}
+            "execEnv": True, "execStop": True}
     if item["services"]:
         node["services"] = dict(SERVICES)
     return node
@@ -381,8 +381,10 @@ def primitive(engine, provider_id, operation, request):
     try:
         return target(engine, name, operation, request)
     except ProviderError:
-        if operation == "exec-poll":
+        if operation in ("exec-poll", "exec-stop"):
             items = inventory(engine, provider_id, node_id)
+            if operation == "exec-stop" and (not items or items[0]["status"] not in LIVE_STATES):
+                return {"ok": True, "result": {"state": "lost"}}
             if not items:
                 return {"ok": True, "result": {"state": "lost", "reason": "The container no longer exists."}}
             # Stopping a container ends its processes; they do not come back when it starts again.
@@ -487,7 +489,7 @@ def main():
             result = inspect(engine, provider_id, request)
         elif operation == "destroy":
             result = destroy(engine, provider_id, request)
-        elif operation in ("filesystem", "exec-start", "exec-poll"):
+        elif operation in ("filesystem", "exec-start", "exec-poll", "exec-stop"):
             response = primitive(engine, provider_id, operation, request)
             if not response.get("ok"):
                 reply.update(ok=False, error=response.get("error") or {"code": "TargetError", "message": "The container request failed."})

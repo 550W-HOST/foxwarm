@@ -27,9 +27,7 @@ Implements the fixed-operation filesystem and read-only Git services used by Cod
 ## Integration
 
 - `packages/cli-node/src/client.ts` handles `node_service_request` and calls this module.
-- `src/nodes/manager.ts` checks advertised versions and correlates requests/responses.
-- `src/vscodeWebRoutes.ts` keeps master operations local and dispatches non-master filesystem/Git requests through the node service protocol.
-- `src/vscodeWebRoutes.test.ts` exercises the HTTP-to-node-service dispatch with an advertised fake node; a real Docker CLI-node E2E also validated Explorer read/write and SCM status/diff.
+- Main checks advertised versions, correlates requests/responses, keeps master operations local and dispatches non-master filesystem/Git requests through the node service protocol; see [Code services](./code-services.md) and [External Node services](./external-node-services.md).
 - Commit details require advertised `vscode-git` service version 2; older nodes keep status/content compatibility but receive a structured unsupported-service response for commit inspection.
 
 `codeWorkspaceFilename` and `codeWorkspaceNode` share the persisted per-Node workspace filename identity between the retained server and browser extensions. Empty workspaces retain their Node for folder commands and terminal creation.

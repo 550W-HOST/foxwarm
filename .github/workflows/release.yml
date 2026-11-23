@@ -18,7 +18,9 @@ permissions:
 
 env:
   # The release before this one, for the upgrade checks. Move it forward with each release.
-  PREVIOUS_RELEASE: v0.9.5
+  PREVIOUS_RELEASE: v0.9.6
+  # Only final package files, never the wrapped build inputs, diagnostics or checksum outputs.
+  PACKAGE_ARTIFACTS: '{foxwarm-linux-x64{,-native}.tar.gz,foxwarm-osx-arm64{,-native}.tar.gz,foxwarm-win-x64{,-native}.zip,foxwarm-desktop-{win-x64,osx-arm64}.zip,foxwarm-desktop-win-x64-setup.exe,foxwarm-android-node.apk,foxwarm-code-*.fwassets,native-cli-node{,-osx-arm64}-latest-v3.tar.gz,native-cli-node-win-x64-latest-v3.zip}'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -31,6 +33,8 @@ jobs:
   native-cli:
     name: Build and qualify standalone Native AOT CLI packages
     uses: ./.github/workflows/native-cli-node.yml
+    with:
+      standalone-artifacts: true
 
   # Release packages ship the LanceDB library and the ToolScript worker built from pinned,
   # patched upstream sources (scripts/release/build-lancedb.sh, build-monty.sh): LanceDB without
@@ -219,10 +223,21 @@ jobs:
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages-linux
-          path: dist/
+          path: dist/foxwarm-linux-x64.tar.gz
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: dist/foxwarm-linux-x64-native.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: dist/foxwarm-code-*.fwassets
+          archive: false
+          if-no-files-found: error
           retention-days: 14
 
   macos:
@@ -261,10 +276,15 @@ jobs:
         run: node scripts/release/package.mjs --build-assets --output dist --native-libraries "$RUNNER_TEMP/native" --target osx-arm64 --target osx-arm64-native
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages-macos
-          path: dist/*.tar.gz
+          path: dist/foxwarm-osx-arm64.tar.gz
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: dist/foxwarm-osx-arm64-native.tar.gz
+          archive: false
+          if-no-files-found: error
           retention-days: 14
       - name: Qualify the archived Main, detached exec, PTY, native ToolScript and the Vector child
         run: |
@@ -302,21 +322,19 @@ jobs:
           for package in dist/foxwarm-osx-arm64*.tar.gz; do
             /bin/bash scripts/release/smoke-server.sh "$package" 3001 --without-tmux
           done
-      - name: Upgrade the previous release's self-contained package to the native package
+      - name: Upgrade the previous release's native package
         shell: /bin/bash -e {0}
         run: |
-          # The installed release's own control script performs the switch, as for users: once
-          # after an installer rerun with the new package file, and once by its own update,
-          # which downloads its recorded asset; for 0.9.6 the release publishes the native
-          # package under that name.
+          # The installed release's own control script performs the upgrade, as for users: once
+          # after an installer rerun, and once by its own update, which downloads its recorded asset.
           mkdir -p "$RUNNER_TEMP/previous"
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIOUS_RELEASE"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-osx-arm64-self-contained.tar.gz" "$base/foxwarm-osx-arm64-self-contained.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-osx-arm64-native.tar.gz" "$base/foxwarm-osx-arm64-native.tar.gz"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/SHA256SUMS" "$base/SHA256SUMS"
-          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-osx-arm64-self-contained\.tar\.gz$' SHA256SUMS | shasum -a 256 -c -)
-          previous="$RUNNER_TEMP/previous/foxwarm-osx-arm64-self-contained.tar.gz"
+          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-osx-arm64-native\.tar\.gz$' SHA256SUMS | shasum -a 256 -c -)
+          previous="$RUNNER_TEMP/previous/foxwarm-osx-arm64-native.tar.gz"
           /bin/bash scripts/release/smoke-upgrade.sh "$previous" dist/foxwarm-osx-arm64-native.tar.gz 3001
-          /bin/bash scripts/release/smoke-upgrade.sh --via-update foxwarm-osx-arm64-self-contained.tar.gz \
+          /bin/bash scripts/release/smoke-upgrade.sh --via-update foxwarm-osx-arm64-native.tar.gz \
             "$previous" dist/foxwarm-osx-arm64-native.tar.gz 3001
       - name: Switch a framework-dependent installation to the native package
         shell: /bin/bash -e {0}
@@ -325,7 +343,7 @@ jobs:
   # The Desktop app is a NativeAOT build of the AppKit host, published as its ad-hoc signed bundle.
   macos-desktop:
     name: Build and qualify the macOS Desktop app
-    needs: native-osx-arm64
+    needs: [code-resources, native-osx-arm64]
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -365,14 +383,31 @@ jobs:
           path: ${{ runner.temp }}/native
       - name: Make the ToolScript worker executable
         run: chmod +x "$RUNNER_TEMP/native/monty"
+      - name: Download shared Code package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: code-resources
+          path: ${{ runner.temp }}/code-pack
+      - name: Prepare shared Code resources
+        run: |
+          set -- "$RUNNER_TEMP"/code-pack/foxwarm-code-*.fwassets
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo 'Expected one shared Code asset pack' >&2
+            exit 1
+          fi
+          node scripts/asset-pack.mjs extract "$1" "$RUNNER_TEMP/code-assets"
+          mkdir -p packages/vscode-web/assets
+          cp -R "$RUNNER_TEMP/code-assets/packages/vscode-web/assets/." packages/vscode-web/assets/
       - name: Build the Desktop app natively
-        run: node scripts/release/package.mjs --build-assets --output dist --native-libraries "$RUNNER_TEMP/native" --target desktop-osx-arm64
+        run: |
+          node scripts/release/package.mjs --build-assets --output dist --native-libraries "$RUNNER_TEMP/native" --target desktop-osx-arm64
+          bytes=$(stat -f %z dist/foxwarm-desktop-osx-arm64.zip)
+          echo "macOS Desktop archive with Code: $bytes bytes" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages-macos-desktop
           path: dist/foxwarm-desktop-osx-arm64.zip
+          archive: false
           if-no-files-found: error
-          compression-level: 0
           retention-days: 14
       - name: Extract the Desktop package
         run: ditto -x -k dist/foxwarm-desktop-osx-arm64.zip "$RUNNER_TEMP/desktop-extracted"
@@ -446,14 +481,13 @@ jobs:
           echo 'Release signing skipped: this non-tag release-variant APK is debug-signed, has a -dev version name, and is a workflow artifact only.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages-android
           path: dist/foxwarm-android-node.apk
+          archive: false
           if-no-files-found: error
-          compression-level: 0
           retention-days: 14
 
-  aggregate:
-    name: Aggregate release assets and checksums
+  checksums:
+    name: Generate release checksums
     needs: [packages, macos, macos-desktop, native-cli, windows, android]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -464,45 +498,26 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.21.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # These are already the release files. In particular, do not extract the .zip packages.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: release-packages-*
+          pattern: ${{ env.PACKAGE_ARTIFACTS }}
           merge-multiple: true
           path: dist
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: native-cli-*
-          path: .temp/native-cli
-      - name: Include the qualified standalone CLI archives
-        run: |
-          find .temp/native-cli -path '*/assets/downloads/*' \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
-          test -f dist/native-cli-node-latest-v3.tar.gz
-          test -f dist/native-cli-node-win-x64-latest-v3.zip
-          test -f dist/native-cli-node-osx-arm64-latest-v3.tar.gz
-      # One-release transition, 0.9.6 only (user decisions 2026-11-12); drop it in 0.9.7. The control
-      # script of a 0.9.5-or-earlier self-contained macOS installation updates by downloading the
-      # retired asset name and its SHA256SUMS line. The alias serves it the native package, whose
-      # release.json records the native asset, so its next update requests that directly.
-      # The same holds for a self-contained Windows installation.
-      - name: Publish the native macOS and Windows packages under the retired self-contained names (0.9.6 only)
-        run: |
-          version="$(node -p 'require("./package.json").version')"
-          case "$version" in
-            0.9.5|0.9.6)
-              cp dist/foxwarm-osx-arm64-native.tar.gz dist/foxwarm-osx-arm64-self-contained.tar.gz
-              cp dist/foxwarm-win-x64-native.zip dist/foxwarm-win-x64-self-contained.zip ;;
-            *) echo "::warning::$version publishes no self-contained macOS or Windows alias; remove this step." ;;
-          esac
+          skip-decompress: true
       - name: Write one checksum list covering every platform
         run: |
           test -f dist/foxwarm-android-node.apk
+          test -f dist/foxwarm-desktop-win-x64-setup.exe
+          test -f dist/native-cli-node-latest-v3.tar.gz
+          test -f dist/native-cli-node-win-x64-latest-v3.zip
+          test -f dist/native-cli-node-osx-arm64-latest-v3.tar.gz
           node scripts/release/package.mjs --output dist --checksums-only
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages
-          path: dist/
+          path: dist/SHA256SUMS
+          archive: false
           if-no-files-found: error
-          compression-level: 0
           retention-days: 14
 
   linux:
@@ -522,10 +537,13 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.403'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download both Linux server packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-packages-linux
+          pattern: foxwarm-linux-x64{,-native}.tar.gz
+          merge-multiple: true
           path: dist
+          skip-decompress: true
       - name: Install tmux and the qualification driver
         run: |
           sudo apt-get update && sudo apt-get install -y tmux
@@ -594,10 +612,12 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.403'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download the shared Code package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-packages-linux
+          pattern: foxwarm-code-*.fwassets
           path: dist
+          skip-decompress: true
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: native-win-x64
@@ -607,7 +627,6 @@ jobs:
       - name: Prepare shared Code resources
         shell: pwsh
         run: |
-          # The server artifact forwards the shared Code asset pack unchanged.
           New-Item -ItemType Directory -Force packages/vscode-web/assets | Out-Null
           $code = @(Get-ChildItem dist/foxwarm-code-*.fwassets)
           if ($code.Count -ne 1) { throw 'Expected one shared Code asset pack' }
@@ -616,10 +635,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/test/prepare-browser.mjs --check-code
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build the Windows server packages and Desktop
+      # The image's own Inno Setup has come and gone between windows-2025 image versions.
+      - name: Install the pinned Inno Setup compiler
         shell: pwsh
         run: |
-          node scripts/release/package.mjs --build-assets --output dist --native-libraries "$env:RUNNER_TEMP/native" --target win-x64 --target win-x64-native --target desktop-win-x64 | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-publish.log"
+          $iscc = ./scripts/release/install-inno-setup.ps1 -Destination "$env:RUNNER_TEMP/inno-setup"
+          "FOXWARM_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build the Windows server packages, Desktop and its installer
+        shell: pwsh
+        run: |
+          node scripts/release/package.mjs --build-assets --output dist --native-libraries "$env:RUNNER_TEMP/native" --inno-setup "$env:FOXWARM_ISCC" --target win-x64 --target win-x64-native --target desktop-win-x64 | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-publish.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Main's NativeAOT warnings are gated by the Tests workflow's native lane. The Desktop's own
       # code has none; release publications carry no symbols, so warnings name only the caller.
@@ -631,13 +656,27 @@ jobs:
           if ($desktop.Count) { throw "The Desktop has $($desktop.Count) NativeAOT warnings" }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages-windows
-          path: |
-            dist/foxwarm-win-x64.zip
-            dist/foxwarm-win-x64-native.zip
-            dist/foxwarm-desktop-win-x64.zip
+          path: dist/foxwarm-win-x64.zip
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: dist/foxwarm-win-x64-native.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: dist/foxwarm-desktop-win-x64.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: dist/foxwarm-desktop-win-x64-setup.exe
+          archive: false
+          if-no-files-found: error
           retention-days: 14
       - name: Check that every imported DLL is in the packages or part of Windows
         shell: pwsh
@@ -677,22 +716,21 @@ jobs:
       - name: Native server package
         shell: pwsh
         run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-native.zip -Port 3002
-      - name: Upgrade the previous release's self-contained package to the native package
+      - name: Upgrade the previous release's native package
         shell: pwsh
         run: |
           # As on Linux and macOS: once by rerunning the installer with the new package file,
-          # once through the installed release's own update, which downloads its recorded asset;
-          # for 0.9.6 the release publishes the native package under that name.
+          # once through the installed release's own update, which downloads its recorded asset.
           $previous = Join-Path $env:RUNNER_TEMP 'previous'
           New-Item -ItemType Directory -Force $previous | Out-Null
           $base = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:PREVIOUS_RELEASE"
-          Invoke-WebRequest "$base/foxwarm-win-x64-self-contained.zip" -OutFile "$previous/foxwarm-win-x64-self-contained.zip" -UseBasicParsing
+          Invoke-WebRequest "$base/foxwarm-win-x64-native.zip" -OutFile "$previous/foxwarm-win-x64-native.zip" -UseBasicParsing
           Invoke-WebRequest "$base/SHA256SUMS" -OutFile "$previous/SHA256SUMS" -UseBasicParsing
-          $expected = Get-Content "$previous/SHA256SUMS" | Where-Object { $_ -match '^([0-9a-f]{64})  foxwarm-win-x64-self-contained\.zip$' } | ForEach-Object { $Matches[1] }
-          if (-not $expected -or (Get-FileHash "$previous/foxwarm-win-x64-self-contained.zip" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Checksum verification failed for the previous release' }
-          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-self-contained.zip" -New dist/foxwarm-win-x64-native.zip
+          $expected = Get-Content "$previous/SHA256SUMS" | Where-Object { $_ -match '^([0-9a-f]{64})  foxwarm-win-x64-native\.zip$' } | ForEach-Object { $Matches[1] }
+          if (-not $expected -or (Get-FileHash "$previous/foxwarm-win-x64-native.zip" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Checksum verification failed for the previous release' }
+          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-native.zip" -New dist/foxwarm-win-x64-native.zip
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-self-contained.zip" -New dist/foxwarm-win-x64-native.zip -ViaUpdate foxwarm-win-x64-self-contained.zip
+          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-native.zip" -New dist/foxwarm-win-x64-native.zip -ViaUpdate foxwarm-win-x64-native.zip
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Switch a framework-dependent installation to the native package
         shell: pwsh
@@ -729,6 +767,10 @@ jobs:
           } finally {
             Remove-ItemProperty -Path $policy -Name 'Foxwarm.Desktop.exe'
           }
+      # The installed files are the ZIP's, qualified above; this checks what the installer adds.
+      - name: Install the Desktop, start it at sign-in, reinstall over it and uninstall it
+        shell: pwsh
+        run: ./scripts/release/smoke-desktop-installer.ps1 -Setup dist/foxwarm-desktop-win-x64-setup.exe -Package dist/foxwarm-desktop-win-x64.zip
       - name: Upload Desktop acceptance summary
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -750,10 +792,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download the native Linux server package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-packages-linux
+          name: foxwarm-linux-x64-native.tar.gz
           path: dist
+          skip-decompress: true
       - name: Build from the native Linux package
         run: |
           mkdir -p "$RUNNER_TEMP/package"
@@ -794,16 +838,25 @@ jobs:
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows, image, macos, macos-desktop, aggregate]
+    needs: [linux, windows, image, macos, macos-desktop, checksums]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download the release packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-packages
+          pattern: ${{ env.PACKAGE_ARTIFACTS }}
+          merge-multiple: true
           path: dist
+          skip-decompress: true
+      - name: Download SHA256SUMS
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: SHA256SUMS
+          path: dist
+          skip-decompress: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

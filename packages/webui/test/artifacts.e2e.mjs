@@ -7,10 +7,20 @@ import {readFile,readdir,mkdir,mkdtemp,rm} from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {createRequire} from 'node:module'
+import {execFile} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
 import {build} from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 const require=createRequire(import.meta.url)
-const {prepareArtifact}=require('../../../lib/artifacts/prepare.js')
+// React documents are compiled by the same artifact runtime managed Main runs for publication.
+const prepareArtifact=document=>new Promise((resolve,reject)=>{
+ const child=execFile(process.execPath,[fileURLToPath(new URL('../../artifact-runtime/dist/managedPrepare.js',import.meta.url))],{maxBuffer:8*1024*1024},(error,stdout)=>{
+  let value;try{value=JSON.parse(stdout)}catch{return reject(error||new Error('Invalid artifact runtime output'))}
+  if(error||typeof value.compiled!=='string')return reject(new Error(value.error||String(error)))
+  resolve({compiled:value.compiled})
+ })
+ child.stdin.end(JSON.stringify({action:'react',document}))
+})
 let server,browser,url
 const records=new Map()
 const receipt=(id,type,title)=>({protocolVersion:1,artifactId:`art_${id.repeat(32)}`,revision:1,sessionId:'demo/main',type,title})

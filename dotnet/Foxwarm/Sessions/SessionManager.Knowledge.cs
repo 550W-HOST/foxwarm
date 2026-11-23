@@ -85,23 +85,21 @@ internal sealed partial class SessionManager
         if (action == "list")
         {
             var list = await skills.ListAsync(agent);
-            if (list.Count == 0)
-                return Output($"No skills found for agent \"{agent}\".");
-            return Output(
-                $"Found {list.Count} skill(s) for agent \"{agent}\":\n\n"
-                    + string.Join(
-                        '\n',
-                        list.Select(info =>
-                            $"- **{info.Name}** [{info.SourceLabel}]"
-                            + (
-                                string.IsNullOrEmpty(info.Description)
-                                    ? ""
-                                    : $" - {info.Description}"
-                            )
-                            + " (1 document)"
-                        )
-                    )
-            );
+            return new JsonObject
+            {
+                ["agent"] = agent,
+                ["skills"] = new JsonArray(
+                    list.Select(info =>
+                        {
+                            var skill = new JsonObject { ["name"] = info.Name };
+                            if (!string.IsNullOrEmpty(info.Description))
+                                skill["description"] = info.Description;
+                            skill["source"] = info.SourceLabel;
+                            return (JsonNode?)skill;
+                        })
+                        .ToArray()
+                ),
+            };
         }
         if (action != "load")
             throw new InvalidDataException("skill.action must be \"list\" or \"load\".");

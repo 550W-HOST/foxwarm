@@ -44,19 +44,24 @@ test('real source builds, failed update, restart, old output removal and delayed
   fs.mkdirSync(bin);
   fs.mkdirSync(path.join(data, 'state'), { recursive: true });
   const excluded = new Set(['node_modules', 'bin', 'obj', 'dist', '.temp', '.cache']);
-  for (const name of ['dotnet', 'src', 'scripts', 'skills', 'templates', 'packages',
-    'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.artifacts.json', 'LICENSE']) {
+  for (const name of ['dotnet', 'scripts', 'skills', 'templates', 'packages',
+    'package.json', 'package-lock.json', 'LICENSE']) {
     fs.cpSync(path.join(repository, name), path.join(app, name), {
       recursive: true, filter: source => !path.relative(repository, source).split(path.sep).some(part => excluded.has(part)),
     });
   }
   for (const name of ['node_modules', 'packages/webui/node_modules'])
     fs.cpSync(path.join(repository, name), path.join(app, name), { recursive: true });
-  const montyPackage = path.join(app, 'node_modules/@pydantic/monty-linux-x64-gnu');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(montyPackage, 'package.json'))).version, '0.0.19');
-  const montyCache = path.join(app, 'dotnet/Foxwarm/obj/monty-0.0.19/linux-x64/bin');
-  fs.mkdirSync(montyCache, { recursive: true });
-  fs.copyFileSync(path.join(montyPackage, 'monty'), path.join(montyCache, 'monty'));
+  // The C# worker's pinned official package, from this checkout's build cache or the acquisition script.
+  const montyVersion = JSON.parse(fs.readFileSync(path.join(repository, 'dotnet/Foxwarm/ToolScript/monty-source.json'), 'utf8')).version;
+  const montyPrefix = path.join(app, 'dotnet/Foxwarm/obj/monty-' + montyVersion, 'linux-x64');
+  const montyBuilt = path.join(repository, 'dotnet/Foxwarm/obj/monty-' + montyVersion, 'linux-x64/bin/monty');
+  if (fs.existsSync(montyBuilt)) {
+    fs.mkdirSync(path.join(montyPrefix, 'bin'), { recursive: true });
+    fs.copyFileSync(montyBuilt, path.join(montyPrefix, 'bin/monty'));
+  } else {
+    execFileSync('python3', [path.join(repository, 'dotnet/scripts/acquire-monty-native.py'), montyPrefix, '--rid', 'linux-x64'], { stdio: 'ignore' });
+  }
   const realNpm = execFileSync('bash', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim();
   const realTmux = execFileSync('bash', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim();
   fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nif [ "$1" = ci ] || { [ "$1" = --prefix ] && [ "$3" = ci ]; }; then echo "Fixture: reuse installed locked dependencies"; exit 0; fi\nexec "$TEST_REAL_NPM" "$@"\n', { mode: 0o755 });

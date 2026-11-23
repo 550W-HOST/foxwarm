@@ -59,7 +59,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         string? ProcessStartTicks = null,
         string? ProviderId = null,
         string? Reference = null,
-        string? CompletionCapability = null
+        string? CompletionCapability = null,
+        long? StopRequestedAt = null,
+        string? Summary = null
     )
     {
         internal ExecObservation Observation { get; init; } = new();
@@ -102,6 +104,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 value["resolvedCwd"] = cwd;
             if (CompletionCapability is not null)
                 value["completionCapability"] = CompletionCapability;
+            if (StopRequestedAt is not null)
+                value["stopRequestedAt"] = StopRequestedAt;
+            if (Summary is not null)
+                value["summary"] = Summary;
             return value;
         }
     }
@@ -250,7 +256,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 Text(raw, "processStartTicks"),
                 provider,
                 reference,
-                Text(raw, "completionCapability")
+                Text(raw, "completionCapability"),
+                SessionWait.Number(raw["stopRequestedAt"]) is double stopped
+                && double.IsFinite(stopped)
+                    ? (long)stopped
+                    : null,
+                Text(raw, "summary")
             );
             record.Observation.Cwd = Text(raw, "resolvedCwd");
             pending[id] = record;
@@ -407,11 +418,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     {
         if (!IsSupported)
             return Error(
-                "exec_unavailable",
                 "Local shell execution is not supported on this platform. Select a supported Node."
             );
         if (closing)
-            return Error("exec_unavailable", "Host is shutting down.");
+            return Error("Host is shutting down.");
         if (
             args is null
             || args.Count
@@ -423,7 +433,6 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             || (args.ContainsKey("cwd") && Text(args, "cwd") is null)
         )
             return Error(
-                "invalid_tool_arguments",
                 "exec requires command, optional cwd, optional timeout and optional secretEnv."
             );
         double seconds;
@@ -434,12 +443,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
         catch (InvalidDataException error)
         {
-            return Error("invalid_tool_arguments", error.Message);
+            return Error(error.Message);
         }
         ct.ThrowIfCancellationRequested();
         paths ??= MainNativePaths.Default(workspaceForSession(sessionId));
         if (backend is not null && string.IsNullOrWhiteSpace(command))
-            return Error("invalid_tool_arguments", "exec requires command.");
+            return Error("exec requires command.");
         string? cwd = Text(args, "cwd") ?? providerCwd;
         if (backend is null)
         {
@@ -451,11 +460,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
             catch (ArgumentException error)
             {
-                return Error("invalid_path", error.Message);
+                return Error(error.Message);
             }
         }
         else if (cwd is { Length: 0 })
-            return Error("invalid_tool_arguments", "Exec cwd must be a non-empty string.");
+            return Error("Exec cwd must be a non-empty string.");
         IReadOnlyDictionary<string, string>? environment = null;
         if (args.ContainsKey("secretEnv"))
             try
@@ -468,7 +477,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
             catch (InvalidDataException error)
             {
-                return Error("invalid_tool_arguments", error.Message);
+                return Error(error.Message);
             }
         // A supported identity move may commit while reservation or start is awaiting a receipt.
         var agent = agentForSession(sessionId);
@@ -505,6 +514,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     },
                     hardCancellation
                 );
+            // The call's stated purpose, kept for the running-command list.
+            record = record with { Summary = ToolActivity.CaptionSummary("exec", args) };
             await TrackAsync(() => pending[record.Id] = record);
         }
         finally

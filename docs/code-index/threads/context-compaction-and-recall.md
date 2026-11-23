@@ -35,9 +35,6 @@ Read-only block expansion and the Main history search viewer are in [WebUI expan
 
 ## Modules
 
-- [session context](../modules/session-context.md)
-- [session core](../modules/session-core.md)
-- [LLM](../modules/llm.md)
 - [WebUI](../modules/webui.md)
 
 ## Invariants

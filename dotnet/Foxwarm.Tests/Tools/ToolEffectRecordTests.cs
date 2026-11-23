@@ -130,7 +130,7 @@ public sealed class ToolEffectRecordTests
         // A denied call keeps the rule that denied it beside its ordinary error.
         Assert.Equal(
             "tool_authorization_denied",
-            responses[1]["response"]!["error"]!["type"]!.GetValue<string>()
+            responses[1]["response"]!.FailureCode()!
         );
         var denied = responses[1]["__meta"]!["target"]!;
         Assert.Equal("write", denied["name"]!.GetValue<string>());

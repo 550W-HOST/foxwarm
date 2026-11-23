@@ -34,7 +34,13 @@ internal sealed class ModelRouting(Func<long>? clock = null)
     private long nextGeneration = 1;
     private long Now => clock?.Invoke() ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    internal Request Begin(string virtualKey, ConcreteHostModel model)
+    internal Request Begin(string virtualKey, ConcreteHostModel model) =>
+        Capture(virtualKey, model, activate: true);
+
+    internal Request Preview(string virtualKey, ConcreteHostModel model) =>
+        Capture(virtualKey, model, activate: false);
+
+    private Request Capture(string virtualKey, ConcreteHostModel model, bool activate)
     {
         if (!model.IsVirtual)
             throw new InvalidOperationException("Selected model is not virtual.");
@@ -44,7 +50,8 @@ internal sealed class ModelRouting(Func<long>? clock = null)
             Active route;
             if (model.ProviderType == "session-hash")
             {
-                active.Remove(virtualKey);
+                if (activate)
+                    active.Remove(virtualKey);
                 route = new Active(fingerprint, 0, new(StringComparer.Ordinal));
             }
             else if (
@@ -52,8 +59,13 @@ internal sealed class ModelRouting(Func<long>? clock = null)
                 || route.Fingerprint != fingerprint
             )
             {
-                route = new Active(fingerprint, nextGeneration++, new(StringComparer.Ordinal));
-                active[virtualKey] = route;
+                route = new Active(
+                    fingerprint,
+                    activate ? nextGeneration++ : 0,
+                    new(StringComparer.Ordinal)
+                );
+                if (activate)
+                    active[virtualKey] = route;
             }
             return new Request(
                 virtualKey,
@@ -63,7 +75,9 @@ internal sealed class ModelRouting(Func<long>? clock = null)
                 HostModels.Positive(model.Configuration["failureThreshold"], 5, "failureThreshold"),
                 HostModels.Positive(model.Configuration["cooldownMs"], 600000, "cooldownMs"),
                 route.Generation,
-                route.Health
+                activate
+                    ? route.Health
+                    : new Dictionary<string, Health>(route.Health, StringComparer.Ordinal)
             );
         }
     }

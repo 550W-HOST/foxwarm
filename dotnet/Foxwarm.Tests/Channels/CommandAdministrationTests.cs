@@ -33,8 +33,8 @@ public sealed partial class CommandAdministrationTests
     internal static async Task<JsonObject> SourceAsync(JsonObject input)
     {
         var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required");
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
+            ?? throw new InvalidOperationException("FOXWARM_REPO_ROOT is required");
         var start = new ProcessStartInfo(
             "node",
             Path.Combine(
@@ -89,7 +89,7 @@ public sealed partial class CommandAdministrationTests
             Assert.Contains(head, UserCommands.Heads);
             Assert.Contains("`" + head + "`", help);
         }
-        // Retired heads and model-only nouns are not commands.
+        // Former 0.9.5 heads and model-only nouns are not commands.
         foreach (var name in new[] { "/messages", "/delete-messages", "/verbose", "/search", "/attach", "/memory", "/file", "/tool", "/tools", "/config", "/index", "/retry" })
             Assert.Null(UserCommands.Find(name));
         Assert.True(UserCommands.Find("/stop")!["requiresSession"]!.GetValue<bool>());

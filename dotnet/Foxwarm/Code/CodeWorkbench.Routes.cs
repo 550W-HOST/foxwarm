@@ -525,7 +525,7 @@ internal sealed partial class CodeWorkbench
                 )
         );
         app.MapGet(
-            "/vscode-web",
+            RoutePath,
             context =>
                 Guard(
                     context,

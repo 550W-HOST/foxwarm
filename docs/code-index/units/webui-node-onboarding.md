@@ -1,7 +1,7 @@
 # Unit: webui-node-onboarding
 
 Files: packages/webui/src/components/NodeOnboardingModal.tsx, packages/webui/src/components/NodeSetupQr.tsx, packages/webui/src/components/AndroidPairingDetails.tsx, packages/webui/test/nodeOnboarding.e2e.mjs
-Secondary files: packages/webui/src/components/SystemNodes.tsx, src/channels/webuiNodeOnboarding.ts, dotnet/Foxwarm.Tests/scripts/qualify-shell-onboarding.mjs, packages/webui/test/mainHostNodeOnboarding.e2e.mjs
+Secondary files: packages/webui/src/components/SystemNodes.tsx, dotnet/Foxwarm.Tests/scripts/qualify-shell-onboarding.mjs, packages/webui/test/mainHostNodeOnboarding.e2e.mjs
 
 ## Purpose
 

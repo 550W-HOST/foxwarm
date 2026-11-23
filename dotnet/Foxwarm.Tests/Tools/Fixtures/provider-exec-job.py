@@ -18,9 +18,13 @@ log_path.parent.mkdir(parents=True, exist_ok=True)
 script = "trap 'pwd > \"$FIXTURE_CWD\"' EXIT\n" + request["command"] + "\n"
 env = dict(os.environ, FIXTURE_CWD=str(job / "cwd"))
 with log_path.open("wb") as output:
-    child = subprocess.Popen(["/bin/bash", "-c", script], cwd=cwd, env=env,
+    # The shell gets its own process group so exec-stop can end it without this supervisor.
+    child = subprocess.Popen(["/bin/bash", "-c", script], cwd=cwd, env=env, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+    (job / "shell-pid").write_text(str(child.pid))
     code = child.wait()
+    if code < 0:
+        code = 128 - code
 finished = time.time()
 status = {"state": "finished", "exitCode": code,
           "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(finished)) + (".%03dZ" % (int(finished * 1000) % 1000)),

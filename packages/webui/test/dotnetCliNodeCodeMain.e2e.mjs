@@ -8,13 +8,13 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
-import { functionCallFor } from './ctlModelCalls.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
-for (const runtime of ['source', 'dotnet']) {
-  const workbenchDir = runtime === 'source' ? resolve('packages/vscode-web/assets/vscode-web') : resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
+for (const runtime of ['dotnet']) {
+  const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
   const assets = await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js')).then(() => true, () => false)
   const env = {}, fixture = await createHostFixture('cli-code-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
@@ -36,7 +36,7 @@ for (const runtime of ['source', 'dotnet']) {
     for (const [source, target] of [[downstream, upstream], [upstream, downstream]]) { source.on('close', () => { sockets.delete(source); if (target.readyState === WebSocket.OPEN) target.close() }); source.on('error', () => {}) }
   })
   let round = 0, page, cli, cliOutput = ''
-  const call = functionCallFor(runtime)
+  const call = functionCall
   const model = createServer(async (request, response) => {
     try {
       let raw = ''; for await (const bytes of request) raw += bytes
@@ -87,9 +87,9 @@ for (const runtime of ['source', 'dotnet']) {
     await until(async () => { const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')); return state.history.some(row => row.parts?.some(part => part.text?.includes('CLI-CODE-DONE'))) }, 'normal model remote file turn', 30000)
     await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
     await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-    await page.waitForSelector('button[title$="renamed.txt in Code"]')
+    await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'renamed.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'renamed.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); await page.waitForSelector('a.foxwarm-code-link[title$="renamed.txt in Code"]')
     if (assets) {
-      await page.click('button[title$="renamed.txt in Code"]'); let code = await codeFrame()
+      await page.click('a.foxwarm-code-link[title$="renamed.txt in Code"]'); let code = await codeFrame()
       await code.waitForSelector('.editor-instance .view-lines', { timeout: 45000 }); await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
       await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nSaved through native-capable CLI Code service'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
       await until(async () => (await readFile(join(repo, 'renamed.txt'), 'utf8')).includes('Saved through native-capable CLI Code service'), 'official FS extension saved remotely')

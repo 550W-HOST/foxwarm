@@ -1,6 +1,6 @@
 # Unit: Code workbench and Git/file services
 
-Files: `dotnet/Foxwarm/Code/CodeFileService.cs`, `dotnet/Foxwarm/Code/CodeGitService.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.Routes.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.Install.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.cs`
+Files: `dotnet/Foxwarm/Code/CodeFileService.cs`, `dotnet/Foxwarm/Code/CodeGitService.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.Routes.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.Install.cs`, `dotnet/Foxwarm/Code/CodeWorkbench.cs`, `dotnet/Foxwarm/Code/workbench.html`, `dotnet/Foxwarm/Code/workbenchFrame.js`
 Secondary files: `dotnet/Foxwarm.NodePrimitives/CodeNativePaths.cs`
 
 ## Purpose
@@ -25,7 +25,7 @@ The fixed workspace-root response remains Master-only and authoritative for app/
 
 ## Installed resources and workspace defaults
 
-Server Code assets are separately installed and survive payload replacement. Windows Desktop includes them in its application [HTTP asset pack](./http-assets.md); macOS Desktop retains optional Code. `CodeAssets` selects payload resources when the payload pack has the workbench or an old payload `vscode-web` directory exists; otherwise it uses the stable application-root Code pack or extracted tree. Selection is checked per request, so preparation while Main runs needs only a reload. Static modules (including Code's runtime `node_modules`), built-in extension manifests/resources, optional YAML and capability webview pre resources all use the same abstraction. First-party extensions remain payload resources versioned with Main. Build tools retain their existing preparation output paths, without runtime asset environment controls.
+Server Code assets are separately installed and survive payload replacement. Both [Desktop packages](./desktop-packages.md#desktop-producer-and-qualification) include them in the application [HTTP asset pack](./http-assets.md). `CodeAssets` selects payload resources when the payload pack has the workbench or an old payload `vscode-web` directory exists; otherwise it uses the stable application-root Code pack or extracted tree. Selection is checked per request, so preparation while Main runs needs only a reload. Static modules (including Code's runtime `node_modules`), built-in extension manifests/resources, optional YAML and capability webview pre resources all use the same abstraction. First-party extensions remain payload resources versioned with Main. Build tools retain their existing preparation output paths, without runtime asset environment controls.
 
 Direct launches without a folder request open the application root. Current WebUI launches select `state/vscode-web/node-<encoded-node-id>.code-workspace` through `nodeId`, independently of the iframe-only `embedded=true` flag. `MigrateWorkspace` distributes legacy folder descriptors by URI authority and preserves settings before archiving the old file; existing per-Node target files retain their roots. Bootstrap, migration and privacy-default backfill use the existing atomic document writer through `WriteWorkspace`. Generic Code file writes retain ordinary filesystem semantics. Explicit settings and malformed current workspace files retain their existing behavior. Managed webviews retain the same-public-origin process capability. Source retains its automatic hashed localhost origin and same-origin capability fallback elsewhere. No configured-origin, default-folder or workspace-path environment branch participates.
 
@@ -35,9 +35,19 @@ When required workbench assets are missing, authenticated `/vscode-web` returns 
 
 The authenticated static route adapts only `out/vs/workbench/workbench.web.main.internal.js` from the selected packed or loose Code resource store. `PatchWorkbench` matches the Source-supported webview-origin hash helper and clipboard-probe bodies, capturing current generated identifiers rather than pinning minifier names. Only the first supported helper/probe is rewritten; changed shapes fail with an explicit unavailable response. The original asset bytes are not modified. Capability bootstrap/CSP rewriting, normal auth and deployment-relative URLs keep their existing owners.
 
+The .NET bootstrap installs `workbenchFrame.js` before Code loads. Only a top-level document with a Desktop frame provider adapts Code's Window Controls Overlay API and title-bar spacer widths to the physical left/right host reservations. The adapter also accepts the first `foxwarm-frame` event for WebView2 opener popups. It sends the existing rectangle-only frame report and active Code theme brightness, with native drag excluded over title controls and floating layers. In WebView2 the open menu’s title-bar grid cell is raised above the editor so the menu paints and receives clicks. Ordinary browsers and embedded Code keep their normal layout. See [the app-window decision](./host-runtime.md#d-desktop-app-windows) and [frame protocol](./webui-window-frame.md#d-window-frame).
+
 The source preparation pin is Code-OSS 1.141.0; route-shape tests do not prove a prepared or running asset version. The owned normal-host Workbench fixture has qualified the pinned source-built 1.141.0 payload for filesystem saves, immutable SCM content/diff rendering, local terminal extension effects, embedded iframe reuse and standalone launch. This does not qualify every optional workbench feature. Optional YAML assistance requires its separately prepared vendor payload and its own browser qualification; neither asset preparation nor route registration establishes that behavior.
 
+## Design decisions
+
+### D-code-routes-auth-boundary
+
+Workbench, static, extension, filesystem, and Git routes use WebUI authentication. The unauthenticated webview route is restricted to one unguessable process capability and official bootstrap assets only.
+
 ## Tests
+
+`packages/webui/test/codeWindowFrame.e2e.mjs` exercises the adapter on a controlled DOM and the real workbench served by managed Main, with Windows and macOS inset providers and top-level browser and iframe controls.
 
 `dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs` (Windows virtual drive root over HTTP, missing-assets setup page/status/cache contract, real served files/Git, native metadata/link/error/partial-rename behavior, missing Git, renamed asset identifiers, unchanged source bytes and auth); `packages/webui/test/mainHostWorkbenchParity.e2e.mjs` (normal host/original App, optional official Code-OSS FS/SCM/PTY extensions, exact immutable Git content status/body and rendered diff within one 30-second bound rather than treating the mounted editor shell as loaded content); `NodeCodeServicesPathTests.cs` (Windows Node service mapping, virtual root, mutation refusal, mapped Git results and unchanged native/POSIX paths); `NodeServiceTransportTests.cs`; `packages/webui/test/mainHostNodeCode.e2e.mjs` (owned hosts, unchanged official CLI, original WebUI and optional official workbench/browser extensions).
 

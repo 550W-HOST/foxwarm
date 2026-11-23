@@ -252,16 +252,13 @@ internal sealed partial class SessionToolExecutor(
             catch (OperationCanceledException)
             {
                 return new(
-                    UnsupportedTurnToolExecutor.ToolError(
-                        "tool_call_cancelled",
-                        "Tool call canceled before execution."
-                    )
+                    ToolFailure.Result("Tool call canceled before execution.", "tool_call_cancelled")
                 );
             }
             catch (Exception error)
                 when (error is InvalidOperationException or IOException or InvalidDataException)
             {
-                return new(UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message));
+                return new(ToolFailure.Result(error.Message));
             }
         }
         var settled = await Task.WhenAll(preparations.Select(Settle));
@@ -358,6 +355,9 @@ internal sealed partial class SessionToolExecutor(
             current.ExecPlacement = RemoteExecPlacement(resolved, null);
     }
 
+    /// <summary>The Session's current Node and cwd as later calls will use them.</summary>
+    internal (string Node, string? Cwd) SessionPlacement => sessions.ExecutionPlacement(hosted);
+
     internal bool ToolScriptExecution => invocation.Value?.ToolScriptSubCalls is not null;
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
     internal string? DirectExecWorkspace => execSnapshot.Value?.Cwd;
@@ -419,19 +419,13 @@ internal sealed partial class SessionToolExecutor(
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_cancelled",
-                    "Tool call canceled before execution."
-                )
+                ToolFailure.Result("Tool call canceled before execution.", "tool_call_cancelled")
             );
         }
         catch (ToolAuthorizationUnavailableException error)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    ToolAuthorizationUnavailableException.Code,
-                    error.Message
-                ),
+                ToolFailure.Result(error.Message, ToolAuthorizationUnavailableException.Code),
                 true
             );
         }
@@ -449,7 +443,7 @@ internal sealed partial class SessionToolExecutor(
             )
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message),
+                ToolFailure.Result(error.Message),
                 Target: target
             );
         }
@@ -725,12 +719,7 @@ internal sealed partial class SessionToolExecutor(
                                 ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
                                 : ""
                         ),
-                    _ => args.Count == 1
-                        ? Text(args.First().Value)
-                        : string.Join(
-                            '\n',
-                            args.Select(pair => pair.Key + ": " + Text(pair.Value))
-                        ),
+                    _ => ToolResponseFormatting.FormatArguments(args, singleLine: true),
                 }
             );
         return preview.Length > 200 ? preview[..197] + "..." : preview;
@@ -864,15 +853,12 @@ internal sealed partial class SessionToolExecutor(
         }
         catch (TaskError error)
         {
-            return UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
+            return ToolFailure.Result(error.Message, error.Code);
         }
         catch (ToolAuthorizationUnavailableException error)
         {
             Interlocked.Exchange(ref policyUnavailable, 1);
-            return UnsupportedTurnToolExecutor.ToolError(
-                ToolAuthorizationUnavailableException.Code,
-                error.Message
-            );
+            return ToolFailure.Result(error.Message, ToolAuthorizationUnavailableException.Code);
         }
         catch (ToolAuthorizationDeniedException error)
         {
@@ -884,13 +870,13 @@ internal sealed partial class SessionToolExecutor(
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("invalid_path", error.Message);
+            return ToolFailure.Result(error.Message);
         }
         catch (UnauthorizedAccessException error)
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
         catch (OperationCanceledException error)
             when (cancellationToken.IsCancellationRequested || error is SessionTurnShutdownException
@@ -900,11 +886,11 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
                     ? "process shutdown"
                     : hosted.Entry.ToolCancellationSource;
-            return UnsupportedTurnToolExecutor.ToolError(
-                "tool_call_cancelled",
+            return ToolFailure.Result(
                 dispatched
                     ? $"Tool request canceled by {source} after dispatch. Started effects may have occurred and were not reversed."
-                    : $"Tool call was not started because {source} cancelled it; it was not executed."
+                    : $"Tool call was not started because {source} cancelled it; it was not executed.",
+                "tool_call_cancelled"
             );
         }
         catch (Exception error)
@@ -920,7 +906,7 @@ internal sealed partial class SessionToolExecutor(
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -1069,7 +1055,7 @@ internal sealed partial class SessionToolExecutor(
         {
             return execution with
             {
-                Response = UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message),
+                Response = ToolFailure.Result(error.Message),
                 DeferredCwd = null,
                 DeferredCwdNode = null,
                 ResolvedPaths = null,
@@ -1185,7 +1171,7 @@ internal sealed partial class SessionToolExecutor(
         {
             if (error is CommittedWaitDeclarationException committed)
                 explicitWaitIds.Add(committed.WaitId);
-            return UnsupportedTurnToolExecutor.ToolError("wait_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -1220,7 +1206,7 @@ internal sealed partial class SessionToolExecutor(
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException or IOException)
         {
-            return UnsupportedTurnToolExecutor.ToolError("ask_user_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -1306,6 +1292,7 @@ internal sealed partial class SessionToolExecutor(
                 "set_agent_rules",
                 "session",
                 "view_session",
+                "set_session_model",
                 "set_session_child_model",
                 "set_session_compact_threshold",
                 "compact_session",
@@ -1338,6 +1325,10 @@ internal sealed partial class SessionToolExecutor(
                 owner.ExecutionNode,
                 owner.ExecutionCwd
             );
+        handlers["exec_list"] = (owner, args, token) =>
+            owner.Manager.ListExecsToolAsync(owner.Hosted, args, token);
+        handlers["exec_stop"] = (owner, args, token) =>
+            owner.Manager.StopExecToolAsync(owner.Hosted, args, token);
         handlers["cancel_transfer"] = (owner, args, token) =>
             owner.Manager.CancelCopyTransferAsync(owner.Hosted, args, token);
         handlers["send_file"] = (owner, args, token) =>
@@ -1377,9 +1368,7 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 MemoryTools.ExecuteAsync(owner.Hosted, owner.Manager, name, args, token);
         handlers["list_agents"] = (owner, _, _) =>
-            Task.FromResult(
-                new JsonObject { ["output"] = owner.Manager.ListAgentsText(owner.Hosted) }
-            );
+            Task.FromResult(owner.Manager.ListAgents(owner.Hosted));
         handlers["set_config"] = (owner, args, token) =>
             owner.Manager.InstallConfigAsync(
                 owner.Hosted,
@@ -1417,21 +1406,15 @@ internal sealed partial class SessionToolExecutor(
                 args,
                 token
             );
-        handlers["explain_tool_authorization"] = async (owner, args, token) =>
-        {
-            var explanation = await owner.Manager.ExplainToolAuthorizationAsync(
+        handlers["explain_tool_authorization"] = (owner, args, token) =>
+            owner.Manager.ExplainToolAuthorizationAsync(
                 owner.Hosted,
                 owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
                 args,
                 token
             );
-            // ToolScript receives the structure; a model receives its JSON text.
-            return owner.Programmatic
-                ? explanation
-                : new JsonObject { ["output"] = explanation.ToJsonText() };
-        };
         handlers["node"] = (owner, args, token) =>
-            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token, owner.Programmatic);
+            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
         handlers["node_create_auth_token"] = (owner, args, token) =>
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
         handlers["node_remove"] = (owner, args, token) =>

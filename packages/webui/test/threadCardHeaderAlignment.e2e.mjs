@@ -74,7 +74,6 @@ async function readAlignment() {
     const centerDelta = (left, right) => Math.abs(left.center - right.center)
     const readTag = rect('#read .foxwarm-tool-tag')
     const readSummary = rect('#read .foxwarm-tool-call-summary')
-    const readCode = rect('#read .foxwarm-tool-code-open')
     const readPath = rect('#read .foxwarm-tool-code-path')
     const readRange = rect('#read .foxwarm-tool-read-range')
     const shortReadPath = rect('#read-short .foxwarm-tool-code-path')
@@ -93,7 +92,6 @@ async function readAlignment() {
     return {
       deltas: {
         readTagSummary: centerDelta(readTag, readSummary),
-        readTagCode: centerDelta(readTag, readCode),
         readTagPath: centerDelta(readTag, readPath),
         readTagRange: centerDelta(readTag, readRange),
         event: centerDelta(eventTag, eventPreview),

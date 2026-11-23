@@ -46,7 +46,6 @@ internal sealed partial class SessionManager
             return new(
                 new JsonObject
                 {
-                    ["output"] = $"Closed question {target}.",
                     ["questionId"] = target,
                     ["status"] = "closed",
                 },
@@ -84,12 +83,12 @@ internal sealed partial class SessionManager
         return new(
             new JsonObject
             {
-                ["output"] =
-                    after == "wait"
-                        ? $"Asked question {id}. The Session waits for the user's answer after this tool batch."
-                        : $"Asked question {id}. The answer will arrive later as a user message.",
                 ["questionId"] = id,
                 ["status"] = "open",
+                ["note"] =
+                    after == "wait"
+                        ? "The Session waits for the user's answer after this tool batch."
+                        : "The answer will arrive later as a user message.",
             },
             after == "wait" ? id : null
         );

@@ -4,6 +4,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -25,6 +26,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
 // src/extension.ts
 var extension_exports = {};
@@ -310,9 +312,9 @@ ${uri.toString()}` : uri;
 }
 var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
   constructor(apiBase) {
-    this.apiBase = apiBase;
-    this.changeEmitter = new vscode.EventEmitter();
-    this.onDidChangeFile = this.changeEmitter.event;
+    __publicField(this, "apiBase", apiBase);
+    __publicField(this, "changeEmitter", new vscode.EventEmitter());
+    __publicField(this, "onDidChangeFile", this.changeEmitter.event);
   }
   static fromExtensionContext(context) {
     return new _FoxwarmFileSystemProvider(deriveApiBase(context.extensionUri));
@@ -598,6 +600,8 @@ var modelDefaultProperties = {
   retryIntervalsMs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0, maximum: 2147483647 }, default: [2e3, 5e3, 1e4, 2e4, 4e4, 6e4], description: "Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline." },
   textRedaction,
   contextLimit: { ...positiveInteger, description: "Context limit in tokens." },
+  idleCompactMinutes: { type: "number", minimum: 0, description: "Compact idle Sessions after this many minutes from their last provider request, before the provider prompt cache expires. Zero or omitted disables idle compaction. Model overrides provider, then defaults." },
+  idleCompactMinContextPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, description: "Minimum fraction of the context window the last request must exceed for idle compaction; default 0.5. Model overrides provider, then defaults." },
   maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
   providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." },
   imageInput: { type: "boolean", default: true, description: "Whether the model accepts image input. When false, images stay in the Session but each request to this model sends a short text placeholder instead." }
@@ -679,6 +683,8 @@ var providerObjectEntry = {
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: modelOverrideProperties.asyncCompact,
+    idleCompactMinutes: modelOverrideProperties.idleCompactMinutes,
+    idleCompactMinContextPercent: modelOverrideProperties.idleCompactMinContextPercent,
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
     disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
     keepReasoningOnError: { type: "boolean", default: false, description: "Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution." },
@@ -696,7 +702,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -704,7 +710,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -1348,14 +1354,29 @@ async function addExplorerFolderToWorkspace(uri) {
   if ((stat.type & vscode3.FileType.Directory) === 0) throw new Error(`${target.realPath} is not a directory.`);
   await addFoxwarmFolder({ kind: "addFolder", nodeId: target.nodeId, path: target.realPath });
 }
+async function revealFoxwarmDirectory(request) {
+  const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(request.nodeId, request.path));
+  const covered = (await loadedWorkspaceFolders()).some((folder) => {
+    try {
+      const root = parseFoxwarmUri(folder.uri);
+      return root.nodeId === request.nodeId && containsPath(root.realPath, request.path);
+    } catch {
+      return false;
+    }
+  });
+  if (!covered) {
+    const path = request.cwd && containsPath(request.cwd, request.path) ? request.cwd : request.path;
+    await addFoxwarmFolder({ kind: "addFolder", nodeId: request.nodeId, path });
+  }
+  await revealWorkspaceRoot(uri);
+  return { status: "revealed", uri: uri.toString(true) };
+}
 async function openFoxwarmFile(request, provider) {
   const normalized = normalizeFoxwarmOpenRequest(request);
   if (normalized.kind !== "openFile") throw new Error("Expected an openFile request.");
   const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
   const stat = await vscode3.workspace.fs.stat(uri);
-  if ((stat.type & vscode3.FileType.Directory) !== 0) {
-    throw new Error(`${normalized.path} is a directory, not a file.`);
-  }
+  if ((stat.type & vscode3.FileType.Directory) !== 0) return revealFoxwarmDirectory(normalized);
   const covered = vscode3.workspace.workspaceFolders?.some((folder) => {
     try {
       const root = parseFoxwarmUri(folder.uri);

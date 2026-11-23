@@ -16,6 +16,7 @@ internal sealed partial record OperationPlan
     {
         "compact_session",
         "refresh_session_snapshot",
+        "set_session_model",
         "set_session_child_model",
         "set_session_compact_threshold",
         "move_session",
@@ -208,7 +209,7 @@ internal sealed partial record OperationPlan
             case "move-agent":
                 return ("moved Session's Agent", ["SessionAgent"]);
             case "status-node":
-                return ("the inbound caller's selected Node", []);
+                return ("the calling Session's current Node, or the inbound caller's selected Node", []);
             case "target-session":
                 if (
                     declaration.FrontEnd is not null

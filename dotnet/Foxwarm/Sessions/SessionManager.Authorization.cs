@@ -963,6 +963,6 @@ internal sealed partial class SessionManager
                     policy.Warnings.Select(warning => (JsonNode?)warning).ToArray()
                 );
         }
-        return new JsonObject { ["output"] = installed.ToJsonText() };
+        return installed;
     }
 }

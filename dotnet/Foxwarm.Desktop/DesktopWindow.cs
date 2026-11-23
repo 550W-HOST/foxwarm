@@ -25,6 +25,8 @@ internal sealed partial class DesktopWindow : Window
     private MainHost? host;
     private DesktopWebViews? webViews;
     private Task startup = Task.CompletedTask;
+    // WebView2 starts once the window is first shown; a sign-in start runs only Main until then.
+    private readonly TaskCompletionSource shown = new();
     private bool exiting;
     private Uri? endpoint;
 
@@ -45,7 +47,15 @@ internal sealed partial class DesktopWindow : Window
         };
     }
 
-    internal void Start() => startup = StartAsync();
+    internal void Start(bool tray)
+    {
+        if (!tray)
+        {
+            Activate();
+            shown.TrySetResult();
+        }
+        startup = StartAsync();
+    }
 
     private async Task StartAsync()
     {
@@ -92,6 +102,9 @@ internal sealed partial class DesktopWindow : Window
                 Path.Combine(data, "state", "desktop-port"),
                 endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)
             );
+            if (exiting)
+                return;
+            await shown.Task;
             if (exiting)
                 return;
             status.Text = "Opening Foxwarm…";
@@ -191,7 +204,7 @@ internal sealed partial class DesktopWindow : Window
             ExitApplication();
     }
 
-    private void OpenWindow()
+    internal void OpenWindow()
     {
         if (exiting)
             return;
@@ -200,13 +213,15 @@ internal sealed partial class DesktopWindow : Window
             presenter.Restore();
         Activate();
         native.Foreground();
+        shown.TrySetResult();
     }
 
-    private async void ExitApplication()
+    internal async void ExitApplication()
     {
         if (exiting)
             return;
         exiting = true;
+        shown.TrySetResult();
         webViews?.CloseAll();
         status.Text = "Closing Foxwarm…";
         view.Visibility = Visibility.Collapsed;

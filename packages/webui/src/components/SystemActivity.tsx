@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react'
 import { ChevronDown, ChevronRight, ExternalLink, ListFilter, Search, X } from 'lucide-react'
 import { webUiRealtime } from '../realtime'
 import {
@@ -119,11 +119,14 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
   listRef.current = list
   const container = useRef<HTMLDivElement | null>(null)
 
-  useEffect(() => {
+  // Measured before paint so the first frame already uses the layout that fits.
+  useLayoutEffect(() => {
     const element = container.current
     if (!element) return
-    setWidth(element.clientWidth)
-    const observer = new ResizeObserver(entries => setWidth(entries[0]?.contentRect.width ?? element.clientWidth))
+    // A zero width (detached or hidden for a moment) says nothing about the layout to use.
+    const update = (value: number) => { if (value > 0) setWidth(value) }
+    update(element.clientWidth)
+    const observer = new ResizeObserver(entries => update(entries[0]?.contentRect.width ?? element.clientWidth))
     observer.observe(element)
     return () => observer.disconnect()
   }, [])

@@ -356,6 +356,34 @@ public sealed partial class RuntimePresentationTests
                 .ToolArgsPreview("exec", new JsonObject { ["command"] = new string('x', 1000) })
                 .Length
         );
+        // Other tools: the shared one-line argument layout, as the collapsed WebUI card shows it.
+        Assert.Equal(
+            "waitAnySessions: [a]\nreason: \"first\\nsecond\"",
+            SessionToolExecutor.ToolArgsPreview(
+                "wait",
+                new JsonObject
+                {
+                    ["waitAnySessions"] = new JsonArray("a"),
+                    ["reason"] = "first\nsecond",
+                }
+            )
+        );
+        Assert.Equal(
+            "[a, b]",
+            SessionToolExecutor.ToolArgsPreview(
+                "wait",
+                new JsonObject { ["waitAnySessions"] = new JsonArray("a", "b") }
+            )
+        );
+        Assert.Equal(
+            200,
+            SessionToolExecutor
+                .ToolArgsPreview(
+                    "wait",
+                    new JsonObject { ["reason"] = new string('x', 1000), ["count"] = 1 }
+                )
+                .Length
+        );
     }
 
     private sealed class NoChat : IChatService

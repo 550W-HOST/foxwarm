@@ -24,7 +24,7 @@ internal sealed partial class MessageRouter
         await command.Reply(
             SessionWait.Text(result["output"])
                 ?? "❌ Search failed: "
-                    + (SessionWait.Text(result["error"]?["message"]) ?? "Search unavailable.")
+                    + (ToolFailure.Message(result) ?? "Search unavailable.")
         );
     }
 
@@ -201,12 +201,47 @@ internal sealed partial class MessageRouter
     private static string TimerFailure(JsonObject result, string prefix) =>
         "❌ "
         + prefix
-        + (SessionWait.Text(result["error"]?["message"]) ?? "Timer unavailable.")
+        + (ToolFailure.Message(result) ?? "Timer unavailable.")
         + (
             SessionCatalog.Flag(result["timerCommitted"])
                 ? $" Timer `{result["timerId"]}` change was committed."
                 : ""
         );
+
+    private async Task ExecListAsync(UserCommand command)
+    {
+        var owner = await command.TargetAsync();
+        var listed = await runtime.Manager.ListExecsToolAsync(
+            owner,
+            new JsonObject(),
+            CancellationToken.None
+        );
+        await command.Reply(
+            SessionManager.ExecListText(
+                listed["execs"] as JsonArray ?? [],
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            )
+        );
+    }
+
+    private async Task ExecStopAsync(UserCommand command)
+    {
+        var owner = await command.TargetAsync();
+        try
+        {
+            var stopped = await runtime.Manager.StopExecToolAsync(
+                owner,
+                new JsonObject { ["execId"] = command.Text("execId") },
+                CancellationToken.None
+            );
+            await command.Reply(SessionWait.Text(stopped["note"]) ?? "");
+        }
+        catch (Exception error)
+            when (error is InvalidDataException or InvalidOperationException or IOException)
+        {
+            await command.Reply("⚠️ " + error.Message);
+        }
+    }
 
     private async Task TimerListAsync(UserCommand command)
     {

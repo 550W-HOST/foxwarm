@@ -1,13 +1,13 @@
 # Unit: Native-aware Node bootstrap
 
 Files: `templates/node/run.sh`, `templates/node/run-interactive.sh`, `templates/node/run-docker.sh`, `templates/node/run.ps1`, `templates/node/docker-compose.yaml`, `scripts/start-sandbox-node.sh`, `dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs`
-Secondary/integration references: `dotnet/Foxwarm/Nodes/NodeBootstrap.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.cs`, `src/nodes/httpRoutes.ts`, `src/nodes/runSh.test.ts`, `src/nodes/runPs1.test.ts`, `dotnet/Foxwarm.Tests/Tools/NodeOnboardingHttpTests.cs`
+Secondary/integration references: `dotnet/Foxwarm/Nodes/NodeBootstrap.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.cs`, `test/node-bootstrap/runSh.test.mjs`, `test/node-bootstrap/runPs1.test.mjs`, `dotnet/Foxwarm.Tests/Tools/NodeOnboardingHttpTests.cs`
 
 ## Selection and delivery
 
 Main-generated WebUI, `/node` and bootstrap-info commands share the existing templates. Bare-metal foreground/background/systemd and interactive launchers select the full static native CLI for Linux x86-64 and the native osx-arm64 channel on Apple Silicon. PowerShell selects the native win-x64 channel on x64 Windows, including a 32-bit PowerShell host. Docker selection runs inside the target Linux build, so it follows the container architecture rather than the operator's machine. Other architectures retain the prebuilt JavaScript/source-build path. The independent Shell HTTP client keeps its existing implementation.
 
-`NodeBootstrap` renders the public URL `https://foxwarm.net/downloads/native-cli-node-latest-v{n}.tar.gz` using `NodeConnectionHub.CurrentProtocolVersion`, the same owner used for Main negotiation. The retained Source renderer uses its existing shared protocol range. The [distribution lane](./native-cli-distribution.md) owns the complete package and channel retention. Clients download directly; Main does not compile, fetch, proxy or cache a release. Windows and macOS channels are `native-cli-node-win-x64-latest-v{n}.zip` and `native-cli-node-osx-arm64-latest-v{n}.tar.gz`. A 404 on these new channels means no published package and selects the existing JavaScript/source-build path; other HTTP, transport, extraction or missing-executable failures stop setup. The existing Linux download remains fail-closed. Native branches do not require Node.js/npm. PowerShell source fallback passes relative archive and destination paths to native tar. During extraction it sets both PowerShell's literal location and the process working directory to the owned source root, then restores both in `finally`. Native tools and in-process readers therefore resolve the same source layout without exposing Windows drive-qualified paths to GNU tar. Bracket, apostrophe and Unicode roots remain literal; extraction failure stops setup. Publication is gated by platform qualification and deployment approval, independently of template availability.
+`NodeBootstrap` renders the public URL `https://foxwarm.net/downloads/native-cli-node-latest-v{n}.tar.gz` using `NodeConnectionHub.CurrentProtocolVersion`, the same owner used for Main negotiation. The [distribution lane](./native-cli-distribution.md) owns the complete package and channel retention. Clients download directly; Main does not compile, fetch, proxy or cache a release. Windows and macOS channels are `native-cli-node-win-x64-latest-v{n}.zip` and `native-cli-node-osx-arm64-latest-v{n}.tar.gz`. A 404 on these new channels means no published package and selects the existing JavaScript/source-build path; other HTTP, transport, extraction or missing-executable failures stop setup. The existing Linux download remains fail-closed. Native branches do not require Node.js/npm. PowerShell source fallback passes relative archive and destination paths to native tar. During extraction it sets both PowerShell's literal location and the process working directory to the owned source root, then restores both in `finally`. Native tools and in-process readers therefore resolve the same source layout without exposing Windows drive-qualified paths to GNU tar. Bracket, apostrophe and Unicode roots remain literal; extraction failure stops setup. Publication is gated by platform qualification and deployment approval, independently of template availability.
 
 ## Existing caller effects
 
@@ -24,6 +24,16 @@ Docker retains the existing utility-rich Node base image and non-x64 JavaScript 
 Official launchers set `FOXWARM_NODE_LAUNCH_*` non-secret environment fields consumed by both native and JavaScript `NodeClient` registration. Bare-metal generated launchers retain installation root, foreground/background/systemd method and service scope. Interactive launchers report caller cwd and absolute data/source paths. Windows reports script cwd, absolute paths and interactive mode. The Docker wrapper writes host project/data/Compose/environment paths into its existing environment file; Compose passes them to the client instead of reporting in-container paths as host installation paths. Its actual up/log operations use the selected Compose/environment files. Manual Compose and older launchers may omit host paths and use editable administrator defaults.
 
 The reported fields only drive [administrator restart suggestions](./external-nodes.md#administrator-node-maintenance); clients retain their existing credential-file and runtime ownership. Ordinary restart commands contain no token, while explicit recovery returns a new-token setup command once.
+
+## Design decisions
+
+### D-node-bootstrap-bundle
+
+Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundles when available, plus an explicit build fallback and separately installed optional PTY runtime.
+
+Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
+
+Android on-device delivery and replacement of the ADB host client are canonical in [D-node-android-on-device](./android-node-app.md#d-node-android-on-device).
 
 ## Tests and limits
 

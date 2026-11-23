@@ -75,8 +75,8 @@ public sealed class ExecDurationTests
             },
             default
         );
-        Assert.Contains("Elapsed: ", result["output"]!.GetValue<string>());
-        Assert.DoesNotContain("Elapsed: unknown", result["output"]!.GetValue<string>());
+        // The receipt header carries the measured elapsed time.
+        Assert.DoesNotContain("unknown", ExecReceipt.Header(result["output"]!.GetValue<string>()));
         // Restart uses real persisted process ownership; no guessed finish time on SIGKILL.
         await first.DisposeAsync();
         await using var recovered = new LocalExecManager(
@@ -90,10 +90,12 @@ public sealed class ExecDurationTests
         );
         await recovered.InitializeAsync(_ => true);
         var message = await completion.Task.WaitAsync(TimeSpan.FromSeconds(8));
+        // The header line carries the measured duration, or none when it is unknown.
+        var header = ExecReceipt.Summary(message);
         if (missingStatus)
-            Assert.Contains("Duration: unknown", message);
+            Assert.DoesNotMatch(@"\d(\.\d+)?m?s\b", header);
         else
-            Assert.Matches(@"Duration: 1\.[4-9]s", message);
+            Assert.Matches(@"\b1\.[4-9]s\b", header);
     }
 
     // macOS: BSD date has no %N, so the wrapper falls back to whole seconds. The command

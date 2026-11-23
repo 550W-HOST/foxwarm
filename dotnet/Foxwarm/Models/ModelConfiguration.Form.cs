@@ -82,6 +82,8 @@ internal sealed partial class ModelConfiguration
                         "effort",
                         "historyReasoningField",
                         "asyncCompact",
+                        "idleCompactMinutes",
+                        "idleCompactMinContextPercent",
                         "disallowEmptyResponse",
                         "keepReasoningOnError",
                         "sameProviderAs",

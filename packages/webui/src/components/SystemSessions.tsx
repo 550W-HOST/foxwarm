@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Bot, ChevronRight, CircleDot, ExternalLink, GitFork, ListFilter, Search, Server, Sparkles } from 'lucide-react'
 import type { Session } from './SessionListCore'
+import { RunningCommandList } from './RunningCommands'
 import { formatUsdCost } from '../usageCost'
 import type { TokenUsage } from './TokenUsageDetails'
 import type { WebUiNodeTarget } from '../nodeTargets'
@@ -157,6 +158,13 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
           </section>
         ) : null}
 
+        {session.runningExecs ? (
+          <section data-inspector-running-commands className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Running commands</h3>
+            <div className="mt-1"><RunningCommandList key={session.id} sessionId={session.id} active revision={session.runningExecs} emptyText="No commands are running." /></div>
+          </section>
+        ) : null}
+
         <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Placement</h3>
           <dl className="mt-1">
@@ -244,11 +252,12 @@ export function SessionFilterBar({ filters, onChange, statusOptions, agents, tot
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+      <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:flex-1">
         <label className="relative w-full sm:w-64 sm:shrink-0">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />
           <input value={filters.query} onChange={event => onChange({ query: event.target.value })} aria-label="Search sessions, models, tools" placeholder="Search sessions…" className="h-9 w-full rounded-lg border border-fw-border bg-fw-surface py-0 pl-9 pr-3 text-xs text-fw-text-strong outline-none hover:bg-fw-hover focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring" />
         </label>
+        <div className="grid w-full grid-cols-2 gap-1 sm:contents">
         <FilterSelect label="Filter by status" icon={<ListFilter className="h-3.5 w-3.5" />} value={filters.status} onChange={value => onChange({ status: value as ArchitectureStatusFilter })}
           options={statusOptions.map(option => ({ value: option.id, label: `${option.label}${typeof option.count === 'number' ? ` · ${option.count}` : ''}` }))} />
         <FilterSelect label="Filter by agent" icon={<Bot className="h-3.5 w-3.5" />} value={filters.agent || ''} onChange={value => onChange({ agent: value || null })}
@@ -257,6 +266,7 @@ export function SessionFilterBar({ filters, onChange, statusOptions, agents, tot
           options={[{ value: '', label: 'All nodes' }, ...nodes.map(node => ({ value: node.id, label: `${node.label} · ${node.count}` }))]} />
         <FilterSelect label="Filter by model" icon={<Sparkles className="h-3.5 w-3.5" />} value={filters.model || ''} onChange={value => onChange({ model: value || null })}
           options={[{ value: '', label: 'All models' }, ...models.map(model => ({ value: model.id, label: `${model.id} · ${model.count}` }))]} />
+        </div>
       </div>
       <div className="ml-auto flex shrink-0 items-center">
         <UsagePie global usage={usage} />

@@ -63,5 +63,5 @@ internal static class ApprovalStagingSupport
     }
 
     internal static string? ErrorType(JsonNode? result) =>
-        SessionWait.Text(result?["error"]?["type"]);
+        result.FailureIdentity();
 }

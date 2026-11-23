@@ -22,16 +22,13 @@ internal class ToolAuthorizationDeniedException(string message) : InvalidOperati
 {
     internal virtual string ErrorType => "tool_authorization_denied";
 
-    // Additional model-facing fields of the error object and of the result beside it.
-    internal virtual JsonObject? ErrorFields => null;
+    // Additional model-facing fields of the result beside the error.
     internal virtual JsonObject? ResultFields => null;
 
+    // The type is the result's code: Activity classifies denials, approvals and skips by it.
     internal JsonObject ToolError()
     {
-        var error = new JsonObject { ["type"] = ErrorType, ["message"] = Message };
-        foreach (var pair in ErrorFields ?? [])
-            error[pair.Key] = pair.Value?.DeepClone();
-        var result = new JsonObject { ["error"] = error };
+        var result = ToolFailure.Result(Message, ErrorType);
         foreach (var pair in ResultFields ?? [])
             result[pair.Key] = pair.Value?.DeepClone();
         return result;
@@ -122,10 +119,18 @@ internal sealed class ToolApprovalOutcomeException(
 ) : ToolAuthorizationDeniedException(message)
 {
     internal override string ErrorType => type;
-    internal override JsonObject? ErrorFields =>
-        note is null ? null : new JsonObject { ["note"] = note };
-    internal override JsonObject? ResultFields =>
-        approvalId is null ? null : new JsonObject { ["approvalId"] = approvalId };
+    internal override JsonObject? ResultFields
+    {
+        get
+        {
+            var fields = new JsonObject();
+            if (note is not null)
+                fields["note"] = note;
+            if (approvalId is not null)
+                fields["approvalId"] = approvalId;
+            return fields;
+        }
+    }
 }
 
 internal sealed class ToolAuthorizationAuthority(

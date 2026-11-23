@@ -11,6 +11,7 @@ import { useState } from 'react'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
+import type { TerminalListOptions } from './TerminalList'
 
 interface SidebarProps {
   sessions: Session[]
@@ -42,6 +43,7 @@ interface SidebarProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
+  terminalList?: TerminalListOptions
   onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
@@ -80,6 +82,7 @@ export default function Sidebar({
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  terminalList,
   onCreateAgent,
   onCreateSession,
   onToggleCollapsed,
@@ -146,6 +149,7 @@ export default function Sidebar({
               nodeTargets={nodeTargets}
               nodeTargetsError={nodeTargetsError}
               onRefreshNodeTargets={onRefreshNodeTargets}
+              terminalList={terminalList}
             />
           </nav>
         </div>

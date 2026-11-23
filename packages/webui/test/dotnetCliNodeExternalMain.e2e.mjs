@@ -15,10 +15,10 @@ const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
 const exists = file => access(file).then(() => true, () => false)
-for (const runtime of ['source', 'dotnet']) {
+for (const runtime of ['dotnet']) {
   const env = {}, host = await createHostFixture('cli-external-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(host.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
-  const prefix = runtime === 'source' ? '' : '/external/main'
+  const prefix = '/external/main'
   const tokens = { alpha: 'synthetic-alpha', beta: 'synthetic-beta' }
   const identities = Object.fromEntries(Object.entries(tokens).map(([id, token]) => [id, { token, surfaces: { mcp: {} } }]))
   await writeFile(join(host.data, 'state/config.yaml'), JSON.stringify({ url: host.origin + prefix, bot: { httpPort: host.port, enableWebUI: true, enableTrigger: false }, vector: false, vectorMaintenance: false, sessionWorkers: false, dbWorkers: false, channels: {}, access: { identities } }))

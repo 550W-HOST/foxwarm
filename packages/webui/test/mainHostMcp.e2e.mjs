@@ -236,7 +236,7 @@ try {
   assert.equal((await request('POST', route(current) + '/message', { text: '/stop' })).status, 200)
   await idle(); await until(() => exists(join(peerRoot, 'cancelled-stop')), 'actual peer observed Stop cancellation')
   assert(!await exists(join(peerRoot, 'effect-after-stop.txt')))
-  assert.equal((await pair('after-stop-no-effect')).canceled, true); assert.equal((await pair('held-stop')).error.type, 'tool_call_cancelled')
+  assert.equal((await pair('after-stop-no-effect')).canceled, true); assert.equal((await pair('held-stop')).code, 'tool_call_cancelled')
   await perform('mcp:local/echo_effect', { tag: 'after-stop-valid' }, 'after-stop-valid')
 
   for (const [name, transport, endpoint] of [['http', 'streamable-http', '/mcp'], ['sse', 'sse', '/sse'], ['auto-http', 'auto', '/mcp'], ['auto-sse', 'auto', '/sse']]) {

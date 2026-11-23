@@ -74,7 +74,7 @@ try {
   await fixture.stop(); mode = true; await writeFile(config, originalConfig + '# checkpoint retained\nhandoffConfirmation: true\n'); await fixture.start()
   assert.equal(await readFile(join(fixture.data, 'state/sessions/parent_disabled-empty.json'), 'utf8'), oldBytes)
   await run('invalid-isolated', [tool('bad-direct', 'create_child_session', { suffix: 'bad-direct' }), wrapped('bad-unified', 'send_to_session', { sessionId: 'recipient', message: 'HAND-TASK:SHOULD-NOT-ARRIVE' }), tool('okay-write', 'write', { filePath: 'sibling.txt', content: 'ordinary sibling' })])
-  assert.equal((await response('parent', 'bad-direct')).response.error.type, 'invalid_inter_agent_handoff_confirmation')
+  assert.match((await response('parent', 'bad-direct')).response.error, /^Inter-agent handoff recall must include .* Inter-agent handoff confirmation must end with the exact sentence/)
   assert((await response('parent', 'bad-unified')).response.error); assert.equal(countTask('SHOULD-NOT-ARRIVE'), 0); assert.equal(await readFile(join(fixture.work, 'sibling.txt'), 'utf8'), 'ordinary sibling')
   assert.equal(await exists(join(fixture.data, 'state/sessions/parent_bad-direct.json')), false)
   const wrongOrder = confirmed({ suffix: 'wrong-order' }); wrongOrder.displayName = 'late'

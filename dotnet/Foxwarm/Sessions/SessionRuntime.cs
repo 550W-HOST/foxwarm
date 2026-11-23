@@ -349,12 +349,16 @@ internal sealed partial class SessionOwner
         return MainMetadata?.Invoke(result) ?? result;
     }
 
+    internal Func<int>? RunningExecCount { get; set; }
+
     public JsonObject BuildDto() => BuildDto(Metadata());
 
     public JsonObject BuildDto(SessionMetadata meta)
     {
         var dto = SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
         dto["runtimeState"] = RuntimeSnapshot(meta);
+        // Background commands still tracked for this Session; the WebUI lists them on request.
+        dto["runningExecs"] = RunningExecCount?.Invoke() ?? 0;
         Entry.WithState(state =>
         {
             dto["currentNode"] = ExecutionNode(state.AuthorityEnvelope);

@@ -4,9 +4,6 @@ Part of the [tool dispatch](./tool-dispatch.md) thread. Covers the live MCP conf
 
 ## Key units
 
-- [src-mcp-client](../units/src-mcp-client.md)
-- [src-mcp-external-service](../units/src-mcp-external-service.md)
-- [src-mcp-inbound-catalog](../units/src-mcp-inbound-catalog.md)
 
 ## Invariants
 
@@ -32,7 +29,7 @@ The Session wrapper uses exact existing `builtin:session` list, `builtin:view_se
 
 ### D-dispatch-mcp-live-configuration
 
-**Derived lifecycle design for [validated live installation](../units/src-config.md#d-config-live-install).** Connection generations/pools adopt the installed MCP configuration without attributing old work to a new identity. The mechanism must preserve already-started work and explicit failure scope rather than silently replaying calls.
+**Derived lifecycle design for [validated live installation](../units/host-runtime.md#d-config-live-install).** Connection generations/pools adopt the installed MCP configuration without attributing old work to a new identity. The mechanism must preserve already-started work and explicit failure scope rather than silently replaying calls.
 
 [2026-08-01, updated 2026-08-19] The first managed/runtime MCP configuration read establishes one authoritative in-memory snapshot. Subsequent MCP listing, discovery, and calls read that snapshot rather than rereading the backing file. `mcp_config` mutations must persist successfully before replacing the live snapshot, become visible to subsequent MCP operations immediately, and require no Foxwarm restart. Manual backing-file edits do not alter the live snapshot; do not add file watching or an agent-facing manual reload path. Optional per-server `timeoutSeconds` is bounded to finite 1-3600 seconds and applies only to tool calls through SDK request options; zero canonically clears the field and omission preserves the SDK default.
 
@@ -48,7 +45,7 @@ Replies use existing `send_to_channel`, including Main Management source fencing
 
 The receiving Main derives its target solely from the locally authorized binding, identifies provenance by configured server and endpoint rather than a claimed remote Session, and admits text through the existing ordinary durable local/Worker input path. It wakes/queues normally and never pretends to be an internal child reply. Receiver liveness and local source permission are rechecked at admission. Managed configuration changes/disable, Session deletion, external-context disposal and shutdown fence and close bindings. Ordinary caller connections are released after 15 minutes idle, excluding in-flight requests; enabled reception uses its standard ping instead of ordinary idle disposal. Streamable HTTP cleanup uses bounded SDK DELETE followed by close, while legacy SSE uses its own close. Concurrent setup is coalesced and a failed or closed setup cannot become usable. Standard ping preserves the existing server idle lifetime; SDK same-context reconnect is distinct from message durability. The extension provides online best-effort sending only, with no ACK, EventStore, replay, outbox, automatic original-input retry or reuse of old reply targets across a new context. Its protocol boundary is the installed SDK's negotiated versions, not a claim to support later protocol revisions.
 
-Implementation navigation: [notification connections](../units/src-mcp-caller-connections.md), [Main MCP facade](../units/src-mcp-external-service.md), [inbound HTTP](../units/src-mcp-inbound-http.md), [Session ingress](../units/src-mcp-inbound-session-service.md) and [channel delivery](../units/src-session-channels.md).
+Implementation navigation: [notification connections](../units/dotnet-mcp-notifications.md), [Main MCP facade](../units/dotnet-mcp-notifications.md), [inbound HTTP](../units/dotnet-inbound-mcp.md), [Session ingress](../units/dotnet-inbound-mcp.md) and [channel delivery](../units/dotnet-external-channels.md).
 
 [2026-10-10] Client extension capability expresses support, not automatic reception. Session-owned HTTP clients negotiate version 1 at initialization and install a disabled handler. `mcp_notifications` start verifies actual GET readiness and peer capability, then enables delivery to the trusted current Session without changing remote Node/cwd/exec ownership. Before invoking a peer that advertises the Foxwarm extension, the canonical outbound call rejects `foxwarm_session` send with `allowReply:true` unless that connection has enabled reception. Third-party same-name tools without the advertised extension are not intercepted. External-context owners do not claim an internal receiving Session. No version upgrade or reception-control RPC is added; the remote server is not asked to prove whether a client processes notifications.
 
@@ -56,8 +53,8 @@ A 404/closed context is not a reason to replay a possibly executed tool. Later o
 
 Notification reception reauthorization uses the complete existing tool permission path for start, receive, explicit-reply preflight and ping, including Agent-local layers. Missing notification server names never fall back to another configuration. A moved/inactive owner is cleaned up at the next existing ping boundary; no connection migration or stable-identity layer is added.
 
-Internal MCP results remove pure text JSON blocks duplicating structured data and unwrap structured-only results at the existing client normalization boundary. Errors, additional explanations/metadata and multimodal data remain, with the existing image-promotion/output-guard order. Raw external MCP passthrough and server wire compatibility do not change. The canonical result rules are [D-mcp-source-normalization](../units/src-mcp-client.md#d-mcp-source-normalization).
+Internal MCP results remove pure text JSON blocks duplicating structured data and unwrap structured-only results at the existing client normalization boundary. Errors, additional explanations/metadata and multimodal data remain, with the existing image-promotion/output-guard order. Raw external MCP passthrough and server wire compatibility do not change. The canonical result rules are [D-mcp-source-normalization](../units/mcp.md#d-mcp-source-normalization).
 
 ## Canonical ownership
 
-MCP result cleanup is canonical in [D-mcp-source-normalization](../units/src-mcp-client.md#d-mcp-source-normalization).
+MCP result cleanup is canonical in [D-mcp-source-normalization](../units/mcp.md#d-mcp-source-normalization).

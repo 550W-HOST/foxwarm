@@ -217,6 +217,9 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
             .Select(p => p["functionResponse"]?["response"])
             .FirstOrDefault(p => p is not null);
         var result = McpInboundCatalog.Result(response?.DeepClone());
+        // The CLI's model reads the text block: the same text other providers and the WebUI show.
+        if (response is not JsonObject { } raw || raw["content"] is not JsonArray)
+            result["content"]![0]!["text"] = Foxwarm.Tools.ToolResponseFormatting.Format(response);
         if (response is JsonObject value && value["error"] is not null)
             result["isError"] = true;
         var content = result["content"]!.AsArray();

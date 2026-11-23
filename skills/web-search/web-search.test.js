@@ -20,7 +20,7 @@ test('OpenAI and Gemini web-search requests share a 240-second timeout', () => {
 });
 
 test('OpenAI web search uses the current default model', () => {
-  assert.equal(DEFAULT_OPENAI_MODEL, 'gpt-5.6-sol');
+  assert.equal(DEFAULT_OPENAI_MODEL, 'gpt-6.1-terra');
 });
 
 test('raw models reader skips virtual providers and discovers concrete GPT leaves only', () => {

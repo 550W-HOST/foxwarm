@@ -87,7 +87,7 @@ public sealed partial class SessionCreationParityTests
             var denied = await Create("denied", path, creator);
             Assert.Contains(
                 "Tool authorization rule denies node capability `read`",
-                denied!["error"]!["message"]!.GetValue<string>()
+                denied!.FailureMessage()!
             );
             Assert.Equal(
                 initial,
@@ -102,7 +102,7 @@ public sealed partial class SessionCreationParityTests
         var isolatedDenied = await Create("isolated-denied", outside, admitted);
         Assert.Contains(
             "Tool authorization rule denies node capability `read`",
-            isolatedDenied!["error"]!["message"]!.GetValue<string>()
+            isolatedDenied!.FailureMessage()!
         );
         Assert.Null(f.Manager.Catalog.Get("restricted/isolated-denied"));
 

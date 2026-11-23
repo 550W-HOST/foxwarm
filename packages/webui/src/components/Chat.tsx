@@ -8,11 +8,13 @@ import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
-import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields } from './chatSessionSearch'
+import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields, type SessionSearchMatch } from './chatSessionSearch'
+import { ExecLinkContext, counterpartRole, findExecLink, flashExecLink, indexExecLinks, type ExecLinkController, type ExecLinkRole } from './execLinks'
 import ContextScrollbar from './ContextScrollbar'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '../contextScrollbarSettings'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
+import RunningCommands from './RunningCommands'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
 import { isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
@@ -283,6 +285,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const capturedInteractionVersionRef = useRef(0)
   const pendingContentResizeRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>(null)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const attachedRangeRef = useRef<{ scrollHeight: number; clientHeight: number } | null>(null)
   const cardHeightChangesRef = useRef(new Set<object>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
@@ -385,7 +388,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     shouldAutoScrollRef.current = following
     pendingUserLeaveBottomRef.current = pendingUserLeave
     setFollowingBottom(following)
-  }, [])
+    if (following && historyMode === 'continuous') {
+      // A following reader sees the live tail; a window kept while reading would leave later rows unmounted.
+      setContinuousWindowKey(null)
+      setContinuousProtectedRange(null)
+    }
+  }, [historyMode])
 
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
@@ -496,6 +504,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     const state = captureCurrentViewportState()
     if (state) pendingContentResizeRef.current = { state, interactionVersion: userInteractionVersionRef.current }
   }, [captureCurrentViewportState]))
+
+  // An attached reader stays on the latest row before the browser paints any growth,
+  // whether React rendered it or a Composer, image or font resize did. Changed rows or a
+  // changed scroll range pin; a render or scroll that moves no layout leaves the position
+  // alone. Rows are checked as well because a sliding window can keep the range while
+  // native scroll anchoring moves scrollTop. A restore still in progress owns the
+  // position, and a pointer gesture may be starting a scrollbar drag.
+  const keepAttachedBottom = useCallback((rowsChanged = false) => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    const range = { scrollHeight: container.scrollHeight, clientHeight: container.clientHeight }
+    const previous = attachedRangeRef.current
+    attachedRangeRef.current = range
+    if (!rowsChanged && previous?.scrollHeight === range.scrollHeight && previous.clientHeight === range.clientHeight) return
+    if (!shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pointerScrollInteractionRef.current || !isContentLayoutReady()) return
+    if (range.scrollHeight - container.scrollTop - range.clientHeight > 0.5) container.scrollTop = range.scrollHeight
+  }, [isContentLayoutReady])
 
   const applyViewportState = useCallback((state: ChatViewportState): boolean => {
     const container = messagesContainerRef.current
@@ -915,10 +940,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     finally { setModelBusy(false) }
   }, [mergeConfirmedSettings, sessionId])
 
-  useEffect(() => {
-    if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
-    scrollToBottom()
-  }, [messages, scrollToBottom, streamingAssistantDraft])
+  useLayoutEffect(() => keepAttachedBottom())
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
     const snapshotText = webUiIdentityMode || historyMode === 'continuous' ? '' : persistentMemorySnapshot.trim()
@@ -1001,6 +1023,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
       : snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [timelineView, snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
+  useLayoutEffect(() => keepAttachedBottom(true), [keepAttachedBottom, timelineMessages, queuedMessages])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
@@ -1110,6 +1133,56 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     searchHistoryDraftRef.current = ''
     lastSearchQueryRef.current = ''
   }, [sessionId])
+
+  // execId links between a background command's receipt and its completion event. A mounted
+  // counterpart is scrolled to directly; a loaded one hidden in a collapsed group or older window
+  // is revealed with the same targeting Search uses.
+  const execLinkIndex = useMemo(() => indexExecLinks(messages), [messages])
+  const [execJump, setExecJump] = useState<{ target: SessionSearchMatch | null; execId: string; role: ExecLinkRole; navigation: number } | null>(null)
+  const execJumpAppliedRef = useRef(0)
+  const revealExecLink = useCallback((execId: string, role: ExecLinkRole): boolean => {
+    const container = messagesContainerRef.current
+    const found = findExecLink(committedTimelineRef.current, execId, role)
+    if (!container || !found) return false
+    const rect = found.getBoundingClientRect()
+    const viewport = container.getBoundingClientRect()
+    container.scrollTop += rect.top - viewport.top - Math.min(96, container.clientHeight * 0.25)
+    currentViewportGeometryRef.current = null
+    captureCurrentViewportState()
+    flashExecLink(found)
+    return true
+  }, [captureCurrentViewportState])
+  const jumpToExec = useCallback((execId: string, role: ExecLinkRole) => {
+    const target = counterpartRole(role)
+    if (!(target === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId)) return
+    leaveBottomFollow()
+    if (revealExecLink(execId, target)) return
+    let match: SessionSearchMatch | null = null
+    if (timelineView !== 'conversation') {
+      const query = `[${execId}]`
+      const field = projectSessionSearchFields(messages, timelineView, activeMessages, { showInterAgentMessages, showCommentary })
+        .find(candidate => candidate.surface === (target === 'receipt' ? 'response' : 'system') && candidate.text.includes(query + ' '))
+      if (field) {
+        match = { ...field, id: `exec:${execId}:${target}`, offset: field.text.indexOf(query), ordinal: 0, query }
+        const inGroup = match.groupKey && (match.surface === 'response' || match.surface === 'system')
+        const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
+        if (historyMode === 'continuous') {
+          setContinuousProtectedRange(null)
+          setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
+        } else if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
+      }
+    }
+    setExecJump(previous => ({ target: match, execId, role: target, navigation: (previous?.navigation ?? 0) + 1 }))
+  }, [activeMessages, execLinkIndex, historyMode, leaveBottomFollow, messages, revealExecLink, showCommentary, showFullTimeline, showInterAgentMessages, timelineView])
+  useLayoutEffect(() => {
+    if (!execJump || execJump.navigation === execJumpAppliedRef.current) return
+    if (revealExecLink(execJump.execId, execJump.role)) execJumpAppliedRef.current = execJump.navigation
+  }, [execJump, revealExecLink, timelineMessages, showFullTimeline])
+  useLayoutEffect(() => { setExecJump(null) }, [sessionId, searchOpen, timelineView])
+  const execLinkController = useMemo<ExecLinkController>(() => ({
+    hasCounterpart: (execId, role) => (counterpartRole(role) === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId),
+    jump: jumpToExec,
+  }), [execLinkIndex, jumpToExec])
 
   useLayoutEffect(() => {
     const registry = CSS.highlights
@@ -1300,6 +1373,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     syncScrollbarGutter()
     const observer = new ResizeObserver(() => {
       syncScrollbarGutter()
+      keepAttachedBottom()
       if (resizeRestoreFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeRestoreFrameRef.current)
       }
@@ -1354,7 +1428,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         resizeRestoreFrameRef.current = null
       }
     }
-  }, [applyViewportAnchorCandidates, applyViewportState])
+  }, [applyViewportAnchorCandidates, applyViewportState, keepAttachedBottom])
 
   useLayoutEffect(() => () => {
     // A mode switch has already changed the rendered source by cleanup time.
@@ -1744,7 +1818,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
                 <ToolCallActivityContext.Provider value={!displayingLatest ? NO_RUNNING_TOOL_CALLS : toolCallActivity?.runningCallIds ?? (sessionRecord?.runtimeState?.perCallToolActivity ? NO_RUNNING_TOOL_CALLS : undefined)}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                 <SentVersionContext.Provider value={sentVersion}>
-                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && queueFooterCount > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} liveTiming={!pendingSend} />
+                  <ExecLinkContext.Provider value={execLinkController}><ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : execJump?.target ?? null} renderMessageFooter={displayingLatest && queueFooterCount > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} liveTiming={!pendingSend} /></ExecLinkContext.Provider>
                 </SentVersionContext.Provider>
                 </ToolScriptProgressContext.Provider>
                 </ToolCallActivityContext.Provider>
@@ -1767,6 +1841,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
               onCancelCompaction={webUiIdentityMode ? undefined : handleCancelCompaction}
               isMobile={isMobile}
               onContinue={webUiIdentityMode ? undefined : handleContinue}
+              backgroundControl={!webUiIdentityMode && (sessionRecord?.runningExecs ?? 0) > 0 ? <RunningCommands sessionId={sessionId} count={sessionRecord!.runningExecs!} /> : undefined}
             />}
             {displayingLatest && queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">

@@ -81,7 +81,7 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri e
             popup = new DesktopPopupWindow(
                 this,
                 owner,
-                DesktopNavigation.IsFramed(endpoint, e.Uri),
+                DesktopNavigation.FrameFor(endpoint, e.Uri),
                 target == DesktopTarget.Blank,
                 features.HasSize ? features.Width : null,
                 features.HasSize ? features.Height : null

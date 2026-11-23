@@ -9,7 +9,7 @@
 # `${TURN_ID}` is stable for one session turn, including its tool loop, and changes
 # when a later session turn starts.
 
-default: openai/gpt-5.6-sol
+default: openai/gpt-6-astra
 # Concrete provider settings override defaults; individual model object entries
 # override their provider. The three limit/image-format fields also fall back to
 # legacy config.yaml llm settings when omitted.
@@ -28,14 +28,21 @@ defaults:
   #   # Use [] for no reuse, or "all" for every detected label.
   #   knownLabels: [private_email, private_phone, private_address]
   # imageInput: false # text-only models: send a short placeholder instead of each image
+  # Optionally compact an idle Session before its provider prompt cache expires: minutes after
+  # the last request (0 or omitted: off; keep it below the cache lifetime) and the minimum
+  # fraction of the context window that request used.
+  # idleCompactMinutes: 55
+  # idleCompactMinContextPercent: 0.5
 providers:
   openai:
-    providerType: openai-completions
+    providerType: openai-responses
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
     # Optional provider default: disable background compact jobs.
     # Model objects may override this; omitted defaults to true.
     # asyncCompact: false
+    # idleCompactMinutes: 55
+    # idleCompactMinContextPercent: 0.5
     # Optional: enable compressed request bodies for this provider entry.
     # requestCompression: gzip  # or: br
     # Optional: treat a completed response with no content and no tool calls as
@@ -57,23 +64,28 @@ providers:
     # extraHeaders:
     #   x-provider-default: enabled
     models:
-      - gpt-5.6-sol
-      - id: gpt-5.6-terra
+      - gpt-6-astra
+      - gpt-6.1-sol
+      - id: gpt-6.1-terra
         # asyncCompact: false
+        # idleCompactMinutes: 0  # Disable idle compaction for this model.
+        # idleCompactMinContextPercent: 0.5
         # disallowEmptyResponse: true
-      - gpt-5.6-luna
+      - gpt-6-luna
 
   # `openai` and `openai-responses` use the newer Responses API over HTTP/SSE.
   # `openai-ws` uses the same request/event format over a provider WebSocket;
   # it rejects requestCompression and transport-owned extraFields (`input`,
   # `previous_response_id`, `stream`, `type`, `background`, `context_management`,
   # `conversation`, and `stream_id`).
-  # Use `openai-completions` when you explicitly need the older /chat/completions API.
+  # Use `openai-completions` when you explicitly need the older /chat/completions API;
+  # several current OpenAI models support tool calling only through Responses.
   # Optional on Responses SSE/WebSocket concrete models only (default false).
   # A failed stream may retain completed encrypted reasoning for the next request;
   # this is not a transport resume or a promise of less provider computation.
   # keepReasoningOnError: true  # model object entries may override, including false
-  # To enable hosted web search, first change providerType to openai-responses.
+  # Hosted web search requires a Responses provider type (`openai`,
+  # `openai-responses`, or `openai-ws`).
   # Ordinary turns and compact-plan requests declare configured hosted tools.
   # Background one-shot and setup-test requests omit them.
   # webSearch: true  # or false, for default settings
@@ -88,7 +100,7 @@ providers:
   # imageGeneration: true  # or false, for default settings
   # imageGeneration:
   #   enabled: true
-  #   model: gpt-image-1        # optional hosted image model
+  #   model: gpt-image-2.5-sunburst  # optional hosted image model
   #   action: auto              # auto, generate, or edit
   #   size: 1024x1024           # optional, provider-defined
   #   quality: high             # auto, low, medium, high, xhigh, or max
@@ -124,21 +136,24 @@ providers:
   #   apiKey: your-secondary-key
   #   sameProviderAs: openai
   #   models:
-  #     - gpt-5.6-sol
+  #     - gpt-6-astra
   #     - id: local-variant
-  #       upstreamModelId: gpt-5.6-sol
-  #       sameModelAs: openai/gpt-5.6-sol
+  #       upstreamModelId: gpt-6-astra
+  #       sameModelAs: openai/gpt-6-astra
 
   anthropic:
     providerType: anthropic
     baseUrl: https://api.anthropic.com
     apiKey: your-anthropic-key
     models:
-      - claude-opus-5
+      - claude-opus-5-5
+      - claude-fable-5-2
+      - claude-sonnet-5-5
+      - claude-haiku-5-5
 
   # A non-empty provider string is shorthand for a single-target session-hash
   # alias. The alias key remains selectable while resolving to this concrete leaf.
-  fast: openai/gpt-5.6-sol
+  fast: openai/gpt-6.1-terra
 
   # Virtual providers use their own retryIntervalsMs or defaults, ignoring the
   # selected concrete provider/model intervals (also for shorthand aliases).

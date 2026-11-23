@@ -36,7 +36,7 @@ Each model-tool, exec, lifecycle and discovery request launches a new process. C
 
 Operations with inputs add `request`. Success adds `"ok": true, "result": ...`; failure adds `"ok": false, "error": { "code": "SafeCode", "message": "Safe message", "retryable": false }`. Result and error are mutually exclusive. Error text must be safe for the caller: do not include credentials, private launcher arguments or raw transport diagnostics.
 
-Operations are `describe`, `list`, `filesystem`, `exec-start`, `exec-poll`, declared `create`, `ensure`, `inspect`, `destroy` lifecycle actions, and `connect`, which opens the optional service channel instead of answering one request. A response identity mismatch or malformed response fails the call; Core does not try another protocol or replay effects.
+Operations are `describe`, `list`, `filesystem`, `exec-start`, `exec-poll`, optional `exec-stop`, declared `create`, `ensure`, `inspect`, `destroy` lifecycle actions, and `connect`, which opens the optional service channel instead of answering one request. A response identity mismatch or malformed response fails the call; Core does not try another protocol or replay effects.
 
 ## Describe
 
@@ -79,11 +79,12 @@ Agents use `node({action:"inspect",providerId:"provider-id"})` to discover the d
   "filesystem": "read-write",
   "exec": true,
   "execEnv": true,
+  "execStop": true,
   "services": { "vscode-fs": 1, "vscode-git": 2, "vscode-pty": 1 }
 }
 ```
 
-`label`, `kind`, `defaultCwd`, `exec`, `execEnv` and `services` are optional. `execEnv:true` requires `exec:true` and declares that `exec-start` accepts [`env`](#start). `services` declares the fixed Code/Terminal services the Node can serve over the [service channel](#optional-service-channel), with the same names and versions as a resident Node's capabilities. A Provider that omits it keeps today's behavior; no version or negotiation field is added. Names Core does not know are ignored; a malformed shape or a version that is not a positive integer rejects the inventory. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
+`label`, `kind`, `defaultCwd`, `exec`, `execEnv`, `execStop` and `services` are optional. `execEnv:true` requires `exec:true` and declares that `exec-start` accepts [`env`](#start). `execStop:true` requires `exec:true` and declares that the Node implements [`exec-stop`](#stop). `services` declares the fixed Code/Terminal services the Node can serve over the [service channel](#optional-service-channel), with the same names and versions as a resident Node's capabilities. A Provider that omits it keeps today's behavior; no version or negotiation field is added. Names Core does not know are ignored; a malformed shape or a version that is not a positive integer rejects the inventory. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
 
 `filesystem:"read"` derives canonical `read`. `filesystem:"read-write"` also derives `write`, `edit` and `apply_patch`. `exec:true` derives canonical `exec`. Every executable-provider Node exposes at least a read filesystem: exec logs must be readable in the same Node namespace. Providers do not supply model tool schemas, tool formatting or patch semantics. Unsupported capabilities never fall back to Main.
 
@@ -178,11 +179,21 @@ The command must survive the adapter request's process exit. Do not retain inher
 
 Running cwd is optional. Finished `exitCode` is required and is a real integer or `null` when unknown; finish timestamp, duration, cwd and safe `error` are optional. Missing records must not mean exit code zero. A transient query failure is an error response, not finished or lost.
 
+### Stop
+
+`exec-stop` is optional. Core sends it only to a Node whose current descriptor declares `execStop:true`, when the Session that owns a tracked background command asks to stop it; other Nodes are reported as unable to stop commands. It receives `{ "nodeId": "example-node", "ref": "...", "graceMs": 5000 }`. Ask the command to terminate (on POSIX targets, send `SIGTERM` to the command's process group), wait up to `graceMs`, then end it forcibly (`SIGKILL` to the group) if it is still running. Return one of:
+
+```json
+{ "state": "stopped" }
+```
+
+`stopped` means it ended within the grace period, `killed` that it had to be ended forcibly, `finished` that it had already finished before anything was signalled, and `lost` that the execution records no longer exist. Keep supervising the command as usual: its real status, typically `143` or `137`, is reported through `exec-poll`, and Core delivers its completion once, stating that a stop was requested. The reference identifies the execution, so never signal a process that merely reuses a recorded PID. An error response or an unusable answer is reported to the caller as an unknown outcome; Core never repeats a stop request.
+
 ### Core-owned behavior
 
 Core uses the existing `PersistentExecManager`, same registry and existing 24-hour background-notification tracking lifetime. Native records without a provider reference remain native; authenticated CLI protocols and persisted native jobs are unchanged. Core allocates public exec IDs, waits within the requested foreground budget, reads bounded log samples, retains at most 1 MiB of programmatic raw content, delivers completion to the original exact owner and removes tracking only after acknowledged delivery or expiration.
 
-Stop releases foreground waiting without killing the command. Stop during start waits for the bounded start receipt or hard deadline; it does not abort the launcher as a substitute for cancelling a remote command. An uncertain start is reported as unknown and must never be automatically repeated. There is no process-kill primitive.
+Stop releases foreground waiting without killing the command. Stop during start waits for the bounded start receipt or hard deadline; it does not abort the launcher as a substitute for cancelling a remote command. An uncertain start is reported as unknown and must never be automatically repeated. Ending a command is a separate, explicit [stop](#stop) request.
 
 Foreground output observation is also bounded and read-only. Completed commands use the remaining requested foreground budget; after normal background timeout, one shared 500 ms snapshot window preserves fast partial capture. Stop or hard cancellation ends these reads promptly, and display/programmatic formatting does not restart them after cancellation. Unavailable output is reported explicitly; the foreground signal is never retained in job state or restart resolution.
 

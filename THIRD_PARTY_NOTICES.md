@@ -43,7 +43,7 @@ Apache License 2.0. Their license texts are included in .NET publish output as
 Release packages ship the LanceDB native library built from the SDK's pinned source
 without its object-store back ends (build configuration in
 `dotnet/Foxwarm.LanceDb/native-build.patch`) and a ToolScript worker built from the
-Pydantic Monty v0.0.19 source (MIT License) without its type checker
+Pydantic Monty v1.6.0 source (MIT License) with its type checker replaced by a stub
 (`dotnet/Foxwarm/ToolScript/monty-no-type-check.patch`). `LanceDB-native-crates.txt` and
 `Monty-native-crates.txt` in those packages list the Rust crates linked into each binary
 with their declared licenses and license texts.

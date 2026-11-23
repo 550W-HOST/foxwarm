@@ -41,8 +41,7 @@ internal static class ToolCallControls
                         original?.ContainsKey(key) == true && !True(original[key])
                     );
                     if (invalid is not null)
-                        preset = UnsupportedTurnToolExecutor.ToolError(
-                            "invalid_tool_control_argument",
+                        preset = ToolFailure.Result(
                             invalid + " accepts only the boolean value true when provided."
                         );
                     else if (True(original?[Names[0]]))
@@ -63,10 +62,7 @@ internal static class ToolCallControls
                         catch (InvalidDataException error)
                         {
                             // Same rejection the handler gives when the checkpoint is off.
-                            preset = UnsupportedTurnToolExecutor.ToolError(
-                                "agent_tool_error",
-                                error.Message
-                            );
+                            preset = ToolFailure.Result(error.Message);
                         }
                         if (preset is null)
                             try
@@ -75,10 +71,7 @@ internal static class ToolCallControls
                             }
                             catch (InvalidDataException error)
                             {
-                                preset = UnsupportedTurnToolExecutor.ToolError(
-                                    HandoffConfirmation.ErrorCode,
-                                    error.Message
-                                );
+                                preset = ToolFailure.Result(error.Message);
                             }
                     }
                 }

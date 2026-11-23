@@ -15,6 +15,7 @@ const other: Lang = lang === 'en' ? 'zh' : 'en';
     <p>{t.footer.tagline}</p>
     <nav aria-label="Footer">
       <a href={docsPath(lang)}>{t.footer.docs}</a>
+      <a href={`${t.path}#download`}>{t.footer.download}</a>
       <a href={blogPath(lang)}>{t.footer.blog}</a>
       <a href={githubUrl}>{t.footer.github}</a>
       <a href={`${githubUrl}/blob/main/LICENSE`}>{t.footer.license}</a>

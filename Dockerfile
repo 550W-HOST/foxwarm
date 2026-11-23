@@ -16,13 +16,12 @@ COPY package.json package-lock.json ./
 COPY packages/webui/package.json packages/webui/package-lock.json ./packages/webui/
 RUN npm ci && npm --prefix packages/webui ci
 
-COPY tsconfig.json tsconfig.artifacts.json ./
-COPY src/artifacts/managedPrepare.ts src/artifacts/reactCompiler.ts src/artifacts/rasterMetadata.ts ./src/artifacts/
 COPY dotnet ./dotnet
 COPY templates ./templates
 COPY skills ./skills
 COPY scripts ./scripts
 COPY packages/shared ./packages/shared
+COPY packages/artifact-runtime ./packages/artifact-runtime
 COPY packages/webui ./packages/webui
 COPY packages/cli-node ./packages/cli-node
 COPY packages/cli-node-runtime ./packages/cli-node-runtime

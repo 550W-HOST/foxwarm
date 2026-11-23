@@ -4,6 +4,7 @@ import { SidebarNavItem } from './SidebarNav'
 import NodeTargetSelect from './NodeTargetSelect'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
 import { selectLauncherDraftNode } from '../launcherDraft'
+import TerminalList, { RunningTerminalCount, type TerminalListOptions } from './TerminalList'
 
 interface CreateTabButtonProps {
   defaultNodeId: string
@@ -16,13 +17,22 @@ interface CreateTabButtonProps {
   /** `nav`: a sidebar navigation row. */
   variant?: 'button' | 'nav'
   onCancel?: () => void
+  /** Running terminals listed below the new-terminal form. */
+  terminalList?: TerminalListOptions
 }
 
-export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, nodeTargets, nodeTargetsError, onRefreshNodeTargets, inlineOptions = false, variant = 'button', onCancel }: CreateTabButtonProps) {
+export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, nodeTargets, nodeTargetsError, onRefreshNodeTargets, inlineOptions = false, variant = 'button', onCancel, terminalList }: CreateTabButtonProps) {
   const [open, setOpen] = useState(inlineOptions)
   const [nodeId, setNodeId] = useState(defaultNodeId || 'master')
   const [path, setPath] = useState(defaultPath || '')
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const refreshTerminalsRef = useRef(terminalList?.onRefresh)
+  refreshTerminalsRef.current = terminalList?.onRefresh
+
+  // Inline options are already open when they mount.
+  useEffect(() => {
+    if (open) refreshTerminalsRef.current?.()
+  }, [open])
 
   useEffect(() => {
     setNodeId(defaultNodeId || 'master')
@@ -64,6 +74,13 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
     setOpen(false)
   }
 
+  const toggleOptions = () => {
+    setOpen((value) => {
+      if (!value) onRefreshNodeTargets?.()
+      return !value
+    })
+  }
+
   const handleNodeChange = (nextNodeId: string) => {
     const nextDraft = selectLauncherDraftNode({ nodeId, path }, nextNodeId)
     if (nextDraft.nodeId === nodeId) return
@@ -81,7 +98,8 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
           onClick={handleDefaultCreate}
           disabled={!defaultCreateAvailable}
           title={defaultCreateAvailable ? `Create ${label.toLowerCase()} tab` : defaultAvailability.reason}
-          options={{ open, label: `Custom ${label.toLowerCase()} tab`, onToggle: () => setOpen((value) => { if (!value) onRefreshNodeTargets?.(); return !value }) }}
+          trailing={terminalList ? <RunningTerminalCount terminals={terminalList.terminals} className="ml-auto" /> : undefined}
+          options={{ open, label: terminalList ? 'Terminals' : `Custom ${label.toLowerCase()} tab`, onToggle: toggleOptions }}
         />
       )}
       {!inlineOptions && variant === 'button' && <div className="flex w-full items-stretch gap-1">
@@ -95,14 +113,9 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
           <span>{label}</span>
         </button>
         <button
-          onClick={() => {
-            setOpen((value) => {
-              if (!value) onRefreshNodeTargets?.()
-              return !value
-            })
-          }}
+          onClick={toggleOptions}
           className={`inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors ${baseClass}`}
-          title={`Custom ${label.toLowerCase()} tab`}
+          title={terminalList ? 'Terminals' : `Custom ${label.toLowerCase()} tab`}
         >
           <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
@@ -150,6 +163,19 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
               </button>
             </div>
           </div>
+          {terminalList && (
+            <div className={`mt-3 border-t border-fw-border pt-3 ${inlineOptions ? '' : '-mx-1 px-1'}`}>
+              <TerminalList
+                terminals={terminalList.terminals}
+                openTerminalIds={terminalList.openTerminalIds}
+                onOpen={(terminal) => {
+                  if (!inlineOptions) setOpen(false)
+                  terminalList.onOpen(terminal)
+                }}
+                onKill={terminalList.onKill}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

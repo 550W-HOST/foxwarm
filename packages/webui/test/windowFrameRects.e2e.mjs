@@ -90,6 +90,33 @@ test('edge fills extend through gutter and padding, but never across interactive
   })
 })
 
+test('no-drag holes cover exactly the controls that a later drag surface overlaps', async () => {
+  await withFixture(`
+    <div class="shell">
+      <div class="panel" data-frame-row="column" data-frame-in-band style="width:60px;position:relative">
+        <div id="rail" data-frame-drag style="position:absolute;left:0;top:0;width:120px;height:36px;z-index:5">
+          <button id="floating" style="margin-left:80px"></button>
+        </div>
+        <div data-frame-drag style="margin-top:40px;height:36px"><button id="below"></button></div>
+      </div>
+      <div class="panel" data-frame-row="inline" data-frame-in-band style="flex:1">
+        <div id="strip" data-frame-drag style="height:36px;padding-left:60px"><button id="own"><span role="button" tabindex="0">x</span></button></div>
+      </div>
+      <div class="panel" data-frame-row="inline" style="width:100px">
+        <div data-frame-drag style="height:36px"></div>
+      </div>
+    </div>`, async page => {
+    const result = await page.evaluate(() => {
+      const r = id => document.getElementById(id).getBoundingClientRect()
+      return { holes: window.windowFrame.computeFrameNoDragHoles(document), floating: r('floating').toJSON(), strip: r('strip').toJSON(), rail: r('rail').toJSON() }
+    })
+    // The rail floats over the strip, which follows it in the document: its button needs a hole.
+    assert.ok(result.rail.right > result.strip.left && result.floating.right > result.strip.left, 'fixture: the floating button overlaps the strip')
+    const { x, y, width: w, height: h } = result.floating
+    assert.deepEqual(result.holes, [{ x, y, w, h }])
+  })
+})
+
 test('the overlay surface colour is the page under the controls, composited and ignoring frame fills', async () => {
   await withFixture(`
     <div class="foxwarm-frame-fills"><div class="foxwarm-frame-fill" style="position:fixed;left:600px;top:0;width:200px;height:40px;background:transparent"></div></div>

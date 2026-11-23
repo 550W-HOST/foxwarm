@@ -54,8 +54,8 @@ public sealed class VectorRecallTurnTests
         if (embeddingFails)
         {
             Assert.Equal("VECTOR_OPERATION_FAILED", result["code"]!.GetValue<string>());
-            Assert.Equal("VECTOR_OPERATION_FAILED", result["error"]!["type"]!.GetValue<string>());
-            Assert.Contains("503", result["error"]!["message"]!.GetValue<string>());
+            Assert.Equal("VECTOR_OPERATION_FAILED", result.FailureCode()!);
+            Assert.Contains("503", result.FailureMessage()!);
             Assert.Null(result["retryable"]);
         }
         else

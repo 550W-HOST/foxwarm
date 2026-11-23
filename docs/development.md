@@ -8,7 +8,7 @@ Foxwarm 开发指南，覆盖本地运行、目录结构、调试方式，以及
 
 - Node.js 20.19+ (20.x) or 22.12+
 - npm
-- TypeScript 5.x
+- .NET 10 SDK and ASP.NET Core 10 runtime
 - （可选）Ollama，用于 embeddings
 - （可选）Chromium，用于浏览器自动化
 
@@ -29,22 +29,19 @@ npm run start:notmux
 # 后台 tmux 运行
 npm start
 
-# 开发监听
-npm run dev
-
 # 安装并构建 backend + WebUI
 npm run build-all
 ```
 
-## Core delivery and retained backend lane
+## Core delivery
 
 Default `npm run build` now builds the managed Main delivery graph: Shared, TS CLI Node, original WebUI, tracked Code extensions and Core resources. Install a net10.0-capable .NET SDK plus ASP.NET Core 10 runtime; no exact patch SDK is required. Fresh Monty acquisition uses Python 3. Linux source installation also needs make and GCC/G++ with libc/libutil development files (root node-pty still uses node-gyp). No optional image decoder or Desktop installer is required.
 
-`node .`, `npm run start:notmux`, tmux start/restart and Windows start/status/restart/stop use managed Main with the same installation-relative data/config selection. Windows restart stops before rebuilding loaded native files. Main TUI is not implemented: `--tui` fails before startup, while persisted `bot.enableTUI` logs an ignored diagnostic. Worker/controller hosting remains excluded without deleting its records. This candidate does not promote public Main or replace live installations. The root Docker recipe and production/test Compose consumers use the same managed delivery; default CI tests the managed host and explicit Source reference. macOS Main is not qualified; other-platform TS Node clients remain supported.
+`node .`, `npm run start:notmux`, tmux start/restart and Windows start/status/restart/stop use managed Main with the same installation-relative data/config selection. Windows restart stops before rebuilding loaded native files. Main TUI is not implemented: `--tui` fails before startup, while persisted `bot.enableTUI` logs an ignored diagnostic. This candidate does not promote public Main or replace live installations. The root Docker recipe and production/test Compose consumers use the same managed delivery; default CI tests the managed host. macOS Main is not qualified; other-platform TS Node clients remain supported.
 
 The Bash source controls keep an interactive shell in the dedicated tmux pane. `scripts/stop.sh` and `scripts/restart.sh` validate Main's PID from the checkout-root `foxwarm.pid`, send SIGTERM, and wait for Main and its launcher; after 60 seconds they force termination with SIGKILL. Restart builds in staging before stopping and promotes only after stop completes. The first restart of an older PID-less launch discovers Main in the exact pane's foreground group. See the [source update procedure](../skills/foxwarm-maintenance/references/SOURCE-UPDATES.md).
 
-Use `npm run build:reference` before retained TypeScript unit tests, Source Archive seeding and differential fixtures; `npm run test:reference` runs only the retained reference/package unit groups; `test:unit` also runs the managed suite. Default builds no longer compile TypeScript Main. `npm run dev` watches that reference source, not managed Main. `build:node`, `node` and `cli-node` remain independent Shared/TS CLI builds without .NET.
+`test:unit` runs the managed suite together with the maintained component groups. `build:node`, `node` and `cli-node` remain independent Shared/TS CLI Node builds without .NET. The TypeScript Main backend was removed; an existing TypeScript installation upgrades in place by following the [TypeScript migration guide](../website/src/content/docs/docs/typescript-migration.md).
 
 `npm run publish:core -- -r linux-x64 -o /path/to/empty/output` creates a framework-dependent runtime directory. `build:assets` prepares independent inputs for direct `dotnet publish`; publishing rejects missing built resources. Plain backend build/test never invokes npm. The same graph feeds optional Windows Desktop without a second WebUI copy. The source-built image preserves Node 24 / Debian 13 and operator tools, adds the official ASP.NET Core 10 runtime, and uses distro Chromium; see [Docker delivery](../test/README.md). See [host build and runtime prerequisites](../dotnet/README.md#build-publish-and-public-cli). The public `foxwarm` bin remains a one-shot CLI/help dispatcher, not a new Main start command.
 
@@ -52,21 +49,18 @@ Use `npm run build:reference` before retained TypeScript unit tests, Source Arch
 
 ```text
 foxwarm/
-├── dotnet/Foxwarm/         # managed Main
-├── src/                   # retained TypeScript reference
-│   ├── index.ts            # 启动入口
-│   ├── commands.ts         # 用户命令定义
-│   ├── commandHandler.ts   # 命令分发
-│   ├── config.ts           # 配置常量与 models config 加载
-│   ├── messageRouter.ts    # session queue 与消息路由
-│   ├── sessionManager.ts   # session 持久化与生命周期
-│   ├── sessionAgentOps.ts  # agent/session 重命名与迁移等操作
-│   ├── llm.ts              # LLM 请求与 tool-calling 主循环
-│   ├── tools.ts            # 通用工具实现
-│   ├── toolsSessionAgent.ts# session / agent 工具
-│   ├── nodesManager.ts     # 可选 remote node 管理
-│   ├── vector.ts           # LanceDB 向量记忆
-│   └── channels/           # 各 channel 实现
+├── dotnet/
+│   ├── Foxwarm/            # managed Main（入口 MainHost.cs）
+│   │   ├── Channels/       # 外部 channel 与 WebUI channel
+│   │   ├── Sessions/       # Session 持久化、生命周期与 turn
+│   │   ├── Models/         # 模型配置与 provider 协议
+│   │   ├── Tools/          # 工具定义、执行与授权
+│   │   ├── Nodes/          # remote Node 与 Provider
+│   │   └── Vector/         # LanceDB 向量记忆
+│   ├── Foxwarm.CliNode/    # managed CLI Node
+│   └── Foxwarm.Tests/      # managed 测试
+├── packages/shared/        # Main 与 Node 客户端共享的 TypeScript 代码
+├── packages/cli-node/      # TypeScript CLI Node
 ├── agents/                 # Agent 工作区与长期记忆
 ├── skills/                 # Skill 定义（可选）
 ├── state/                  # 运行时状态与日志（含 token 文件）
@@ -95,27 +89,15 @@ foxwarm/
 
 ### 新增命令
 
-命令定义位于 `src/commands.ts`。
-
-```ts
-'/mycommand': {
-  description: 'Do something',
-  requiresSession: true,
-  handler: async (ctx, args) => {
-    ctx.reply('done')
-  }
-}
-```
+命令解析与分发位于 `dotnet/Foxwarm/MessageRouter.Commands.cs`；公开管理命令见 [command administration](code-index/units/dotnet-command-administration.md)。
 
 ### 新增 Channel
 
-在 `src/channels/` 中实现 `Channel` 接口，并在 `src/index.ts` 中接入启动流程。
+在 `dotnet/Foxwarm/Channels/` 中实现 managed channel，并按 [shared external channels](code-index/units/dotnet-external-channels.md) 的约定接入注册与重载。
 
 ### 新增 Tool
 
-优先放到：
-- `src/tools.ts`（通用工具）
-- `src/toolsSessionAgent.ts`（session / agent / child-session 工具）
+工具定义与执行位于 `dotnet/Foxwarm/Tools/`；注册、发现与执行约定见 [unified tool registry](code-index/units/tools-registry.md)，授权声明见 [tool operation catalog](code-index/units/tool-operation-catalog.md)。
 
 ### 新增 Skill
 
@@ -138,20 +120,13 @@ skill 会自动出现在可见 skills catalog 中；需要完整说明时，使�
 npm run build
 ```
 
-根目录构建依次执行 shared、sandbox runtime、CLI node 和 Main 的 TypeScript 编译；
-sandbox runtime 和 CLI node 仍用 esbuild 生成各自的 bundle。此命令不构建 WebUI，
-WebUI 使用独立的 `npm --prefix packages/webui run build`。
+默认构建准备完整的 managed Main 交付：Shared、TS CLI Node、原始 WebUI、Code 扩展与 Core 资源。
+只构建后端时使用 `dotnet build dotnet/Foxwarm.sln`，它不准备前端资源。
 
-这四个 TypeScript 项目启用磁盘增量缓存，因此独立执行的 `npm run build` 也能复用
-上次编译结果，不需要开启 watch。Main 的缓存位于 `lib/.tsbuildinfo`，其余三个
-项目各自使用 `dist/.tsbuildinfo`；类型检查、declaration 和现有编译范围不变。
-esbuild bundle 仍在每次构建时生成。
-
-需要完整重建时，删除对应的整个 `lib/` 或 `dist/` 目录，让产物和缓存一起清理；
-不要保留缓存而只删除部分产物。清理全部后重新构建：
+需要完整重建 TypeScript 包时，删除对应的整个 `dist/` 目录，让产物和增量缓存一起清理：
 
 ```bash
-rm -rf lib packages/shared/dist packages/cli-node/dist
+rm -rf packages/shared/dist packages/cli-node/dist packages/artifact-runtime/dist
 npm run build
 ```
 
@@ -161,7 +136,7 @@ npm run build
 npm run quality:unused
 ```
 
-`quality:unused` 是只读 TypeScript 检查入口：root backend、`packages/shared`、`packages/cli-node` 会额外启用 `--noUnusedLocals --noUnusedParameters`；WebUI 使用自身 tsconfig 中已开启的 unused 检查。该命令不安装新依赖，也不生成构建产物。
+`quality:unused` 是只读 TypeScript 检查入口：`packages/shared`、`packages/artifact-runtime`、`packages/cli-node` 会额外启用 `--noUnusedLocals --noUnusedParameters`；WebUI 使用自身 tsconfig 中已开启的 unused 检查。该命令不安装新依赖，也不生成构建产物。
 
 ### 日志
 

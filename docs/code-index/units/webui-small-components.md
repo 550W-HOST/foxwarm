@@ -9,13 +9,13 @@ A collection of small, reusable React UI components and utility functions for th
 
 ## Key Exports
 
-- `MobilePageHeader` — Transparent progressive-blur mobile heading with positive-height parent-local measurement.
+- `MobilePageHeader` — Transparent progressive-blur mobile heading with positive-height parent-local measurement; an optional `leading` slot (System's Back action) precedes the title.
 - `ContentHeader` — Page/section header with icon, title, optional back button and actions; its sole-tab Workbench close/icon controls and empty-header pane drag entry are owned by [Single-tab headers](./webui-workbench.md#single-tab-headers)
 - `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal, section headers, separators and checked radio/toggle items
 - `CollapsedSidebar` — Fixed-width collapsed sidebar rail: expand, stacked Setup gear/settings dropdown, System/Tasks/Search icons, then New session and root-session avatar buttons
 - `AgentCreationMenu` — Shared Agents `+` control and single new-session/new-agent modal flow, including Agent tags plus inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
-- `CreateTabButton` — Split button (or, with `variant="nav"`, a sidebar navigation row) for creating terminal tabs with custom node/path options
+- `CreateTabButton` — Split button (or, with `variant="nav"`, a sidebar navigation row) for creating terminal tabs with custom node/path options; with `terminalList`, its dropdown and the mobile inline form also list running terminals ([TerminalList](./webui-terminal.md))
 - `CodeLaunchButton` — Sidebar navigation row (`SidebarNavItem`) with an options chevron for opening Code at a remembered node/path and controlling the global new-window default; its tooltip and option say "new window" in app windows and "new browser tab" in the browser ([app windows](./webui-app.md#app-windows-and-new-window-copy))
 - `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs

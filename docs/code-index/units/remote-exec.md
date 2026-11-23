@@ -1,6 +1,6 @@
 # Unit: External exec authority and Node Session events
 
-Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Exec.cs`, `dotnet/Foxwarm/Nodes/RemoteExecAuthority.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeEvents.cs`
+Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Exec.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.ExecControl.cs`, `dotnet/Foxwarm/Nodes/RemoteExecAuthority.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeEvents.cs`
 
 ## Purpose
 
@@ -28,14 +28,24 @@ An exec error with `execStarted:false` is a definite pre-start rejection. An omi
 
 Remote cwd is forwarded only for the captured selected Node. Explicit cwd and the official client's default selection work unchanged; stdout is not a cwd protocol. A peer-reported [placement record](../threads/tools-permissions-and-exec.md#d-exec-placement-record) is requested only through the advertised feature, passed to the result-metadata callback and stripped by `RemoteNodeResult`; it never commits Session cwd. Main filesystem resolution never receives a remote namespace. Main-owned status/history and Session creation remain possible offline; an actual remote effect fails without Master fallback. Standalone named Sessions use their explicit or target Agent defaults; same-Agent children, forks and timer-created Sessions follow their parent or captured owner Node, subject to binding. Timer admission and internal wait clocks are Main-owned rather than conditioned on an online external process.
 
+## Exec control
+
+A CLI Node that registered `features.execControl` accepts `exec_control_request {requestId, action:"stop", sessionId, execId, completionCapability}` and answers `exec_control_response {requestId, ok, result:{outcome}}` with `stopped`, `killed`, `ended`, `finished`, `already-requested` or `not-found`. The capability lets the Node check the exact owner grant it persisted at start. `NodeConnectionHub.StopRemoteExecAsync` sends it only for an active claim of the requesting owner (`ExecClaims.Active`), marks `Claim.StopRequested` once, and waits at most 15 seconds; a lost or late reply is an unknown outcome and is never resent, and a Node without the feature is unsupported without any frame. The Node stops with the shared `ExecStop` and records `stopRequestedAt`, so its own completion text reports the stop. Claims also carry command, dispatch time and placement cwd/log for [listing](./tools-local-io.md#d-exec-list-stop); they remain transient across a Main restart. `RemoteExecProtocolTests.ExecControl` and `CliNodeExecTests.Stop` cover the frames and the CLI side.
+
 ## External owners
 
 [Ordinary inbound MCP](./dotnet-inbound-mcp.md) owns a separate `ExternalExecOwnership` record set and actual v3 external wire owner. `RemoteExecAuthority.IssueExternal`/`VerifyExternal` reuse the persisted capability secret with the Source v2 external-completion payload; internal Session claims and completion ownership remain unchanged.
+
+## Design decisions
+
+### D-node-session-event-scope
+
+The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/RemoteExecProtocolTests.cs` uses real authenticated WebSockets and actual Session save lanes for strict pre/post-rename faults, duplicate ACK, exact registration, supported/unsupported Stop, explicit legacy/collision rejection, actual CLI definite-versus-unknown error projection and claim settlement, Session rename/delete and restart receipt-versus-new-authority evidence. `packages/webui/test/mainHostRemoteExec.e2e.mjs` uses owned real .NET hosts, unchanged official CLI processes and real Monty dispatch. Each official-client launch requires that process's registration acknowledgement and Main's executable online record before selection; an older retiring proxy connection cannot satisfy launch readiness. Selection checks the committed tool receipt as well as saved placement. It verifies side-effect counts, canonical pairs, Archive/authority, foreground/timeout/background, bounded direct parallel calls, concrete authorization, current/explicit/default cwd, switch/wait, strict-save retry, dropped ACK, official pre-start collision, interactive pre-start Stop, post-start Stop, Run queued, Session/Node lifecycle, official pending-event replay, Main restart uncertainty, creation/fork/timer placement and genuine ordinary background/trigger/onboot producers.
 
-`packages/webui/test/dotnetNodeExecTransitions.e2e.mjs` compares ordinary Source and .NET Main with the actual TypeScript and managed CLI clients. Each client launch waits for its local registration completion and Main's online record before reading the saved credentials. It combines cross-Agent Session moves with client connection recovery, moves an already accepted but unacknowledged completion before retry, and recovers a disconnected foreground execution before background registration. The checks retain the original dispatch ID/grant, one command effect, one durable receipt and no duplicate completion wake. `FOXWARM_TS_ROOT` selects the original TypeScript checkout; foreground disconnect waits for both the started-effect marker and the persisted foreground record, then retains each Main's existing result deadline rather than requiring immediate rejection. The protocol lifecycle test checks that completed deletion returns not-found through the old alias while rejecting late completion.
+`packages/webui/test/dotnetNodeExecTransitions.e2e.mjs` runs managed Main with the actual TypeScript and managed CLI clients. Each client launch waits for its local registration completion and Main's online record before reading the saved credentials. It combines cross-Agent Session moves with client connection recovery, moves an already accepted but unacknowledged completion before retry, and recovers a disconnected foreground execution before background registration. The checks retain the original dispatch ID/grant, one command effect, one durable receipt and no duplicate completion wake. Foreground disconnect waits for both the started-effect marker and the persisted foreground record, then retains Main's existing result deadline rather than requiring immediate rejection. The protocol lifecycle test checks that completed deletion returns not-found through the old alias while rejecting late completion.
 
 Transfer/copy, remote ToolScript source, image delivery, Code/PTY services, Shell HTTP, provider lifecycle and Worker/inbound MCP remain outside this unit's connected phase.

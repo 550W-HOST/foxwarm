@@ -255,11 +255,12 @@ public sealed partial class ModelUsageCostTests
             "session",
             new JsonObject { ["action"] = "status" }
         );
-        Assert.Contains("estimated cost=< $0.0001 USD", status["output"]!.GetValue<string>());
-        Assert.Contains(
-            "total estimated cost: < $0.0001 USD",
-            status["output"]!.GetValue<string>()
-        );
+        Assert.True(SessionCatalog.Number(status["lastUsage"]?["cost"]) > 0);
+        Assert.Equal(0.000081, SessionCatalog.Number(status["totalCost"])!.Value, 10);
+        // The `/status` text formats both costs.
+        var statusText = SessionStatus.Text(status);
+        Assert.Contains("estimated cost=< $0.0001 USD", statusText);
+        Assert.Contains("total estimated cost: < $0.0001 USD", statusText);
         var journals = await manager.Journal.ListAsync(owner.Id, null, null, null, 10);
         Assert.Equal(2, journals.Count);
         var savedCosts = new List<double>();

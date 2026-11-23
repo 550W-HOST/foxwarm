@@ -22,8 +22,7 @@ internal sealed partial class SessionToolExecutor
         var call = invocation.Value?.CompactCall ?? new JsonObject { ["args"] = args.DeepClone() };
         var malformed = call["argsParseError"] is not null;
         if (!malformed && !args.ContainsKey("inContext"))
-            return UnsupportedTurnToolExecutor.ToolError(
-                "unknown_tool",
+            return ToolFailure.Result(
                 "submit_compact_plan can be used only in a compaction request, or as the in-context-compaction skill describes."
             );
         if (
@@ -32,8 +31,7 @@ internal sealed partial class SessionToolExecutor
             && flag.TryGetValue<bool>(out var enabled)
             && !enabled
         )
-            return UnsupportedTurnToolExecutor.ToolError(
-                "unknown_tool",
+            return ToolFailure.Result(
                 "submit_compact_plan can be used only in a compaction request, or as the in-context-compaction skill describes."
             );
         if (
@@ -42,8 +40,7 @@ internal sealed partial class SessionToolExecutor
             || foregroundBatch is not long seq
             || CurrentCallId.Length == 0
         )
-            return UnsupportedTurnToolExecutor.ToolError(
-                "compact_plan_invalid",
+            return ToolFailure.Result(
                 "In-context submission requires an ordinary foreground tool batch; nested ToolScript and unattended calls are not supported."
             );
 
@@ -77,10 +74,7 @@ internal sealed partial class SessionToolExecutor
         }
         catch (CompactPlanInvalidException error)
         {
-            var result = UnsupportedTurnToolExecutor.ToolError(
-                "compact_plan_invalid",
-                error.Message
-            );
+            var result = ToolFailure.Result(error.Message);
             try
             {
                 var path =
@@ -90,7 +84,8 @@ internal sealed partial class SessionToolExecutor
                 result["nodeId"] = ExecutionNode;
                 if (ExecutionCwd is not null)
                     result["cwd"] = ExecutionCwd;
-                result["output"] = CompactPlanInput.RepairGuidance + "\n" + path;
+                result["note"] =
+                    "Plan validation failed. The submitted plan was saved to argsFilePath. Correct the reported error with edit, then resubmit using argsFilePath.";
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {

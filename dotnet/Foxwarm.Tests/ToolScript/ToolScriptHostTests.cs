@@ -395,7 +395,7 @@ public sealed class ToolScriptHostTests
         );
         f.Manager.Authorization.Invalidate();
         var denied = await f.Call("run_script", new JsonObject { ["filePath"] = " source.py " });
-        Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", denied.FailureCode()!);
         var inline = await f.Call(
             "run_script",
             new JsonObject { ["code"] = "return 'open('\n", ["filePath"] = "unused.py" }

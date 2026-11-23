@@ -96,10 +96,11 @@ public sealed class SecretSetupRouteTests
             CancellationToken.None
         );
         var pairing = manager.Nodes.Registry.PairingToken;
-        var output = info["output"]!.GetValue<string>();
+        Assert.Null(info["output"]);
+        var output = info.ToJsonText();
         Assert.DoesNotContain(pairing, output);
         Assert.Contains("PAIRING_TOKEN", output);
-        Assert.Equal(tokenFile, JsonNode.Parse(output)!["pairingTokenFile"]!.GetValue<string>());
+        Assert.Equal(tokenFile, info["pairingTokenFile"]!.GetValue<string>());
         Assert.Equal(pairing + "\n", await File.ReadAllTextAsync(tokenFile));
         Assert.Equal(
             UnixFileMode.UserRead | UnixFileMode.UserWrite,

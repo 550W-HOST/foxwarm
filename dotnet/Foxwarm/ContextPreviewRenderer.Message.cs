@@ -161,18 +161,11 @@ internal sealed partial class ContextPreviewRenderer
                 var name = Text(call["name"]);
                 var args = Args(call);
                 var line = $"[call:{name}] {args}";
-                var target = ToolActivity.Target(
+                var shown = ToolActivity.Preview(
                     name,
                     call["args"] as JsonObject ?? new JsonObject()
                 );
-                events.Add(
-                    new(
-                        target.Name,
-                        SessionWait.Text(call["id"]),
-                        false,
-                        ToolActivity.Summary(target.Name, target.Args)
-                    )
-                );
+                events.Add(new(shown.Name, SessionWait.Text(call["id"]), false, shown.Summary));
                 tool.Add(name + "\n" + args);
                 search.Add(name + "\n" + args);
                 if (detail != "names")

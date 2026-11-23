@@ -1,0 +1,24 @@
+---
+import Command from './Command.astro';
+
+// The server install commands, one tab per platform. The page script preselects the visitor's platform.
+export type InstallTab = { id: string; label: string; command: string; prompt: string };
+// `title`, when given, names the commands beside the tabs; the tab list is labelled by it or by `label`.
+interface Props { idPrefix: string; label: string; tabs: InstallTab[]; copy: string; title?: string; class?: string }
+const { idPrefix, label, tabs, copy, title, class: className } = Astro.props;
+---
+<div class:list={['command-card', className]} data-tabs>
+  <div class="command-head">
+    <div class="command-tabs" role="tablist" aria-label={title ?? label}>
+      {tabs.map((tab, index) => (
+        <button type="button" role="tab" id={`${idPrefix}-tab-${tab.id}`} aria-controls={`${idPrefix}-panel-${tab.id}`} aria-selected={index === 0 ? 'true' : 'false'} tabindex={index === 0 ? 0 : -1} data-tab={tab.id}>{tab.label}</button>
+      ))}
+    </div>
+    {title && <span class="command-title" aria-hidden="true">{title}</span>}
+  </div>
+  {tabs.map((tab, index) => (
+    <div class="command-panel" role="tabpanel" id={`${idPrefix}-panel-${tab.id}`} aria-labelledby={`${idPrefix}-tab-${tab.id}`} hidden={index !== 0}>
+      <Command command={tab.command} prompt={tab.prompt} copy={copy} wrap />
+    </div>
+  ))}
+</div>

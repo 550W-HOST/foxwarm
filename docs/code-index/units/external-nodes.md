@@ -42,6 +42,22 @@ The unchanged CLI's `session_list_request`, `session_history_request` and `sessi
 
 Advertised external exec and authenticated Node Session events are connected through the [remote exec unit](./remote-exec.md), including transient start-time authority, durable completion ACK, waits and truthful Stop. Whole-file transfer/copy, remote ToolScript source, image export/delivery and bound-Agent attachments are connected through the [file consumers unit](./external-node-files.md). Code/PTY Node consumers connect through the [fixed service transport](./external-node-services.md); The [Shell HTTP transport](./external-shell-http.md) connects the unchanged exec-only sh/curl client. Inline native ToolScript can dispatch ordinary Node tools through the same concrete registry. Protocol 3 negotiation alone does not grant external-owner or Worker behavior; Session events use authenticated placement or the exact exec completion grant. CLI/Android shared protocol consumers retain their existing contracts; Browser extension behavior is mapped in the [Browser Node module](../modules/browser-node.md).
 
+## Design decisions
+
+- [2026-06-24] Administrative node deletion/rename should not leave an online node usable under stale credentials; `NodeConnectionHub.Disconnect` lets command flows unregister the runtime node and close its WebSocket after registry mutation.
+
+### D-node-restart-and-revocation
+
+[2026-11-15, user decision] System Nodes offers existing CLI restart commands without a credential, using the Node's saved credentials. Official clients report non-secret launch method, platform and installation paths; older or unknown installations have editable defaults. Shell clients retain no credentials, so restarting them requires the operator's token or explicit reissue. Main cannot recover an existing plaintext token. Reissue replaces its hash, invalidates the old token, disconnects the current transport and returns the replacement command/token once to the administrator. The mounted dialog discards it on close.
+
+Deletion revokes credentials, disconnects and removes the approved record. Descendants require explicit cascade confirmation; processes and files on the remote machine are untouched. Provider-owned Nodes use Provider destruction, not native credential deletion; the System Nodes delete action is unavailable for those Nodes and mixed subtrees. Implementation: [external Node maintenance](#administrator-node-maintenance), [System Nodes](./webui-nodes.md).
+
+### D-node-credential-hash
+
+**Security and persisted-credential contract, independently supported by authenticated Node consumers.** It constrains [Node authority](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries). Credential verification/storage is an implementation boundary with a real security consumer, not a rationale for adding unrelated artifact fingerprints.
+
+Persist approved authentication tokens only as hashes on the master; return plaintext once through the approved pending claim.
+
 ## Tests
 
 `NodeSessionRequestTests` covers all three negotiated generations, cold metadata listing, canonical aliases, count bounds, history text shapes, malformed/missing requests, reassignment during real cold admission, exact-connection replacement, shutdown cancellation and incompatible quarantine. `packages/webui/test/mainHostCliSessions.e2e.mjs` uses the unchanged actual TS `NodeClient` methods against an owned Main/local model: list/history/send, normal wrapped ingress and model reply, denied/reassigned/bound-Agent scope and cold Main restart. It does not launch a browser or claim a new CLI implementation.
@@ -76,7 +92,7 @@ Public template GETs instead substitute the validated first forwarded-host/Host 
 
 ## Administrator Node maintenance
 
-[D-node-restart-and-revocation](../modules/nodes.md#d-node-restart-and-revocation) owns the user contract. `POST /api/nodes/{nodeId}/restart-command` uses `NodeBootstrap.ExistingLaunch` and the existing command builder in stored-credential mode, without reading pairing credentials. Foreground/background/interactive/Windows reuse the launchers; systemd restarts the reported system/user unit and Docker starts the existing Compose project. Body overrides remain unpersisted drafts.
+[D-node-restart-and-revocation](#d-node-restart-and-revocation) owns the user contract. `POST /api/nodes/{nodeId}/restart-command` uses `NodeBootstrap.ExistingLaunch` and the existing command builder in stored-credential mode, without reading pairing credentials. Foreground/background/interactive/Windows reuse the launchers; systemd restarts the reported system/user unit and Docker starts the existing Compose project. Body overrides remain unpersisted drafts.
 
 `POST /api/nodes/{nodeId}/reissue-token` validates inputs before `NodeConnectionHub.Reissue`. Hash replacement and retirement share registration's publication gate and the registry mutation lane. `ApprovedNodeRegistry.Reissue` updates hash/timestamp and clears old unclaimed pairing handoffs. Precommit failure retains trust; known-committed failure disconnects and reports the durability error. The no-store response returns the replacement token and direct-auth command once. This administrator HTTP operation leaves the model-facing private-file creation contract unchanged.
 

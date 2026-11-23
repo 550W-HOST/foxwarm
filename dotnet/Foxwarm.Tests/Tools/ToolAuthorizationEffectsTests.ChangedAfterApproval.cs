@@ -33,7 +33,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal("tool_approval_unavailable", Error(response));
         Assert.Equal(
             "This call changed while it waited for approval: node `read` now needs approval under rule source, which the approval did not cover. It was not executed.",
-            SessionWait.Text(response["error"]!["message"])
+            response.FailureMessage()
         );
         var record = Assert.Single(Records(caller));
         Assert.Equal("cancelled", SessionWait.Text(record["status"]));

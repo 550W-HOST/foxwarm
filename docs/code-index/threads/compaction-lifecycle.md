@@ -4,6 +4,10 @@
 
 Owns the transient mechanics around a compaction job: snapshot planning, the shared snapshot, job, and commit engine, ready-first scheduling against ordinary input, commit fences, busy windows, cancellation, and Session-worker placement. What a plan may contain is in [context compaction](./context-compaction.md). The active-history authority contract is in the parent [thread](./context-compaction-and-recall.md#d-context-active-history-authority).
 
+## Idle scheduling
+
+The maintained C# owner implements [the optional idle trigger](./context-compaction.md#d-context-idle-compaction) in `SessionCompactor.Idle.cs`. It attaches only after exact-owner admission, arms at processor release, and uses an injected `TimeProvider`. State/settings notifications reuse a cached measurement rather than scanning history. Timer callbacks detach completed-turn execution scopes, recheck the latest active request and current route, and enter the existing compact registry under the Session state gate. Disposal/retirement cancels the timer; shutdown also drains an already firing admission before cancelling the independent planner. In-memory attempt/commit watermarks prevent old measurements from rearming; a fired timer is one-shot for its measurement, including a planner no-op, rather than retrying an expired deadline.
+
 ## Snapshots and jobs
 
 - Compact planning snapshots preserve custom memory sources and mutate prompt state only on the detached clone; commit refreshes live memory using its recorded concrete snapshot identity. Canonical prompt behavior: [conditional memory snapshots](./conditional-memory-snapshots.md).
@@ -27,7 +31,6 @@ Completed jobs are applied only at the owner's established safe points, under th
 
 ## Modules and units
 
-- [src-session-history](../units/src-session-history.md)
 
 ## Design decisions
 

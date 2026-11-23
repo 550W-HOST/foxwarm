@@ -91,7 +91,7 @@ public sealed class CreationModelParameterTests
             id = "source_" + name;
         }
         var response = await f.ToolAsync(tool, args);
-        var error = response?["error"]?["message"]?.GetValue<string>();
+        var error = response?.FailureMessage();
         if (error is not null)
             throw new InvalidDataException(error);
         var created = await f.Manager.RequiredAsync(id);

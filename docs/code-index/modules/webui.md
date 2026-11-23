@@ -1,6 +1,6 @@
 # Module: WebUI
 
-The React client is shared with the .NET host. Backend-specific access identities and route behavior below describe the retained TypeScript implementation; current .NET authentication and integration gaps are documented in the [.NET WebUI boundary](../threads/dotnet-webui-boundary.md).
+The React client is shared with the .NET host. Current .NET authentication and integration gaps are documented in the [.NET WebUI boundary](../threads/dotnet-webui-boundary.md).
 
 - [Interactive artifacts](../threads/webui-artifacts.md) — versioned chart and sandboxed React content, modular publication and rendering.
 
@@ -26,18 +26,18 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-realtime](../units/webui-realtime.md) — one page-scoped multiplexed WebSocket, revisioned logical subscriptions, and server hub.
 - [webui-demo](../units/webui-demo.md) — separate static demo build that replays recorded API and realtime data read-only for the website.
 - [webui-chat-composer](../units/webui-chat-composer.md) — draft/input, autocomplete, attachments, and model controls.
+- [webui-running-commands](../units/webui-running-commands.md) — a Session's background commands with Stop, and execId links between receipts and completion events.
 - [WebUI timeline](./webui-timeline.md) — focused module for Timeline modes, pane-local Search, Reasoning, Conversation and Activity contracts, with navigation to the rendering units.
 - [webui-workbench](../units/webui-workbench.md) — persisted tab/pane layout and compatibility normalization.
 - [webui-window-frame](../units/webui-window-frame.md) — title-area layout and window drag for the Desktop hosts and the PWA window-controls overlay.
 - [webui-workbench-content](../units/webui-workbench-content.md) — stable tab instances, shared slot geometry, current-pane headers/focus, and content error isolation.
-- [webui-setup-view](../units/webui-setup-view.md), [webui-settings](../units/webui-settings.md), [settings menu](../units/webui-settings-menu.md).
+- [webui-setup-view](../units/webui-setup-view.md), [webui-settings](../units/dotnet-webui-tasks-relations.md), [settings menu](../units/webui-settings-menu.md).
 - [webui-theme-system](../units/webui-theme-system.md) — versioned portable manifests, built-ins, browser-local registry/selection, semantic runtime, Setup management, and renderer adapters.
 - [webui-terminal](../units/webui-terminal.md) — xterm browser client.
 - [webui-editor](../units/webui-editor.md) (including the [shared Debug/Timeline JSON inspector](../units/webui-editor.md#d-editor-json-inspection)), [small components](../units/webui-small-components.md).
-- [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/WS/SSE/upload/setup/terminal routes.
 - WebUI identity access is defined by `access.identities.<identityId>.surfaces.webui`; there is no persisted WebUI identity-token storage layer.
 - Session list/state/history/settings routes and session update streams consume immutable SessionRuntime DTOs; destructive lifecycle and channel-attachment routes retain their explicit manager-owned coordination boundary.
-- [VS Code Web routes](../units/src-vscode-web-routes.md) and [extensions](../units/vscode-web-extensions.md).
+- [VS Code Web routes](../units/code-services.md) and [extensions](../units/vscode-web-extensions.md).
 
 ## URL and transport boundaries
 
@@ -123,7 +123,7 @@ All REST, SSE, WebSocket, download, Code, extension, and embedded URLs derive fr
 
 The server derives a download-specific key from the active instance token using a domain-separated HMAC-SHA256, then signs the resource kind, file path or blob ID, optional Session route ID, download filename, preview option and expiry. Global blobs, Session blobs and arbitrary paths occupy distinct MAC namespaces; a grant cannot move between them or between Sessions. Verification uses constant-time MAC comparison and applies only to the download resource's GET/HEAD requests. No additional secret file or database is introduced, and the instance token never enters the URL. Ordinary restart retains grants; activating a different instance token invalidates prior grants. Expiry is checked when the request begins, with no timer interrupting an accepted stream.
 
-Reply-file, expanded tool, image-viewer and unsafe-image attachment download actions obtain a fresh signed URL with their existing browser credentials immediately before handing it to the native browser downloader. Grants stay action-local rather than entering canonical messages or history. Existing unsigned authenticated thumbnails/previews, filename sanitization, raster-only inline MIME, HEAD behavior and deployment prefixes remain supported. Explicit blob downloads request attachment disposition without changing their safe MIME; local `blob:`/`data:` sources do not require signatures. Implementation and HTTP/browser evidence: [WebUI routes](../units/src-channels-webui.md) and [reply files](../units/webui-reply-files.md).
+Reply-file, expanded tool, image-viewer and unsafe-image attachment download actions obtain a fresh signed URL with their existing browser credentials immediately before handing it to the native browser downloader. Grants stay action-local rather than entering canonical messages or history. Existing unsigned authenticated thumbnails/previews, filename sanitization, raster-only inline MIME, HEAD behavior and deployment prefixes remain supported. Explicit blob downloads request attachment disposition without changing their safe MIME; local `blob:`/`data:` sources do not require signatures. Implementation and HTTP/browser evidence: [WebUI routes](../units/dotnet-webui-core.md) and [reply files](../units/webui-reply-files.md).
 
 ### D-webui-workbench-shell
 

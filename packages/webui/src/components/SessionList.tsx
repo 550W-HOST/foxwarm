@@ -10,6 +10,7 @@ import CodeLaunchButton from './CodeLaunchButton'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
+import { RunningTerminalCount, type TerminalListOptions } from './TerminalList'
 
 type HomeTab = 'sessions' | 'tasks' | 'search' | 'setup'
 interface SessionListProps {
@@ -38,6 +39,7 @@ interface SessionListProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
+  terminalList?: TerminalListOptions
   onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
@@ -68,6 +70,7 @@ export default function SessionList({
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  terminalList,
   onCreateAgent,
   onCreateSession,
   idleNotificationModes,
@@ -104,13 +107,13 @@ export default function SessionList({
   const moreEntries: ContextMenuEntry[] = [
     { key: 'agents', label: 'System', icon: <Network size={16} />, onSelect: onSelectArchitecture },
     { key: 'code', label: 'Code', icon: <Code2 size={16} />, onSelect: () => setUtility('code') },
-    { key: 'terminal', label: 'Terminal', icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
+    { key: 'terminal', label: <span className="flex min-w-0 items-center gap-2" data-workspace-tool="terminal"><span className="min-w-0 truncate">Terminal</span><RunningTerminalCount terminals={terminalList?.terminals} className="ml-auto" /></span>, icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
     ...(onSelectLogs ? [{ key: 'logs', label: 'Logs', icon: <FileText size={16} />, onSelect: onSelectLogs }] : []),
   ]
   const navClass = 'flex min-h-12 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-2 text-xs hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring'
 
   return (
-    <div data-mobile-session-home data-mobile-standalone={('standalone' in navigator && navigator.standalone === true) || undefined}
+    <div data-mobile-session-home
       className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 flex flex-col bg-fw-canvas">
       <section id="mobile-panel-sessions" role="tabpanel" aria-labelledby="mobile-tab-sessions" className="min-h-0 flex-1 flex-col" style={{display: primaryTab === 'sessions' ? 'flex' : 'none'}}>
       <ContextMenu open={!!moreAnchor} entries={moreEntries} anchorRect={moreAnchor} preferredPlacement="bottom-end"
@@ -128,7 +131,7 @@ export default function SessionList({
         </button>
 
         )} toolbarContainerClassName="px-4 py-2" listContainerClassName="mobile-session-scroll px-4 pt-2" />
-        <div className="fixed right-4 z-20" style={{bottom: 'calc(var(--foxwarm-home-safe-area-bottom) + 88px)'}}>
+        <div className="fixed right-4 z-20" style={{bottom: 'calc(var(--foxwarm-app-safe-area-bottom) + 88px)'}}>
           <AgentCreationMenu agents={agents} currentAgent={currentSessionRecord?.agent} onCreateAgent={onCreateAgent} onCreateSession={onCreateSession}
             creationRequest={creationRequest} onCreationRequestHandled={() => setCreationRequest(null)} directCreate
             triggerLabel="New session" triggerClassName="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-fw-accent px-4 text-sm font-medium text-fw-accent-text shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring focus-visible:ring-offset-2"
@@ -161,7 +164,8 @@ export default function SessionList({
             onOpen={(node, path) => {setUtility(null); onOpenCode(node, path)}} onNodeChange={onCodeNodeChange} onPathChange={onCodePathChange}
             onOpenInNewWindowChange={onCodeOpenInNewWindowChange} onRefreshNodeTargets={onRefreshNodeTargets} />
             : <CreateTabButton inlineOptions onCancel={() => setUtility(null)} defaultNodeId={defaultNodeId} defaultPath={defaultPath}
-              onCreate={options => {setUtility(null); onCreateTerminalTab(options)}} nodeTargets={nodeTargets} nodeTargetsError={nodeTargetsError} onRefreshNodeTargets={onRefreshNodeTargets} />}
+              onCreate={options => {setUtility(null); onCreateTerminalTab(options)}} nodeTargets={nodeTargets} nodeTargetsError={nodeTargetsError} onRefreshNodeTargets={onRefreshNodeTargets}
+              terminalList={terminalList && { ...terminalList, onOpen: terminal => {setUtility(null); terminalList.onOpen(terminal)} }} />}
         </dialog>, document.body)}
     </div>
   )

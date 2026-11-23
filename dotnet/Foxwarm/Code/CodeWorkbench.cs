@@ -63,6 +63,7 @@ internal sealed partial class CodeWorkbench
         || Directory.Exists(Path.Combine(extensionRoot, "assets", "vscode-web"));
     private HttpAssets CodeAssets => PayloadHasCode ? payloadAssets : externalAssets;
     private string Assets => PayloadHasCode ? Path.Combine(extensionRoot, "assets") : installedAssets;
+    internal const string RoutePath = "/vscode-web";
     private const string AssetRoot = HttpAssets.CodePrefix + "/vscode-web";
     private const string YamlRoot = HttpAssets.CodePrefix + "/extensions/redhat.vscode-yaml";
 
@@ -262,7 +263,7 @@ internal sealed partial class CodeWorkbench
         Foxwarm.Nodes.NodeProviderRegistry.ValidateId(nodeId);
         if (FolderNode(folder) != nodeId)
             folder = "foxwarm://node+" + Uri.EscapeDataString(nodeId) + "/";
-        var route = address.Prefix.ToUriComponent() + "/vscode-web";
+        var route = address.Prefix.ToUriComponent() + RoutePath;
         var baseUrl = origin + route + "/static";
         var extensions = new JsonArray();
         foreach (
@@ -298,12 +299,7 @@ internal sealed partial class CodeWorkbench
         };
         foreach (var setting in PrivacyDefaults)
             configuration["configurationDefaults"]![setting.Key] = setting.Value!.DeepClone();
-        using var resource = Assembly
-            .GetExecutingAssembly()
-            .GetManifestResourceStream("Foxwarm.Code.workbench.html")!;
-        using var reader = new StreamReader(resource);
-        return reader
-            .ReadToEnd()
+        return WorkbenchTemplate
             .Replace("@@CONFIGURATION@@", WebUtility.HtmlEncode(configuration.ToJsonText()))
             .Replace(
                 "@@ASSETBASE@@",
@@ -314,6 +310,16 @@ internal sealed partial class CodeWorkbench
             .Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToHtmlJson())
             .Replace("@@HASYAML@@", HasYaml ? "true" : "false")
             .Replace("@@HASPTY@@", hasPty ? "true" : "false");
+    }
+
+    private static readonly string WorkbenchTemplate = ReadResource("workbench.html")
+        .Replace("@@WORKBENCHFRAME@@", ReadResource("workbenchFrame.js"));
+
+    private static string ReadResource(string name)
+    {
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("Foxwarm.Code." + name)!;
+        using var reader = new StreamReader(resource);
+        return reader.ReadToEnd();
     }
 
     private static string PatchWorkbench(string source)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This thread owns the authenticated remote transport contract among the master [nodes module](../modules/nodes.md), full [CLI node](../modules/cli-node.md), and lightweight [browser node](../modules/browser-node.md). The authenticated WebSocket transport is one implementation behind the generic Node provider boundary; it is not the definition of every Node.
+This thread owns the authenticated remote transport contract among the master [nodes module](../modules/dotnet-nodes.md), full [CLI node](../modules/cli-node.md), and lightweight [browser node](../modules/browser-node.md). The authenticated WebSocket transport is one implementation behind the generic Node provider boundary; it is not the definition of every Node.
 
 ## Pairing and authentication
 
@@ -54,7 +54,7 @@ Remote background exec completion is a narrower protocol exception, not a generi
 ## Tool-result compatibility
 
 - Current CLI and browser-extension screenshot writers emit `inlineData` with `mimeType`; they never write text markers or source-specific base64 fields.
-- `src/nodes/legacyToolResultCompatibility.ts` is the one read-old boundary for remote node results. It recognizes prior `{image, encoding, format}`, `{screenshot, mimeType}`, `__IMAGE__`, and `__SCREENSHOT__` wire shapes and converts them to the current structured form before generic tool-result processing.
+- `dotnet/Foxwarm/Nodes/RemoteNodeResult.cs` is the one read-old boundary for remote node results. It recognizes prior `{image, encoding, format}`, `{screenshot, mimeType}`, `__IMAGE__`, and `__SCREENSHOT__` wire shapes and converts them to the current structured form before generic tool-result processing.
 - The generic image pipeline does not recognize those old node shapes. Identical text from master tools or MCP remains ordinary tool output.
 - The compatibility file, its test, and its single `NodesManager.handleToolResponse` call form one deletable unit. They can be removed together after supported nodes and extensions have all upgraded to structured writers.
 
@@ -64,19 +64,13 @@ The master serves current launch scripts, compose, PowerShell, a minimal dynamic
 
 ## Units
 
-- [Shell HTTP Node](../units/src-nodes-shell-http.md)
 
-- [src-nodes-manager](../units/src-nodes-manager.md)
-- [src-node-providers](../units/src-node-providers.md)
-- [src-nodes-misc](../units/src-nodes-misc.md)
-- [src-nodes-registry](../units/src-nodes-registry.md)
 - [CLI node client](../units/cli-node-client.md)
 - [CLI node proxy](../units/cli-node-master-proxy.md)
 - [CLI node TUI](../units/cli-node-tui.md)
 - [browser node extension](../units/browser-node-extension.md)
 - [shared node tools](../units/shared-node-tools.md)
 - [shared Node protocol](../units/shared-node-protocol.md)
-- [terminal router](../units/src-terminal-router.md)
 
 ## Design decisions
 
@@ -92,7 +86,7 @@ External MCP callers use native unified Nodes for all forms. Legacy external pee
 
 An exec-only Shell Node is an authenticated remote Node behind the same provider/selection boundary. It uses the existing pre-created per-node credential and a genuine HTTP long-poll transport, without client JSON parsing, WebSocket emulation, filesystem services, or external-owner capabilities. The current C# Main supports the existing POSIX sh/curl client and an explicit Windows PowerShell 5.1 dialect, independent of Main's host OS. Main keeps the original dispatch Session, generated exec ID, and signed completion grant; the client reports only that task's result. Foreground timeout transitions to the same background command and its completion uses the existing durable Session-event admission/ACK boundary. No network failure requeues an already delivered command.
 
-The client drains output while retaining only fixed 4 KiB head/tail samples and total bytes; it does not save full logs. Its startup directory supplies default/relative cwd without creating Agent directories. HTTP runtime state, task contexts and bounded receipts are process-local, so restart/loss of context means an unknown outcome rather than crash continuation. Completion expiry does not kill a command or remove an active collector. Exact current implementation and validation boundaries are owned by [External Shell HTTP](../units/external-shell-http.md); the retained TypeScript transport is indexed in [src-nodes-shell-http](../units/src-nodes-shell-http.md).
+The client drains output while retaining only fixed 4 KiB head/tail samples and total bytes; it does not save full logs. Its startup directory supplies default/relative cwd without creating Agent directories. HTTP runtime state, task contexts and bounded receipts are process-local, so restart/loss of context means an unknown outcome rather than crash continuation. Completion expiry does not kill a command or remove an active collector. Exact current implementation and validation boundaries are owned by [External Shell HTTP](../units/external-shell-http.md).
 
 Official clients recover temporary poll failures, the 90-second polling expiry and Main restart using a read-only registration HEAD followed by a conditional POST. The existing publication/revocation gate checks the current live Shell or WebSocket identity. A proposed connection can acknowledge its own lost successful response without replacing its queue, or replace its exact observed predecessor; automatic recovery cannot displace a conflicting live successor. When no live transport remains after expiry or Main restart, a still-authorized client may recover, with admission order selecting the current connection. A client that observes replacement stops until explicitly started again. Recoverable unavailability, a still-pending poll and replacement have separate marked HTTP reasons. Invalid/revoked credentials and user stop remain terminal; temporary registration failures wait two seconds between attempts. Existing POST/poll/report clients retain their wire contract; current clients fall back to legacy one-shot registration when the server lacks the HEAD handshake. Report workers retain their delivered task's original connection rather than adopting new polling state.
 
@@ -106,11 +100,13 @@ The independent Nodes Workbench page shows Node metadata without Session lists, 
 
 Linux CLI (including systemd), interactive CLI, Docker (including manual Compose), and Windows default to pairing approval and can switch to a pre-created token. Linux and Windows Shell use direct authentication only. Generated POSIX Shell bootstrap streams into `sh -s --`; Windows Shell and CLI invoke downloaded script content through a ScriptBlock with separately bound parameters. CLI program/state directories remain persistent. Browser uses the existing request/approve pairing flow, with a credential-free unpacked extension download, directly visible authenticated address/token details, concise browser-specific installation steps and explicit sharing. Creation is always an explicit action; method/mode changes and command updates never create or rotate an identity. One modal-owned created identity can supply every method's supported direct-auth input. Its bound name/address remain separate from editable pairing drafts, while directory changes regenerate commands with the same credential.
 
-Browser setup credentials are modal-owned, not persisted or placed in ordinary summaries, URLs or logs; closing aborts requests and discards modal state, but does not revoke an already accepted creation. No recovery or automatic creation retry is introduced. No new pairing identity, claim protocol or token platform is introduced. Implementation: [WebUI Node onboarding](../units/webui-node-onboarding.md) and [authenticated onboarding routes](../units/src-webui-node-onboarding.md).
+Browser setup credentials are modal-owned, not persisted or placed in ordinary summaries, URLs or logs; closing aborts requests and discards modal state, but does not revoke an already accepted creation. No recovery or automatic creation retry is introduced. No new pairing identity, claim protocol or token platform is introduced. Implementation: [WebUI Node onboarding](../units/webui-node-onboarding.md) and [authenticated onboarding routes](../units/webui-node-onboarding.md).
 
 ### D-node-thread-call-cancellation
 
 A Node may advertise optional `capabilities.features.toolCallCancellation: true` for ordinary non-exec calls. C# Main sends correlated `tool_call_cancel {callId}` when that dispatched call's Session cancellation or deadline ends its wait. Only that authenticated connection receives the cancel; unsupported clients retain unknown-outcome behavior. Browser Node aborts the exact call's pending Ask/queued work and discards canceled results; the C# CLI Node forwards the cancel to its managed browser host. Already accepted page effects cannot be undone and are not retried.
+
+[2026-11-18] Current .NET CLI Nodes on native platforms advertise `features.execControl` and answer correlated `exec_control_request` (stop) for a background Session exec with `exec_control_response`; Main sends it only to such Nodes, waits at most 15 seconds and never resends. Contract: [exec control](../units/remote-exec.md#exec-control).
 
 This capability does not change persistent exec. Its separately negotiated `execWaitCancellation` still ends foreground waiting through the existing background-registration handshake while retaining exec reply correlation and process lifetime. No Browser-specific Core routing is introduced.
 

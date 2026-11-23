@@ -69,10 +69,9 @@ export async function createHostFixture(name, options = {}) {
   async function start() {
     const startup = { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_SYNC_FILE_LOG: '0', ...(options.env || {}), FOXWARM_DATA_DIR: data, }
     ownedListener = false
-    const source = options.runtime === 'source'
-    const native = !source && (options.coreExecutable || process.env.FOXWARM_TEST_MAIN_EXECUTABLE)
-    const command = source ? process.execPath : native || join(process.env.DOTNET_ROOT, 'dotnet')
-    const arguments_ = native ? [] : [resolve(source ? 'lib/index.js' : options.corePath || 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')]
+    const native = options.coreExecutable || process.env.FOXWARM_TEST_MAIN_EXECUTABLE
+    const command = native || join(process.env.DOTNET_ROOT, 'dotnet')
+    const arguments_ = native ? [] : [resolve(options.corePath || 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')]
     const child = spawn(command, arguments_, {
       stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: startup
     })
@@ -85,19 +84,18 @@ export async function createHostFixture(name, options = {}) {
       child.once('exit', exited); child.once('error', finish)
       const observe = bytes => {
         output = (output + bytes).slice(-20000)
-        const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: ([^\r\n]+)\r?\n/m.exec(output)?.[1]
+        const bound = /^Main HTTP listening: ([^\r\n]+)\r?\n/m.exec(output)?.[1]
         if (bound) {
           // Published Main listens on the wildcard default, or on loopback when the test's
           // config.yaml sets bot.httpHost: 127.0.0.1.
-          const expected = source ? [origin] : [`http://0.0.0.0:${port}`, origin]
+          const expected = [`http://0.0.0.0:${port}`, origin]
           if (!expected.includes(bound) || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
           else { ownedListener = true; finish() }
         }
       }
       child.stdout.on('data', observe); child.stderr.on('data', observe)
     })
-    if (source) await until(async () => (await api('GET', '/api/nodes')).status === 200, 'Source routes ready')
-    else { const health = await api('GET', '/health'); assert.equal(health.status, 200); assert.equal(health.body?.status, 'ready') }
+    const health = await api('GET', '/health'); assert.equal(health.status, 200); assert.equal(health.body?.status, 'ready')
   }
   async function openApp(credential = token) {
     browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.chromeArgs || [])], userDataDir: join(root, 'browser') })
@@ -124,8 +122,7 @@ export async function createHostFixture(name, options = {}) {
     host.child.kill('SIGTERM')
   }
   async function stop(afterAdmission) {
-    if (options.runtime === 'source') signalStop()
-    else assert.equal((await api('POST', '/admin/shutdown')).status, 202)
+    assert.equal((await api('POST', '/admin/shutdown')).status, 202)
     await afterAdmission?.()
     assert.deepEqual(await waitForExit(), { code: 0, signal: null }, host.output)
   }

@@ -313,7 +313,7 @@ public sealed partial class LlmFailureStateTests
             fixture.Owner.History(),
             row =>
                 row["role"]?.GetValue<string>() == "tool"
-                && row.ToJsonString().Contains("unknown_tool")
+                && row.ToJsonString().Contains("Unknown tool")
         );
         Assert.Equal("idle", State(fixture.Owner));
         Assert.Null(fixture.Owner.Entry.Snapshot().Meta["llmFailed"]);

@@ -6,22 +6,28 @@ import { createServer } from 'node:http'
 import { readFile, readdir, mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { createRequire } from 'node:module'
-import express from 'express'
+import { createHash } from 'node:crypto'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { createHostFixture } from './mainHostFixture.mjs'
+import { createMainHostProxy } from './mainHostProxy.mjs'
+import { restoreStateSnapshot, stateSnapshot } from './stateSeeds.mjs'
 
-const require=createRequire(import.meta.url)
-const {HttpServer}=require('../../../lib/httpServer.js')
-const {registerWebUiFileDownloads,registerWebUiBlobDownloads}=require('../../../lib/channels/webuiFileDownloads.js')
-const {resolveImageBlobPath}=require('../../../lib/imageBlobs.js')
+// The ImageParts component runs against an owned managed Main behind a recording proxy. Its Archive
+// holds one referenced PNG at continuous-parent seq 150, which a scoped identity may read only there.
+const fixture = await createHostFixture('image-parts')
+const seed = await restoreStateSnapshot(stateSnapshot('continuous-history'), fixture.data)
+const scopedSession = seed.parent, archiveSeq = '150'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const imagePartsEntry = new URL('../src/components/ImageParts.tsx', import.meta.url).pathname
-const pngId = `${'a'.repeat(64)}.png`
-const svgId = `${'b'.repeat(64)}.svg`
+const pngId = seed.image.blobId
+const svgBytes = Buffer.from('<svg/>')
+const svgId = createHash('sha256').update(svgBytes).digest('hex') + '.svg'
 const missingId = `${'c'.repeat(64)}.png`
-const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+const blobPath = id => path.join(fixture.data, 'state/image-blobs', id.slice(0, 2), id)
+const pngBytes = await readFile(blobPath(pngId))
+const pngWidth = seed.image.width
 
 async function buildFixtureBundle() {
   const source = `
@@ -36,7 +42,7 @@ async function buildFixtureBundle() {
         React.createElement(ImageParts, { imageParts: [{ inlineDataRef: ref }], keyPrefix: id }))
     )
     render('safe', { blobId: '${pngId}', imageId: 'safe', mimeType: 'image/png', apiPath: '/blobs/${pngId}' })
-    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}?archiveSeq=2' }, 'reader/main')
+    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}?archiveSeq=${archiveSeq}' }, '${scopedSession}')
     render('unsafe', { blobId: '${svgId}', imageId: 'unsafe', mimeType: 'image/svg+xml', apiPath: '/blobs/${svgId}' })
     render('missing', { blobId: '${missingId}', imageId: 'missing', mimeType: 'image/png', apiPath: '/blobs/${missingId}' })
     window.renderLargeImage = () => {
@@ -65,51 +71,32 @@ async function buildFixtureBundle() {
 
 test('ImageParts uses authenticated deployment-relative blob URLs and never renders active formats inline', async () => {
   const bundle = await buildFixtureBundle()
-  const requests = []
   const assets = new URL('../dist/assets/', import.meta.url)
   const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
   const css = await readFile(new URL(cssName, assets), 'utf8')
-  const backend=new HttpServer(0,'fixture-token')
-  backend.setWebUiIdentityVerifier(token=>token==='scoped-image-token'?{role:'webui',identityId:'reader',sessionIds:['reader/main']}:null)
-  const signRequests=[]
-  const archiveAuthorizationInputs=[]
-  backend.app.use((request,_response,next)=>{
-    if(request.path.includes('/blobs/'))requests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
-    if(request.path.endsWith('/download'))signRequests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
-    next()
-  })
-  const signatures=registerWebUiFileDownloads(backend,'fixture-token')
-  registerWebUiBlobDownloads(backend,signatures,async(req,res,sessionId,blobId)=>{
-    const auth=await backend.getAuthContext(req)
-    const archiveSeq=req.query.archiveSeq??req.body?.archiveSeq
-    archiveAuthorizationInputs.push({method:req.method,archiveSeq})
-    if(auth?.role==='admin'||(auth?.role==='webui'&&sessionId==='reader/main'&&blobId===pngId&&archiveSeq==='2'))return true
-    res.status(auth?403:401).json({error:'Forbidden'});return false
-  })
-  for(const [id,bytes]of[[pngId,pngBytes],[svgId,Buffer.from('<svg/>')]]){
-    const file=resolveImageBlobPath(id);await mkdir(path.dirname(file),{recursive:true});await writeFile(file,bytes)
-  }
-  const app=express();app.use('/nested',backend.app)
-  app.use((request,response)=>{
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><div id="safe"></div><div id="scoped"></div><div id="unsafe"></div><div id="missing"></div><div id="large"></div><script>${bundle}</script></body></html>`)
-  })
-  const server=createServer(app)
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  const origin = `http://127.0.0.1:${server.address().port}`
+  await mkdir(path.dirname(blobPath(svgId)), { recursive: true }); await writeFile(blobPath(svgId), svgBytes)
+  const proxy = await createMainHostProxy({ target: fixture.origin, prefix: '/nested', page: () => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><div id="safe"></div><div id="scoped"></div><div id="unsafe"></div><div id="missing"></div><div id="large"></div><script>${bundle}</script></body></html>` })
+  await writeFile(path.join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: proxy.origin + '/nested', bot: { httpPort: fixture.port, enableTrigger: false }, vector: { enabled: false },
+    access: { identities: { reader: { token: 'scoped-image-token', surfaces: { webui: { sessions: [scopedSession] } } } } } }))
+  await fixture.start()
+  const blobRequests = () => proxy.requests.filter(request => request.path.includes('/blobs/'))
+  const requests = { some: check => blobRequests().some(check), findLast: check => blobRequests().findLast(check) }
+  const signRecords = () => proxy.requests.filter(request => request.path.endsWith('/download'))
+  const signRequests = { get length() { return signRecords().length }, at: index => signRecords().at(index) }
+  const origin = proxy.origin
   let browser
   try {
     browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
     const page = await browser.newPage()
-    await page.setCookie({ name: 'foxwarm_token', value: 'fixture-token', url: `${origin}/nested/` })
+    await page.setCookie({ name: 'foxwarm_token', value: fixture.token, url: `${origin}/nested/` })
     await page.goto(`${origin}/nested/`, { waitUntil: 'load' })
-    await page.waitForFunction(() => {
+    await page.waitForFunction(width => {
       const image = document.querySelector('#safe img')
-      return image?.complete && image.naturalWidth === 1 && document.querySelector('#missing')?.textContent?.includes('Image unavailable')
-    })
+      return image?.complete && image.naturalWidth === width && document.querySelector('#missing')?.textContent?.includes('Image unavailable')
+    }, {}, pngWidth)
 
     assert.equal(await page.$$('#safe img').then(nodes => nodes.length), 1)
-    assert.equal(requests.some(request => request.url === `/nested/api/blobs/${pngId}` && request.cookie.includes('foxwarm_token=fixture-token')), true)
+    assert.equal(requests.some(request => request.url === `/nested/api/blobs/${pngId}` && request.cookie.includes('foxwarm_token=' + fixture.token)), true)
     assert.equal(await page.$$('#unsafe img').then(nodes => nodes.length), 0)
     assert.match(await page.$eval('#missing', element => element.textContent || ''), /Image unavailable/)
     assert.equal(await page.$eval('#unsafe button', button => button.type==='button'&&!button.disabled), true)
@@ -120,7 +107,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await page.evaluate(() => window.scrollTo(0,0))
       await page.click('#safe button')
       await page.waitForSelector('[data-image-preview][open]')
-      await page.waitForFunction(() => document.querySelector('[data-image-preview] img')?.naturalWidth === 1)
+      await page.waitForFunction(width => document.querySelector('[data-image-preview] img')?.naturalWidth === width, {}, pngWidth)
       const geometry = await page.$eval('[data-image-preview]', dialog => {
         const box=dialog.getBoundingClientRect(),image=dialog.querySelector('img').getBoundingClientRect(),header=dialog.querySelector('header').getBoundingClientRect()
         return {full:box.x===0&&box.y===0&&Math.abs(box.width-innerWidth)<1&&Math.abs(box.height-innerHeight)<1,contained:image.left>=0&&image.right<=innerWidth&&image.top>=header.bottom&&image.bottom<=innerHeight,focus:dialog.contains(document.activeElement),locked:document.documentElement.style.overflow==='hidden'}
@@ -147,7 +134,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await network.send('Fetch.continueRequest',{requestId:event.requestId})
     })
     try{
-      for(const [id,token]of[['safe','fixture-token'],['scoped','scoped-image-token']]){
+      for(const [id,token]of[['safe',fixture.token],['scoped','scoped-image-token']]){
         await page.setCookie({name:'foxwarm_token',value:token,url:origin+'/nested/'})
         const completed=new Promise((resolve,reject)=>{
           const timer=setTimeout(()=>reject(new Error('Image download did not finish')),10000)
@@ -163,9 +150,9 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
         // The non-secret theme cookie is path-scoped and may accompany any same-path request; no other cookie, in particular no login token, may.
         assert.ok(downloaded);assert.deepEqual(downloaded.cookie.split(';').map(part=>part.split('=')[0].trim()).filter(name=>name&&name!=='foxwarm_canvas'),[])
         if(id==='scoped'){
-          assert.ok(downloaded.url.startsWith('/nested/api/sessions/reader%2Fmain/blobs/'))
-          assert.ok(requests.some(request=>request.url.includes('/sessions/reader%2Fmain/blobs/')&&request.url.includes('archiveSeq=2')))
-          assert.ok(archiveAuthorizationInputs.some(input=>input.method==='POST'&&input.archiveSeq==='2'),'Archive proof reaches signature issuance')
+          assert.ok(downloaded.url.startsWith(`/nested/api/sessions/${encodeURIComponent(scopedSession)}/blobs/`))
+          assert.ok(requests.some(request=>request.url.includes(`/sessions/${encodeURIComponent(scopedSession)}/blobs/`)&&request.url.includes('archiveSeq='+archiveSeq)))
+          assert.ok(signRecords().some(input=>input.method==='POST'&&JSON.parse(input.body||'{}').archiveSeq===archiveSeq),'Archive proof reaches signature issuance')
         }
         await page.click('[aria-label="Close image preview"]')
       }
@@ -174,7 +161,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await client.send('Browser.setDownloadBehavior',{behavior:'default'});await client.detach()
       await rm(downloads,{recursive:true,force:true})
     }
-    await page.setCookie({name:'foxwarm_token',value:'fixture-token',url:origin+'/nested/'})
+    await page.setCookie({name:'foxwarm_token',value:fixture.token,url:origin+'/nested/'})
     await page.evaluate(()=>{HTMLAnchorElement.prototype.click=function(){window.downloaded={url:this.href,name:this.download}}})
     await page.click('#safe button');await page.waitForSelector('[data-image-preview][open]')
     await page.click('[aria-label="Download Image 1"]');await page.waitForFunction(()=>!!window.downloaded)
@@ -366,8 +353,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
     } finally { await touch.detach() }
   } finally {
     await browser?.close()
-    for(const id of[pngId,svgId])await rm(resolveImageBlobPath(id),{force:true})
-    server.closeAllConnections?.()
-    await new Promise(resolve => server.close(resolve))
+    await proxy.close()
+    await fixture.cleanup()
   }
 })

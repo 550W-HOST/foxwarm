@@ -91,23 +91,6 @@ test('new-tab commit targets are encoded as typed startup URL parameters', () =>
   assert.equal(url.searchParams.get('openCommitId'), '85ad4d1b')
 })
 
-test('tool Code paths keep plain text and expose only an adjacent native icon action', async () => {
-  const source = await readFile(path.join(webuiRoot, 'src/components/ToolTimelineItems.tsx'), 'utf8')
-  const start = source.indexOf('const ToolCodePath')
-  const end = source.indexOf('const isLegacyDiffToolName', start)
-  const component = start >= 0 && end > start ? source.slice(start, end) : ''
-  assert.match(component, /<button/)
-  assert.match(component, /type="button"/)
-  assert.match(component, /foxwarm-tool-code-open/)
-  assert.match(component, /aria-label=\{`Open \$\{displayPath\} in Code`\}/)
-  assert.match(component, /<Code2 size=\{13\} aria-hidden="true"/)
-  assert.match(component, /onOpenCodeFile\?\.\(displayPath, lines, target\)/)
-  assert.match(component, /<span[^>]*className=\{pathClass\}>\{displayPath\}<\/span>/)
-  assert.doesNotMatch(component, /role="button"|tabIndex=/)
-  assert.doesNotMatch(component, /hover:underline cursor-pointer|text-blue|dark:text-blue/)
-})
-
-
 test('Windows drive paths use the same Code URI while preserving relative resolution and drive roots', () => {
   const root = resolveSessionCodeTarget('master', 'W:\\')
   assert.deepEqual(root, { nodeId: 'master', path: '/W:' })

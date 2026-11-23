@@ -134,7 +134,7 @@ try {
 
   // A terminal tab in the original WebUI on the same Node.
   await page.evaluate(() => { location.hash = '' })
-  await page.click('button[aria-label="Custom terminal tab"]')
+  await page.click('[data-sidebar-nav="terminal"] button[aria-label="Terminals"]')
   const terminalSelect = await page.waitForSelector('select')
   await until(() => terminalSelect.evaluate((select, node) => [...select.options].some(option => option.value === node && !option.disabled), NODE), 'Provider Node offered for Terminal')
   await terminalSelect.select(NODE)

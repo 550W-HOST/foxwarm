@@ -184,7 +184,8 @@
     "externalToolOwner": 1,
     "unifiedEdit": true,
     "toolCallCancellation": true,
-    "secretEnv": true
+    "secretEnv": true,
+    "execControl": true
   },
   "services": {
     "vscode-fs": 1,

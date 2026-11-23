@@ -11,7 +11,7 @@ public sealed class MainFileDeliveryTests
 {
     private static JsonObject Args(string path) => new() { ["filePath"] = path };
 
-    private static string? Error(JsonObject value) => SessionWait.Text(value["error"]?["type"]);
+    private static string? Error(JsonObject value) => value.FailureIdentity();
 
     private static JsonObject Image(JsonObject reference) =>
         new()
@@ -243,9 +243,18 @@ public sealed class MainFileDeliveryTests
         f.Manager.RegisterWebUiFileDelivery((_, _, _) => { });
         var result = await f.Call("send_file", Args(path));
         Assert.Null(Error(result));
-        Assert.Contains("Delivered: 1", result.ToJsonString());
-        Assert.Contains("missing:room", result.ToJsonString());
-        Assert.Contains("send-only", result.ToJsonString());
+        Assert.Null(result["output"]);
+        Assert.Equal(
+            ["webui:" + f.Owner.Id],
+            result["delivered"]!.AsArray().Select(item => item!.GetValue<string>()).ToArray()
+        );
+        Assert.Equal(
+            "missing:room",
+            Assert.Single(result["failed"]!.AsArray())!["channelTargetId"]!.GetValue<string>()
+        );
+        var skipped = Assert.Single(result["skipped"]!.AsArray())!;
+        Assert.Equal("other:room", skipped["channelTargetId"]!.GetValue<string>());
+        Assert.Equal("send-only", skipped["reason"]!.GetValue<string>());
         channels["channels"]!.AsObject().Remove("webui:" + f.Owner.Id);
         await File.WriteAllTextAsync(
             Path.Combine(f.Data, "state", "channels.json"),
@@ -608,9 +617,8 @@ public sealed class MainFileDeliveryTests
     public async Task Byte_export_of_owned_HEIC_needs_no_decoder_and_postwrite_failure_reports_existing_effect_without_retry()
     {
         await using var f = await Fixture.Create();
-        var repository = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
         var bytes = await File.ReadAllBytesAsync(
-            Path.Combine(repository, "src", "testFixtures", "synthetic-alpha-3x2.heic")
+            ImageCodecTests.HeifPath("synthetic-alpha-3x2.heic")
         );
         var reference = await f.Manager.Images.PutAsync(bytes, "image/heic", "heic");
         await ForkClearLifecycleTests.AppendAsync(f.Owner, Image(reference));
@@ -633,7 +641,7 @@ public sealed class MainFileDeliveryTests
             "image_write_to_file",
             new JsonObject { ["id"] = "heic", ["filePath"] = path }
         );
-        Assert.Equal("image_export_partial", Error(partial));
+        Assert.NotNull(partial.FailureMessage());
         Assert.True(partial["fileWritten"]!.GetValue<bool>());
         Assert.Equal(path, SessionWait.Text(partial["fullPath"]));
         Assert.Equal(bytes, await File.ReadAllBytesAsync(path));

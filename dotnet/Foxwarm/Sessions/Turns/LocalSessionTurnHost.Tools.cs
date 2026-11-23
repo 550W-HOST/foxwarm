@@ -16,6 +16,10 @@ public sealed partial class LocalSessionTurnHost
     )
     {
         var results = new TurnToolExecution?[planned.Count];
+        // The Session's Node and cwd once each call settled, including a cwd it changed.
+        var placements = new (string Node, string? Cwd)?[planned.Count];
+        (string Node, string? Cwd)? Placement() =>
+            tools is SessionToolExecutor executor ? executor.SessionPlacement : null;
         var cursor = 0;
         var selectionFailed = false;
         while (cursor < planned.Count)
@@ -23,9 +27,9 @@ public sealed partial class LocalSessionTurnHost
             if (selectionFailed)
             {
                 results[cursor++] = new(
-                    UnsupportedTurnToolExecutor.ToolError(
-                        "tool_call_skipped",
-                        "Tool call was not started because Node selection failed."
+                    ToolFailure.Result(
+                        "Tool call was not started because Node selection failed.",
+                        "tool_call_skipped"
                     )
                 );
                 continue;
@@ -39,6 +43,7 @@ public sealed partial class LocalSessionTurnHost
                         total: planned.Count
                     )
                     .ConfigureAwait(false);
+                placements[cursor] = Placement();
                 if (
                     IsNodeSelection(planned[cursor].Call)
                     && !SelectionSucceeded(results[cursor]!.Response)
@@ -99,9 +104,12 @@ public sealed partial class LocalSessionTurnHost
                 .Select(_ => WorkAsync())
                 .ToArray();
             await Task.WhenAll(workers).ConfigureAwait(false);
-            if (tools is SessionToolExecutor replay)
-                for (var index = start; index < end; index++)
+            for (var index = start; index < end; index++)
+            {
+                if (tools is SessionToolExecutor replay)
                     results[index] = await replay.ReplayCwdAsync(results[index]!);
+                placements[index] = Placement();
+            }
         }
         var parts = new JsonArray();
         for (var index = 0; index < planned.Count; index++)
@@ -131,6 +139,17 @@ public sealed partial class LocalSessionTurnHost
             {
                 var meta = response["__meta"] as JsonObject ?? new JsonObject();
                 meta["target"] = target.DeepClone();
+                response["__meta"] = meta;
+            }
+            // Display base for file links the model writes after this call: the Session's Node
+            // and cwd once the call settled, including a cwd the call itself changed.
+            if (placements[index] is { } after)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                var value = new JsonObject { ["node"] = after.Node };
+                if (after.Cwd is { Length: > 0 } cwd)
+                    value["cwd"] = cwd;
+                meta["placementAfter"] = value;
                 response["__meta"] = meta;
             }
             if (result.ExecPlacement is { } placement)
@@ -170,8 +189,7 @@ public sealed partial class LocalSessionTurnHost
                 }
                 catch (Foxwarm.Images.ImageInputException error)
                 {
-                    response["response"] = UnsupportedTurnToolExecutor.ToolError(
-                        "image_materialization_failed",
+                    response["response"] = ToolFailure.Result(
                         error.Message + " The tool call completed; its effects were not reversed."
                     );
                     response.Remove("__meta");
@@ -224,12 +242,9 @@ public sealed partial class LocalSessionTurnHost
                     new JsonObject
                     {
                         ["canceled"] = true,
-                        ["error"] = new JsonObject
-                        {
-                            ["type"] = "tool_call_cancelled",
-                            ["message"] =
-                                $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
-                        },
+                        ["error"] =
+                            $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
+                        ["code"] = "tool_call_cancelled",
                     }
                 )
             );
@@ -238,9 +253,9 @@ public sealed partial class LocalSessionTurnHost
         if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable)
             return await Skipped(
                 new(
-                    UnsupportedTurnToolExecutor.ToolError(
-                        "tool_call_skipped",
-                        "Tool call was not started because tool authorization policy was unavailable."
+                    ToolFailure.Result(
+                        "Tool call was not started because tool authorization policy was unavailable.",
+                        "tool_call_skipped"
                     )
                 )
             );
@@ -262,7 +277,7 @@ public sealed partial class LocalSessionTurnHost
                     index,
                     total
                 );
-            return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
+            return new(ToolFailure.Result(error));
         }
         if (prepared?.Response is not null && tools is SessionToolExecutor executor)
             return executor.PreparedFailure(prepared);
@@ -279,16 +294,16 @@ public sealed partial class LocalSessionTurnHost
         catch (OperationCanceledException)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_cancelled",
-                    $"Tool request canceled by {entry.ToolCancellationSource} after dispatch. Started effects may have occurred and were not reversed."
+                ToolFailure.Result(
+                    $"Tool request canceled by {entry.ToolCancellationSource} after dispatch. Started effects may have occurred and were not reversed.",
+                    "tool_call_cancelled"
                 )
             );
         }
         catch (Exception exception)
             when (exception is InvalidOperationException or IOException or ArgumentException)
         {
-            return new(UnsupportedTurnToolExecutor.ToolError("tool_error", exception.Message));
+            return new(ToolFailure.Result(exception.Message));
         }
         finally
         {

@@ -29,6 +29,40 @@ internal static class TextRedactionProjection
 
     internal static string Serialize(JsonNode? node) => node?.ToJsonString(ArgumentJson) ?? "null";
 
+    // The content of a JSON string, without its quotes, with only the escapes JSON requires
+    // (quote, backslash and control characters). Everything else stays literal, as a model
+    // writes it; the configured encoder would also escape characters outside the BMP.
+    internal static string JsonStringContent(string value)
+    {
+        var builder = new System.Text.StringBuilder(value.Length + 8);
+        foreach (var character in value)
+            switch (character)
+            {
+                case '"':
+                    builder.Append("\\\"");
+                    break;
+                case '\\':
+                    builder.Append("\\\\");
+                    break;
+                case '\n':
+                    builder.Append("\\n");
+                    break;
+                case '\r':
+                    builder.Append("\\r");
+                    break;
+                case '\t':
+                    builder.Append("\\t");
+                    break;
+                case < ' ':
+                    builder.Append("\\u").Append(((int)character).ToString("x4"));
+                    break;
+                default:
+                    builder.Append(character);
+                    break;
+            }
+        return builder.ToString();
+    }
+
     // The configured request owner has already made this copy and hydrated its
     // image parts. Mutate text slots in place to retain request-local part identity.
     internal static Task RedactHistoryAsync(
@@ -298,22 +332,12 @@ internal static class TextRedactionProjection
         TextRedactionScope scope
     )
     {
-        string? Arguments(string? raw)
-        {
-            if (raw is null)
-                return null;
-            try
-            {
-                var parsed = JsonNode.Parse(raw);
-                var restored = RestoreStrings(parsed, scope);
-                return JsonNode.DeepEquals(parsed, restored) ? raw : Serialize(restored);
-            }
-            catch (JsonException)
-            {
-                // Incomplete JSON cannot be restored safely as an argument object.
-                return null;
-            }
-        }
+        // Drafts show the raw argument text as it grows, so it is not parsed. Placeholders
+        // need no JSON escaping and are model-written inside string values; replacing them
+        // with escaped originals keeps the text the same JSON fragment. Final arguments are
+        // restored structurally from the completed call (RestoreMessage).
+        string? Arguments(string? raw) =>
+            raw is null ? null : scope.RestoreArgumentProgress(raw, JsonStringContent);
         return value with
         {
             Text = scope.RestoreProgress(value.Text),

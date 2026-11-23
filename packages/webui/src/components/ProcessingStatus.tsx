@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import RuntimeFox from './RuntimeFox'
 import FoxThinkingText from './FoxThinkingText'
@@ -21,13 +21,15 @@ interface ProcessingStatusProps {
   failure?: { title: string; details?: string } | null
   onContinue?: () => void
   onCancelCompaction?: () => void
+  /** Background-command control shown in the same row, also while idle. */
+  backgroundControl?: ReactNode
 }
 
 const controlButtonClass = 'inline-flex shrink-0 items-center rounded-md px-2 text-fw-text-muted transition-colors hover:bg-fw-hover hover:text-fw-text-strong focus-visible:underline disabled:cursor-not-allowed'
 const toneClasses = { accent: 'text-fw-accent', special: 'text-fw-special', warning: 'text-fw-warning', danger: 'text-fw-danger', muted: 'text-fw-text-muted' }
 const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
-const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
+const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction, backgroundControl }: ProcessingStatusProps) {
   const [now, setNow] = useState(Date.now)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<{ left: number; bottom?: number; top?: number; width: number; maxHeight: number } | null>(null)
@@ -99,13 +101,14 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
     {liveCaption ? <span className="min-w-0 truncate" title={liveCaption}>{liveCaption}</span> : view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}
   </>
   return <div data-processing-status-slot className={sessionQueueLength > 0 ? 'flex min-h-14 items-end pt-4' : 'flex min-h-14 items-end'}>
-    {(view || controlFeedback && controlFeedback.status !== 'accepted') && <div className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 ${isMobile ? 'w-full' : 'w-full max-w-[80%]'}`}>
+    {(view || backgroundControl || controlFeedback && controlFeedback.status !== 'accepted') && <div className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 ${isMobile ? 'w-full' : 'w-full max-w-[80%]'}`}>
       {view && <div role="status" aria-label={view.label} aria-atomic="true" className="fw-processing-main flex min-w-0 max-w-full items-center gap-3" data-processing-runtime-state={interrupted ? 'interrupted' : runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')} data-runtime-presentation={view.kind}>
         {hasDetails ? <button data-runtime-caption ref={trigger} type="button" aria-label={`Runtime details: ${view.label}`} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(previous => !previous)} className={`inline-flex min-h-8 min-w-0 max-w-full items-center gap-2.5 text-left ${view.secondary ? 'text-sm' : 'text-lg'} leading-7 ${toneClasses[view.tone]} hover:opacity-80 focus-visible:underline`}>
           {caption}
         </button> : <div data-runtime-caption className={`inline-flex min-h-8 min-w-0 max-w-full items-center gap-2.5 ${view.secondary ? 'text-sm' : 'text-lg'} leading-7 ${toneClasses[view.tone]}`}>{caption}</div>}
         {continuable && onContinue && <button type="button" disabled={!!pendingControl} onClick={onContinue} className={`${controlButtonClass} h-8 text-sm`}>Continue</button>}
       </div>}
+      {backgroundControl}
       {controlFeedback && controlFeedback.status !== 'accepted' && <div role={controlFeedback.status === 'error' ? 'alert' : 'status'} data-control-feedback className={`w-full text-xs ${controlFeedback.status === 'error' ? 'text-fw-danger' : 'text-fw-text-muted'}`}>{controlFeedback.message}{controlFeedback.details && <details className="mt-1 text-fw-text-muted"><summary className="w-fit cursor-pointer">Details</summary><p className="mt-1 whitespace-pre-wrap break-words">{controlFeedback.details}</p></details>}</div>}
     </div>}
     {open && view && createPortal(<div ref={panel} role="dialog" aria-label="Runtime details" tabIndex={-1} data-runtime-details className="fixed z-[100] max-h-[min(28rem,calc(100dvh-2rem))] overflow-y-auto rounded-lg border border-fw-border bg-fw-surface p-4 text-sm text-fw-text shadow-xl" style={{ ...position, visibility: position ? 'visible' : 'hidden' }}>

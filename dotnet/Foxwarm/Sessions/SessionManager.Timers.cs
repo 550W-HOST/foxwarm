@@ -133,15 +133,7 @@ internal sealed partial class SessionManager
         {
             if (name == "list_timers")
             {
-                var list = timers.List(requested);
-                return new JsonObject
-                {
-                    ["output"] =
-                        list.Count == 0
-                            ? "No timers found for session '" + requested + "'."
-                            : "Found " + list.Count + " timer(s):\n" + list.ToJsonText(),
-                    ["timers"] = list,
-                };
+                return new JsonObject { ["timers"] = timers.List(requested) };
             }
             var id = name == "create_timer" ? null : ToolRegistry.Text(args, "timerId");
             if (id is not null && name == "update_timer")
@@ -152,11 +144,7 @@ internal sealed partial class SessionManager
             {
                 token.ThrowIfCancellationRequested();
                 var deleted = await timers.DeleteAsync(id!, requested, token, PrepareAsync);
-                return new JsonObject
-                {
-                    ["output"] = "Timer '" + id + (deleted ? "' deleted." : "' not found."),
-                    ["deleted"] = deleted,
-                };
+                return new JsonObject { ["deleted"] = deleted };
             }
             var existing = name == "update_timer" ? timers.Get(id!, requested) : null;
             var owner = await RequiredAsync(
@@ -223,23 +211,11 @@ internal sealed partial class SessionManager
                             );
                     }
                 );
-            return new JsonObject
-            {
-                ["output"] =
-                    "Timer '"
-                    + SessionWait.Text(timer["id"])
-                    + (existing is null ? "' created." : "' updated.")
-                    + "\n"
-                    + timer.ToJsonText(),
-                ["timer"] = timer,
-            };
+            return new JsonObject { ["timer"] = timer };
         }
         catch (TimerCommittedException error)
         {
-            var result = UnsupportedTurnToolExecutor.ToolError(
-                "timer_committed_partial",
-                error.Message
-            );
+            var result = ToolFailure.Result(error.Message);
             result["timerCommitted"] = true;
             result["timerId"] = error.TimerId;
             return result;

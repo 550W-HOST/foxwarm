@@ -34,6 +34,12 @@ type DisplayMathBlockMatch = {
 
 export type HtmlSanitizer = (html: string) => string
 
+/**
+ * Decides how a link destination renders. Undefined keeps the ordinary link; null renders
+ * the link text alone; a value renders a Code link with that href and data attributes.
+ */
+export type FileLinkRenderer = (href: string) => { href: string; attributes: Record<string, string> } | null | undefined
+
 let activeMathRenderContext: MathRenderContext | null = null
 let mathRenderContextCounter = 0
 
@@ -297,18 +303,30 @@ const replaceMathPlaceholders = (html: string, placeholders: MathPlaceholder[]):
   return placeholders.reduce((current, placeholder) => current.split(placeholder.marker).join(placeholder.html), html)
 }
 
-const renderMarkdownTokens = (tokens: Token[], sanitizer: HtmlSanitizer, wrapTables = false): string => {
+const renderMarkdownTokens = (tokens: Token[], sanitizer: HtmlSanitizer, wrapTables = false, fileLink?: FileLinkRenderer): string => {
   const previousContext = activeMathRenderContext
   const context: MathRenderContext = {
     markerPrefix: createMathMarkerPrefix(),
     placeholders: [],
   }
-  const renderer = wrapTables ? new markdown.Renderer(markdown.defaults) : undefined
+  const renderer = wrapTables || fileLink ? new markdown.Renderer(markdown.defaults) : undefined
 
-  if (renderer) {
+  if (renderer && wrapTables) {
     const renderTable = renderer.table
     renderer.table = function (token) {
       return `<div class="foxwarm-markdown-table-scroll">${renderTable.call(this, token)}</div>`
+    }
+  }
+  if (renderer && fileLink) {
+    const renderLink = renderer.link
+    renderer.link = function (token) {
+      const resolved = fileLink(token.href)
+      if (resolved === undefined) return renderLink.call(this, token)
+      const inner = this.parser.parseInline(token.tokens)
+      if (resolved === null) return inner
+      const attributes = Object.entries(resolved.attributes)
+        .map(([name, value]) => ` ${name}="${escapeHtml(value)}"`).join('')
+      return `<a href="${escapeHtml(resolved.href)}" class="foxwarm-code-link"${attributes}>${inner}</a>`
     }
   }
 
@@ -392,6 +410,7 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
   sanitizer?: HtmlSanitizer,
   artifacts?: { enabled: boolean; streaming?: boolean },
   citations: CitationRenderOptions | false = {},
+  fileLink?: FileLinkRenderer,
 ): MarkdownRenderSegment[] => {
   const segments: MarkdownRenderSegment[] = []
 
@@ -416,14 +435,14 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
       continue
     }
     const wrapTables = tokenContainsTable(token)
-    const html = renderMarkdownTokens([token], sanitizer ?? sanitizeAssistantHtml, wrapTables)
+    const html = renderMarkdownTokens([token], sanitizer ?? sanitizeAssistantHtml, wrapTables, fileLink)
     if (html) segments.push({ kind: 'html', tokenIndex, html })
   }
   return segments
 }
 
-export const renderAssistantMarkdownSegments = (text: string, artifacts?: { enabled: boolean; streaming?: boolean }, citations?: CitationRenderOptions | false): MarkdownRenderSegment[] => (
-  renderAssistantMarkdownSegmentsWithSanitizer(text, undefined, artifacts, citations)
+export const renderAssistantMarkdownSegments = (text: string, artifacts?: { enabled: boolean; streaming?: boolean }, citations?: CitationRenderOptions | false, fileLink?: FileLinkRenderer): MarkdownRenderSegment[] => (
+  renderAssistantMarkdownSegmentsWithSanitizer(text, undefined, artifacts, citations, fileLink)
 )
 /** Reuse the same top-level lexer contract for reply-tail deduplication. */
 export function assistantArtifactReferences(text: string): ArtifactReference[] {

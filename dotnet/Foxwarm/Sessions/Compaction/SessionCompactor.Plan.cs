@@ -175,16 +175,15 @@ internal sealed partial class SessionCompactor
                         if (controlled.Preset is not null)
                         {
                             var canceled = controlled.Preset["canceled"]?.GetValue<bool>() == true;
-                            var presetType = SessionWait.Text(controlled.Preset["error"]?["type"]);
                             var presetMessage =
                                 SessionWait.Text(controlled.Preset["message"])
-                                ?? SessionWait.Text(controlled.Preset["error"]?["message"]);
+                                ?? ToolFailure.Message(controlled.Preset);
                             AppendToolFeedback(
                                 detached,
                                 calls[0]!,
                                 canceled
                                     ? "Compact repair canceled."
-                                    : $"Compact repair failed [{presetType}]: {presetMessage}"
+                                    : $"Compact repair failed: {presetMessage}"
                             );
                         }
                         else
@@ -342,9 +341,7 @@ internal sealed partial class SessionCompactor
                         detached,
                         calls,
                         prompt,
-                        error is ToolAuthorizationDeniedException denied
-                            ? denied.ErrorType
-                            : "tool_io_error"
+                        error is ToolAuthorizationDeniedException denied ? denied.ErrorType : null
                     );
                 }
             }
@@ -401,7 +398,7 @@ internal sealed partial class SessionCompactor
         List<JsonObject> history,
         IEnumerable<JsonObject?> calls,
         string feedback,
-        string errorType = "compact_plan_invalid"
+        string? code = null
     )
     {
         var parts = new JsonArray();
@@ -417,14 +414,9 @@ internal sealed partial class SessionCompactor
                     {
                         ["tool_use_id"] = id,
                         ["name"] = call?["name"]?.GetValue<string>() ?? "submit_compact_plan",
-                        ["response"] = new JsonObject
-                        {
-                            ["error"] = new JsonObject
-                            {
-                                ["type"] = errorType,
-                                ["message"] = feedback,
-                            },
-                        },
+                        ["response"] = code is null
+                            ? ToolFailure.Result(feedback)
+                            : ToolFailure.Result(feedback, code),
                     },
                 }
             );

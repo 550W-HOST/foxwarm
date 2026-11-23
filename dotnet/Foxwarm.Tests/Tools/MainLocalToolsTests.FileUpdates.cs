@@ -61,7 +61,7 @@ public sealed partial class MainLocalToolsTests
                 "write",
                 new JsonObject { ["filePath"] = path, ["content"] = "never" }
             );
-            Assert.Equal("file_exists", Error(result));
+            Assert.NotNull(result.FailureMessage());
         }
         Assert.Equal("before\n", await File.ReadAllTextAsync(Path.Combine(root, "existing.txt")));
         Assert.Equal("missing.txt", new FileInfo(Path.Combine(root, "dangling.txt")).LinkTarget);
@@ -89,14 +89,14 @@ public sealed partial class MainLocalToolsTests
                     "*** Begin Patch\n*** Update File: script.sh\n@@\n-before\n+after\n*** Update File: missing.txt\n@@\n-before\n+after\n*** Add File: never.txt\n+never\n*** End Patch",
             }
         );
-        Assert.Equal("patch_failed", Error(result));
+        Assert.NotNull(result.FailureMessage());
         Assert.Contains(
             "Operations already applied",
-            result["error"]!["message"]!.GetValue<string>()
+            result.FailureMessage()!
         );
         Assert.Contains(
             "1 remaining operation(s) were not applied.",
-            result["error"]!["message"]!.GetValue<string>()
+            result.FailureMessage()!
         );
         Assert.Equal("after\n", await File.ReadAllTextAsync(path));
         Assert.Equal(

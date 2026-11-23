@@ -13,28 +13,20 @@ internal sealed partial class MessageRouter
     {
         var target = await command.TargetAsync();
         await command.Reply(
-            SessionWait.Text(
-                (
-                    await runtime.Manager.ObserveAsync(
-                        target,
-                        "session",
-                        new JsonObject { ["action"] = "status" },
-                        administrator: true
-                    )
-                )["output"]
-            )!
+            SessionStatus.Text(
+                await runtime.Manager.ObserveAsync(
+                    target,
+                    "session",
+                    new JsonObject { ["action"] = "status" },
+                    administrator: true
+                )
+            )
         );
     }
 
     private async Task SessionListAsync(UserCommand command)
     {
         var manager = runtime.Manager;
-        // One-release notice (user decision 2026-11-16; remove in 0.9.7): 0.9.5 took a page
-        // number here, so a bare integer is refused instead of silently filtering by it.
-        if (command.Text("query") is { } page && Regex.IsMatch(page, "^[0-9]+$"))
-            throw new UserCommandException(
-                "❌ `/session list` takes search text, not a page number. Use `--start` and `--count` to page, for example `/session list --start 20 --count 20`."
-            );
         var start = (int)Math.Clamp(Math.Truncate(command.Call.Number("start") ?? 0), 0, int.MaxValue);
         var count = (int)Math.Clamp(Math.Truncate(command.Call.Number("count") ?? 20), 1, 200);
         var scope = command.Text("scope") ?? "all";

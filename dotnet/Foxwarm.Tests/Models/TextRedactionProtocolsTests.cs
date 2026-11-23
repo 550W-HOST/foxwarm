@@ -279,12 +279,19 @@ public sealed class TextRedactionProtocolsTests
         {
             Assert.Contains(updates, value => value.Text == secret);
             Assert.Contains(updates, value => value.Reasoning == key);
+            // Drafts carry the provider's raw, possibly incomplete argument text.
+            var restoredArgs =
+                "{\"value\":\"" + TextRedactionProjection.JsonStringContent(secret) + "\"}";
             Assert.Contains(
                 updates,
+                value => value.ToolCalls.Any(call => call.Arguments == restoredArgs)
+            );
+            Assert.All(
+                updates,
                 value =>
-                    value.ToolCalls.Any(call =>
-                        call.Arguments is string args
-                        && JsonNode.Parse(args)?["value"]?.GetValue<string>() == secret
+                    Assert.All(
+                        value.ToolCalls,
+                        call => Assert.DoesNotContain(TextRedactor.Prefix, call.Arguments ?? "")
                     )
             );
         }

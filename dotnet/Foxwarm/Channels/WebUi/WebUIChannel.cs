@@ -113,6 +113,7 @@ internal sealed partial class WebUIChannel(
         );
         RegisterSetupRoutes(app);
         RegisterSessionNodeRoutes(app);
+        RegisterSessionExecRoutes(app);
         app.MapPost(
             "/api/sessions/{id}/cwd",
             async (string id, HttpRequest request) =>

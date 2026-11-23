@@ -54,7 +54,7 @@
   },
   {
     "id": "session-controls",
-    "tool": { "source": "builtin", "name": ["wait", "submit_compact_plan"] },
+    "tool": { "source": "builtin", "name": ["wait", "submit_compact_plan", "exec_list", "exec_stop"] },
     "action": "allow"
   },
   {

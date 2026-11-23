@@ -9,7 +9,7 @@ import { initializeThemeRuntime } from './theme/runtime'
 import BuildUpdateNotice from './components/BuildUpdateNotice'
 import { isStandaloneWebUi } from './updateReload'
 import { initializeWindowFrame } from './windowFrame'
-import { syncViewportHeight } from './viewportHeight'
+import { markIosStandaloneViewport, syncViewportHeight } from './viewportHeight'
 import { API_BASE_PATH } from './config'
 import { BootReadySignal, markBootReady } from './components/FoxLoaders'
 
@@ -21,6 +21,7 @@ const EmbeddedChatApp = lazy(() => import('./EmbeddedWebUiApp').then(module => (
 const EmbeddedAgentsApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedAgentsApp })))
 const EmbeddedSetupApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedSetupApp })))
 
+markIosStandaloneViewport()
 syncViewportHeight()
 initializeThemeRuntime()
 initializeWindowFrame()

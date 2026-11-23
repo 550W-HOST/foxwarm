@@ -132,7 +132,7 @@ public sealed partial class ResponsesPrefixCommitTests
         Assert.Equal(imageStatus, evidence["status"]!.GetValue<string>());
         Assert.Equal("resp_image_failure", evidence["responseId"]!.GetValue<string>());
         Assert.Equal("image_failed", evidence["id"]!.GetValue<string>());
-        Assert.Equal("UserError", evidence["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("UserError", evidence.FailureCode()!);
         Assert.Equal("system_error", evidence["error"]!["code"]!.GetValue<string>());
         Assert.Contains(
             "image generation did not produce a usable image",
@@ -167,7 +167,7 @@ public sealed partial class ResponsesPrefixCommitTests
             calls,
             call => call?["id"]?.GetValue<string>() == "image_failed"
         )!;
-        Assert.Equal("UserError", diagnostic["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("UserError", diagnostic.FailureCode()!);
         Assert.Equal("resp_image_failure", diagnostic["responseId"]!.GetValue<string>());
         Assert.True(raw["rawStream"]!["contentOmitted"]!.GetValue<bool>());
         Assert.Null(raw["rawStream"]!["body"]);

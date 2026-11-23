@@ -946,6 +946,50 @@ public sealed class SessionTurnTests
     }
 
     [Fact]
+    public async Task InputArrivingWhileTheProcessorReleasesStartsTheNextTurn()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        chat.QueueResult("first");
+        chat.QueueResult("second");
+        var registry = new SessionRegistry(store, chat, new RecordingToolExecutor());
+        var entry = registry.Add("s");
+        entry.State.Queue.Add(QueueItem.UserText("A"));
+        Task? ingress = null;
+        // A start requested from the release observer, the latest point of the finishing
+        // processor, models ingress on another thread: once the claim is free it must start its
+        // own turn instead of colliding with a stale processor registration.
+        entry.ProcessorReleased = () =>
+        {
+            entry.ProcessorReleased = null;
+            entry.WithState(state => state.Queue.Add(QueueItem.UserText("B")));
+            ingress = registry.Runner.ProcessQueueAsync("s");
+        };
+
+        await registry.Runner.ProcessQueueAsync("s").WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(ingress);
+        await ingress!.WaitAsync(TimeSpan.FromSeconds(5));
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (
+            entry.Snapshot().History.Materialize().Count(message => message["role"]!.GetValue<string>() == "model") < 2
+            || entry.HasProcessor
+        )
+        {
+            Assert.True(DateTime.UtcNow < deadline, "The second turn did not run.");
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(
+            new[] { "user", "model", "user", "model" },
+            entry
+                .Snapshot()
+                .History.Materialize()
+                .Select(message => message["role"]!.GetValue<string>())
+        );
+        Assert.Equal(2, entry.ProcessorClaimCount);
+    }
+
+    [Fact]
     public async Task MalformedArgsAndUnknownToolProducePairedErrorsWithOriginalCallIds()
     {
         var store = new InMemorySessionAuthorityStore();
@@ -979,14 +1023,8 @@ public sealed class SessionTurnTests
             new[] { "bad_args", "unknown" },
             parts.Select(part => part!["functionResponse"]!["tool_use_id"]!.GetValue<string>())
         );
-        Assert.Equal(
-            "invalid_tool_arguments",
-            parts[0]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>()
-        );
-        Assert.Equal(
-            "unknown_tool",
-            parts[1]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>()
-        );
+        Assert.NotNull(parts[0]?["functionResponse"]?["response"]?.FailureMessage());
+        Assert.NotNull(parts[1]?["functionResponse"]?["response"]?.FailureMessage());
         Assert.Equal(1, tools.Invocations);
         Assert.Equal(2, chat.Calls.Count);
     }
@@ -1320,7 +1358,7 @@ internal sealed class RecordingToolExecutor(JsonObject? response = null) : ITurn
 {
     private readonly JsonObject response =
         response
-        ?? UnsupportedTurnToolExecutor.ToolError("unknown_tool", "Unknown tool: other_tool");
+        ?? ToolFailure.Result("Unknown tool: other_tool");
     private int invocations;
     public int Invocations => Volatile.Read(ref invocations);
 

@@ -60,7 +60,7 @@ public sealed class QQBotHostTests
         var settings = await HttpServerSettings.CaptureDesktopAsync(data);
         var configuration = new ModelConfiguration(data);
         var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? Directory.GetCurrentDirectory();
         await using var host = await MainHost.CreateAsync(
             [],

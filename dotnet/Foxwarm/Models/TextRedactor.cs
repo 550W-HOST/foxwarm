@@ -183,14 +183,27 @@ internal sealed partial class TextRedactor : IDisposable
         }
     }
 
-    internal string Restore(string text, IReadOnlyDictionary<string, string> registered) =>
+    // `encode` formats an original for its surrounding syntax, for example JSON string
+    // content; by default the original is inserted as it is.
+    internal string Restore(
+        string text,
+        IReadOnlyDictionary<string, string> registered,
+        Func<string, string>? encode = null
+    ) =>
         placeholder.Replace(
             text,
-            match => registered.TryGetValue(match.Value, out var original) ? original : match.Value
+            match =>
+                registered.TryGetValue(match.Value, out var original)
+                    ? encode?.Invoke(original) ?? original
+                    : match.Value
         );
 
     // Progress is a cumulative snapshot. Hold only an unfinished placeholder at its end.
-    internal string RestoreProgress(string text, IReadOnlyDictionary<string, string> registered)
+    internal string RestoreProgress(
+        string text,
+        IReadOnlyDictionary<string, string> registered,
+        Func<string, string>? encode = null
+    )
     {
         var start = text.LastIndexOf(Prefix, StringComparison.Ordinal);
         if (start >= 0)
@@ -214,7 +227,7 @@ internal sealed partial class TextRedactor : IDisposable
                 text = text[..^length];
                 break;
             }
-        return Restore(text, registered);
+        return Restore(text, registered, encode);
     }
 
     // The cached result of one slot. A memory miss reads the slot's finished result from the

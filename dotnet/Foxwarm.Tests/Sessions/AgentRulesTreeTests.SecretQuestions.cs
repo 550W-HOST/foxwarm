@@ -56,7 +56,7 @@ public sealed partial class AgentRulesTreeTests
 
         // Filling a referenced name is a secret fact of the question, as for add_secret.
         var pending = await Ask(asker, SecretQuestion("pending-key"));
-        Assert.Equal("tool_authorization_denied", SessionWait.Text(pending?["error"]?["type"]));
+        Assert.Equal("tool_authorization_denied", pending?.FailureCode());
         Assert.Contains("`pending-key`", ErrorMessage(pending));
         Assert.Contains(
             "already exists",

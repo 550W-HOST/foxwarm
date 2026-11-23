@@ -8,8 +8,8 @@ namespace Foxwarm.Desktop;
 /// <summary>
 /// An app window opened by a page (window.open or a link with a target). Its web view is
 /// built from the configuration WebKit supplies, so it shares the opener's process and
-/// data store and keeps <c>window.opener</c>. The WebUI's own document gets the main
-/// window's custom frame; other same-origin documents keep the standard title bar.
+/// data store and keeps <c>window.opener</c>. The WebUI and Code have custom frames;
+/// other same-origin documents keep the standard title bar.
 /// Closing it closes it; only the main window stays alive when closed.
 /// </summary>
 internal sealed class DesktopPopupWindow
@@ -35,7 +35,7 @@ internal sealed class DesktopPopupWindow
         WKWebViewConfiguration configuration,
         WKContentRuleList rules,
         Uri endpoint,
-        bool framed,
+        DesktopWindowFrame frameKind,
         bool blank,
         WKWindowFeatures features,
         Action<DesktopPopupWindow> closed
@@ -72,9 +72,9 @@ internal sealed class DesktopPopupWindow
         var controller = new WKUserContentController();
         controller.AddContentRuleList(rules);
         configuration.UserContentController = controller;
-        if (framed)
+        if (frameKind != DesktopWindowFrame.System)
         {
-            Frame = new DesktopFrame(Window);
+            Frame = new DesktopFrame(Window, frameKind);
             Frame.Configure(configuration, endpoint);
         }
         View = new WKWebView(Window.ContentView!.Bounds, configuration)

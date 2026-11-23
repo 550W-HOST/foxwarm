@@ -83,10 +83,10 @@ public sealed class MainBrowserFailureTests
         var response = Assert.Single(paired["parts"]!.AsArray())!["functionResponse"]!;
         Assert.Equal("browser-launch", response["tool_use_id"]!.GetValue<string>());
         Assert.Equal("browser_open", response["name"]!.GetValue<string>());
-        Assert.Equal("tool_error", response["response"]!["error"]!["type"]!.GetValue<string>());
+        Assert.NotNull(response["response"]!.FailureMessage());
         Assert.Contains(
             "not installed",
-            response["response"]!["error"]!["message"]!.GetValue<string>()
+            response["response"]!.FailureMessage()!
         );
         Assert.Equal(
             "Browser failure received",

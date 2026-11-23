@@ -245,9 +245,12 @@ internal sealed partial class NodeProviderRegistry
             value["primitiveBackends"]!["exec"] = value["exec"]!.DeepClone();
         if (value["execEnv"] is not null)
             value["primitiveBackends"]!["execEnv"] = value["execEnv"]!.DeepClone();
+        if (value["execStop"] is not null)
+            value["primitiveBackends"]!["execStop"] = value["execStop"]!.DeepClone();
         value.Remove("filesystem");
         value.Remove("exec");
         value.Remove("execEnv");
+        value.Remove("execStop");
         value["tools"] = HasAuthorizationAncestry(SessionWait.Text(value["id"])!)
             ? DefinitionsFor(descriptor)
             : new JsonArray();

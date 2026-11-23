@@ -12,6 +12,9 @@ import { functionCall } from './ctlModelCalls.mjs'
 const fixture = await createHostFixture('fork-clear'), records = [], errors = [], connections = [], held = new Map(), heldOnce = new Set(), commandNotices = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
+// Idle-only commands need the exact owner quiescent: busy released, its processor run retired
+// (runtimeState.processing) and no ordinary input queued. busy=false alone precedes the run's release.
+const quiet = async id => { const live = await history(id); assert.equal(typeof live.queueLength, 'number'); return !live.session.busy && !live.session.runtimeState?.processing && live.queueLength === 0 }
 const authorityPath = id => join(fixture.data, 'state/sessions', id + '.json')
 const authority = id => readFile(authorityPath(id), 'utf8').then(JSON.parse)
 const sha = id => createHash('sha256').update(id).digest('hex')
@@ -166,7 +169,7 @@ try {
   assert((await authority(parent)).history.length > 0); assert.equal((await authority(parent)).queue.length, 0)
   await writeFile(join(fixture.work, 'fork-release'), 'release'); await until(async () => !(await history(parent)).session.busy, 'Stop does not kill or replay ordinary effect')
   assert(!(await history(parent)).messages.some(row => row.parts?.some(part => part.text === 'captured queued input to drop')))
-  await until(async () => (await history(parent)).messages.some(row => row.parts?.some(part => part.system?.includes('background-process-finished'))) && !(await history(parent)).session.busy, 'real surviving exec completion is consumed before idle clear')
+  await until(async () => (await history(parent)).messages.some(row => row.parts?.some(part => part.system?.includes('background-process-finished'))) && await quiet(parent), 'real surviving exec completion is consumed before idle clear')
   const expanded = await fixture.api('GET', route(child) + '/context-blocks/1/expand'); assert.equal(expanded.status, 200); assert(expanded.body.items.every(item => item.inherited && item.sourceSessionId === parent))
   assert(archive(child).every(([seq]) => seq > cap[1]), 'fork stores only owned suffix, not copied parent Archive')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), parent); await page.evaluate(() => window.foxwarmTest.sendMessage('/session clear'))
@@ -248,7 +251,7 @@ try {
   const crossFresh = crossAgent + '/cross-fresh'; await childSettled(crossFresh, 'cross-fresh-task'); assert.equal((await authority(crossFresh)).systemPromptFiles, undefined); assert((await authority(crossFresh)).persistentMemorySnapshot.includes('Separate Agent memory.')); assert.equal(branch(crossFresh)[0], null)
   const crossCount = fixture.sql('SELECT COUNT(*) FROM archive_branches')[0][0]; await send(parent, 'cross-fork')
   assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_branches')[0][0], crossCount); assert.equal((await fixture.api('GET', route(crossAgent + '/cross-fork') + '/history')).status, 404)
-  await seed(parent, 'selected-plan', 12); holdPlan = true; held.delete('plan'); const beforeCompactNotice = commandNotices.length
+  await seed(parent, 'selected-plan', 12); await until(() => quiet(parent), 'seeded parent quiescent before /compact'); holdPlan = true; held.delete('plan'); const beforeCompactNotice = commandNotices.length
   const selectedCompact = command(parent, '/compact')
   assert.equal((await selectedCompact).status, 200)
   await until(() => commandNotices.slice(beforeCompactNotice).some(row => row.sessionId === parent), 'selected-file compaction command reply')

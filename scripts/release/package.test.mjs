@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { TARGETS, archive, assetName, packCode, codeAssetName, hostRid, validateCodeAssets, writeChecksums } from './package.mjs'
+import { TARGETS, archive, assetName, packCode, codeAssetName, hostRid, includesCode, installerAssetName, installerScript, installerTarget, validateCodeAssets, writeChecksums } from './package.mjs'
 
 import { codePrefix, extractPack, readPack } from '../asset-pack.mjs'
 
@@ -61,7 +61,7 @@ with tarfile.open(sys.argv[1]) as archive:
 
 test('checksum aggregation replaces partial lists and covers all platform assets', unix, t => {
   const work = scratch(t)
-  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-native.tar.gz', 'foxwarm-android-node.apk', codeAssetName]
+  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-native.tar.gz', 'foxwarm-android-node.apk', installerAssetName, codeAssetName]
   for (const name of files) fs.writeFileSync(path.join(work, name), name)
   fs.writeFileSync(path.join(work, 'SHA256SUMS'), 'partial build list\n')
   writeChecksums(work)
@@ -122,6 +122,10 @@ test('every server platform publishes a native package instead of a self-contain
   assert.equal(hostRid('win32', 'x64'), 'win-x64')
 })
 
+test('only the two Desktop packages bundle the workbench', () => {
+  assert.deepEqual(Object.keys(TARGETS).filter(includesCode).sort(), ['desktop-osx-arm64', 'desktop-win-x64'])
+})
+
 test('the Windows Desktop is a NativeAOT package built only on Windows x64', t => {
   assert.deepEqual(TARGETS['desktop-win-x64'], { kind: 'desktop', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' })
   if (hostRid() === 'win-x64') return t.skip('this host can build the package')
@@ -131,6 +135,42 @@ test('the Windows Desktop is a NativeAOT package built only on Windows x64', t =
   assert.equal(elsewhere.status, 1)
   assert.match(elsewhere.stderr, /desktop-win-x64 is a NativeAOT package and must be built on win-x64/)
   assert.deepEqual(fs.readdirSync(output), [])
+})
+
+test('the Windows Desktop installer keeps its name and installation identity', () => {
+  assert.equal(installerTarget, 'desktop-win-x64')
+  const script = fs.readFileSync(installerScript, 'utf8')
+  assert.match(script, new RegExp(`^OutputBaseFilename=${installerAssetName.replace(/\.exe$/, '')}$`, 'm'))
+  // Upgrades and uninstallation find an installation by this AppId.
+  assert.match(script, /^#define AppGuid "6BE01B0C-EDFF-4777-A5DE-FB2F3BB5167D"$/m)
+  assert.match(script, /^AppId=\{\{\{#AppGuid\}\}$/m)
+  assert.match(script, /^PrivilegesRequired=lowest$/m)
+})
+
+test('the installer text exists in English and Simplified Chinese', () => {
+  const script = fs.readFileSync(installerScript, 'utf8')
+  const languages = [...script.matchAll(/^Name: "([a-z]+)"; MessagesFile: /gm)].map(match => match[1])
+  assert.deepEqual(languages, ['english', 'chinesesimplified'])
+  const messages = language => [...script.matchAll(new RegExp(`^${language}\\.(\\w+)=.+$`, 'gm'))].map(match => match[1]).sort()
+  assert.ok(messages('english').length > 0)
+  assert.deepEqual(messages('chinesesimplified'), messages('english'))
+  // Every custom message a script uses is defined.
+  const used = [...new Set([...script.matchAll(/\{cm:(\w+)|CustomMessage\('(\w+)'\)/g)].map(match => match[1] ?? match[2]))].sort()
+  assert.deepEqual(used.filter(name => name !== 'LaunchProgram'), messages('english'))
+})
+
+test('the installer is built only with the Windows Desktop archive', t => {
+  const output = scratch(t)
+  const iscc = path.join(output, 'ISCC.exe')
+  fs.writeFileSync(iscc, '')
+  const script = path.join(root, 'scripts/release/package.mjs')
+  const without = spawnSync(process.execPath, [script, '--output', output, '--target', 'linux-x64', '--inno-setup', iscc], { encoding: 'utf8' })
+  assert.equal(without.status, 2)
+  assert.match(without.stderr, /--inno-setup needs the desktop-win-x64 target and an archive/)
+  const missing = spawnSync(process.execPath, [script, '--output', output, '--target', 'desktop-win-x64', '--inno-setup', path.join(output, 'missing.exe')], { encoding: 'utf8' })
+  assert.equal(missing.status, 2)
+  assert.match(missing.stderr, /No such file/)
+  assert.deepEqual(fs.readdirSync(output), ['ISCC.exe'])
 })
 
 test('the macOS Desktop is a NativeAOT application bundle built only on macOS arm64', t => {

@@ -145,13 +145,11 @@ public sealed class ImageCodecTests
             Assert.Same(bytes, variant.Bytes);
     }
 
-    private static byte[] Heif(string name)
-    {
-        var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("Image tests require the assigned Source root.");
-        return File.ReadAllBytes(Path.Combine(root, "src", "testFixtures", name));
-    }
+    /// <summary>Synthetic HEIF fixtures copied to the test output (see Images/Fixtures/README.md).</summary>
+    internal static string HeifPath(string name) =>
+        Path.Combine(AppContext.BaseDirectory, "Images", "Fixtures", name);
+
+    private static byte[] Heif(string name) => File.ReadAllBytes(HeifPath(name));
 
     [Theory]
     [InlineData("synthetic-3x2.heic", false)]

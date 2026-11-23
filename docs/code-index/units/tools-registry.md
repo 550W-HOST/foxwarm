@@ -1,6 +1,6 @@
 # Unit: Unified tool registry and Session tool execution
 
-Files: `dotnet/Foxwarm/Tools/ToolActivity.cs`, `dotnet/Foxwarm/Tools/AgentToolDefinitions.cs`, `dotnet/Foxwarm/Tools/CompactToolDefinition.cs`, `dotnet/Foxwarm/Tools/KnowledgeToolDefinitions.cs`, `dotnet/Foxwarm/Tools/MemoryTools.cs`, `dotnet/Foxwarm/Tools/ObservationToolDefinitions.cs`, `dotnet/Foxwarm/Tools/SessionSettingsDefinitions.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.ToolScript.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.Output.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.Compaction.cs`, `dotnet/Foxwarm/Tools/TimerToolDefinitions.cs`, `dotnet/Foxwarm/Tools/ToolCallControls.cs`, `dotnet/Foxwarm/Tools/ToolOutputGuard.cs`, `dotnet/Foxwarm/Tools/ToolRegistry.cs`, `dotnet/Foxwarm/Tools/ToolResponseFormatting.cs`, `dotnet/Foxwarm/Tools/ToolScriptToolDefinitions.cs`, `dotnet/Foxwarm/Tools/UnifiedToolDefinitions.cs`, `dotnet/Foxwarm/Tools/UnifiedTools.Schema.cs`, `dotnet/Foxwarm/Tools/UnifiedTools.Results.cs`, `dotnet/Foxwarm/Tools/UnifiedTools.cs`, `dotnet/Foxwarm/Tools/WaitToolDefinitions.cs`
+Files: `dotnet/Foxwarm/Tools/ToolActivity.cs`, `dotnet/Foxwarm/Tools/AgentToolDefinitions.cs`, `dotnet/Foxwarm/Tools/CompactToolDefinition.cs`, `dotnet/Foxwarm/Tools/KnowledgeToolDefinitions.cs`, `dotnet/Foxwarm/Tools/MemoryTools.cs`, `dotnet/Foxwarm/Tools/ObservationToolDefinitions.cs`, `dotnet/Foxwarm/Tools/SessionSettingsDefinitions.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.ToolScript.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.Output.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.Compaction.cs`, `dotnet/Foxwarm/Tools/TimerToolDefinitions.cs`, `dotnet/Foxwarm/Tools/ToolCallControls.cs`, `dotnet/Foxwarm/Tools/ToolOutputGuard.cs`, `dotnet/Foxwarm/Tools/ToolRegistry.cs`, `dotnet/Foxwarm/Tools/ToolResponseFormatting.cs`, `dotnet/Foxwarm/Tools/ToolResponseYaml.cs`, `dotnet/Foxwarm/Tools/ToolScriptToolDefinitions.cs`, `dotnet/Foxwarm/Tools/UnifiedToolDefinitions.cs`, `dotnet/Foxwarm/Tools/UnifiedTools.Schema.cs`, `dotnet/Foxwarm/Tools/UnifiedTools.Results.cs`, `dotnet/Foxwarm/Tools/UnifiedTools.cs`, `dotnet/Foxwarm/Tools/WaitToolDefinitions.cs`
 
 ## Purpose
 
@@ -13,7 +13,8 @@ The [external Session runtime](./session-claude-runtime.md) adds an exact-run pr
 - `ToolRegistry` combines builtins, MCP, provider-hosted definitions, and permitted Node capabilities into one discovered set with stable names/schemas.
 - `UnifiedToolDefinitions`/`UnifiedTools.Schema` publish model-facing JSON; `UnifiedTools` resolves calls and carries Session/agent/request scope into execution.
 - `SessionToolExecutor` dispatches definitions, commits observation/memory/wait/settings/timer/compact changes through SessionManager/save-lane APIs, and returns source JSON values with separately typed trusted receipts; the `session` tool resolves targeted status through the real Main owner and applies parent changes through catalog presentation mutation; its ToolScript partial bridges to MainToolScript. Advertised external tools use current or explicit Node capability snapshots from the [external Node unit](./external-nodes.md); builtin name collisions stay source-qualified, and external exec uses the [remote exec authority unit](./remote-exec.md). Executable provider exec instead joins the existing [persistent local/provider owner](./tools-local-io.md#provider-exec), carrying exact-Node cwd through normal and deferred Session save-lane updates. Copy, image export/delivery and remote source use the [file consumers unit](./external-node-files.md), preserving their distinct builtin and path identities.
-- `ToolCallControls`, `ToolOutputGuard`, `BoundedTextExcerpt`, and `ToolResponseFormatting` enforce call ordering, size/truncation, status/error envelopes, and provider-visible output boundaries.
+- `ToolCallControls`, `ToolOutputGuard`, `BoundedTextExcerpt`, and `ToolResponseFormatting` enforce call ordering, size/truncation, status/error envelopes, and provider-visible output boundaries. `ToolResponseFormatting` and `ToolResponseYaml` port the shared TypeScript formatter exactly ([D-tool-result-text](./shared-node-tools.md#d-tool-result-text)), including the tool-call argument text `FormatArguments` ([D-tool-call-argument-text](./shared-node-tools.md#d-tool-call-argument-text)); every C# provider serializer and the external Claude runtime text block use them.
+- `ToolFailure` (in `Sessions/Turns/TurnContracts.cs`) builds and reads failed tool results ([D-tool-error-shape](#d-tool-error-shape)).
 
 ## Contract and side effects
 
@@ -31,7 +32,59 @@ The discoverable hidden `node_remove` builtin shares the existing credential rev
 
 The discoverable hidden `node_create_auth_token` builtin always resolves to Main and returns only Node ID/file path. Its file/registry ordering and private-path boundary are owned by [the external Node unit](./external-nodes.md).
 
-Local callable declarations carry `type: function`; the channel, notification, artifact and Main browser declarations follow the same function schema contract as other builtins and Node capabilities. `ToolRegistry` and `ToolCallControls.ForModel` preserve that discriminator when projecting definitions. This is separate from MCP discovery's `inputSchema` objects and from provider-native tools added by the [Responses request plan](./model-responses.md). Discovery-only declarations remain hidden by default. Ordinary description rendering and schema selection follow [unified discovery](../modules/tools-and-permissions.md#d-tools-unified-discovery); `UnifiedTools` keeps comment escaping without the former per-description clipping or displayed injection marker.
+Local callable declarations carry `type: function`; the channel, notification, artifact and Main browser declarations follow the same function schema contract as other builtins and Node capabilities. `ToolRegistry` and `ToolCallControls.ForModel` preserve that discriminator when projecting definitions. This is separate from MCP discovery's `inputSchema` objects and from provider-native tools added by the [Responses request plan](./model-responses.md). Discovery-only declarations remain hidden by default. Ordinary description rendering and schema selection follow [unified discovery](#d-tools-unified-discovery); `UnifiedTools` keeps comment escaping without the former per-description clipping or displayed injection marker.
+
+### D-tool-error-shape
+
+**User-assigned correction (2026-11-19).** A failed tool call returns `{error: "<message>"}`, built by `ToolFailure.Result`. This is the original shape (`{ error: message }`, plus `code` only when the thrown error had one); the 2026-09-29 C# port had wrapped every failure as `{error: {type, message}}`, which models read as an escaped one-line object.
+
+- `code` stands beside `error` only where a reader branches on it or the failing operation reports one. Branching reader: Activity outcome classification (`tool_authorization_denied`/`tool_authorization_unresolved` → denied, `tool_approval_rejected`, `tool_approval_expired`/`tool_approval_unavailable`, `tool_call_skipped` → skipped, `tool_call_cancelled` for Stop/shutdown cancellation before or after dispatch, `external_call_failed` for inbound MCP calls) and the WebUI error labels of those rows. Reported codes: `TOOL_AUTH_POLICY_UNAVAILABLE`, Task errors, Session deletion (with `details`) and recall's vector unavailability (with `retryable`). The other former types (`tool_error`, `invalid_command`, `unknown_tool`, `invalid_path`, `invalid_tool_arguments`, `invalid_tool_control_argument`, handoff confirmation, `compact_plan_invalid`, ...) had no branching reader and are not written; Activity shows such failures as a plain error.
+- Further fields stay beside `error`: approval `note` and `approvalId`, partial creation `sessionId`/`initialDeliveryCommitted`/`parentNoticeCommitted`, `timerCommitted`/`timerId`, `canceled`.
+- Read-old, write-new: `ToolFailure.Message` and `ToolFailure.Code` accept both shapes (legacy `error.message`, legacy `error.type` as the code). Activity indexing, the Session sequence projection (`code`, else legacy `error.type`), compaction plan input and repair feedback, and the WebUI/command timer and recall replies read through them. Persisted rows are not migrated; they render with the [shared text format](./shared-node-tools.md#d-tool-result-text).
+- ToolScript receives the same value; programmatic `ctl` failures are still raised as exceptions carrying the message.
+
+### D-builtin-result-shapes
+
+**User decision (2026-11-20).** A builtin returns the value its reader needs, and the model, the WebUI and ToolScript see that same value; the model and WebUI read it through the [readable text format](./shared-node-tools.md#d-tool-result-text). No result carries an `output` sentence that repeats its own fields, and no record is double-encoded as JSON text in `output`.
+
+- **Records** (lists, status, settings, receipts of actions that produce identifiers) are structured objects without `output`. A hint the reader needs and that used to exist only in the sentence becomes an explicit field, normally `note` (`ask_user`, `exec stop`, `image save`, `artifact prepare`, a background `node copy`, `submit_compact_plan`); a follow-up command is a field holding the exact `ctl` command (`session list` `nextPage`, written by `CtlCommandText.For`). Fields are dropped only when they are internal or empty: absent optional values are left out rather than written as null, except where null itself means something (an unset override or effort).
+- **Documents and prose** keep `output` text: `session view`, history recall, `memory read`, `skill load`, `--help`, `tool search`, `read`, `exec` and command output. Their script-only named fields follow [D-dispatch-programmatic-tool-data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
+- **Action confirmations without data** (rename, send, delete, memory writes) keep a short `output` sentence. Image-carrying results keep their image parts.
+- The object is the same for every caller: there is no ToolScript-only structure behind model text (`node list` and `config explain-auth` formerly branched on `programmatic`).
+- User commands that share an owner operation render their own reply text from the record (`/status` through `SessionStatus.Text`, `/exec list` through `SessionManager.ExecListText`, `/exec stop` from `note`); other `/` commands already had their own text.
+
+Records under this rule, with their top-level fields:
+
+| Command (builtin) | Result |
+| --- | --- |
+| `timer list` (`list_timers`) | `timers` |
+| `timer create/update/pause/resume` (`create_timer`, `update_timer`) | `timer` |
+| `timer delete` (`delete_timer`) | `deleted` |
+| `exec list` / `exec stop` | `execs` / `execId`, `outcome`, `note` |
+| `node list` (`node`) | `currentNode`, `nodes`, `providers` |
+| `node select` | `nodeId`, `defaultCwd`, `cwdCleared` |
+| `node pending` (`node_pair_list`) | `requests` |
+| `node approve` (`node_pair_approve`) | the approval receipt (`nodeId`, `authToken`, `deliveredLive`, ...) |
+| `node bootstrap-info` | the bootstrap info with `pairingTokenFile` |
+| `node copy` (`copy_between_nodes`) | `sourceNode`, `sourcePath`, `targetNode`, `fullPath`, `sizeBytes`, `sha256`, `warning`?; in the background `transferId`, `bytesCopied`, `sizeBytes`, `elapsed`, `note`, `warning`? |
+| `node cancel-transfer` | `transferId`, `status` and, when known, `sizeBytes`, `sha256` or `reason`; a finished copy returns its copy receipt |
+| `file send` (`send_file`) | `fullPath`, `fileDelivery`, `delivered`, `skipped`?, `failed`? |
+| `image save` (`image_write_to_file`) | `fullPath`, `note` |
+| `artifact prepare` / `publish` / `get` | `marker`, `preparedArtifact`, `note` / `marker`, `artifact` / `marker`, `metadata` |
+| `ask_user` | `questionId`, `status`, `note` (`close`: `questionId`, `status`) |
+| `submit_compact_plan` | `accepted`, `applied`, `operationId`, `note`, `overBudget`?; a rejected plan keeps `error` with `argsFilePath`, `nodeId`, `cwd`?, `note` |
+| `script list` (`list_toolscript_runs`) | `runs` of `runId`, `status`, `mode`, `scriptPath`, `createdAt`, `completedAt`?; `script get` keeps the full record |
+| `session child-model` | `sessionId`, `change`?, `model`, `effectiveModel`, `policySource`, `policyChain`, `effort`, `effectiveEffort`, `allowedEfforts` |
+| `session compact-threshold` | `sessionId`, `change`?, `thresholdTokens`, `effectiveThresholdTokens` |
+| `session status` | `sessionId`, `displayName`?, `agent`, `node`, `agentDirectory`, `cwd`?, `parentSessionId`?, `archived`?, model and effort fields, message, token, image and usage fields, compaction threshold, child defaults, `runtime`, `busy`?, `recentChildren` |
+| `session list` | `currentSession`, `parentSession`?, `query`?, `total`, `start`, `sessions`, `nextPage`? |
+| `agent list` (`list_agents`) | `agents` of `id`, `sessionCount`, `inherit`?, `createdBy`?, `ruleCount`, `defaultNode`?, `defaultCwd`? |
+| `skill list` | `agent`, `skills` of `name`, `description`?, `source` |
+| `agent inherit`, `config set`, `config explain-auth` | their former JSON payload as the object itself |
+
+Session rows (`session list` `sessions`, `session status` `recentChildren`) come from `SessionStatus.Row`: `id`, `displayName`?, `current`?, `latestMessageSeq`?, `activeMessages`, the runtime fields of `SessionStatus.RuntimeFields` (`state`, `phase`?, `waitingFor`?, `waitReason`?, `pendingSessions`?, `waitExecIds`?, `waitQuestionIds`?, `activity`?, `queueLength`?) and `lastMessageAt`?.
+
+Request prefixes ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)): persisted results keep their stored shapes and render as before, and no tool declaration changes, so existing history is not rewritten and consecutive requests still extend one prefix. A one-time prefix change at deployment was accepted (user, 2026-11-19) and is not needed. Readers that matched old sentences in `output` read fields instead. Tests check field structure, not wording.
 
 ### D-tools-node-independent-default-declarations
 
@@ -39,7 +92,7 @@ Local callable declarations carry `type: function`; the channel, notification, a
 
 [2026-11-14] The default set is `SessionToolExecutor.DefaultBuiltins`: `read`, `write`, `edit`, `exec`, `run_script`, `continue_script`, `wait`, `ask_user`, `send_to_session`, `create_child_session`, `task`, `submit_compact_plan` and `ctl`, plus conditional `generate_image`. The former defaults `node`, `recall`, `copy_between_nodes`, `cancel_transfer`, `send_file`, `image_write_to_file`, the memory tools, `image_crop`, `list_agents`, `skill`, `session`, `view_session` and `send_to_channel` stay registered and are reached through `ctl` ([D-ctl-command-registry](./ctl-command-registry.md#d-ctl-command-registry)); `search_tools` is removed. Wherever this section refers to `search_tools` or `call_tool`, read `ctl tool search` and `ctl tool call`.
 
-`SessionManager.ModelDefinitions` is the shared projection for chat, compaction, BTW and the external runtime. Direct, unified and ToolScript calls still resolve their actual execution Node and enforce capability admission and authorization before effects. `search_tools` keeps target-specific advertised descriptions, schemas and visibility, and remote-only capabilities remain accessible through explicit discovery and `call_tool`. A declaration is not an invocation grant. The retained TypeScript resolver's current-Node visibility and Shell exec substitution are reference behavior, not the maintained declaration contract.
+`SessionManager.ModelDefinitions` is the shared projection for chat, compaction, BTW and the external runtime. Direct, unified and ToolScript calls still resolve their actual execution Node and enforce capability admission and authorization before effects. `search_tools` keeps target-specific advertised descriptions, schemas and visibility, and remote-only capabilities remain accessible through explicit discovery and `call_tool`. A declaration is not an invocation grant.
 
 Inputs of the default declaration list, in `SessionManager.ModelDefinitions`:
 
@@ -59,7 +112,7 @@ For remote `exec`, `SessionToolExecutor.RemoteResultMetadata` and `SettleRemoteE
 
 The [two-stage guard](../threads/tools-permissions-and-exec.md#structured-output-guard) retains all ordinary siblings when shortening `output` is sufficient. Its whole-response summaries use ordinary response formatting, including the existing .NET `outputTruncated: true` envelope whose error branch carries an `error` excerpt without `output`. Only a non-null top-level `error` selects that branch; an explicit `error: null` remains null and uses the successful output excerpt. Guarding must not manufacture a batch error and thereby clear an otherwise valid same-batch wait. This preserves both current and persisted summaries without wrapping the excerpt in a new execution metadata section.
 
-When the persisted verbose flag is enabled, resolved and authorized top-level dispatch broadcasts the original invocation name and existing argument preview through the normal transient non-WebUI delivery owner. A malformed top-level attempt also broadcasts before returning `invalid_tool_arguments`, without generic effect authorization or dispatch; its raw string arguments use the same 200-character preview bound, with the ordinary preview fallback when raw text is absent. Cancellation, closing, preset results and unavailable policy still short-circuit before malformed display, while well-formed denied calls do not reach the dispatch hook. Programmatic subcalls keep their existing outer presentation. The broadcast adds no canonical history, ordinary progress duplicate or platform-ACK dependency, and does not move structured runtime/progress boundaries.
+When the persisted verbose flag is enabled, resolved and authorized top-level dispatch broadcasts the original invocation name and existing argument preview through the normal transient non-WebUI delivery owner. A malformed top-level attempt also broadcasts before returning its argument failure, without generic effect authorization or dispatch; its raw string arguments use the same 200-character preview bound, with the ordinary preview fallback when raw text is absent. Cancellation, closing, preset results and unavailable policy still short-circuit before malformed display, while well-formed denied calls do not reach the dispatch hook. Programmatic subcalls keep their existing outer presentation. The broadcast adds no canonical history, ordinary progress duplicate or platform-ACK dependency, and does not move structured runtime/progress boundaries.
 
 Resolved, authorized top-level dispatch supplies runtime name/source/server/Node, optional wrapper invocation, short resolved-argument preview and zero-based batch position. Programmatic subcalls preserve the outer script runtime and use its existing subcall progress. Successful builtin `send_to_session` delivery supplies separate display-only canonical destination/body evidence, bounded to 32,768 UTF-16 units. `TurnToolExecution.SessionMessages` flows to function-response `__meta.sessionMessages`, while ToolScript captures only its current completed host subcall's `sessionMessage`. These values do not broaden child-to-parent handoff receipts, alter returned values or delivery count, or trust arbitrary MCP/result JSON. Existing provider projection removes the metadata.
 
@@ -81,6 +134,70 @@ Model-facing `exec` and `run_script` schemas require `summary` describing the ac
 `ToolActivity` resolves `call_tool` descriptors for display (including `argsJson`), takes the supplied exec/script purpose and uses a short literal command prefix for older exec calls. Existing action/path/title fields summarize other tools without new generic parameters. Resolved runtime `argsPreview` uses the same purpose for exec/script calls. No shell interpretation, result inference, new exec registry field or additional history read is involved. See [context previews](./session-compaction.md#recall-and-lineage-contract) for source pairing and [tool timeline](./webui-tool-timeline.md) for browser display.
 
 [2026-11-12, user q-3a09cbb119] Default tool declarations are kept short and uniform. The cancellation controls are not declared (the framework prompt describes them once); `send_file.text`, `recall.agentName` and recall `scope: all` are removed and rejected as unknown arguments; the concept words Session, Agent, Task, Node and Provider are capitalised in model-facing copy; and every relative-path description states one rule: the Session working directory on the current Node when set, otherwise the Node's default directory. Contracts: [Node-relative paths](../behaviors/nodes-workspaces-and-permissions.md), [model cancellation](../threads/tool-dispatch-authorization.md#d-dispatch-model-tool-cancellation-and-handoff-confirmation). Tests check schema structure and behavior, not wording.
+
+## Design decisions
+
+### D-config-handoff-confirmation
+
+[2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent `handoffRecall` / `handoffConfirmation` contract and its schema/reminder guidance; omission or `false` disables only that review requirement. Model tool-call cancellation controls remain enabled in both modes.
+
+### D-llm-stable-tool-schema
+
+**Derived constraint; directly selected to support [request-prefix stability](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability).** Restrict special execution paths at dispatch rather than varying their advertised schema solely because the request is compact or an aside. [Hosted declarations](./model-responses.md#d-responses-hosted-tool-purpose) and the [compact gate](../threads/context-compaction.md#d-context-compact-runtime-gate) implement distinct parts of that design.
+
+Normal turns, side requests, and compact planning keep one model-facing tool schema when their prompt prefix/schema lineage is shared. Runtime gates enforce special-flow restrictions.
+
+### D-llm-shared-response-format
+
+**Derived design; selected for consistent tool-result presentation.** It serves the [value/presentation/control distinction](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers). Shared formatting is a serialization mechanism; it must not flatten native program inputs or alter success/error semantics to simplify a provider adapter.
+
+Structured tool values remain structured until provider serialization, where one shared formatter produces text for all provider protocols.
+
+### D-tools-unified-discovery
+
+**Derived interface design; requested and adopted to reduce tool-catalog duplication and keep [schemas stable](#d-llm-stable-tool-schema).** Search locates a concrete capability and a single invocation interface reaches it. Consolidation is not an authorization shortcut: [resolved-target policy](../threads/tool-dispatch-authorization.md#d-dispatch-resolved-target) still owns the operation.
+
+[2026-11-14] Superseded as the model interface by [D-ctl-command-registry](./ctl-command-registry.md#d-ctl-command-registry): `search_tools` and `call_tool` were removed (user) and their behavior moved unchanged to `ctl tool search` and `ctl tool call`; the search formatting, budgets, schema selection and server prefilter below still describe `tool search`, with copyable descriptors written as `tool call` commands. ToolScript's `call_tool` host function is unchanged.
+
+Less frequently used builtins, MCP tools, and node tools are discovered through `search_tools` and invoked through `call_tool`. Direct provider calls, unified calls, and ToolScript nested calls share the canonical resolved-operation boundary in [D-dispatch-resolved-target](../threads/tool-dispatch-authorization.md#d-dispatch-resolved-target).
+
+[2026-09-03] Ordinary model-facing `search_tools` returns the standard `{ output: string }` envelope. Trusted programmatic execution additionally receives structured descriptors and available warnings; the [program versus model consumer contract](../behaviors/automation-and-scheduled-work.md#what-does-the-program-consume-and-what-does-the-model-receive) owns that distinction. Available MCP output schemas follow the same detailed-subset limit; they are omitted when unavailable, not fabricated. The text begins with actual emitted/total-match counts and retains bounded warning text. Safe identities use compact canonical-ID declarations; unsafe identities use copyable explicit `call_tool` source/server-or-node/name descriptors with exact JSON quoting, and are omitted with a warning when structured identity is unavailable. Its default result limit is 5. Runtime normalizes finite values with truncation and a 1-200 clamp; omitted or non-finite values use 5, while the model schema is an integer bounded to 1-200. Schema detail remains capped at the first 10 selected results, and `includeSchema=false` emits explicit schema-omitted summaries. The complete formatter output, including headers, omission notices, and warnings, is capped at 32,000 characters below the outer tool-output guard. Metadata controls and line-direction characters are escaped. Recognized unsupported structural schema constraints widen to `unknown` or `Record<string, unknown>`. Required-only object keys retain other-key typing, open-object unknown typing, or closed-object impossibility, with bounded overflow marked explicitly; no claim is made that every future JSON Schema keyword is understood.
+
+[2026-10-29] Maintained C# ordinary discovery renders tool and displayed property descriptions without per-description clipping, retaining control/direction escaping, whitespace normalization and comment-terminator escaping. It omits the displayed default-injection marker; structured programmatic `hidden` metadata, model injection and authorization keep their existing semantics. `includeSchema` still defaults to true, explicit false requests summaries, and only the first ten selected tools receive schema detail. Structural schema simplification and the aggregate search budget still apply. There is no independent per-declaration rejection; a declaration is omitted as a whole only when it does not fit the remaining aggregate budget.
+
+[2026-11-06] Without `server`, MCP discovery for an isolated Agent's Session lists only the distinct servers named by its MCP allow rules, in rule order; other Sessions list all enabled servers. An explicit `server` is used as given. Unreadable isolation metadata selects no servers. [2026-11-10] Retired with legacy isolation in R2; the policy-based server prefilter below applies to every Session.
+
+[2026-11-09] Discovery without `server` also skips a server that some effective policy layer denies for every tool name and argument (`SessionManager.McpServerVisible`), because listing a server opens its connection. A rule that depends on the tool name, arguments or paths keeps the server listed; individual tools are still filtered by ordinary visibility. An explicit `server` is listed as requested. Policy load failures propagate instead of being reported as unavailable MCP configuration.
+
+[2026-11-06] Discovery without `server` lists at most six servers concurrently under one 15-second deadline shared by the whole search; a server still waiting or listing at the deadline is cancelled and reported as an ordinary per-server warning that suggests passing `server`. Results and warnings keep server order. Searching one named server keeps the [60-second per-request discovery timeout](./mcp.md#connection-and-cancellation-contract). There is no discovery cache; per-Session connection ownership is unchanged.
+
+[2026-11-15] The text rendering, matching and schema default above are superseded by [discovery rendering](./ctl-command-registry.md#discovery-rendering) (user decision): builtins with commands are listed as commands, declared tools by name, MCP and Node tools by tool ID and one-line summary; matching is on whole words with names weighted above descriptions; text shows argument types only with `--schema`, while programmatic callers keep receiving `inputSchema` unless they pass `--no-schema`. Budgets, visibility, the server prefilter and the broad MCP deadline are unchanged.
+
+Agent-level authorization and filtered discovery are canonical in [D-dispatch-exact-agent-tool-rules](../threads/tool-dispatch-authorization.md#d-dispatch-exact-agent-tool-rules).
+
+### D-tools-structured-output-guard
+
+**Directly selected algorithmic constraint under the [program/presentation/control boundary](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers).** The two-stage order preserves useful structured siblings before falling back to a whole-result summary. Artifact naming and local size budgets are implementation choices; saving the full value does not excuse an incorrect model-facing projection.
+
+Output guarding keeps long tool results usable without flooding model context. The selected two-stage design first shortens an oversized top-level `output` while retaining its other fields, then checks the complete formatted response and replaces it with a bounded summary only if it is still oversized. Each shortened source remains available through a full-output file locator. This preserves ordinary structured siblings when shortening `output` alone is sufficient; a whole-response summary is the fallback, not the first step. Its [observable result/control boundary](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers) requires success/error classification to survive that projection; null or absent errors must not become manufactured errors. The maintained host implements both stages. The [managed caller path](../threads/tools-permissions-and-exec.md#structured-output-guard) keeps native programmatic values and image carriers outside text shortening. Saving failures retain the original success/error classification, report the storage failure separately, and do not advertise a complete-output locator.
+
+### D-tools-control-results
+
+Control and handoff tools return minimal success signals rather than echoing arguments or full message bodies that are already visible in the call.
+
+### D-tools-schema-validity
+
+**Independent provider-protocol constraint.** Advertised tools must serialize as valid schemas for the actual consuming provider. Schema projection implements [stable declarations](#d-llm-stable-tool-schema); local shape checks or a permissive test peer cannot establish wire compatibility.
+
+Default model-facing tool properties have concrete schema shapes accepted by strict providers. Runtime validation handles argument alternatives that JSON Schema cannot express cleanly.
+
+### D-tools-resource-action-consolidation
+
+**Derived interface design within [unified discovery](#d-tools-unified-discovery) and [stable tool schemas](#d-llm-stable-tool-schema).** Grouping resource operations reduces duplicate entry points. The selected action surface does not require retaining obsolete internal aliases; real persisted automation and external callers remain separate compatibility evidence.
+
+[2026-08-01, updated 2026-08-20] Keep the default model-facing namespace compact by grouping closely related operations under singular resource tools: `session` owns status/list/update-display-name, `skill` owns list/load, and `node` owns list/select/create/ensure/inspect/destroy. Do not add parallel `sandbox` or `node_resource` tools; provider-neutral lifecycle authority is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers). The display-name action is exactly `update-display-name`; the earlier `rename` action and removed standalone tool name are not retained as aliases. Keep action-specific arguments flat in the shared schema. A successful display-name update reports both the previous and resulting values, using `unset` for no display name and an explicit unchanged result for no-op calls. `start_toolscript_run` is the narrow exception to removed-name handling: it remains hidden and callable only for documented user-ToolScript compatibility, while current guidance uses `run_script({ mode: "background" })`. MCP configuration/listing is discoverable through `search_tools`/`call_tool` rather than injected by default.
+
+Node-environment ownership and the removed deletion surface are canonical in [D-dispatch-node-environment-placement](../threads/tool-dispatch-node-execution.md#d-dispatch-node-environment-placement).
 
 ## Tests
 

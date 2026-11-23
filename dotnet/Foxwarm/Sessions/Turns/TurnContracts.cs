@@ -99,14 +99,35 @@ public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
     {
         cancellationToken.ThrowIfCancellationRequested();
         var name = functionCall["name"]?.GetValue<string>() ?? "";
-        return Task.FromResult<JsonNode?>(ToolError("unknown_tool", $"Unknown tool: {name}"));
+        return Task.FromResult<JsonNode?>(ToolFailure.Result($"Unknown tool: {name}"));
     }
+}
 
-    public static JsonObject ToolError(string type, string message) =>
-        new()
+// A failed tool call's result: {error: "<message>"}, the shape the model, the WebUI and ToolScript
+// read. `code` is added only where a reader branches on it (Activity outcomes) or the failing
+// operation reported one. Results persisted before 2026-11-19 carry {error: {type, message}};
+// the readers below accept both.
+public static class ToolFailure
+{
+    public static JsonObject Result(string message) => new() { ["error"] = message };
+
+    public static JsonObject Result(string message, string code) =>
+        new() { ["error"] = message, ["code"] = code };
+
+    // The failure message, or null when the result is not a failure.
+    public static string? Message(JsonNode? response) =>
+        (response as JsonObject)?["error"] switch
         {
-            ["error"] = new JsonObject { ["type"] = type, ["message"] = message },
+            JsonObject legacy => SessionWait.Text(legacy["message"]),
+            JsonValue text => SessionWait.Text(text),
+            _ => null,
         };
+
+    // The machine code of a failure: `code`, or the legacy `error.type`.
+    public static string? Code(JsonNode? response) =>
+        response is JsonObject { } result && result["error"] is { } error
+            ? SessionWait.Text(result["code"]) ?? SessionWait.Text((error as JsonObject)?["type"])
+            : null;
 }
 
 public sealed class ToolLoopLimitException(int limit)

@@ -106,12 +106,12 @@ public sealed partial class ProviderFileConsumerTests
             "send_file",
             new JsonObject { ["filePath"] = "report.txt", ["channelTargetId"] = "chat:room" }
         );
-        Assert.Equal("tool_authorization_denied", send["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", send.FailureCode()!);
         var image = await f.Call(
             "image_write_to_file",
             new JsonObject { ["id"] = "missing", ["filePath"] = "image.png" }
         );
-        Assert.Equal("tool_authorization_denied", image["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", image.FailureCode()!);
         var unified = await f.Call(
             "ctl",
             CtlTestArgs.Unified(new JsonObject
@@ -124,7 +124,7 @@ public sealed partial class ProviderFileConsumerTests
                 },
             })
         );
-        Assert.Equal("tool_authorization_denied", unified["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", unified.FailureCode()!);
         Assert.Equal(before, (await f.Requests()).Length);
 
         // The same calls on master are not refused by this Node-targeted rule.
@@ -134,7 +134,7 @@ public sealed partial class ProviderFileConsumerTests
             "send_file",
             new JsonObject { ["filePath"] = "report.txt", ["channelTargetId"] = "chat:room" }
         );
-        Assert.NotEqual("tool_authorization_denied", master["error"]?["type"]?.GetValue<string>());
+        Assert.NotEqual("tool_authorization_denied", master.FailureCode());
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public sealed partial class ProviderFileConsumerTests
                 ["channelTargetId"] = "chat:room",
             }
         );
-        Assert.Equal("tool_authorization_denied", send["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", send.FailureCode()!);
         var image = await f.Call(
             "image_write_to_file",
             new JsonObject
@@ -164,6 +164,6 @@ public sealed partial class ProviderFileConsumerTests
                 ["node"] = "other/target",
             }
         );
-        Assert.Equal("tool_authorization_denied", image["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", image.FailureCode()!);
     }
 }

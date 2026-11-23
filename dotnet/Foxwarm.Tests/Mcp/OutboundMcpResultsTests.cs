@@ -39,13 +39,10 @@ public sealed class OutboundMcpResultsTests
         Assert.True((await f.First.Registry.Control.StopAsync(f.First.Id)).AbortedInFlight);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
         var response = Assert.Single(ToolResponses(f.First));
-        Assert.Equal(
-            "tool_call_cancelled",
-            response["response"]!["error"]!["type"]!.GetValue<string>()
-        );
+        Assert.Equal("tool_call_cancelled", response["response"]!.FailureCode());
         Assert.Contains(
             "not reversed",
-            response["response"]!["error"]!["message"]!.GetValue<string>()
+            response["response"]!.FailureMessage()!
         );
         Assert.Single(await peer.WaitAsync("delete"));
         Assert.Single(await peer.EventsAsync(), row => row["kind"]?.GetValue<string>() == "effect");
@@ -130,7 +127,7 @@ public sealed class OutboundMcpResultsTests
             .OfType<JsonObject>()
             .Where(row => row["type"]?.GetValue<string>() == "function_call_output")
             .ToArray();
-        Assert.Equal("[1, null, false]", outputs[0]["output"]!.GetValue<string>());
+        Assert.Equal("- 1\n- null\n- false", outputs[0]["output"]!.GetValue<string>());
         Assert.Equal("false", outputs[1]["output"]!.GetValue<string>());
         Assert.Single(peer.Requests, row => row["method"]!.GetValue<string>() == "server/discover");
         Assert.DoesNotContain(
@@ -310,7 +307,7 @@ public sealed class OutboundMcpResultsTests
             .ExecuteAsync(new JsonObject { ["name"] = "view_session", ["args"] = args }, default);
         var detail = full!["output"]!.GetValue<string>();
         Assert.Contains("ERROR: " + EcmaJson.Stringify(protocol), detail);
-        Assert.Contains("ERROR: " + EcmaJson.Stringify(rootError), detail);
+        Assert.Contains("ERROR: " + SessionWait.Text(rootError), detail);
         Assert.Contains("[tool:ctl] business control", detail);
         var current = f.First.History();
         Assert.Equal(history.Count, current.Count);

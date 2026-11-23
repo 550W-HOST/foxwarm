@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the ToolScript worker executable (monty or monty.exe) from the source pinned in
-# dotnet/Foxwarm/ToolScript/monty-source.json (pydantic/monty v0.0.19) with
-# dotnet/Foxwarm/ToolScript/monty-no-type-check.patch, which leaves out the ty type checker that
-# Foxwarm never uses. The release workflow runs this like build-lancedb.sh.
+# dotnet/Foxwarm/ToolScript/monty-source.json (pydantic/monty v1.6.0) with
+# dotnet/Foxwarm/ToolScript/monty-no-type-check.patch, which replaces the ty type checker that
+# Foxwarm never uses by a stub of its API. The release workflow runs this like build-lancedb.sh.
 # Usage: scripts/release/build-monty.sh OUTPUT_DIRECTORY
 set -euo pipefail
 output="$(mkdir -p "${1:?Usage: build-monty.sh OUTPUT_DIRECTORY}" && cd "$1" && pwd)"

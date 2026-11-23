@@ -1,10 +1,5 @@
-// Owned loopback AS and official SDK resource from the canonical Source scenarios.
-import { createRequire } from 'node:module'
-import { resolve } from 'node:path'
-const require = createRequire(import.meta.url)
-const source = process.env.FOXWARM_TS_ROOT
-if (!source) throw new Error('Set FOXWARM_TS_ROOT to the built repository checkout')
-const { createMcpOAuthFixture } = require(resolve(source, 'lib/mcpOAuthTestFixture.js'))
+// Owned loopback AS and official SDK resource, driven over stdin/stdout by McpOAuthFixture.cs.
+import { createMcpOAuthFixture } from './mcp-oauth-fixture.mjs'
 const fixture = await createMcpOAuthFixture()
 let releaseRefresh, releaseSlow, releaseMetadata, releaseInitialize401, releaseInitializeResult
 let slowEntered = false, refreshEntered = false, metadataEntered = false

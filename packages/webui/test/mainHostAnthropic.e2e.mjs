@@ -101,7 +101,7 @@ const peer = createServer(async (request, response) => {
       assert(replay.some(block => block.signature === signature)); assert(replay.some(block => block.signature === 'signed-empty')); assert(replay.some(block => block.type === 'redacted_thinking' && block.data === redacted))
       const results = body.messages.flatMap(row => Array.isArray(row.content) ? row.content.filter(block => block.type === 'tool_result') : [])
       assert.deepEqual(results.slice(-4).map(result => result.tool_use_id), ['write-ok', 'read-ok', 'write-invalid', 'write-nonobject'])
-      assert(results.at(-1).content.includes('invalid_tool_arguments')); assert(JSON.stringify(replay.find(block => block.id === 'write-invalid').input).includes('Invalid tool arguments JSON'))
+      assert.match(results.at(-1).content, /^error: 'Tool call was not executed: the response stopped at max_tokens before the tool input was known to be complete\. Invalid tool arguments JSON: /m); assert(JSON.stringify(replay.find(block => block.id === 'write-invalid').input).includes('Invalid tool arguments JSON'))
       assert(!JSON.stringify(body.messages).includes('The response stopped at the output limit.'))
       assert.equal(await readFile(join(fixture.data, 'agents/team/note.txt'), 'utf8'), 'héllo'); assert(!await exists(join(fixture.data, 'agents/team/forbidden.txt'))); assert(!await exists(join(fixture.data, 'agents/team/array-forbidden.txt')))
       answer(response, 'FLOW-DONE'); return

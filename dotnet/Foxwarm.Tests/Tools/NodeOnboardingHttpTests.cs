@@ -110,14 +110,9 @@ public sealed partial class NodeOnboardingHttpTests
             new JsonObject { ["filePath"] = tokenPath },
             default
         );
-        Assert.Contains("中文+'token", nested["output"]!.GetValue<string>());
-        Assert.DoesNotContain("\\u", nested["output"]!.GetValue<string>());
-        Assert.Equal(
-            tokenPath,
-            JsonNode.Parse(nested["output"]!.GetValue<string>())![
-                "pairingTokenFile"
-            ]!.GetValue<string>()
-        );
+        Assert.Null(nested["output"]);
+        Assert.Equal(tokenPath, nested["pairingTokenFile"]!.GetValue<string>());
+        Assert.DoesNotContain("\\u", nested.ToJsonText());
     }
 
     [Fact]

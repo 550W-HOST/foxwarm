@@ -25,6 +25,8 @@ await writeFile(entryPath, `
   const nodes = Array.from({ length: 45 }, (_, i) => ({ id: 'node-' + i, label: 'node-' + i, selectable: i !== 30, reason: i === 30 ? 'Offline' : null, hint: i === 31 ? 'Policy hint fixture' : null }))
   window.directoryRequests = []
   window.fetch = async (url, init) => {
+    // The installation directory only feeds the trigger's status; the Session directory is the picker list.
+    if (url.endsWith('/api/nodes')) return { ok: true, json: async () => ({ nodes: nodes.map(node => ({ id: node.id, online: true })) }) }
     if (!url.endsWith('/nodes')) return { ok: true, json: async () => ({ commands: [] }) }
     window.directoryRequests.push({ url, signal: init.signal })
     return new Promise(resolve => { window.resolveDirectory = () => resolve({ ok: true, json: async () => ({ nodes }) }) })

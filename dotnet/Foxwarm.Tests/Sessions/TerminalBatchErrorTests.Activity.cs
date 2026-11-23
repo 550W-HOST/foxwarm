@@ -70,9 +70,6 @@ public sealed partial class TerminalBatchErrorTests
         );
         Assert.Equal(4, result["parts"]!.AsArray().Count);
         Assert.Contains("first result", result.ToJsonString());
-        Assert.Equal(
-            "tool_call_cancelled",
-            result["parts"]![3]!["functionResponse"]!["response"]!["error"]!["type"]!.ToString()
-        );
+        Assert.Equal("tool_call_cancelled", result["parts"]![3]!["functionResponse"]!["response"]!.FailureCode());
     }
 }

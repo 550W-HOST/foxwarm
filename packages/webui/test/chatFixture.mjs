@@ -126,10 +126,11 @@ async function buildFixtureBundle() {
       window.fixtureRequests.push(url)
       const bootstrapFailure = new URLSearchParams(location.search).has('bootstrapFailure')
       if (url.endsWith('/nodes')) return new Response(JSON.stringify({ nodes: [
-        { id: 'master', label: 'master', selectable: true, reason: null },
-        { id: 'exec-only-remote', label: 'Shell node', selectable: true, reason: null },
-        { id: 'offline-node', label: 'offline-node', selectable: false, reason: 'Offline' },
-        { id: 'upgrade-node', label: 'upgrade-node', selectable: false, reason: 'Update this node to connect.' },
+        // One payload serves both the Session picker list and the installation directory's status fields.
+        { id: 'master', label: 'master', selectable: true, reason: null, online: true },
+        { id: 'exec-only-remote', label: 'Shell node', selectable: true, reason: null, online: true },
+        { id: 'offline-node', label: 'offline-node', selectable: false, reason: 'Offline', online: false },
+        { id: 'upgrade-node', label: 'upgrade-node', selectable: false, reason: 'Update this node to connect.', online: true, protocolCompatibility: { status: 'upgrade-required', client: {}, master: {} } },
       ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.endsWith('/node')) {
         window.fixtureNodePosts.push({ url, body: JSON.parse(init.body) })

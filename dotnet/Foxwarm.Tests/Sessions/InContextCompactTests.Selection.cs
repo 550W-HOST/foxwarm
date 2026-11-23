@@ -222,8 +222,8 @@ public sealed partial class InContextCompactTests
         );
         await fixture.RunAsync();
         Assert.Contains(
-            "compact_plan_invalid",
-            fixture.ToolResponse("script")["response"]!.ToJsonString()
+            "requires an ordinary foreground tool batch",
+            fixture.ToolResponse("script")["response"]!["result"].FailureMessage()
         );
         Assert.Equal(0, fixture.Owner.Entry.Snapshot().HistoryVersion);
         Assert.False(fixture.Owner.Compactor.Active);
@@ -290,7 +290,7 @@ public sealed partial class InContextCompactTests
         await fixture.RunAsync();
         Assert.Equal(
             "tool_authorization_denied",
-            fixture.ToolResponse("denied")["response"]!["error"]!["type"]!.GetValue<string>()
+            fixture.ToolResponse("denied")["response"]!.FailureCode()!
         );
         Assert.Equal(0, fixture.Owner.Entry.Snapshot().HistoryVersion);
         Assert.False(fixture.Owner.Compactor.Active);

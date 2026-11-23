@@ -25,7 +25,7 @@ public sealed class CronScheduleTests
     {
         using var temp = new TempDirectory();
         var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? throw new InvalidOperationException("Owned Source checkout is required.");
         var output = Path.Combine(temp.Path, "oracle.json");
         var start = new ProcessStartInfo("node")
@@ -117,7 +117,7 @@ public sealed class CronScheduleTests
     public async Task Actual_CronDate_elapsed_calendar_startOf_and_local_offset_resolution_match_through_gaps_folds_and_month_edges()
     {
         using var temp = new TempDirectory();
-        var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
+        var root = Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!;
         var input = new JsonArray();
         foreach (
             var (zone, cursor) in new[]

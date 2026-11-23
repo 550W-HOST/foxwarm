@@ -14,7 +14,7 @@ public sealed partial class AgentRulesTreeTests
     {
         await using var f = await ConfigurationFixture();
         async Task Policy(string yaml) => await f.Manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes(yaml), default);
-        string? Type(JsonNode? result) => SessionWait.Text(result?["error"]?["type"]);
+        string? Type(JsonNode? result) => result?.FailureCode();
 
         await Policy("version: 1\nrules:\n- {op: mcp.manage, mcp: {server: protected-server}, action: deny}\n");
         foreach (var name in new[] { "protected-server", " protected-server ", "\tprotected-server\n" })

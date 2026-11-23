@@ -835,8 +835,11 @@ internal sealed partial record OperationPlan(
                         : args["scope"]?.DeepClone() ?? "current-agent";
                     return true;
                 case "status-node":
-                    // Inbound `node status` views the caller's selected Node.
-                    value = NodeTarget ?? facts?.TargetNode;
+                    // `node status` views the caller's current Node: an inbound connection's
+                    // selected Node, or the calling Session's.
+                    value =
+                        NodeTarget
+                        ?? (facts is { Principal: "internal" } ? context.CurrentNode : facts?.TargetNode);
                     return value is not null;
                 case "caller":
                     value = facts?.Session;

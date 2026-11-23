@@ -625,7 +625,7 @@ try {
   await turn('policy', [
     call('policy', 'set_config', { target: 'tool-rules', filePath: 'deny-browser.yaml' }),
   ]);
-  assert.equal((await invoke('browser_tabs')).error.type, 'tool_authorization_denied');
+  assert.equal((await invoke('browser_tabs')).code, 'tool_authorization_denied');
   await writeFile(join(fixture.work, 'allow-browser.yaml'), 'version: 1\n');
   await turn('restore', [
     call('restore', 'set_config', { target: 'tool-rules', filePath: 'allow-browser.yaml' }),

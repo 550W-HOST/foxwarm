@@ -9,10 +9,10 @@ internal static class MontyFrameBudget
 {
     internal const int MaximumFrame = 256 * 1024 * 1024;
     internal const int ProtocolDepth = 100;
-    private static readonly MessageParser<ChildEvent> Parser =
-        ChildEvent.Parser.WithDiscardUnknownFields(true);
+    private static readonly MessageParser<WorkerEvent> Parser =
+        WorkerEvent.Parser.WithDiscardUnknownFields(true);
 
-    internal static ChildEvent Parse(
+    internal static WorkerEvent Parse(
         byte[] frame,
         ToolScriptDataBudget budget,
         bool frameReserved = false
@@ -34,7 +34,7 @@ internal static class MontyFrameBudget
         if (!frameReserved)
             budget.Charge(frame.Length);
         using var input = new CodedInputStream(frame);
-        Message(input, frame, frame.Length, ChildEvent.Descriptor, budget, 0);
+        Message(input, frame, frame.Length, WorkerEvent.Descriptor, budget, 0);
         if (!input.IsAtEnd)
             throw new InvalidDataException("Unexpected Monty frame tail.");
     }

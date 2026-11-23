@@ -50,7 +50,7 @@ Independent commands and newly created terminals omit the hosting process's `TMU
 
 Master `exec` also drops inherited variables whose value equals a known secret; see [secret references and redaction](../threads/secret-references-and-redaction.md#model-facing-restrictions). CLI and Provider launches are unaffected.
 
-The shared .NET `ExecNative.Launcher` and `TerminalNative.Handle.Spawn` own this boundary for Main and CLI. TypeScript native exec and the supported CLI PTY use `independentProcessEnvironment`; retained TypeScript Main exec shares that native backend. Provider-owned execution environments remain the Provider's responsibility.
+The shared .NET `ExecNative.Launcher` and `TerminalNative.Handle.Spawn` own this boundary for Main and CLI. TypeScript native exec and the supported CLI PTY use `independentProcessEnvironment`. Provider-owned execution environments remain the Provider's responsibility.
 
 ### D-persistent-exec-logical-cwd
 
@@ -97,7 +97,7 @@ Measure tracking age from persisted `startedAt`. At ages at or below 24 hours, p
 
 ### D-persistent-exec-date-co-located-artifacts
 
-Every native run's log, status, recorded cwd, wrapper script and Windows user-command script belong to its start-date directory. POSIX also uses a transient paths file there, normally removed after consumption. The one-time historical migration remains owned by [D-legacy-undated-exec-artifact-migration](./src-migrations.md#d-legacy-undated-exec-artifact-migration). Provider artifacts belong to the adapter's target namespace and retention policy.
+Every native run's log, status, recorded cwd, wrapper script and Windows user-command script belong to its start-date directory. POSIX also uses a transient paths file there, normally removed after consumption. The one-time historical migration remains owned by [D-legacy-undated-exec-artifact-migration](#d-legacy-undated-exec-artifact-migration). Provider artifacts belong to the adapter's target namespace and retention policy.
 
 ### D-persistent-exec-bounded-log-excerpts
 
@@ -111,8 +111,25 @@ Partial output precedes a metadata footer beginning with `---`. Timeout/Stop ide
 
 Preserve captured output whitespace exactly in foreground and timeout previews. The added metadata separator is not command output. Empty output alone gets a placeholder; no-trailing-LF notices distinguish final and partial capture. Main and CLI share the same implementation.
 
+### D-persistent-exec-completion-output-tail
+
+**Directly requested (2026-11-18).** A background completion event carries a bounded tail of the captured output, so reading the result rarely needs another call. The .NET runtimes implement it in the shared `ExecOutput.Completion` (Main native and Provider exec, CLI Node Session exec).
+
+- The tail is at most the last 40 lines taken from one ranged read of the log's last 4,096 bytes. The event is persisted in history as ordinary input, so its excerpt is much smaller than a foreground result, roughly 1k tokens at most. That covers typical test summaries, compiler errors and stack-trace ends. When the window starts inside a line, that fragment is dropped if a whole line follows; a split UTF-8 sequence at the start of a single over-long line is skipped.
+- The excerpt uses the foreground display conventions: the shared bounded-text classification (binary output becomes a hexadecimal preview of the last 64 bytes, invalid bytes become `\xNN` with the conversion note), lines over 550 characters keep 250 at each end with a line-too-long placeholder, metadata starts after the output's own trailing LF or one separator LF, and a missing trailing LF is stated.
+- The [`[execId]` header line](./tools-local-io.md#d-exec-id-first-receipts) states the outcome, exit code and duration, followed by error, command preview and Node; the footer keeps the log locator. A partial tail states the shown line count and the shown and total byte sizes. A zero-byte log is `(No output)`. A missing or unreadable log, or a Provider read that fails or exceeds its 5-second budget, is `(Command output unavailable)`, never empty output, and does not block delivery.
+- Main neutralizes framing look-alikes (`SessionBoundary.NeutralizeFraming`) in the completion text at both admission points, native/Provider and authenticated CLI completion, because the event is framed as `<foxwarm-system kind="event" type="background-process-finished">` and its output must not close or forge that frame. Known secret values are masked by the save lane's [R2 Session-state redaction](../threads/secret-references-and-redaction.md) at queue admission, as for every other history input.
+- The text is composed once per delivery attempt and committed under the existing `exec-completion:<id>` or remote receipt, so it is persisted once and never regenerated per request ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)).
+
+### D-legacy-undated-exec-artifact-migration
+
+Legacy undated persistent-exec artifacts are migrated conservatively: only exact historical wrapper/user/paths names older than a full local-day boundary are archived per agent before unlink, and the migration records completion only after none remain. The current writer's date-co-located artifact contract is owned by [D-persistent-exec-date-co-located-artifacts](#d-persistent-exec-date-co-located-artifacts).
+
+
 ## Integration and tests
 
-Main's `createExecRuntime` supplies persistence and exact-owner completion dispatch. TypeScript CLI tools continue using their existing native managers and external-owner namespace contracts. The [.NET CLI adapter](./dotnet-cli-node.md#persistent-session-exec) preserves Session and external native namespaces and their distinct acknowledged lifecycles without importing Main’s different manager or Provider registry. `src/nodes/providerExecBackend.ts` is the Core-only bridge for optional external process primitives, not an adapter SDK import.
+Main's `createExecRuntime` supplies persistence and exact-owner completion dispatch. TypeScript CLI tools continue using their existing native managers and external-owner namespace contracts. The [.NET CLI adapter](./dotnet-cli-node.md#persistent-session-exec) preserves Session and external native namespaces and their distinct acknowledged lifecycles without importing Main’s different manager or Provider registry. 
 
-`nativeExecBackend.test.ts` covers inherited file capture and launch errors, with Windows-only integration for Unicode scripts/paths, PowerShell and native output, pipeline input, exit/cwd sidecars, and background recovery with acknowledged completion. `persistentExec.test.ts` covers native launch, cwd, output, Stop, registry/recovery, expiration, identity allocation, mutation ordering and notifications. Process-separated provider uncertainty, loss, query bounds, restart and raw-output tests belong to [src-node-providers](./src-node-providers.md). Foreground cancellation semantics remain canonical in [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+`nativeExecBackend.test.ts` covers inherited file capture and launch errors, with Windows-only integration for Unicode scripts/paths, PowerShell and native output, pipeline input, exit/cwd sidecars, and background recovery with acknowledged completion. `persistentExec.test.ts` covers native launch, cwd, output, Stop, registry/recovery, expiration, identity allocation, mutation ordering and notifications. Process-separated provider uncertainty, loss, query bounds, restart and raw-output tests belong to [src-node-providers](./dotnet-node-providers.md). Foreground cancellation semantics remain canonical in [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
+`ExecCompletionTests` covers the completion text (complete, partial, empty, unavailable, no trailing LF, long-line, conversion and binary cases, one bounded window read, and the CLI-composed message); `ExecCompletionEventTests` covers a native completion's masked output inside its neutralized event frame, and `RemoteExecProtocolTests` the neutralized CLI completion. `ProviderFileConsumerTests.Exec` checks a Provider completion's tail read through the Node's files.

@@ -200,6 +200,8 @@ internal sealed partial class SessionManager
                         false
                     );
                 }
+                case "set_session_model":
+                    return (await SessionModelAsync(source, args), false);
                 case "set_session_child_model":
                 case "set_session_compact_threshold":
                     return (await SessionSettingsAsync(source, name, args), false);
@@ -223,7 +225,7 @@ internal sealed partial class SessionManager
                         OptionalString(args, "inheritAgentName"),
                         OptionalBool(args, "refreshSnapshots") ?? false
                     );
-                    return (Output(JsonData.Serialize(result)), false);
+                    return ((JsonObject)result, false);
                 }
                 case "create_session":
                 {
@@ -476,20 +478,19 @@ internal sealed partial class SessionManager
         }
         catch (SessionDeletionException error)
         {
-            var response = UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
-            response["error"]!["details"] = error.Details.DeepClone();
+            var response = ToolFailure.Result(error.Message, error.Code);
+            response["details"] = error.Details.DeepClone();
             return (response, false);
         }
         catch (CommittedSessionCreationException error)
         {
-            var response = UnsupportedTurnToolExecutor.ToolError("partial_create", error.Message);
-            var detail = response["error"] as JsonObject;
+            var response = ToolFailure.Result(error.Message);
             if (error.SessionId is not null)
-                detail!["sessionId"] = error.SessionId;
+                response["sessionId"] = error.SessionId;
             if (error.InitialDeliveryCommitted is not null)
-                detail!["initialDeliveryCommitted"] = error.InitialDeliveryCommitted;
+                response["initialDeliveryCommitted"] = error.InitialDeliveryCommitted;
             if (error.ParentNoticeCommitted is not null)
-                detail!["parentNoticeCommitted"] = error.ParentNoticeCommitted;
+                response["parentNoticeCommitted"] = error.ParentNoticeCommitted;
             return (response, false);
         }
         catch (Exception error)
@@ -504,7 +505,7 @@ internal sealed partial class SessionManager
             )
         {
             return (
-                UnsupportedTurnToolExecutor.ToolError("agent_tool_error", error.Message),
+                ToolFailure.Result(error.Message),
                 false
             );
         }

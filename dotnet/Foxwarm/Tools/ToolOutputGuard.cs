@@ -159,6 +159,7 @@ internal static class ToolOutputGuard
             var key in new[]
             {
                 "error",
+                "code",
                 "status",
                 "runId",
                 "continuationId",

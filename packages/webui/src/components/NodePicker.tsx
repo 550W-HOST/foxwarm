@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Server } from 'lucide-react'
+import { Check, Server, ServerOff } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import { describeExecutionNodeProblem } from '../nodeTargets'
+import { useNodeDirectory } from '../useNodeDirectory'
 
 type NodeOption = { id: string; label: string; selectable: boolean; reason: string | null; hint?: string | null }
 
@@ -24,6 +26,13 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   const pendingRef = useRef<AbortController | null>(null)
   const wasOpenRef = useRef(false)
   const remote = currentNode !== 'master'
+  // Master is the Main server itself; only remote placements need live status.
+  const directory = useNodeDirectory({ enabled: remote })
+  const problem = remote && directory.loaded && !directory.error
+    ? describeExecutionNodeProblem(directory.nodes, currentNode)
+    : null
+  const triggerLabel = problem ? `Execution node: ${currentNode} · ${problem}` : `Execution node: ${currentNode}`
+  const TriggerIcon = problem ? ServerOff : Server
 
   const positionPopup = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
@@ -140,8 +149,9 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
         type="button"
         className={`foxwarm-node-picker-trigger inline-flex h-8 min-w-0 items-center rounded-lg text-[13px] text-fw-text-muted transition hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring disabled:opacity-50 dark:hover:bg-fw-hover ${remote ? 'gap-1.5 px-2.5' : 'w-8 justify-center'}`}
         disabled={disabled || saving}
-        aria-label={`Execution node: ${currentNode}`}
-        title={`Execution node: ${currentNode}`}
+        aria-label={triggerLabel}
+        title={triggerLabel}
+        data-node-status={problem ? 'problem' : undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => {
@@ -150,11 +160,12 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
             setLoading(true)
             setError(null)
             positionPopup()
+            if (remote) void directory.reload()
           }
           setOpen(value => !value)
         }}
       >
-        <Server size={14} strokeWidth={2} className={`shrink-0 ${remote ? 'text-fw-accent' : ''}`} aria-hidden="true" />
+        <TriggerIcon size={14} strokeWidth={2} className={`shrink-0 ${problem ? 'text-fw-warning' : remote ? 'text-fw-accent' : ''}`} aria-hidden="true" />
         {remote && <span className="truncate">{currentNode}</span>}
       </button>
       {open && createPortal(

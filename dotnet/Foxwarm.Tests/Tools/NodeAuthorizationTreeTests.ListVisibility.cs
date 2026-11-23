@@ -11,8 +11,7 @@ public sealed partial class NodeAuthorizationTreeTests
         await f.Manager.ExecuteNodeToolAsync(
             owner ?? f.Owner,
             Obj("""{"action":"list"}"""),
-            default,
-            programmatic: true
+            default
         );
 
     private static string[] Listed(JsonObject data) =>
@@ -91,13 +90,16 @@ public sealed partial class NodeAuthorizationTreeTests
         data = await ListData(f);
         Assert.DoesNotContain("master", Listed(data));
         Assert.DoesNotContain("other", Listed(data));
-        var text = SessionWait.Text(
-            (await f.Call("node", Obj("""{"action":"list"}""")))!["output"]
-        )!;
-        Assert.Contains("`parent` (remote) — offline; not selectable", text);
-        Assert.DoesNotContain("`other`", text);
-        Assert.DoesNotContain("`master` (master)", text);
-        Assert.Contains("- `master` (inspect)", text);
+        // The model receives the same structure as a script.
+        var direct = (await f.Call("node", Obj("""{"action":"list"}""")))!.AsObject();
+        Assert.Null(direct["output"]);
+        var parentRow = Row(direct, "parent");
+        Assert.Equal("remote", SessionWait.Text(parentRow["kind"]));
+        Assert.Equal("offline", SessionWait.Text(parentRow["availability"]));
+        Assert.False(parentRow["select"]!.GetValue<bool>());
+        Assert.DoesNotContain("other", Listed(direct));
+        Assert.DoesNotContain("master", Listed(direct));
+        Assert.Equal(new[] { "inspect" }, Actions(direct, "master"));
     }
 
     [Fact]
@@ -171,11 +173,10 @@ public sealed partial class NodeAuthorizationTreeTests
         );
         Assert.Equal(new[] { "create" }, Actions(data, "fixture"));
         Assert.Empty(Row(data, "fixture/target")["manage"]!.AsArray());
-        var text = SessionWait.Text(
-            (await f.Call("node", Obj("""{"action":"list"}""")))!["output"]
-        )!;
-        Assert.Contains("- `fixture` (create)", text);
-        Assert.DoesNotContain("authenticated-remote", text);
+        var direct = (await f.Call("node", Obj("""{"action":"list"}""")))!.AsObject();
+        Assert.Null(direct["output"]);
+        Assert.Equal(new[] { "create" }, Actions(direct, "fixture"));
+        Assert.Empty(Actions(direct, "authenticated-remote"));
 
         // Without any possible lifecycle action, no Providers section is shown at all.
         await f.Policy(
@@ -189,8 +190,8 @@ public sealed partial class NodeAuthorizationTreeTests
         data = await ListData(f);
         Assert.Empty(data["providers"]!.AsArray());
         Assert.Equal(new[] { "master" }, Listed(data));
-        text = SessionWait.Text((await f.Call("node", Obj("""{"action":"list"}""")))!["output"])!;
-        Assert.DoesNotContain("Providers:", text);
+        direct = (await f.Call("node", Obj("""{"action":"list"}""")))!.AsObject();
+        Assert.Empty(direct["providers"]!.AsArray());
     }
 
     [Fact]
@@ -294,6 +295,6 @@ public sealed partial class NodeAuthorizationTreeTests
             inspected!["node"]!["tools"]!.AsArray(),
             tool => Assert.NotNull(tool!["parameters"])
         );
-        Assert.DoesNotContain("parameters", data["output"]!.GetValue<string>());
+        Assert.DoesNotContain("parameters", data.ToJsonString());
     }
 }

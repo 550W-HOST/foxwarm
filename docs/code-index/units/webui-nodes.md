@@ -1,7 +1,7 @@
 # Unit: webui-nodes
 
 Files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/NodeActionsModal.tsx, packages/webui/src/useNodeDirectory.ts
-Secondary files: packages/webui/src/components/SystemView.tsx, packages/webui/src/App.tsx, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/popupMove.e2e.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostNodeActions.e2e.mjs
+Secondary files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/NodePicker.tsx, packages/webui/src/App.tsx, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/popupMove.e2e.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostNodeActions.e2e.mjs
 
 ## Purpose
 
@@ -12,7 +12,7 @@ Owns the Nodes section of the [System page](./webui-system-view.md): connected N
 - `SystemNodes` — Node cards, Online/Total summary, pending approval count and the New nodes action.
 - `NodeOverviewCard` — directory identity, type, online/protocol state, recent activity, service versions and the Sessions placed on the Node.
 - `NodeActionsModal` — native modal dialog for editable existing launch commands, explicit one-time token reissue and descendant-aware deletion; owns abortable requests and secret lifetime.
-- `useNodeDirectory` — directory-only initial read and visibility-aware 30-second refresh, with cancellation and request-identity publication fencing. System owns one instance and passes Node identities to the Nodes section, Session filters, the inspector and Agent isolation choices.
+- `useNodeDirectory` — directory-only initial read and visibility-aware 30-second refresh, with cancellation and request-identity publication fencing. System owns one instance and passes Node identities to the Nodes section, Session filters, the inspector and Agent isolation choices. The composer [Node picker](./webui-chat-composer.md#d-composer-session-node-picker) owns another, enabled only for a remote current Node; `enabled: false` performs no reads, and `loaded` reports whether any read has succeeded.
 
 ## Behavior and integration
 
@@ -24,7 +24,7 @@ Owns the Nodes section of the [System page](./webui-system-view.md): connected N
 
 ## Existing Node actions
 
-[Restart/revocation](../modules/nodes.md#d-node-restart-and-revocation) governs the actions. Approved CLI and Shell cards open Start command; all native approved cards offer Delete. Master, Provider-owned and unavailable placement cards do not expose native credential actions. Opening a command reads only non-secret launch facts and the credential-free restart suggestion. Method, address and relevant paths remain editable until explicit reissue. Changing an input clears the stale command until Update command; no edit rotates credentials.
+[Restart/revocation](./external-nodes.md#d-node-restart-and-revocation) governs the actions. Approved CLI and Shell cards open Start command; all native approved cards offer Delete. Master, Provider-owned and unavailable placement cards do not expose native credential actions. Opening a command reads only non-secret launch facts and the credential-free restart suggestion. Method, address and relevant paths remain editable until explicit reissue. Changing an input clears the stale command until Update command; no edit rotates credentials.
 
 Reissue requires a second explicit confirmation. Its one-time response and copyable token live only in the mounted dialog, with input controls frozen to the issued command. Closing aborts pending requests and discards late responses without retry or implicit revocation. It tells the operator that the old token no longer works and the replacement is shown once. The native dialog supplies focus confinement and Escape cancellation; close restores the invoking control. No token enters browser storage or a request URL.
 
@@ -33,7 +33,7 @@ Deletion previews descendants and requires a checked cascade confirmation when c
 ## Tests
 
 - `workbenchPreview.e2e.mjs` covers 15 directory entries with nine online (including one incompatible online Node), full-list order and native scrolling, no additional directory requests, theme contrast, both status-preview entries, dismissal, empty/failed previews, System reuse, collapsed-pane activation of a saved Nodes tab, route hydration, persistence/reload of the section, mobile rendering and sole-tab headers.
-- `nodeOnboarding.e2e.mjs` covers the section switch, per-section summaries, unavailable placement cards, authenticated onboarding, pending pagination/approval, visibility pause, credential lifecycle and abort tests, and polling cleanup after unmount.
+- `nodeOnboarding.e2e.mjs` runs `SystemView` against managed Main behind a recording proxy (`mainHostProxy.mjs`), with pending pairings from the official CLI Node client. It covers the section switch, per-section summaries, authenticated onboarding, pending pagination/approval, visibility pause, credential lifecycle and abort tests, and polling cleanup after unmount.
 - `mainHostNodeActions.e2e.mjs` covers real native/JavaScript launch reports, stored-credential copy, Shell reissue, copy failure, cancel/reissue, secret disposal after close and an accepted delayed response, edited paths, single/cascade deletion and Provider exclusion.
 - `popupMove.e2e.mjs` covers moving System on Nodes to the `nodes` leaf and in-place section switching in popup and embedded leaves. `mainHostSystem.e2e.mjs` covers the sections, Session placement and every former entry point against a real C# Main.
 

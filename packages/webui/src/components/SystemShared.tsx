@@ -5,6 +5,13 @@ import type { Session } from './SessionListCore'
 import UsageDetails, { formatUsageNumber as usageNumber, type TokenUsage } from './TokenUsageDetails'
 import { getSessionRuntimeTone } from '../sessionRuntimeState'
 
+/**
+ * First column of the Usage tables. Below md the table keeps its natural layout inside a
+ * horizontal scroller: this column takes the space the figures leave, truncates its labels,
+ * keeps a readable minimum and stays in view while the figures scroll.
+ */
+export const USAGE_TABLE_FIRST_COLUMN = 'max-md:sticky max-md:left-0 max-md:z-[1] max-md:w-full max-md:min-w-[7rem] max-md:max-w-0 max-md:bg-fw-surface'
+
 export const formatRelativeTime = (timestamp?: number) => {
   if (!timestamp) return 'No messages yet'
   const diff = Math.max(0, Date.now() - timestamp)

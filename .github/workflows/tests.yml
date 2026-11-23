@@ -141,10 +141,8 @@ jobs:
         run: |
           npm ci
           npm --prefix packages/webui ci
-      - name: Build managed delivery and explicit Source reference
-        run: |
-          npm run build
-          npm run build:reference
+      - name: Build managed delivery
+        run: npm run build
       - name: Restore shared HEIF prerequisite
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -206,10 +204,8 @@ jobs:
         run: |
           npm ci
           npm --prefix packages/webui ci
-      - name: Build managed delivery and explicit Source reference
-        run: |
-          npm run build
-          npm run build:reference
+      - name: Build managed delivery
+        run: npm run build
       - name: Restore shared HEIF prerequisite
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -220,8 +216,6 @@ jobs:
         run: |
           test -s "$RUNNER_TEMP/heif-test/prefix/lib/libheif.so"
           test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
-      # Source is still needed by managed oracles and fixture producers; the
-      # retired Main unit suite is available separately through test:reference.
       - name: Run managed tests
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
@@ -287,10 +281,8 @@ jobs:
           test -x "$browser_path"
           "$browser_path" --version
           echo "path=$browser_path" >> "$GITHUB_OUTPUT"
-      - name: Build managed delivery and explicit Source reference
-        run: |
-          npm run build
-          npm run build:reference
+      - name: Build managed delivery
+        run: npm run build
       - name: Restore shared HEIF prerequisite
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -381,10 +373,8 @@ jobs:
           test -x "$browser_path"
           "$browser_path" --version
           echo "path=$browser_path" >> "$GITHUB_OUTPUT"
-      - name: Build managed delivery and explicit Source reference
-        run: |
-          npm run build
-          npm run build:reference
+      - name: Build managed delivery
+        run: npm run build
       - name: Run real-application E2E
         env:
           FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
@@ -446,12 +436,10 @@ jobs:
           test -x "$browser_path"
           "$browser_path" --version
           echo "path=$browser_path" >> "$GITHUB_OUTPUT"
-      # The full-application harness seeds its Archive with the Source writer; the
-      # Main browser fixture also connects a managed CLI Node.
-      - name: Build delivery assets, Source reference and CLI Node fixture
+      # The Main browser fixture also connects a managed CLI Node.
+      - name: Build delivery assets and CLI Node fixture
         run: |
           npm run build:assets
-          npm run build:reference
           dotnet build dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj -c Debug
       - name: Publish NativeAOT Main once
         run: |

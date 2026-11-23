@@ -17,7 +17,7 @@ Owns reusable cross-package implementations for patch application, file/exec/bro
 - [shared-output-truncation](../units/shared-output-truncation.md) — Unicode-safe line-aware excerpts and metadata footer.
 - [shared-config-schemas](../units/shared-config-schemas.md) — pure public-safe App/Models Draft-07 schemas shared by browser consumers.
 
-Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk-json-durability), not duplicated here.
+Durable JSON semantics are canonical in [src-utils](../units/session-authority-json.md#d-disk-json-durability), not duplicated here.
 
 ## Public interfaces
 
@@ -57,7 +57,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 
 ### D-shared-write-first
 
-**Derived implementation using the filesystem's established write guarantees.** It serves the selected [write side-effect policy](./tools-and-permissions.md#d-tools-write-parent-policy). Filesystem write modes and existing errors avoid redundant preflight races; this does not establish transaction or rollback semantics for multi-file operations.
+**Derived implementation using the filesystem's established write guarantees.** It serves the selected [write side-effect policy](../units/tools-local-io.md#d-tools-write-parent-policy). Filesystem write modes and existing errors avoid redundant preflight races; this does not establish transaction or rollback semantics for multi-file operations.
 
 Attempt the requested write using atomic filesystem flags before parent diagnostics; this preserves valid symlinked parent behavior while still producing friendly errors.
 
@@ -77,7 +77,7 @@ When output overflows, shorten extreme individual lines and omit whole middle li
 
 Wrappers retain only environment-specific roots/namespaces, permission and ownership checks, transport, interactive approval, and result/presentation metadata. The patch parser/matcher is `packages/shared/src/applyPatch.ts`; the file patch executor is `packages/shared/src/fileToolCore.ts` over `FileOperations`, including provider-owned asynchronous parents. Main file/memory, native CLI, and primitive Provider calls use these same implementations. Compact repair reuses pure patch semantics while retaining its exact pending-file descriptor boundary.
 
-Pure exact edit validation, transformation and schema projection are owned by `packages/shared/src/unifiedEdit.ts`; Main, Node and compact repair import them directly. The retained `exactReplacement` helper keeps the separate memory-tool behavior. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
+Pure exact edit validation, transformation and schema projection are owned by `packages/shared/src/unifiedEdit.ts`; Main, Node and compact repair import them directly. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
 
 ## Canonical cross-module ownership
 

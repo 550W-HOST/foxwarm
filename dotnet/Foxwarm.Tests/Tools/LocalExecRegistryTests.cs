@@ -58,11 +58,8 @@ public sealed class LocalExecRegistryTests
             {
                 Assert.Equal("main/owned", owner);
                 Assert.Equal("exec_source_record_1234", id);
-                Assert.Contains("Exit code: 7", message);
-                Assert.Contains(
-                    "Command output in " + entry["logPath"]!.GetValue<string>(),
-                    message
-                );
+                ExecReceipt.ExitCode(message, 7);
+                Assert.Contains(entry["logPath"]!.GetValue<string>(), message);
                 attempts++;
                 if (!accepted)
                     throw new IOException("Owned receiver rejects admission.");
@@ -97,6 +94,32 @@ public sealed class LocalExecRegistryTests
         Assert.Equal(
             "  original\n",
             await File.ReadAllTextAsync(entry["logPath"]!.GetValue<string>())
+        );
+    }
+
+    [Fact]
+    public async Task Recovered_record_keeps_the_exec_call_summary_for_listing()
+    {
+        using var temp = new TempDirectory();
+        var described = Record(temp.Path);
+        described["summary"] = "Build the release";
+        described["notifyOnCompletion"] = true;
+        var plain = Record(temp.Path, "exec_source_record_5678");
+        plain["notifyOnCompletion"] = true;
+        plain["startedAt"] = described["startedAt"]!.GetValue<long>() + 1;
+        await Seed(temp.Path, described, plain);
+        await using var manager = new LocalExecManager(
+            temp.Path,
+            _ => temp.Path,
+            (_, _, _) => Task.CompletedTask
+        );
+        await manager.RegisterRecordsAsync(_ => true);
+        var running = manager.Running("main/owned");
+        Assert.Equal(["Build the release", null], running.Select(exec => exec.Summary));
+        var tracked = manager.Tracked.Single(record => record["id"]!.GetValue<string>() == "exec_source_record_1234");
+        Assert.Equal("Build the release", tracked["summary"]!.GetValue<string>());
+        Assert.False(
+            manager.Tracked.Single(record => record["id"]!.GetValue<string>() == "exec_source_record_5678").ContainsKey("summary")
         );
     }
 
@@ -304,7 +327,7 @@ public sealed class LocalExecRegistryTests
         Directory.CreateDirectory(Registry(temp.Path));
         stop.Cancel();
         var output = (await execution)["output"]!.GetValue<string>();
-        Assert.Contains("ended this call's wait", output);
+        Assert.Contains("Stop", ExecReceipt.Header(output));
         var tracked = Assert.Single(manager.Tracked);
         Assert.True(tracked["notifyOnCompletion"]!.GetValue<bool>());
         Directory.Delete(Registry(temp.Path));
@@ -501,8 +524,8 @@ public sealed class LocalExecRegistryTests
         await manager.RegisterRecordsAsync(_ => true);
         await manager.ReconcileNowAsync();
         Assert.NotNull(delivered);
-        Assert.Contains("Exit code: unknown", delivered);
-        Assert.Contains("Duration: unknown", delivered);
+        // Neither an exit code nor a duration is invented.
+        Assert.DoesNotMatch(@"\d", ExecReceipt.Summary(delivered));
         Assert.Null(JsonNode.Parse(await File.ReadAllTextAsync(status))!["exitCode"]);
     }
 

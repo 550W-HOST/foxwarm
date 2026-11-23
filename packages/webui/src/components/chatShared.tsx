@@ -141,7 +141,17 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
-  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>; approval?: ToolApprovalMeta }
+  __meta?: {
+    resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>
+    toolScriptSubCalls?: ToolScriptSubCall[]
+    sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>
+    approval?: ToolApprovalMeta
+    /** What the call resolved to; `node` is its execution Node for `source: 'node'`. */
+    target?: { source?: string; name?: string; node?: string }
+    exec?: { nodeId?: string; cwd?: string; sessionCwd?: string; finalCwd?: string }
+    /** The Session's Node and cwd once the call settled, as later file links resolve. */
+    placementAfter?: { node?: string; cwd?: string }
+  }
   name: string
   response: any
 }

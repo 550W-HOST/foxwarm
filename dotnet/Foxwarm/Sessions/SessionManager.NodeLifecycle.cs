@@ -10,8 +10,7 @@ internal sealed partial class SessionManager
     internal async Task<JsonObject> ExecuteNodeToolAsync(
         SessionOwner owner,
         JsonObject args,
-        CancellationToken token,
-        bool programmatic = false
+        CancellationToken token
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -57,46 +56,35 @@ internal sealed partial class SessionManager
                 visible["lifecycle"] = actions;
                 providers.Add(visible);
             }
-            var currentNode = visibility.CurrentNode;
-            var result = new JsonObject
+            // An absent parent is left out rather than listed as null.
+            foreach (var node in nodes.OfType<JsonObject>())
+                if (node["parentNode"] is null)
+                    node.Remove("parentNode");
+            return new JsonObject
             {
-                ["output"] =
-                    $"Current node: `{currentNode}`.\n"
-                    + string.Join(
-                        '\n',
-                        nodes
-                            .OfType<JsonObject>()
-                            .Select(value =>
-                                $"- `{value["id"]!.GetValue<string>()}` ({value["kind"]!.GetValue<string>()}) — {value["availability"]!.GetValue<string>()}"
-                                + (
-                                    value["select"]!.GetValue<bool>()
-                                    || value["id"]!.GetValue<string>() == currentNode
-                                        ? ""
-                                        : "; not selectable"
-                                )
-                            )
-                    )
-                    + (
-                        providers.Count == 0
-                            ? ""
-                            : "\nProviders:\n"
-                                + string.Join(
-                                    '\n',
-                                    providers
-                                        .OfType<JsonObject>()
-                                        .Select(value =>
-                                            $"- `{value["id"]!.GetValue<string>()}` ({string.Join(", ", value["lifecycle"]!.AsArray().Select(SessionWait.Text))})"
-                                        )
-                                )
-                    ),
+                ["currentNode"] = visibility.CurrentNode,
+                ["nodes"] = nodes,
+                ["providers"] = providers,
             };
-            if (programmatic)
+        }
+        if (action == "status")
+        {
+            ToolRegistry.Keys(args, ["action"]);
+            var current = CurrentNode(owner);
+            var status = new JsonObject
             {
-                result["nodes"] = nodes;
-                result["providers"] = providers;
-                result["currentNode"] = currentNode;
-            }
-            return result;
+                ["currentNode"] = current,
+                ["connected"] = NodeProviders.Connected(current),
+            };
+            // An unset Session cwd means commands start in the Node's default directory.
+            var cwd = owner.Entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["cwd"]));
+            if (!string.IsNullOrWhiteSpace(cwd))
+                status["cwd"] = cwd;
+            var defaultCwd =
+                current == "master" ? agents.AgentDirectory(owner.Agent) : NodeProviders.DefaultCwd(current);
+            if (defaultCwd is not null)
+                status["defaultCwd"] = defaultCwd;
+            return status;
         }
         if (action == "select")
         {
@@ -106,7 +94,7 @@ internal sealed partial class SessionManager
         }
         if (action is not ("create" or "ensure" or "inspect" or "destroy"))
             throw new InvalidDataException(
-                "node action must be list, select, create, ensure, inspect, or destroy."
+                "node action must be list, status, select, create, ensure, inspect, or destroy."
             );
         ToolRegistry.Keys(
             args,

@@ -5,10 +5,11 @@ import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, unlink, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
+import { receiptExecId } from './execReceipt.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
@@ -72,10 +73,7 @@ for (const root of ['00-ui-single', '00-ui-tree', 'tree', 'bad-tree']) {
 }
 await seed('bad-tree-foreign', { parentSessionId: 'bad-tree', currentNode: 'invalid node' }, { currentNode: 'invalid node' })
 await seed('self-cycle', { parentSessionId: 'self-cycle' }); await seed('worker-target'); await seed('worker-orphan')
-const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
-const catalog = new catalogModule.SessionCatalogStore(join(state, 'catalog.sqlite')); catalog.initializeEmpty(); catalog.replaceAll(rows); catalog.close()
-const seedFile = join(fixture.root, 'seed.json'); await writeFile(seedFile, JSON.stringify(rows))
-execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedFile], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+await seedCatalog(fixture.data, rows); seedArchiveBranches(fixture.data, rows)
 const channelsFile = join(state, 'channels.json')
 function audit() { const db = new DatabaseSync(join(state, 'archive-store.sqlite'), { readOnly: true }); try { return ['archive_messages', 'archive_blocks', 'archive_branches'].map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY 1,2').all()) } finally { db.close() } }
 const saved = id => readFile(join(sessions, id + '.json'), 'utf8').then(JSON.parse)
@@ -148,21 +146,21 @@ try {
   // Real primary empty authority takes precedence over selected older migration evidence.
   await writeFile(channelsFile, JSON.stringify({ channels: {} })); await writeFile(join(state, 'sessions.json.pre-catalog-sqlite-v1.bak'), JSON.stringify({ channelAttachments: { 'discord:old': 'worker-target' } }))
   const workerFile = join(state, 'session-runtime.sqlite')
-  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-delete-worker-fixture-ts.mjs'), workerFile, 'active', 'worker-target'], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-worker-store-seed.mjs'), workerFile, 'active', 'worker-target'], { stdio: 'pipe' })
   const activeWorker = await remove('worker-target', false, 409); assert.equal(activeWorker.code, 'SESSION_DELETE_WORKER_UNSUPPORTED'); assert(await dto('worker-target'))
   let db = new DatabaseSync(workerFile); db.exec("UPDATE session_worker_ownership SET state='inactive',incarnation_id=NULL WHERE session_id='worker-target'; PRAGMA user_version=1"); db.close()
   await remove('worker-target', false, 500); db = new DatabaseSync(workerFile); assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1); db.exec('PRAGMA user_version=2; DROP INDEX idx_session_worker_mailbox_pending'); db.close()
   await remove('worker-target', false, 500); db = new DatabaseSync(workerFile); assert(!db.prepare("SELECT name FROM sqlite_master WHERE name='idx_session_worker_mailbox_pending'").get()); db.exec('CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE applied_at IS NULL'); db.close()
   const inactive = await remove('worker-target'); assert.deepEqual(inactive.workerRowsRemovedSessionIds, ['worker-target'])
-  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-delete-worker-fixture-ts.mjs'), workerFile, 'orphan', 'worker-orphan'], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-worker-store-seed.mjs'), workerFile, 'orphan', 'worker-orphan'], { stdio: 'pipe' })
   const orphan = await remove('worker-orphan'); assert.deepEqual(orphan.workerRowsRemovedSessionIds, [])
   db = new DatabaseSync(workerFile, { readOnly: true }); assert.equal(db.prepare("SELECT COUNT(*) n FROM session_worker_mailbox WHERE session_id='worker-orphan'").get().n, 1); assert(!db.prepare("SELECT * FROM session_worker_ownership WHERE session_id='worker-orphan'").get()); db.close()
   // Launched shell/output are preserved while only exact tracking/callback ownership retires.
   const execRecords = async () => JSON.parse(await readFile(join(state, 'running-exec.json'), 'utf8')).execs
   async function launch(id) {
     await send(id, id); const current = await saved(id)
-    const result = current.history.flatMap(row => row.parts || []).map(part => part.functionResponse?.response?.output || '').find(value => value.includes('execId:'))
-    const execId = result?.match(/execId: ([a-z-]+)/)?.[1]
+    const result = current.history.flatMap(row => row.parts || []).map(part => part.functionResponse?.response?.output || '').find(value => receiptExecId(value))
+    const execId = receiptExecId(result)
     assert(execId)
     const record = (await execRecords()).find(record => record.id === execId && record.sessionId === id)
     assert(record); shells.push(record.pid); return record

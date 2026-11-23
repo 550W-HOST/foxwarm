@@ -28,6 +28,12 @@ The store is bound to one `(sessionId, agent)` lifetime. Archive writes require 
 
 Atomic write-stage and canonical-append callbacks remain direct construction seams. The manager can forward them internally for owning-boundary tests; no filesystem fault protocol or operation-classification scopes select writes. A canonical callback runs after Archive enqueue and authority preparation, before awaiting its receipt and before active JSON publication; reaching it alone does not prove Archive commit.
 
+## Design decisions
+
+### D-session-core-authoritative-history
+
+Per-session JSON is authoritative for full semantic Session state, including busy concurrency/recovery fields. Local busy claim/release persistence commits that authority before updating its catalog projection; a catalog postcommit failure must not roll the live owner behind already committed JSON. The Main-owned catalog may contain UI-only fields intentionally excluded from semantic state. Catalog storage and scaling are canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary); cross-process save-before-mailbox-ack ordering is canonical in [D-process-topology-session-state-authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/ArchiveWriterOverlapTests.cs` (held Archive completion versus validated/serialized preparation/publication, preparation-failure compensation, independent batching and input ownership); `dotnet/Foxwarm.Tests/Storage/AuthorityStreamingTests.cs` compares complete streamed values with document serialization, bounds write chunks, and checks invalid immutable records and partial-stream cleanup. `SessionAuthorityRetentionTests.cs` measures deduplicated UTF-8 backing arrays reachable through loaded/restored envelope, metadata, all queue paths and immutable history, then checks caller isolation, sharing, strict save and cold reopen. `PersistentSessionTurnTests.cs`; `CommittedAuthorityProjectionTests.cs` (durable catalog consequences for strict save/append/compaction, combined failures, and real WebUI creation followed by ordinary ingress and cold reopen); `SessionCatalogPublicationTests.cs`; `SessionIdentityRecoveryTests.cs`; `dotnet/Foxwarm.Tests/Sessions/CommittedArchiveBoundaryTests.cs`.

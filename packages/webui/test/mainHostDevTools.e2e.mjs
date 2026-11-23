@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { mainHostLaunch } from './mainHostFixture.mjs'
+import { completionEvent, requireReceiptExecId } from './execReceipt.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-devtools-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
@@ -48,7 +49,7 @@ const toolOutput = (body, id) => {
 }
 const tracking = async () => JSON.parse(await readFile(join(dataRoot, 'state/running-exec.json'), 'utf8').catch(() => '{"execs":[]}')).execs
 function extractLog(output) { const path = /(?:Log file: |Command output saved to: )([^\n]+)/.exec(output)?.[1]; assert(path, output); return path }
-function extractExecId(output) { const id = /execId: ([a-z]+-[a-z]+)/.exec(output)?.[1]; assert(id, `Missing execId in ${String(output).slice(-250)}`); return id }
+function extractExecId(output) { return requireReceiptExecId(output) }
 try {
   await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
   await writeFile(join(workRoot, 'src.txt'), 'old\nduplicate\nduplicate\n', 'utf8')
@@ -146,8 +147,8 @@ try {
   assert(responseOf('edit-empty')?.error)
   assert.equal(await readFile(join(workRoot, 'empty.txt'), 'utf8'), '')
   assert.match(JSON.stringify(responseOf('patch-partial')), /Operations already applied/)
-  assert.equal(responseOf('patch-unsafe')?.error?.type, 'tool_authorization_denied')
-  assert.equal(responseOf('patch-symlink')?.error?.type, 'tool_authorization_denied')
+  assert.equal(responseOf('patch-unsafe')?.code, 'tool_authorization_denied')
+  assert.equal(responseOf('patch-symlink')?.code, 'tool_authorization_denied')
   assert.match(responseOf('nonzero')?.output || '', /Exit code: 7/)
   assert((responseOf('env')?.output || '').includes(dataRoot))
   assert.doesNotMatch(responseOf('env')?.output || '', /synthetic-provider-secret/)
@@ -186,7 +187,9 @@ try {
     'same-Session event continuation after restart', 12000) }
   catch (error) { console.error('BG diagnostic', JSON.stringify({ rows: (await history(bg)).map(row => ({role:row.role,part: JSON.stringify(row.parts?.[0]).slice(0,250)})), state: (await request(hostPort, 'GET', `/api/sessions/${bg}/state`)).body, tracking: await tracking(), provider:requests.slice(-4), errors, host:host.output })); throw error }
   const after = await history(bg)
-  assert.equal(after.flatMap(row => row.parts || []).filter(part => part.system?.includes('background-process-finished')).length, 1)
+  const completions = after.flatMap(row => row.parts || []).filter(part => part.system?.includes('background-process-finished'))
+  assert.equal(completions.length, 1)
+  assert.deepEqual(completionEvent(completions[0].system)?.execId, bgExecId); assert.equal(completionEvent(completions[0].system).exitCode, 0)
   assert(after.some(row => row.parts?.some(part => part.functionCall?.name === 'read')))
   const readBack = after.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'bg-read')?.functionResponse?.response
   assert.match(readBack?.output || '', /BACKGROUND-DONE/)

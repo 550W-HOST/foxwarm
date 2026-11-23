@@ -110,13 +110,15 @@ async function runSendWindow(t, view, scenario) {
   // A slow turn start keeps this state on screen.
   await new Promise(resolve => setTimeout(resolve, 450))
   if (scenario === 'busy') assert.equal(await page.evaluate(() => window.sendWindowFrames.at(-1).marked), true, 'the server preview takes over the same row')
-  await page.evaluate(({ seq, marker, clientMessageId, claimed, busy }) => {
-    const canonical = { role: 'user', parts: [{ text: marker }], __meta: { seq: seq + 1, timestamp: Date.now(), clientMessageId } }
+  // Frames are classified against the append itself; a later round trip can follow painted commit frames.
+  const appended = await page.evaluate(({ seq, marker, clientMessageId, claimed, busy }) => {
+    const appended = Date.now()
+    const canonical = { role: 'user', parts: [{ text: marker }], __meta: { seq: seq + 1, timestamp: appended, clientMessageId } }
     const since = busy ? Date.now() - 800 : claimed
     window.sendWindowState({ busy: true, busyStartedAt: since, queueLength: 0, messageCount: seq + 1, runtimeState: { state: 'requesting-model', busy: true, since, active: { phase: 'unknown' } } })
     window.emitFixtureEvent({ type: 'history-append', messages: [canonical], queuedMessages: [], queueLength: 0, messageCount: seq + 1, historyVersion: 0 })
+    return appended
   }, { seq, marker, clientMessageId, claimed, busy: scenario === 'busy' })
-  const appended = await page.evaluate(() => Date.now())
   await new Promise(resolve => setTimeout(resolve, 30))
   await page.evaluate(({ seq }) => {
     const since = Date.now()

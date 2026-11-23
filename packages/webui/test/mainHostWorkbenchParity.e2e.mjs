@@ -123,7 +123,7 @@ try {
   assert((Object.values((await savedLayout()).tabsById).find(tab => tab.type === 'search')).title.includes('submitted query'))
   assert.equal(await page.$eval('[data-history-search-view] [role="alert"]', node => node.textContent), submittedError)
 
-  // Desktop dock/reload/collapse retains the actual PTY; explicit pane Close deletes it.
+  // Desktop dock/reload/collapse and pane Close retain the actual PTY; only Kill ends it.
   await chat(); await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
   const terminal = await until(async () => (await host.api('GET', '/api/terminals')).body.terminals[0], 'real docked terminal')
   assert.equal(terminal.cwd, host.work)
@@ -134,18 +134,27 @@ try {
   assert(terminalPane && terminalPane.tabIds.length === 1)
   await click('[aria-label="Toggle terminal panel"]'); assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
   await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
+  // A focused terminal asks before the page unloads.
+  await page.evaluate(() => document.activeElement?.blur())
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('[data-terminal-header]', { visible: true })
   assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
   layout = await savedLayout(); terminalTab = Object.values(layout.tabsById).find(tab => tab.type === 'terminal'); terminalPane = panes(layout.root).find(pane => pane.tabIds.includes(terminalTab.id))
   assert.equal(terminalPane.tabIds.length, 1)
   await click(`[data-workbench-content-pane="${terminalPane.id}"] button[aria-label="Close pane"]`)
-  await until(async () => (await host.api('GET', '/api/terminals/' + terminal.id)).status === 404, 'explicit terminal pane Close')
+  await page.waitForFunction(() => !document.querySelector('[data-terminal-header]'))
+  assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid, 'pane Close detaches')
+  await click('[aria-label="Toggle terminal panel"]'); await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+  assert.deepEqual((await host.api('GET', '/api/terminals')).body.terminals.map(row => row.id), [terminal.id], 'the panel shows the detached PTY again')
+  page.once('dialog', dialog => { void dialog.accept() })
+  await click('[data-terminal-kill]')
+  await until(async () => (await host.api('GET', '/api/terminals/' + terminal.id)).status === 404, 'explicit terminal Kill')
+  await page.waitForFunction(() => !document.querySelector('[data-terminal-header]'))
 
   // Original official Code-OSS and browser FS/SCM/terminal extensions.
   await chat(); await click('.foxwarm-chat-root button[title="Code"]')
   let code = await codeFrame(); await code.waitForSelector('.monaco-workbench', { timeout: 45000 })
   await page.evaluate(() => { window.parityCode = document.querySelector('[data-foxwarm-vscode-web-frame]'); window.parityCodeWindow = window.parityCode.contentWindow })
-  await chat(); await click('button[title="Open notes.txt in Code"]'); code = await codeFrame()
+  await chat(); if (!await page.$('a.foxwarm-code-link[title="Open notes.txt in Code"]')) { await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'notes.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'notes.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); } await click('a.foxwarm-code-link[title="Open notes.txt in Code"]'); code = await codeFrame()
   await code.waitForSelector('.editor-instance .view-lines', { timeout: 45000 })
   await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nOfficial Code saved'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
   await until(async () => (await readFile(join(host.work, 'notes.txt'), 'utf8')).includes('Official Code saved'), 'official browser FS saved')

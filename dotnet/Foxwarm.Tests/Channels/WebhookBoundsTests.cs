@@ -199,7 +199,7 @@ public sealed class WebhookBoundsTests
             var result = await SetConfig(raw);
             Assert.Equal(
                 "set_config cannot add or change webhook identities. Ask the user to configure webhooks in Setup.",
-                SessionWait.Text(result?["error"]?["message"])
+                result?.FailureMessage()
             );
             Assert.Equal(before, f.Configuration.ReadCurrentAppRaw());
         }

@@ -35,11 +35,6 @@ export const nativeMainSmoke = [
   'packages/webui/test/toolApproval.e2e.mjs',
 ]
 
-export const standaloneSelftests = [
-  'lib/selftest/queueDrainSelfTest.js',
-  'lib/selftest/toolLoopStallSelfTest.js',
-]
-
 // Driven by test/app-e2e/run-app-e2e.mjs with a live application and a scripted
 // provider, so they are never run standalone by the routine unit groups.
 export const appHarnessE2e = [
@@ -62,13 +57,6 @@ const manualGroups = new Map([
   ['dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs', 'manual-smoke'],
   ['packages/webui/test/dotnetCliNodeAotLinux.e2e.mjs', 'manual-smoke'],
   ['packages/webui/test/dotnetCliNodeAot.e2e.mjs', 'manual-smoke'],
-  ['test/managedSessionLiveSmoke.js', 'manual-smoke'],
-  ['test/pushOnlyBroadcastSmoke.js', 'manual-smoke'],
-  ['test/sessionMetadataSafetySmoke.js', 'manual-smoke'],
-  ['test/stopAbortSmoke.js', 'manual-smoke'],
-  ['test/toolscriptPhase1Smoke.js', 'manual-smoke'],
-  ['test/llmToolSerializationTest.js', 'manual-regression'],
-  ['test/toolscriptSkillAgentTrial.js', 'manual-skill-trial'],
 ])
 
 function normalize(value) {
@@ -83,10 +71,8 @@ function classify(file) {
   if (/^(?:lib|packages\/[^/]+\/dist)\/.*\.test\.js$/.test(file)) return 'generated-test-artifact'
   // These tests execute resources/helpers still shipped by managed Main. Other
   // Source tests exercise the retired Main, even when their subject is a Node.
-  if (['src/nodes/runSh.test.ts', 'src/nodes/runPs1.test.ts'].includes(file)) return 'node-bootstrap'
-  if (file === 'src/artifacts/runtimeHelpers.test.ts') return 'runtime-helpers'
-  if (/^src\/.*\.test\.ts$/.test(file)) return 'reference-backend'
-  if (file === 'scripts/test/reference-isolation.test.mjs') return 'reference-isolation'
+  if (/^test\/node-bootstrap\/.*\.test\.mjs$/.test(file)) return 'node-bootstrap'
+  if (/^packages\/artifact-runtime\/test\/.*\.test\.mjs$/.test(file)) return 'runtime-helpers'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
   if (/^packages\/cli-node\/src\/.*\.test\.ts$/.test(file)) return 'cli-node'
   if (/^packages\/browser-(?:node|host)\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
@@ -123,7 +109,6 @@ export function loadTestInventory(repoRoot) {
 }
 
 export function compiledPath(file) {
-  if (file.startsWith('src/') && file.endsWith('.ts')) return `lib/${file.slice(4, -3)}.js`
   const packageMatch = file.match(/^packages\/(shared|cli-node)\/src\/(.*)\.ts$/)
   if (packageMatch) return `packages/${packageMatch[1]}/dist/${packageMatch[2]}.js`
   return file
@@ -142,18 +127,12 @@ export const routineUnitGroups = [
   'python',
 ]
 
-export const referenceGroups = ['reference-backend', 'reference-isolation']
-
 export const deferredGroups = {
-  'reference-backend': 'Retired TypeScript Main tests; explicit test:reference only.',
-  'reference-isolation': 'Nested retired Main test isolation regressions; explicit test:reference only.',
   'managed': 'Compiled and executed by dotnet test through test:managed or test:unit.',
   'managed-delivery': 'Complete owned publish and original App proof through test:published.',
   'generated-test-artifact': 'Covered through its classified source test.',
   'vscode-assets-e2e': 'Requires prepared VS Code and YAML extension assets.',
   'website-owned': 'Owned by the website test workflow.',
   'manual-smoke': 'Stateful standalone smoke checks; run only with an explicitly assigned disposable environment.',
-  'manual-regression': 'Standalone historical regression script; not part of the routine runner.',
-  'manual-skill-trial': 'Historical interactive trial; isolated state but no maintained synthetic provider fixture.',
   'manual-hardware-smoke': 'Live-device smoke driver; requires explicitly assigned Android hardware and is never routine CI.',
 }

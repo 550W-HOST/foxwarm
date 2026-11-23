@@ -121,6 +121,16 @@ internal static partial class OperationDeclarations
             [Primary()]
         ),
         Declare(
+            "builtin:exec_list",
+            [SelfBranch("call", null, "lists background commands owned by the caller")],
+            [Primary()]
+        ),
+        Declare(
+            "builtin:exec_stop",
+            [SelfBranch("call", null, "stops a background command owned by the caller")],
+            [Primary()]
+        ),
+        Declare(
             "builtin:cancel_transfer",
             [SelfBranch("call", null, "cancels a transfer owned by the caller")],
             [Primary()]
@@ -288,6 +298,7 @@ internal static partial class OperationDeclarations
         Control("stop_session", "stop"),
         Control("compact_session", "compact"),
         Control("refresh_session_snapshot", "snapshot"),
+        Control("set_session_model", "settings"),
         Control("set_session_child_model", "settings"),
         Control("set_session_compact_threshold", "settings"),
         Declare(
@@ -430,8 +441,8 @@ internal static partial class OperationDeclarations
                 Branch("list", "list", Op("node.list")),
                 Branch("inspect", "inspect", Op("node.view", "node=node-target")),
                 Branch("select", "select", Op("node.select", "node=node-target")),
-                // External-only: inbound `node status` views the selected Node; the model's
-                // node tool has no such action.
+                // `node status` views the caller's current Node: the Session's, or an inbound
+                // connection's selected Node.
                 Branch("status", "status", Op("node.view", "node=status-node")),
                 Branch(
                     "create",

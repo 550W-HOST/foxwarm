@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -108,7 +109,7 @@ class ContainerProviderTests(unittest.TestCase):
         node = result["node"]
         self.assertEqual(node, {"id": "task-1", "label": "task-1", "kind": "sandbox", "type": "container",
                                 "availability": "ready", "defaultCwd": "/workspace", "filesystem": "read-write",
-                                "exec": True, "execEnv": True})
+                                "exec": True, "execEnv": True, "execStop": True})
         self.assertIn("offline", result["effect"])
         run = self.calls("run")[0]
         joined = " ".join(run)
@@ -227,6 +228,31 @@ class ContainerProviderTests(unittest.TestCase):
                 self.assertNotIn(value.encode(), path.read_bytes(), str(path))
         refused = self.call("exec-start", {"nodeId": "task-1", "command": "true", "env": {"CI_TOKEN": 1}})
         self.assertEqual(refused["error"]["code"], "InvalidRequest")
+
+    def test_exec_stop_ends_the_command_group_and_its_real_status_is_recorded(self):
+        self.create()
+        self.assertTrue(self.ok("list")["nodes"][0]["execStop"])
+        started = self.ok("exec-start", {"nodeId": "task-1", "command": "sleep 30 & echo $! > child.pid; wait"})
+        for _ in range(100):
+            if self.call("filesystem", {"nodeId": "task-1", "operation": "stat", "path": "child.pid"}).get("ok"):
+                break
+            time.sleep(0.05)
+        stopped = self.ok("exec-stop", {"nodeId": "task-1", "ref": started["ref"], "graceMs": 5000})
+        self.assertEqual(stopped, {"state": "stopped"})
+        self.assertEqual(self.poll(started["ref"])["exitCode"], 143)
+        read = self.ok("filesystem", {"nodeId": "task-1", "operation": "read", "path": "child.pid", "offset": 0, "count": 32})
+        child = int(base64.b64decode(read["dataBase64"]).decode())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child, 0)
+        # Stopping again, or a command that already finished, reports that and signals nothing.
+        self.assertEqual(self.ok("exec-stop", {"nodeId": "task-1", "ref": started["ref"], "graceMs": 5000}), {"state": "finished"})
+        ignored = self.ok("exec-start", {"nodeId": "task-1", "command": "trap '' TERM; sleep 30"})
+        for _ in range(100):
+            if self.ok("exec-poll", {"nodeId": "task-1", "ref": ignored["ref"]}).get("cwd"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(self.ok("exec-stop", {"nodeId": "task-1", "ref": ignored["ref"], "graceMs": 200}), {"state": "killed"})
+        self.assertEqual(self.poll(ignored["ref"])["exitCode"], 137)
 
     def test_destroy_is_idempotent_when_another_caller_removes_the_container_first(self):
         self.create()

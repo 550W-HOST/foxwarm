@@ -20,7 +20,7 @@ const peer = createServer(async (request, response) => {
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw), text = body.input.filter(item => item.role === 'user').flatMap(item => item.content || []).map(part => part.text || '').join('\n')
     const key = [...text.matchAll(/NATIVE-PATHS:([\w-]+)/g)].at(-1)?.[1] || 'ordinary', n = counts.get(key) || 0, planning = text.includes('COMPACTION STARTED:')
-    counts.set(key, n + 1); requests.push({ key, n, body, planning }); assert(!JSON.stringify(body).includes('"resolvedPaths"'), 'Display metadata must not enter any model request.')
+    counts.set(key, n + 1); requests.push({ key, n, body, planning }); assert(!/"(?:resolvedPaths|placementAfter)"/.test(JSON.stringify(body)), 'Display metadata must not enter any model request.')
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     const complete = output => response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'native-' + requests.length, output, usage: { input_tokens: 40, output_tokens: 3 } } }) + '\n\n')
     if (planning) {
@@ -65,7 +65,7 @@ try {
   const navigation = []; page.on('request', request => { if (request.url().includes('/vscode-web/')) navigation.push(request.url()) })
   await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-  await page.waitForSelector('[aria-label="Open $fw_tmp/native.txt in Code"]'); await page.click('[aria-label="Open $fw_tmp/native.txt in Code"]')
+  await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, '$fw_tmp/native.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), '$fw_tmp/native.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); await page.waitForSelector('a.foxwarm-code-link[title="Open $fw_tmp/native.txt in Code"]'); await page.click('a.foxwarm-code-link[title="Open $fw_tmp/native.txt in Code"]')
   await until(() => navigation.length, 'actual Code navigation intent')
   const target = new URL(navigation[0]); assert.equal(target.searchParams.get('initialFolderUri'), 'foxwarm://node+master' + join(owned.work, 'tmp'))
   const codeResponse = await fetch(navigation[0], { headers: { authorization: 'Bearer ' + owned.token } })
@@ -81,7 +81,10 @@ try {
   assert.equal(await readFile(join(relative, 'note'), 'utf8'), 'file base'); assert(result(await authority('main'), 'relative-exec').response.output.includes(join(relative, 'relative') + '\n'))
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: changed })).status, 200); await turn('main', 'exec')
   const env = result(await authority('main'), 'env').response.output; assert(env.includes([home, owned.work, join(owned.work, 'tmp')].join('\n'))); assert(env.includes('<owned-upper-sentinel><owned-api-sentinel><owned-provider-sentinel>')); assert(!env.includes('inherited-lower-wrong'))
-  assert.equal((await authority('main')).cwd, join(owned.work, 'tmp')); await turn('main', 'segment'); assert.equal((await authority('main')).cwd, home); assert.equal(await readFile(join(home, 'after-segment.txt'), 'utf8'), 'model ordered'); const status = result(await authority('main'), 'cwd-status').response.output; assert(status.includes(home)); assert(status.includes('master'))
+  assert.equal((await authority('main')).cwd, join(owned.work, 'tmp')); await turn('main', 'segment'); assert.equal((await authority('main')).cwd, home);
+  // Each call records the Session placement it left for later reply file links, in model order.
+  { const state = await authority('main'); assert.deepEqual(['first-cwd', 'second-cwd', 'after-cwd'].map(id => result(state, id).__meta.placementAfter), [{ node: 'master', cwd: changed }, { node: 'master', cwd: home }, { node: 'master', cwd: home }]) }
+  assert.equal(await readFile(join(home, 'after-segment.txt'), 'utf8'), 'model ordered'); const status = result(await authority('main'), 'cwd-status').response; assert.equal(status.cwd, home); assert.equal(status.node.id, 'master')
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: owned.work })).status, 200); await turn('main', 'live'); assert.equal((await authority('main')).cwd, changed)
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: owned.work })).status, 200)
   const liveRecord = JSON.parse(await readFile(join(owned.data, 'state/running-exec.json'), 'utf8')).execs.find(record => record.command.includes('LIVE-FINISHED'))

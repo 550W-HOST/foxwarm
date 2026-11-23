@@ -91,11 +91,8 @@ public sealed partial class InContextCompactTests
                 if (index == 1)
                 {
                     var rejected = f.ToolResponse("bad")["response"]!;
-                    Assert.Equal(
-                        "compact_plan_invalid",
-                        SessionWait.Text(rejected["error"]?["type"])
-                    );
-                    var error = SessionWait.Text(rejected["error"]?["message"])!;
+                    Assert.NotNull(rejected.FailureMessage());
+                    var error = rejected.FailureMessage()!;
                     Assert.Contains(malformed ? "BytePositionInLine" : "replaceAsBlocks[0]", error);
                     path = rejected["argsFilePath"]!.GetValue<string>();
                     var saved = await File.ReadAllTextAsync(path);
@@ -185,7 +182,7 @@ public sealed partial class InContextCompactTests
         );
         await f.RunAsync();
         var result = f.ToolResponse("bad")["response"]!;
-        Assert.Contains("LineNumber", result["error"]!["message"]!.GetValue<string>());
+        Assert.Contains("LineNumber", result.FailureMessage()!);
         Assert.Equal(
             Path.Combine(f.Work, "broken.json"),
             result["argsFilePath"]!.GetValue<string>()
@@ -229,12 +226,12 @@ public sealed partial class InContextCompactTests
         f.Manager.Authorization.Invalidate();
         await f.RunAsync();
         var denied = f.ToolResponse("denied")["response"]!;
-        Assert.Equal("tool_authorization_denied", SessionWait.Text(denied["error"]?["type"]));
+        Assert.Equal("tool_authorization_denied", denied.FailureCode());
         Assert.Null(denied["argsFilePath"]);
         Assert.True(f.ToolResponse("canceled")["response"]!["canceled"]!.GetValue<bool>());
         var invalid = f.ToolResponse("invalid")["response"]!;
-        Assert.Equal("compact_plan_invalid", SessionWait.Text(invalid["error"]?["type"]));
-        Assert.Contains("sourceStart", SessionWait.Text(invalid["error"]?["message"]));
+        Assert.NotNull(invalid.FailureMessage());
+        Assert.Contains("sourceStart", invalid.FailureMessage());
         Assert.NotNull(invalid["stagingError"]);
         Assert.Null(invalid["argsFilePath"]);
         Assert.Equal(0, f.Owner.Entry.Snapshot().HistoryVersion);
@@ -273,8 +270,8 @@ public sealed partial class InContextCompactTests
         );
         await f.RunAsync();
         var stale = f.ToolResponse("stale")["response"]!;
-        Assert.Equal("compact_plan_invalid", SessionWait.Text(stale["error"]?["type"]));
-        Assert.Contains("sourceStart", SessionWait.Text(stale["error"]?["message"]));
+        Assert.NotNull(stale.FailureMessage());
+        Assert.Contains("sourceStart", stale.FailureMessage());
         Assert.NotNull(stale["argsFilePath"]);
         Assert.Equal(1, f.Owner.Entry.Snapshot().HistoryVersion);
         Assert.Single(f.Owner.Archive.ReadBlocks());

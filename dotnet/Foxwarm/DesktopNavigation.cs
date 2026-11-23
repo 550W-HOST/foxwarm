@@ -19,6 +19,13 @@ internal enum DesktopTarget
     Ignore,
 }
 
+internal enum DesktopWindowFrame
+{
+    System,
+    WebUi,
+    Code,
+}
+
 /// <summary>
 /// Navigation and window policy shared by the Windows and macOS hosts. Same-origin pages
 /// stay in the app, including new windows; other web pages go to the default browser.
@@ -62,15 +69,19 @@ internal static class DesktopNavigation
             : DesktopTarget.Ignore;
     }
 
-    /// <summary>
-    /// Whether a new window gets the custom frame: only the WebUI's own document at the app
-    /// root speaks the frame protocol. Code, files and other same-origin documents, and
-    /// blank windows, keep the system title bar.
-    /// </summary>
-    internal static bool IsFramed(Uri origin, string? text) =>
-        IsApp(origin, text)
-        && Uri.TryCreate(text, UriKind.Absolute, out var uri)
-        && uri.AbsolutePath == origin.AbsolutePath;
+    /// <summary>The title area is selected once, from the requested URL of a new window.</summary>
+    internal static DesktopWindowFrame FrameFor(Uri origin, string? text)
+    {
+        if (!IsApp(origin, text) || !Uri.TryCreate(text, UriKind.Absolute, out var uri))
+            return DesktopWindowFrame.System;
+        if (uri.AbsolutePath == origin.AbsolutePath)
+            return DesktopWindowFrame.WebUi;
+        var codePath = origin.AbsolutePath.TrimEnd('/') + Code.CodeWorkbench.RoutePath;
+        return uri.AbsolutePath.Equals(codePath, StringComparison.OrdinalIgnoreCase)
+            || uri.AbsolutePath.Equals(codePath + "/", StringComparison.OrdinalIgnoreCase)
+            ? DesktopWindowFrame.Code
+            : DesktopWindowFrame.System;
+    }
 
     /// <summary>
     /// Content size of a new app window in DIPs: the requested size (window.open's width and

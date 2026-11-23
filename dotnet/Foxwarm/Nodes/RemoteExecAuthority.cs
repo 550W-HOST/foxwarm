@@ -19,6 +19,15 @@ internal sealed class RemoteExecAuthority
         internal string Agent = owner.Agent;
         internal string State = "reserved";
         internal DateTimeOffset TrackedAt = DateTimeOffset.UtcNow;
+
+        // Listing facts recorded by Main at dispatch and from the start result's placement
+        // record. Remote claims are transient, so these do not survive a Main restart.
+        internal string? Command;
+        internal string? Summary;
+        internal long DispatchedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        internal string? Cwd;
+        internal string? LogPath;
+        internal bool StopRequested;
     }
 
     private readonly object gate = new();
@@ -284,6 +293,43 @@ internal sealed class RemoteExecAuthority
                 && (!activeOnly || claim.State == "active")
             );
         }
+    }
+
+    // Background commands of this exact owner, in the same scope as Has(owner, id).
+    internal Claim[] Active(SessionOwner owner)
+    {
+        lock (gate)
+        {
+            Prune();
+            return claims
+                .Values.Where(claim =>
+                    ReferenceEquals(claim.Owner, owner)
+                    && claim.Agent == owner.Agent
+                    && claim.State == "active"
+                )
+                .ToArray();
+        }
+    }
+
+    internal Claim? Active(SessionOwner owner, string id) =>
+        Active(owner).FirstOrDefault(claim => claim.ExecId == id);
+
+    // Marks a stop request once; false when one was already requested.
+    internal bool RequestStop(Claim claim)
+    {
+        lock (gate)
+        {
+            if (claim.StopRequested)
+                return false;
+            claim.StopRequested = true;
+            return true;
+        }
+    }
+
+    internal void ClearStop(Claim claim)
+    {
+        lock (gate)
+            claim.StopRequested = false;
     }
 
     internal void Rebind(SessionOwner owner)

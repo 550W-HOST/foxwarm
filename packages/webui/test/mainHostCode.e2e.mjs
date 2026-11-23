@@ -189,7 +189,7 @@ try {
   stage('embedded workbench file and selection')
   await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-  await page.waitForSelector('button[title="Open notes.txt in Code"]'); await page.click('button[title="Open notes.txt in Code"]')
+  await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'notes.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'notes.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); await page.waitForSelector('a.foxwarm-code-link[title="Open notes.txt in Code"]'); await page.click('a.foxwarm-code-link[title="Open notes.txt in Code"]')
   let code = await codeFrame(page); await code.waitForSelector('.editor-instance .view-lines', { timeout: 40000 })
   await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
   await page.evaluate(() => { document.querySelector('iframe[src*="vscode-web"]').dataset.codeProof = 'same-frame' })
@@ -334,13 +334,22 @@ try {
     return appCwd.body.terminal.cwd === dirname(owned.work)
   }, 'original App cwd tracking', 30000)
   const persistedTabId = await until(async () => page.evaluate(id => { try { const saved = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4') || '{}'); const state = saved.state || saved; return Object.entries(state.tabsById || {}).find(([, tab]) => tab.terminalId === id && !tab.createMode)?.[0] || false } catch { return false } }, appTerminal.id), 'original App terminal tab persistence', 30000)
-  stage('original App terminal reload and close')
+  stage('original App terminal reload, close and kill')
+  // A focused terminal asks before the page unloads.
+  await page.evaluate(() => document.activeElement?.blur())
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession); await page.evaluate(id => { window.location.hash = '#tab/' + encodeURIComponent(id) }, persistedTabId); await page.waitForSelector('.xterm-screen, .xterm-rows', { timeout: 30000 })
   const appAfterReload = await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`); assert.equal(appAfterReload.body.terminal.pid, appTerminal.pid); assert.equal(appAfterReload.body.terminal.cwd, dirname(owned.work))
   const terminalClose = '[data-workbench-tab-close="' + persistedTabId + '"], [data-tab-id="' + persistedTabId + '"] button[title="Close tab"]'
   await page.waitForSelector(terminalClose, { visible: true })
   await page.locator(terminalClose).click()
-  await until(async () => (await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).status === 404, 'original App explicit terminal close', 30000)
+  await page.waitForFunction(id => { const saved = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4') || '{}'); return !(saved.state || saved).tabsById?.[id] }, {}, persistedTabId)
+  assert.equal((await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).body.terminal.pid, appTerminal.pid, 'tab Close detaches')
+  await page.click('[data-sidebar-nav="terminal"] button[aria-label="Terminals"]')
+  const killFromList = `[data-terminal-row=${JSON.stringify(appTerminal.id)}] button[aria-label="Kill terminal"]`
+  await page.waitForSelector(killFromList, { visible: true })
+  page.once('dialog', dialog => { void dialog.accept() })
+  await page.locator(killFromList).click()
+  await until(async () => (await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).status === 404, 'original App terminal kill from the sidebar list', 30000)
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
   stage('workbench and workspace restore')
@@ -364,7 +373,8 @@ try {
   }
   await clickReadableAction('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-  await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page)
+  if (!await page.$('a.foxwarm-code-link[title="Open notes.txt in Code"]')) { await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'notes.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'notes.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); }
+  await clickReadableAction('a.foxwarm-code-link[title="Open notes.txt in Code"]'); code = await codeFrame(page)
   await code.waitForFunction(() => document.querySelector('.monaco-workbench')
     && document.querySelector('.tab.active')?.getAttribute('aria-label')?.includes('notes.txt')
     && document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'), { timeout: 30000 })

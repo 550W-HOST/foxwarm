@@ -10,6 +10,7 @@ Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions
 
 ## Units
 
+- [Node development workflow](../units/node-development-workflow.md) — portable provisioning, source/material transfer, Task-linked assignment, committed/evidence-only delivery and explicit release example.
 - [Native-aware Node bootstrap](../units/native-node-bootstrap.md) — generated platform selection, state/service paths and public download channel.
 - [.NET CLI Node](../units/dotnet-cli-node.md) — separate authenticated file/exec, fixed Code/optional terminal services, loopback trigger and Session client API executable.
 - [Native CLI interactive entry](../units/dotnet-cli-interactive.md) — explicit console mode with bounded Session history/message input and ordinary-tool approval.
@@ -28,6 +29,14 @@ Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions
 - [Node list visibility](../units/node-list-visibility.md)
 
 The System Nodes administrator APIs also expose credential-free restart suggestions, explicit token reissue and confirmed native subtree deletion; see [administrator maintenance](../units/external-nodes.md#administrator-node-maintenance).
+
+## Design decisions
+
+### D-node-isolation-boundary
+
+**Governing distinction; directly selected.** Environment isolation and [tool authorization](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries) solve different problems. A Node/Provider supplies the execution environment; an Agent flag, role label or selected Node alone cannot prove an OS/network sandbox.
+
+`currentNode` is execution routing. An Agent's `defaultNode` only places new sessions; the legacy `agent.isolatedNode` binding was retired in R2 ([isolation migration](../units/isolation-migration.md#r2-startup-migration)). Pairing/binding does not imply node exclusivity or environment virtualization.
 
 ## Tests and callers
 

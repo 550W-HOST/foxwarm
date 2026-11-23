@@ -11,6 +11,41 @@ internal static class SessionSettingsDefinitions
 [
   {
     "type": "function",
+    "name": "set_session_model",
+    "description": "Inspect or switch the model and effort of this Session or one of its descendant Sessions. Without model or effort, shows the current selection and the configured models. A change applies from the target's next model request, including later requests of a turn already in progress, and starts a new prompt cache.",
+    "strict": false,
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "This Session or a descendant Session. Defaults to this Session."
+        },
+        "model": {
+          "type": "string",
+          "description": "Configured model key; default returns to the default model."
+        },
+        "effort": {
+          "type": "string",
+          "description": "Effort setting; use default or unset to clear the override.",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "default",
+            "unset"
+          ]
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "type": "function",
     "name": "set_session_child_model",
     "description": "Inspect or change the default model and effort for future child or related new sessions. Unset settings follow the source session's normal model and effort defaults.",
     "strict": false,

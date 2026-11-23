@@ -140,6 +140,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 "filesystem",
                 "exec",
                 "execEnv",
+                "execStop",
                 "defaultCwd",
                 "services",
             ]
@@ -166,6 +167,14 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                     node["execEnv"] is not JsonValue environment
                     || !environment.TryGetValue<bool>(out var env)
                     || !env
+                    || node["exec"]?.GetValue<bool>() != true
+                )
+            // execStop: the optional exec-stop operation is implemented.
+            || node.ContainsKey("execStop")
+                && (
+                    node["execStop"] is not JsonValue stop
+                    || !stop.TryGetValue<bool>(out var stops)
+                    || !stops
                     || node["exec"]?.GetValue<bool>() != true
                 )
         )

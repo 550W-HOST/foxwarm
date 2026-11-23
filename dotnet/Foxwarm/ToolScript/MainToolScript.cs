@@ -133,12 +133,25 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                     : 20;
                 var status = Text(args["status"]);
                 var rows = await store.ListAsync(context.LiteralOwner, limit, status, token);
-                var budget = new ToolScriptDataBudget();
+                // One compact row per run; script get returns a run's full record.
                 var output = new JsonArray();
                 foreach (var row in rows)
                 {
-                    budget.JsonValue(row);
-                    output.Add(Project(row, lean: false));
+                    var summary = new JsonObject();
+                    foreach (
+                        var key in new[]
+                        {
+                            "runId",
+                            "status",
+                            "mode",
+                            "scriptPath",
+                            "createdAt",
+                            "completedAt",
+                        }
+                    )
+                        if (row[key] is { } value)
+                            summary[key] = value.DeepClone();
+                    output.Add(summary);
                 }
                 return new JsonObject { ["runs"] = output };
             case "cancel_toolscript_run":
@@ -322,7 +335,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                 identity is null
                 || Text(identity["engine"]) != "@pydantic/monty"
                 || Text(identity["version"]) != MontyWorker.Version
-                || Text(identity["snapshotFormat"]) != "monty-pool-snapshot-v0.0.19"
+                || Text(identity["snapshotFormat"]) != MontyWorker.SnapshotFormat
             )
                 throw new NotSupportedException(
                     "ToolScript snapshot runtime is incompatible. The historical record and snapshot were retained."
@@ -553,6 +566,6 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         {
             ["engine"] = "@pydantic/monty",
             ["version"] = MontyWorker.Version,
-            ["snapshotFormat"] = "monty-pool-snapshot-v0.0.19",
+            ["snapshotFormat"] = MontyWorker.SnapshotFormat,
         };
 }

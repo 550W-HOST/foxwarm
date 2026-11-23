@@ -87,4 +87,4 @@ Anchors also gain this final Unicode fallback after their existing exact/trim be
 
 `applyPatch.test.ts` owns the single parser/matcher suite: operation counts, supported Unicode mappings and stricter-pass precedence, anchor/EOF behavior, CRLF/final-newline preservation, malformed envelopes, basic/multiple hunks, blank context, and bounded failed-hunk diagnostics for short, long, and multi-hunk failures. Node and backend tool tests verify matching regressions, unchanged failed files, skipped subsequent operations, and retained partial-success summaries.
 
-Main filesystem tests in `src/tools/applyPatchOutput.test.ts` go through canonical `callTool`; Node wrapper tests cover partial effects and injected primitives. `src/nodeExecution.test.ts` covers provider-owned opaque parent paths, and compact repair, memory/path, authorization, metadata, and paired CLI transport tests retain their respective integration boundaries.
+Node wrapper tests cover partial effects and injected primitives; compact repair, memory/path, authorization, metadata, and paired CLI transport tests retain their respective integration boundaries.

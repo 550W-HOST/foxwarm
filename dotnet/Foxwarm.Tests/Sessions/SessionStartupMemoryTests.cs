@@ -12,106 +12,6 @@ namespace Foxwarm.Tests;
 
 public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
 {
-    private static async Task<JsonObject> Source(string mode, string root)
-    {
-        var repository =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("Owned Source fixture root is required.");
-        using var process = Process.Start(
-            new ProcessStartInfo("node")
-            {
-                WorkingDirectory = repository,
-                ArgumentList =
-                {
-                    Path.Combine(
-                        repository,
-                        "dotnet",
-                        "Foxwarm.Tests",
-                        "Fixtures",
-                        "session-startup-memory-fixture-ts.mjs"
-                    ),
-                    mode,
-                    root,
-                },
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            }
-        )!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var text = await stdout;
-        Assert.True(process.ExitCode == 0, text + await stderr);
-        const string prefix = "SESSION_STARTUP_FIXTURE:";
-        return JsonNode
-            .Parse(
-                text.Split('\n').Single(line => line.StartsWith(prefix, StringComparison.Ordinal))[
-                    prefix.Length..
-                ]
-            )!
-            .AsObject();
-    }
-
-    [Fact]
-    public async Task Source_and_managed_startup_keep_438_wait_only_sessions_cold_across_queries_and_restart()
-    {
-        using var temp = new TempDirectory();
-        var data = Path.Combine(temp.Path, "data");
-        var oracle = Path.Combine(temp.Path, "oracle");
-        await Source("seed", data);
-        foreach (var file in Directory.EnumerateFiles(data, "*", SearchOption.AllDirectories))
-        {
-            var copy = Path.Combine(oracle, Path.GetRelativePath(data, file));
-            Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
-            File.Copy(file, copy);
-        }
-        var source = await Source("inspect", oracle);
-        Assert.Equal(new[] { "busy", "queued" }, SessionWait.Strings(source["hydrated"]));
-        await using var peer = new Peer();
-        for (var opening = 0; opening < 2; opening++)
-        {
-            await using var manager = new SessionManager(
-                data,
-                Path.Combine(temp.Path, "work"),
-                peer.Options,
-                HostModels.ForTest(peer.Options)
-            );
-            var reads = new ConcurrentBag<string>();
-            manager.AdmissionReadObserved = reads.Add;
-            await manager.LoadMainHostAsync();
-            await Settle(manager);
-            var view = new SessionListQueries(new SessionRuntime(manager));
-            Assert.Equal(440, view.GlobalSummary()["total"]!.GetValue<long>());
-            Assert.NotNull(view.Projection("legacy-0"));
-            Assert.Equal(440, manager.Catalog.List().Length);
-            Assert.Equal(440, manager.Catalog.Count());
-            output.WriteLine(
-                $"Opening {opening}: catalog=440, wait-only=438, authority reads={reads.Count}, owners={manager.Owners().Count()}, provider requests={peer.Requests.Count}."
-            );
-            foreach (var id in SessionWait.Strings(source["coldIds"]))
-            {
-                Assert.NotNull(manager.CatalogMetadata(id)!.Wait);
-                Assert.Null(manager.Find(id));
-            }
-            Assert.Equal(
-                opening == 0 ? new[] { "busy", "queued" } : [],
-                reads.Order(StringComparer.Ordinal)
-            );
-            Assert.Equal(opening == 0 ? 2 : 0, manager.Owners().Count());
-            Assert.Equal(2, peer.Requests.Count);
-            if (opening == 0)
-            {
-                Assert.Contains(
-                    "session-resumed",
-                    manager.Find("busy")!.History()[1].ToJsonString()
-                );
-                Assert.Contains(
-                    "Synthetic pending work.",
-                    manager.Find("queued")!.History()[1].ToJsonString()
-                );
-            }
-        }
-    }
 
     [Fact]
     public void Recovery_query_keeps_managed_pending_candidates_without_selecting_wait_presence()
@@ -234,7 +134,7 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
                     },
                     default
                 );
-                Assert.Contains("Switched to background", result["output"]!.GetValue<string>());
+                ExecReceipt.Header(result["output"]!.GetValue<string>());
             }
             await using var manager = new SessionManager(
                 data,

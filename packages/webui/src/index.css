@@ -52,6 +52,47 @@
   }
 }
 
+/*
+ * Bottom safe band of the app shell: the single owner of its effective bottom inset.
+ *
+ * iOS 26 installed web apps (viewport-fit=cover + black-translucent status bar) size the
+ * viewport short by the top safe-area inset while the page is shorter than the screen
+ * (WebKit bug 301108): 100dvh, innerHeight and visualViewport.height end above the
+ * home-indicator area and nothing is painted below. A screen-tall document gets the full
+ * viewport (see the installed-iOS `html` rule below the mobile html/body rule), after which
+ * the shell's ordinary 100dvh reaches the screen bottom.
+ *
+ * The band is the part of the bottom safe area that overlaps the shell. In an installed iOS
+ * app at rest that is `safe-area-bottom + 100dvh - 100lvh`: the full inset once the viewport
+ * is screen-tall, zero if it stays short. While main.tsx pins the shell to the visual
+ * viewport (keyboard, zoom) the shell ends at the visible area and the band is zero.
+ * `data-foxwarm-ios-standalone` and `data-foxwarm-viewport-pinned` come from viewportHeight.ts.
+ *
+ * --foxwarm-app-safe-area-bottom: band above the shell's lower edge; fixed bottom controls
+ *   and in-scroller clearance use it. Other browsers keep the full bottom inset.
+ * --foxwarm-chat-composer-safe-area-bottom: band the Chat composer clears; only in the
+ *   installed iOS app, elsewhere the composer keeps its 1rem spacing.
+ */
+:root {
+  --foxwarm-app-safe-area-bottom: var(--foxwarm-safe-area-bottom);
+  --foxwarm-chat-composer-safe-area-bottom: 0px;
+}
+
+@media (max-width: 768px) {
+  html[data-foxwarm-ios-standalone] {
+    --foxwarm-app-safe-area-bottom: 0px;
+    --foxwarm-chat-composer-safe-area-bottom: var(--foxwarm-app-safe-area-bottom);
+  }
+}
+
+@supports (height: 100lvh) {
+  @media (max-width: 768px) {
+    html[data-foxwarm-ios-standalone]:not([data-foxwarm-viewport-pinned]) {
+      --foxwarm-app-safe-area-bottom: max(0px, calc(var(--foxwarm-safe-area-bottom) + 100dvh - 100lvh));
+    }
+  }
+}
+
 .foxwarm-safe-area-shell {
   box-sizing: border-box;
   padding-top: var(--foxwarm-safe-area-top);
@@ -146,6 +187,7 @@ html.dark {
 
 .foxwarm-chat-composer {
   padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-chat-scrollbar-gutter, 0px));
+  padding-bottom: max(1rem, var(--foxwarm-chat-composer-safe-area-bottom));
 }
 
 /* Hide scrolled Timeline text below the floating composer and behind its lower edge.
@@ -568,6 +610,23 @@ html .foxwarm-markdown.foxwarm-question-user-content :is(a, a:hover) {
   }
 }
 
+/*
+ * Installed iOS app: the document itself is screen-tall so WebKit hands over the full
+ * viewport (bug 301108 shortens it only while the page is shorter than the screen; a
+ * taller fixed html or shell is clipped at the short edge instead). `100%` is the current
+ * viewport, so once it is full height this equals it and nothing can scroll. The body
+ * stays the fixed app container; overflow stays hidden.
+ */
+@supports (height: 100lvh) {
+  @media (max-width: 768px) {
+    html[data-foxwarm-ios-standalone] {
+      position: static;
+      height: auto;
+      min-height: min(100lvh, calc(100% + var(--foxwarm-safe-area-top)));
+    }
+  }
+}
+
 body {
   margin: 0;
   min-height: 100dvh;
@@ -743,6 +802,28 @@ input, textarea, select { touch-action: manipulation; }
     word-break: break-word;
     font: inherit;
     color: inherit;
+  }
+
+  /* Reply file links and expanded file-tool paths: one Code link style. */
+  a.foxwarm-code-link {
+    color: var(--foxwarm-color-accent);
+    font-weight: inherit;
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+
+  a.foxwarm-code-link:hover {
+    text-decoration-style: solid;
+  }
+
+  a.foxwarm-code-link:focus-visible {
+    outline: 1px solid var(--foxwarm-color-focus-ring);
+    outline-offset: 1px;
+    border-radius: 2px;
   }
 
   .foxwarm-tool-call-summary {
@@ -2220,6 +2301,13 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 .foxwarm-workbench-tab-toolbar button { width: 28px; height: 28px; border-color: transparent; background: transparent; border-radius: 6px; }
 .foxwarm-workbench-tab-toolbar button:hover { background: var(--foxwarm-color-hover); }
 @media (pointer: coarse) { .foxwarm-workbench-tab-close { opacity: 1; } }
+@media (pointer: coarse) {
+  .foxwarm-terminal-kill { width: 28px; height: 28px; }
+  .foxwarm-terminal-list-open { min-height: 44px; }
+  .foxwarm-terminal-list-kill { width: 44px; height: 44px; }
+  .foxwarm-running-command-toggle { min-height: 40px; }
+  .foxwarm-running-command-stop { height: 40px; }
+}
 
 /* Full width only removes the Timeline cap, not the shared outer gutters. */
 .foxwarm-chat-messages-content[data-full-width="true"] {
@@ -2510,15 +2598,6 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   box-shadow: var(--foxwarm-panel-shadow);
 }
 .dark .mobile-glass-surface { background: color-mix(in srgb, var(--foxwarm-color-surface) 70%, transparent); }
-[data-mobile-session-home] {
-  --foxwarm-home-safe-area-bottom: var(--foxwarm-safe-area-bottom);
-}
-@supports (height: 100dvh) and (height: 100lvh) {
-  [data-mobile-session-home][data-mobile-standalone] {
-    /* Reserve only the safe-area band still inside the installed iOS viewport. */
-    --foxwarm-home-safe-area-bottom: max(0px, calc(var(--foxwarm-safe-area-bottom) + 100dvh - 100lvh));
-  }
-}
 .mobile-primary-nav {
   width: calc(100% - 24px);
   max-width: 440px;
@@ -2527,13 +2606,13 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   z-index: 30;
   left: 12px;
   right: 12px;
-  bottom: calc(var(--foxwarm-home-safe-area-bottom) + 12px);
+  bottom: calc(var(--foxwarm-app-safe-area-bottom) + 12px);
   border-radius: calc(var(--foxwarm-radius-large-px) + 12px);
 }
 .mobile-primary-nav [role="tab"] { border-radius: calc(var(--foxwarm-radius-large-px) + 6px); }
 .mobile-primary-nav [aria-selected="true"] { background: color-mix(in srgb, var(--foxwarm-color-accent) 10%, transparent); }
-.mobile-session-scroll { padding-bottom: calc(var(--foxwarm-safe-area-bottom) + 160px); }
-.mobile-primary-panel :is(.tasks-main, [data-history-search-view], [data-setup-section]) { padding-bottom: calc(var(--foxwarm-safe-area-bottom) + 100px); }
+.mobile-session-scroll { padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 160px); }
+.mobile-primary-panel :is(.tasks-main, [data-history-search-view], [data-setup-section]) { padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 100px); }
 @supports not (backdrop-filter: blur(1px)) { :is(.mobile-glass-surface, .dark .mobile-glass-surface) { background: var(--foxwarm-color-surface); } }
 @media (prefers-reduced-transparency: reduce) {
   :is(.mobile-glass-surface, .dark .mobile-glass-surface) { background: var(--foxwarm-color-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -2601,6 +2680,10 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 
 .mobile-tasks-page .tasks-main, .mobile-history-page > [data-history-search-view], .mobile-setup-page [data-setup-section] { padding-top: calc(var(--mobile-page-header-height, 64px) + 8px); }
 .mobile-setup-page .foxwarm-setup-navigation { display: none; }
+/* System on phones: content scrolls under the floating header and clears the bottom safe band. */
+.mobile-system-page [data-system-scroll] { padding-top: calc(var(--mobile-page-header-height, 64px) + 8px); padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 24px); }
+.mobile-system-tabs { scrollbar-width: none; }
+.mobile-system-tabs::-webkit-scrollbar { display: none; }
 .mobile-history-page form { border: 0; background: transparent; padding: 0; }
 .mobile-header-circle[data-filtered]::after { content: ""; width: 5px; height: 5px; position: absolute; top: 6px; right: 6px; border-radius: 50%; background: var(--foxwarm-color-accent); }
 
@@ -2681,6 +2764,9 @@ html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm
 html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm-frame-edge[data-frame-edge="end"] { left: 0; width: auto; bottom: auto; height: var(--foxwarm-frame-pad-top, 0px); }
 /* Fills carry title-row drag surfaces through the shell gutter and panel padding to the window edges. */
 .foxwarm-frame-fill { position: fixed; }
+/* PWA overlay: no-drag holes after the page content for controls a later drag surface covers;
+ * invisible and never hit, they only take part in app-region. */
+.foxwarm-frame-hole { position: fixed; pointer-events: none; }
 /* Narrow layouts keep their mobile shell under a plain draggable strip. */
 html[data-foxwarm-frame][data-foxwarm-frame-narrow] { --foxwarm-safe-area-top: var(--foxwarm-frame-top, 0px); }
 .foxwarm-frame-strip {
@@ -2690,12 +2776,13 @@ html[data-foxwarm-frame][data-foxwarm-frame-narrow] { --foxwarm-safe-area-top: v
 }
 /* Drag surfaces for the PWA overlay; the Desktop hosts get the same surfaces as
  * rectangles. Since Chromium 152 app-region inherits into descendants, so every
- * interactive descendant and floating layer opts out. */
+ * interactive descendant and floating layer opts out. Chromium applies the boxes in
+ * document order, the last one deciding: fills come first, holes last. */
 html[data-foxwarm-frame] :is([data-frame-row][data-frame-in-band] [data-frame-drag], [data-frame-row][data-frame-in-band][data-frame-drag], .foxwarm-frame-fill, .foxwarm-frame-strip) {
   app-region: drag; -webkit-app-region: drag; user-select: none; -webkit-user-select: none;
 }
 html[data-foxwarm-frame] [data-frame-drag] :is(button, a[href], input, select, textarea, summary, label, iframe, [contenteditable], [role="button"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]),
-html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag]) {
+html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag], .foxwarm-frame-hole) {
   app-region: no-drag; -webkit-app-region: no-drag;
 }
 @media (forced-colors: active) { .foxwarm-frame-strip { background: Canvas; } }
@@ -2875,3 +2962,10 @@ html[data-foxwarm-window~="inactive"] .foxwarm-popup-title { color: var(--foxwar
 [data-foxwarm-popup-framed] { --foxwarm-safe-area-top: 0px; }
 body:has([data-foxwarm-popup-framed]) .foxwarm-frame-strip { background: transparent; }
 @media (forced-colors: active) { .foxwarm-popup-card { border-color: CanvasText; } }
+/* A background command's receipt or completion reached through its execId link. */
+@keyframes fw-exec-link-flash {
+  0%, 35% { background-color: color-mix(in srgb, var(--foxwarm-color-accent) 32%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--foxwarm-color-accent) 32%, transparent); }
+  100% { background-color: transparent; box-shadow: 0 0 0 3px transparent; }
+}
+.fw-exec-link-flash { animation: fw-exec-link-flash 1.8s ease-out; }
+@media (prefers-reduced-motion: reduce) { .fw-exec-link-flash { animation-duration: 0.01s; outline: 2px solid var(--foxwarm-color-accent); } }

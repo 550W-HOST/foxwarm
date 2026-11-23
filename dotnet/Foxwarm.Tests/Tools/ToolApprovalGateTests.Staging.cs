@@ -97,8 +97,8 @@ public sealed partial class ToolApprovalGateTests
         await f.Manager.DecideToolApprovalAsync(f.Owner, pending["id"]!.GetValue<string>(), true, null, Administrator);
         var execution = await call.WaitAsync(TimeSpan.FromSeconds(30));
         var response = execution.Response!.AsObject();
-        Assert.Equal("tool_authorization_denied", response["error"]!["type"]!.GetValue<string>());
-        Assert.Contains("`confirm-read`", response["error"]!["message"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", response.FailureCode()!);
+        Assert.Contains("`confirm-read`", response.FailureMessage()!);
         // The approved call never ran.
         var record = Assert.Single(Approvals(f.Owner));
         Assert.Equal("cancelled", record["status"]!.GetValue<string>());
@@ -146,7 +146,7 @@ public sealed partial class ToolApprovalGateTests
         var pending = Assert.Single(await PendingAsync(f.Owner));
         stop.Cancel();
         var response = (await call.WaitAsync(TimeSpan.FromSeconds(30))).Response!.AsObject();
-        Assert.Equal("tool_call_cancelled", response["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_call_cancelled", response.FailureCode()!);
         var record = Assert.Single(Approvals(f.Owner));
         Assert.Equal(pending["id"]!.GetValue<string>(), record["id"]!.GetValue<string>());
         Assert.Equal("cancelled", record["status"]!.GetValue<string>());

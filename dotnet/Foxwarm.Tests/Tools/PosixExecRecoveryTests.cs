@@ -57,7 +57,7 @@ public sealed class PosixExecRecoveryTests
             await recovered.ReconcileNowAsync();
             await recovered.ReconcileNowAsync();
             var message = Assert.Single(delivered);
-            Assert.Contains("Exit code: 7", message);
+            ExecReceipt.ExitCode(message, 7);
             Assert.Equal("x", await File.ReadAllTextAsync(Path.Combine(temp.Path, "launches")));
             Assert.Empty(recovered.Tracked);
         }

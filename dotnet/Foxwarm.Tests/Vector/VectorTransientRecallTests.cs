@@ -138,12 +138,7 @@ public sealed class VectorTransientRecallTests
         };
         var inputPath = Path.Combine(f.Temp.Path, "transient-input.json");
         await File.WriteAllTextAsync(inputPath, EcmaJson.Stringify(input));
-        var source = await VectorFixture.SourceAsync(
-            "transient",
-            Path.Combine(f.Temp.Path, "source-transient"),
-            inputPath,
-            Path.Combine(f.Temp.Path, "transient-result.json")
-        );
+        var source = await VectorFixture.RecordedSourceAsync("transient", inputPath);
         // Explicit lexical rank is new; candidate order and original metadata retain
         // the Source contract.
         for (var index = 0; index < captured.Count; index++)

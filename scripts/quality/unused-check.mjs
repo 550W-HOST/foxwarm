@@ -6,12 +6,12 @@ const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 const checks = [
   {
-    label: 'root backend TypeScript unused check',
-    args: ['--no-install', 'tsc', '-p', 'tsconfig.json', '--noEmit', '--incremental', 'false', '--noUnusedLocals', '--noUnusedParameters', '--pretty', 'false'],
-  },
-  {
     label: 'shared package TypeScript unused check',
     args: ['--no-install', 'tsc', '-p', 'packages/shared/tsconfig.json', '--noEmit', '--incremental', 'false', '--noUnusedLocals', '--noUnusedParameters', '--pretty', 'false'],
+  },
+  {
+    label: 'artifact-runtime package TypeScript unused check',
+    args: ['--no-install', 'tsc', '-p', 'packages/artifact-runtime/tsconfig.json', '--noEmit', '--noUnusedLocals', '--noUnusedParameters', '--pretty', 'false'],
   },
   {
     label: 'cli-node package TypeScript unused check',

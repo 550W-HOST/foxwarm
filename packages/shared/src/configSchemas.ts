@@ -182,6 +182,8 @@ const modelDefaultProperties = {
   retryIntervalsMs: { type: 'array', minItems: 1, items: { type: 'integer', minimum: 0, maximum: 2147483647 }, default: [2000, 5000, 10000, 20000, 40000, 60000], description: 'Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline.' },
   textRedaction,
   contextLimit: { ...positiveInteger, description: 'Context limit in tokens.' },
+  idleCompactMinutes: { type: 'number', minimum: 0, description: 'Compact idle Sessions after this many minutes from their last provider request, before the provider prompt cache expires. Zero or omitted disables idle compaction. Model overrides provider, then defaults.' },
+  idleCompactMinContextPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, description: 'Minimum fraction of the context window the last request must exceed for idle compaction; default 0.5. Model overrides provider, then defaults.' },
   maxOutput: { ...positiveInteger, description: 'Maximum output tokens requested from the provider. Provider-specific extraFields may override this value.' },
   providerImageOutputFormat: { enum: ['webp', 'jpeg'], description: 'Format used for optimized input images: webp, or jpeg with PNG for transparent images.' },
   imageInput: { type: 'boolean', default: true, description: 'Whether the model accepts image input. When false, images stay in the Session but each request to this model sends a short text placeholder instead.' },
@@ -268,6 +270,8 @@ const providerObjectEntry = {
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: modelOverrideProperties.asyncCompact,
+    idleCompactMinutes: modelOverrideProperties.idleCompactMinutes,
+    idleCompactMinContextPercent: modelOverrideProperties.idleCompactMinContextPercent,
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
     disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
     keepReasoningOnError: { type: 'boolean', default: false, description: 'Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution.' },
@@ -285,7 +289,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'idleCompactMinutes', 'idleCompactMinContextPercent', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -293,7 +297,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'idleCompactMinutes', 'idleCompactMinContextPercent', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs'].map((field) => ({ required: [field] })) },
       },
     },
     {

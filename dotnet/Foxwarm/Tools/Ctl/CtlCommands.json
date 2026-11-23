@@ -93,7 +93,10 @@
     },
     {
       "name": "exec",
-      "summary": "Read results of commands started through this connection."
+      "summary": "List and stop this Session's background commands.",
+      "copy": {
+        "external": "Read results of commands started through this connection."
+      }
     }
   ],
   "commands": [
@@ -860,8 +863,10 @@
     },
     {
       "path": "session model",
-      "summary": "Show or switch the model and effort of this conversation's Session.",
+      "summary": "Show or switch the model and effort of this Session or a descendant Session.",
+      "help": "A change applies from the Session's next model request, including later requests of a turn already in progress, and starts a new prompt cache.",
       "ingress": [
+        "model",
         "user"
       ],
       "user": {
@@ -869,14 +874,24 @@
         "session": "required"
       },
       "target": {
-        "local": "user"
+        "source": "builtin",
+        "name": "set_session_model"
       },
       "params": [
         {
           "name": "model",
           "type": "string",
           "kind": "positional",
-          "help": "Model key or a unique part of it; default returns to the default model. Omit to show the current model."
+          "help": "Configured model key; default returns to the default model. Omit to show the current model and the configured models."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "This Session or a descendant Session. Defaults to this Session.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "effort",
@@ -884,7 +899,15 @@
           "kind": "flag",
           "help": "Effort level; default or unset clears it."
         }
-      ]
+      ],
+      "copy": {
+        "user": {
+          "summary": "Show or switch the model and effort of this conversation's Session.",
+          "params": {
+            "model": "Model key or a unique part of it; default returns to the default model. Omit to show the current model."
+          }
+        }
+      }
     },
     {
       "path": "session fork",
@@ -1727,8 +1750,9 @@
     },
     {
       "path": "node status",
-      "summary": "Show this connection's current Node and working directory.",
+      "summary": "Show this Session's current Node and working directory.",
       "ingress": [
+        "model",
         "external"
       ],
       "target": {
@@ -1738,7 +1762,12 @@
           "action": "status"
         }
       },
-      "params": []
+      "params": [],
+      "copy": {
+        "external": {
+          "summary": "Show this connection's current Node and working directory."
+        }
+      }
     },
     {
       "path": "node select",
@@ -3501,7 +3530,7 @@
     {
       "path": "script list",
       "summary": "List this Session's ToolScript runs.",
-      "help": "Shows each run's status and progress summary.",
+      "help": "Shows each run's status and timestamps; script get shows one run in full.",
       "ingress": [
         "model"
       ],
@@ -4011,6 +4040,50 @@
           "help": "Maximum executions to list, 1–20. Defaults to 5."
         }
       ]
+    },
+    {
+      "path": "exec list",
+      "summary": "List this Session's commands still running in the background.",
+      "help": "Shows each command's execId, Node, start time and elapsed time, working directory and log. Commands that have finished are not listed, even if their completion has not arrived yet.",
+      "ingress": [
+        "model",
+        "user"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "exec_list"
+      },
+      "params": [],
+      "user": {
+        "handler": "exec-list",
+        "session": "required"
+      }
+    },
+    {
+      "path": "exec stop",
+      "summary": "Stop a background command of this Session.",
+      "help": "Sends the command's process group a termination signal and kills it if it is still running 5 seconds later; on Windows it ends the process tree. The command's completion is still reported once and says it was stopped. Some Nodes cannot stop commands.",
+      "ingress": [
+        "model",
+        "user"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "exec_stop"
+      },
+      "params": [
+        {
+          "name": "execId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "execId returned by exec."
+        }
+      ],
+      "user": {
+        "handler": "exec-stop",
+        "session": "required"
+      }
     }
   ],
   "shortcuts": [
