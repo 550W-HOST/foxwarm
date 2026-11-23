@@ -19,11 +19,7 @@ Write ordinary top-level code. The `args` input is available throughout the scri
 ```python
 base_dir = args["baseDir"].rstrip("/")
 
-listing = call_tool({
-    "source": "node",
-    "name": "read",
-    "args": {"filePath": base_dir},
-})
+listing = call_tool("read", {"filePath": base_dir})
 print(listing[:200])
 
 label = ask_agent("Reply with a short label")
@@ -93,39 +89,32 @@ Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", .
 
 ### `call_tool(...)`
 
-Use one bridge for builtin, MCP, and node tools. Environment capabilities such as read/write/edit/exec/browse use `source: "node"`; omitting `nodeId` targets the session current node. The unified descriptor is the clearest form:
+Use one bridge for builtin, MCP, and node tools. Pass the tool as a string: a builtin or declared tool name, or a tool ID from `ctl tool search` for MCP and Node tools:
 
 ```python
-content = call_tool({
-    "source": "node",
-    "name": "read",
-    "args": {"filePath": args["path"]},
-})
+content = call_tool("read", {"filePath": args["path"]})
 
-repos = call_tool({
-    "source": "mcp",
-    "server": "github",
-    "name": "search_repos",
-    "args": {"query": "foxwarm"},
-})
+repos = call_tool("mcp:github/search_repos", {"query": "foxwarm"})
 
+screenshot = call_tool("node:<node-id>/android_screenshot", {"inline": True})
+
+return {"content": content, "repos": repos, "screenshot": screenshot}
+```
+
+Environment capabilities such as `read`, `write`, `edit` and `exec` called by name run on the session's current node. A Node tool ID always names its node, as `ctl tool search` returns it.
+
+When the parts are computed, pass a descriptor instead; omitting `nodeId` targets the session's current node:
+
+```python
 screenshot = call_tool({
     "source": "node",
     "nodeId": args["nodeId"],
     "name": "android_screenshot",
     "args": {"inline": True},
 })
-
-return {"content": content, "repos": repos, "screenshot": screenshot}
 ```
 
-For a simple builtin call, the string form is supported:
-
-```python
-content = call_tool("read", {"filePath": "README.md"})
-```
-
-`ctl(command, values=None)` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage. It is the same call as `call_tool("ctl", {"command": command, "values": values})`, with the same authorization, approvals and Node placement as the tool the command runs.
+`ctl(command, values=None)` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage. It is the same call as `call_tool("ctl", {"command": command, "values": values})`, with the same authorization, approvals and Node placement as the tool the command runs. Call a tool ID from `ctl tool search` with `call_tool(tool_id, args)`, not `ctl("tool call ...")`.
 
 ```python
 ctl("memory edit MEMORY.md --old-text @old --new-text @new", {"old": old, "new": new})

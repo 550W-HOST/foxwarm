@@ -176,10 +176,8 @@ def main(args):
     # reads the protected file as needed; do not print its contents or return
     # the nested exec result.
     call_tool(
-        source="node",
-        nodeId="master",
-        name="exec",
-        args={"command": "scp -- '/secure/new-node.token' 'node-host:/secure/new-node.token'"},
+        "node:master/exec",
+        {"command": "scp -- '/secure/new-node.token' 'node-host:/secure/new-node.token'"},
     )
     return {"nodeId": created["nodeId"], "filePath": created["filePath"], "transfer": "requested"}
 ```
