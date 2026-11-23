@@ -143,11 +143,6 @@ internal sealed partial class MessageRouter
             await source.Reply(auth.Describe(source, unauthorized: true));
             return true;
         }
-        if (UserCommands.RetiredNotice(command) is { } notice)
-        {
-            await source.Reply(notice);
-            return true;
-        }
         try
         {
             switch (CtlParser.ParseUser(command, rawArgs))

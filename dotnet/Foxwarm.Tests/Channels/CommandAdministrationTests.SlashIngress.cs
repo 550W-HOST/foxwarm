@@ -19,6 +19,11 @@ public sealed partial class CommandAdministrationTests
     [InlineData("\u0085/stop")]
     [InlineData("/stop\u0085compact")]
     [InlineData("/session\u0085move renamed")]
+    [InlineData("/search weekly")]
+    [InlineData("/messages 2")]
+    [InlineData("/delete-messages 1")]
+    [InlineData("/verbose on")]
+    [InlineData("/attach other")]
     public async Task Non_command_slash_input_is_admitted_verbatim_with_parts_and_client_identity(
         string text
     )
@@ -84,56 +89,43 @@ public sealed partial class CommandAdministrationTests
         Assert.False(MessageRouter.IsKnownCommand("@helper /unknown", allowMention: true));
     }
 
-    // One-release notice for the 0.9.5 heads (remove in 0.9.7).
+    // The 0.9.5 heads that became noun commands, and a bare `/session list` integer, have no
+    // special handling since 0.9.7; the WebUI case is in the verbatim-admission theory above.
     [Fact]
-    public async Task Retired_heads_reply_with_their_new_spelling_and_run_nothing()
+    public async Task Former_0_9_5_heads_reach_channel_sessions_and_a_bare_list_integer_is_a_query()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
-        var web = new List<string>();
-        f.Owner.Changed += e =>
+        var former = new[]
         {
-            if (e.Kind == SessionEventKind.CommandReply)
-                web.Add(SessionWait.Text(e.Data?["parts"]?[0]?["text"])!);
+            "/search weekly",
+            "/messages 2",
+            "/delete-messages 1",
+            "/verbose on",
+            "/attach other",
         };
-        var renamed = new Dictionary<string, string>
-        {
-            ["/search weekly"] = "/history search",
-            ["/messages 2"] = "/session messages",
-            ["/delete-messages 1"] = "/session delete-messages",
-            ["/verbose on"] = "/session verbose",
-            ["/attach other"] = "/channel attach",
-        };
-        foreach (var (text, current) in renamed)
-        {
-            Assert.True(MessageRouter.IsKnownCommand(text));
-            var response = await f.Router.HandleMessageAsync(
-                new ChannelContext(f.Owner.Id, "webui"),
-                new ChannelMessage(text, null)
-            );
-            Assert.Equal(200, response.Status);
-            Assert.Contains("is now `" + current + "`", web.Last());
-            Assert.Contains("/help " + current[1..], web.Last());
-        }
-        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
-        Assert.Empty(f.Owner.History());
-        Assert.Null(UserCommands.Find("/attach"));
-        Assert.DoesNotContain("/attach", UserCommands.Heads);
-
         var replies = new List<string>();
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, f.Owner);
-        await f.Router.HandleExternalMessageAsync(source, Message("/attach other"));
-        Assert.Contains("`/attach` is now `/channel attach`", replies.Single());
+        foreach (var text in former)
+        {
+            Assert.False(await f.Router.HandleExternalCommandAsync(source, text.Split(' ')[0], null));
+            await f.Router.HandleExternalMessageAsync(source, Message(text));
+            Assert.Contains(
+                text,
+                SessionWait.Text(f.Owner.Entry.Snapshot().Queue.Last().Parts![0]["system"])
+            );
+        }
+        Assert.Empty(replies);
         Assert.Equal(f.Owner.Id, SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"]));
-        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
 
-        // A bare page number is refused; text and options still list.
+        var numbered = await f.Manager.CreateNamedAsync("main", "build-2024", null, null);
         await f.Router.HandleExternalMessageAsync(source, Message("/session list 2"));
-        Assert.Contains("--start", replies.Last());
-        await f.Router.HandleExternalMessageAsync(source, Message("/session list source2"));
-        Assert.DoesNotContain("--start", replies.Last());
+        var listed = Assert.Single(replies);
+        Assert.Contains("matching `2`", listed);
+        Assert.Contains(numbered.Id, listed);
+        Assert.DoesNotContain("--start", listed);
     }
 
     [Fact]

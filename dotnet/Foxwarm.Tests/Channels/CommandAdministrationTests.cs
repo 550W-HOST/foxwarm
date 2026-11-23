@@ -89,7 +89,7 @@ public sealed partial class CommandAdministrationTests
             Assert.Contains(head, UserCommands.Heads);
             Assert.Contains("`" + head + "`", help);
         }
-        // Retired heads and model-only nouns are not commands.
+        // Former 0.9.5 heads and model-only nouns are not commands.
         foreach (var name in new[] { "/messages", "/delete-messages", "/verbose", "/search", "/attach", "/memory", "/file", "/tool", "/tools", "/config", "/index", "/retry" })
             Assert.Null(UserCommands.Find(name));
         Assert.True(UserCommands.Find("/stop")!["requiresSession"]!.GetValue<bool>());
