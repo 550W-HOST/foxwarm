@@ -26,13 +26,9 @@ run:
 
 # Advisor
 
-Run it directly; there is nothing to load first:
+Run it directly with `ctl skill run advisor --args @args`, passing the arguments as `values.args`, for example `{"question": "..."}`. There is nothing to load first.
 
-```text
-ctl skill run advisor --args @args    with args {"question": "..."}
-```
-
-The advisor is a fork of this Session on a stronger model. It sees everything you see up to the moment you ask, investigates with read-only actions and sends its advice to you. Your turn ends when you run the skill and resumes when the advice arrives, or after `waitSeconds` if none does; then check the advisor with `ctl session view <advisor>`.
+The advisor is a fork of this Session on the advisor model, normally a stronger one than yours. It sees everything you see up to the moment you ask, investigates with read-only actions and sends its advice to you. Your turn ends when you run the skill and resumes when the advice arrives, or after `waitSeconds` if none does; then check the advisor with `ctl session view <advisor>`.
 
 ## When to consult
 
@@ -58,6 +54,6 @@ You stay responsible for the decision. Weigh the advice against what you know, v
 - To clarify the same decision, send the advisor a follow-up with `send_to_session` and say what changed. It keeps its earlier investigation.
 - For a new decision, or the same one after substantial further work, run a new consultation, so the advisor sees your current context.
 
-The advisor Session is archived out of the Session list's way but stays available; the user can open it to read its investigation.
+The advisor Session is archived, so the Session list shows it dimmed after the others. It stays available: you can send it follow-ups, and the user can open it to read its investigation.
 
 If no model key named `advisor` is configured and you pass no `model`, the skill fails without creating anything. It also refuses when your context is larger than the advisor model's context limit.
