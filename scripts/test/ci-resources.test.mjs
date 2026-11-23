@@ -197,7 +197,7 @@ test('Release downloads the original package files, without platform bundles or 
   ]
   const mainPackages = [...Object.keys(TARGETS).map(assetName), 'foxwarm-android-node.apk', codeAssetName]
   const packages = [...mainPackages, ...cliPackages]
-  const derived = ['SHA256SUMS', 'foxwarm-osx-arm64-self-contained.tar.gz', 'foxwarm-win-x64-self-contained.zip']
+  const derived = ['SHA256SUMS']
   const uploads = Object.values(release.jobs).flatMap(job => job.steps ?? [])
     .filter(step => step.uses?.startsWith('actions/upload-artifact@'))
   for (const file of [...mainPackages, ...derived]) {
