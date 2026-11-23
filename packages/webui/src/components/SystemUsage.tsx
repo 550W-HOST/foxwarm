@@ -127,7 +127,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
     <div className="space-y-4" data-system-usage data-usage-period={period} data-usage-grouping={grouping}>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Usage period">
+          <div className="inline-flex h-9 items-stretch rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Usage period">
             {USAGE_PERIODS.map(item => (
               <button key={item.id} type="button" aria-pressed={period === item.id} data-usage-period-option={item.id} onClick={() => setPeriod(item.id)} className={segment(period === item.id)}>{item.label}</button>
             ))}

@@ -236,7 +236,7 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
     <div ref={container} className="min-w-0 space-y-4" data-system-activity data-activity-kind={kind} data-activity-layout={stacked ? 'stacked' : 'table'}>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Activity period">
+          <div className="inline-flex h-9 items-stretch rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Activity period">
             {PERIODS.map(item => (
               <button key={item.id} type="button" aria-pressed={period === item.id} data-activity-period={item.id} onClick={() => setPeriod(item.id)} className={segment(period === item.id)}>{item.label}</button>
             ))}
