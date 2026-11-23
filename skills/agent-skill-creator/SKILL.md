@@ -162,7 +162,7 @@ Minimum requirements:
 
 For executable skills, prefer one clear command or script entry point. If several scripts must run in order, add an orchestrator such as `scripts/run_pipeline.py` rather than making the agent sequence steps from prose.
 
-A self-contained ToolScript entry that reaches one stated outcome from its arguments alone, with bounded side effects and no `ask_agent`, can be declared runnable in the frontmatter (`run:` with `entry`, a one-line `effect`, optional `mode` and `timeoutSecs`, and an `args` JSON Schema using `type`, `properties`, `required`, `enum`, `items`, `description` and `additionalProperties`), so agents run it with `ctl skill run <name>` without loading `SKILL.md`; `ctl skill run <name> --help` shows whether the block is valid.
+A ToolScript entry can be declared runnable when it is one self-contained file that reaches one stated outcome from its arguments alone, with bounded side effects and no `ask_agent`. Declare it in the frontmatter as `run:` with `entry`, a one-line `effect`, optional `mode` and `timeoutSecs`, and an `args` JSON Schema using `type`, `properties`, `required`, `enum`, `items`, `description` and `additionalProperties`. Agents then run it with `ctl skill run <name>` without loading `SKILL.md`, and `ctl skill run <name> --help` shows whether the block is valid.
 
 ## Validation
 
