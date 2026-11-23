@@ -316,3 +316,26 @@ describe('limits', { skip }, () => {
     }
   });
 });
+
+describe('deadlines', { skip }, () => {
+  test('a page that keeps its main thread busy still ends the call at its deadline', { timeout: 30000 }, async () => {
+    const site = await startSite();
+    const manager = new BrowserManager({ env: environment.env });
+    try {
+      await manager.execute('browser_open', { url: site.url('/second') }, context());
+      const started = Date.now();
+      await assert.rejects(
+        manager.execute('browser_open', { url: site.url('/busy') }, context(2000)),
+        /aborted due to timeout/,
+      );
+      assert.ok(Date.now() - started < 5000, `open ended ${Date.now() - started} ms after its 2000 ms budget began`);
+      assert.deepEqual(
+        (await manager.execute('browser_tabs', {}, context())).tabs.map((tab) => tab.url),
+        [site.url('/second')],
+      );
+    } finally {
+      await manager.close();
+      await site.close();
+    }
+  });
+});

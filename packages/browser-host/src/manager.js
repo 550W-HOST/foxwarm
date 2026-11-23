@@ -261,10 +261,13 @@ export class BrowserManager {
     return tab.cdp.send(method, params);
   }
 
-  async title(tab) {
+  // Page reads made while settling or reporting state run in the page's main thread, which a
+  // busy page can hold indefinitely; they end with the call's signal like every other wait.
+  async title(tab, signal) {
     try {
-      return await tab.page.title();
-    } catch {
+      return await abortable(tab.page.title(), signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
       return '';
     }
   }
@@ -274,11 +277,11 @@ export class BrowserManager {
     return { requests: tab.navRequests, commits: tab.navCommits, pageId: tab.pageId };
   }
 
-  async state(tab, before, extra = {}) {
+  async state(tab, before, signal, extra = {}) {
     const state = {
       tabId: tab.id,
       url: tab.page.url(),
-      title: await this.title(tab),
+      title: await this.title(tab, signal),
       navigated: tab.navCommits !== before.commits,
       ...extra,
     };
@@ -287,10 +290,11 @@ export class BrowserManager {
   }
 
   // ---- waiting ---------------------------------------------------------------------------
-  async readyState(tab) {
+  async readyState(tab, signal) {
     try {
-      return await tab.page.evaluate(() => document.readyState);
-    } catch {
+      return await abortable(tab.page.evaluate(() => document.readyState), signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
       return null;
     }
   }
@@ -306,13 +310,13 @@ export class BrowserManager {
     const navEnd = Math.min(ctx.deadline, Date.now() + this.limits.navigationMs);
     while (Date.now() < navEnd) {
       if (tab.navInFlight.size === 0 && tab.navCommits !== before.commits) {
-        const ready = await this.readyState(tab);
+        const ready = await this.readyState(tab, signal);
         if (ready && ready !== 'loading') break;
       }
       await sleep(40, signal);
     }
     const loadEnd = Math.min(ctx.deadline, Date.now() + this.limits.loadMs);
-    while (Date.now() < loadEnd && (await this.readyState(tab)) !== 'complete') await sleep(50, signal);
+    while (Date.now() < loadEnd && (await this.readyState(tab, signal)) !== 'complete') await sleep(50, signal);
     const lullEnd = Math.min(ctx.deadline, Date.now() + 1500);
     let quietSince = Date.now();
     while (Date.now() < lullEnd) {
@@ -330,7 +334,7 @@ export class BrowserManager {
       ctx.signal,
     );
     await this.settle(tab, before, ctx, 0);
-    return this.state(tab, before, response ? { status: response.status() } : {});
+    return this.state(tab, before, ctx.signal, response ? { status: response.status() } : {});
   }
 
   // ---- tools -----------------------------------------------------------------------------
@@ -356,7 +360,7 @@ export class BrowserManager {
           tabs.map(async (tab) => ({
             tabId: tab.id,
             url: tab.page.url(),
-            title: await this.title(tab),
+            title: await this.title(tab, ctx.signal),
           })),
         ),
       };
@@ -421,7 +425,7 @@ export class BrowserManager {
     if (name === 'browser_read') {
       const snapshotId = `${tab.pageId}/${crypto.randomUUID()}`;
       const content = await guard(this.evalIn(tab, readPage, args.format ?? 'snapshot', snapshotId));
-      return { tabId: tab.id, pageId: tab.pageId, url: tab.page.url(), title: await this.title(tab), ...content };
+      return { tabId: tab.id, pageId: tab.pageId, url: tab.page.url(), title: await this.title(tab, signal), ...content };
     }
 
     if (name === 'browser_screenshot') return this.screenshot(tab, args, ctx);
@@ -445,7 +449,7 @@ export class BrowserManager {
         if (Date.now() >= end) break;
         await sleep(Math.min(100, end - Date.now()), signal);
       }
-      return this.state(tab, before, matched ? { matched: true } : { matched: false, reason: 'timeout' });
+      return this.state(tab, before, signal, matched ? { matched: true } : { matched: false, reason: 'timeout' });
     }
 
     const before = this.marks(tab);
@@ -462,13 +466,13 @@ export class BrowserManager {
       }
       await guard(tab.page.mouse.click(point.x, point.y));
       await this.settle(tab, before, ctx);
-      return this.state(tab, before, { clicked: true });
+      return this.state(tab, before, signal, { clicked: true });
     }
 
     if (name === 'browser_fill') {
       await guard(this.evalIn(tab, elementAction, { ...element, text: args.text }, 'replace'));
       await this.settle(tab, before, ctx, 0);
-      return this.state(tab, before, { filled: true }); // Never echo entered values.
+      return this.state(tab, before, signal, { filled: true }); // Never echo entered values.
     }
 
     if (name === 'browser_type' || name === 'browser_press') {
@@ -477,11 +481,11 @@ export class BrowserManager {
       if (name === 'browser_type') {
         await typeText(send, args.text);
         await this.settle(tab, before, ctx, 0);
-        return this.state(tab, before, { typed: true });
+        return this.state(tab, before, signal, { typed: true });
       }
       await pressKey(send, args.key);
       await this.settle(tab, before, ctx);
-      return this.state(tab, before, { pressed: args.key });
+      return this.state(tab, before, signal, { pressed: args.key });
     }
 
     if (name === 'browser_select') {
@@ -489,21 +493,21 @@ export class BrowserManager {
         this.evalIn(tab, elementAction, { ...element, values: args.values }, 'select'),
       );
       await this.settle(tab, before, ctx, 100);
-      return this.state(tab, before, result);
+      return this.state(tab, before, signal, result);
     }
 
     if (name === 'browser_scroll') {
       const result = await guard(
         this.evalIn(tab, elementAction, { ...element, deltaX: args.deltaX, deltaY: args.deltaY }, 'scroll'),
       );
-      return this.state(tab, before, result);
+      return this.state(tab, before, signal, result);
     }
 
     if (name === 'browser_evaluate') {
       const send = (method, params) => guard(this.cdpSend(tab, method, params));
       const result = await evaluateBounded(send, args.code);
       await this.settle(tab, before, ctx, 150);
-      return this.state(tab, before, result);
+      return this.state(tab, before, signal, result);
     }
     throw new Error('Unknown browser tool: ' + name);
   }

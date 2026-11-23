@@ -68,6 +68,13 @@ export async function startSite() {
       return; // never ends: the document keeps loading
     }
     if (request.url === '/stall') return; // never answers
+    if (request.url === '/busy') {
+      // Reaches DOMContentLoaded, then keeps the page's main thread busy for good.
+      response.writeHead(200, { 'content-type': 'text/html' });
+      return response.end(
+        '<!doctype html><title>Busy</title><p>busy</p><script>addEventListener("DOMContentLoaded", () => setTimeout(() => { for (;;) {} }, 0))</script>',
+      );
+    }
     const body = pages[request.url.split('?')[0]];
     if (!body) {
       response.writeHead(404, { 'content-type': 'text/html' });
