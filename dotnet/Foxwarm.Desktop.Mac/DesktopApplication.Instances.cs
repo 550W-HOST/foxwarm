@@ -57,7 +57,7 @@ internal sealed partial class DesktopApplication
     {
         // The item's own action answers Return when it is highlighted from the keyboard.
         var item = new NSMenuItem(title, (_, _) => activate());
-        item.View = new InstanceMenuRow(title, selected, symbol, trailing, activate);
+        item.View = new InstanceMenuRow(item, title, selected, symbol, trailing, activate);
         return item;
     }
 
@@ -168,8 +168,11 @@ internal sealed class InstanceMenuRow : NSView
     private readonly NSButton? button;
     private readonly Action activate;
     private readonly Action? trailingAction;
+    // The item that hosts this view; NSView.enclosingMenuItem isn't bound.
+    private readonly WeakReference<NSMenuItem> item;
 
     internal InstanceMenuRow(
+        NSMenuItem item,
         string title,
         bool selected,
         string symbol,
@@ -179,6 +182,7 @@ internal sealed class InstanceMenuRow : NSView
         : base(new CGRect(0, 0, Width, Height))
     {
         this.activate = activate;
+        this.item = new(item);
         AutoresizingMask = NSViewResizingMask.WidthSizable;
         check = NSImageView.FromImage(NSImage.GetSystemSymbol("checkmark", null)!);
         check.Frame = new CGRect(12, 4, 14, 16);
@@ -186,7 +190,7 @@ internal sealed class InstanceMenuRow : NSView
         icon = NSImageView.FromImage(NSImage.GetSystemSymbol(symbol, null)!);
         icon.Frame = new CGRect(30, 3, 18, 18);
         label = NSTextField.CreateLabel(title);
-        label.Font = NSFont.MenuFontOfSize(0);
+        label.Font = NSFont.MenuFontOfSize(0)!;
         label.LineBreakMode = NSLineBreakMode.TruncatingMiddle;
         label.Frame = new CGRect(54, 3, Width - 54 - (trailing is null ? 12 : 40), 18);
         label.AutoresizingMask = NSViewResizingMask.WidthSizable;
@@ -199,27 +203,29 @@ internal sealed class InstanceMenuRow : NSView
             button = NSButton.CreateButton(NSImage.GetSystemSymbol(action.Symbol, action.Tip)!, Trailing);
             button.Bordered = false;
             button.ToolTip = action.Tip;
-            button.SetAccessibilityLabel(action.Tip);
+            ((NSView)button).AccessibilityLabel = action.Tip;
             button.Frame = new CGRect(Width - 36, 1, 26, 22);
             button.AutoresizingMask = NSViewResizingMask.MinXMargin;
             AddSubview(button);
         }
-        SetAccessibilityElement(true);
-        SetAccessibilityRole(NSAccessibilityRoles.MenuItemRole);
-        SetAccessibilityLabel(selected ? title + ", current" : title);
+        AccessibilityElement = true;
+        AccessibilityRole = NSAccessibilityRoles.MenuItemRole!;
+        AccessibilityLabel = selected ? title + ", current" : title;
     }
 
-    private bool Highlighted => EnclosingMenuItem?.Highlighted == true;
+    private NSMenuItem? Item => item.TryGetTarget(out var target) ? target : null;
+
+    private bool Highlighted => Item?.Highlighted == true;
 
     public override void DrawRect(CGRect dirtyRect)
     {
         var highlighted = Highlighted;
         if (highlighted)
         {
-            NSColor.SelectedContentBackgroundColor.SetFill();
+            NSColor.SelectedContentBackground.SetFill();
             NSBezierPath.FromRoundedRect(new CGRect(5, 0, Bounds.Width - 10, Bounds.Height), 4, 4).Fill();
         }
-        var color = highlighted ? NSColor.SelectedMenuItemText : NSColor.LabelColor;
+        var color = highlighted ? NSColor.SelectedMenuItemText : NSColor.Label;
         if (label.TextColor != color)
             label.TextColor = color;
         check.ContentTintColor = color;
@@ -240,7 +246,7 @@ internal sealed class InstanceMenuRow : NSView
     // Closes the menu first; the action runs once its tracking loop has ended.
     private void Run(Action action)
     {
-        EnclosingMenuItem?.Menu?.CancelTracking();
+        Item?.Menu?.CancelTracking();
         NSApplication.SharedApplication.BeginInvokeOnMainThread(action);
     }
 }
