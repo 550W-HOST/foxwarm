@@ -27,7 +27,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 | `session.send` | target Session | — | send family: aliases, `<parent>`, `<main>`; external send (canonical) |
 | `session.deliver` | target Session | — | file family: an omitted target is the caller when no channel target is given |
 | `session.create` | target Agent (`targetAgent`), Node, parent (`parent`), prospective target (`targetSession`: its Agent, fixed ID when known, child relation) | `kind: session\|child\|timer\|source`, `placement: inherited\|explicit`, `runtime`, `fork` | `create_session`, `create_child_session`, a timer's creation-target probe (`kind: timer`), and `create_agent` main and missing-source Sessions |
-| `session.control` | target Session | `change: stop\|rename\|compact\|snapshot\|settings` | the per-tool `sessionId` |
+| `session.control` | target Session | `change: stop\|rename\|archive\|compact\|snapshot\|settings` | the per-tool `sessionId` |
 | `session.manage` | target Session, new parent, new Agent | `change: reparent\|move\|delete` | `update-parent`, `move_session`, `delete_session`, `create_agent` `convertSession` |
 | `history.read` | target Session | `mode: exact\|vector` | archive tools, exact recall, Session-scoped vector recall |
 | `history.search` | target Agent (always the caller's own) | — | vector `recall` with `scope: current-agent`; `recall` rejects `agentName` |
@@ -104,7 +104,7 @@ Notation:
 | `create_child_session` | `session.create(kind: child, parent: caller, targetAgent, node, prospective child)`; `[task.assign(task, prospective child)]` | P; Task-local rights; the final child ID is bound after allocation. Subsumed: initial message, fork. |
 | `create_session` | `session.create(kind: session, …)`; its Session is the caller's child when `parentSessionId` resolves to the caller | P; S each prompt file as `node:master/read` |
 | `task` (one branch per action) | `task.create(assigned)` with `[task.assign]` / `task.list` / `task.read` / `task.assign(caller)` for claim / `task.assign` / `task.update` / `task.complete` / `task.cancel` | P. Subsumed: notifications. |
-| `session` (one branch per action) | status: `session.view` / list: `session.list` / rename: `session.control(rename)` / set-parent, clear-parent: `session.manage(reparent)` | P |
+| `session` (one branch per action) | status: `session.view` / list: `session.list` / rename: `session.control(rename)` / archive, unarchive: `session.control(archive)` / set-parent, clear-parent: `session.manage(reparent)` | P |
 | `view_session` | `session.view` | P |
 | `stop_session`, `compact_session`, `refresh_session_snapshot`, `set_session_model`, `set_session_child_model`, `set_session_compact_threshold` | `session.control(stop\|compact\|snapshot\|settings)` | P |
 | `move_session` / `delete_session` | `session.manage(move)`, `[agent.create]`, `[env.read]`/`[env.write]` memory legs / `session.manage(delete)` | P |

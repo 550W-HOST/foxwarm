@@ -11,7 +11,9 @@ internal sealed partial class SessionToolExecutor
         ToolScriptDataBudget Budget,
         ToolScriptWaitScope WaitScope,
         string? RunId,
-        ToolScriptDetach? Detach = null
+        ToolScriptDetach? Detach = null,
+        // The model call that started the outermost script of this turn; null for unattended runs.
+        string? RootCallId = null
     );
 
     private readonly AsyncLocal<ScriptScope?> scriptScope = new();
@@ -109,6 +111,7 @@ internal sealed partial class SessionToolExecutor
         var nested = Programmatic;
         var literal = scriptScope.Value?.LiteralOwner ?? hosted.Id;
         var waitScope = scriptScope.Value?.WaitScope ?? new ToolScriptWaitScope();
+        var rootCallId = nested ? scriptScope.Value?.RootCallId : unattended ? null : rootCall?.CallId;
         // Only an attended top-level call can hand a background run off; timer, webhook and
         // nested runs keep the slice contract.
         var detach =
@@ -149,7 +152,8 @@ internal sealed partial class SessionToolExecutor
                     budget,
                     waitScope,
                     context.ToolScriptRunId,
-                    effectiveDetach
+                    effectiveDetach,
+                    rootCallId
                 );
                 try
                 {

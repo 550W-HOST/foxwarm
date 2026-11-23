@@ -322,7 +322,8 @@ internal sealed partial class SessionManager
         bool userInitiated = false,
         string runtime = "foxwarm",
         string? creatorCallId = null,
-        JsonObject? model = null
+        JsonObject? model = null,
+        string? scriptRootCallId = null
     )
     {
         var instructed = !string.IsNullOrEmpty(initialMessage);
@@ -375,7 +376,8 @@ internal sealed partial class SessionManager
                     initialNode: initialNode,
                     creatorCallId: creatorCallId,
                     instructed: instructed,
-                    suggestedModel: model
+                    suggestedModel: model,
+                    scriptRootCallId: scriptRootCallId
                 );
             else
             {

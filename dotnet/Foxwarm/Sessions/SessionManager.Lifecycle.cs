@@ -103,7 +103,9 @@ internal sealed partial class SessionManager
         string? initialNode = null,
         string? creatorCallId = null,
         bool instructed = false,
-        JsonObject? suggestedModel = null
+        JsonObject? suggestedModel = null,
+        // The model call whose script created this fork, when a script did (D-lifecycle-fork-dual-return).
+        string? scriptRootCallId = null
     )
     {
         ClaudeRuntimeState.RequireFoxwarm(parent, "Fork");
@@ -135,6 +137,12 @@ internal sealed partial class SessionManager
                 ? Array.FindIndex(tailCalls, call => SessionWait.Text(call["id"]) == creatorCallId)
                 : -1;
         var callVisible = creator >= 0;
+        // A script's create call is not a model call; the script's own call is closed with a
+        // result that says the script created this fork. Its instruction arrives as a message.
+        var scriptRoot =
+            creator < 0 && childMode && !userInitiated && !string.IsNullOrEmpty(scriptRootCallId)
+                ? Array.FindIndex(tailCalls, call => SessionWait.Text(call["id"]) == scriptRootCallId)
+                : -1;
         CreationModelPlan? modelPlan = null;
         var created = await WithCreationIdentityAsync(
             id,
@@ -244,6 +252,11 @@ internal sealed partial class SessionManager
                                                                             id,
                                                                             taskId,
                                                                             instructed
+                                                                        )
+                                                                    : index == scriptRoot
+                                                                        ? SessionBoundary.ForkScriptCall(
+                                                                            parent.Id,
+                                                                            id
                                                                         )
                                                                         : SessionBoundary.ForkSkippedCall(
                                                                             parent.Id

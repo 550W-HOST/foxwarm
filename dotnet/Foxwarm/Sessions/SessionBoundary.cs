@@ -440,6 +440,10 @@ internal static class SessionBoundary
             );
     }
 
+    // The result of the model call whose script created the fork: the script ran in the parent.
+    internal static string ForkScriptCall(string parent, string child) =>
+        $"This call ran a script in the parent session `{parent}`, and the script created this session, `{child}`, as its fork. The script's result went to the parent. Act on the next message you receive.";
+
     internal static string ForkSkippedCall(string parent) =>
         $"Not run in this session: this call runs only in the parent session `{parent}`.";
 

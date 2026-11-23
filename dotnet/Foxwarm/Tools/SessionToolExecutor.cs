@@ -1133,7 +1133,10 @@ internal sealed partial class SessionToolExecutor(
             // Only a direct model call is visible as such in the Session's own history.
             !unattended && !Programmatic
                 ? invocation.Value?.CallId
-                : null
+                : null,
+            // A call of an attended script that has not detached runs under the model call
+            // that started the script, which is still the last row of the history.
+            !unattended && !ScriptDetached ? scriptScope.Value?.RootCallId : null
         );
         if (
             !unattended

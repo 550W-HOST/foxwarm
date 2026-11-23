@@ -329,7 +329,9 @@
     {
       "path": "session archive",
       "summary": "Archive a Session.",
+      "help": "Archiving changes only the Session list, which shows an archived Session dimmed and after the others. The Session keeps working: it still receives messages and runs its timers. `ctl session unarchive` reverses it.",
       "ingress": [
+        "model",
         "user"
       ],
       "user": {
@@ -337,21 +339,35 @@
         "session": "optional"
       },
       "target": {
-        "local": "user"
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "archive"
+        }
       },
       "params": [
         {
           "name": "sessionId",
           "type": "string",
           "kind": "positional",
-          "help": "Session to archive. Defaults to this conversation's Session."
+          "help": "Session to archive. Defaults to this Session."
         }
-      ]
+      ],
+      "copy": {
+        "user": {
+          "help": "",
+          "params": {
+            "sessionId": "Session to archive. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session unarchive",
       "summary": "Unarchive a Session.",
+      "help": "Shows an archived Session among the others in the Session list again.",
       "ingress": [
+        "model",
         "user"
       ],
       "user": {
@@ -359,16 +375,28 @@
         "session": "optional"
       },
       "target": {
-        "local": "user"
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "unarchive"
+        }
       },
       "params": [
         {
           "name": "sessionId",
           "type": "string",
           "kind": "positional",
-          "help": "Session to unarchive. Defaults to this conversation's Session."
+          "help": "Session to unarchive. Defaults to this Session."
         }
-      ]
+      ],
+      "copy": {
+        "user": {
+          "help": "",
+          "params": {
+            "sessionId": "Session to unarchive. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session view",

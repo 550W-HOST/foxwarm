@@ -284,6 +284,17 @@ internal static partial class OperationDeclarations
                     "update-display-name",
                     Op("session.control", "targetSession=target-session", "with.change==rename")
                 ),
+                // Archiving is presentation of the Session list, controlled like its name.
+                Branch(
+                    "archive",
+                    "archive",
+                    Op("session.control", "targetSession=target-session", "with.change==archive")
+                ),
+                Branch(
+                    "unarchive",
+                    "unarchive",
+                    Op("session.control", "targetSession=target-session", "with.change==archive")
+                ),
                 Branch(
                     "set-parent",
                     "update-parent",

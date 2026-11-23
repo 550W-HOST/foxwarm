@@ -306,6 +306,22 @@ public sealed class RunnableSkillTests
     }
 
     [Fact]
+    public async Task Bundled_run_blocks_are_valid_and_the_advisor_takes_a_required_question()
+    {
+        using var c = new Catalog();
+        var skills = new Skills(c.Agents, Path.Combine(AppContext.BaseDirectory, "skills"));
+        var list = await skills.ListAsync("main");
+        Assert.All(list, skill => Assert.Null(skill.RunError));
+        var advisor = list.Single(skill => skill.Name == "advisor").Run!;
+        Assert.Equal("foreground", advisor.Mode);
+        Assert.Equal("question", Assert.Single(advisor.Args["required"]!.AsArray())!.GetValue<string>());
+        Assert.False(advisor.Args["additionalProperties"]!.GetValue<bool>());
+        Skills.ValidateArgs(advisor.Args, new JsonObject { ["question"] = "q", ["model"] = "m", ["effort"] = "high", ["waitSeconds"] = 60 });
+        var entry = await skills.ReadEntryAsync("advisor", "main");
+        Assert.Equal("global", entry.Info.SourceType);
+    }
+
+    [Fact]
     public void Skill_run_parses_as_run_skill_and_its_help_names_the_skill()
     {
         static JsonObject Args(string command, JsonObject? values = null, string? valuesJson = null)

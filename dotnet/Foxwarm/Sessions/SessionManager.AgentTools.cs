@@ -13,7 +13,8 @@ internal sealed partial class SessionManager
         CancellationToken cancellationToken = default,
         Action<string, string>? sessionMessageDelivered = null,
         string? toolScriptRunId = null,
-        string? modelCallId = null
+        string? modelCallId = null,
+        string? scriptRootCallId = null
     )
     {
         var previous = semanticCaller.Value;
@@ -26,7 +27,8 @@ internal sealed partial class SessionManager
                 args,
                 sessionMessageDelivered,
                 toolScriptRunId,
-                modelCallId
+                modelCallId,
+                scriptRootCallId
             );
         }
         finally
@@ -41,7 +43,8 @@ internal sealed partial class SessionManager
         JsonObject? args,
         Action<string, string>? sessionMessageDelivered,
         string? toolScriptRunId,
-        string? modelCallId
+        string? modelCallId,
+        string? scriptRootCallId
     )
     {
         try
@@ -349,7 +352,8 @@ internal sealed partial class SessionManager
                                 args.ContainsKey("runtime")
                             ),
                             creatorCallId: modelCallId,
-                            model: suggestedModel
+                            model: suggestedModel,
+                            scriptRootCallId: scriptRootCallId
                         );
                     if (taskId is null)
                     {
