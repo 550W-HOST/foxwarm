@@ -76,6 +76,15 @@ Read [Post-Upgrade Checks](references/POST-UPGRADE.md) from the target revision
 when planning an upgrade. Source, initialized configuration, and Agent memory
 have separate ownership; an update must not silently replace the latter two.
 
+When an Agent updates or restarts the installation it runs in, start the update
+or restart command with an ordinary `exec`. On the Main server, exec launches
+commands detached from Main, so the command outlives the restart. After Main
+starts again, it reconciles the recorded execution and delivers the completion
+event to the Session that started it, and a Session that was busy when Main
+stopped resumes automatically. Don't detach the command yourself with `nohup`,
+`setsid` or `&`: the exec then returns at once, and no completion event reports
+the real outcome.
+
 Use the installation's existing launch configuration, including its data root
 and environment. A source update, successful build, and running replacement are
 separate facts. Report which happened. Confirm the intended runtime payload and
