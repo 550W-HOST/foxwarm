@@ -82,6 +82,8 @@ Put this on a provider, or on an individual model object to override it for that
 
 The effort picker next to the message box shows the allowed levels for the Session's model. If a routed model does not accept the selected level, Foxwarm uses that model's default.
 
+Effort is part of every request, so changing it normally makes the provider process the whole conversation again instead of reading it from its prompt cache. Anthropic models that support [per-message effort](https://platform.claude.com/docs/en/build-with-claude/effort-per-message) can keep the cache: set `perMessageEffort: true` on the provider or model. Foxwarm then records each change in the conversation, and the new level applies from the next message; a change made while the model is working through tool calls applies once new input arrives. Switching the model, and switching to or from `none`, still start over. The setting has no effect when `extraFields` sets `thinking.type` to `between_tools` or `disabled`.
+
 ## Per-model settings
 
 These go on a model object (`- id: ...`) or, for all of a provider's models, on the provider:

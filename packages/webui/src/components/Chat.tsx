@@ -16,7 +16,7 @@ import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import RunningCommands from './RunningCommands'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
-import { isInternalTimelineMessage, type Message } from './chatShared'
+import { isEffortChangeMessage, isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -1018,9 +1018,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   // Conversation hides model bookkeeping; technical views retain the existing snapshot and rows.
   const timelineMessages = useMemo(() => {
+    const shown = visibleMessages.some(isEffortChangeMessage) ? visibleMessages.filter(message => !isEffortChangeMessage(message)) : visibleMessages
     const baseMessages = timelineView === 'conversation'
-      ? visibleMessages.filter(message => !isInternalTimelineMessage(message))
-      : snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+      ? shown.filter(message => !isInternalTimelineMessage(message))
+      : snapshotSystemMessage ? [snapshotSystemMessage, ...shown] : shown
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [timelineView, snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
   useLayoutEffect(() => keepAttachedBottom(true), [keepAttachedBottom, timelineMessages, queuedMessages])

@@ -40,6 +40,7 @@ public sealed record ResponsesClientOptions(
     internal double? HardTimeoutMs { get; init; }
     internal TimeProvider? Clock { get; init; }
     internal bool KeepReasoningOnError { get; init; }
+    internal bool PerMessageEffort { get; init; }
     internal ModelInteractionDiagnostics.Interaction.Attempt? Diagnostics { get; init; }
     internal Func<JsonObject, bool, Task<JsonObject>>? CommitAssistantSegment { get; init; }
     internal string? ProviderPromptCacheKey { get; init; }

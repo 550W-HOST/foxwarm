@@ -82,6 +82,8 @@ effort:
 
 输入框旁的推理强度菜单会显示当前模型允许的档位。如果路由选中的模型不接受所选档位，Foxwarm 会改用该模型的默认档位。
 
+推理强度是每个请求的一部分，所以修改它通常会让服务商重新处理整个对话，而不是从提示缓存读取。支持[按消息设置推理强度](https://platform.claude.com/docs/en/build-with-claude/effort-per-message)的 Anthropic 模型可以保留缓存：在服务商或模型上设置 `perMessageEffort: true`。Foxwarm 会把每次修改记录在对话中，新档位从下一条消息开始生效；如果修改时模型正在连续调用工具，则等到有新的输入时才生效。切换模型，或切换到 `none`、从 `none` 切回，仍会重新开始缓存。当 `extraFields` 把 `thinking.type` 设为 `between_tools` 或 `disabled` 时，这项设置不起作用。
+
 ## 单模型设置
 
 下面这些字段写在模型对象（`- id: ...`）上；写在服务商上时，对它的所有模型生效：

@@ -23,7 +23,15 @@ internal static class ConcreteRequestHistory
         {
             // Visibility belongs to canonical admission, before request-only metadata removal.
             if (!CanonicalMessage.IsVisible(original))
+            {
+                // Non-context except for the model that recorded it; the adapter decides use.
+                if (
+                    EffortChangeRecord.Read(original) is { } change
+                    && change.ModelId == destinationModelId
+                )
+                    prepared.Add(change.ToRow());
                 continue;
+            }
             var source =
                 SessionWait.Text(original["role"]) == "model"
                     ? SessionWait.Text((original["__meta"] as JsonObject)?["modelId"])

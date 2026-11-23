@@ -288,6 +288,7 @@ internal sealed partial class HostModels
                     "idleCompactMinContextPercent",
                     "disallowEmptyResponse",
                     "keepReasoningOnError",
+                    AnthropicMessageEffort.Option,
                     "webSearch",
                     "imageGeneration",
                     "sameProviderAs",

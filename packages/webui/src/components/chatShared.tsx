@@ -203,6 +203,8 @@ export interface MessagePart {
   phase?: 'commentary' | 'final_answer'
   text?: string
   system?: string
+  /** Request bookkeeping replayed by per-message-effort models; never displayed. */
+  effortChange?: { modelId: string; previousEffort: string; effort: string }
   thinking?: string
   providerMeta?: MessagePartProviderMeta
   functionCall?: FunctionCall
@@ -478,6 +480,11 @@ const isInternalSystemPart = (part: MessagePart): boolean => {
   return tag.attrs.kind === 'session-settings-changed'
     || (tag.attrs.kind === 'session-boundary' && tag.attrs.event === 'first-run')
 }
+
+/** A recorded effort change renders nothing for the model and has no timeline row in any view. */
+export const isEffortChangeMessage = (message: Message): boolean => (
+  message.role === 'user' && message.modelVisible === false && message.parts.length === 1 && !!message.parts[0].effortChange
+)
 
 export const isInternalTimelineMessage = (message: Message): boolean => {
   if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true
