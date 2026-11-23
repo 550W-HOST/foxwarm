@@ -864,7 +864,7 @@
     {
       "path": "session model",
       "summary": "Show or switch the model and effort of this Session or a descendant Session.",
-      "help": "A change applies from the Session's next model request, including later requests of a turn already in progress, and starts a new prompt cache.",
+      "help": "A change applies from the Session's next model request, including later requests of a turn already in progress, and starts a new prompt cache. On a model with perMessageEffort, an effort-only change keeps the prompt cache, and the provider may apply it only from the Session's next input rather than within a running tool loop.",
       "ingress": [
         "model",
         "user"

@@ -182,6 +182,30 @@ public sealed class ViewSessionTests
     }
 
     [Fact]
+    public async Task Effort_change_records_preview_as_one_non_context_line_in_view_and_recall()
+    {
+        await using var f = await OutboundMcpFixture.CreateAsync();
+        await ForkClearLifecycleTests.AppendAsync(
+            f.First,
+            Text("before"),
+            new EffortChangeRecord("a/wire", "high", "low").ToRow(),
+            Text("after")
+        );
+        var lines = Output(await View(f)).Split('\n');
+        var at = Array.FindIndex(lines, entry => entry.Contains("[effort high → low]"));
+        Assert.True(at > 0, string.Join('\n', lines));
+        Assert.Single(lines, entry => entry.Contains("[effort "));
+        Assert.Contains("user [non-context]:", lines[at - 1] + lines[at]);
+        var recalled = await ArchiveRecallTool.ExecuteAsync(
+            f.Manager,
+            f.First,
+            new JsonObject { ["target"] = "msg#2", ["previewLength"] = 2000 }
+        );
+        Assert.Contains("[effort high → low]", Output(recalled));
+        Assert.Contains("[non-context]", Output(recalled));
+    }
+
+    [Fact]
     public async Task Names_show_each_operation_once_with_errors_and_neutral_page_boundaries()
     {
         await using var f = await OutboundMcpFixture.CreateAsync();

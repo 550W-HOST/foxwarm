@@ -122,6 +122,11 @@ internal sealed partial class ContextPreviewRenderer
             )
                 AddText(visible);
             if (
+                part.ContainsKey(EffortChangeRecord.PartKey)
+                && EffortChangeRecord.Read(message) is { } change
+            )
+                AddText($"[effort {change.PreviousEffort} → {change.Effort}]");
+            if (
                 SessionWait.Text(part["text"]) is string text
                 && !text.Contains(
                     "--- RELEVANT MEMORY SNIPPETS (RAG) ---",
