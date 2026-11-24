@@ -549,8 +549,10 @@ public sealed class SeparateImageGenerationTests
         Assert.Null(body["previous_response_id"]);
         Assert.Null(body["prompt_cache_key"]);
         Assert.Null(body["conversation"]);
-        Assert.Empty(body["input"]!.AsArray());
-        Assert.Equal("image instructions", body["instructions"]!.GetValue<string>());
+        // The image request leads with its own developer prompt; the ordinary input and
+        // instructions overrides reach neither that item nor a top-level field.
+        Assert.Equal("image instructions", ResponsesRequestShape.SystemPrompt(body));
+        Assert.Single(body["input"]!.AsArray());
         Assert.Equal(
             "image_generation",
             Assert.Single(body["tools"]!.AsArray())!["type"]!.GetValue<string>()

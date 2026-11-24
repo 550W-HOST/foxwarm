@@ -352,16 +352,20 @@ public static partial class ResponsesRequestSerializer
             || Math.Floor(maxOutputTokens) != maxOutputTokens
         )
             throw new ArgumentOutOfRangeException(nameof(maxOutputTokens));
+        var input = ConvertHistoryWithImages(
+            history,
+            concreteModelId,
+            images,
+            compatibility: compatibility
+        );
+        // The system prompt leads `input` as a developer message rather than top-level
+        // `instructions`, which newer models place after `input`, outside the cached prefix.
+        if (instructions.Length > 0)
+            input.Insert(0, DeveloperMessage(instructions));
         var data = new JsonObject
         {
             ["model"] = requestModel,
-            ["instructions"] = instructions,
-            ["input"] = ConvertHistoryWithImages(
-                history,
-                concreteModelId,
-                images,
-                compatibility: compatibility
-            ),
+            ["input"] = input,
             ["tools"] = tools is null ? BuildToolDefinitions() : tools.DeepClone(),
             ["tool_choice"] = "auto",
             ["parallel_tool_calls"] = true,
@@ -381,6 +385,16 @@ public static partial class ResponsesRequestSerializer
         }
         return data;
     }
+
+    private static JsonObject DeveloperMessage(string instructions) =>
+        new()
+        {
+            ["type"] = "message",
+            ["role"] = "developer",
+            ["content"] = new JsonArray(
+                new JsonObject { ["type"] = "input_text", ["text"] = instructions }
+            ),
+        };
 
     internal static JsonArray BuildToolDefinitions() =>
         new(

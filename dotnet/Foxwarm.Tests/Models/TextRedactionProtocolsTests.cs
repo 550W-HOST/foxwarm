@@ -31,7 +31,7 @@ public sealed class TextRedactionProtocolsTests
                     key = (
                         protocol == "anthropic" ? body["system"]
                         : protocol == "openai-completions" ? body["messages"]![0]!["content"]
-                        : body["instructions"]
+                        : JsonValue.Create(ResponsesRequestShape.SystemPrompt(body))
                     )!.GetValue<string>();
                     Assert.StartsWith(TextRedactor.Prefix, key);
                     Assert.Equal(opaque, body["opaque"]!.GetValue<string>());

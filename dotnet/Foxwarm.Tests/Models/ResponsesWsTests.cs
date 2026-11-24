@@ -186,6 +186,78 @@ public sealed class ResponsesWsTests
     }
 
     [Fact]
+    public async Task System_prompt_leads_the_chain_and_a_changed_prompt_starts_a_fresh_request()
+    {
+        await using var peer = await WsPeer.StartAsync();
+        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        ResponsesWsChatService Service(string prompt) =>
+            new(
+                Options(peer.Uri) with
+                {
+                    Instructions = prompt,
+                },
+                transport,
+                ModelRequestScope.Canonical,
+                false,
+                "lineage"
+            );
+        async Task Turn(ResponsesWsChatService service, List<JsonObject> history, string text)
+        {
+            history.Add(Message("user", text));
+            var result = await service.ChatAsync("same-session", history, CancellationToken.None);
+            history.Add(result.AssistantMessage!);
+            result.FinalizeHistory([result.AssistantMessage!]);
+        }
+
+        var history = new List<JsonObject>();
+        await Turn(Service("prompt A"), history, "first");
+        // Unchanged prompt: the stored chain covers the developer item, so only the suffix goes.
+        await Turn(Service("prompt A"), history, "second");
+        // Changed prompt: the first input item differs, so no stored prefix matches.
+        await Turn(Service("prompt B"), history, "third");
+
+        Assert.Equal(3, peer.Requests.Count);
+        var first = peer.Requests[0];
+        Assert.False(first.ContainsKey("previous_response_id"));
+        Assert.Equal("prompt A", ResponsesRequestShape.SystemPrompt(first));
+        Assert.Equal(2, first["input"]!.AsArray().Count);
+
+        var chained = peer.Requests[1];
+        Assert.Null(chained["instructions"]);
+        Assert.Equal("response-1", chained["previous_response_id"]!.GetValue<string>());
+        var suffix = Assert.Single(chained["input"]!.AsArray())!;
+        Assert.Equal("user", suffix["role"]!.GetValue<string>());
+
+        var fresh = peer.Requests[2];
+        Assert.False(fresh.ContainsKey("previous_response_id"));
+        Assert.Equal("prompt B", ResponsesRequestShape.SystemPrompt(fresh));
+        Assert.Equal(6, fresh["input"]!.AsArray().Count);
+        Assert.Equal(2, peer.Connections);
+    }
+
+    [Fact]
+    public void Fingerprint_prefixes_cover_the_leading_developer_prompt()
+    {
+        JsonObject Body(string prompt) =>
+            ResponsesRequestSerializer.BuildRequest(
+                [Message("user", "same")],
+                "m",
+                "ws/m",
+                prompt,
+                713
+            );
+        var a = ResponsesWsState.Fingerprint(Body("prompt A"));
+        var again = ResponsesWsState.Fingerprint(Body("prompt A"));
+        var b = ResponsesWsState.Fingerprint(Body("prompt B"));
+        // The prompt is no longer part of the invariant; it is the first prefix item.
+        Assert.Equal(a.Invariant, b.Invariant);
+        Assert.Equal(2, a.Final.ItemCount);
+        Assert.Equal(a.Prefixes, again.Prefixes);
+        Assert.NotEqual(a.Prefixes[0], b.Prefixes[0]);
+        Assert.DoesNotContain(b.Prefixes, prefix => a.Prefixes.Contains(prefix));
+    }
+
+    [Fact]
     public async Task Pending_caller_stop_discards_without_poisoning_other_sessions_and_lowlevel_never_reuses()
     {
         await using var peer = await WsPeer.StartAsync();

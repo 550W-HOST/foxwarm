@@ -246,8 +246,8 @@ public sealed partial class SessionCommandEffectsTests
                 sideJournal["promptCacheKeyHash"]!.ToString()
             );
             Assert.Equal(
-                requests[0]["instructions"]!.ToString(),
-                requests[1]["instructions"]!.ToString()
+                ResponsesRequestShape.SystemPrompt(requests[0]),
+                ResponsesRequestShape.SystemPrompt(requests[1])
             );
             Assert.True(JsonNode.DeepEquals(requests[0]["tools"], requests[1]["tools"]));
             Assert.DoesNotContain("detached result", requests[2]["input"]!.ToJsonString());

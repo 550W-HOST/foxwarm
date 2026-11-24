@@ -166,9 +166,18 @@ public sealed class ProcessRestartTests
             var thirdRequest = JsonNode
                 .Parse((await server.RequestAt(2).WaitAsync(TimeSpan.FromSeconds(5))).Body)!
                 .AsObject();
+            ResponsesRequestShape.SystemPrompt(thirdRequest);
             var thirdInput = thirdRequest["input"]!.AsArray();
             Assert.Equal(
-                new[] { "message", "function_call", "function_call_output", "message", "message" },
+                new[]
+                {
+                    "message",
+                    "message",
+                    "function_call",
+                    "function_call_output",
+                    "message",
+                    "message",
+                },
                 thirdInput.Select(item => item!["type"]!.GetValue<string>())
             );
             var thirdJson = thirdInput.ToJsonString();

@@ -419,7 +419,7 @@ public sealed partial class RequestPrefixTests
     }
 
     private static string Instructions(JsonObject request) =>
-        request["instructions"]!.GetValue<string>();
+        ResponsesRequestShape.SystemPrompt(request);
 
     private static string Event(JsonObject response) =>
         "data: "

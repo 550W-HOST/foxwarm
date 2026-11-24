@@ -165,15 +165,16 @@ public sealed class SessionAutoTitleTests
         );
         Assert.Contains("Check Nginx Config", states);
         var title = JsonNode.Parse((await peer.RequestAt(1)).Body)!.AsObject();
-        Assert.Equal(SessionAutoTitle.Instructions, title["instructions"]?.ToString());
+        Assert.Equal(SessionAutoTitle.Instructions, ResponsesRequestShape.SystemPrompt(title));
         Assert.True(title["tools"] is null || title["tools"]!.AsArray().Count == 0);
+        // The system prompt leads; the title request carries one transcript item after it.
+        var transcript = title["input"]!.AsArray().Skip(1).ToArray();
         var input = string.Concat(
-            title["input"]!
-                .AsArray()
+            transcript
                 .SelectMany(item => item!["content"]!.AsArray())
                 .Select(part => part!["text"]?.ToString())
         );
-        Assert.Single(title["input"]!.AsArray());
+        Assert.Single(transcript);
         Assert.Contains("How do I check my nginx config?", input);
         Assert.Contains("Use `nginx -t` first.", input);
         Assert.DoesNotContain("foxwarm-message", input);

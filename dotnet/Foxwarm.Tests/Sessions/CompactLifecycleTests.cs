@@ -1448,7 +1448,7 @@ public sealed partial class CompactLifecycleTests
             {
                 Interlocked.Increment(ref PlannerRequests);
                 PlanRequestModel = SessionWait.Text(owned["model"]);
-                PlanInstructions = SessionWait.Text(owned["instructions"]);
+                PlanInstructions = ResponsesRequestShape.SystemPrompt(owned);
                 PlanReached.TrySetResult();
                 await plan.Task.WaitAsync(cancellationToken);
                 if (FailPlan)
