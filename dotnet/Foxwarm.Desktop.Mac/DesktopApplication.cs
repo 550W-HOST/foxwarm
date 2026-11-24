@@ -21,6 +21,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
     private WKWebView? view;
     private Navigation? navigation;
     private BrowserUi? browserUi;
+    private DesktopDownloads? downloads;
     private WKContentRuleList? ruleList;
     private WKContentRuleListStore? rulesStore;
     private readonly List<DesktopPopupWindow> popups = [];
@@ -139,6 +140,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             frame!.Configure(webConfiguration, scope);
             navigation = new Navigation(this, frame, null);
             browserUi = new BrowserUi(this);
+            downloads = new DesktopDownloads(() => window);
             view = new WKWebView(window!.ContentView!.Bounds, webConfiguration)
             {
                 AutoresizingMask =
@@ -362,6 +364,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         if (!exiting)
         {
             exiting = true;
+            downloads?.Close();
             CloseAppWindows();
             _ = StopAsync(sender);
         }
@@ -427,7 +430,19 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             Action<WKNavigationActionPolicy> decisionHandler
         )
         {
-            var target = DesktopNavigation.Classify(owner.scope!, action.Request.Url?.AbsoluteString);
+            var url = action.Request.Url?.AbsoluteString;
+            // A link with the download attribute, including blob: and data: links that pages
+            // build; any other download request falls through to the navigation policy.
+            if (
+                action.ShouldPerformDownload
+                && !owner.exiting
+                && DesktopDownloadPolicy.Allows(owner.scope!, url, webView.Url?.AbsoluteString)
+            )
+            {
+                decisionHandler(WKNavigationActionPolicy.Download);
+                return;
+            }
+            var target = DesktopNavigation.Classify(owner.scope!, url);
             var mainFrame = action.TargetFrame?.MainFrame != false;
             if (target is DesktopTarget.App or DesktopTarget.Blank)
             {
@@ -442,6 +457,52 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             if (target == DesktopTarget.Browser)
                 OpenExternal(action.Request.Url);
             popup?.LeftApp();
+        }
+
+        // A response marked as an attachment, or one WebKit can't show, is a download.
+        public override void DecidePolicy(
+            WKWebView webView,
+            WKNavigationResponse navigationResponse,
+            Action<WKNavigationResponsePolicy> decisionHandler
+        )
+        {
+            var response = navigationResponse.Response;
+            if (
+                navigationResponse.CanShowMimeType
+                && !DesktopDownloadPolicy.IsAttachment(Header(response, "Content-Disposition"))
+            )
+            {
+                decisionHandler(WKNavigationResponsePolicy.Allow);
+                return;
+            }
+            decisionHandler(
+                !owner.exiting
+                && DesktopDownloadPolicy.Allows(owner.scope!, response.Url?.AbsoluteString, webView.Url?.AbsoluteString)
+                    ? WKNavigationResponsePolicy.Download
+                    : WKNavigationResponsePolicy.Cancel
+            );
+        }
+
+        public override void NavigationActionDidBecomeDownload(
+            WKWebView webView,
+            WKNavigationAction navigationAction,
+            WKDownload download
+        ) => owner.downloads!.Start(download);
+
+        public override void NavigationResponseDidBecomeDownload(
+            WKWebView webView,
+            WKNavigationResponse navigationResponse,
+            WKDownload download
+        ) => owner.downloads!.Start(download);
+
+        private static string? Header(NSUrlResponse response, string name)
+        {
+            if (response is not NSHttpUrlResponse http)
+                return null;
+            foreach (var (key, value) in http.AllHeaderFields)
+                if (string.Equals(key.ToString(), name, StringComparison.OrdinalIgnoreCase))
+                    return value.ToString();
+            return null;
         }
     }
 
