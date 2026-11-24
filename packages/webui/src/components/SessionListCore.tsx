@@ -754,7 +754,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     if (!bounded) return
     relationGenerationRef.current += 1; setContextMenu(null); setDeleteConfirm(null); setArchiveConfirm(null); setRelationRows(new Map())
     descendantSummaryGenerationRef.current.clear(); setDescendantSummaries(new Map()); setDescendantSummaryLoading(new Set())
-  }, [viewMode, filterText, resolvedCurrentSessionId, boundedOwnershipKey])
+  }, [viewMode, filterText, resolvedCurrentSessionId])
+  // Rows arriving or leaving elsewhere in the list keep an open menu or dialog; only its own row leaving closes it.
+  useEffect(() => {
+    if (!bounded) return
+    const present = new Set(sessions.map(session => session.id))
+    if (contextMenu && !present.has(contextMenu.sessionId)) setContextMenu(null)
+    if (deleteConfirm && !present.has(deleteConfirm)) setDeleteConfirm(null)
+    if (archiveConfirm && !present.has(archiveConfirm)) setArchiveConfirm(null)
+  }, [boundedOwnershipKey])
   useEffect(() => {
     const active = new Set([contextMenu?.sessionId, deleteConfirm, archiveConfirm].filter((id): id is string => !!id))
     if (!contextMenu) { relationGenerationRef.current += 1; setRelationRows(new Map()) }
@@ -764,9 +772,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [contextMenu?.sessionId, deleteConfirm, archiveConfirm])
   useEffect(() => {
     if (!bounded) return
-    descendantSummaryGenerationRef.current.clear()
-    setDescendantSummaries(new Map())
-    setDescendantSummaryLoading(new Set())
+    // Open lifecycle actions reload their totals. The last total stays shown, so the descendant choice survives,
+    // and Delete waits for the reload; the new generation fences answers requested before the invalidation.
     if (contextMenu) void loadDescendantSummary(contextMenu.sessionId)
     if (deleteConfirm) void loadDescendantSummary(deleteConfirm)
     if (archiveConfirm) void loadDescendantSummary(archiveConfirm)
