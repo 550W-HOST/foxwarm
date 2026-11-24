@@ -82,6 +82,9 @@ internal sealed class DesktopNative : IDisposable
 
     internal static void ShowMessage(string text) => MessageBox(0, text, "Foxwarm", 0x40);
 
+    /// <summary>A warning owned by <paramref name="owner"/>, e.g. a failed download.</summary>
+    internal static void ShowWarning(nint owner, string text) => MessageBox(owner, text, "Foxwarm", 0x30);
+
     private nint WindowProcedure(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)
     {
         if (message == taskbarCreatedMessage)

@@ -5,7 +5,7 @@ namespace Foxwarm;
 /// <summary>
 /// Download rules shared by the Desktop hosts (D-desktop-downloads): which requests may
 /// become downloads, and the file name a download is offered under. The macOS host applies
-/// them to WebKit's downloads; WebView2 applies its own defaults on Windows.
+/// them to WebKit's downloads, the Windows host to WebView2's.
 /// </summary>
 internal static class DesktopDownloadPolicy
 {

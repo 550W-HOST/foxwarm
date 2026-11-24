@@ -14,6 +14,7 @@ namespace Foxwarm.Desktop;
 internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri scope)
 {
     private readonly List<DesktopPopupWindow> popups = [];
+    private readonly DesktopDownloads downloads = new();
     private bool closing;
 
     internal CoreWebView2Environment Environment => environment;
@@ -32,8 +33,8 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
     private Uri scope = scope;
 
     // The permissions a download from a page of the scope needs (D-desktop-downloads): a page's
-    // second and later downloads, and writing into a folder the user picked in the system
-    // dialog, which Code's Download… uses for folders and large files.
+    // second and later downloads (WebView2 blocks them before any download event), and writing
+    // into a folder or file the user picked in the system dialog, which Code's Download… uses.
     private static readonly CoreWebView2PermissionKind[] DownloadPermissions =
     [
         CoreWebView2PermissionKind.MultipleAutomaticDownloads,
@@ -58,6 +59,7 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
         {
             profile = core.Profile;
             AllowDownloads();
+            DesktopDownloads.UseFolder(profile, Path.Combine(environment.UserDataFolder, "Downloads"));
         }
         core.NavigationStarting += (_, e) =>
         {
@@ -70,6 +72,7 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
             leftApp?.Invoke();
         };
         core.NewWindowRequested += (_, e) => OpenWindow(e, owner);
+        downloads.Attach(core, owner, () => Scope);
         // Every other permission is refused.
         core.PermissionRequested += (_, e) =>
             e.State =
@@ -92,6 +95,7 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
     internal void CloseAll()
     {
         closing = true;
+        downloads.Close();
         CloseWindows();
     }
 
