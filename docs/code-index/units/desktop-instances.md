@@ -1,6 +1,6 @@
 # Unit: Desktop instances
 
-Files: `dotnet/Foxwarm/DesktopInstances.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.Local.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.Instances.cs`, `dotnet/Foxwarm.Desktop.Mac/DesktopApplication.Local.cs`, `dotnet/Foxwarm.Desktop.Mac/DesktopApplication.Instances.cs`, `packages/webui/src/components/InstanceBrand.tsx`, `dotnet/Foxwarm.Tests/Channels/DesktopInstancesTests.cs`, `packages/webui/test/instanceBrand.test.mjs`
+Files: `dotnet/Foxwarm/DesktopInstances.cs`, `dotnet/Foxwarm/DesktopAuthCookie.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.Local.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.Instances.cs`, `dotnet/Foxwarm.Desktop.Mac/DesktopApplication.Local.cs`, `dotnet/Foxwarm.Desktop.Mac/DesktopApplication.Instances.cs`, `packages/webui/src/components/InstanceBrand.tsx`, `dotnet/Foxwarm.Tests/Channels/DesktopInstancesTests.cs`, `dotnet/Foxwarm.Tests/Channels/DesktopAuthCookieTests.cs`, `packages/webui/test/instanceBrand.test.mjs`
 Secondary files: `dotnet/Foxwarm/DesktopNavigation.cs`, `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.cs`, `dotnet/Foxwarm.Desktop/DesktopWebViews.cs`, `dotnet/Foxwarm.Desktop/DesktopFrame.cs`, `dotnet/Foxwarm.Desktop/DesktopNative.cs`, `dotnet/Foxwarm.Desktop/DesktopPopupWindow.cs`, `dotnet/Foxwarm.Desktop.Mac/DesktopApplication.cs`, `dotnet/Foxwarm.Desktop.Mac/DesktopFrame.cs`, `dotnet/Foxwarm.Desktop.Mac/DesktopPopupWindow.cs`, `dotnet/Foxwarm.Tests/Channels/DesktopNavigationTests.cs`, `packages/webui/src/components/Sidebar.tsx`, `packages/webui/src/windowFrame.ts`, `packages/webui/src/index.css`, `packages/webui/test/windowFrame.e2e.mjs`
 
 ## Purpose
@@ -25,6 +25,10 @@ The Windows and macOS Desktop apps switch between instances: the local instance,
 
 The selected instance is the app's scope: its origin plus its base path (`/` for the local instance, for example `/foxwarm/` for a remote behind a path prefix). `DesktopNavigation.IsApp` holds `<base>` without its slash and everything below `<base>/`, case-sensitively, but not a sibling such as `/foxwarm-other/`. [D-desktop-app-windows](./desktop-windows.md#d-desktop-app-windows) and [D-window-frame](./webui-window-frame.md#d-window-frame) apply to the scope rather than to the local origin: pages and new windows in it stay in the app, everything else goes to the default browser, and HTTP(S) loads outside it are blocked. The document-start frame state is installed only in top-level documents of the scope (`DesktopNavigation.ScopeCondition`), and both page messages are accepted only from them. A switch closes the previous instance's app windows, moves the scope (WebView2 resource filter and document script; WebKit content rules and user script) and then navigates. Deployment-relative WebUI paths keep working under a base path because the scope's own pages and resources are under it.
 
+### Local sign-in cookie
+
+Each start of local Main posts the token to its `/api/auth`, and the host then puts the sign-in cookie into the app's one web view profile (`DesktopAuthCookie`): `foxwarm_token` with the escaped token, the local endpoint's host and path, 365 days, HttpOnly, Secure only over HTTPS, and SameSite=Lax, the same SameSite value as the WebUI's own sign-in cookie ([webui-login](./webui-login.md)). Remote instances keep their own cookies on their own hosts; the host never touches them. [2026-11-24] Coordinator decision: Lax, not Strict, on both hosts. WebKit on macOS 26 withholds a Strict cookie from a client `loadRequest` issued while the view shows another site's document, which is every switch from a remote back to the local instance, so the local document request arrived without it and Main served the sign-in page. macOS 15's WebKit still sends it. Lax still keeps the cookie off cross-site subresource requests and POSTs.
+
 ### Fallback entries and failures
 
 A remote whose WebUI predates the click message, or that does not load, has no brand row. The native entries always work: the **Instances** menu in the macOS menu bar, and on Windows **Ctrl+Shift+F1** and the tray menu's **Switch instance…**. Ctrl+Shift+F1 is a system hot key registered only while the main window is active (`DesktopNative.ActivateShortcut`), because the focused web view keeps key presses from XAML keyboard accelerators; another application may already own it, in which case the tray entry remains. It is bound by neither the WebUI (its own shortcuts and the terminal's Ctrl and Ctrl+Shift keys) nor Code's default keybindings, and on keyboards with AltGr it is not a character key.
@@ -34,6 +38,7 @@ When the main window's document fails to load (unreachable host, DNS, TLS, refus
 ## Function index
 
 - `DesktopInstances.Load/Parse/Select/Add/Remove/ToJson` — the host settings file.
+- `DesktopAuthCookie.For(endpoint, token, now)` — the local sign-in cookie's properties.
 - `DesktopInstances.Normalize(input)`, `Label(url)`, `RunningSessionsText(count)` — typed URLs, menu labels, stop confirmation detail.
 - `DesktopInstanceMenuRequest.Parse(json)` — the brand row's message.
 - `DesktopNavigation.IsApp/InBasePath/ScopeCondition` — the scope.
@@ -44,6 +49,7 @@ When the main window's document fails to load (unreachable host, DNS, TLS, refus
 ## Tests
 
 - `DesktopInstancesTests.cs`: URL normalization and rejection, labels, settings round trip through the file (remove the selected remote selects local, no temporary file left), unusable settings, the stop confirmation counts, the menu message's exact schema against frame-region messages.
+- `DesktopAuthCookieTests.cs`: the local sign-in cookie's name, escaped value, host, path, lifetime, Secure only over HTTPS, and SameSite=Lax.
 - `DesktopNavigationTests.cs`: a remote scope with a base path (in, sibling paths, other scheme, port and case), its frame selection, and the document condition with escaping.
 - `instanceBrand.test.mjs`: emoji and name or the logo and name, each field on its own, the button only with a host, and the message sent only through an existing top-level host channel.
 - `windowFrame.e2e.mjs` brand-row cases: the browser shows the configured emoji and name as a plain heading, light and dark; under a Windows host the brand is a centred title-row button outside every drag rectangle, and one click sends exactly one `instance-menu` message with its rectangle; after the macOS lights the default shows the logo only and a configured instance its emoji and a name that fits, light and dark; a name that doesn't fit (with an emoji, and a long one with the logo) leaves the glyph alone in a button that still has the instance's accessible name, the freed width drags, and widening the sidebar brings the name back into the button until it is narrowed again; under Windows a long name stays truncated. Every case holds the region contract.

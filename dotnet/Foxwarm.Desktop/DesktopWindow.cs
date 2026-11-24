@@ -319,16 +319,17 @@ internal sealed partial class DesktopWindow : Window
             "api/auth", new JsonObject { ["token"] = token }, MainJsonContext.Text.JsonObject
         );
         response.EnsureSuccessStatusCode();
+        var auth = DesktopAuthCookie.For(endpoint, token, DateTimeOffset.UtcNow);
         var cookie = core!.CookieManager.CreateCookie(
-            "foxwarm_token",
-            Uri.EscapeDataString(token),
-            endpoint.Host,
-            endpoint.AbsolutePath
+            DesktopAuthCookie.Name,
+            auth.Value,
+            auth.Domain,
+            auth.Path
         );
         cookie.IsHttpOnly = true;
-        cookie.IsSecure = endpoint.Scheme == Uri.UriSchemeHttps;
-        cookie.SameSite = CoreWebView2CookieSameSiteKind.Strict;
-        cookie.Expires = DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
+        cookie.IsSecure = auth.Secure;
+        cookie.SameSite = Enum.Parse<CoreWebView2CookieSameSiteKind>(DesktopAuthCookie.SameSite);
+        cookie.Expires = auth.Expires.ToUnixTimeSeconds();
         core.CookieManager.AddOrUpdateCookie(cookie);
     }
 }

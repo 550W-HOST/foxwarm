@@ -96,16 +96,20 @@ internal sealed partial class DesktopApplication
             MainJsonContext.Text.JsonObject
         );
         response.EnsureSuccessStatusCode();
+        var auth = DesktopAuthCookie.For(endpoint, token, DateTimeOffset.UtcNow);
         using var properties = new NSMutableDictionary
         {
-            [NSHttpCookie.KeyName] = new NSString("foxwarm_token"),
-            [NSHttpCookie.KeyValue] = new NSString(Uri.EscapeDataString(token)),
-            [NSHttpCookie.KeyDomain] = new NSString(endpoint.Host),
-            [NSHttpCookie.KeyPath] = new NSString(endpoint.AbsolutePath),
-            [NSHttpCookie.KeyExpires] = NSDate.FromTimeIntervalSinceNow(365 * 24 * 60 * 60),
-            [NSHttpCookie.KeySameSitePolicy] = NSHttpCookie.KeySameSiteStrict,
+            [NSHttpCookie.KeyName] = new NSString(DesktopAuthCookie.Name),
+            [NSHttpCookie.KeyValue] = new NSString(auth.Value),
+            [NSHttpCookie.KeyDomain] = new NSString(auth.Domain),
+            [NSHttpCookie.KeyPath] = new NSString(auth.Path),
+            [NSHttpCookie.KeyExpires] = (NSDate)auth.Expires.UtcDateTime,
+            // NSHTTPCookieSameSiteLax is "lax".
+            [NSHttpCookie.KeySameSitePolicy] = new NSString(DesktopAuthCookie.SameSite.ToLowerInvariant()),
             [new NSString("HttpOnly")] = new NSString("TRUE"),
         };
+        if (auth.Secure)
+            properties[NSHttpCookie.KeySecure] = new NSString("TRUE");
         using var cookie = new NSHttpCookie(properties);
         await WKWebsiteDataStore.DefaultDataStore.HttpCookieStore.SetCookieAsync(cookie);
     }
