@@ -163,10 +163,16 @@ test('the served bundled workbench uses Code’s own WCO layout only with a top-
     await win.waitForSelector('.menubar-menu-items-holder', { visible: true })
     const menuRect = await win.$eval('.menubar-menu-items-holder', element => element.getBoundingClientRect().toJSON())
     assert.ok((await snapshot(win)).report.regions.every(region => !intersects(region, menuRect)))
-    const menuItem = await win.waitForFunction(() => {
+    // Code's menu ignores a mouse-up on an item until a 100 ms timer, started when the item renders, has run. A busy
+    // page delivers queued input before such an overdue timer, so elapsed time alone does not make the item clickable.
+    // HTML runs equal-delay timers in the order they were started: once a timer started after the item rendered
+    // has run, so has the item's own, and the click below reaches its activation.
+    const menuItem = await win.waitForFunction(async () => {
       const item = [...document.querySelectorAll('.menubar-menu-items-holder [role="menuitem"]')]
         .find(element => element.textContent.includes('New Text File'))
       if (!item) return false
+      await new Promise(resolve => setTimeout(resolve, 100))
+      if (!item.isConnected) return false
       const bounds = item.getBoundingClientRect()
       const x = bounds.left + 14, y = bounds.top + bounds.height / 2
       return item.contains(document.elementFromPoint(x, y)) && { x, y }
