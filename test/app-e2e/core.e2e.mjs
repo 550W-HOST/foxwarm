@@ -1,5 +1,6 @@
 import { appE2eRuntime } from './runtime.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
+import { responsesHistory, responsesSystemPrompt } from '../../packages/webui/test/ctlModelCalls.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -342,6 +343,10 @@ test('Responses WebSocket reuses one completed prefix, reconnects with full repl
   })
   assert.equal(one.connectionId, two.connectionId)
   assert.notEqual(two.connectionId, three.connectionId)
+  // Full requests lead with the system prompt, unchanged across the reconnect; the continuation
+  // sends only its suffix.
+  for (const full of [one, child]) assert.match(responsesSystemPrompt(full.body), /Synthetic full-application E2E system prompt\./)
+  assert.deepEqual(three.body.input[0], one.body.input[0])
   assert.equal(two.body.previous_response_id, 'ws-resp-one')
   assert.equal(two.body.input.length, 1)
   const secondInput = semanticInput(two.body.input[0])
@@ -350,8 +355,8 @@ test('Responses WebSocket reuses one completed prefix, reconnects with full repl
   assert.match(secondInput.text, /APP_E2E_WS_TWO/)
   assert.doesNotMatch(JSON.stringify(two.body.input), /APP_E2E_WS_ONE|ws answer one/)
   assert.equal(three.body.previous_response_id, undefined)
-  assert.equal(three.body.input.length, 5)
-  const replay = three.body.input.map(semanticInput)
+  assert.equal(three.body.input.length, 6)
+  const replay = responsesHistory(three.body).map(semanticInput)
   assert.match(replay[0].text, /APP_E2E_WS_ONE/)
   assert.deepEqual(replay[1], { type: 'message', role: 'assistant', text: 'ws answer one' })
   assert.match(replay[2].text, /APP_E2E_WS_TWO/)

@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesSystemPrompt } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-agents-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
@@ -70,7 +70,7 @@ try {
       assert(id, 'Canonical Session identity must reach the actual provider request')
       assert(latest, 'The fixture input is recovered independently of later control rows')
       const count = (counts.get(id) || 0) + 1; counts.set(id, count)
-      const snapshot = body.instructions || ''
+      const snapshot = responsesSystemPrompt(body)
       assert(snapshot.includes('You are running in Foxwarm') && snapshot.includes('FRAME-SHARED'))
       if (id.startsWith('beta/')) {
         assert(snapshot.includes('BETA-'), `${id} missing beta memory`)

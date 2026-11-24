@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesSystemPrompt } from './ctlModelCalls.mjs'
 import { chooseSelectOption } from './selectDriver.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
@@ -122,7 +122,7 @@ try {
   const agentDir = agent => join(dataRoot, 'agents', agent)
   const snapshot = async id => (await authority(id)).persistentMemorySnapshot
   // The stored memory prefix is frozen independently of request-time execution hints.
-  const prompt = body => (body.instructions || '').split('\n\n--- EXECUTION ENVIRONMENT ---')[0]
+  const prompt = body => responsesSystemPrompt(body).split('\n\n--- EXECUTION ENVIRONMENT ---')[0]
   const toolValue = (rows, id) => rows.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response
   async function refresh(id) { assert.equal((await request('POST', `${path(id)}/refresh-memory`)).status, 200) }
   async function skill(agent, name, description, body = '', files = {}) {

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
 import { createHostFixture, requiredCompactOperations, saveModelsInOriginalApp, until } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesSystemPrompt } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('fork-clear'), records = [], errors = [], connections = [], held = new Map(), heldOnce = new Set(), commandNotices = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -233,7 +233,7 @@ try {
   assert.equal(forcedState.persistentMemorySnapshot, selected); assert.equal(forcedState.nextBlockId, 3); assert.equal(branch(forced)[2], 2)
   assert.equal((await authority(parent)).nextBlockId, 1, 'fork resolves target/cap without correcting source counter')
   const forcedWire = await send(forced, 'force-fork-task'); assert(forcedWire.every(row => row.kind === 'http')); assert.equal(forcedWire.at(-1).body.cache, (await authority(parent)).promptCacheKey)
-  assert(forcedWire.at(-1).body.instructions.includes('Changed file must not be read by fork snapshot copy.'))
+  assert(responsesSystemPrompt(forcedWire.at(-1).body).includes('Changed file must not be read by fork snapshot copy.'))
   await send(parent, 'selected-fork'); const selectedFork = parent + '_selected-fork'
   await childSettled(selectedFork, 'selected-fork-task')
   const forkPrompt = (await authority(selectedFork)).persistentMemorySnapshot
@@ -245,7 +245,7 @@ try {
   assert.equal(branch(selectedFresh)[0], null, 'fresh graph child is an Archive root')
   assert.equal((await fixture.api('POST', route(parent) + '/refresh-memory', {})).status, 200); assert((await authority(parent)).persistentMemorySnapshot.includes('Changed file must not be read by fork snapshot copy.'))
   assert.equal((await fixture.api('POST', route(parent) + '/model', { model: 'sync' })).status, 200)
-  const httpRequests = await send(parent, 'selected-http'); assert(httpRequests.every(row => row.kind === 'http')); assert(httpRequests.at(-1).body.instructions.includes('Changed file must not be read by fork snapshot copy.'))
+  const httpRequests = await send(parent, 'selected-http'); assert(httpRequests.every(row => row.kind === 'http')); assert(responsesSystemPrompt(httpRequests.at(-1).body).includes('Changed file must not be read by fork snapshot copy.'))
   assert.equal(httpRequests.at(-1).body.cache, (await authority(parent)).promptCacheKey)
   await send(parent, 'create-agent'); await writeFile(join(fixture.data, 'agents', crossAgent, 'memory', 'MEMORY.md'), 'Separate Agent memory.'); await send(parent, 'cross-fresh')
   const crossFresh = crossAgent + '/cross-fresh'; await childSettled(crossFresh, 'cross-fresh-task'); assert.equal((await authority(crossFresh)).systemPromptFiles, undefined); assert((await authority(crossFresh)).persistentMemorySnapshot.includes('Separate Agent memory.')); assert.equal(branch(crossFresh)[0], null)
@@ -257,7 +257,7 @@ try {
   await until(() => commandNotices.slice(beforeCompactNotice).some(row => row.sessionId === parent), 'selected-file compaction command reply')
   assert.match(commandNotices.slice(beforeCompactNotice).find(row => row.sessionId === parent).text, /Compaction started/)
   await until(() => held.has('plan'), 'actual selected-file awaited HTTP planner')
-  const selectedPlan = held.get('plan'); assert.equal(selectedPlan.kind, 'http'); assert(selectedPlan.body.instructions.includes('Changed file must not be read by fork snapshot copy.')); assert(selectedPlan.body.instructions.includes('Selected common regular memory.'))
+  const selectedPlan = held.get('plan'); assert.equal(selectedPlan.kind, 'http'); assert(responsesSystemPrompt(selectedPlan.body).includes('Changed file must not be read by fork snapshot copy.')); assert(responsesSystemPrompt(selectedPlan.body).includes('Selected common regular memory.'))
   await writeFile(join(fixture.work, 'selected-prompt.md'), 'Selected live commit refresh uses the current file.')
   selectedPlan.valid(); holdPlan = false; held.delete('plan'); assert.equal((await selectedCompact).status, 200)
   await until(async () => !(await history(parent)).session.busy && (await authority(parent)).nextBlockId > 3, 'old frontier corrected only by real nonempty allocation')

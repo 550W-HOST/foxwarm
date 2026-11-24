@@ -12,7 +12,7 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { until } from './mainHostFixture.mjs'
 import { publishedToolOutcomes } from './publishedToolOutcomes.mjs'
 import { browserEnvironment } from '../../browser-host/test/fixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesHistory, responsesSystemPrompt } from './ctlModelCalls.mjs'
 
 const payload = process.env.FOXWARM_PUBLISHED_CORE
 assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
@@ -150,8 +150,8 @@ try {
     return JSON.stringify(qualificationHistory).includes('PACKAGED-NATIVE-DONE')
   }, 'packaged native/browser/image/artifact turn', 60_000)
   assert.equal(requests.length, 5)
-  assert.match(JSON.stringify(requests[2].input), /Packaged browser/)
-  assert.match(JSON.stringify(requests[3].input), /input_image/)
+  assert.match(JSON.stringify(responsesHistory(requests[2])), /Packaged browser/)
+  assert.match(JSON.stringify(responsesHistory(requests[3])), /input_image/)
   const history = (await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body
   const artifactIds = [...new Set(JSON.stringify(history).match(/art_[a-f0-9]{32}/g) || [])]
   assert.equal(artifactIds.length, 1)
@@ -172,8 +172,8 @@ try {
   assert.equal((await fetch(origin + blob)).status, 401)
   const bytes = Buffer.from(await (await fetch(origin + blob, { headers: { authorization: 'Bearer ' + token } })).arrayBuffer())
   assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a')
-  const effects = JSON.stringify(requests[1].input)
-  assert(requests.some(body => String(body.instructions || '').includes('You are running in Foxwarm')))
+  const effects = JSON.stringify(responsesHistory(requests[1]))
+  assert(requests.some(body => responsesSystemPrompt(body).includes('You are running in Foxwarm')))
   assert.match(effects, /completed/); assert.match(effects, /42/); assert.match(effects, /Source: global/); assert.match(effects, /INITIALIZATION.md/)
   assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
   assert(!(await readdir(join(data, 'state'))).includes('db'), 'Disabled Vector stays lazy')

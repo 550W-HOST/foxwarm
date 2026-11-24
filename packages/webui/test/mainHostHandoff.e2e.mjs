@@ -4,7 +4,7 @@ import { once } from 'node:events'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesHistory } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('handoff'), requests = [], failures = [], scripts = new Map(), shellPids = []
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
@@ -26,7 +26,7 @@ let mode = false, childReports = 0
 const provider = createServer(async (request, output) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
-    const body = JSON.parse(raw), input = JSON.stringify(body.input)
+    const body = JSON.parse(raw)
     // A forked child reads its instruction from the copied creating call, identified by its own fork result.
     const forked = new Set(body.input.filter(item => item.type === 'function_call_output' && JSON.stringify(item.output ?? '').includes('Fork complete: you are the child session')).map(item => item.call_id))
     const matches = [...JSON.stringify(body.input.filter(item => item.role === 'user' || item.type === 'function_call' && forked.has(item.call_id))).matchAll(/HAND-TASK:([A-Za-z0-9_-]+)/g)], key = matches.at(-1)?.[1] || 'ordinary'
@@ -41,7 +41,7 @@ const provider = createServer(async (request, output) => {
     }
     let calls = scripts.get(key); if (calls) scripts.delete(key)
     if (!calls && ['child-report', 'fork-report'].includes(key) && !body.input.some(item => item.type === 'function_call_output' && item.call_id?.startsWith('report-'))) {
-      assert(hasCheckpoint(input)); assert(input.includes('send_to_session')); childReports++
+      const history = JSON.stringify(responsesHistory(body)); assert(hasCheckpoint(history)); assert(history.includes('send_to_session')); childReports++
       calls = [tool('report-' + key, 'send_to_session', confirmed({ sessionId: '<parent>', message: 'HAND-TASK:result-' + key, currentSessionTurnAction: 'end_turn' }))]
     }
     if (key === 'finish-with-error' && !calls) {

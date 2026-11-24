@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, saveModelsInOriginalApp } from './mainHostFixture.mjs'
 import { seedArchiveBranches, seedCatalog as writeCatalog } from './stateSeeds.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesSystemPrompt } from './ctlModelCalls.mjs'
 
 const fixtures = [], requests = [], failures = []
 const text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
@@ -118,7 +118,7 @@ try {
   const snapshot = (await saved(empty)).persistentMemorySnapshot
   assert.match(snapshot, /<foxwarm-current-model model-id="a\/wire" \/>/)
   assert(snapshot.includes(framework.trim()), 'First concrete snapshot contains the bundled framework source')
-  assert(requests.at(-1).body.instructions.includes(framework.trim()), 'First provider request carries the framework prompt')
+  assert(responsesSystemPrompt(requests.at(-1).body).includes(framework.trim()), 'First provider request carries the framework prompt')
   await empty.stop()
 
   // Virtual startup has no selected concrete snapshot/route; only the first real turn captures a leaf.
