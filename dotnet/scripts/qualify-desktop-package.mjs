@@ -281,7 +281,7 @@ try {
   browser?.disconnect(); browser = undefined
   const children = await descendants(mainPid)
   const menu = await desktop('exit', mainPid)
-  assert.deepEqual(menu.items, ['Open', 'Exit'])
+  assert.deepEqual(menu.items, ['Open', 'Switch instance…', null, 'Exit'])
   await stopped('the notification icon Exit item')
   assert.match(await readFile(join(data, 'state/logs/foxwarm.log'), 'utf8'), /Main stopped\./)
   await until(async () => {
