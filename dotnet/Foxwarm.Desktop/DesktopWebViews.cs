@@ -19,7 +19,27 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
     internal CoreWebView2Environment Environment => environment;
 
     /// <summary>The selected instance: its origin and base path. Switching closes the app windows first.</summary>
-    internal Uri Scope { get; set; } = scope;
+    internal Uri Scope
+    {
+        get => scope;
+        set
+        {
+            scope = value;
+            AllowDownloads();
+        }
+    }
+
+    private Uri scope = scope;
+
+    // The permissions a download from a page of the scope needs (D-desktop-downloads): a page's
+    // second and later downloads, and writing into a folder the user picked in the system
+    // dialog, which Code's Download… uses for folders and large files.
+    private static readonly CoreWebView2PermissionKind[] DownloadPermissions =
+    [
+        CoreWebView2PermissionKind.MultipleAutomaticDownloads,
+        CoreWebView2PermissionKind.FileReadWrite,
+    ];
+    private CoreWebView2Profile? profile;
 
     /// <summary>Opens the host's instance menu for a framed window's brand row.</summary>
     internal Action<Window, FrameRect>? InstanceMenu { get; init; }
@@ -34,6 +54,11 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
     internal void Configure(CoreWebView2 core, Window owner, Action? leftApp = null)
     {
         core.Settings.AreHostObjectsAllowed = false;
+        if (profile is null)
+        {
+            profile = core.Profile;
+            AllowDownloads();
+        }
         core.NavigationStarting += (_, e) =>
         {
             var target = DesktopNavigation.Classify(Scope, e.Uri);
@@ -45,7 +70,12 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
             leftApp?.Invoke();
         };
         core.NewWindowRequested += (_, e) => OpenWindow(e, owner);
-        core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
+        // Every other permission is refused.
+        core.PermissionRequested += (_, e) =>
+            e.State =
+                DownloadPermissions.Contains(e.PermissionKind) && IsAppUri(e.Uri)
+                    ? CoreWebView2PermissionState.Allow
+                    : CoreWebView2PermissionState.Deny;
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += (_, e) =>
         {
@@ -113,6 +143,28 @@ internal sealed class DesktopWebViews(CoreWebView2Environment environment, Uri s
         finally
         {
             deferral.Complete();
+        }
+    }
+
+    /// <summary>
+    /// Grants the scope's origin the download permissions in the profile. WebView2 lets a page
+    /// start one download and asks before the next; the profile remembers the answer per
+    /// origin, so the refusal earlier versions gave left every page with only its first
+    /// download, also after restarts. Setting the state replaces such a remembered refusal; granting
+    /// on request alone would not, because WebView2 no longer asks.
+    /// </summary>
+    private async void AllowDownloads()
+    {
+        if (profile is null)
+            return;
+        try
+        {
+            foreach (var kind in DownloadPermissions)
+                await profile.SetPermissionStateAsync(kind, scope.GetLeftPart(UriPartial.Authority), CoreWebView2PermissionState.Allow);
+        }
+        catch (Exception error)
+        {
+            Debug.WriteLine(error);
         }
     }
 
