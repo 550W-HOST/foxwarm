@@ -12,7 +12,7 @@ A file source's Node selects where source is read, not where the VM or every nes
 
 ### Run a skill's entry
 
-A skill may declare a runnable entry in its `SKILL.md` frontmatter ([runnable skills](../units/host-runtime.md#runnable-skills)). `ctl skill run <name> --args @args` resolves the skill as `skill load` does, reads its entry through the skill subsystem on the Main server and runs it as an inline `run_script` with the caller's authority: the same result, pauses, background detach, nested-run rules and last-host-call wait. The args are checked against the skill's schema before any run record exists. Only the source disclosure differs from loading the skill and running its code: the entry is read under the `run_skill` rule, not as a `read` on master (user, 2026-11-23); every effect of the entry is still an ordinary authorized call. Entries are single self-contained files (user, 2026-11-23).
+A skill may declare a runnable entry in its `SKILL.md` frontmatter ([runnable skills](../units/skills.md#runnable-skills)). `ctl skill run <name> --args @args` resolves the skill as `skill load` does, reads its entry through the skill subsystem on the Main server and runs it as an inline `run_script` with the caller's authority: the same result, pauses, background detach, nested-run rules and last-host-call wait. The args are checked against the skill's schema before any run record exists. Only the source disclosure differs from loading the skill and running its code: the entry is read under the `run_skill` rule, not as a `read` on master (user, 2026-11-23); every effect of the entry is still an ordinary authorized call. Entries are single self-contained files (user, 2026-11-23).
 
 ### What does the program consume, and what does the model receive?
 

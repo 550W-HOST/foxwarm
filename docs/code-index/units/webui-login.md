@@ -24,7 +24,7 @@ Browser cookie scope follows the actual visible login directory, `location.pathn
 
 Recovery never imports a localStorage token. An old Strict-cookie login landing checks `./api/auth/session` using same-origin cookies, migrates only after a valid admin/webui response, then re-enters once. Explicit login pages and hash-token links remain manual. The probe is bounded to five seconds, aborted on user input/submission/departure, and guarded by deployment-scoped sessionStorage against redirect loops; denied storage leaves the manual form usable. Failed/offline/invalid probes preserve credentials. Successful app boot clears the guard.
 
-An existing same-name/domain/path HttpOnly cookie blocks script replacement. The .NET host retains valid old raw/derived cookie reads, but does not automatically migrate browser storage through backend path inference. The separate native Desktop cookie is owned by [host runtime](./host-runtime.md#desktop-boundary), not this frontend flow.
+An existing same-name/domain/path HttpOnly cookie blocks script replacement. The .NET host retains valid old raw/derived cookie reads, but does not automatically migrate browser storage through backend path inference. The separate native Desktop cookie is owned by [host runtime](./desktop-windows.md#desktop-boundary), not this frontend flow.
 
 ## D-login-presentation
 

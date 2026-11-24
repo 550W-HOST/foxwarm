@@ -9,7 +9,7 @@ namespace Foxwarm;
 
 // The validated `run` block of a runnable skill: an entry ToolScript inside the skill directory,
 // a one-line effect for the catalog, default mode and budget, and the schema of its args
-// (docs/code-index/units/host-runtime.md#runnable-skills).
+// (docs/code-index/units/skills.md#runnable-skills).
 internal sealed record SkillRun(
     string Entry,
     string Effect,
