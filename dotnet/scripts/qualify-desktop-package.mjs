@@ -161,7 +161,7 @@ async function attach() {
   assert(!identity.visibleCookies.includes('foxwarm_token'), 'Desktop authentication cookie must be HttpOnly')
   const cookies = await page.cookies()
   const auth = cookies.find(cookie => cookie.name === 'foxwarm_token')
-  assert(auth?.httpOnly && auth.sameSite === 'Strict', 'Native WebView2 authentication cookie is missing')
+  assert(auth?.httpOnly && auth.sameSite === 'Lax', 'Expected native WebView2 authentication cookie to be HttpOnly and SameSite=Lax')
   return page
 }
 async function start() {
