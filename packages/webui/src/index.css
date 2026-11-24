@@ -2833,7 +2833,7 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-fra
 
 /* Brand row: one title row tall. Controls at the top left (macOS lights): it starts after
  * them and shows the logo only, as the app name is in the menu bar; an instance's own
- * emoji and name stay. */
+ * emoji and name stay, the name only while it fits. */
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row {
   display: flex; align-items: center;
   height: var(--foxwarm-frame-title-height);
@@ -2847,6 +2847,12 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-instance-menu] {
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-instance-menu]:hover { background-color: color-mix(in srgb, var(--foxwarm-color-text-strong) 9%, transparent); }
 html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row { padding-left: max(12px, var(--foxwarm-frame-left, 0px)); }
 html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-wordmark[data-brand-default] { display: none; }
+/* A configured name that doesn't fit (InstanceBrand marks the heading) leaves the icon alone
+ * instead of truncating: out of the flow, so the freed width drags, and clipped rather than
+ * hidden, so it still names the heading or the menu button. */
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell [data-instance-brand][data-brand-overflow] .foxwarm-sidebar-wordmark {
+  position: absolute; clip-path: inset(50%); pointer-events: none;
+}
 /* Its hover fill stays clear of the lights. */
 html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell [data-instance-menu] { margin-left: 0; }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-nav { padding-top: 6px; }

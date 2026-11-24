@@ -842,6 +842,7 @@ test('drag overlays draw the real tab and a compact pane summary, framed or not,
 })
 
 const BRANDED = { instanceName: 'Lab server', tabIcon: '🧪' }
+const FITS = { instanceName: 'Lab', tabIcon: '🧪' }
 
 /** The brand row as rendered: logo or emoji, the name and whether it is the instance-menu button. */
 function brandState(page) {
@@ -856,6 +857,35 @@ function brandState(page) {
       name: visible(brand.querySelector('.foxwarm-sidebar-wordmark')) ? brand.querySelector('.foxwarm-sidebar-wordmark').textContent : null,
       button: button ? { ...box(button), haspopup: button.getAttribute('aria-haspopup'), title: button.getAttribute('title') } : null,
       menuMessages: window.__frameMessages.filter(message => message.type === 'instance-menu'),
+    }
+  })
+}
+
+/**
+ * How the brand shows its name: `shown` in the flow (`truncated` when it is cut), `hidden`
+ * out of the flow and clipped away, or `none` (the macOS default wordmark). `glyph` is the
+ * visible logo or emoji, `room` where the full name would end beside it.
+ */
+function brandName(page) {
+  return page.evaluate(() => {
+    const brand = document.querySelector('[data-instance-brand]')
+    const name = brand.querySelector('.foxwarm-sidebar-wordmark')
+    const style = getComputedStyle(name)
+    const glyph = brand.querySelector('svg, .foxwarm-sidebar-brand-icon')
+    const glyphBox = glyph.getBoundingClientRect()
+    const range = document.createRange()
+    range.selectNodeContents(name)
+    const state = style.display === 'none' ? 'none'
+      : style.position === 'absolute' && style.clipPath === 'inset(50%)' && style.pointerEvents === 'none' ? 'hidden'
+        : name.scrollWidth > name.clientWidth ? 'truncated' : 'shown'
+    return {
+      state,
+      text: name.textContent,
+      overflow: brand.hasAttribute('data-brand-overflow'),
+      glyph: getComputedStyle(glyph).display !== 'none' && glyphBox.width > 0 ? (glyph.tagName === 'svg' ? 'logo' : glyph.textContent) : null,
+      glyphRight: glyphBox.right,
+      nameEnd: glyphBox.right + 8 + range.getBoundingClientRect().width,
+      middle: (glyphBox.top + glyphBox.bottom) / 2,
     }
   })
 }
@@ -917,23 +947,97 @@ test('brand row under a Desktop host: a button that sends only the instance-menu
   }
 })
 
-test('brand row after the macOS lights: logo only by default, the instance emoji and name when set', async () => {
+test('brand row after the macOS lights: logo only by default, the instance emoji and a name that fits', async () => {
   for (const dark of [false, true]) {
-    for (const settings of [null, BRANDED]) {
+    for (const settings of [null, FITS]) {
       const { page, errors, close } = await open({ host: MACOS, settings, dark })
       try {
-        if (settings) await page.waitForFunction(() => document.querySelector('[data-instance-brand] .foxwarm-sidebar-wordmark')?.textContent === 'Lab server')
+        if (settings) await page.waitForFunction(() => document.querySelector('[data-instance-brand] .foxwarm-sidebar-wordmark')?.textContent === 'Lab')
         await settle(page)
         const state = await brandState(page)
         const label = `macos settings=${!!settings} dark=${dark}`
-        if (settings) assert.deepEqual({ logo: state.logo, icon: state.icon, name: state.name }, { logo: false, icon: '🧪', name: 'Lab server' }, label)
+        if (settings) assert.deepEqual({ logo: state.logo, icon: state.icon, name: state.name }, { logo: false, icon: '🧪', name: 'Lab' }, label)
         else assert.deepEqual({ logo: state.logo, icon: state.icon, name: state.name }, { logo: true, icon: null, name: null }, label)
+        const name = await brandName(page)
+        assert.deepEqual({ state: name.state, overflow: name.overflow, glyph: name.glyph }, settings ? { state: 'shown', overflow: false, glyph: '🧪' } : { state: 'none', overflow: false, glyph: 'logo' }, label)
         const glyph = await page.evaluate(() => document.querySelector('[data-instance-brand] :is(svg, .foxwarm-sidebar-brand-icon)').getBoundingClientRect().left)
         assert.ok(glyph >= MACOS.left, `${label}: brand after the lights`)
         assertHostContract(await inspect(page), label)
-        await brandShot(page, `macos-${settings ? 'branded' : 'default'}-${dark ? 'dark' : 'light'}`)
+        await brandShot(page, `macos-${settings ? 'fits' : 'default'}-${dark ? 'dark' : 'light'}`)
         assert.deepEqual(errors, [])
       } finally { await close() }
     }
   }
+})
+
+/** Drags the sidebar's resize handle by `dx` and waits for the frame to settle. */
+async function resizeSidebar(page, dx) {
+  const handle = await (await page.$('.foxwarm-sidebar-resize')).boundingBox()
+  const x = handle.x + handle.width / 2, y = handle.y + handle.height / 2
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x + dx, y, { steps: 4 })
+  await page.mouse.up()
+  await settle(page)
+  await settle(page)
+}
+
+test('brand row after the macOS lights: a name that does not fit leaves the emoji or logo alone until it fits again', async () => {
+  const LONG = { instanceName: 'Northwind production cluster', tabIcon: '' }
+  for (const dark of [false, true]) {
+    for (const settings of [BRANDED, LONG]) {
+      const { page, errors, close } = await open({ host: MACOS, settings, dark })
+      const label = `macos ${settings.instanceName} dark=${dark}`
+      try {
+        await page.waitForFunction(name => document.querySelector('[data-instance-brand] .foxwarm-sidebar-wordmark')?.textContent === name, {}, settings.instanceName)
+        await settle(page)
+        let name = await brandName(page)
+        assert.deepEqual({ state: name.state, overflow: name.overflow, glyph: name.glyph, text: name.text }, { state: 'hidden', overflow: true, glyph: settings.tabIcon || 'logo', text: settings.instanceName }, label)
+        let state = await brandState(page)
+        // The button is the glyph alone and still names the instance.
+        assert.ok(state.button.left + state.button.width <= name.glyphRight + 8, `${label}: the button ends after the glyph`)
+        const accessible = await page.accessibility.snapshot({ root: await page.$('[data-instance-menu]') })
+        assert.equal(accessible?.name, settings.instanceName, `${label}: accessible name`)
+        let info = await inspect(page)
+        assertHostContract(info, label)
+        // The width the name would take drags.
+        const middle = Math.round(name.middle)
+        for (const x of [Math.ceil(name.glyphRight) + 10, Math.min(Math.floor(name.nameEnd), Math.floor(info.brand.right) - 1)]) {
+          if (x < Math.floor(info.interactive.find(control => control.name === 'Open setup').left)) assert.ok(inRegion(info.regions, x, middle), `${label}: freed width drags at ${x},${middle}`)
+        }
+        await brandShot(page, `macos-${settings === BRANDED ? 'branded' : 'long'}-${dark ? 'dark' : 'light'}`)
+        if (settings === BRANDED) {
+          // A wider sidebar brings the whole name back, and a narrower one takes it away again.
+          await resizeSidebar(page, 164)
+          name = await brandName(page)
+          assert.deepEqual({ state: name.state, overflow: name.overflow, glyph: name.glyph }, { state: 'shown', overflow: false, glyph: '🧪' }, `${label}: widened`)
+          state = await brandState(page)
+          assert.ok(state.button.left + state.button.width >= name.nameEnd, `${label}: widened button holds the name`)
+          info = await inspect(page)
+          assertHostContract(info, `${label} widened`)
+          assert.ok(!inRegion(info.regions, Math.ceil(name.glyphRight) + 10, middle), `${label}: the name is part of the button again`)
+          await brandShot(page, `macos-branded-wide-${dark ? 'dark' : 'light'}`)
+          await resizeSidebar(page, -164)
+          name = await brandName(page)
+          assert.equal(name.state, 'hidden', `${label}: narrowed`)
+          info = await inspect(page)
+          assertHostContract(info, `${label} narrowed`)
+          assert.ok(inRegion(info.regions, Math.ceil(name.glyphRight) + 10, middle), `${label}: narrowed, the freed width drags again`)
+        }
+        assert.deepEqual(errors, [])
+      } finally { await close() }
+    }
+  }
+})
+
+test('brand row under a Windows host: a name that does not fit is truncated as before', async () => {
+  const { page, errors, close } = await open({ host: WINDOWS, settings: { instanceName: 'Northwind production cluster', tabIcon: '🧪' } })
+  try {
+    await page.waitForFunction(() => document.querySelector('[data-instance-brand] .foxwarm-sidebar-wordmark')?.textContent === 'Northwind production cluster')
+    await settle(page)
+    const name = await brandName(page)
+    assert.deepEqual({ state: name.state, glyph: name.glyph }, { state: 'truncated', glyph: '🧪' })
+    assertHostContract(await inspect(page), 'windows long name')
+    assert.deepEqual(errors, [])
+  } finally { await close() }
 })

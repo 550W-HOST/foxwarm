@@ -142,25 +142,39 @@ function activeDragSurfaces(doc: Document): HTMLElement[] {
   })
 }
 
+/** A box on the pixel grid: each edge to the nearest pixel, so neighbouring boxes stay joined. */
+const snapNearest = (r: DOMRect): FrameRect => {
+  const x = Math.round(r.left), y = Math.round(r.top)
+  return { x, y, w: Math.round(r.right) - x, h: Math.round(r.bottom) - y }
+}
+/** A box on the pixel grid, grown to whole pixels so that it covers every fraction of the box. */
+const snapOutward = (r: DOMRect): FrameRect => {
+  const x = Math.floor(r.left), y = Math.floor(r.top)
+  return { x, y, w: Math.ceil(r.right) - x, h: Math.ceil(r.bottom) - y }
+}
+
 /**
- * Drag rectangles in CSS px relative to the viewport: active drag surfaces minus their
- * interactive descendants and minus every floating layer.
+ * Drag rectangles in whole CSS px relative to the viewport: active drag surfaces minus their
+ * interactive descendants and minus every floating layer. Surfaces are snapped to the
+ * nearest pixel and holes outward before subtracting, so a rectangle never reaches into a
+ * control at fractional positions (rounding a fractional x and width separately can add a
+ * pixel at the right edge).
  */
 export function collectFrameDragRects(doc: Document = document): number[][] {
-  const floating = [...doc.querySelectorAll(FRAME_FLOATING)].map(el => toRect(el.getBoundingClientRect()))
+  const floating = [...doc.querySelectorAll(FRAME_FLOATING)].map(el => snapOutward(el.getBoundingClientRect()))
   const rects: FrameRect[] = []
   for (const drag of activeDragSurfaces(doc)) {
     const box = drag.getBoundingClientRect()
     if (box.width < 1 || box.height < 1) continue
-    let parts = [toRect(box)]
-    const own = [...drag.querySelectorAll(FRAME_INTERACTIVE)].map(el => toRect(el.getBoundingClientRect()))
+    let parts = [snapNearest(box)]
+    const own = [...drag.querySelectorAll(FRAME_INTERACTIVE)].map(el => snapOutward(el.getBoundingClientRect()))
     for (const hole of [...own, ...floating]) parts = parts.flatMap(part => subtractRect(part, hole))
     rects.push(...parts)
   }
   return rects
     .filter(r => r.w >= 2 && r.h >= 2)
     .slice(0, FRAME_REGION_LIMIT)
-    .map(r => [Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)])
+    .map(r => [r.x, r.y, r.w, r.h])
 }
 
 const hasOwnText = (element: Element) => [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && !!node.textContent?.trim())
@@ -500,6 +514,25 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
   // The theme runtime re-reads this on every theme change; layout changes refresh it below.
   if (overlay) setFrameChromeColor(() => frameSurfaceColor(document, readZones()))
 
+  // Controls in the title row change size without any row resizing or a mutation the
+  // observers below see: a text change, a web font or emoji font that finishes loading,
+  // the brand dropping its name after the macOS lights. Their boxes are holes in the drag
+  // rectangles (and the overlay's no-drag holes), so each one is watched while it is in an
+  // active drag surface; closed tabs and removed controls are released again.
+  const controlResize = new ResizeObserver(() => relayout())
+  let watchedControls = new Set<Element>()
+  const watchControls = () => {
+    const current = new Set<Element>()
+    for (const surface of activeDragSurfaces(document)) {
+      for (const control of surface.querySelectorAll(FRAME_INTERACTIVE)) {
+        current.add(control)
+        if (!watchedControls.has(control)) controlResize.observe(control)
+      }
+    }
+    for (const control of watchedControls) if (!current.has(control)) controlResize.unobserve(control)
+    watchedControls = current
+  }
+
   const run = () => {
     frame = 0
     if (layoutDirty) {
@@ -508,12 +541,14 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       if (overlay) refreshFrameChromeColor()
     }
     if (hosted) report()
+    watchControls()
   }
   const schedule = () => { if (!frame) frame = requestAnimationFrame(run) }
   const relayout = () => { layoutDirty = true; schedule() }
 
   const resize = new ResizeObserver(relayout)
   resize.observe(root)
+  document.fonts?.addEventListener('loadingdone', relayout)
   const observed = new WeakSet<Element>()
   const observeRows = () => {
     for (const element of document.querySelectorAll('[data-frame-row]')) {
@@ -549,6 +584,9 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     stop() {
       if (frame) cancelAnimationFrame(frame)
       resize.disconnect()
+      controlResize.disconnect()
+      watchedControls.clear()
+      document.fonts?.removeEventListener('loadingdone', relayout)
       rowObserver.disconnect()
       themeObserver.disconnect()
       reportObserver?.disconnect()

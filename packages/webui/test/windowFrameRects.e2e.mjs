@@ -63,6 +63,32 @@ test('drag rectangles exclude interactive descendants, floating layers and rows 
   })
 })
 
+test('drag rectangles snap to whole pixels without reaching into controls at fractional positions', async () => {
+  // The brand button ends at 136.5 px and Setup starts at 157 px: rounding the gap's x
+  // (136.5) and width (20.5) separately would report 137 + 21 = 158, a pixel into Setup.
+  await withFixture(`
+    <div data-frame-drag id="row" style="position:fixed;left:0;top:0;width:300.25px;height:48px">
+      <button id="brand" style="position:absolute;left:6px;top:8px;width:130.5px;height:32px"></button>
+      <button id="setup" style="position:absolute;left:157px;top:7.5px;width:32px;height:33.25px"></button>
+      <button id="toggle" style="position:absolute;left:213.4px;top:8px;width:36.2px;height:32px"></button>
+    </div>
+    <div role="menu" id="menu" style="position:fixed;left:250.6px;top:40.3px;width:30px;height:30px"></div>`, async page => {
+    const result = await page.evaluate(() => {
+      const rect = id => document.getElementById(id).getBoundingClientRect().toJSON()
+      return { regions: window.windowFrame.collectFrameDragRects(document), boxes: ['brand', 'setup', 'toggle', 'menu'].map(id => ({ id, ...rect(id) })) }
+    })
+    const touches = ([x, y, w, h], r) => Math.min(x + w, r.right) - Math.max(x, r.left) > 0 && Math.min(y + h, r.bottom) - Math.max(y, r.top) > 0
+    for (const region of result.regions) {
+      assert.ok(region.every(Number.isInteger), `integer rect ${region}`)
+      for (const box of result.boxes) assert.ok(!touches(region, box), `${region} reaches into ${box.id}`)
+    }
+    // The gap between the brand and Setup is reported from the brand's last whole pixel to Setup.
+    assert.ok(result.regions.some(([x, y, w, h]) => x === 137 && x + w === 157 && y <= 8 && y + h >= 40), JSON.stringify(result.regions))
+    // The surface's own fractional edge rounds to the nearest pixel.
+    assert.equal(Math.max(...result.regions.map(([x, , w]) => x + w)), 300)
+  })
+})
+
 test('edge fills extend through gutter and padding, but never across interactive or text content', async () => {
   await withFixture(`
     <div class="shell">
