@@ -15,6 +15,7 @@ import puppeteer from 'puppeteer-core'
 import { validateDesktopPackage } from './validate-desktop-package.mjs'
 import { missingImports } from '../../scripts/release/windows-imports.mjs'
 import { killProcessTree, runCleanup } from './desktop-cleanup.mjs'
+import { describeProcesses, listProcesses, processTree, survivors } from './desktop-processes.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 
 assert.equal(process.platform, 'win32', 'Desktop runtime qualification requires Windows and WebView2')
@@ -30,22 +31,24 @@ async function desktop(action, pid) {
   return JSON.parse(stdout.trim().split(/\r?\n/).pop())
 }
 const modules = async pid => (await desktop('modules', pid)).modules.map(name => name.toLowerCase())
-async function processes() {
-  const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    'Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress'],
-  { windowsHide: true, timeout: 60_000, maxBuffer: 64 << 20 })
-  return JSON.parse(stdout).map(row => ({ pid: row.ProcessId, ppid: row.ParentProcessId, args: row.CommandLine || '' }))
-}
-async function descendants(pid) {
-  const all = await processes(), found = []
-  for (let parents = [pid]; parents.length;) {
-    const next = all.filter(row => parents.includes(row.ppid) && !found.some(seen => seen.pid === row.pid))
-    found.push(...next)
-    parents = next.map(row => row.pid)
+// Processes are matched by PID and creation time, see desktop-processes.mjs.
+const descendants = async pid => processTree(await listProcesses(run), pid)
+// Every process the Desktop started before it was asked to exit ends with it, except WebView2's,
+// which WebView2 ends by itself. A timeout names the ones still running.
+async function childrenEnded(captured, label) {
+  const owned = captured.filter(row => !/^msedgewebview2\.exe$/i.test(row.name))
+  let rows = [], left = []
+  try {
+    await until(async () => {
+      rows = await listProcesses(run)
+      left = survivors(rows, owned)
+      return !left.length
+    }, label, 30_000)
+  } catch (error) {
+    if (!left.length) throw error
+    throw new Error(`${error.message}; still running:\n${describeProcesses(left, rows)}\nCaptured before the exit:\n${describeProcesses(captured, rows)}`)
   }
-  return found
 }
-const alive = async pid => (await processes()).some(row => row.pid === pid)
 const sql = async (statement, parameters = []) => JSON.parse((await run('python', ['-c',
   'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))',
   join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { windowsHide: true })).stdout)
@@ -284,10 +287,7 @@ try {
   assert.deepEqual(menu.items, ['Open', 'Switch instance…', null, 'Exit'])
   await stopped('the notification icon Exit item')
   assert.match(await readFile(join(data, 'state/logs/foxwarm.log'), 'utf8'), /Main stopped\./)
-  await until(async () => {
-    for (const row of children) if (await alive(row.pid) && !/msedgewebview2\.exe/i.test(row.args)) return false
-    return true
-  }, 'Desktop child processes ended', 30_000)
+  await childrenEnded(children, 'Desktop child processes ended')
 
   stage = 'restart with retained data'
   await start()
@@ -306,7 +306,7 @@ try {
   const trayPid = child.pid
   assert.equal((await desktop('tray', trayPid)).registered, true, 'A sign-in start has no notification icon')
   assert.equal((await desktop('window', trayPid)).visible, false, 'A sign-in start must not show the window')
-  assert(!(await descendants(trayPid)).some(row => /msedgewebview2\.exe/i.test(row.args)), 'WebView2 must start with the window')
+  assert(!(await descendants(trayPid)).some(row => /^msedgewebview2\.exe$/i.test(row.name)), 'WebView2 must start with the window')
   // A further sign-in start exits by itself and leaves the window hidden.
   await run(executable, ['--tray'], { cwd, env, windowsHide: true, timeout: 30_000 })
   assert.equal((await desktop('window', trayPid)).visible, false, 'A further sign-in start must not show the window')
@@ -322,10 +322,7 @@ try {
   await exitRequest()
   await stopped('the exit request')
   assert.equal(await mainStops(), stopsBefore + 1, 'The exit request must stop Main through its normal shutdown')
-  await until(async () => {
-    for (const row of trayChildren) if (await alive(row.pid) && !/msedgewebview2\.exe/i.test(row.args)) return false
-    return true
-  }, 'Desktop child processes ended after the exit request', 30_000)
+  await childrenEnded(trayChildren, 'Desktop child processes ended after the exit request')
   Object.assign(summary, {
     extractedDesktop: true, importsComplete: true, noCoreClr: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true,
     nativeExecHelper: true, canonicalAgentRoot: true, configuredAgentRoot: true, webSocketCookie: true, artifactDependencies: true,
