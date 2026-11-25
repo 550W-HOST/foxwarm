@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Projection.cs`, `dotnet/F
 
 ## Purpose
 
-Projects validated Session snapshots into bounded Main-owned list/architecture/presentation rows and serves exact, cursor, child, scope, count, and alias queries without hydrating Session authority.
+File implementation of `ISessionCatalogStore` together with the [mutation unit](./session-catalog-mutations.md) ([storage context](./storage-context.md#session-catalog)). Projects validated Session snapshots into bounded Main-owned list/architecture/presentation rows and serves exact, cursor, child, scope, count, and alias queries without hydrating Session authority.
 
 ## Stable methods and callers
 

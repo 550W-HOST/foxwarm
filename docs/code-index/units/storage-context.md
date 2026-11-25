@@ -1,17 +1,19 @@
-# Unit: Storage context and Session authority backend
+# Unit: Storage context and store interfaces
 
-Files: `dotnet/Foxwarm/Storage/StorageContext.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/FileSessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityCodec.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionQueueJson.cs`, `dotnet/Foxwarm.Tests/Storage/SessionAuthorityContractTests.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthority.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthorityTests.cs`, `dotnet/Foxwarm.Tests/Storage/FileSessionAuthorityBackendTests.cs`, `dotnet/Foxwarm.Tests/Sessions/FileAuthorityTestExtensions.cs`
-Secondary files: `dotnet/Foxwarm/Sessions/SessionManager.AgentOps.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionIdentityMoveJournal.cs`
+Files: `dotnet/Foxwarm/Storage/StorageContext.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/FileSessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityCodec.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionQueueJson.cs`, `dotnet/Foxwarm/Sessions/Storage/ArchiveStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.Session.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalogStore.cs`, `dotnet/Foxwarm.Tests/Storage/SessionAuthorityContractTests.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthority.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthorityTests.cs`, `dotnet/Foxwarm.Tests/Storage/FileSessionAuthorityBackendTests.cs`, `dotnet/Foxwarm.Tests/Sessions/FileAuthorityTestExtensions.cs`
+Secondary files: `dotnet/Foxwarm/Sessions/SessionManager.AgentOps.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionIdentityMoveJournal.cs`, `dotnet/Foxwarm/Sessions/SessionSequenceProjection.cs`, `dotnet/Foxwarm/Sessions/UsageOverview.cs`
 
 ## Purpose
 
-Domain code reaches persistent state through storage interfaces instead of data-root paths, so a database-backed implementation can be added without changing domain logic. `IStorageContext` holds one runtime's stores. `FileStorageContext` is file mode: the files and SQLite databases under one data directory, implemented by the existing store classes. The context currently holds the Session authority backend. Other stores join it as they get their interfaces.
+Domain code reaches persistent state through storage interfaces instead of data-root paths, so a database-backed implementation can be added without changing domain logic. `IStorageContext` holds one runtime's stores. `FileStorageContext` is file mode: the files and SQLite databases under one data directory, implemented by the existing store classes. The context holds the Session authority backend, the Archive, the identity ledger and the Session catalog. Other stores join it as they get their interfaces.
 
 ## D-storage-seams
 
 **Derived design.** [2026-11-26] Each store's interface sits at its existing class boundary. The file implementation is today's code, including its failure classification, and is not a generic document store. Interfaces carry no tenant or fencing parameters; a database context binds them per instance. Pure validation and value mapping (`SessionAuthorityCodec`, `SessionQueueJson`, `SessionAuthorityReader.Normalize`, `SessionAuthorityDocument` validation) stay shared static code, so every representation stores and loads the same value.
 
-`SessionManager` builds a `FileStorageContext` from its data root unless a context is supplied. The atomic-write and canonical-commit test hooks belong to that file context (`FileStorageOptions`).
+`SessionManager` builds a `FileStorageContext` from its data root unless a context is supplied. The atomic-write and canonical-commit test hooks belong to that file context (`FileStorageOptions`). Constructing a file context performs no I/O; `SessionManager` still disposes the catalog when it stops.
+
+File members that exist only for inspection, fixtures and test hooks (the SQLite paths, `SessionCatalog.Upsert`, `QueryObserved`, `BeforeAuthorityProjection`, `Explain`, Vector checkpoints) stay off the interfaces; tests reach them through the casts in `FileAuthorityTestExtensions`.
 
 ## Stable symbols and callers
 
@@ -24,6 +26,27 @@ Domain code reaches persistent state through storage interfaces instead of data-
   - `MoveIdentity` is used by identity move and recovery. `SessionIdentityMoveJournal.MoveArtifacts` moves the legacy per-Session artifacts and delegates the authority itself.
   - `DeleteAuthority` and `DeleteLegacyArtifacts` are used by deletion and channel creation compensation. Their `removed` callbacks keep the existing separate "removed" and "durable" deletion stages.
 - File-mode-only readers (catalog migration, legacy Archive import, upgrade inspection) still read `state/sessions` directly, because they read upgrade input that a database mode never has.
+
+### Archive
+
+- `IArchiveStore.ForSession` opens one Session's `IArchiveSession` without I/O: the message, block and branch reads and writes of [the Archive message store](./archive-message-store.md), with identical semantics (immutable rows, exact replay, conflict failure, attempt-owned rollback). `SqliteArchiveMessageStore` implements it explicitly over its existing members. Session owners, `ISessionAuthority.Archive`, compaction and Archive tools, continuous history and Main-side Vector recall use the interface.
+- The store's installation-level operations replace the Archive SQL that Main ran on its own connections. The SQL moved unchanged into `SqliteArchiveStore`:
+  - `AcquireWriter`: the runtime's writer lease.
+  - `ResolveCommittedIdentity`: execution-lifetime checks and recovery direction.
+  - `HasLifetimeRowsAsync`: the Archive half of identity reservation.
+  - `SequenceCounts`: catalog message counts.
+  - `RenameIdentity`: identity move and recovery.
+  - `OpenIdentityReader`: usage-overview ownership.
+  - `OpenSequenceReader`: the WebUI sequence view.
+- Not rerouted: the Vector owner (`VectorService`, `VectorRuntime`, lexical indexing) opens the Archive by path, because it may run in a separate process; Archive migration, import, export and the archive CLI are file-mode tools; and the [activity index](./activity-index.md) still opens the Archive file for its derived tool-effect tables.
+
+### Identity ledger
+
+`IIdentityLedger` covers startup identity evidence, reservations of retired IDs, rename validation and commit, the pending identity-move record and the artifact move that carries it out. `FileIdentityLedger` combines `CommittedArchiveIdentity` and `SessionIdentityMoveJournal` unchanged ([identity moves](./archive-identity-and-moves.md)). `MoveArtifacts` takes the authority move as a callback, so the ledger never reaches the authority itself.
+
+### Session catalog
+
+`ISessionCatalogStore` is the instance surface of `SessionCatalog` used by Main: authority publication, identity rewrite, exact and alias resolution, topology, list, group, activity and sequence queries, presentation mutations, deletion, the `Changed` event and the presentation-mutation hook. `Exists` and `OpenIdentityRecovery` serve pending identity recovery. Projection rules and value helpers stay static on `SessionCatalog` ([projections](./session-catalog-projection.md), [mutations](./session-catalog-mutations.md)). Migration and upgrade inspection construct their own `SessionCatalog`.
 
 ## D-session-authority-representations
 

@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.cs`, `dotnet/F
 
 ## Purpose
 
-Owns immutable raw Archive message rows and the bounded local/effective readers used by prompt reconstruction, history inspection, Sidebar counts, and lexical/vector preparation.
+File implementation of `IArchiveSession` ([storage context](./storage-context.md#archive)). Owns immutable raw Archive message rows and the bounded local/effective readers used by prompt reconstruction, history inspection, Sidebar counts, and lexical/vector preparation.
 
 ## Stable methods and callers
 

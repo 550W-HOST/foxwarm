@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Authority.cs`, `dotnet/Fo
 
 ## Purpose
 
-Owns the mutation edges around the Main catalog: authority publication, identity/alias updates, presentation-only changes, and deletion cleanup.
+Part of the file `ISessionCatalogStore` ([storage context](./storage-context.md#session-catalog)). Owns the mutation edges around the Main catalog: authority publication, identity/alias updates, presentation-only changes, and deletion cleanup.
 
 ## Stable methods and callers
 
