@@ -173,7 +173,18 @@ public sealed class SessionTurnRunner
             var host = hosts.For(entry);
             claimed = await host.TryClaimBusyAsync(continuing: retry).ConfigureAwait(false);
             if (!claimed)
+            {
+                // A Stop that no running turn observed: it arrived while the Session was idle
+                // or before this processor claimed busy. This processor holds the only claim,
+                // so it finalizes the Stop as a turn would; otherwise Stopping refuses every
+                // later claim while runnable input retriggers processors without end.
+                if (
+                    entry.WithState(state => state.Stopping && !state.Busy)
+                    && !await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)
+                )
+                    await host.FinalizeStoppedAsync().ConfigureAwait(false);
                 return;
+            }
             admitted?.Invoke();
             var retryPending =
                 retry
