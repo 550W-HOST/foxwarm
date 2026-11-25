@@ -220,7 +220,9 @@ const composerTheme = EditorView.theme({
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': { fontFamily: 'inherit', lineHeight: 'inherit', maxHeight: '200px', overflowX: 'hidden', overflowY: 'auto' },
   // minWidth lets wrapped content shrink to the scroller, so chips can cap at the line width.
-  '.cm-content': { boxSizing: 'border-box', padding: '8px 16px', minHeight: '60px', minWidth: '0', fontFamily: 'inherit' },
+  // caretColor replaces the base theme's black caret with the native caret in
+  // the text color; the console treatment's accent caret (index.css) is more specific.
+  '.cm-content': { boxSizing: 'border-box', padding: '8px 16px', minHeight: '60px', minWidth: '0', fontFamily: 'inherit', caretColor: 'auto' },
   '.cm-line': { padding: '0' },
 })
 

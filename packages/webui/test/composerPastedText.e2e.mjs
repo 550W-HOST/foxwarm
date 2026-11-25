@@ -2041,6 +2041,28 @@ for (const spec of browsers) {
 }
 
 for (const spec of browsers) {
+  test(`${spec.name} paints the caret in the theme text color, or the console accent`, async () => withBrowser(spec, async page => {
+    // The editor library's own default caret is black regardless of theme.
+    await page.evaluate(() => window.fixtureInitializeTheme())
+    for (const [colorMode, console] of [['light', false], ['dark', false], ['dark', true], ['light', true]]) {
+      const colors = await page.evaluate(({ colorMode, console }) => {
+        document.documentElement.classList.toggle('dark', colorMode === 'dark')
+        if (console) document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
+        else document.documentElement.removeAttribute('data-foxwarm-component-treatment')
+        const editor = window.fixtureEditor()
+        const probe = document.createElement('span')
+        probe.style.color = 'var(--foxwarm-console-accent)'
+        document.body.append(probe)
+        const accent = getComputedStyle(probe).color
+        probe.remove()
+        return { caret: getComputedStyle(editor).caretColor, text: getComputedStyle(editor).color, accent }
+      }, { colorMode, console })
+      assert.equal(colors.caret, console ? colors.accent : colors.text, `${colorMode} ${console ? 'console' : 'standard'}: ${JSON.stringify(colors)}`)
+    }
+  }))
+}
+
+for (const spec of browsers) {
   test(`${spec.name} keeps pasted images aligned with atomic caret boundaries`, async () => withBrowser(spec, async page => {
     await page.evaluate(() => window.fixtureInitializeTheme())
     const editor = '[role="textbox"][aria-label="Message"]'
