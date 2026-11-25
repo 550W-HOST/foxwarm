@@ -32,7 +32,7 @@ public sealed class SessionListActivityTests
         );
         var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
         await manager.LoadAsync();
-        manager.Catalog.Upsert(rows);
+        manager.Catalog.File().Upsert(rows);
         return (manager, new SessionListQueries(new SessionRuntime(manager), () => Now));
     }
 
@@ -79,7 +79,7 @@ public sealed class SessionListActivityTests
         await using var _ = manager;
         var ordered = manager.Catalog.Get("ordered")!;
         ordered["sidebarOrder"] = 1;
-        manager.Catalog.Upsert([ordered]);
+        manager.Catalog.File().Upsert([ordered]);
 
         Assert.Equal(
             ["quiet", "busy-alone", "tail", "stale", "ordered"],

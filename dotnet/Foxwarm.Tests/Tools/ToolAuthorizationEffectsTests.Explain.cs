@@ -269,7 +269,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         _ = await manager.RequiredAsync("foreign");
         var row = manager.Catalog.Get(caller.Id)!;
         row["aliases"]!.AsArray().Add("foreign");
-        manager.Catalog.Upsert([row]);
+        manager.Catalog.File().Upsert([row]);
         Assert.Equal(
             "foreign",
             manager.Catalog.Resolve("foreign")["sessionId"]!.GetValue<string>()

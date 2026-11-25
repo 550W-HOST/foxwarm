@@ -33,7 +33,7 @@ public sealed class SessionListVisibilityScaleTests(ITestOutputHelper output)
                 )
             );
         }
-        f.Manager.Catalog.Upsert(rows);
+        f.Manager.Catalog.File().Upsert(rows);
         f.Manager.ChangePresentation(catalog => catalog.SetParent(source, "team1/s1"));
 
         var policies = new Dictionary<string, string>

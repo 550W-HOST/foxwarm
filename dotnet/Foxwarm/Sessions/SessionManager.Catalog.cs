@@ -438,7 +438,7 @@ internal sealed partial class SessionManager
         return CatalogPresentations(ids, true);
     }
 
-    internal PresentationChange ChangePresentation(Func<SessionCatalog, PresentationChange> action)
+    internal PresentationChange ChangePresentation(Func<ISessionCatalogStore, PresentationChange> action)
     {
         var change = action(Catalog);
         try

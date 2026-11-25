@@ -11,6 +11,9 @@ internal static class FileAuthorityTestExtensions
     /// <summary>The SQLite Archive view, for file-mode Vector checkpoint inspection.</summary>
     internal static SqliteArchiveMessageStore Sqlite(this IArchiveSession archive) =>
         (SqliteArchiveMessageStore)archive;
+
+    /// <summary>The SQLite catalog, for file-mode fixtures, query observation and test hooks.</summary>
+    internal static SessionCatalog File(this ISessionCatalogStore catalog) => (SessionCatalog)catalog;
 }
 
 /// <summary>File-mode staging of identity-move crash states for tests.</summary>

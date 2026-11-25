@@ -5,7 +5,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionCatalog
 {
-    internal DeleteSelection SelectDeletion(string requested, bool recursive)
+    public DeleteSelection SelectDeletion(string requested, bool recursive)
     {
         lock (gate)
         {
@@ -32,7 +32,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal void RemoveForDeletion(string id)
+    public void RemoveForDeletion(string id)
     {
         lock (gate)
         {

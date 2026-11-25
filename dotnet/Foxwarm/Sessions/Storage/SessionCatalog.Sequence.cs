@@ -15,7 +15,7 @@ internal sealed partial class SessionCatalog
     /// The sequence view chooses Sessions by their own Archive rows, because the catalog's
     /// last-message time marks input and a turn's later rows can follow it by hours.
     /// </summary>
-    internal IReadOnlyList<SequenceSession> SequenceSessions()
+    public IReadOnlyList<SequenceSession> SequenceSessions()
     {
         using var connection = OpenReader();
         using var command = Command(

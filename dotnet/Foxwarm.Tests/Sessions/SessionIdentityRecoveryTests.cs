@@ -36,7 +36,7 @@ public sealed class SessionIdentityRecoveryTests
             var owner = await seed.CreateNamedAsync("main", "old", null, null);
             await ForkClearLifecycleTests.AppendAsync(owner, Text("Original immutable audit"));
             row = seed.Catalog.Get("old")!;
-            catalogPath = seed.Catalog.FilePath;
+            catalogPath = seed.Catalog.File().FilePath;
         }
         File.Delete(catalogPath);
         File.Delete(catalogPath + "-wal");
@@ -206,7 +206,7 @@ public sealed class SessionIdentityRecoveryTests
             await seed.LoadAsync();
             var owner = await seed.CreateNamedAsync("main", "old", null, null);
             await ForkClearLifecycleTests.AppendAsync(owner, Text("Retained byte proof"));
-            catalogPath = seed.Catalog.FilePath;
+            catalogPath = seed.Catalog.File().FilePath;
             if (mode == "other-lifetime")
             {
                 await seed.CreateAgentAsync("claimed", false, null);

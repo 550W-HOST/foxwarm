@@ -115,7 +115,7 @@ internal sealed partial class SessionCatalog
     }
 
     /// <summary>Maintained subtree activity time of each existing row.</summary>
-    internal Dictionary<string, double> SubtreeTimes(string[] ids)
+    public Dictionary<string, double> SubtreeTimes(string[] ids)
     {
         var result = new Dictionary<string, double>(StringComparer.Ordinal);
         if (ids.Length == 0)
@@ -141,7 +141,7 @@ internal sealed partial class SessionCatalog
     /// after <paramref name="since"/>, counting at most <paramref name="cap"/> through one
     /// bounded indexed seek per parent.
     /// </summary>
-    internal Dictionary<string, int> RecentChildCounts(string[] parents, double since, int cap)
+    public Dictionary<string, int> RecentChildCounts(string[] parents, double since, int cap)
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
         if (parents.Length == 0)

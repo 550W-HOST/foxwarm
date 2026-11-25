@@ -78,7 +78,7 @@ public sealed partial class WaitLivenessTests
         var reads = new ConcurrentBag<string>();
         var candidateCounts = new List<int>();
         manager.AdmissionReadObserved = reads.Add;
-        manager.Catalog.QueryObserved = (sql, count) =>
+        manager.Catalog.File().QueryObserved = (sql, count) =>
         {
             if (sql.Contains("recent_rank<=", StringComparison.Ordinal))
                 candidateCounts.Add(count);

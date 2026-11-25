@@ -104,7 +104,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal Func<JsonObject[], IDisposable>? BeforePresentationMutation { get; set; }
+    public Func<JsonObject[], IDisposable>? BeforePresentationMutation { get; set; }
 
     private PresentationChange CommitPresentation(
         Func<(JsonObject Result, JsonObject[] Rows)> prepare
@@ -146,7 +146,7 @@ internal sealed partial class SessionCatalog
         return result;
     }
 
-    internal PresentationChange SetLastChannel(string id, JsonObject channel) =>
+    public PresentationChange SetLastChannel(string id, JsonObject channel) =>
         CommitPresentation(() =>
         {
             var row = RequiredMain(id);
@@ -156,7 +156,7 @@ internal sealed partial class SessionCatalog
             return (new JsonObject { ["success"] = true }, new[] { row });
         });
 
-    internal PresentationChange Archive(
+    public PresentationChange Archive(
         string requested,
         bool archived,
         bool descendants = false,
@@ -197,7 +197,7 @@ internal sealed partial class SessionCatalog
             );
         });
 
-    internal PresentationChange Pin(string requested, bool pinned) =>
+    public PresentationChange Pin(string requested, bool pinned) =>
         CommitPresentation(() =>
         {
             var row = RequiredMain(requested);
@@ -216,7 +216,7 @@ internal sealed partial class SessionCatalog
             );
         });
 
-    internal PresentationChange SetParent(string requested, string? parent) =>
+    public PresentationChange SetParent(string requested, string? parent) =>
         CommitPresentation(() =>
         {
             var row = RequiredMain(requested);
@@ -274,7 +274,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal PresentationChange Move(string requested, JsonObject body, bool promote = false) =>
+    public PresentationChange Move(string requested, JsonObject body, bool promote = false) =>
         CommitPresentation(() =>
         {
             var moving = RequiredMain(requested);

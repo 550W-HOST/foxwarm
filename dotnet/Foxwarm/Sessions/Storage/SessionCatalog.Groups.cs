@@ -118,7 +118,7 @@ internal sealed partial class SessionCatalog
     /// Flat counts every unpinned row. Maintained counts minus the pinned rows, which
     /// form their own Sidebar section.
     /// </summary>
-    internal Dictionary<string, long> GroupCounts(string by, bool tree)
+    public Dictionary<string, long> GroupCounts(string by, bool tree)
     {
         var column = GroupColumn(by);
         lock (gate)
@@ -159,7 +159,7 @@ internal sealed partial class SessionCatalog
     /// tree modes, every unpinned row in Flat. <paramref name="exclude"/> omits a row the
     /// caller places separately (an Agent's main Session).
     /// </summary>
-    internal CatalogPage GroupPage(
+    public CatalogPage GroupPage(
         string by,
         string key,
         string mode,
@@ -216,7 +216,7 @@ internal sealed partial class SessionCatalog
     }
 
     /// <summary>The group key (Agent or current Node) of each existing row.</summary>
-    internal Dictionary<string, string> GroupKeys(string[] ids, string by)
+    public Dictionary<string, string> GroupKeys(string[] ids, string by)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         if (ids.Length == 0)

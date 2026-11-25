@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
-internal sealed partial class SessionCatalog : IDisposable
+internal sealed partial class SessionCatalog : ISessionCatalogStore
 {
     private readonly object gate = new();
     private readonly string root;
@@ -12,7 +12,9 @@ internal sealed partial class SessionCatalog : IDisposable
     private long revision = 1;
     private readonly string instance = Guid.NewGuid().ToString("N");
     internal string FilePath => Path.Combine(root, "state", "catalog.sqlite");
-    internal string Revision
+
+    public bool Exists => File.Exists(FilePath);
+    public string Revision
     {
         get
         {
@@ -23,7 +25,7 @@ internal sealed partial class SessionCatalog : IDisposable
             }
         }
     }
-    internal event Action? Changed;
+    public event Action? Changed;
 
     // Test observation is scoped to this real SQL owner, not a substitute implementation.
     internal Action<string, int>? QueryObserved { get; set; }
@@ -31,7 +33,7 @@ internal sealed partial class SessionCatalog : IDisposable
 
     internal SessionCatalog(string root) => this.root = Path.GetFullPath(root);
 
-    internal void Initialize()
+    public void Initialize()
     {
         lock (gate)
             EnsureInitialized();
@@ -172,7 +174,7 @@ internal sealed partial class SessionCatalog : IDisposable
         }
     }
 
-    internal JsonObject? Get(string id)
+    public JsonObject? Get(string id)
     {
         if (Monitor.IsEntered(gate))
             return Rows($"SELECT {Columns} FROM session_catalog WHERE session_id=$p0", id)
@@ -182,7 +184,7 @@ internal sealed partial class SessionCatalog : IDisposable
             .FirstOrDefault();
     }
 
-    internal JsonObject[] GetMany(IEnumerable<string> requested)
+    public JsonObject[] GetMany(IEnumerable<string> requested)
     {
         var ids = requested.Distinct(StringComparer.Ordinal).ToArray();
         if (ids.Length > 200)
@@ -200,7 +202,7 @@ internal sealed partial class SessionCatalog : IDisposable
         }
     }
 
-    internal JsonObject[] List(int limit = int.MaxValue, int offset = 0)
+    public JsonObject[] List(int limit = int.MaxValue, int offset = 0)
     {
         lock (gate)
             return Rows(
@@ -212,7 +214,7 @@ internal sealed partial class SessionCatalog : IDisposable
     }
 
     /// <summary>Rows with open questions, most recent first, through the partial presence index.</summary>
-    internal JsonObject[] QuestionRows(int limit)
+    public JsonObject[] QuestionRows(int limit)
     {
         lock (gate)
             return Rows(
@@ -222,7 +224,7 @@ internal sealed partial class SessionCatalog : IDisposable
                 .ToArray();
     }
 
-    internal JsonObject Resolve(string requested)
+    public JsonObject Resolve(string requested)
     {
         if (Monitor.IsEntered(gate))
         {
@@ -259,7 +261,7 @@ internal sealed partial class SessionCatalog : IDisposable
             : new JsonObject { ["kind"] = "alias", ["sessionId"] = first };
     }
 
-    internal JsonObject? Presentation(string id)
+    public JsonObject? Presentation(string id)
     {
         lock (gate)
         {
@@ -278,7 +280,7 @@ internal sealed partial class SessionCatalog : IDisposable
         }
     }
 
-    internal string[] PathIds(string id)
+    public string[] PathIds(string id)
     {
         lock (gate)
         {
@@ -355,7 +357,7 @@ internal sealed partial class SessionCatalog : IDisposable
         NormalizeParents(db!, references);
     }
 
-    internal void PublishAuthority(JsonObject authority, bool allowInsert = false)
+    public void PublishAuthority(JsonObject authority, bool allowInsert = false)
     {
         var id = Text(authority["id"])!;
         BeforeAuthorityProjection?.Invoke(id);
@@ -372,7 +374,7 @@ internal sealed partial class SessionCatalog : IDisposable
         Changed?.Invoke();
     }
 
-    internal void Rename(string id, string? name)
+    public void Rename(string id, string? name)
     {
         lock (gate)
         {
@@ -387,7 +389,7 @@ internal sealed partial class SessionCatalog : IDisposable
     }
 
     // Sets a label only while none is present; the check and write share the catalog gate.
-    internal bool RenameIfUnnamed(string id, string name)
+    public bool RenameIfUnnamed(string id, string name)
     {
         lock (gate)
         {

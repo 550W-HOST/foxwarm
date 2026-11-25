@@ -134,7 +134,7 @@ public sealed class SessionIdentityBoundaryTests
         await using var manager = Manager(data, work);
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "old", null, null);
-        manager.Catalog.Upsert(
+        manager.Catalog.File().Upsert(
             Enumerable.Range(0, 1000).Select(i => SessionCatalogTests.Row("cold-" + i, i, "old"))
         );
         var channels = Path.Combine(data, "state", "channels.json");
@@ -282,7 +282,7 @@ public sealed class SessionIdentityBoundaryTests
             var db = new SqliteConnection(
                 new SqliteConnectionStringBuilder
                 {
-                    DataSource = manager.Catalog.FilePath,
+                    DataSource = manager.Catalog.File().FilePath,
                     Pooling = false,
                 }.ToString()
             )

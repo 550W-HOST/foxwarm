@@ -455,7 +455,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             CancellationToken.None,
             target
         );
-        manager.Catalog.Upsert([SessionCatalogTests.Row("direct", 0, "foreign", "alpha", ["kid"])]);
+        manager.Catalog.File().Upsert([SessionCatalogTests.Row("direct", 0, "foreign", "alpha", ["kid"])]);
         await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() =>
             manager.AuthorizeToolAsync(
                 owner,

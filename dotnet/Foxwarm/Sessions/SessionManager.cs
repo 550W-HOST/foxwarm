@@ -19,7 +19,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.Artifacts.ArtifactPreparer ArtifactPreparation { get; } = new();
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
-    internal readonly SessionCatalog Catalog;
+    internal readonly ISessionCatalogStore Catalog;
     private readonly AgentCatalog agents;
     private readonly AgentMemory memory;
     private readonly Skills skills;
@@ -122,7 +122,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Storage.Identities.ValidateStartupEvidence(allowPendingIdentityRecovery: true);
         Directory.CreateDirectory(this.root);
         deletionChannels = new(this.root);
-        Catalog = new SessionCatalog(this.root);
+        Catalog = Storage.Catalog;
         Tasks = new TaskService(
             this,
             this.root,

@@ -336,7 +336,7 @@ public sealed partial class ModelUsageCostTests
         await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("next"));
         var running = owner.StartProcessing();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(15));
-        manager.Catalog.BeforeAuthorityProjection = _ =>
+        manager.Catalog.File().BeforeAuthorityProjection = _ =>
             throw new IOException("Owned catalog publication fault");
         release.TrySetResult();
         try
@@ -363,7 +363,7 @@ public sealed partial class ModelUsageCostTests
         }
         finally
         {
-            manager.Catalog.BeforeAuthorityProjection = null;
+            manager.Catalog.File().BeforeAuthorityProjection = null;
         }
         await owner.Entry.SaveLane.SaveStrictAsync();
         Assert.Equal(

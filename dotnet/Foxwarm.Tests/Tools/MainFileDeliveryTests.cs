@@ -182,7 +182,7 @@ public sealed class MainFileDeliveryTests
         var target = await f.Manager.CreateNamedAsync("main", "target", null, null);
         var row = f.Manager.Catalog.Get(target.Id)!;
         row["aliases"] = new JsonArray("recipient");
-        f.Manager.Catalog.Upsert([row]);
+        f.Manager.Catalog.File().Upsert([row]);
         f.Manager.AttachWebUi(target.Id, target);
         var path = Path.Combine(f.Work, "file");
         await File.WriteAllTextAsync(path, "x");
@@ -577,7 +577,7 @@ public sealed class MainFileDeliveryTests
         f.Manager.AttachWebUi(target.Id, target);
         var row = f.Manager.Catalog.Get(target.Id)!;
         row["aliases"] = new JsonArray("cold-alias");
-        f.Manager.Catalog.Upsert([row]);
+        f.Manager.Catalog.File().Upsert([row]);
         var path = Path.Combine(f.Work, "cold-file");
         await File.WriteAllTextAsync(path, "x");
         await f.Manager.DisposeAsync();

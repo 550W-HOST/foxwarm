@@ -9,7 +9,7 @@ internal sealed record CatalogChildren(string Parent, JsonObject[] Rows, long To
 
 internal sealed partial class SessionCatalog
 {
-    internal string[] RestartIds()
+    public string[] RestartIds()
     {
         lock (gate)
         {
@@ -29,7 +29,7 @@ internal sealed partial class SessionCatalog
     // Sessions whose last save announced pending tool approvals. No approval survives a restart,
     // so startup loads these owners to expire the records and settle the projection. The open
     // condition keeps the lookup on the question presence index.
-    internal string[] PendingApprovalIds()
+    public string[] PendingApprovalIds()
     {
         lock (gate)
         {
@@ -46,7 +46,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal string[] RecentWaitIds(long activityCutoff)
+    public string[] RecentWaitIds(long activityCutoff)
     {
         lock (gate)
         {
@@ -89,7 +89,7 @@ internal sealed partial class SessionCatalog
         key.Select((value, index) => index == key.Count - 1 ? (object?)Text(value) : Number(value))
             .ToArray();
 
-    internal long Count(string? agent = null, string? parent = null)
+    public long Count(string? agent = null, string? parent = null)
     {
         lock (gate)
         {
@@ -112,7 +112,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal JsonObject[] OffsetPage(
+    public JsonObject[] OffsetPage(
         int limit,
         int offset,
         string? agent = null,
@@ -145,7 +145,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal CatalogPage Page(
+    public CatalogPage Page(
         string mode,
         int limit,
         JsonArray? after,
@@ -201,7 +201,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal CatalogChildren[] Children(
+    public CatalogChildren[] Children(
         IReadOnlyList<(string Id, JsonArray? After)> requests,
         string mode,
         int limit,
@@ -290,7 +290,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal Dictionary<string, long> ChildCounts(string[] ids, string? agent = null)
+    public Dictionary<string, long> ChildCounts(string[] ids, string? agent = null)
     {
         if (ids.Length == 0)
             return new(StringComparer.Ordinal);
@@ -315,7 +315,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal Dictionary<string, JsonObject> Scopes(string[] ids)
+    public Dictionary<string, JsonObject> Scopes(string[] ids)
     {
         if (ids.Length == 0)
             return new(StringComparer.Ordinal);
@@ -342,7 +342,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal Dictionary<string, JsonObject> ResolveMany(string[] ids)
+    public Dictionary<string, JsonObject> ResolveMany(string[] ids)
     {
         if (ids.Length == 0)
             return new(StringComparer.Ordinal);
@@ -392,7 +392,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal Dictionary<string, string[]> Paths(string[] ids)
+    public Dictionary<string, string[]> Paths(string[] ids)
     {
         if (ids.Length == 0)
             return new(StringComparer.Ordinal);
@@ -432,9 +432,9 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
         }
     }
 
-    internal JsonObject Summary() => Summary(out _);
+    public JsonObject Summary() => Summary(out _);
 
-    internal JsonObject Summary(out long costCount)
+    public JsonObject Summary(out long costCount)
     {
         lock (gate)
         {
@@ -465,7 +465,7 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
         }
     }
 
-    internal Dictionary<string, (int Total, int Active, int Queued)> AgentActivityCounts()
+    public Dictionary<string, (int Total, int Active, int Queued)> AgentActivityCounts()
     {
         lock (gate)
         {
@@ -509,7 +509,7 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
         }
     }
 
-    internal JsonArray AgentCounts()
+    public JsonArray AgentCounts()
     {
         lock (gate)
         {
@@ -534,7 +534,7 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
     private const string DescendantCte =
         "WITH RECURSIVE subtree(session_id) AS (VALUES($p0) UNION SELECT child.session_id FROM session_catalog child JOIN subtree ON child.parent_session_id=subtree.session_id) ";
 
-    internal (JsonObject Summary, JsonObject[] Rows, long CostCount) Descendants(
+    public (JsonObject Summary, JsonObject[] Rows, long CostCount) Descendants(
         string id,
         int limit
     )
@@ -584,7 +584,7 @@ SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputToke
         }
     }
 
-    internal HashSet<string> FilterDescendants(string id, string[] candidates)
+    public HashSet<string> FilterDescendants(string id, string[] candidates)
     {
         if (candidates.Length == 0)
             return new(StringComparer.Ordinal);
@@ -610,7 +610,7 @@ SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputToke
         }
     }
 
-    internal Dictionary<string, int> BusyDescendants(string[] roots, string[] busy)
+    public Dictionary<string, int> BusyDescendants(string[] roots, string[] busy)
     {
         var result = roots.ToDictionary(id => id, _ => 0, StringComparer.Ordinal);
         if (roots.Length == 0 || busy.Length == 0)

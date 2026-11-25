@@ -79,7 +79,7 @@ internal sealed class SessionRuntime(SessionManager manager)
     internal (long Total, JsonObject[] Page) ListPage(int start, int count) =>
         manager.CatalogMetadataOffset(start, count);
 
-    internal SessionCatalog Catalog => manager.Catalog;
+    internal ISessionCatalogStore Catalog => manager.Catalog;
     internal string PresentationRevision => manager.PresentationRevision;
 
     internal JsonObject[] LocalProjections() => manager.LocalProjections();
@@ -205,7 +205,7 @@ internal sealed class SessionRuntime(SessionManager manager)
         await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
 
     internal PresentationChange ChangePresentation(
-        Func<SessionCatalog, PresentationChange> action
+        Func<ISessionCatalogStore, PresentationChange> action
     ) => manager.ChangePresentation(action);
 
     internal void ReplyToCommand(string id, string text) => manager.ReplyToCommand(id, text);

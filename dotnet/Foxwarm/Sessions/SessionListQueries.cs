@@ -12,7 +12,7 @@ internal sealed class SessionListQueryException(string code, string message) : E
 internal sealed partial class SessionListQueries
 {
     private readonly SessionRuntime runtime;
-    private SessionCatalog Catalog => runtime.Catalog;
+    private ISessionCatalogStore Catalog => runtime.Catalog;
     public string Revision => runtime.PresentationRevision;
 
     private readonly Func<long> clock;

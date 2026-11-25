@@ -4,7 +4,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionCatalog
 {
-    internal void OpenIdentityRecovery()
+    public void OpenIdentityRecovery()
     {
         lock (gate)
         {
@@ -16,7 +16,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal JsonObject[] IdentityChildren(string id)
+    public JsonObject[] IdentityChildren(string id)
     {
         lock (gate)
             return Rows(
@@ -26,7 +26,7 @@ internal sealed partial class SessionCatalog
                 .ToArray();
     }
 
-    internal string[] RewriteIdentity(
+    public string[] RewriteIdentity(
         string from,
         string to,
         string agent,
@@ -81,7 +81,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal string ValidateIdentityParent(string child, string parent)
+    public string ValidateIdentityParent(string child, string parent)
     {
         lock (gate)
         {
@@ -91,12 +91,12 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal void NotifyIdentityChanged() => Changed?.Invoke();
+    public void NotifyIdentityChanged() => Changed?.Invoke();
 }
 
 // Minimal metadata adapter for a pending source move before normal source-catalog migration.
 // It selects one real metadata authority and never reads unrelated Session JSON.
-internal sealed class SessionIdentityMetadata(string root, SessionCatalog catalog)
+internal sealed class SessionIdentityMetadata(string root, ISessionCatalogStore catalog)
 {
     private JsonObject? legacy;
     private JsonObject? rows;
@@ -104,7 +104,7 @@ internal sealed class SessionIdentityMetadata(string root, SessionCatalog catalo
 
     internal void Open()
     {
-        if (File.Exists(catalog.FilePath))
+        if (catalog.Exists)
         {
             catalog.OpenIdentityRecovery();
             return;

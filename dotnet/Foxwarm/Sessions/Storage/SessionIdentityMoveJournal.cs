@@ -273,7 +273,7 @@ internal interface IIdentityLedger
     /// <summary>Fails startup when stored identity evidence is inconsistent.</summary>
     void ValidateStartupEvidence(bool allowPendingIdentityRecovery = false);
 
-    Task InitializeAsync(SessionCatalog catalog);
+    Task InitializeAsync(ISessionCatalogStore catalog);
     bool IsReserved(string sessionId);
     void ValidateRename(string oldId, string newId);
     Task CommitRenameAsync(string oldId, string newId);
@@ -307,7 +307,7 @@ internal sealed class FileIdentityLedger(string dataRoot) : IIdentityLedger
     public void ValidateStartupEvidence(bool allowPendingIdentityRecovery = false) =>
         CommittedArchiveIdentity.ValidateStartupEvidence(dataRoot, allowPendingIdentityRecovery);
 
-    public Task InitializeAsync(SessionCatalog catalog) => committed.InitializeAsync(catalog);
+    public Task InitializeAsync(ISessionCatalogStore catalog) => committed.InitializeAsync(catalog);
 
     public bool IsReserved(string sessionId) => committed.IsReserved(sessionId);
 

@@ -15,7 +15,7 @@ internal sealed partial class CommittedArchiveIdentity(string root)
 
     internal bool IsReserved(string id) => reserved.Contains(id);
 
-    internal async Task InitializeAsync(SessionCatalog catalog)
+    internal async Task InitializeAsync(ISessionCatalogStore catalog)
     {
         await initialization.WaitAsync();
         try

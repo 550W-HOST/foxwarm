@@ -34,7 +34,7 @@ public sealed class SessionCatalogPublicationTests
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "one", null, null);
         var runtime = new SessionRuntime(manager);
-        manager.Catalog.BeforeAuthorityProjection = _ =>
+        manager.Catalog.File().BeforeAuthorityProjection = _ =>
             throw new IOException("Owned projection fault.");
         await Assert.ThrowsAsync<AuthorityCommittedException>(() =>
             runtime.UpdateSettingsAsync(owner.Id, new JsonObject { ["model"] = "b" })
@@ -65,7 +65,7 @@ public sealed class SessionCatalogPublicationTests
         );
         Assert.Null(cold.Catalog.Get(owner.Id)!["model"]);
         Assert.Single(cold.LocalProjections());
-        manager.Catalog.BeforeAuthorityProjection = null;
+        manager.Catalog.File().BeforeAuthorityProjection = null;
         await owner.Entry.SaveLane.SaveStrictAsync();
         owner.PublishStateChanged();
         Assert.Equal("b", manager.Catalog.Get(owner.Id)!["model"]!.GetValue<string>());
@@ -92,7 +92,7 @@ public sealed class SessionCatalogPublicationTests
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "one", null, null);
         var runtime = new SessionRuntime(manager);
-        manager.Catalog.BeforeAuthorityProjection = _ =>
+        manager.Catalog.File().BeforeAuthorityProjection = _ =>
             throw new IOException("Owned threshold projection fault.");
         await Assert.ThrowsAsync<AuthorityCommittedException>(() =>
             owner.Entry.SaveLane.CommitSettingsAsync(
@@ -109,7 +109,7 @@ public sealed class SessionCatalogPublicationTests
             ]!.GetValue<double>()
         );
         Assert.Single(manager.LocalProjections());
-        manager.Catalog.BeforeAuthorityProjection = null;
+        manager.Catalog.File().BeforeAuthorityProjection = null;
         await owner.Entry.SaveLane.SaveStrictAsync();
         owner.PublishStateChanged();
         Assert.Empty(manager.LocalProjections());

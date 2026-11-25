@@ -124,7 +124,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             "version: 1\ndefaultAction: deny\nrules: [{action: allow, tool: {source: builtin, name: task}, args: {ownerSessionId: {session: {relation: parent}}}}]"
         );
         // The relationship comes from current catalog metadata, not a hydrated owner's snapshot.
-        manager.Catalog.Upsert([SessionCatalogTests.Row("direct", 0, "foreign", "alpha", ["kid"])]);
+        manager.Catalog.File().Upsert([SessionCatalogTests.Row("direct", 0, "foreign", "alpha", ["kid"])]);
         await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() =>
             manager.AuthorizeToolAsync(
                 child,

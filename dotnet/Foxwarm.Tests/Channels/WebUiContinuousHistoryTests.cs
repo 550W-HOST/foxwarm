@@ -93,7 +93,7 @@ public sealed class WebUiContinuousHistoryTests
         await ForkClearLifecycleTests.AppendAsync(owner, rows);
         var row = f.Manager.Catalog.Get(owner.Id)!;
         row["aliases"] = new JsonArray("continuous-alias");
-        f.Manager.Catalog.Upsert([row]);
+        f.Manager.Catalog.File().Upsert([row]);
         // An Archive row beyond the ordinary snapshot must not leak into display.
         owner.Archive.WriteMessages([Raw(owner.Id, 126)]);
         var route = "api/sessions/continuous-alias/history/continuous";

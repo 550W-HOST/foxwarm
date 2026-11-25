@@ -140,14 +140,14 @@ internal sealed partial class SessionManager
             return;
         if (
             selected?.Get(record.NewId) is not null
-            || File.Exists(Catalog.FilePath) && Catalog.Get(record.NewId) is not null
+            || Catalog.Exists && Catalog.Get(record.NewId) is not null
         )
             throw new InvalidDataException(
                 "Owned destination still has Main membership; preserve its directory until recovery completes."
             );
         if (
             selected?.HasOtherAgentLifetime(record.OwnedAgent, record.NewId) == true
-            || File.Exists(Catalog.FilePath)
+            || Catalog.Exists
                 && Catalog.List().Any(row => SessionCatalog.Text(row["agent"]) == record.OwnedAgent)
         )
             throw new InvalidDataException(

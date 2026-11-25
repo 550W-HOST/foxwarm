@@ -211,7 +211,7 @@ public sealed class CommittedAuthorityProjectionTests
         await f.SeedAsync();
         f.Fault = failDurability ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : null;
         var projectionError = new IOException("Owned projection failure.");
-        f.Catalog.BeforeAuthorityProjection = _ => throw projectionError;
+        f.Catalog.File().BeforeAuthorityProjection = _ => throw projectionError;
         var error = await Assert.ThrowsAsync<AuthorityCommittedException>(() =>
             f.CommitAsync(operation)
         );
@@ -237,7 +237,7 @@ public sealed class CommittedAuthorityProjectionTests
             Assert.Same(projectionError, error.InnerException);
         // A later normal save can refresh the projection; this attempt does not retry it.
         f.Fault = null;
-        f.Catalog.BeforeAuthorityProjection = null;
+        f.Catalog.File().BeforeAuthorityProjection = null;
         await f.Store.CommitAsync((await f.Store.LoadAsync("s"))!, SaveKind.Strict);
         Assert.Equal("new", f.Catalog.Get("s")!["model"]!.GetValue<string>());
     }

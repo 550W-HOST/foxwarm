@@ -36,11 +36,11 @@ public sealed class TaskChildDeliveryTests
                     await manager.CreateChildAsync(parent, "vanished", null, null, null, null)
                 ).Child;
                 committedChild = child;
-                manager.Catalog.BeforeAuthorityProjection = id =>
+                manager.Catalog.File().BeforeAuthorityProjection = id =>
                 {
                     if (id != child.Id)
                         return;
-                    manager.Catalog.BeforeAuthorityProjection = null;
+                    manager.Catalog.File().BeforeAuthorityProjection = null;
                     throw new IOException("Owned child delivery projection failure.");
                 };
                 return child;
@@ -61,7 +61,7 @@ public sealed class TaskChildDeliveryTests
         Assert.Equal(committedChild.Id, task["ownerSessionId"]!.GetValue<string>());
         Assert.Equal(committedChild.Id, task["attachedSessionId"]!.GetValue<string>());
         Assert.Equal("failed", task["assignmentNotificationStatus"]!.GetValue<string>());
-        manager.Catalog.BeforeAuthorityProjection = null;
+        manager.Catalog.File().BeforeAuthorityProjection = null;
         await manager.ShutdownAsync();
     }
 
