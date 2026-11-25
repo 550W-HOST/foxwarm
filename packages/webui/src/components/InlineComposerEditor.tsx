@@ -468,7 +468,25 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const view = new EditorView({ parent: host, state: createState(value) })
     viewRef.current = view
     lastEmittedRef.current = JSON.stringify(documentToDraft(view.state))
+    // iOS moves a collapsed caret past either end of the document into the
+    // neighboring page text while the editor keeps focus, where no caret is
+    // painted. CodeMirror ignores selections outside its content, so put the
+    // DOM selection back at the editor's own selection. Real focus moves
+    // change the active element and are left alone.
+    const keepCaretInEditor = () => {
+      const selection = document.getSelection()
+      if (!selection || selection.rangeCount === 0 || !selection.isCollapsed || view.composing) return
+      if (document.activeElement !== view.contentDOM || view.contentDOM.contains(selection.focusNode)) return
+      view.focus()
+      if (!view.contentDOM.contains(document.getSelection()?.focusNode ?? null)) {
+        const { node, offset } = view.domAtPos(view.state.selection.main.head)
+        document.getSelection()?.collapse(node, offset)
+      }
+    }
+    // Registered after CodeMirror's own listener, which records the new DOM selection first.
+    document.addEventListener('selectionchange', keepCaretInEditor)
     return () => {
+      document.removeEventListener('selectionchange', keepCaretInEditor)
       if (compositionFrameRef.current !== null) cancelAnimationFrame(compositionFrameRef.current)
       compositionFrameRef.current = null
       view.destroy()

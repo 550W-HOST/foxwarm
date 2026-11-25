@@ -2041,6 +2041,72 @@ for (const spec of browsers) {
 }
 
 for (const spec of browsers) {
+  test(`${spec.name} keeps a collapsed caret that leaves either end of the focused editor inside it`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.evaluate(() => {
+      const form = window.fixtureEditor().closest('form')
+      const before = document.createElement('p'); before.id = 'fixture-text-before'; before.textContent = 'text before the composer'
+      const after = document.createElement('p'); after.id = 'fixture-text-after'; after.textContent = 'text after the composer'
+      form.before(before); form.after(after)
+    })
+    await page.click(editor)
+    await page.keyboard.type('test')
+    // iOS's space-bar trackpad moves the caret past the document end into the
+    // following page text while the editor keeps focus.
+    const escape = id => page.evaluate(id => new Promise(resolve => {
+      document.addEventListener('selectionchange', () => requestAnimationFrame(() => requestAnimationFrame(resolve)), { once: true })
+      const text = document.getElementById(id).firstChild
+      getSelection().collapse(text, id === 'fixture-text-after' ? 0 : text.length)
+    }), id)
+    const caret = () => page.evaluate(() => {
+      const selection = getSelection()
+      return {
+        inside: window.fixtureEditor().contains(selection.focusNode),
+        focused: document.activeElement === window.fixtureEditor(),
+        head: window.fixtureView().state.selection.main.head,
+      }
+    })
+    await escape('fixture-text-after')
+    assert.deepEqual(await caret(), { inside: true, focused: true, head: 4 })
+    await page.keyboard.type('X')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'testX')
+
+    await page.keyboard.press('Home')
+    await escape('fixture-text-before')
+    assert.deepEqual(await caret(), { inside: true, focused: true, head: 0 })
+    await page.keyboard.type('Y')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'YtestX')
+
+    // A range selection outside the editor is not changed.
+    await page.evaluate(() => new Promise(resolve => {
+      document.addEventListener('selectionchange', () => requestAnimationFrame(() => requestAnimationFrame(resolve)), { once: true })
+      const text = document.getElementById('fixture-text-after').firstChild
+      getSelection().setBaseAndExtent(text, 0, text, 4)
+    }))
+    assert.equal(await page.evaluate(() => getSelection().toString()), 'text')
+
+    // Real focus moves are left alone: a click on page text, Tab, and a toolbar button.
+    await page.click(editor)
+    const textBox = await page.$eval('#fixture-text-after', node => { const box = node.getBoundingClientRect(); return { x: box.left + 20, y: box.top + box.height / 2 } })
+    await page.mouse.click(textBox.x, textBox.y)
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.deepEqual(await page.evaluate(() => ({
+      focused: document.activeElement === window.fixtureEditor(),
+      inAfter: document.getElementById('fixture-text-after').contains(getSelection().focusNode),
+    })), { focused: false, inAfter: true })
+
+    await page.click(editor)
+    await page.keyboard.press('Tab')
+    assert.equal(await page.evaluate(() => document.activeElement !== window.fixtureEditor() && document.activeElement !== document.body), true)
+
+    await page.click(editor)
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureSends.length === 1)
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Send message')
+  }))
+}
+
+for (const spec of browsers) {
   test(`${spec.name} paints the caret in the theme text color, or the console accent`, async () => withBrowser(spec, async page => {
     // The editor library's own default caret is black regardless of theme.
     await page.evaluate(() => window.fixtureInitializeTheme())
