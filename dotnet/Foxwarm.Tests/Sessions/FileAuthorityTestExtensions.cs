@@ -19,6 +19,11 @@ internal static class FileAuthorityTestExtensions
     internal static Foxwarm.Models.LlmRequestJournalStore File(
         this Foxwarm.Models.ILlmJournalStore journal
     ) => (Foxwarm.Models.LlmRequestJournalStore)journal;
+
+    /// <summary>The run-record files, for write-stage hooks.</summary>
+    internal static Foxwarm.ToolScript.ToolScriptRunStore File(
+        this Foxwarm.ToolScript.IToolScriptRunStore store
+    ) => (Foxwarm.ToolScript.ToolScriptRunStore)store;
 }
 
 /// <summary>File-mode staging of identity-move crash states for tests.</summary>

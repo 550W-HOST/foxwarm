@@ -94,7 +94,7 @@ public sealed class ToolScriptLifecycleTests
             };
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
         var original = await File.ReadAllBytesAsync(
-            f.Manager.ToolScript.Store.PathFor(record["runId"]!.GetValue<string>())
+            f.Manager.ToolScript.Store.File().PathFor(record["runId"]!.GetValue<string>())
         );
         var error = await Assert.ThrowsAsync<NotSupportedException>(() =>
             f.Manager.ToolScript.ExecuteAsync(
@@ -113,7 +113,7 @@ public sealed class ToolScriptLifecycleTests
         Assert.Equal(
             original,
             await File.ReadAllBytesAsync(
-                f.Manager.ToolScript.Store.PathFor(record["runId"]!.GetValue<string>())
+                f.Manager.ToolScript.Store.File().PathFor(record["runId"]!.GetValue<string>())
             )
         );
     }
@@ -247,7 +247,7 @@ public sealed class ToolScriptLifecycleTests
         await using var f = await ScriptFixture.Create();
         var calls = 0;
         var writes = 0;
-        f.Manager.ToolScript.Store.StageForTests = (_, stage) =>
+        f.Manager.ToolScript.Store.File().StageForTests = (_, stage) =>
         {
             if (
                 stage
@@ -287,7 +287,7 @@ public sealed class ToolScriptLifecycleTests
         Assert.Equal(afterRename, record["snapshotBase64"] is not null);
         Assert.Equal(afterRename, record["waiting"] is not null);
         Assert.Equal(afterRename, run["continuationId"] is not null);
-        f.Manager.ToolScript.Store.StageForTests = null;
+        f.Manager.ToolScript.Store.File().StageForTests = null;
         if (afterRename)
         {
             var done = await f.Manager.ToolScript.ExecuteAsync(
@@ -331,37 +331,37 @@ public sealed class ToolScriptLifecycleTests
             new JsonObject { ["sessionId"] = "unknown", ["leaseId"] = "old" }
         );
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        var original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.PathFor(id));
+        var original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id));
         foreach (var tool in new[] { "continue_script", "cancel_toolscript_run" })
             await Assert.ThrowsAsync<NotSupportedException>(() =>
                 f.Manager.ToolScript.ExecuteAsync(tool, Resume(run), Context(f), default)
             );
         Assert.Equal(
             original,
-            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.PathFor(id))
+            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id))
         );
         record["relatedManagedSessions"] = new JsonArray();
         record["vmRuntime"]!["version"] = "unknown";
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.PathFor(id));
+        original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id));
         await Assert.ThrowsAsync<NotSupportedException>(() =>
             f.Manager.ToolScript.ExecuteAsync("continue_script", Resume(run), Context(f), default)
         );
         Assert.Equal(
             original,
-            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.PathFor(id))
+            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id))
         );
         record["vmRuntime"]!["version"] = MontyWorker.Version;
         var snapshot = record["snapshotBase64"]!.DeepClone();
         record["snapshotBase64"] = "not-valid-base64";
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.PathFor(id));
+        original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id));
         await Assert.ThrowsAsync<FormatException>(() =>
             f.Manager.ToolScript.ExecuteAsync("continue_script", Resume(run), Context(f), default)
         );
         Assert.Equal(
             original,
-            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.PathFor(id))
+            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id))
         );
         record["snapshotBase64"] = snapshot;
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
@@ -417,7 +417,7 @@ public sealed class ToolScriptLifecycleTests
     {
         await using var f = await ScriptFixture.Create();
         var calls = 0;
-        f.Manager.ToolScript.Store.StageForTests = (_, stage) =>
+        f.Manager.ToolScript.Store.File().StageForTests = (_, stage) =>
             stage == AtomicJsonWriteStage.BeforeRename
                 ? Task.FromException(new IOException("initial record boundary"))
                 : Task.CompletedTask;
@@ -437,7 +437,7 @@ public sealed class ToolScriptLifecycleTests
         Assert.Equal(0, calls);
         Assert.True(initial["recordPersistenceFailed"]!.GetValue<bool>());
         Assert.False(f.Manager.ToolScript.Store.Exists(initial["runId"]!.GetValue<string>()));
-        f.Manager.ToolScript.Store.StageForTests = null;
+        f.Manager.ToolScript.Store.File().StageForTests = null;
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var active = f.Manager.ToolScript.ExecuteAsync(
@@ -483,7 +483,7 @@ public sealed class ToolScriptLifecycleTests
         await using var f = await ScriptFixture.Create();
         var calls = 0;
         var writes = 0;
-        f.Manager.ToolScript.Store.StageForTests = (_, stage) =>
+        f.Manager.ToolScript.Store.File().StageForTests = (_, stage) =>
         {
             if (
                 stage

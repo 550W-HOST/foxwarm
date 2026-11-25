@@ -5,7 +5,42 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.ToolScript;
 
-internal sealed class ToolScriptRunStore(string root)
+/// <summary>
+/// Durable ToolScript run records, one per run ID, with a per-run lane that serializes their
+/// read-modify-write. Records are whole JSON documents read and written under the run's data
+/// budget. The file implementation is <see cref="ToolScriptRunStore"/>.
+/// </summary>
+internal interface IToolScriptRunStore
+{
+    /// <summary>Waits for the run's lane; disposing the result releases it.</summary>
+    Task<IDisposable> AcquireAsync(string id, CancellationToken token);
+
+    bool Exists(string id);
+
+    /// <summary>The run's record, or null when none exists.</summary>
+    Task<JsonObject?> ReadAsync(string id, CancellationToken token);
+
+    /// <summary>
+    /// The owner's newest records by update time, at most <paramref name="limit"/>, optionally
+    /// with one status. Unreadable records are skipped; a record over the data budget fails.
+    /// </summary>
+    Task<IReadOnlyList<JsonObject>> ListAsync(
+        string owner,
+        int limit,
+        string? status,
+        CancellationToken token
+    );
+
+    /// <summary>Replaces the record named by its <c>runId</c> atomically.</summary>
+    Task WriteAsync(
+        JsonObject record,
+        CancellationToken token,
+        ToolScriptDataBudget? activity = null
+    );
+}
+
+/// <summary>File-mode run records: <c>state/toolscript-runs/&lt;runId&gt;.json</c>.</summary>
+internal sealed class ToolScriptRunStore(string root) : IToolScriptRunStore
 {
     private readonly string directory = Path.Combine(
         Path.GetFullPath(root),
@@ -17,7 +52,7 @@ internal sealed class ToolScriptRunStore(string root)
     );
     internal Func<string, AtomicJsonWriteStage, Task>? StageForTests { get; set; }
 
-    internal async Task<IDisposable> AcquireAsync(string id, CancellationToken token)
+    public async Task<IDisposable> AcquireAsync(string id, CancellationToken token)
     {
         PathFor(id);
         var lane = lanes.GetOrAdd(id, _ => new(1, 1));
@@ -42,9 +77,9 @@ internal sealed class ToolScriptRunStore(string root)
         return Path.Combine(directory, id + ".json");
     }
 
-    internal bool Exists(string id) => File.Exists(PathFor(id));
+    public bool Exists(string id) => File.Exists(PathFor(id));
 
-    internal async Task<JsonObject?> ReadAsync(string id, CancellationToken token)
+    public async Task<JsonObject?> ReadAsync(string id, CancellationToken token)
     {
         var path = PathFor(id);
         try
@@ -61,7 +96,7 @@ internal sealed class ToolScriptRunStore(string root)
         }
     }
 
-    internal async Task<IReadOnlyList<JsonObject>> ListAsync(
+    public async Task<IReadOnlyList<JsonObject>> ListAsync(
         string owner,
         int limit,
         string? status,
@@ -105,7 +140,7 @@ internal sealed class ToolScriptRunStore(string root)
         return records;
     }
 
-    internal async Task WriteAsync(
+    public async Task WriteAsync(
         JsonObject record,
         CancellationToken token,
         ToolScriptDataBudget? activity = null

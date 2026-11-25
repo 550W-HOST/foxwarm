@@ -7,13 +7,13 @@ namespace Foxwarm.ToolScript;
 
 internal sealed partial class MainToolScript : IAsyncDisposable
 {
-    private readonly ToolScriptRunStore store;
+    private readonly IToolScriptRunStore store;
     private readonly string binary;
     private readonly ConcurrentDictionary<string, ActiveRun> active = new(StringComparer.Ordinal);
     private volatile bool closing;
     private readonly HashSet<TaskCompletionSource> activities = [];
     private readonly object gate = new();
-    internal ToolScriptRunStore Store => store;
+    internal IToolScriptRunStore Store => store;
 
     private sealed class ActiveRun : IDisposable
     {
@@ -66,8 +66,11 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     }
 
     internal MainToolScript(string root, string? binary = null)
+        : this(new ToolScriptRunStore(root), binary) { }
+
+    internal MainToolScript(IToolScriptRunStore store, string? binary = null)
     {
-        store = new(root);
+        this.store = store;
         this.binary = Path.GetFullPath(
             binary
                 ?? Path.Combine(

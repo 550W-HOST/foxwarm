@@ -87,7 +87,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             );
         Images = new(root);
         Artifacts = new(Path.Combine(root, "state", "artifacts"), ArtifactPreparation);
-        ToolScript = new(root);
+        ToolScript = new(Storage.ToolScriptRuns);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
