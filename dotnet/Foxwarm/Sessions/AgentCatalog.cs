@@ -9,7 +9,8 @@ internal sealed partial class AgentCatalog
 {
     private readonly string workspaceRoot;
     private readonly string agentRoot;
-    private readonly string indexPath;
+    private readonly Foxwarm.Storage.IStateDocument index;
+    private readonly Foxwarm.Storage.IStateDocument installation;
     private readonly bool canonicalLayout;
     private readonly SemaphoreSlim createGate = new(1, 1);
     private readonly object stateGate = new();
@@ -27,7 +28,8 @@ internal sealed partial class AgentCatalog
         bool createDirectories = true,
         Func<(int MaxDepth, int MaxChildren)>? treeLimits = null,
         Action<AtomicJsonWriteStage>? metadataWriteStage = null,
-        Func<string?>? installDefaultNode = null
+        Func<string?>? installDefaultNode = null,
+        Foxwarm.Storage.IStateDocuments? documents = null
     )
     {
         this.treeLimits = treeLimits ?? (() => (16, 128));
@@ -38,11 +40,16 @@ internal sealed partial class AgentCatalog
         agentRoot = canonicalLayout
             ? this.workspaceRoot
             : Path.Combine(this.workspaceRoot, "agents");
-        indexPath = Path.Combine(Path.GetFullPath(dataRoot), "state", "agents.json");
-        if (File.Exists(indexPath))
+        documents ??= new Foxwarm.Storage.FileStateDocuments(dataRoot);
+        index = documents.Open(
+            Foxwarm.Storage.StateDocumentName.Agents,
+            new(stage => this.metadataWriteStage?.Invoke(stage))
+        );
+        installation = documents.Open(Foxwarm.Storage.StateDocumentName.Installation);
+        if (this.index.ReadText() is { } indexText)
         {
             var index =
-                JsonNode.Parse(File.ReadAllText(indexPath)) as JsonObject
+                JsonNode.Parse(indexText) as JsonObject
                 ?? throw new InvalidDataException("Agent metadata must be an object.");
             // Only the identified C# envelope selects the retained list reader.
             // Source metadata may itself contain Agents named version or agents.
@@ -306,7 +313,7 @@ internal sealed partial class AgentCatalog
             AuthorityCommittedException? durabilityFailure = null;
             try
             {
-                AtomicIndexWrite(indexPath, payload.ToJsonText());
+                AtomicIndexWrite(payload.ToJsonText());
             }
             catch (AuthorityCommittedException error)
             {
@@ -391,7 +398,7 @@ internal sealed partial class AgentCatalog
         return Path.Combine(agentRoot, name);
     }
 
-    private void AtomicIndexWrite(string path, string text)
+    private void AtomicIndexWrite(string text)
     {
         var written = JsonNode.Parse(text) as JsonObject;
         EnsureReaderVersion(
@@ -399,11 +406,7 @@ internal sealed partial class AgentCatalog
         );
         try
         {
-            new AtomicJsonFile(
-                Path.GetDirectoryName(path)!,
-                Path.GetFileName(path),
-                metadataWriteStage
-            ).WriteTextPayload(text, default);
+            index.ReplaceText(text);
         }
         catch (AuthorityCommittedException error)
         {

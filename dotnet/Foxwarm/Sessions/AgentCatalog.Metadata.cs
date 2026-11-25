@@ -109,9 +109,7 @@ internal sealed partial class AgentCatalog
                 row["inheritable"] = false;
             try
             {
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonText()
+                AtomicIndexWrite(Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)
@@ -152,9 +150,7 @@ internal sealed partial class AgentCatalog
                 row["inherit"] = inherit;
             try
             {
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonText()
+                AtomicIndexWrite(Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)

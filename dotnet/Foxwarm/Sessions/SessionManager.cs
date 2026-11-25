@@ -155,7 +155,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                         ) ?? 128
                     )
                 ),
-            installDefaultNode: () => models.ConfigurationOwner?.AgentDefaultNode
+            installDefaultNode: () => models.ConfigurationOwner?.AgentDefaultNode,
+            documents: Storage.Documents
         );
         skills = new Skills(
             agents,

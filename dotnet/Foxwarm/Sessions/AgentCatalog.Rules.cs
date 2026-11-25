@@ -240,9 +240,7 @@ internal sealed partial class AgentCatalog
             }
             try
             {
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonText()
+                AtomicIndexWrite(Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)
@@ -290,9 +288,7 @@ internal sealed partial class AgentCatalog
                 row["defaultCwd"] = cwd;
             try
             {
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonText()
+                AtomicIndexWrite(Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)

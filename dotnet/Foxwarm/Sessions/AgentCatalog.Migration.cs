@@ -16,15 +16,15 @@ internal sealed partial class AgentCatalog
 
     internal const string InstallationFileName = "installation.json";
 
-    internal string InstallationPath =>
-        Path.Combine(Path.GetDirectoryName(indexPath)!, InstallationFileName);
+    /// <summary>Where the installation metadata lives, for diagnostics and tests.</summary>
+    internal string InstallationPath => installation.Locator;
 
-    internal static int? MinimumReaderVersion(string installationPath)
+    internal int? MinimumReaderVersion()
     {
-        if (!File.Exists(installationPath))
+        if (installation.ReadText() is not { } text)
             return null;
         var document =
-            JsonNode.Parse(File.ReadAllText(installationPath)) as JsonObject
+            JsonNode.Parse(text) as JsonObject
             ?? throw new InvalidDataException("Installation metadata must be an object.");
         var value = document["minimumReaderVersion"];
         if (value is null)
@@ -38,7 +38,7 @@ internal sealed partial class AgentCatalog
 
     private void RequireReaderVersion()
     {
-        var required = MinimumReaderVersion(InstallationPath);
+        var required = MinimumReaderVersion();
         if (required > ReaderVersion)
             throw new InvalidDataException(
                 $"This installation requires a Foxwarm Main that reads installation level {required}; this binary reads level {ReaderVersion}. Upgrade Main instead of downgrading."
@@ -67,18 +67,14 @@ internal sealed partial class AgentCatalog
     private void EnsureReaderVersion(JsonObject next)
     {
         var level = RequiredReaderLevel(next);
-        if (level == 0 || MinimumReaderVersion(InstallationPath) >= level)
+        if (level == 0 || MinimumReaderVersion() >= level)
             return;
-        var path = InstallationPath;
-        var document = File.Exists(path)
-            ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+        var document = installation.ReadText() is { } text
+            ? JsonNode.Parse(text) as JsonObject
                 ?? throw new InvalidDataException("Installation metadata must be an object.")
             : new JsonObject();
         document["minimumReaderVersion"] = level;
-        new AtomicJsonFile(
-            Path.GetDirectoryName(path)!,
-            InstallationFileName
-        ).WriteTextPayload(document.ToJsonText(), default);
+        installation.ReplaceText(document.ToJsonText());
     }
 
     /// <summary>
@@ -137,9 +133,7 @@ internal sealed partial class AgentCatalog
             };
             try
             {
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonText()
+                AtomicIndexWrite(Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)
@@ -185,9 +179,7 @@ internal sealed partial class AgentCatalog
             EnsureReaderVersion(next);
             try
             {
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonText()
+                AtomicIndexWrite(Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)

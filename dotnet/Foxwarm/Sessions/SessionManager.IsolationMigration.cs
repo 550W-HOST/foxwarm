@@ -94,7 +94,7 @@ internal sealed partial class SessionManager
         int? minimum = null;
         try
         {
-            minimum = AgentCatalog.MinimumReaderVersion(agents.InstallationPath);
+            minimum = agents.MinimumReaderVersion();
         }
         catch (Exception error) when (error is InvalidDataException or IOException) { }
         var result = new JsonObject

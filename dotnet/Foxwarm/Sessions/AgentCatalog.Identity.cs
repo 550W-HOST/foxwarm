@@ -120,9 +120,7 @@ internal sealed partial class AgentCatalog
                 }
                 try
                 {
-                    AtomicIndexWrite(
-                        indexPath,
-                        Payload(List().Where(id => id is not "main" && id != name), next)
+                    AtomicIndexWrite(Payload(List().Where(id => id is not "main" && id != name), next)
                             .ToJsonText()
                     );
                 }

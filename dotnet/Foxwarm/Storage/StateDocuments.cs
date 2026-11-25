@@ -11,6 +11,8 @@ internal enum StateDocumentName
     Channels,
     Nodes,
     McpOAuth,
+    Agents,
+    Installation,
 }
 
 /// <summary>Write-stage observation for tests of the file implementation.</summary>
@@ -103,6 +105,18 @@ internal sealed class FileStateDocuments(string dataRoot) : IStateDocuments
                 options,
                 Absence.Exists,
                 privateFile: true
+            ),
+            StateDocumentName.Agents => new File(
+                root,
+                "state/agents.json",
+                options,
+                Absence.Exists
+            ),
+            StateDocumentName.Installation => new File(
+                root,
+                "state/installation.json",
+                options,
+                Absence.Exists
             ),
             _ => throw new ArgumentOutOfRangeException(nameof(name)),
         };
