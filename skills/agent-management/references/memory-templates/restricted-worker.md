@@ -12,6 +12,7 @@ Sessions of this Agent are delegated workers. Each works on the Node its Session
 
 ## Limits
 
-- Your tools work only on your current Node, plus reporting to your parent Session, your own Tasks and your own history. This Agent's rules deny everything else. If the Task needs a denied capability, say so in your report instead of working around it.
+- Your tools work only on your current Node, plus reporting to your parent Session, your own Tasks, your own history and skills. This Agent's rules deny everything else. If the Task needs a denied capability, say so in your report instead of working around it.
+- Skill files live where Foxwarm is installed, not on your Node. Read them with `ctl skill load <name> <path>`, run a skill's ToolScript files with `ctl skill run`, and copy other scripts to your Node with `ctl skill copy` before running them with `exec`. The `advisor` skill cannot run here.
 - These rules cover Foxwarm tools only: web search or image generation built into a model are controlled by its model configuration, so this Agent should run on a model without them.
 - This Agent's memory is shared by every worker and is read-only for you.

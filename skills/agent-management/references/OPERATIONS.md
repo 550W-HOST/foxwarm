@@ -115,11 +115,13 @@ Use one long-lived worker Agent for all assignments of a kind instead of one Age
 - a Task and a child Session on that Node: `create_child_session({agentName:"worker", suffix:"<assignment>", node:"sandbox/<assignment>", taskId:"<task>", …handoff fields})`. Task completion notifies the coordinator;
 - an explicit release after review: `ctl session delete` for the worker, then `ctl node destroy` with its exact confirmation.
 
+The `restricted-worker` template also lets workers read, copy and run their own skills, except `advisor`, which forks the Session. A skill script runs as the worker: each call it makes is checked against the template, and its model requests are allowed.
+
 The [node-setup development workflow](../../node-setup/references/development-workflow.md) runs these steps with source transfer and delivery.
 
 ### Channel assistants
 
-For an Agent that answers a chat channel, reserve one long-lived Node for it (an `ensure`d container or a paired machine), then create the Agent with `defaultNode` set to that Node and the rules from `channel-assistant.rules.json`. Channel Sessions start on the default Node. The template allows tools on the current Node, file delivery to the same conversation, its own history and skills.
+For an Agent that answers a chat channel, reserve one long-lived Node for it (an `ensure`d container or a paired machine), then create the Agent with `defaultNode` set to that Node and the rules from `channel-assistant.rules.json`. Channel Sessions start on the default Node. The template allows tools on the current Node, file delivery to the same conversation, its own history, and reading skills and copying their files to that Node; it does not run skill scripts.
 
 Files people send to an Agent are saved on `master` in its directory under `.temp/channel-files`, not on its Node; the template's first rule allows reading only that directory there. All conversations of the Agent share its Node and these files. Use one Agent and Node per group of people who may see each other's material.
 
