@@ -17,22 +17,16 @@ Read and adapt:
 Write ordinary top-level code. The `args` input is available throughout the script:
 
 ```python
-base_dir = args["baseDir"].rstrip("/")
+path = args.get("path", "README.md")
 
-listing = call_tool("read", {"filePath": base_dir})
-print(listing[:200])
+doc = call_tool("read", {"filePath": path})
+print(doc["content"][:200])
 
 label = ask_agent("Reply with a short label")
-return {"label": label, "listingPreview": listing[:200]}
+return {"label": label, "excerpt": doc["content"][:200]}
 ```
 
-Run the bundled file using the absolute skill directory returned by `ctl skill load` in place of `<skill-directory>`. This example assumes the session's current Node is Main, where the bundled resources live:
-
-```text
-run_script({node: "master", filePath: "<skill-directory>/examples/automation_basic.py", args: {baseDir: "<skill-directory>/examples"}})
-```
-
-Resource references above are relative to the skill directory for reading documentation. `run_script.filePath` is instead resolved on its selected source Node using the session working directory; loading a skill does not change that directory. Selecting `node: "master"` reads the source from master but does not change the current Node for nested tools. When running from another current Node, provide `baseDir` for a directory on that Node containing the example's `README.md`, or copy the resources there before running them.
+Run the bundled example with `ctl skill run toolscript-automation --script examples/automation_basic.py`.
 
 Or run a small inline script with the `code` argument. The default mode is `foreground`.
 

@@ -211,4 +211,32 @@ public sealed partial class SkillAccessTests
             (await RunCommand(host, entryOnly, "skill run demo --script scripts/other.py")).FailureCode()
         );
     }
+
+    [Fact]
+    public async Task The_bundled_example_runs_for_a_template_worker_on_another_Node()
+    {
+        if (!(OperatingSystem.IsLinux() && MontyWorker.IsSupported))
+            return;
+        await using var host = await Host.Create();
+        var bundled = Path.Combine(ToolScriptSourceTests.BundledSkills(), "toolscript-automation");
+        foreach (var file in Directory.GetFiles(bundled, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(host.Skills.Path, "toolscript-automation", Path.GetRelativePath(bundled, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+        await host.F.Manager.CreateAgentAsync("worker", createMainSession: false);
+        await host.F.Manager.SetAgentRulesAsync("worker", RestrictedWorkerRules());
+        var worker = await host.F.Manager.CreateNamedAsync("worker", "remote", null, null, initialNode: "sandbox-x");
+        Assert.Equal("sandbox-x", host.F.Manager.CurrentNode(worker));
+        var tools = host.Tools(worker);
+        async Task<JsonObject> Call(string name, JsonObject args) =>
+            (
+                await tools.ExecuteAsync(
+                    new JsonObject { ["id"] = "example-" + name, ["name"] = name, ["args"] = args.DeepClone() },
+                    default
+                )
+            )!.AsObject();
+        await ToolScriptSourceTests.AssertBundledExampleRuns(Call, host.Skills.Path);
+    }
 }

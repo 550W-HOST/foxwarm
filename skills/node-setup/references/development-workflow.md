@@ -34,17 +34,11 @@ rules:
     action: allow   # narrowed by developer-worker's local layer
 ```
 
-The coordinator rule is intentionally powerful; use the installation's trusted coordinator identity, and review earlier matching rules first. If the coordinator is restricted instead, remember that Provider-wide `create` and `ensure` have no concrete Node target and need their own rules, that cross-Node copy allows must cover both endpoints, and that `run_script` is a separate grant. Do not generate exact Node or Task rules per assignment, and do not let this helper edit authorization.
+The coordinator rule is intentionally powerful; use the installation's trusted coordinator identity, and review earlier matching rules first. If the coordinator is restricted instead, remember that Provider-wide `create` and `ensure` have no concrete Node target and need their own rules, that cross-Node copy allows must cover both endpoints, and that `run_skill` is a separate grant. Do not generate exact Node or Task rules per assignment, and do not let this helper edit authorization.
 
 ## Load the runnable example
 
-The self-contained ToolScript is `examples/development_workflow.py`. Resolve `<skill-directory>` from `ctl skill load node-setup`. It runs from an installed/copied skill directory without importing a source checkout or sibling Python modules:
-
-```text
-run_script({node:"master", filePath:"<skill-directory>/examples/development_workflow.py", args:{...}})
-```
-
-Choose the source Node that actually holds the script. This `node` argument controls the script's **source file**, not nested tool routing. The coordinator must be allowed to read that source. The helper explicitly routes every exec/read/copy leg. Load `toolscript-automation` for Monty execution, `continue_script`, and native result contracts. The JSON objects below are `run_script.args`; preserve the returned **script result**, not the outer run wrapper, between phases.
+The self-contained ToolScript is `examples/development_workflow.py`. Run it with `ctl skill run node-setup --script examples/development_workflow.py --args @args`; it needs no source checkout or sibling Python modules. The helper routes every exec, read and copy leg explicitly. Load `toolscript-automation` for Monty execution, `continue_script`, and native result contracts. The JSON objects below are `run_script.args`; preserve the returned **script result**, not the outer run wrapper, between phases.
 
 ### 0. Provision a fresh Node (Providers that create Nodes)
 

@@ -45,10 +45,13 @@ Read [Backup and Restore](references/BACKUP-RESTORE.md) for the restore-set
 contents, consistency boundaries, and the bundled SQLite chunk helper:
 
 ```bash
-python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py create SOURCE.sqlite NEW-SNAPSHOT-DIRECTORY
-python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py verify SNAPSHOT-DIRECTORY
-python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py restore SNAPSHOT-DIRECTORY NEW.sqlite
+ctl skill copy foxwarm-maintenance <dir> --path scripts
+python3 <dir>/sqlite-chunks.py create SOURCE.sqlite NEW-SNAPSHOT-DIRECTORY
+python3 <dir>/sqlite-chunks.py verify SNAPSHOT-DIRECTORY
+python3 <dir>/sqlite-chunks.py restore SNAPSHOT-DIRECTORY NEW.sqlite
 ```
+
+On master, `<dir>` can instead be the skill's own `scripts` directory; `ctl skill load foxwarm-maintenance` shows its path there.
 
 Run these from the program repository. They operate on one SQLite component,
 not a complete installation. Online SQLite backups must include committed WAL
