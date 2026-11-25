@@ -13,6 +13,7 @@ internal interface IStorageContext
     IArchiveStore Archive { get; }
     IIdentityLedger Identities { get; }
     ISessionCatalogStore Catalog { get; }
+    ITaskRowStore Tasks { get; }
 }
 
 /// <summary>Construction seams of the file stores, used only by tests.</summary>
@@ -30,6 +31,7 @@ internal sealed class FileStorageContext : IStorageContext
         Archive = new SqliteArchiveStore(DataRoot);
         Identities = new FileIdentityLedger(DataRoot);
         Catalog = new SessionCatalog(DataRoot);
+        Tasks = new SqliteTaskRowStore(DataRoot);
         Authority = new FileSessionAuthorityBackend(
             DataRoot,
             options?.AuthorityStageHook,
@@ -46,4 +48,6 @@ internal sealed class FileStorageContext : IStorageContext
     public IIdentityLedger Identities { get; }
 
     public ISessionCatalogStore Catalog { get; }
+
+    public ITaskRowStore Tasks { get; }
 }

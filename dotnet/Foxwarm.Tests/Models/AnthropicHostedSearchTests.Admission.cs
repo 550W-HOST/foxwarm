@@ -324,7 +324,14 @@ public sealed partial class AnthropicHostedSearchTests
                 (_, _) => Task.CompletedTask,
                 images: store.Images
             );
-            Tasks = new TaskService(null!, data, id => id, _ => [], _ => null, _ => "main");
+            Tasks = new TaskService(
+                null!,
+                new SqliteTaskRowStore(data),
+                id => id,
+                _ => [],
+                _ => null,
+                _ => "main"
+            );
             var chat = new SessionChatService(
                 requests,
                 options,

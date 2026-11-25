@@ -384,7 +384,14 @@ public sealed class TaskReminderHistoryTests
                     return Task.CompletedTask;
                 }
             );
-            Tasks = new TaskService(null!, root, id => id, _ => [], _ => null, _ => "main");
+            Tasks = new TaskService(
+                null!,
+                new SqliteTaskRowStore(root),
+                id => id,
+                _ => [],
+                _ => null,
+                _ => "main"
+            );
             var agents = new AgentCatalog(root, Path.Combine(root, "work"));
             var memory = new AgentMemory(agents, new Skills(agents, Path.Combine(root, "skills")));
             var chat = new SessionChatService(

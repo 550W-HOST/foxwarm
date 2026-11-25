@@ -125,7 +125,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Catalog = Storage.Catalog;
         Tasks = new TaskService(
             this,
-            this.root,
+            Storage.Tasks,
             id => ResolveTaskSessionId(id),
             id => TaskSessionAliases(id),
             id => TaskAnchorSeq(id),

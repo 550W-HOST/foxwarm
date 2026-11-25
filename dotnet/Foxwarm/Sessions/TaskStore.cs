@@ -31,19 +31,25 @@ internal sealed class TaskStore : IDisposable
     private const int ListLimit = 50;
     private const int ChildLimit = 20;
     private const int NoteLimit = 10;
-    private readonly string path;
+    private readonly ITaskRowStore rows;
     private readonly Func<string, string?> resolveAlias;
     private readonly Func<string, IReadOnlyList<string>> aliases;
     private readonly object gate = new();
-    private SqliteConnection? connection;
 
     internal TaskStore(
         string root,
         Func<string, string?> resolveAlias,
         Func<string, IReadOnlyList<string>> aliases
     )
+        : this(new SqliteTaskRowStore(root), resolveAlias, aliases) { }
+
+    internal TaskStore(
+        ITaskRowStore rows,
+        Func<string, string?> resolveAlias,
+        Func<string, IReadOnlyList<string>> aliases
+    )
     {
-        path = Path.Combine(root, "state", "tasks.sqlite");
+        this.rows = rows;
         this.resolveAlias = resolveAlias;
         this.aliases = aliases;
     }
@@ -65,15 +71,10 @@ internal sealed class TaskStore : IDisposable
         if (actorKind != "user" && action is not ("list" or "get") && string.IsNullOrEmpty(actor))
             throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.");
         lock (gate)
-        {
-            var db = Open();
-            var read = action is "list" or "get";
-            if (read)
-            {
-                using var tx = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
-                try
-                {
-                    var result = ExecuteTransaction(
+            return rows.Run(
+                action is "list" or "get" ? TaskRowAccess.Read : TaskRowAccess.Write,
+                db =>
+                    ExecuteTransaction(
                         db,
                         args,
                         actor,
@@ -81,45 +82,8 @@ internal sealed class TaskStore : IDisposable
                         anchorSeq,
                         actorKind,
                         scopeSessionIds
-                    );
-                    tx.Commit();
-                    return result;
-                }
-                catch
-                {
-                    try
-                    {
-                        tx.Rollback();
-                    }
-                    catch { }
-                    throw;
-                }
-            }
-            db.ExecuteNonQuery("BEGIN IMMEDIATE");
-            try
-            {
-                var result = ExecuteTransaction(
-                    db,
-                    args,
-                    actor,
-                    httpLimit ?? ListLimit,
-                    anchorSeq,
-                    actorKind,
-                    scopeSessionIds
-                );
-                db.ExecuteNonQuery("COMMIT");
-                return result;
-            }
-            catch
-            {
-                try
-                {
-                    db.ExecuteNonQuery("ROLLBACK");
-                }
-                catch { }
-                throw;
-            }
-        }
+                    )
+            );
     }
 
     internal TaskStoreResult ExecuteAsUser(JsonObject args, int? httpLimit = null) =>
@@ -129,7 +93,7 @@ internal sealed class TaskStore : IDisposable
     {
         lock (gate)
         {
-            var row = Read(Open(), taskId);
+            var row = rows.Run(TaskRowAccess.Direct, db => db.Read(taskId));
             return row is null ? null : Canonical(Text(row["ownerSessionId"]));
         }
     }
@@ -138,7 +102,7 @@ internal sealed class TaskStore : IDisposable
     {
         lock (gate)
         {
-            var row = Read(Open(), taskId);
+            var row = rows.Run(TaskRowAccess.Direct, db => db.Read(taskId));
             return row is null ? null : Canonical(Text(row["createdBySessionId"]));
         }
     }
@@ -150,8 +114,7 @@ internal sealed class TaskStore : IDisposable
             return null;
         lock (gate)
         {
-            var db = Open();
-            var row = Read(db, id);
+            var row = rows.Run(TaskRowAccess.Direct, db => db.Read(id));
             return row is null
                 ? null
                 : Canonical(Text(row["ownerSessionId"]) ?? Text(row["createdBySessionId"]));
@@ -161,102 +124,79 @@ internal sealed class TaskStore : IDisposable
     internal void MigrateLegacyGoal(string sessionId, string goal, long anchorSeq)
     {
         lock (gate)
-        {
-            var db = Open();
-            db.ExecuteNonQuery("BEGIN IMMEDIATE");
-            try
-            {
-                var references = References(sessionId);
-                var placeholders = string.Join(',', references.Select((_, index) => "$r" + index));
-                using var find = db.CreateCommand();
-                find.CommandText =
-                    $"SELECT id FROM tasks WHERE legacyGoalSessionId IN ({placeholders}) ORDER BY createdAt,id LIMIT 1";
-                for (var index = 0; index < references.Count; index++)
-                    Add(find, "$r" + index, references[index]);
-                var existing = find.ExecuteScalar()?.ToString();
-                if (existing is null)
+            rows.Run(
+                TaskRowAccess.Write,
+                db =>
                 {
-                    var id = NewTaskId();
-                    var now = Now();
-                    using var insert = db.CreateCommand();
-                    insert.CommandText =
-                        "INSERT INTO tasks(id,title,description,status,createdBySessionId,ownerSessionId,createdAt,updatedAt,legacyGoalSessionId,reminderLastSeq) VALUES($id,$title,$description,'active',$creator,$owner,$now,$now,$legacy,$anchor)";
-                    Add(insert, "$id", id);
-                    Add(
-                        insert,
-                        "$title",
-                        SessionGoal.Trim(goal).Split('\n')[0][
-                            ..Math.Min(200, SessionGoal.Trim(goal).Split('\n')[0].Length)
-                        ]
-                    );
-                    Add(insert, "$description", goal);
-                    Add(insert, "$creator", Canonical(sessionId));
-                    Add(insert, "$owner", Canonical(sessionId));
-                    Add(insert, "$now", now);
-                    Add(insert, "$legacy", sessionId);
-                    Add(insert, "$anchor", anchorSeq);
-                    insert.ExecuteNonQuery();
+                    var existing = db.FindLegacyGoal(References(sessionId));
+                    if (existing is null)
+                    {
+                        var now = Now();
+                        db.Insert(
+                            "id",
+                            NewTaskId(),
+                            "title",
+                            SessionGoal.Trim(goal).Split('\n')[0][
+                                ..Math.Min(200, SessionGoal.Trim(goal).Split('\n')[0].Length)
+                            ],
+                            "description",
+                            goal,
+                            "status",
+                            "active",
+                            "createdBySessionId",
+                            Canonical(sessionId),
+                            "ownerSessionId",
+                            Canonical(sessionId),
+                            "createdAt",
+                            now,
+                            "updatedAt",
+                            now,
+                            "legacyGoalSessionId",
+                            sessionId,
+                            "reminderLastSeq",
+                            anchorSeq
+                        );
+                    }
+                    else if (db.Read(existing) is { } existingRow)
+                    {
+                        var creator = Canonical(Text(existingRow["createdBySessionId"]));
+                        var owner = Canonical(Text(existingRow["ownerSessionId"]));
+                        var attached = Canonical(Text(existingRow["attachedSessionId"]));
+                        var previousOwner = Canonical(Text(existingRow["previousOwnerSessionId"]));
+                        db.Update(
+                            existing,
+                            "createdBySessionId",
+                            creator,
+                            "ownerSessionId",
+                            owner,
+                            "attachedSessionId",
+                            attached,
+                            "previousOwnerSessionId",
+                            previousOwner,
+                            "legacyGoalSessionId",
+                            Canonical(Text(existingRow["legacyGoalSessionId"]))
+                        );
+                    }
+                    return 0;
                 }
-                else if (Read(db, existing) is { } existingRow)
-                {
-                    var creator = Canonical(Text(existingRow["createdBySessionId"]));
-                    var owner = Canonical(Text(existingRow["ownerSessionId"]));
-                    var attached = Canonical(Text(existingRow["attachedSessionId"]));
-                    var previousOwner = Canonical(Text(existingRow["previousOwnerSessionId"]));
-                    Update(
-                        db,
-                        existing,
-                        "createdBySessionId",
-                        creator,
-                        "ownerSessionId",
-                        owner,
-                        "attachedSessionId",
-                        attached,
-                        "previousOwnerSessionId",
-                        previousOwner,
-                        "legacyGoalSessionId",
-                        Canonical(Text(existingRow["legacyGoalSessionId"]))
-                    );
-                }
-                db.ExecuteNonQuery("COMMIT");
-            }
-            catch
-            {
-                try
-                {
-                    db.ExecuteNonQuery("ROLLBACK");
-                }
-                catch { }
-                throw;
-            }
-        }
+            );
     }
 
     internal string? ReadStoredDescription(string taskId)
     {
         lock (gate)
-        {
-            var db = Open();
-            using var command = db.CreateCommand();
-            command.CommandText = "SELECT description FROM tasks WHERE id=$id";
-            Add(command, "$id", taskId);
-            var value = command.ExecuteScalar();
-            if (value is null or DBNull)
-                return null;
-            return value.ToString();
-        }
+            return Text(rows.Run(TaskRowAccess.Direct, db => db.Read(taskId))?["description"]);
     }
 
     internal void AttachChild(string taskId, string childSessionId)
     {
         lock (gate)
-        {
-            var db = Open();
-            db.ExecuteNonQuery("BEGIN IMMEDIATE");
-            try
-            {
+            rows.Run(
+                TaskRowAccess.Write,
+                db =>
+                {
                 var task =
-                    Read(db, taskId)
+                    db.Read(taskId)
                     ?? throw new TaskError("TASK_NOT_FOUND", $"Task {taskId} not found.", 404);
                 var status = Text(task["status"]);
                 if (status is "completed" or "cancelled")
@@ -269,8 +209,7 @@ internal sealed class TaskStore : IDisposable
                         409
                     );
                 var now = Now();
-                Update(
-                    db,
+                db.Update(
                     taskId,
                     "createdBySessionId",
                     Canonical(Text(task["createdBySessionId"])),
@@ -281,46 +220,30 @@ internal sealed class TaskStore : IDisposable
                     "updatedAt",
                     now
                 );
-                AddNote(
-                    db,
+                db.AddNote(
                     taskId,
                     childSessionId,
                     "session",
                     $"Attached new Session {Canonical(childSessionId)}.",
                     now
                 );
-                db.ExecuteNonQuery("COMMIT");
-            }
-            catch
-            {
-                try
-                {
-                    db.ExecuteNonQuery("ROLLBACK");
+                    return 0;
                 }
-                catch { }
-                throw;
-            }
-        }
+            );
     }
 
     internal JsonObject TaskContext(string sessionId, IReadOnlyList<long> sequences, bool consume)
     {
         lock (gate)
-        {
-            var db = Open();
-            db.ExecuteNonQuery("BEGIN IMMEDIATE");
-            try
-            {
+            return rows.Run(
+                TaskRowAccess.Write,
+                db =>
+                {
                 var references = References(sessionId);
                 var result = new List<JsonObject>();
-                using var cmd = db.CreateCommand();
-                cmd.CommandText = "SELECT * FROM tasks WHERE status='active' ORDER BY createdAt,id";
-                using var reader = cmd.ExecuteReader();
-                var rows = new List<JsonObject>();
-                while (reader.Read())
-                    rows.Add(Row(reader));
+                var active = db.ActiveTasks();
                 var latest = sequences.Count == 0 ? 0 : sequences.Max();
-                foreach (var row in rows)
+                foreach (var row in active)
                 {
                     var creator = Canonical(Text(row["createdBySessionId"]));
                     var owner = Canonical(Text(row["ownerSessionId"]));
@@ -339,8 +262,7 @@ internal sealed class TaskStore : IDisposable
                         || attached != Text(row["attachedSessionId"])
                         || previousOwner != Text(row["previousOwnerSessionId"])
                     )
-                        Update(
-                            db,
+                        db.Update(
                             Text(row["id"])!,
                             "createdBySessionId",
                             creator,
@@ -372,8 +294,7 @@ internal sealed class TaskStore : IDisposable
                         );
                         count = 0;
                     }
-                    Update(
-                        db,
+                    db.Update(
                         id,
                         "reminderLastSeq",
                         Math.Max(latest, last),
@@ -381,24 +302,14 @@ internal sealed class TaskStore : IDisposable
                         count
                     );
                 }
-                db.ExecuteNonQuery("COMMIT");
                 var tasks = new JsonArray(result.Take(50).Select(item => (JsonNode)item).ToArray());
                 return new JsonObject
                 {
                     ["tasks"] = tasks,
                     ["omitted"] = Math.Max(0, result.Count - tasks.Count),
                 };
-            }
-            catch
-            {
-                try
-                {
-                    db.ExecuteNonQuery("ROLLBACK");
                 }
-                catch { }
-                throw;
-            }
-        }
+            );
     }
 
     internal void MarkNotification(
@@ -409,37 +320,18 @@ internal sealed class TaskStore : IDisposable
     )
     {
         lock (gate)
-        {
-            var db = Open();
-            db.ExecuteNonQuery("BEGIN IMMEDIATE");
-            try
-            {
-                var sql =
-                    $"UPDATE tasks SET {field}=$status WHERE id=$id AND {field}='pending'"
-                    + (revision is null ? "" : " AND assignmentRevision=$revision");
-                using var cmd = db.CreateCommand();
-                cmd.CommandText = sql;
-                cmd.Parameters.AddWithValue("$status", status);
-                cmd.Parameters.AddWithValue("$id", taskId);
-                if (revision is not null)
-                    cmd.Parameters.AddWithValue("$revision", revision.Value);
-                cmd.ExecuteNonQuery();
-                db.ExecuteNonQuery("COMMIT");
-            }
-            catch
-            {
-                try
+            rows.Run(
+                TaskRowAccess.Write,
+                db =>
                 {
-                    db.ExecuteNonQuery("ROLLBACK");
+                    db.SettlePendingNotification(taskId, field, status, revision);
+                    return 0;
                 }
-                catch { }
-                throw;
-            }
-        }
+            );
     }
 
     private TaskStoreResult ExecuteTransaction(
-        SqliteConnection db,
+        ITaskRows db,
         JsonObject args,
         string? actor,
         int limit,
@@ -451,8 +343,6 @@ internal sealed class TaskStore : IDisposable
         var action = Text(args["action"])!;
         if (action == "list")
         {
-            var status = Text(args["status"]);
-            var where = status is null ? "status IN ('open','active')" : "status=$status";
             var scoped =
                 Text(args["scope"]) is string scope && scope != "all"
                     ? (
@@ -467,28 +357,14 @@ internal sealed class TaskStore : IDisposable
                         .Distinct(StringComparer.Ordinal)
                         .ToArray()
                     : null;
-            if (scoped is not null)
-            {
-                var placeholders = string.Join(',', scoped.Select((_, i) => "$scope" + i));
-                where +=
-                    scoped.Length == 0 ? " AND 0"
-                    : Text(args["scope"]) == "owned" ? $" AND ownerSessionId IN ({placeholders})"
-                    : $" AND (createdBySessionId IN ({placeholders}) OR ownerSessionId IN ({placeholders}))";
-            }
-            var rows = Query(
-                db,
-                $"SELECT id,title,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,updatedAt FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
-                status,
-                Math.Min(ListLimit, Math.Max(1, limit)),
-                scopeIds: scoped
+            var filter = new TaskListFilter(
+                Text(args["status"]),
+                scoped,
+                Text(args["scope"]) == "owned"
             );
+            var rows = db.List(filter, Math.Min(ListLimit, Math.Max(1, limit)));
             rows = rows.Select(CanonicalReferences).ToList();
-            var total = ScalarInt(
-                db,
-                $"SELECT COUNT(*) FROM tasks WHERE {where}",
-                status,
-                scopeIds: scoped
-            );
+            var total = db.Count(filter);
             return new(
                 TaskJson(
                     new JsonObject
@@ -504,7 +380,7 @@ internal sealed class TaskStore : IDisposable
         if (action == "create")
         {
             var parent = Text(args["parentTaskId"]);
-            if (parent is not null && !Exists(db, parent))
+            if (parent is not null && db.Read(parent) is null)
                 throw new TaskError("TASK_NOT_FOUND", $"Task {parent} not found.", 404);
             var id = NewTaskId();
             var requestedOwner =
@@ -514,27 +390,36 @@ internal sealed class TaskStore : IDisposable
             var notifyNew =
                 requestedOwner is not null && args["notifySession"]?.GetValue<bool>() == true;
             var now = Now();
-            using var cmd = db.CreateCommand();
-            cmd.CommandText =
-                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq,ownerAssignedAt) VALUES($id,$title,$description,$status,$parent,$creatorKind,$creator,$owner,$now,$now,$revision,$notification,$anchor,$assigned)";
-            Add(cmd, "$id", id);
-            Add(cmd, "$title", Text(args["title"])!);
-            Add(cmd, "$description", Text(args["description"]));
-            Add(cmd, "$parent", parent);
-            Add(cmd, "$creatorKind", actorKind);
-            Add(cmd, "$creator", actorKind == "session" ? Canonical(actor!) : null);
-            Add(cmd, "$owner", requestedOwner);
-            Add(cmd, "$now", now);
-            Add(cmd, "$assigned", requestedOwner is null ? null : now);
-            Add(cmd, "$status", requestedOwner is null ? "open" : "active");
-            Add(cmd, "$revision", requestedOwner is null ? 0 : 1);
-            Add(cmd, "$notification", notifyNew ? "pending" : null);
-            Add(
-                cmd,
-                "$anchor",
-                actorKind == "session" && requestedOwner == Canonical(actor!) ? anchorSeq : null
+            db.Insert(
+                "id",
+                id,
+                "title",
+                Text(args["title"])!,
+                "description",
+                Text(args["description"]),
+                "status",
+                requestedOwner is null ? "open" : "active",
+                "parentTaskId",
+                parent,
+                "createdByKind",
+                actorKind,
+                "createdBySessionId",
+                actorKind == "session" ? Canonical(actor!) : null,
+                "ownerSessionId",
+                requestedOwner,
+                "createdAt",
+                now,
+                "updatedAt",
+                now,
+                "assignmentRevision",
+                requestedOwner is null ? 0 : 1,
+                "assignmentNotificationStatus",
+                notifyNew ? "pending" : null,
+                "reminderLastSeq",
+                actorKind == "session" && requestedOwner == Canonical(actor!) ? anchorSeq : null,
+                "ownerAssignedAt",
+                requestedOwner is null ? null : now
             );
-            cmd.ExecuteNonQuery();
             return new(
                 TaskJson(new JsonObject { ["task"] = Public(db, id) }),
                 notifyNew ? new TaskAssignmentPlan(1, requestedOwner, null, actorKind) : null
@@ -543,7 +428,7 @@ internal sealed class TaskStore : IDisposable
         if (taskId is null)
             throw new TaskError("TASK_INVALID_ARGS", $"task {action} requires a non-empty taskId.");
         var task =
-            Read(db, taskId)
+            db.Read(taskId)
             ?? throw new TaskError("TASK_NOT_FOUND", $"Task {taskId} not found.", 404);
         if (action == "get")
             return new(TaskJson(Details(db, task["id"]!.GetValue<string>())));
@@ -552,8 +437,8 @@ internal sealed class TaskStore : IDisposable
             var note = Text(args["note"]);
             if (note is null)
                 throw new TaskError("TASK_INVALID_ARGS", "comment requires a non-empty note.");
-            AddNote(db, taskId, actorKind == "session" ? actor : null, actorKind, note, Now());
-            Update(db, taskId, "updatedAt", Now());
+            db.AddNote(taskId, actorKind == "session" ? actor : null, actorKind, note, Now());
+            db.Update(taskId, "updatedAt", Now());
             return new(
                 TaskJson(new JsonObject { ["task"] = Public(db, taskId) }),
                 CommentOwner: args["notifySession"]?.GetValue<bool>() == true
@@ -581,8 +466,7 @@ internal sealed class TaskStore : IDisposable
                 : null;
         var owner = Canonical(Text(task["ownerSessionId"]));
         var creator = Canonical(Text(task["createdBySessionId"])!);
-        Update(
-            db,
+        db.Update(
             taskId,
             "createdBySessionId",
             creator,
@@ -606,8 +490,7 @@ internal sealed class TaskStore : IDisposable
                     409
                 );
             if (owner is null)
-                Update(
-                    db,
+                db.Update(
                     taskId,
                     "ownerSessionId",
                     actor,
@@ -664,8 +547,7 @@ internal sealed class TaskStore : IDisposable
                         && previous is not null
                         && previous != requested
                         && (changed || previousStatus == "failed");
-                    Update(
-                        db,
+                    db.Update(
                         taskId,
                         "ownerSessionId",
                         requested,
@@ -691,10 +573,9 @@ internal sealed class TaskStore : IDisposable
                         changed ? 0 : Int(task["reminderMessageCount"])
                     );
                     if (changed)
-                        Update(db, taskId, "ownerAssignedAt", requested is null ? null : now2);
+                        db.Update(taskId, "ownerAssignedAt", requested is null ? null : now2);
                     if (changed)
-                        AddNote(
-                            db,
+                        db.AddNote(
                             taskId,
                             actor!,
                             actorKind,
@@ -709,8 +590,7 @@ internal sealed class TaskStore : IDisposable
                     );
                     break;
                 case "update":
-                    Update(
-                        db,
+                    db.Update(
                         taskId,
                         "title",
                         Text(args["title"]) ?? Text(task["title"]),
@@ -722,7 +602,7 @@ internal sealed class TaskStore : IDisposable
                         now2
                     );
                     if (args["note"] is not null)
-                        AddNote(db, taskId, actor!, actorKind, Text(args["note"])!, now2);
+                        db.AddNote(taskId, actor!, actorKind, Text(args["note"])!, now2);
                     if (
                         args["note"] is not null
                         && args["notifySession"]?.GetValue<bool>() == true
@@ -731,11 +611,10 @@ internal sealed class TaskStore : IDisposable
                     )
                         commentOwner = owner;
                     if (Text(args["status"]) == "active" && Text(task["status"]) != "active")
-                        Update(db, taskId, "reminderLastSeq", anchorSeq, "reminderMessageCount", 0);
+                        db.Update(taskId, "reminderLastSeq", anchorSeq, "reminderMessageCount", 0);
                     break;
                 case "complete":
-                    Update(
-                        db,
+                    db.Update(
                         taskId,
                         "status",
                         "completed",
@@ -751,8 +630,7 @@ internal sealed class TaskStore : IDisposable
                     completed = true;
                     break;
                 case "cancel":
-                    Update(
-                        db,
+                    db.Update(
                         taskId,
                         "status",
                         "cancelled",
@@ -762,7 +640,7 @@ internal sealed class TaskStore : IDisposable
                         now2
                     );
                     if (args["reason"] is not null)
-                        AddNote(db, taskId, actor!, actorKind, Text(args["reason"])!, now2);
+                        db.AddNote(taskId, actor!, actorKind, Text(args["reason"])!, now2);
                     break;
             }
         }
@@ -770,33 +648,16 @@ internal sealed class TaskStore : IDisposable
         return new(TaskJson(payload), plan, completed, commentOwner);
     }
 
-    private JsonObject Details(SqliteConnection db, string id)
+    private JsonObject Details(ITaskRows db, string id)
     {
         var task = Public(db, id);
-        var children = Query(
-            db,
-            "SELECT id,title,status,ownerSessionId FROM tasks WHERE parentTaskId=$id ORDER BY createdAt,id LIMIT 20",
-            null,
-            20,
-            id
-        );
-        var childCount = ScalarInt(
-            db,
-            "SELECT COUNT(*) FROM tasks WHERE parentTaskId=$id",
-            null,
-            id
-        );
-        var notes = Query(
-            db,
-            "SELECT authorKind,sessionId,text,createdAt FROM task_notes WHERE taskId=$id ORDER BY id DESC LIMIT 10",
-            null,
-            10,
-            id
-        );
+        var children = db.Children(id, ChildLimit);
+        var childCount = db.ChildCount(id);
+        var notes = db.LatestNotes(id, NoteLimit);
         notes.Reverse();
         notes = notes.Select(CanonicalNoteReferences).ToList();
         children = children.Select(CanonicalReferences).ToList();
-        var noteCount = ScalarInt(db, "SELECT COUNT(*) FROM task_notes WHERE taskId=$id", null, id);
+        var noteCount = db.NoteCount(id);
         return new JsonObject
         {
             ["task"] = task,
@@ -807,10 +668,10 @@ internal sealed class TaskStore : IDisposable
         };
     }
 
-    private JsonObject Public(SqliteConnection db, string id)
+    private JsonObject Public(ITaskRows db, string id)
     {
         var row =
-            Read(db, id) ?? throw new TaskError("TASK_NOT_FOUND", $"Task {id} not found.", 404);
+            db.Read(id) ?? throw new TaskError("TASK_NOT_FOUND", $"Task {id} not found.", 404);
         foreach (
             var key in new[]
             {
@@ -834,8 +695,8 @@ internal sealed class TaskStore : IDisposable
     {
         lock (gate)
         {
-            var db = Open();
-            return Read(db, taskId) is { } row && row["ownerAssignedAt"] is JsonValue value
+            return rows.Run(TaskRowAccess.Direct, db => db.Read(taskId)) is { } row
+                && row["ownerAssignedAt"] is JsonValue value
                 ? Long(value)
                 : null;
         }
@@ -845,19 +706,23 @@ internal sealed class TaskStore : IDisposable
     internal JsonObject Summaries(IReadOnlyList<string> ids)
     {
         var result = new JsonObject();
-        if (!File.Exists(path))
+        if (!rows.Exists)
             return result;
         lock (gate)
-        {
-            var db = Open();
-            foreach (var id in ids.Take(100))
-                if (Read(db, id) is { } row)
-                    result[id] = new JsonObject
-                    {
-                        ["title"] = Text(row["title"]),
-                        ["status"] = Text(row["status"]),
-                    };
-        }
+            rows.Run(
+                TaskRowAccess.Direct,
+                db =>
+                {
+                    foreach (var id in ids.Take(100))
+                        if (db.Read(id) is { } row)
+                            result[id] = new JsonObject
+                            {
+                                ["title"] = Text(row["title"]),
+                                ["status"] = Text(row["status"]),
+                            };
+                    return 0;
+                }
+            );
         return result;
     }
 
@@ -865,47 +730,21 @@ internal sealed class TaskStore : IDisposable
     internal IReadOnlyDictionary<string, string> Statuses(IReadOnlyList<string> ids)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (ids.Count == 0 || !File.Exists(path))
+        if (ids.Count == 0 || !rows.Exists)
             return result;
         lock (gate)
-        {
-            var db = Open();
-            foreach (var id in ids)
-                if (Read(db, id) is { } row && Text(row["status"]) is { Length: > 0 } status)
-                    result[id] = status;
-        }
+            rows.Run(
+                TaskRowAccess.Direct,
+                db =>
+                {
+                    foreach (var id in ids)
+                        if (db.Read(id) is { } row && Text(row["status"]) is { Length: > 0 } status)
+                            result[id] = status;
+                    return 0;
+                }
+            );
         return result;
     }
-
-    private JsonObject? Read(SqliteConnection db, string id)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT * FROM tasks WHERE id=$id";
-        Add(cmd, "$id", id);
-        using var reader = cmd.ExecuteReader();
-        return reader.Read() ? Row(reader) : null;
-    }
-
-    private static JsonObject Row(SqliteDataReader reader)
-    {
-        var row = new JsonObject();
-        for (var i = 0; i < reader.FieldCount; i++)
-            row[reader.GetName(i)] = reader.IsDBNull(i)
-                ? null
-                : Value(reader.GetValue(i));
-        return row;
-    }
-
-    // Task columns are text and integers. Build the DOM primitive from its actual type so a
-    // row clone or save never needs runtime-type serialization in a native publication.
-    private static JsonValue Value(object value) =>
-        value switch
-        {
-            string text => JsonValue.Create(text),
-            long number => JsonValue.Create(number),
-            int number => JsonValue.Create((long)number),
-            _ => JsonValue.Create(Convert.ToString(value, CultureInfo.InvariantCulture)),
-        };
 
     private JsonObject CanonicalReferences(JsonObject row)
     {
@@ -931,92 +770,6 @@ internal sealed class TaskStore : IDisposable
     }
 
     private static JsonObject TaskJson(JsonObject value) => value;
-
-    private bool Exists(SqliteConnection db, string id) => Read(db, id) is not null;
-
-    private List<JsonObject> Query(
-        SqliteConnection db,
-        string sql,
-        string? status,
-        int limit,
-        string? id = null,
-        IReadOnlyList<string>? scopeIds = null
-    )
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = sql;
-        if (status is not null)
-            Add(cmd, "$status", status);
-        Add(cmd, "$limit", limit);
-        if (id is not null)
-            Add(cmd, "$id", id);
-        if (scopeIds is not null)
-            for (var i = 0; i < scopeIds.Count; i++)
-                Add(cmd, "$scope" + i, scopeIds[i]);
-        using var r = cmd.ExecuteReader();
-        var result = new List<JsonObject>();
-        while (r.Read())
-            result.Add(Row(r));
-        return result;
-    }
-
-    private int ScalarInt(
-        SqliteConnection db,
-        string sql,
-        string? status,
-        string? id = null,
-        IReadOnlyList<string>? scopeIds = null
-    )
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = sql;
-        if (status is not null)
-            Add(cmd, "$status", status);
-        if (id is not null)
-            Add(cmd, "$id", id);
-        if (scopeIds is not null)
-            for (var i = 0; i < scopeIds.Count; i++)
-                Add(cmd, "$scope" + i, scopeIds[i]);
-        return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
-    }
-
-    private void AddNote(
-        SqliteConnection db,
-        string taskId,
-        string? sessionId,
-        string authorKind,
-        string text,
-        long now
-    )
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText =
-            "INSERT INTO task_notes(taskId,authorKind,sessionId,text,createdAt) VALUES($task,$kind,$session,$text,$now)";
-        Add(cmd, "$task", taskId);
-        Add(cmd, "$kind", authorKind);
-        Add(cmd, "$session", sessionId);
-        Add(cmd, "$text", text);
-        Add(cmd, "$now", now);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static void Update(SqliteConnection db, string id, params object?[] values)
-    {
-        using var cmd = db.CreateCommand();
-        var sets = new List<string>();
-        for (var i = 0; i < values.Length; i += 2)
-        {
-            var key = (string)values[i]!;
-            sets.Add($"{key}=$p{i}");
-            Add(cmd, $"$p{i}", values[i + 1]);
-        }
-        cmd.CommandText = $"UPDATE tasks SET {string.Join(',', sets)} WHERE id=$id";
-        Add(cmd, "$id", id);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static void Add(SqliteCommand cmd, string name, object? value) =>
-        cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
 
     private string? Canonical(string? id) => id is null ? null : resolveAlias(id) ?? id;
 
@@ -1058,127 +811,10 @@ internal sealed class TaskStore : IDisposable
 
     private static long? NullableLong(JsonNode? node) => node is null ? null : Long(node);
 
-    private SqliteConnection Open()
-    {
-        if (connection is null)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            connection = new SqliteConnection($"Data Source={path};Cache=Shared");
-            connection.Open();
-            Initialize(connection);
-        }
-        return connection;
-    }
-
-    private static void Initialize(SqliteConnection db)
-    {
-        db.ExecuteNonQuery(
-            "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; "
-                + "CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdByKind TEXT NOT NULL DEFAULT 'session' CHECK(createdByKind IN ('session','user')),createdBySessionId TEXT,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER); "
-                + "CREATE TABLE IF NOT EXISTS task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),authorKind TEXT NOT NULL DEFAULT 'session' CHECK(authorKind IN ('session','user')),sessionId TEXT,text TEXT NOT NULL,createdAt INTEGER NOT NULL);"
-        );
-        foreach (
-            var column in new[]
-            {
-                ("completionNotificationStatus", "TEXT"),
-                ("assignmentNotificationStatus", "TEXT"),
-                ("previousOwnerSessionId", "TEXT"),
-                ("previousOwnerNotificationStatus", "TEXT"),
-                ("assignmentRevision", "INTEGER NOT NULL DEFAULT 0"),
-                ("attachedSessionId", "TEXT"),
-                ("legacyGoalSessionId", "TEXT"),
-                ("reminderLastSeq", "INTEGER"),
-                ("reminderMessageCount", "INTEGER NOT NULL DEFAULT 0"),
-            }
-        )
-        {
-            using var cmd = db.CreateCommand();
-            cmd.CommandText = "PRAGMA table_info(tasks)";
-            using var r = cmd.ExecuteReader();
-            var found = false;
-            while (r.Read())
-                if (r.GetString(1) == column.Item1)
-                    found = true;
-            if (!found)
-                db.ExecuteNonQuery($"ALTER TABLE tasks ADD COLUMN {column.Item1} {column.Item2}");
-        }
-        MigrateActorColumns(db);
-        // Added after the actor migration, which rebuilds the table from its older column set.
-        using (var info = db.CreateCommand())
-        {
-            info.CommandText = "PRAGMA table_info(tasks)";
-            var found = false;
-            using (var reader = info.ExecuteReader())
-                while (reader.Read())
-                    if (reader.GetString(1) == "ownerAssignedAt")
-                        found = true;
-            if (!found)
-                db.ExecuteNonQuery("ALTER TABLE tasks ADD COLUMN ownerAssignedAt INTEGER");
-        }
-        db.ExecuteNonQuery(
-            "CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,updatedAt); "
-                + "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId,createdAt); "
-                + "CREATE INDEX IF NOT EXISTS tasks_self_owned ON tasks(createdBySessionId,ownerSessionId,status,createdAt,id); "
-                + "CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId,id); "
-                + "CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId);"
-        );
-    }
-
-    private static void MigrateActorColumns(SqliteConnection db)
-    {
-        static bool Has(SqliteConnection connection, string table, string column)
-        {
-            using var command = connection.CreateCommand();
-            command.CommandText = $"PRAGMA table_info({table})";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-                if (reader.GetString(1) == column)
-                    return true;
-            return false;
-        }
-        if (Has(db, "tasks", "createdByKind") && Has(db, "task_notes", "authorKind"))
-            return;
-        db.ExecuteNonQuery("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;");
-        try
-        {
-            db.ExecuteNonQuery(
-                "DROP INDEX IF EXISTS tasks_status; DROP INDEX IF EXISTS tasks_parent; DROP INDEX IF EXISTS tasks_legacy_goal; DROP INDEX IF EXISTS tasks_self_owned; DROP INDEX IF EXISTS task_notes_task;"
-            );
-            db.ExecuteNonQuery(
-                "ALTER TABLE tasks RENAME TO tasks_actor_legacy; ALTER TABLE task_notes RENAME TO task_notes_actor_legacy;"
-            );
-            db.ExecuteNonQuery(
-                "CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT,status TEXT NOT NULL CHECK(status IN ('open','active','completed','cancelled')),parentTaskId TEXT REFERENCES tasks(id),createdByKind TEXT NOT NULL DEFAULT 'session' CHECK(createdByKind IN ('session','user')),createdBySessionId TEXT,ownerSessionId TEXT,result TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL,completedAt INTEGER,cancelledAt INTEGER,completionNotificationStatus TEXT,assignmentNotificationStatus TEXT,previousOwnerSessionId TEXT,previousOwnerNotificationStatus TEXT,assignmentRevision INTEGER NOT NULL DEFAULT 0,attachedSessionId TEXT,legacyGoalSessionId TEXT,reminderLastSeq INTEGER,reminderMessageCount INTEGER NOT NULL DEFAULT 0);"
-            );
-            db.ExecuteNonQuery(
-                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,result,createdAt,updatedAt,completedAt,cancelledAt,completionNotificationStatus,assignmentNotificationStatus,previousOwnerSessionId,previousOwnerNotificationStatus,assignmentRevision,attachedSessionId,legacyGoalSessionId,reminderLastSeq,reminderMessageCount) SELECT id,title,description,status,parentTaskId,'session',createdBySessionId,ownerSessionId,result,createdAt,updatedAt,completedAt,cancelledAt,completionNotificationStatus,assignmentNotificationStatus,previousOwnerSessionId,previousOwnerNotificationStatus,assignmentRevision,attachedSessionId,legacyGoalSessionId,reminderLastSeq,reminderMessageCount FROM tasks_actor_legacy;"
-            );
-            db.ExecuteNonQuery(
-                "CREATE TABLE task_notes(id INTEGER PRIMARY KEY,taskId TEXT NOT NULL REFERENCES tasks(id),authorKind TEXT NOT NULL DEFAULT 'session' CHECK(authorKind IN ('session','user')),sessionId TEXT,text TEXT NOT NULL,createdAt INTEGER NOT NULL);"
-            );
-            db.ExecuteNonQuery(
-                "INSERT INTO task_notes(id,taskId,authorKind,sessionId,text,createdAt) SELECT id,taskId,'session',sessionId,text,createdAt FROM task_notes_actor_legacy; DROP TABLE task_notes_actor_legacy; DROP TABLE tasks_actor_legacy;"
-            );
-            db.ExecuteNonQuery("COMMIT; PRAGMA foreign_keys=ON;");
-        }
-        catch
-        {
-            try
-            {
-                db.ExecuteNonQuery("ROLLBACK; PRAGMA foreign_keys=ON;");
-            }
-            catch { }
-            throw;
-        }
-    }
-
     public void Dispose()
     {
         lock (gate)
-        {
-            connection?.Dispose();
-            connection = null;
-        }
+            rows.Dispose();
     }
 
     internal static void Validate(JsonObject args, int? httpLimit)

@@ -25,7 +25,7 @@ internal sealed class TaskService : IDisposable
 
     internal TaskService(
         SessionManager manager,
-        string root,
+        ITaskRowStore rows,
         Func<string, string?> resolveSessionId,
         Func<string, IReadOnlyList<string>> aliases,
         Func<string, long?> anchorSeq,
@@ -36,7 +36,7 @@ internal sealed class TaskService : IDisposable
         this.resolveSessionId = resolveSessionId;
         this.resolveSessionAgent = resolveSessionAgent;
         this.anchorSeq = anchorSeq;
-        store = new TaskStore(root, resolveSessionId, aliases);
+        store = new TaskStore(rows, resolveSessionId, aliases);
     }
 
     internal string? OwnerSessionId(string taskId) => store.OwnerSessionId(taskId);
