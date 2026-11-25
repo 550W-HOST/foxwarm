@@ -137,6 +137,16 @@ test('a second Main on the same data directory exits until the running Main is g
   assert.match(refused.text, /Another Foxwarm Main is already running with data directory/);
   assert(!refused.text.includes('Main started'));
   assert(running(pid));
+  // The archive CLI doesn't take the installation lock, so it runs beside the running Main.
+  for (const file of ['archive.js', 'core-cli.js'])
+    fs.copyFileSync(path.join(__dirname, file), path.join(f.app, 'scripts', file));
+  const exported = path.join(f.root, 'export');
+  const archive = spawnSync(process.execPath, ['-e',
+    `require(${JSON.stringify(path.join(f.app, 'scripts/archive.js'))}).runArchiveCli(['export-jsonl', '-o', ${JSON.stringify(exported)}]).then(code => process.exit(code))`,
+  ], { cwd: f.cwd, env: f.env, encoding: 'utf8' });
+  assert.equal(archive.status, 0, archive.stdout + archive.stderr);
+  assert(!/already running/.test(archive.stderr), archive.stderr);
+  assert(running(pid));
   // The refused launcher leaves the running Main's record for the stop and restart controls.
   assert.equal(fs.readFileSync(path.join(f.app, 'foxwarm.pid'), 'utf8'), `${pid}\n`);
   // A crash-equivalent stop releases the lock without any cleanup.
