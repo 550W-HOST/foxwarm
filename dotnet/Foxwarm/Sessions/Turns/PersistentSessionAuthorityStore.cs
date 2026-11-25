@@ -160,14 +160,21 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
-        var records = appendedMessages.Select(ToArchiveRecord).ToArray();
+        var records = appendedMessages
+            .Select(message => SessionAuthorityCodec.ToArchiveRecord(message, sessionId, agent))
+            .ToArray();
         var receipt = await archive.EnqueueMessagesAsync(records).ConfigureAwait(false);
         IReadOnlyList<ArchiveMessageRecord> inserted = [];
         var published = false;
         AuthorityCommittedException? publicationError = null;
         try
         {
-            var state = PrepareAuthorityState(stagedSnapshot);
+            var state = SessionAuthorityCodec.PrepareState(
+                stagedSnapshot,
+                sessionId,
+                agent,
+                mainFields?.Invoke()
+            );
             await authorityFile
                 .WriteStreamPayloadAsync(
                     stream =>
@@ -229,7 +236,9 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
-        var records = messages.Select(ToArchiveRecord).ToArray();
+        var records = messages
+            .Select(message => SessionAuthorityCodec.ToArchiveRecord(message, sessionId, agent))
+            .ToArray();
         var receipt = await archive.EnqueueCompactionAsync(blocks, records).ConfigureAwait(false);
         IReadOnlyList<ArchiveBlockRecord> newBlocks = [];
         IReadOnlyList<ArchiveMessageRecord> newMessages = [];
@@ -237,7 +246,12 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         AuthorityCommittedException? publicationError = null;
         try
         {
-            var state = PrepareAuthorityState(stagedSnapshot);
+            var state = SessionAuthorityCodec.PrepareState(
+                stagedSnapshot,
+                sessionId,
+                agent,
+                mainFields?.Invoke()
+            );
             await authorityFile
                 .WriteStreamPayloadAsync(
                     stream =>
@@ -349,7 +363,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         }
         foreach (var message in ((JsonArray)normalized["history"]!).OfType<JsonObject>())
             await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
-        var loaded = FromAuthority(normalized);
+        var loaded = SessionAuthorityCodec.FromAuthority(normalized, sessionId);
         foreach (var item in loaded.Queue)
         {
             if (item.Message is not null)
@@ -389,124 +403,17 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
             );
     }
 
-    private ArchiveMessageRecord ToArchiveRecord(JsonObject message)
-    {
-        var meta =
-            message["__meta"] as JsonObject
-            ?? throw new InvalidDataException("Canonical appended message requires __meta.");
-        var seq = ReadInteger(meta["seq"], "message seq");
-        var timestamp = ReadNumber(meta["timestamp"], "message timestamp");
-        return ArchiveMessageRecord.Create(sessionId, agent, seq, timestamp, message);
-    }
-
     private void WriteAuthority(SessionSnapshot snapshot)
     {
-        var state = PrepareAuthorityState(snapshot);
+        var state = SessionAuthorityCodec.PrepareState(
+            snapshot,
+            sessionId,
+            agent,
+            mainFields?.Invoke()
+        );
         authorityFile.WriteStreamPayload(
             stream => SessionAuthorityDocument.WriteTo(stream, state, snapshot.History),
             default
         );
-    }
-
-    private JsonObject PrepareAuthorityState(SessionSnapshot snapshot)
-    {
-        var root = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-        if (mainFields?.Invoke() is { } main)
-            SessionCatalog.OverlayAuthorityContext(root, main);
-        foreach (var field in new[] { "archived", "pinned", "sidebarOrder" })
-            root.Remove(field);
-        root["sessionStateVersion"] = ClaudeRuntimeState.IsExternal(root) ? 2 : 1;
-        if (root["goalState"] is JsonObject goal)
-            goal.Remove("remindOnTurnEnd");
-        root["agent"] = agent;
-        // Keep the existing property position; the writer supplies the immutable array values.
-        root["history"] = null;
-        root["persistentMemorySnapshot"] ??= "";
-        root["queue"] = new JsonArray(
-            snapshot.Queue.Select(SessionQueueJson.ToJson).Cast<JsonNode>().ToArray()
-        );
-        root["stats"] ??= new JsonObject
-        {
-            ["totalCachedTokens"] = 0,
-            ["totalInputTokens"] = 0,
-            ["totalOutputTokens"] = 0,
-            ["lastUsage"] = null,
-        };
-        var meta = (JsonObject)snapshot.Meta.DeepClone();
-        meta.Remove("lastChannel");
-        meta["lastMessageTime"] ??= 0;
-        meta["messageCount"] = snapshot.History.Count;
-        root["meta"] = meta;
-        root["busy"] = snapshot.Busy;
-        root["busyStartedAt"] = snapshot.BusyStartedAt;
-        root["stopping"] = snapshot.Stopping;
-        root["historyVersion"] = snapshot.HistoryVersion;
-        root["lastAppliedMailboxId"] ??= 0;
-        root["nextMessageSeq"] = snapshot.NextMessageSeq;
-        root["nextBlockId"] ??= 1;
-        SessionAuthorityDocument.ValidateState(root, snapshot.History.Count, sessionId, agent);
-        return root;
-    }
-
-    private SessionSnapshot FromAuthority(JsonObject root)
-    {
-        var history = SessionHistory.FromJson(((JsonArray)root["history"]!).OfType<JsonObject>());
-        var envelope = new JsonObject();
-        foreach (var property in root)
-            if (property.Key is not ("history" or "queue" or "meta"))
-                envelope[property.Key] = property.Value?.DeepClone();
-        envelope = DetachDocument(envelope);
-        var queue = ((JsonArray)root["queue"]!)
-            .Select(node => SessionQueueJson.FromJson(DetachDocument((JsonObject)node!)))
-            .ToArray();
-        var busy = root["busy"]!.GetValue<bool>();
-        long? busyStartedAt = root["busyStartedAt"] is JsonValue busyNode
-            ? ReadInteger(busyNode, "busyStartedAt")
-            : null;
-        var stopping = root["stopping"]?.GetValue<bool>() ?? false;
-        return new SessionSnapshot(
-            sessionId,
-            history,
-            queue,
-            busy,
-            busyStartedAt,
-            stopping,
-            DetachDocument((JsonObject)root["meta"]!),
-            ReadInteger(root["nextMessageSeq"], "nextMessageSeq"),
-            ReadInteger(root["historyVersion"], "historyVersion"),
-            envelope
-        );
-    }
-
-    // DeepClone isolates mutations but parsed JsonValue elements may still share the original
-    // JsonDocument. Reparse each retained non-history branch once at cold ingress so small
-    // envelope/meta/queue values cannot keep the authority's unrelated history buffer alive.
-    private static JsonObject DetachDocument(JsonObject value) =>
-        (JsonObject)JsonNode.Parse(value.ToJsonText())!;
-
-    private static long ReadInteger(JsonNode? node, string label)
-    {
-        var number = ReadNumber(node, label);
-        if (number != Math.Truncate(number) || number < long.MinValue || number > long.MaxValue)
-            throw new InvalidDataException($"{label} must be an integer.");
-        return checked((long)number);
-    }
-
-    private static double ReadNumber(JsonNode? node, string label)
-    {
-        if (node is not JsonValue value)
-            throw new InvalidDataException($"{label} must be numeric.");
-        double number;
-        if (value.TryGetValue<double>(out var direct))
-            number = direct;
-        else if (value.TryGetValue<long>(out var signed))
-            number = signed;
-        else if (value.TryGetValue<int>(out var integer))
-            number = integer;
-        else
-            throw new InvalidDataException($"{label} must be numeric.");
-        if (!double.IsFinite(number))
-            throw new InvalidDataException($"{label} must be finite.");
-        return number;
     }
 }
