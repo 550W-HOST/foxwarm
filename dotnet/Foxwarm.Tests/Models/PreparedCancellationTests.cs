@@ -281,13 +281,13 @@ public sealed class PreparedCancellationTests(Xunit.Abstractions.ITestOutputHelp
             1,
             async (_, stream, _) =>
             {
-                manager!.Journal.Writer.BeforeBatch = () =>
+                manager!.Journal.File().Writer.BeforeBatch = () =>
                 {
                     // The first command after this provider response is its failure result.
                     // The next batch is the fully serialized retry's attempt start.
-                    manager.Journal.Writer.BeforeBatch = () =>
+                    manager.Journal.File().Writer.BeforeBatch = () =>
                     {
-                        manager.Journal.Writer.BeforeBatch = null;
+                        manager.Journal.File().Writer.BeforeBatch = null;
                         completedPayload = true;
                         cancel.Cancel();
                         return Task.CompletedTask;

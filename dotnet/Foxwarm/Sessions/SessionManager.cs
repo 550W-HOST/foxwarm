@@ -41,7 +41,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
     private readonly ModelInteractionDiagnostics diagnostics;
-    internal LlmRequestJournalStore Journal { get; }
+    internal ILlmJournalStore Journal { get; }
 
     /// <summary>Installation-wide usage read from the journal's derived ledger.</summary>
     internal UsageOverview Usage { get; }
@@ -311,7 +311,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         timers = Foxwarm.Timers.MainTimers.Reporting(this.root, DeliverTimerAsync);
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
-        Journal = new LlmRequestJournalStore(this.root);
+        Journal = Storage.Journal;
         Usage = new UsageOverview(this, Journal);
         archiveWriter = Storage.Archive.AcquireWriter();
         Activity = new ActivityIndex(this);

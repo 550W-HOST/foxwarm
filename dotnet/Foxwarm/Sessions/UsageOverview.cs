@@ -27,7 +27,7 @@ internal sealed class UsageOverview : IAsyncDisposable
     internal const int SeriesGroups = 8;
 
     private readonly SessionManager manager;
-    private readonly LlmRequestJournalStore journal;
+    private readonly ILlmJournalStore journal;
     private readonly object gate = new();
     private Task backfill = Task.CompletedTask;
     private CancellationToken stop = CancellationToken.None;
@@ -40,7 +40,7 @@ internal sealed class UsageOverview : IAsyncDisposable
         StringComparer.Ordinal
     );
 
-    internal UsageOverview(SessionManager manager, LlmRequestJournalStore journal)
+    internal UsageOverview(SessionManager manager, ILlmJournalStore journal)
     {
         this.manager = manager;
         this.journal = journal;

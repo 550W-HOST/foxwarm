@@ -14,6 +14,11 @@ internal static class FileAuthorityTestExtensions
 
     /// <summary>The SQLite catalog, for file-mode fixtures, query observation and test hooks.</summary>
     internal static SessionCatalog File(this ISessionCatalogStore catalog) => (SessionCatalog)catalog;
+
+    /// <summary>The SQLite journal, for writer hooks and migration markers.</summary>
+    internal static Foxwarm.Models.LlmRequestJournalStore File(
+        this Foxwarm.Models.ILlmJournalStore journal
+    ) => (Foxwarm.Models.LlmRequestJournalStore)journal;
 }
 
 /// <summary>File-mode staging of identity-move crash states for tests.</summary>

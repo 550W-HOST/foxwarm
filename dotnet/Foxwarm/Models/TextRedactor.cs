@@ -103,7 +103,7 @@ internal sealed partial class TextRedactor : IDisposable
         long cacheBytes = DefaultCacheBytes,
         long knownBytes = DefaultKnownBytes,
         int digestCharacters = DigestCharacters,
-        TextRedactionStore? store = null,
+        ITextRedactionStore? store = null,
         TextRedactionKnownLabels? knownLabels = null
     )
     {

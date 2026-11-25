@@ -8,7 +8,7 @@ namespace Foxwarm.Models;
 // record that does not fit the text is a miss and is removed.
 internal sealed partial class TextRedactor
 {
-    private readonly TextRedactionStore? store;
+    private readonly ITextRedactionStore? store;
 
     // Known originals of an earlier process, least recently used first, without writing them
     // again. Values beyond the memory bound are evicted as usual.

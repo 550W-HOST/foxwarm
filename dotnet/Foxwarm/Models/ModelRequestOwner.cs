@@ -11,7 +11,7 @@ internal sealed class ModelRequestOwner(
     Func<int, CancellationToken, Task>? delay = null,
     ResponsesWsTransport? websockets = null,
     Foxwarm.Images.ImageBlobStore? images = null,
-    LlmRequestJournalStore? journal = null,
+    ILlmJournalStore? journal = null,
     ModelInteractionDiagnostics? diagnostics = null,
     Func<string, IReadOnlyList<int>>? retryIntervals = null,
     Foxwarm.Secrets.InstanceSecrets? secrets = null
@@ -818,7 +818,7 @@ internal sealed class ModelRequestOwner(
     }
 
     private static async Task JournalAttemptStartAsync(
-        LlmRequestJournalStore store,
+        ILlmJournalStore store,
         string requestId,
         int attempt,
         string concreteModelId,

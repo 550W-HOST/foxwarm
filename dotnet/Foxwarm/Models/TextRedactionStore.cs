@@ -17,7 +17,7 @@ namespace Foxwarm.Models;
 // The store is a cache. Reads that fail or find an invalid record are misses, writes happen
 // in the background and a failed write only costs a later miss. Deleting the file returns to
 // memory-only behaviour.
-internal sealed partial class TextRedactionStore : IDisposable
+internal sealed partial class TextRedactionStore : ITextRedactionStore
 {
     internal const string FileName = "text-redaction.sqlite";
     internal const long DefaultSlotBytes = 64L * 1024 * 1024;
@@ -105,7 +105,7 @@ internal sealed partial class TextRedactionStore : IDisposable
 
     // Days since the Unix epoch. A record's last use is kept at this granularity, so an
     // entry used by every request is touched on disk at most once a day.
-    internal long Today => clock.GetUtcNow().ToUnixTimeSeconds() / 86400;
+    public long Today => clock.GetUtcNow().ToUnixTimeSeconds() / 86400;
 
     // Opens or creates the store. A file that is not a usable database is only a cache, so it
     // is replaced once; any other failure leaves the redactor memory-only.
@@ -232,7 +232,7 @@ internal sealed partial class TextRedactionStore : IDisposable
     }
 
     // Finished results of one slot, or null when none is stored or the record is unreadable.
-    internal Range[]? ReadSlot(TextRedactionOptions options, string digest)
+    public Range[]? ReadSlot(TextRedactionOptions options, string digest)
     {
         var identity = Identity(options);
         var id = SlotId(digest);
@@ -265,12 +265,12 @@ internal sealed partial class TextRedactionStore : IDisposable
     }
 
     // Removes a slot record whose ranges do not fit its slot text.
-    internal void DeleteSlot(TextRedactionOptions options, string digest) =>
+    public void DeleteSlot(TextRedactionOptions options, string digest) =>
         Enqueue(new(Kind.Delete, false, Identity(options), SlotId(digest), null, false));
 
     // Every readable known original with its labels, least recently used first. Unreadable
     // records are removed.
-    internal List<(string Original, string[] Labels)> ReadKnown()
+    public List<(string Original, string[] Labels)> ReadKnown()
     {
         var result = new List<(string, string[])>();
         var rows = new List<(byte[] Id, byte[] Data)>();
@@ -302,7 +302,7 @@ internal sealed partial class TextRedactionStore : IDisposable
         return result;
     }
 
-    internal void PutSlot(
+    public void PutSlot(
         TextRedactionOptions options,
         string digest,
         TextRedactor.Found[] spans,
@@ -324,10 +324,10 @@ internal sealed partial class TextRedactionStore : IDisposable
         Enqueue(new(Kind.Put, false, Identity(options), SlotId(digest), payload.ToArray(), false));
     }
 
-    internal void TouchSlot(TextRedactionOptions options, string digest) =>
+    public void TouchSlot(TextRedactionOptions options, string digest) =>
         Enqueue(new(Kind.Touch, false, Identity(options), SlotId(digest), null, false));
 
-    internal void PutKnown(string placeholder, string original, string[] labels)
+    public void PutKnown(string placeholder, string original, string[] labels)
     {
         var payload = new MemoryStream();
         using (var output = new BinaryWriter(payload, Strict, leaveOpen: true))
@@ -341,10 +341,10 @@ internal sealed partial class TextRedactionStore : IDisposable
         Enqueue(new(Kind.Put, true, [], KnownId(placeholder), payload.ToArray(), true));
     }
 
-    internal void TouchKnown(string placeholder) =>
+    public void TouchKnown(string placeholder) =>
         Enqueue(new(Kind.Touch, true, [], KnownId(placeholder), null, false));
 
-    internal void DeleteKnown(string placeholder) =>
+    public void DeleteKnown(string placeholder) =>
         Enqueue(new(Kind.Delete, true, [], KnownId(placeholder), null, false));
 
     // Coalesces writes per record: a delete wins over earlier writes, a put after a delete
@@ -385,7 +385,7 @@ internal sealed partial class TextRedactionStore : IDisposable
     }
 
     // Writes the pending records in one transaction. A failure drops them; they become misses.
-    internal void Flush()
+    public void Flush()
     {
         lock (writeGate)
         {
