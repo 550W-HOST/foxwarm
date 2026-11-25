@@ -14,6 +14,7 @@ public sealed partial class SessionSaveLane
     private readonly object laneGate = new();
     private Task tail = Task.CompletedTask;
     private bool retired;
+    private long enqueued;
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
         Exception,
         object
@@ -63,6 +64,31 @@ public sealed partial class SessionSaveLane
         this.entry = entry;
         this.store = store;
         this.migrateGoal = migrateGoal;
+    }
+
+    /// <summary>Operations accepted so far; idle release compares it before and after.</summary>
+    internal long EnqueuedOperations
+    {
+        get
+        {
+            lock (laneGate)
+                return enqueued;
+        }
+    }
+
+    /// <summary>
+    /// Retires an idle lane synchronously: no operation is pending and none was accepted since
+    /// <paramref name="observed"/>. Later operations fail as on deletion retirement.
+    /// </summary>
+    internal bool TryRetireIdle(long observed)
+    {
+        lock (laneGate)
+        {
+            if (retired || enqueued != observed || !tail.IsCompleted)
+                return false;
+            retired = true;
+            return true;
+        }
     }
 
     private async Task<(SessionSnapshot Snapshot, Action<SessionState> Publish)> PrepareGoalAsync(
@@ -456,6 +482,7 @@ public sealed partial class SessionSaveLane
                 return Task.FromException(
                     new InvalidOperationException("Session persistence lane has retired.")
                 );
+            enqueued++;
             var previous = tail;
             current = RunAfterAsync(launch.Task, previous, operation);
             tail = current;

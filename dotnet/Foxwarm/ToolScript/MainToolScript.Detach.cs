@@ -188,6 +188,18 @@ internal sealed partial class MainToolScript
         await Task.WhenAll(pending);
     }
 
+    /// <summary>
+    /// Whether a run of this owner is executing or detached. A run paused at a persisted
+    /// snapshot is neither: it resumes from its record.
+    /// </summary>
+    internal bool Holds(SessionOwner owner)
+    {
+        if (active.Values.Any(run => ReferenceEquals(run.Context.Owner, owner)))
+            return true;
+        lock (gate)
+            return detached.Values.Any(run => ReferenceEquals(run.Owner, owner.Entry));
+    }
+
     // Like exec's wait: a default of 15 seconds, at most 60.
     private static (double Seconds, string? Warning) DetachWait(JsonNode? value, double fallback)
     {

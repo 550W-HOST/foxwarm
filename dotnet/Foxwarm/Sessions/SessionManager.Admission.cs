@@ -18,6 +18,17 @@ internal sealed partial class SessionManager
         internal readonly TaskCompletionSource Finished = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+
+        // The latest semantic admission (monotonic milliseconds) and a count of admissions,
+        // which orders admissions within one clock tick; both change under lifecycle.
+        internal long LastUse = Environment.TickCount64;
+        internal long Uses;
+
+        internal void Touch()
+        {
+            LastUse = Environment.TickCount64;
+            Uses++;
+        }
     }
 
     private readonly Dictionary<string, IdentitySlot> identities = new(StringComparer.Ordinal);
@@ -70,6 +81,8 @@ internal sealed partial class SessionManager
                     throw new InvalidOperationException("Host is shutting down.");
                 identityMoveClaims.TryGetValue(requestedId, out moving);
                 identities.TryGetValue(requestedId, out slot);
+                if (slot is not null)
+                    slot.Touch();
             }
             if (moving is not null && moving != owningIdentityMove.Value)
             {
@@ -118,6 +131,8 @@ internal sealed partial class SessionManager
                             start = true;
                         }
                     }
+                    if (slot is not null)
+                        slot.Touch();
                 }
             }
             if (moving is not null && moving != owningIdentityMove.Value)
@@ -310,6 +325,7 @@ internal sealed partial class SessionManager
                 || !sessions.TryAdd(owner.Id, owner)
             )
                 throw new InvalidOperationException("Session identity collision after validation.");
+            slot.Touch();
         }
         owner.EnableCommittedNotifications();
         try

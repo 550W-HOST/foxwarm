@@ -111,4 +111,13 @@ internal sealed class RecallWindowStore
     }
 
     internal static string Cursor(RecallWindow window, int offset) => window.Id + "." + offset;
+
+    /// <summary>Whether a cursor issued by this owner can still be read.</summary>
+    internal bool HasLive()
+    {
+        lock (gate)
+            return windows.Values.Any(window =>
+                DateTimeOffset.UtcNow - window.CreatedAt < Lifetime
+            );
+    }
 }

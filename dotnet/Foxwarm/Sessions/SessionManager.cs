@@ -129,7 +129,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             id => ResolveTaskSessionId(id),
             id => TaskSessionAliases(id),
             id => TaskAnchorSeq(id),
-            id => Find(id)?.Agent
+            // Catalog membership, not residency: a released or unloaded owner keeps its Agent.
+            id => Find(id)?.Agent ?? CatalogMetadata(id)?.Agent
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
@@ -537,6 +538,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await StartMainServicesAsync();
         await executor.ReconcileNowAsync();
         executor.StartReconciliation();
+        StartIdleRelease();
         foreach (var owner in sessions.Values)
         {
             var envelope = owner.Entry.Snapshot().AuthorityEnvelope;
@@ -864,6 +866,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         timers.StopFuture();
         // Detached runs do not survive the process; end them before draining their owners.
         ToolScript.CancelDetached();
+        StopIdleRelease();
         lock (lifecycle)
         {
             accepting = false;

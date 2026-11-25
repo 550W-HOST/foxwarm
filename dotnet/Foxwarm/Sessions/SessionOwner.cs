@@ -260,6 +260,8 @@ internal sealed partial class SessionOwner
             Unsubscribe(id);
     }
 
+    internal bool HasSubscribers => !listeners.IsEmpty;
+
     public void Emit(SessionEventKind kind, JsonNode? data = null, SessionSnapshot? snapshot = null)
     {
         if (Entry.Retired)

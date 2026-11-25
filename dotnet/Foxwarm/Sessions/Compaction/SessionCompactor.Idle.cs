@@ -233,4 +233,14 @@ internal sealed partial class SessionCompactor
         lock (idleGate)
             return idleFiring;
     }
+
+    /// <summary>An armed or firing idle compaction; hydration never re-arms one.</summary>
+    internal bool IdleScheduled
+    {
+        get
+        {
+            lock (idleGate)
+                return idleTimer is not null || !idleFiring.IsCompleted;
+        }
+    }
 }
