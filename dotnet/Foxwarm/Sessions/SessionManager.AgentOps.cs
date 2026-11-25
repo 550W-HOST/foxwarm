@@ -934,7 +934,7 @@ internal sealed partial class SessionManager
         return await command.ExecuteScalarAsync() is not null;
     }
 
-    private PersistentSessionAuthorityStore MakeStore(string id, string agent)
+    private ISessionAuthority MakeStore(string id, string agent)
     {
         IdentitySlot slot;
         lock (lifecycle)
@@ -942,34 +942,27 @@ internal sealed partial class SessionManager
                 identities.GetValueOrDefault(id)
                 ?? throw new InvalidOperationException("Session identity was not claimed.");
 
-        PersistentSessionAuthorityStore store = null!;
-        store = new PersistentSessionAuthorityStore(
-            root,
+        return Storage.Authority.Open(
             id,
             agent,
-            authorityStageHook: authorityStageHook is null
-                ? null
-                : stage => authorityStageHook(store.SessionId, stage),
-            canonicalCommitBarrier: canonicalCommitBarrier is null
-                ? null
-                : (commit, token) => canonicalCommitBarrier(store.SessionId, commit, token),
-            publishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot),
-            mainFields: () => Catalog.Get(store.SessionId),
-            checkLifetime: () =>
-            {
-                lock (lifecycle)
-                    if (
-                        !identities.TryGetValue(store.SessionId, out var current)
-                        || current != slot
-                        || slot.Retired
-                    )
-                        throw new InvalidOperationException(
-                            "Session authority lifetime has retired."
-                        );
-            },
-            archiveCommitted: OnArchiveCommitted
+            new SessionAuthorityCallbacks(
+                PublishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot),
+                MainFields: current => Catalog.Get(current),
+                CheckLifetime: current =>
+                {
+                    lock (lifecycle)
+                        if (
+                            !identities.TryGetValue(current, out var claimed)
+                            || claimed != slot
+                            || slot.Retired
+                        )
+                            throw new InvalidOperationException(
+                                "Session authority lifetime has retired."
+                            );
+                },
+                ArchiveCommitted: OnArchiveCommitted
+            )
         );
-        return store;
     }
 
     private static string Escape(string text) =>

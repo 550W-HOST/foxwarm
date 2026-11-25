@@ -12,8 +12,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 {
     private readonly PendingWriteRefs pendingWrites = new();
     private readonly string root;
-    private readonly Action<string, AtomicJsonWriteStage>? authorityStageHook;
-    private readonly Func<string, int, CancellationToken, Task>? canonicalCommitBarrier;
+    internal Foxwarm.Storage.IStorageContext Storage { get; }
     private readonly HostPaths? hostPaths;
     internal Foxwarm.Images.ImageBlobStore Images { get; }
     internal Foxwarm.Artifacts.ArtifactStore Artifacts { get; }
@@ -75,12 +74,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
         string? skillsRoot = null,
         HostPaths? hostPaths = null,
         Action<string, AtomicJsonWriteStage>? authorityStageHook = null,
-        Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null
+        Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null,
+        Foxwarm.Storage.IStorageContext? storage = null
     )
     {
         this.hostPaths = hostPaths;
-        this.authorityStageHook = authorityStageHook;
-        this.canonicalCommitBarrier = canonicalCommitBarrier;
+        // The test hooks belong to the default file context; a supplied context brings its own.
+        Storage =
+            storage
+            ?? new Foxwarm.Storage.FileStorageContext(
+                root,
+                new(authorityStageHook, canonicalCommitBarrier)
+            );
         Images = new(root);
         Artifacts = new(Path.Combine(root, "state", "artifacts"), ArtifactPreparation);
         ToolScript = new(root);
@@ -654,7 +659,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public Task<SessionOwner> CreateAsync() => CreateNamedAsync("main", null, null, null);
 
-    private SessionOwner MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
+    private SessionOwner MakeSession(string id, string agent, ISessionAuthority store)
     {
         var hosted = new SessionOwner(id, agent, models)
         {

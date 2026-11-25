@@ -51,7 +51,7 @@ public sealed partial class LocalSessionTurnHost
             await RuntimeTools
                 .CompleteBatchAsync(committed[^1], entry.WithState(state => state.Stopping))
                 .ConfigureAwait(false);
-            var projected = store is PersistentSessionAuthorityStore persistent
+            var projected = store is ISessionAuthority persistent
                 ? await persistent
                     .Images.HydrateAsync(
                         [committed[^1]],

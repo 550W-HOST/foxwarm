@@ -337,7 +337,7 @@ internal sealed partial class SessionManager
     }
 
     private async Task CompensateCreatedBranchAsync(
-        PersistentSessionAuthorityStore store,
+        ISessionAuthority store,
         ArchiveBranch? branch
     )
     {

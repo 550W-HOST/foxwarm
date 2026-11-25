@@ -83,7 +83,7 @@ public sealed partial class SessionCreationParityTests
         );
         var explicitOwner = await f.Manager.RequiredAsync("explicit/main");
         var disk = JsonNode.Parse(
-            await File.ReadAllTextAsync(explicitOwner.AuthorityStore.AuthorityPath)
+            await File.ReadAllTextAsync(explicitOwner.AuthorityStore.AuthorityPath())
         )!;
         // The tool supplies the caller's model; the selected source supplies effort and future-child policy.
         Assert.Equal("local/wire", SessionWait.Text(disk["model"]));
@@ -128,7 +128,7 @@ public sealed partial class SessionCreationParityTests
             )
         );
         var source = await f.Manager.RequiredAsync("source-agent/new-source");
-        Assert.True(File.Exists(source.AuthorityStore.AuthorityPath));
+        Assert.True(File.Exists(source.AuthorityStore.AuthorityPath()));
         Assert.Empty(source.Entry.Snapshot().History);
         Assert.Null(source.Metadata().ParentSessionId);
         Assert.Equal("master", f.Manager.CurrentNode(source));
@@ -386,7 +386,7 @@ public sealed partial class SessionCreationParityTests
             )
         );
         var persisted = JsonNode.Parse(
-            await File.ReadAllTextAsync(target.AuthorityStore.AuthorityPath)
+            await File.ReadAllTextAsync(target.AuthorityStore.AuthorityPath())
         )!;
         Assert.Contains(
             "new explicit refresh content",

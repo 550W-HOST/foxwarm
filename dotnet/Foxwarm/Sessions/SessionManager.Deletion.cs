@@ -292,7 +292,7 @@ internal sealed partial class SessionManager
                 {
                     await DeleteStageAsync(operation, "json-unlink", id);
                     UnlinkActive(
-                        owner.AuthorityStore.AuthorityPath,
+                        ((PersistentSessionAuthorityStore)owner.AuthorityStore).AuthorityPath,
                         () => operation.JsonRemoved.Add(id)
                     );
                     operation.JsonDurable.Add(id);

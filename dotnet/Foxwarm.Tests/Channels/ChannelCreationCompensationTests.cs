@@ -105,7 +105,7 @@ public sealed class ChannelCreationCompensationTests
         );
         await TelegramChannelTests.Until(() => retry.Entry.Snapshot().Queue.Count == 1);
         await TelegramChannelTests.Until(() =>
-            JsonNode.Parse(File.ReadAllText(retry.AuthorityStore.AuthorityPath))!["queue"]!
+            JsonNode.Parse(File.ReadAllText(retry.AuthorityStore.AuthorityPath()))!["queue"]!
                 .AsArray()
                 .Count == 1
         );
@@ -243,7 +243,7 @@ public sealed class ChannelCreationCompensationTests
             Assert.Null(f.Manager.ChannelBinding("alpha:accepted"));
             Assert.Contains(
                 "accepted input",
-                await File.ReadAllTextAsync(candidate.AuthorityStore.AuthorityPath)
+                await File.ReadAllTextAsync(candidate.AuthorityStore.AuthorityPath())
             );
             Assert.Equal(
                 1,

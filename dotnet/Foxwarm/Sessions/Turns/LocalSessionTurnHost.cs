@@ -430,7 +430,7 @@ public sealed partial class LocalSessionTurnHost
         JsonObject? externalRuntime = null
     )
     {
-        if (message is not null && store is PersistentSessionAuthorityStore persistent)
+        if (message is not null && store is ISessionAuthority persistent)
             await persistent.Images.ExternalizeMessageAsync(message);
         var rows = await entry
             .SaveLane.CommitCanonicalAppendWithResultAsync(state =>

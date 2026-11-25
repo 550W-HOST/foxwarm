@@ -40,7 +40,7 @@ public sealed partial class CommandAdministrationTests
         await f.Router.HandleExternalMessageAsync(source, Message("/model " + selection));
         Assert.Equal(stored, f.Owner.Metadata().Model);
         Assert.Contains($"model: `{displayed}`", replies.Single());
-        var authority = await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath);
+        var authority = await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath());
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(source, Message("/model"));
         var reply = replies.Single();
@@ -52,7 +52,7 @@ public sealed partial class CommandAdministrationTests
             Assert.Contains("`local` (default, current)", reply);
         else
             Assert.Contains("`local` (default)", reply);
-        Assert.Equal(authority, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath));
+        Assert.Equal(authority, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()));
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(source, Message("/model --effort high"));
         Assert.Equal(stored, f.Owner.Metadata().Model);
@@ -221,7 +221,7 @@ public sealed partial class CommandAdministrationTests
             new[] { "memory/SELECTED.md" },
             SessionWait.Strings(child.Entry.Snapshot().AuthorityEnvelope["systemPromptFiles"])
         );
-        var disk = JsonNode.Parse(await File.ReadAllTextAsync(child.AuthorityStore.AuthorityPath))!;
+        var disk = JsonNode.Parse(await File.ReadAllTextAsync(child.AuthorityStore.AuthorityPath()))!;
         Assert.Equal(8750, SessionWait.Number(disk["compactThresholdTokens"]));
         Assert.Equal("none", SessionWait.Text(disk["effort"]));
         await f.Router.HandleExternalMessageAsync(

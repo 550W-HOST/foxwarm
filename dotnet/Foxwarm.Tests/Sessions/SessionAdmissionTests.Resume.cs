@@ -36,7 +36,7 @@ public sealed partial class SessionAdmissionTests
         raw["busy"] = true;
         raw["busyStartedAt"] = 1;
         raw["queue"] = new JsonArray(
-            PersistentSessionAuthorityStore.ToQueueJson(
+            SessionQueueJson.ToJson(
                 new QueueItem(QueueItemType.Background, [new JsonObject { ["system"] = wrapper }])
             )
         );

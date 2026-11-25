@@ -94,7 +94,7 @@ public sealed class ExternalChannelRoutingTests
             ]!.GetValue<string>()
         );
         Assert.Null(
-            JsonNode.Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath))![
+            JsonNode.Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()))![
                 "meta"
             ]!["lastChannel"]
         );

@@ -181,7 +181,7 @@ public sealed partial class LocalSessionTurnHost
                 ["role"] = "tool",
                 ["parts"] = new JsonArray(new JsonObject { ["functionResponse"] = response }),
             };
-            if (store is PersistentSessionAuthorityStore persistent)
+            if (store is ISessionAuthority persistent)
             {
                 try
                 {
