@@ -134,7 +134,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             id => ResolveTaskSessionId(id),
             id => TaskSessionAliases(id),
             id => TaskAnchorSeq(id),
-            id => Find(id)?.Agent
+            // Catalog membership, not residency: a released or unloaded owner keeps its Agent.
+            id => Find(id)?.Agent ?? CatalogMetadata(id)?.Agent
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
