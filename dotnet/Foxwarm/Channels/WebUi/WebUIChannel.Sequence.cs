@@ -118,7 +118,7 @@ internal sealed partial class WebUIChannel
                             );
                         var projection = new SessionSequenceProjection(
                             runtime,
-                            sessions.ArchiveDatabase
+                            sessions.Storage.Archive
                         );
                         var result = after is not null
                             ? projection.BuildIncremental(

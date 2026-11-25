@@ -166,6 +166,22 @@ internal static class ArchiveLexicalRecall
         string query,
         int limit,
         VectorSearchOptions? options = null
+    ) =>
+        Search(
+            archive,
+            id => new SqliteArchiveMessageStore(archive.DatabasePath, id),
+            query,
+            limit,
+            options
+        );
+
+    // Searches the lineage of archive; openPart opens each lineage part.
+    internal static IReadOnlyList<JsonObject> Search(
+        IArchiveSession archive,
+        Func<string, IArchiveSession> openPart,
+        string query,
+        int limit,
+        VectorSearchOptions? options = null
     )
     {
         var locators = Locators(query);
@@ -177,7 +193,7 @@ internal static class ArchiveLexicalRecall
         {
             if (candidates.Count >= 256)
                 break;
-            var local = new SqliteArchiveMessageStore(archive.DatabasePath, branch.SessionId);
+            var local = openPart(branch.SessionId);
             if (branch.MaxMessageSeq is null or > 0)
             {
                 var messages = local

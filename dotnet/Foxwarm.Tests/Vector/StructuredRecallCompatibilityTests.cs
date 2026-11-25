@@ -49,7 +49,7 @@ public sealed class StructuredRecallCompatibilityTests
                 }
             }
             // Keep the fixture's dense rows as retained fact hits, not extra block hits.
-            source.Archive.SetVectorCheckpoint(block: 3);
+            source.Archive.Sqlite().SetVectorCheckpoint(block: 3);
         }
         using var table = new VectorTable();
         await table.OpenAsync(f.Dense);

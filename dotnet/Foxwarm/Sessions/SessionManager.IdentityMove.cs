@@ -39,7 +39,8 @@ internal sealed partial class SessionManager
     private volatile bool identityStartupComplete;
     private SessionIdentityMoveRecord? unresolvedIdentityMove;
     internal Func<string, string, Task>? BeforeIdentityStage { get; set; }
-    internal string ArchiveDatabase => Path.Combine(root, "state", "archive-store.sqlite");
+    // The SQLite Archive file: read by the activity index, which still opens it directly, and by tests.
+    internal string ArchiveDatabase => ((SqliteArchiveStore)Storage.Archive).DatabasePath;
     private SessionIdentityMoveJournal IdentityJournal => new(root);
 
     internal WorkspaceTools IdentityWorkspace(
@@ -508,7 +509,7 @@ internal sealed partial class SessionManager
                 );
                 details["pathsMoved"] = true;
                 details["stage"] = "archive";
-                SqliteArchiveIdentityMove.Rename(ArchiveDatabase, record.OldId, record.NewId);
+                Storage.Archive.RenameIdentity(record.OldId, record.NewId);
                 details["archiveMoved"] = true;
                 vectorMoved = true;
                 await Vector.RenameAsync(record.OldId, record.NewId);
@@ -618,11 +619,7 @@ internal sealed partial class SessionManager
                     await Attempt(async () =>
                     {
                         await IdentityStageAsync(operation, "reverse-archive");
-                        SqliteArchiveIdentityMove.Rename(
-                            ArchiveDatabase,
-                            record.NewId,
-                            record.OldId
-                        );
+                        Storage.Archive.RenameIdentity(record.NewId, record.OldId);
                     });
                     await Attempt(() =>
                     {

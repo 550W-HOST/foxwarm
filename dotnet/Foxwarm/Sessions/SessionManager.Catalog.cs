@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
@@ -330,7 +329,7 @@ internal sealed partial class SessionManager
             foreach (var pair in Catalog.ChildCounts(chunk))
                 childCounts[pair.Key] = pair.Value;
         }
-        var sequences = ArchiveSequenceCounts(all.Keys.ToArray());
+        var sequences = Storage.Archive.SequenceCounts(all.Keys.ToArray());
         var ancestry = PresentationAncestry(all, current);
         return all
             .Values.Select(row =>
@@ -512,53 +511,6 @@ internal sealed partial class SessionManager
             return false;
         Find(id)?.PublishStateChanged();
         return true;
-    }
-
-    // Count is the Session's own messages (a fork's after its fork point); Latest is the seq of
-    // its newest message, inherited history included.
-    private Dictionary<string, (long Count, long Latest)> ArchiveSequenceCounts(string[] ids)
-    {
-        var result = new Dictionary<string, (long Count, long Latest)>(StringComparer.Ordinal);
-        var file = Path.Combine(root, "state", "archive-store.sqlite");
-        if (!File.Exists(file))
-            return result;
-        using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = file,
-                Mode = SqliteOpenMode.ReadOnly,
-                Pooling = false,
-            }.ToString()
-        );
-        connection.Open();
-        foreach (var chunk in ids.Chunk(200))
-        {
-            using var command = connection.CreateCommand();
-            var parameters = Enumerable
-                .Range(0, chunk.Length)
-                .Select(index => "$id" + index)
-                .ToArray();
-            for (var index = 0; index < chunk.Length; index++)
-                command.Parameters.AddWithValue(parameters[index], chunk[index]);
-            command.CommandText = $"""
-WITH requested(session_id) AS (VALUES {string.Join(
-                    ',',
-                    parameters.Select(parameter => "(" + parameter + ")")
-                )}),
-local_max AS (SELECT messages.session_id,MAX(messages.seq) max_seq FROM archive_messages messages INNER JOIN requested ON requested.session_id=messages.session_id GROUP BY messages.session_id)
-SELECT requested.session_id,COALESCE(local_max.max_seq,0),branches.parent_session_id,branches.fork_message_seq
-FROM requested LEFT JOIN local_max ON local_max.session_id=requested.session_id LEFT JOIN archive_branches branches ON branches.session_id=requested.session_id
-""";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-                result[reader.GetString(0)] = reader.IsDBNull(2)
-                    ? (reader.GetInt64(1), reader.GetInt64(1))
-                    : (
-                        Math.Max(0, reader.GetInt64(1) - reader.GetInt64(3)),
-                        Math.Max(reader.GetInt64(1), reader.GetInt64(3))
-                    );
-        }
-        return result;
     }
 }
 

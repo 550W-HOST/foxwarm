@@ -199,7 +199,7 @@ public sealed class SessionSequencePagingTests
 
         var projection = new SessionSequenceProjection(
             new SessionRuntime(f.Manager),
-            f.Manager.ArchiveDatabase
+            f.Manager.Storage.Archive
         );
         return new(f, projection, idle, sender, receiver, longTurn, busy, start);
     }

@@ -53,7 +53,7 @@ internal static class SequenceBenchCommand
         );
         var projection = new SessionSequenceProjection(
             new SessionRuntime(manager),
-            manager.ArchiveDatabase
+            manager.Storage.Archive
         );
         static string Line(string label, JsonObject page, double ms) =>
             $"{label} ms={ms:F0} lanes={page["sessions"]!.AsArray().Count} events={page["events"]!.AsArray().Count} links={page["links"]!.AsArray().Count} jsonKiB={page.ToJsonText().Length / 1024} from={page["range"]?["from"]}";

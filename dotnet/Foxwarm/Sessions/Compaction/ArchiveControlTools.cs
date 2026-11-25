@@ -189,7 +189,7 @@ internal static class ArchiveControlTools
 
     private static async Task<(
         string SessionId,
-        SqliteArchiveMessageStore Archive
+        IArchiveSession Archive
     )> AuthorizeArchiveAsync(
         SessionManager manager,
         SessionOwner source,

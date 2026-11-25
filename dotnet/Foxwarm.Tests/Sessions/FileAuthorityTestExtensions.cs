@@ -7,6 +7,10 @@ internal static class FileAuthorityTestExtensions
 {
     internal static string AuthorityPath(this ISessionAuthority store) =>
         ((PersistentSessionAuthorityStore)store).AuthorityPath;
+
+    /// <summary>The SQLite Archive view, for file-mode Vector checkpoint inspection.</summary>
+    internal static SqliteArchiveMessageStore Sqlite(this IArchiveSession archive) =>
+        (SqliteArchiveMessageStore)archive;
 }
 
 /// <summary>File-mode staging of identity-move crash states for tests.</summary>

@@ -7,7 +7,7 @@ internal static class WebUiContinuousHistory
 {
     // Snapshot bounds constrain display reads; Archive never supplies active authority.
     internal static JsonObject Read(
-        SqliteArchiveMessageStore archive,
+        IArchiveSession archive,
         long? before,
         long? after,
         long latest

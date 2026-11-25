@@ -324,7 +324,7 @@ internal static class VectorRawWindow
     }
 
     internal static VectorRawSelection Bounded(
-        SqliteArchiveMessageStore archive,
+        IArchiveSession archive,
         long first,
         long last,
         string query,

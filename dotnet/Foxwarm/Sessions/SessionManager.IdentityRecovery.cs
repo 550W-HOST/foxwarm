@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
@@ -35,20 +34,8 @@ internal sealed partial class SessionManager
                     throw new InvalidDataException(
                         "Finishing identity intent requires its existing durable target."
                     );
-                var resolved = record.OldId;
-                if (File.Exists(ArchiveDatabase))
-                {
-                    using var db = new SqliteConnection(
-                        new SqliteConnectionStringBuilder
-                        {
-                            DataSource = ArchiveDatabase,
-                            Mode = SqliteOpenMode.ReadOnly,
-                            Pooling = false,
-                        }.ToString()
-                    );
-                    db.Open();
-                    resolved = SqliteArchiveMessageStore.ResolveReadOnly(db, record.OldId);
-                }
+                var resolved =
+                    Storage.Archive.ResolveCommittedIdentity(record.OldId) ?? record.OldId;
                 if (backward && resolved != record.OldId)
                     throw new InvalidDataException(
                         "Rollback intent conflicts with committed identity authority."
@@ -105,7 +92,7 @@ internal sealed partial class SessionManager
                     );
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
                 IdentityJournal.MoveArtifacts(from, to, record.Version, Storage.Authority.MoveIdentity);
-                SqliteArchiveIdentityMove.Rename(ArchiveDatabase, from, to);
+                Storage.Archive.RenameIdentity(from, to);
                 await Vector.RenameAsync(from, to);
                 if (raw.ContainsKey("id"))
                     raw["id"] = to;

@@ -10,6 +10,7 @@ namespace Foxwarm.Storage;
 internal interface IStorageContext
 {
     ISessionAuthorityBackend Authority { get; }
+    IArchiveStore Archive { get; }
 }
 
 /// <summary>Construction seams of the file stores, used only by tests.</summary>
@@ -24,6 +25,7 @@ internal sealed class FileStorageContext : IStorageContext
     internal FileStorageContext(string dataRoot, FileStorageOptions? options = null)
     {
         DataRoot = Path.GetFullPath(dataRoot);
+        Archive = new SqliteArchiveStore(DataRoot);
         Authority = new FileSessionAuthorityBackend(
             DataRoot,
             options?.AuthorityStageHook,
@@ -34,4 +36,6 @@ internal sealed class FileStorageContext : IStorageContext
     internal string DataRoot { get; }
 
     public ISessionAuthorityBackend Authority { get; }
+
+    public IArchiveStore Archive { get; }
 }

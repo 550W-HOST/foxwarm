@@ -130,7 +130,7 @@ public sealed class VectorMainCallerTests
                 .ToArray()
         );
         await VectorStorageTests.UntilAsync(() =>
-            owner.Archive.VectorCheckpoint().RawLastIndexedSeq == 50
+            owner.Archive.Sqlite().VectorCheckpoint().RawLastIndexedSeq == 50
         );
         Assert.NotEmpty(f.Peer.Requests);
         Assert.Equal(50, owner.Archive.ReadMessages().Count);
@@ -189,7 +189,7 @@ public sealed class VectorMainCallerTests
                 );
                 Assert.Equal("VECTOR_OPERATION_FAILED", error.Code);
                 Assert.False(error.Retryable);
-                Assert.Equal(1, owner.Archive.VectorCheckpoint().RawLastIndexedSeq);
+                Assert.Equal(1, owner.Archive.Sqlite().VectorCheckpoint().RawLastIndexedSeq);
                 Assert.Equal(
                     0,
                     VectorRuntime.Integer(

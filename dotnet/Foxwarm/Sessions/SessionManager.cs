@@ -50,7 +50,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     /// <summary>Installation activity: the derived index of tool effects and its records.</summary>
     internal ActivityIndex Activity { get; }
     internal Foxwarm.Vector.VectorService Vector { get; }
-    private readonly Foxwarm.Persistence.SqliteWriterOwners.Lease archiveWriter;
+    private readonly IAsyncDisposable archiveWriter;
     internal TaskService Tasks { get; }
     private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
@@ -317,7 +317,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         waitLiveness = new WaitLiveness(this);
         Journal = new LlmRequestJournalStore(this.root);
         Usage = new UsageOverview(this, Journal);
-        archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
+        archiveWriter = Storage.Archive.AcquireWriter();
         Activity = new ActivityIndex(this);
         Vector = new(
             this.root,
@@ -637,8 +637,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public bool Accepting => accepting;
     public HostModels Models => models;
 
-    internal SqliteArchiveMessageStore ArchiveReader(string sessionId) =>
-        new(ArchiveDatabase, sessionId);
+    internal IArchiveSession ArchiveReader(string sessionId) =>
+        Storage.Archive.ForSession(sessionId);
 
     public SessionOwner? Find(string id)
     {

@@ -648,7 +648,7 @@ internal static class ArchiveRecallTool
     }
 
     private static JsonObject Literal(
-        SqliteArchiveMessageStore archive,
+        IArchiveSession archive,
         string id,
         JsonObject args,
         CancellationToken token

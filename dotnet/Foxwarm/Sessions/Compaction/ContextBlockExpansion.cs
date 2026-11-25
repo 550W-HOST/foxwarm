@@ -5,7 +5,7 @@ namespace Foxwarm.Sessions;
 internal static class ContextBlockExpansion
 {
     public static JsonObject? Render(
-        SqliteArchiveMessageStore archive,
+        IArchiveSession archive,
         string id,
         long blockId,
         int previewLength

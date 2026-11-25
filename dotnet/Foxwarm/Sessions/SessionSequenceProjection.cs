@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
@@ -126,19 +125,19 @@ internal sealed partial class SessionSequenceProjection
     }
 
     private readonly SessionRuntime runtime;
-    private readonly string archivePath;
+    private readonly IArchiveStore archive;
     private Func<string, bool> allows = _ => true;
     private double? pageFrom;
 
-    internal SessionSequenceProjection(SessionRuntime runtime, string archivePath)
+    internal SessionSequenceProjection(SessionRuntime runtime, IArchiveStore archive)
     {
         this.runtime = runtime;
-        this.archivePath = archivePath;
+        this.archive = archive;
     }
 
     // Visible catalog Sessions with own Archive rows, optionally limited to requested IDs.
     private List<(SessionCatalog.SequenceSession Session, ArchiveSpan Span)> Candidates(
-        SqliteConnection connection,
+        IArchiveSequenceReader connection,
         IReadOnlyList<string>? requested
     )
     {
@@ -150,7 +149,7 @@ internal sealed partial class SessionSequenceProjection
         {
             if (only is not null && !only.Contains(session.Id) || !allows(session.Id))
                 continue;
-            if (SqliteArchiveSequence.Span(connection, archivePath, session) is { } span)
+            if (connection.Span(session) is { } span)
                 result.Add((session, span));
         }
         return result;
@@ -166,7 +165,7 @@ internal sealed partial class SessionSequenceProjection
     {
         var watch = System.Diagnostics.Stopwatch.StartNew();
         allows = visibility?.Allows ?? (_ => true);
-        using var connection = SqliteArchiveSequence.Open(archivePath);
+        using var connection = archive.OpenSequenceReader();
         var lanes = new Dictionary<string, Lane>(StringComparer.Ordinal);
         var order = new List<string>();
         var cursor = request.Before;
@@ -183,8 +182,7 @@ internal sealed partial class SessionSequenceProjection
                     waiting.Add((session, span));
                 else if (cursor.Includes(span.First, session.Id, span.FirstSeq))
                 {
-                    var high = SqliteArchiveSequence.SeqBefore(
-                        connection,
+                    var high = connection.SeqBefore(
                         session.Id,
                         span,
                         cursor
@@ -249,8 +247,7 @@ internal sealed partial class SessionSequenceProjection
             {
                 var lane = new Lane(source.Session.Id, source.Span)
                 {
-                    Page = SqliteArchiveSequence.ReadRange(
-                        connection,
+                    Page = connection.ReadRange(
                         source.Session.Id,
                         source.Span,
                         source.Low!.Value,
@@ -281,15 +278,14 @@ internal sealed partial class SessionSequenceProjection
 
     // Queues the Source's next row, reading positions in small newest-first chunks.
     private static void Push(
-        SqliteConnection connection,
+        IArchiveSequenceReader connection,
         PriorityQueue<Source, (double, string, long)> heap,
         Source source
     )
     {
         if (source.Buffer.Count == 0 && source.High >= source.Span.FirstSeq)
         {
-            var rows = SqliteArchiveSequence.Positions(
-                connection,
+            var rows = connection.Positions(
                 source.Span,
                 source.High,
                 PositionChunk
@@ -308,7 +304,7 @@ internal sealed partial class SessionSequenceProjection
         var watch = System.Diagnostics.Stopwatch.StartNew();
         allows = visibility?.Allows ?? (_ => true);
         pageFrom = null;
-        using var connection = SqliteArchiveSequence.Open(archivePath);
+        using var connection = archive.OpenSequenceReader();
         var lanes = new Dictionary<string, Lane>(StringComparer.Ordinal);
         var order = new List<string>();
         if (connection is not null)
@@ -324,8 +320,7 @@ internal sealed partial class SessionSequenceProjection
                     continue;
                 var lane = new Lane(session.Id, span)
                 {
-                    Page = SqliteArchiveSequence.ReadAfter(
-                        connection,
+                    Page = connection.ReadAfter(
                         session.Id,
                         span,
                         cursor,

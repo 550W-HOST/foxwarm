@@ -141,7 +141,7 @@ public sealed class SessionSequenceProjectionTests
             .WaitAsync(TimeSpan.FromSeconds(20));
 
         var runtime = new SessionRuntime(f.Manager);
-        var projection = new SessionSequenceProjection(runtime, f.Manager.ArchiveDatabase);
+        var projection = new SessionSequenceProjection(runtime, f.Manager.Storage.Archive);
         var batch = (long)
             SessionWait.Number(
                 f
@@ -376,7 +376,7 @@ public sealed class SessionSequenceProjectionTests
 
         var projection = new SessionSequenceProjection(
             new SessionRuntime(f.Manager),
-            f.Manager.ArchiveDatabase
+            f.Manager.Storage.Archive
         );
         var result = projection.BuildPage(new(), null);
         var links = Objects(result["links"])
@@ -476,7 +476,7 @@ public sealed class SessionSequenceProjectionTests
         );
         var result = new SessionSequenceProjection(
             new SessionRuntime(f.Manager),
-            f.Manager.ArchiveDatabase
+            f.Manager.Storage.Archive
         ).BuildPage(new(), null);
         var texts = Objects(result["events"])
             .Where(item => Text(item["kind"]) == "llm")
@@ -552,7 +552,7 @@ public sealed class SessionSequenceProjectionTests
         );
         var result = new SessionSequenceProjection(
             new SessionRuntime(f.Manager),
-            f.Manager.ArchiveDatabase
+            f.Manager.Storage.Archive
         ).BuildPage(new(), null);
         var tools = Objects(result["events"])
             .Where(item => Text(item["kind"]) == "tool")

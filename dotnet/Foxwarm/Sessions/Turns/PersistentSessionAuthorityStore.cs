@@ -92,6 +92,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
     string ISessionAuthority.SessionId => sessionId;
     string ISessionAuthority.Agent => agent;
     Foxwarm.Images.ImageBlobStore ISessionAuthority.Images => Images;
+    IArchiveSession ISessionAuthority.Archive => archive;
 
     void ISessionAuthority.RebindIdentity(string sessionId, string agent) =>
         RebindIdentity(sessionId, agent);

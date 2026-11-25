@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
-using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
@@ -905,33 +904,7 @@ internal sealed partial class SessionManager
             || Storage.Authority.Exists(id)
         )
             return true;
-        var archive = Path.Combine(root, "state", "archive-store.sqlite");
-        if (!File.Exists(archive))
-            return false;
-        await using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = archive,
-                Mode = SqliteOpenMode.ReadOnly,
-            }.ToString()
-        );
-        await connection.OpenAsync();
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_branches'";
-        var hasBranches = await command.ExecuteScalarAsync() is not null;
-        var hasReservations = SqliteArchiveMessageStore.HasReservationTable(connection);
-        command.CommandText =
-            "SELECT 1 FROM archive_messages WHERE session_id=$id UNION SELECT 1 FROM archive_blocks WHERE session_id=$id"
-            + (hasBranches ? " UNION SELECT 1 FROM archive_branches WHERE session_id=$id" : "")
-            + (
-                hasReservations
-                    ? " UNION SELECT 1 FROM archive_session_id_reservations WHERE session_id=$id OR canonical_session_id=$id"
-                    : ""
-            )
-            + " LIMIT 1";
-        command.Parameters.AddWithValue("$id", id);
-        return await command.ExecuteScalarAsync() is not null;
+        return await Storage.Archive.HasLifetimeRowsAsync(id);
     }
 
     private ISessionAuthority MakeStore(string id, string agent)

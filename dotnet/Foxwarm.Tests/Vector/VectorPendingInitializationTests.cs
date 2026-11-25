@@ -177,11 +177,11 @@ public sealed class VectorPendingInitializationTests
         Assert.Equal("renamed", owner.Id);
         Assert.Equal(4096, f.Archive("renamed").ReadBlocks().Count);
         Assert.Equal(1, fork.Archive.ReadBranch()!.MessageCap);
-        Assert.True(fork.Archive.VectorCheckpoint().RawLastIndexedSeq >= 1);
+        Assert.True(fork.Archive.Sqlite().VectorCheckpoint().RawLastIndexedSeq >= 1);
         await manager.ForceVectorIndexAsync(fork);
         Assert.Equal(
             fork.Entry.Snapshot().NextMessageSeq - 1,
-            fork.Archive.VectorCheckpoint().RawLastIndexedSeq
+            fork.Archive.Sqlite().VectorCheckpoint().RawLastIndexedSeq
         );
         Assert.Contains(
             (

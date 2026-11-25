@@ -85,7 +85,7 @@ internal interface ISessionAuthority
 {
     string SessionId { get; }
     string Agent { get; }
-    SqliteArchiveMessageStore Archive { get; }
+    IArchiveSession Archive { get; }
     Foxwarm.Images.ImageBlobStore Images { get; }
 
     /// <summary>Binds the store to a new identity. The caller holds the owner's lane.</summary>

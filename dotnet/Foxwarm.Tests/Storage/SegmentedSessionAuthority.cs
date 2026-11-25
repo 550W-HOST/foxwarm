@@ -166,7 +166,7 @@ internal sealed class SegmentedSessionAuthority(
 
     public string SessionId => sessionId;
     public string Agent => agent;
-    public SqliteArchiveMessageStore Archive => archive;
+    public IArchiveSession Archive => archive;
     public Foxwarm.Images.ImageBlobStore Images { get; } = new(backend.DataRoot);
 
     public void RebindIdentity(string id, string targetAgent)

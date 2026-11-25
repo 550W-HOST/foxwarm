@@ -3,10 +3,10 @@ using System.Text.Json.Nodes;
 namespace Foxwarm.Sessions;
 
 // Pure source lookup shared by model recall and the existing WebUI block expansion.
-internal sealed class ArchiveContextReader(SqliteArchiveMessageStore archive)
+internal sealed class ArchiveContextReader(IArchiveSession archive)
 {
     internal static ArchiveBlockRecord HydrateBlock(
-        SqliteArchiveMessageStore archive,
+        IArchiveSession archive,
         ArchiveBlockRecord block
     )
     {

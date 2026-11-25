@@ -152,7 +152,7 @@ internal static class VectorRows
             .ToArray();
     }
 
-    internal static JsonObject? Block(ArchiveBlockRecord block, SqliteArchiveMessageStore store)
+    internal static JsonObject? Block(ArchiveBlockRecord block, IArchiveSession store)
     {
         var text = Trim(block.Summary);
         if (text.Length == 0)

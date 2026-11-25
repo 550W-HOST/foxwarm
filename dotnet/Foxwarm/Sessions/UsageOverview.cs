@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
-using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
@@ -181,7 +180,7 @@ internal sealed class UsageOverview : IAsyncDisposable
         )
         foreach (var row in manager.Catalog.GetMany(chunk))
             agents[SessionCatalog.Text(row["id"])!] = SessionCatalog.Text(row["agent"]);
-        using var db = OpenArchive();
+        using var db = manager.Storage.Archive.OpenIdentityReader();
         var result = new Dictionary<string, SessionOwnerInfo>(StringComparer.Ordinal);
         foreach (var id in ids)
         {
@@ -202,30 +201,14 @@ internal sealed class UsageOverview : IAsyncDisposable
         return result;
     }
 
-    private SqliteConnection? OpenArchive()
-    {
-        if (!File.Exists(manager.ArchiveDatabase))
-            return null;
-        var db = new SqliteConnection(
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = manager.ArchiveDatabase,
-                Mode = SqliteOpenMode.ReadOnly,
-                Pooling = false,
-            }.ToString()
-        );
-        db.Open();
-        return db;
-    }
-
-    private (long? Start, string? Agent) ArchiveHistory(SqliteConnection? db, string id)
+    private (long? Start, string? Agent) ArchiveHistory(IArchiveIdentityReader? db, string id)
     {
         if (db is null)
             return (null, null);
         string canonical;
         try
         {
-            canonical = SqliteArchiveMessageStore.ResolveReadOnly(db, id);
+            canonical = db.Resolve(id);
         }
         catch (InvalidDataException)
         {
@@ -234,17 +217,8 @@ internal sealed class UsageOverview : IAsyncDisposable
         }
         if (archive.TryGetValue(canonical, out var cached))
             return cached;
-        using var command = db.CreateCommand();
-        command.CommandText =
-            "SELECT timestamp,agent FROM archive_messages WHERE session_id=$id ORDER BY seq LIMIT 1";
-        command.Parameters.AddWithValue("$id", canonical);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        if (db.FirstMessage(canonical) is not { } found)
             return (null, null);
-        var found = (
-            (long?)Math.Floor(reader.GetDouble(0)),
-            reader.IsDBNull(1) || reader.GetString(1).Length == 0 ? null : reader.GetString(1)
-        );
         archive[canonical] = found;
         return found;
     }

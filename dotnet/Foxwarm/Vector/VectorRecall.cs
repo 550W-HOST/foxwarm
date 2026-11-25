@@ -72,7 +72,7 @@ internal static class VectorRecall
 
     internal static async Task<StructuredVectorRecall> SearchAsync(
         VectorService vector,
-        Func<string, SqliteArchiveMessageStore> archiveReader,
+        Func<string, IArchiveSession> archiveReader,
         string query,
         int limit,
         VectorSearchOptions options,
@@ -131,6 +131,7 @@ internal static class VectorRecall
             {
                 var lexical = ArchiveLexicalRecall.Search(
                     archiveReader(resolvedSessionId),
+                    archiveReader,
                     query,
                     candidateLimit,
                     options
@@ -165,7 +166,7 @@ internal static class VectorRecall
     }
 
     internal static StructuredVectorRecall Reload(
-        Func<string, SqliteArchiveMessageStore> archiveReader,
+        Func<string, IArchiveSession> archiveReader,
         IReadOnlyList<JsonObject> hits,
         string query,
         int limit,
