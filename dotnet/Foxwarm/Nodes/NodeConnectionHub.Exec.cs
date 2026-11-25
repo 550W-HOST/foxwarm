@@ -462,4 +462,7 @@ internal sealed partial class NodeConnectionHub
                     )
                 );
     }
+
+    internal bool HoldsSession(SessionOwner owner) =>
+        ExecClaims.Holds(owner) || calls.Values.Any(call => ReferenceEquals(call.Owner, owner));
 }

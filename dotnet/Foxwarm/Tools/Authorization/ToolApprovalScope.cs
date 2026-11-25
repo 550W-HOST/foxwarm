@@ -281,4 +281,6 @@ internal sealed class ToolApprovalWaiters
     }
 
     internal void Remove(string id) => waiters.TryRemove(id, out _);
+
+    internal bool IsEmpty => waiters.IsEmpty;
 }

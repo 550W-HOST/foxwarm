@@ -348,6 +348,17 @@ internal sealed class RemoteExecAuthority
                 claims.Remove(pair.Key);
     }
 
+    // Any claim, including reserved and outcome-unknown ones: completions and listings
+    // resolve through the exact owner object until the claim settles or expires.
+    internal bool Holds(SessionOwner owner)
+    {
+        lock (gate)
+        {
+            Prune();
+            return claims.Values.Any(claim => ReferenceEquals(claim.Owner, owner));
+        }
+    }
+
     internal void Clear()
     {
         lock (gate)

@@ -47,6 +47,12 @@ internal sealed class SessionRuntimeCredentialStore
                 run.Revoke();
     }
 
+    internal bool Holds(SessionOwner owner)
+    {
+        lock (gate)
+            return runs.Values.Any(run => ReferenceEquals(run.Owner, owner));
+    }
+
     internal void Close()
     {
         lock (gate)

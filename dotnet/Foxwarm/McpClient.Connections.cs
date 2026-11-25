@@ -338,6 +338,16 @@ internal sealed partial class McpClient
         }
     }
 
+    // Session-owned connections (including notification receivers) are bound to the exact
+    // owner object until they close; idle ones close on their own idle timer.
+    internal bool HoldsOwner(SessionOwner owner)
+    {
+        lock (poolGate)
+            return pool
+                .Values.Concat(retiringConnections)
+                .Any(entry => ReferenceEquals(entry.Key.Owner, owner));
+    }
+
     internal async Task ReleaseExternalAsync(McpExternalContext context)
     {
         Task[] pending;

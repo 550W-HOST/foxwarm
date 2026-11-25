@@ -543,6 +543,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await StartMainServicesAsync();
         await executor.ReconcileNowAsync();
         executor.StartReconciliation();
+        StartIdleRelease();
         foreach (var owner in sessions.Values)
         {
             var envelope = owner.Entry.Snapshot().AuthorityEnvelope;
@@ -870,6 +871,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         timers.StopFuture();
         // Detached runs do not survive the process; end them before draining their owners.
         ToolScript.CancelDetached();
+        StopIdleRelease();
         lock (lifecycle)
         {
             accepting = false;
