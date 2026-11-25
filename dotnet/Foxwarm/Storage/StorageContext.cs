@@ -16,6 +16,7 @@ internal interface IStorageContext
     ITaskRowStore Tasks { get; }
     Foxwarm.Models.ILlmJournalStore Journal { get; }
     Foxwarm.ToolScript.IToolScriptRunStore ToolScriptRuns { get; }
+    IStateDocuments Documents { get; }
 }
 
 /// <summary>Construction seams of the file stores, used only by tests.</summary>
@@ -36,6 +37,7 @@ internal sealed class FileStorageContext : IStorageContext
         Tasks = new SqliteTaskRowStore(DataRoot);
         Journal = new Foxwarm.Models.LlmRequestJournalStore(DataRoot);
         ToolScriptRuns = new Foxwarm.ToolScript.ToolScriptRunStore(DataRoot);
+        Documents = new FileStateDocuments(DataRoot);
         Authority = new FileSessionAuthorityBackend(
             DataRoot,
             options?.AuthorityStageHook,
@@ -58,4 +60,6 @@ internal sealed class FileStorageContext : IStorageContext
     public Foxwarm.Models.ILlmJournalStore Journal { get; }
 
     public Foxwarm.ToolScript.IToolScriptRunStore ToolScriptRuns { get; }
+
+    public IStateDocuments Documents { get; }
 }

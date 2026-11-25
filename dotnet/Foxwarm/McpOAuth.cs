@@ -10,7 +10,7 @@ internal sealed partial class McpOAuthService
     internal const string CallbackPath = "/api/mcp/oauth/callback";
     internal const string ClientPath = "/api/mcp/oauth/client.json";
     private readonly object gate = new();
-    private readonly AtomicJsonFile store;
+    private readonly Foxwarm.Storage.IStateDocument store;
     private readonly string? publicBaseUrl;
     private readonly Func<string, JsonObject> getServer;
     private readonly Func<string, JsonObject?> getConfiguredServer;
@@ -49,10 +49,14 @@ internal sealed partial class McpOAuthService
         Func<string, JsonObject?> getConfiguredServer,
         Action<string> closeConnections,
         CancellationToken shutdown,
-        Action<AtomicJsonWriteStage>? writeStage = null
+        Action<AtomicJsonWriteStage>? writeStage = null,
+        Foxwarm.Storage.IStateDocuments? documents = null
     )
     {
-        store = new(root, "state/mcp-oauth.json", writeStage, privateFile: true);
+        store = (documents ?? new Foxwarm.Storage.FileStateDocuments(root)).Open(
+            Foxwarm.Storage.StateDocumentName.McpOAuth,
+            new(writeStage)
+        );
         this.publicBaseUrl = publicBaseUrl;
         this.getServer = getServer;
         this.getConfiguredServer = getConfiguredServer;
@@ -123,8 +127,8 @@ internal sealed partial class McpOAuthService
             return grants;
         try
         {
-            var raw = File.Exists(store.FilePath)
-                ? JsonNode.Parse(File.ReadAllText(store.FilePath)) as JsonObject
+            var raw = store.ReadText() is { } text
+                ? JsonNode.Parse(text) as JsonObject
                 : new JsonObject { ["version"] = 1, ["servers"] = new JsonObject() };
             if (
                 SessionWait.Number(raw?["version"]) != 1
@@ -153,7 +157,9 @@ internal sealed partial class McpOAuthService
             next[name] = grant.DeepClone();
         try
         {
-            store.WritePayload(new JsonObject { ["version"] = 1, ["servers"] = next.DeepClone() });
+            store.ReplaceText(
+                new JsonObject { ["version"] = 1, ["servers"] = next.DeepClone() }.ToJsonText()
+            );
             grants = next;
         }
         catch (AuthorityCommittedException)

@@ -13,8 +13,7 @@ namespace Foxwarm.Tools;
 internal sealed partial class LocalExecManager : IAsyncDisposable
 {
     internal static bool IsSupported => ExecNative.Supported;
-    private readonly string registryPath;
-    private readonly AtomicJsonFile registryFile;
+    private readonly Foxwarm.Storage.IStateDocument registryFile;
     private readonly Func<string, string> workspaceForSession;
     private readonly Func<string, string> agentForSession;
     private readonly Func<string, string> resolveLifetime;
@@ -123,11 +122,13 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         Func<string, string> workspaceForSession,
         Func<string, string, string, Task> notify,
         Func<string, string>? resolveLifetime = null,
-        Func<string, string>? agentForSession = null
+        Func<string, string>? agentForSession = null,
+        Foxwarm.Storage.IStateDocuments? documents = null
     )
     {
-        registryPath = Path.Combine(Path.GetFullPath(dataRoot), "state", "running-exec.json");
-        registryFile = new(dataRoot, Path.Combine("state", "running-exec.json"));
+        registryFile = (documents ?? new Foxwarm.Storage.FileStateDocuments(dataRoot)).Open(
+            Foxwarm.Storage.StateDocumentName.RunningExec
+        );
         this.workspaceForSession = workspaceForSession;
         this.notify = notify;
         this.resolveLifetime = resolveLifetime ?? (id => id);
@@ -171,15 +172,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         JsonObject? data;
         try
         {
-            data = JsonNode.Parse(await File.ReadAllTextAsync(registryPath)) as JsonObject;
-        }
-        catch (FileNotFoundException)
-        {
-            return;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return;
+            if (await registryFile.ReadTextAsync() is not { } text)
+                return;
+            data = JsonNode.Parse(text) as JsonObject;
         }
         catch (System.Text.Json.JsonException)
         {
@@ -273,7 +268,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private void Save()
     {
-        registryFile.WriteTextPayload(
+        registryFile.ReplaceText(
             new JsonObject
             {
                 ["execs"] = new JsonArray(

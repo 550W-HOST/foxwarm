@@ -19,7 +19,12 @@ internal sealed partial class McpClient : IAsyncDisposable
     private long nextOperation;
     private bool closed;
 
-    internal McpClient(string root, string? publicBaseUrl = null, string? configPath = null)
+    internal McpClient(
+        string root,
+        string? publicBaseUrl = null,
+        string? configPath = null,
+        Foxwarm.Storage.IStateDocuments? documents = null
+    )
     {
         configuration = new(root, configPath);
         OAuth = new(
@@ -28,7 +33,8 @@ internal sealed partial class McpClient : IAsyncDisposable
             configuration.Get,
             name => configuration.Snapshot()[name] as JsonObject,
             FenceServer,
-            shutdown.Token
+            shutdown.Token,
+            documents: documents
         );
     }
 

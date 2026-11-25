@@ -95,7 +95,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
         RecallTargets = new(this.root);
-        Nodes = new(this.root);
+        Nodes = new(this.root, Storage.Documents);
         Nodes.Registry.ConfigureLimits(() =>
             (
                 (int)(
@@ -121,7 +121,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         authorization = new ToolAuthorizationAuthority(this.root);
         Storage.Identities.ValidateStartupEvidence(allowPendingIdentityRecovery: true);
         Directory.CreateDirectory(this.root);
-        deletionChannels = new(this.root);
+        deletionChannels = new(this.root, documents: Storage.Documents);
         Catalog = Storage.Catalog;
         Tasks = new TaskService(
             this,
@@ -217,7 +217,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ResolveExecLifetime,
             sessionId =>
                 SessionCatalog.Text(Catalog.Get(sessionId)?["agent"])
-                ?? throw new InvalidDataException("Exec Session membership is missing.")
+                ?? throw new InvalidDataException("Exec Session membership is missing."),
+            Storage.Documents
         );
         executor.ResolveProviderBackend = NodeProviders.ResolveExecBackend;
         executor.ResolveProviderStop = NodeProviders.ExecStopBackendAsync;
@@ -279,7 +280,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         mcp = new Foxwarm.McpClient(
             this.root,
             SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"]),
-            hostPaths?.McpConfigPath
+            hostPaths?.McpConfigPath,
+            Storage.Documents
         );
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
@@ -308,7 +310,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
-        timers = Foxwarm.Timers.MainTimers.Reporting(this.root, DeliverTimerAsync);
+        timers = Foxwarm.Timers.MainTimers.Reporting(Storage.Documents, DeliverTimerAsync);
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
         Journal = Storage.Journal;

@@ -78,12 +78,7 @@ public sealed class NodePrivateCredentialTests
 
         internal void RegistryWrite(Action<AtomicJsonWriteStage>? hook)
         {
-            var file = typeof(ApprovedNodeRegistry)
-                .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(Manager.Nodes.Registry)!;
-            typeof(AtomicJsonFile)
-                .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(file, hook);
+            Manager.Nodes.Registry.WriteStage = hook;
         }
 
         public async ValueTask DisposeAsync()

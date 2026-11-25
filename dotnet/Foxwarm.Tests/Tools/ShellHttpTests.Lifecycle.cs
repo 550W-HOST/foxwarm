@@ -16,12 +16,7 @@ public sealed partial class ShellHttpTests
         Action<AtomicJsonWriteStage>? hook
     )
     {
-        var file = typeof(ApprovedNodeRegistry)
-            .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(hub.Registry)!;
-        typeof(AtomicJsonFile)
-            .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(file, hook);
+        hub.Registry.WriteStage = hook;
     }
 
     [Theory]

@@ -17,7 +17,7 @@ internal sealed class TimerCommittedException(string id, Exception error)
 
 internal sealed partial class MainTimers : IAsyncDisposable
 {
-    private readonly string path;
+    private readonly Foxwarm.Storage.IStateDocument file;
     private readonly Func<JsonObject, Task<JsonObject?>> deliver;
     private readonly object gate = new();
     private readonly SemaphoreSlim saveLane = new(1, 1);
@@ -50,12 +50,18 @@ internal sealed partial class MainTimers : IAsyncDisposable
                 await deliver(row);
                 return null;
             },
-            root
+            new Foxwarm.Storage.FileStateDocuments(root)
         ) { }
 
-    private MainTimers(Func<JsonObject, Task<JsonObject?>> reporting, string root)
+    private MainTimers(
+        Func<JsonObject, Task<JsonObject?>> reporting,
+        Foxwarm.Storage.IStateDocuments documents
+    )
     {
-        path = Path.Combine(root, "state", "timers.json");
+        file = documents.Open(
+            Foxwarm.Storage.StateDocumentName.Timers,
+            new(stage => WriteStage?.Invoke(stage))
+        );
         deliver = reporting;
     }
 
@@ -64,7 +70,12 @@ internal sealed partial class MainTimers : IAsyncDisposable
     internal static MainTimers Reporting(
         string root,
         Func<JsonObject, Task<JsonObject?>> deliver
-    ) => new(deliver, root);
+    ) => new(deliver, new Foxwarm.Storage.FileStateDocuments(root));
+
+    internal static MainTimers Reporting(
+        Foxwarm.Storage.IStateDocuments documents,
+        Func<JsonObject, Task<JsonObject?>> deliver
+    ) => new(deliver, documents);
 
     internal string? Unavailable => unavailable;
 
@@ -78,28 +89,9 @@ internal sealed partial class MainTimers : IAsyncDisposable
             loaded = true;
             try
             {
-                bool exists;
-                try
+                if (await file.ReadTextAsync() is { } text)
                 {
-                    _ = File.GetAttributes(path);
-                    exists = true;
-                }
-                catch (FileNotFoundException)
-                {
-                    RequireKnownAbsentParent();
-                    exists = false;
-                }
-                catch (DirectoryNotFoundException)
-                {
-                    RequireKnownAbsentParent();
-                    exists = false;
-                }
-                if (exists)
-                {
-                    var payload = JsonNode.Parse(
-                        await File.ReadAllTextAsync(path),
-                        documentOptions: ReadOptions
-                    );
+                    var payload = JsonNode.Parse(text, documentOptions: ReadOptions);
                     if (payload is not JsonObject root || root["timers"] is not JsonArray)
                         throw new InvalidDataException(
                             "Unrecognized timers root or timers container."
@@ -124,34 +116,6 @@ internal sealed partial class MainTimers : IAsyncDisposable
         {
             saveLane.Release();
         }
-    }
-
-    private void RequireKnownAbsentParent()
-    {
-        for (
-            var parent = Path.GetDirectoryName(path);
-            parent is not null;
-            parent = Path.GetDirectoryName(parent)
-        )
-        {
-            FileAttributes attributes;
-            try
-            {
-                attributes = File.GetAttributes(parent);
-            }
-            catch (FileNotFoundException)
-            {
-                continue;
-            }
-            catch (DirectoryNotFoundException)
-            {
-                continue;
-            }
-            if (!attributes.HasFlag(FileAttributes.Directory) || !Directory.Exists(parent))
-                throw new IOException("Timer store parent is unavailable.");
-            return;
-        }
-        throw new IOException("Timer store parent is unavailable.");
     }
 
     private void RequireAvailable()
@@ -203,17 +167,10 @@ internal sealed partial class MainTimers : IAsyncDisposable
             if (JsonNode.DeepEquals(next, document) && !forceReplacement)
                 return result?.DeepClone();
             AuthorityCommittedException? partial = null;
-            var root = Path.GetDirectoryName(Path.GetDirectoryName(path)!)!;
             try
             {
                 var payload = next.ToJsonString(JsonOptions);
-                await Task.Run(() =>
-                    new AtomicJsonFile(
-                        root,
-                        "state/timers.json",
-                        stage => WriteStage?.Invoke(stage)
-                    ).WriteTextPayload(payload, token)
-                );
+                await Task.Run(() => file.ReplaceText(payload, token));
             }
             catch (AuthorityCommittedException error)
             {

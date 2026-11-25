@@ -68,12 +68,7 @@ public sealed partial class NodeOnboardingHttpTests
 
         internal void ObserveWrite(Action<AtomicJsonWriteStage>? hook)
         {
-            var file = typeof(ApprovedNodeRegistry)
-                .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(Hub.Registry)!;
-            typeof(AtomicJsonFile)
-                .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(file, hook);
+            Hub.Registry.WriteStage = hook;
         }
 
         public async ValueTask DisposeAsync()

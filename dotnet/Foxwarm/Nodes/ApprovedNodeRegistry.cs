@@ -11,26 +11,20 @@ internal sealed partial class ApprovedNodeRegistry
 {
     internal const long PairingTtl = 60 * 60 * 1000;
     private readonly object gate = new();
-    private readonly AtomicJsonFile file;
+    private readonly Foxwarm.Storage.IStateDocument file;
     private JsonObject data;
     internal string PairingToken { get; }
+
+    /// <summary>Observes registry write stages; tests only.</summary>
+    internal Action<AtomicJsonWriteStage>? WriteStage { get; set; }
     internal event Action<string>? Expired;
     internal static long Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    internal ApprovedNodeRegistry(string root)
+    internal ApprovedNodeRegistry(string root, Foxwarm.Storage.IStateDocuments? documents = null)
     {
-        file = new(
-            root,
-            "state/nodes.json",
-            privateFile: true,
-            backups: new(
-                Rotate: 3,
-                IncludeLegacyBak: true,
-                OnError: error =>
-                    Console.Error.WriteLine(
-                        "[nodes] Failed to rotate Node registry backups: " + error.Message
-                    )
-            )
+        file = (documents ?? new Foxwarm.Storage.FileStateDocuments(root)).Open(
+            Foxwarm.Storage.StateDocumentName.Nodes,
+            new(stage => WriteStage?.Invoke(stage))
         );
         data = Load();
         var tokenPath = Path.Combine(root, "state", "node_token");
@@ -53,7 +47,7 @@ internal sealed partial class ApprovedNodeRegistry
         string? source;
         try
         {
-            loaded = file.LoadFirstAvailable(ReadCandidate, out source);
+            loaded = file.ReadFirstAvailable(ReadCandidate, out source);
         }
         catch (Exception error) when (error is IOException or System.Text.Json.JsonException)
         {
@@ -69,20 +63,20 @@ internal sealed partial class ApprovedNodeRegistry
                 ["providerNodes"] = new JsonObject(),
                 ["pendingPairings"] = new JsonObject(),
             };
-        if (source != file.FilePath)
+        if (source != file.Locator)
         {
             Console.Error.WriteLine(
                 "[nodes] Recovering the Node registry from " + Path.GetFileName(source)
             );
-            file.WritePayload(loaded);
+            file.ReplaceText(loaded.ToJsonText());
         }
         return loaded;
     }
 
-    private static JsonObject ReadCandidate(string path)
+    private static JsonObject ReadCandidate(string text)
     {
         var loaded =
-            JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+            JsonNode.Parse(text) as JsonObject
             ?? throw new InvalidDataException("Invalid Node registry.");
         loaded["approvedNodes"] = loaded["approvedNodes"] is JsonObject approved
             ? approved.DeepClone()
@@ -116,7 +110,7 @@ internal sealed partial class ApprovedNodeRegistry
                 PruneAbsent(next, id => SessionCatalog.Flag(ProviderNodes(next)[id]?["absent"]));
             try
             {
-                file.WritePayload(next);
+                file.ReplaceText(next.ToJsonText());
             }
             catch (AuthorityCommittedException)
             {

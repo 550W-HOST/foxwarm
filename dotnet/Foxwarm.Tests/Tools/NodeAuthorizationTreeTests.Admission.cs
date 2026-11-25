@@ -122,28 +122,16 @@ public sealed partial class NodeAuthorizationTreeTests
         await using var f = await Fixture.Create();
         f.Manager.Nodes.Registry.Create("root");
         f.Manager.Nodes.Registry.Create("child", "root");
-        var file = typeof(ApprovedNodeRegistry)
-            .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(f.Manager.Nodes.Registry)!;
-        var hook = typeof(AtomicJsonFile).GetField(
-            "stageHook",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
         using var reached = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
-        hook.SetValue(
-            file,
-            (Action<AtomicJsonWriteStage>)(
-                stage =>
-                {
-                    if (stage != AtomicJsonWriteStage.BeforeRename)
-                        return;
-                    reached.Set();
-                    if (!release.Wait(TimeSpan.FromSeconds(10)))
-                        throw new TimeoutException("Owned cascade publication barrier timed out.");
-                }
-            )
-        );
+        f.Manager.Nodes.Registry.WriteStage = stage =>
+        {
+            if (stage != AtomicJsonWriteStage.BeforeRename)
+                return;
+            reached.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Owned cascade publication barrier timed out.");
+        };
         var removal = Task.Run(() =>
             f.Call("node_remove", Obj("""{"nodeId":"root","cascade":true}"""))
         );
@@ -161,7 +149,7 @@ public sealed partial class NodeAuthorizationTreeTests
         }
         Success(await removal);
         Denied(await admission!);
-        hook.SetValue(file, null);
+        f.Manager.Nodes.Registry.WriteStage = null;
         Assert.Empty(f.Manager.Nodes.Registry.ListApproved());
         Assert.False(File.Exists(Path.Combine(f.Work, "racing.token")));
     }

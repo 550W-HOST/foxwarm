@@ -6,12 +6,17 @@ namespace Foxwarm.Sessions;
 /// <summary>Persisted attachments only; no channel transport or invented binding from lastChannel.</summary>
 internal sealed class SessionDeletionChannels(
     string root,
-    Action<string?, string>? beforeStage = null
+    Action<string?, string>? beforeStage = null,
+    Foxwarm.Storage.IStateDocuments? documents = null
 )
 {
     private readonly object gate = new();
     private JsonObject? pendingOrdinary;
-    private string FilePath => Path.Combine(root, "state", "channels.json");
+    private readonly Foxwarm.Storage.IStateDocument file = (
+        documents ?? new Foxwarm.Storage.FileStateDocuments(root)
+    ).Open(Foxwarm.Storage.StateDocumentName.Channels);
+
+    // Legacy attachments, read once as file-mode migration input.
     private string EvidencePath =>
         Path.Combine(root, "state", "sessions.json.pre-catalog-sqlite-v1.bak");
 
@@ -137,7 +142,7 @@ internal sealed class SessionDeletionChannels(
     {
         if (pendingOrdinary is not null)
             return (JsonObject)pendingOrdinary.DeepClone();
-        if (ReadOptional(FilePath) is { } current)
+        if (Parse(file.ReadText()) is { } current)
             return Validate(current, normalize);
         if (ReadOptional(EvidencePath) is not { } evidence)
             return new JsonObject { ["channels"] = new JsonObject() };
@@ -160,12 +165,17 @@ internal sealed class SessionDeletionChannels(
         return result;
     }
 
+    private static JsonObject? Parse(string? text) =>
+        text is null
+            ? null
+            : JsonNode.Parse(text) as JsonObject
+                ?? throw new InvalidDataException("Channel authority must be an object.");
+
     private static JsonObject? ReadOptional(string file)
     {
         try
         {
-            return JsonNode.Parse(File.ReadAllText(file)) as JsonObject
-                ?? throw new InvalidDataException("Channel authority must be an object.");
+            return Parse(File.ReadAllText(file));
         }
         catch (FileNotFoundException)
         {
@@ -306,8 +316,8 @@ internal sealed class SessionDeletionChannels(
             throw new InvalidDataException("Non-WebUI binding appeared before deletion cleanup.");
         if (keys.Length == 0)
         {
-            if (ReadOptional(FilePath) is not null)
-                DirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
+            if (Parse(file.ReadText()) is not null)
+                file.EnsureDurable();
             return;
         }
         foreach (var key in keys)
@@ -322,7 +332,7 @@ internal sealed class SessionDeletionChannels(
     {
         try
         {
-            new AtomicJsonFile(root, Path.Combine("state", "channels.json")).WritePayload(payload);
+            file.ReplaceText(payload.ToJsonText());
         }
         catch (AuthorityCommittedException)
         {
