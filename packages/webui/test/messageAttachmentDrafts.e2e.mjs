@@ -46,10 +46,12 @@ test('inline attachment refs preserve File identity by Session and clear only af
   const page=await browser.newPage();await page.goto(fixtureUrl,{waitUntil:'load'})
   const editor='[role="textbox"][aria-label="Message"]'
   await page.type(editor,'before after')
-  await page.evaluate(()=>{
-    const root=document.querySelector('[role="textbox"][aria-label="Message"]');const text=[...root.childNodes].find(node=>node.nodeType===Node.TEXT_NODE)
+  // The editor reads a native selection change from the document's selectionchange event.
+  await page.evaluate(()=>new Promise(resolve=>{
+    const root=document.querySelector('[role="textbox"][aria-label="Message"]');const text=root.querySelector('.cm-line').firstChild
+    document.addEventListener('selectionchange',resolve,{once:true})
     const range=document.createRange();range.setStart(text,7);range.collapse(true);const selection=getSelection();selection.removeAllRanges();selection.addRange(range)
-  })
+  }))
   await upload(page,'duplicate.txt','first')
   const firstRef=await page.$eval('.foxwarm-composer-attachment-chip',node=>node.dataset.composerAttachmentRef)
   assert.equal(firstRef,'attachment1')
@@ -92,7 +94,7 @@ test('numbered attachment previews form a grid above the editor on desktop and m
     await page.waitForSelector('[data-composer-action="send"]:not([disabled])')
     const layout=await page.evaluate(()=>{
       const grid=document.querySelector('.composer-attachment-grid'),editor=document.querySelector('[role="textbox"]'),tiles=[...grid.querySelectorAll('[data-attachment-preview-ref]')]
-      return {numbers:[...grid.querySelectorAll('[data-attachment-number]')].map(el=>el.textContent),inline:[...editor.querySelectorAll('.foxwarm-composer-attachment-chip')].map(el=>el.textContent),images:editor.querySelectorAll('img').length,above:grid.getBoundingClientRect().bottom<=editor.getBoundingClientRect().top,grid:getComputedStyle(grid).display,bounded:tiles.every(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth}),refs:tiles.map(el=>el.dataset.attachmentPreviewRef)}
+      return {numbers:[...grid.querySelectorAll('[data-attachment-number]')].map(el=>el.textContent),inline:[...editor.querySelectorAll('.foxwarm-composer-attachment-chip')].map(el=>el.textContent),images:editor.querySelectorAll('img:not(.cm-widgetBuffer)').length,above:grid.getBoundingClientRect().bottom<=editor.getBoundingClientRect().top,grid:getComputedStyle(grid).display,bounded:tiles.every(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth}),refs:tiles.map(el=>el.dataset.attachmentPreviewRef)}
     })
     assert.deepEqual(layout.numbers,['1','2','3']);assert.deepEqual(layout.inline,['FILE 1','FILE 2','FILE 3']);assert.equal(layout.images,0);assert.equal(layout.grid,'grid');assert.ok(layout.above&&layout.bounded,JSON.stringify(layout))
     if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_DIR+'/attachment-grid-'+width+'.png'})}
@@ -122,8 +124,7 @@ test('active composition displays Send without committing interim text or accide
   await page.evaluate(()=>window.fixtureSetRunning(true));await page.waitForSelector('[data-composer-action="stop"]')
   await page.focus('[role="textbox"]');await page.$eval('[role="textbox"]',el=>{
     el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
-    el.append(document.createTextNode('测试'))
-    el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'测试',isComposing:true}))
+    document.execCommand('insertText',false,'测试')
   })
   await page.waitForSelector('[data-composer-action="send"]:not([disabled])')
   await page.click('[aria-label="Send message"]');await page.waitForFunction(()=>window.sentPayloads.length===1)
