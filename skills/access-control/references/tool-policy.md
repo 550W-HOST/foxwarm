@@ -230,7 +230,7 @@ The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: p
 | `stop_session` | Required `sessionId`; no universal default. |
 | `task` | `ownerSessionId`, the Session a Task is assigned to; absent means no match. `<parent>` and `<main>` are not resolved here, so callers must pass the real Session ID. Use the owned-Task matcher on `taskId` for the caller's own Tasks. |
 
-Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The family registry is `ToolAuthorizationPolicy.TargetResolvers` in the Main server; see the [policy selectors and authoritative facts](../../../docs/code-index/units/tool-authorization.md#policy-selectors-and-authoritative-facts) for target and default resolution.
+Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The family registry is `ToolAuthorizationPolicy.TargetResolvers` in the Main server.
 
 Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. Model-facing Session and Agent lists are filtered by these grants; see List visibility below.
 
@@ -244,7 +244,7 @@ To restrict direct and scheduled creation to the caller's Agent without granting
   args: {agentName: {agent: {sameAgent: false}}}
 ```
 
-The Agent matcher is registered only for this exact builtin/argument pair; `sameAgent: true` is also supported. New-Session timer creation/updates reuse generic creation-target policy after normalization, including inherited targets. Their own timer permissions still apply. Future name/settings conditions can make the ordered check indeterminate and reject registration; this does not add trigger-time authorization or change human timer commands. See the [policy contract](../../../docs/code-index/units/tool-authorization.md#session-creation-agent-targets) and [scheduled-work boundary](../../../docs/code-index/behaviors/automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script).
+The Agent matcher is registered only for this exact builtin/argument pair; `sameAgent: true` is also supported. New-Session timer creation/updates reuse generic creation-target policy after normalization, including inherited targets. Their own timer permissions still apply. Future name/settings conditions can make the ordered check indeterminate and reject registration; this does not add trigger-time authorization or change human timer commands.
 
 ### Discovery visibility
 
@@ -329,4 +329,4 @@ rules:
 
 Generic deny applies to every internal Session. Generic allow passes only this policy layer: Agent-local layers, own channel attachment requirements, Node readiness and tool-local validation remain separate checks. A denied call cannot be fixed merely by adding a generic allow if a later check rejects it.
 
-Agents migrated from legacy isolation carry a generated Agent-local layer. Review or replace it with [agent-management](../../agent-management/SKILL.md); a global allow cannot widen it.
+Agents migrated from legacy isolation carry a generated Agent-local layer. Review or replace it with the `agent-management` skill; a global allow cannot widen it.

@@ -16,7 +16,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 | Restrict one Agent and the Agents created from it | [Agent-local layers](references/tool-policy.md#agent-local-layers) and the agent-management templates (`ctl skill load agent-management references/memory-templates/`) |
 | Read and merge the existing policy, install a candidate, and confirm behavior | [Safe updates and troubleshooting](references/policy-updates.md) |
 | Connect an MCP client/server or exchange explicit replies between instances | Load [mcp-management](../mcp-management/SKILL.md) |
-| Create/migrate an Agent, edit inheritance/memory, or review a migrated legacy isolated Agent | Load [agent-management](../agent-management/SKILL.md) |
+| Create/migrate an Agent, edit inheritance/memory, or review a migrated legacy isolated Agent | Load the `agent-management` skill |
 
 ## Essential boundaries
 
