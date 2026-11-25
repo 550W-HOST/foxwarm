@@ -19,6 +19,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Session runtime, owner, and turn runner](../units/session-turns.md)
 - [Automatic Session titles](../units/session-auto-title.md)
 - [Read-only Session upgrade inspection](../units/session-upgrade-inspection.md)
+- [Storage context and Session authority backend](../units/storage-context.md)
 - [Persistent Session authority store](../units/session-authority-store.md)
 - [Session authority JSON and atomic file writes](../units/session-authority-json.md)
 - [Session catalog schema, bootstrap, and migration](../units/session-catalog-schema.md)

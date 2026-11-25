@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Sessions/Turns/PersistentSessionAuthorityStore.cs`
 
 ## Purpose
 
-Bridges an ordered `SessionSaveLane` to the two durable authorities: active Session JSON and immutable Archive SQLite. It also hydrates cold owners and publishes Main-owned catalog projections.
+File implementation of `ISessionAuthority`, opened through the [Session authority backend](./storage-context.md). Bridges an ordered `SessionSaveLane` to the two durable authorities: active Session JSON and immutable Archive SQLite. It also hydrates cold owners and publishes Main-owned catalog projections.
 
 ## Stable methods and callers
 
@@ -12,9 +12,10 @@ Bridges an ordered `SessionSaveLane` to the two durable authorities: active Sess
 - `CommitCanonicalAppendAsync` validates, admits exact Archive message rows, prepares/validates/streams authority UTF-8 to a temporary file while persistence is pending, awaits the Archive commit, then publishes active JSON, rolls back only rows inserted by a failed pre-rename attempt, and publishes the projection after JSON publication.
 - `CommitCompactionAsync` performs the corresponding Archive block/message write followed by active JSON write and inserted-row rollback.
 - `LoadAsync` reads only the bound Session JSON through the shared read-only `SessionAuthorityReader`, then externalizes image parts. Missing authority with existing Archive rows is a typed local unavailable error; Archive access errors remain global. When both JSON and Archive are absent it returns `null`; the caller still decides whether that lifetime is creatable. `SessionManager.Admission` rejects a missing authority for an already registered catalog member instead of silently creating an empty Session.
+- Snapshot-to-state preparation, the state-to-snapshot mapping and appended-message Archive records come from the shared `SessionAuthorityCodec`, so every representation stores the same value.
 - `RebindIdentity`, `PersistIdentitySnapshotAsync`, and `Retire` support ordered identity moves and owner shutdown; `CheckWrite` prevents writes after retirement or failed identity authority.
 
-Callers: `SessionSaveLane`, `SessionRegistry.LoadOrAddAsync`, `SessionManager`, and the compaction/fork lifecycle. Consumers receive `SessionSnapshot` or catalog projection callbacks rather than the store mutating Session state itself.
+Callers: `SessionSaveLane`, `SessionRegistry.LoadOrAddAsync`, `SessionManager`, and the compaction/fork lifecycle, all through `ISessionAuthority`. Tests may construct the store directly; `AuthorityPath`, `ArchivePath` and `LastDirectorySyncResult` are file-only inspection members. Consumers receive `SessionSnapshot` or catalog projection callbacks rather than the store mutating Session state itself.
 
 ## Contract and failure behavior
 
