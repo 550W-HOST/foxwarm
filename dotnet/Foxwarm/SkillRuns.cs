@@ -8,14 +8,16 @@ using System.Text.Json.Nodes;
 namespace Foxwarm;
 
 // The validated `run` block of a runnable skill: an entry ToolScript inside the skill directory,
-// a one-line effect for the catalog, default mode and budget, and the schema of its args
+// a one-line effect for the catalog, default mode and budget, and the schema of its args.
+// ArgsText is the declared schema as compact JSON, shown in the catalog; null without `run.args`
 // (docs/code-index/units/skills.md#runnable-skills).
 internal sealed record SkillRun(
     string Entry,
     string Effect,
     string Mode,
     double? TimeoutSecs,
-    JsonObject Args
+    JsonObject Args,
+    string? ArgsText
 );
 
 // A runnable skill's entry as read for one run: UTF-8 source and the hash of its bytes.
@@ -36,6 +38,8 @@ internal sealed record SkillEntry(SkillInfo Info, SkillRun Run, string Path, str
 internal sealed partial class Skills
 {
     internal const int MaxEffectLength = 200;
+
+    internal const int MaxArgsLength = 1000;
 
     private static readonly string[] RunKeys = ["entry", "effect", "mode", "timeoutSecs", "args"];
 
@@ -196,7 +200,17 @@ internal sealed partial class Skills
             };
         if (SessionText(args["type"]) != "object")
             throw new InvalidDataException("`run.args` must have type: object.");
-        return new SkillRun(entry, effect, mode, timeout, args);
+        // The catalog shows the normalized schema in declared order; the limit measures that text.
+        string? argsText = null;
+        if (run.Contains("args"))
+        {
+            argsText = args.ToJsonText();
+            if (argsText.Length > MaxArgsLength)
+                throw new InvalidDataException(
+                    $"`run.args` must be at most {MaxArgsLength} characters as compact JSON."
+                );
+        }
+        return new SkillRun(entry, effect, mode, timeout, args, argsText);
     }
 
     // The entry's full path: relative, no `.`/`..` segments, every component below the skill

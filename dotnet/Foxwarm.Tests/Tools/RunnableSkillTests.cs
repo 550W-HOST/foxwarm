@@ -80,8 +80,14 @@ public sealed class RunnableSkillTests
             ),
             demo.Args.ToJsonString()
         );
+        // The catalog text is the normalized schema in its declared order.
+        Assert.Equal(
+            """{"type":"object","additionalProperties":false,"required":["question"],"properties":{"question":{"type":"string","description":"What to ask."},"level":{"type":"integer","enum":[1,2]},"tags":{"type":"array","items":{"type":"string"}}}}""",
+            demo.ArgsText
+        );
         var minimal = list.Single(skill => skill.Name == "minimal").Run!;
         Assert.Equal(("foreground", (double?)null), (minimal.Mode, minimal.TimeoutSecs));
+        Assert.Null(minimal.ArgsText);
         // Without args the entry takes none.
         Assert.Throws<InvalidDataException>(() =>
             Skills.ValidateArgs(minimal.Args, new JsonObject { ["x"] = 1 })
@@ -133,6 +139,37 @@ public sealed class RunnableSkillTests
         var list = await c.Skills.ListAsync("main");
         Assert.NotNull(list.Single(skill => skill.Name == "edge").Run);
         Assert.Null(list.Single(skill => skill.Name == "over").Run);
+    }
+
+    // A schema whose compact JSON has exactly `length` characters.
+    private static string ArgsOfLength(int length)
+    {
+        const string Shell = """{"type":"object","properties":{"q":{"type":"string","description":""}}}""";
+        return $"run:\n  entry: scripts/run.py\n  effect: Takes q.\n  args:\n    type: object\n    properties:\n      q: {{type: string, description: {new string('d', length - Shell.Length)}}}\n";
+    }
+
+    [Fact]
+    public async Task An_overlong_args_schema_makes_the_run_block_invalid_at_the_limit()
+    {
+        using var c = new Catalog();
+        WriteSkill(c.Global, "edge", ArgsOfLength(Skills.MaxArgsLength));
+        WriteSkill(c.Global, "over", ArgsOfLength(Skills.MaxArgsLength + 1));
+        var list = await c.Skills.ListAsync("main");
+        Assert.Equal(Skills.MaxArgsLength, list.Single(skill => skill.Name == "edge").Run!.ArgsText!.Length);
+        var over = list.Single(skill => skill.Name == "over");
+        Assert.Null(over.Run);
+        Assert.Contains("`run.args`", over.RunError);
+        Assert.Contains(Skills.MaxArgsLength.ToString(System.Globalization.CultureInfo.InvariantCulture), over.RunError);
+        // Still listed and loadable; `skill run` reports the reason.
+        Assert.Contains("# over", (await c.Skills.LoadAsync("over", "main")).Content);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => c.Skills.ReadEntryAsync("over", "main"));
+        Assert.Contains(over.RunError!, error.Message);
+        var snapshot = await Snapshot(c);
+        Assert.Contains(
+            "<skill><name>over</name><description>A synthetic skill.</description><source>global</source></skill>\n",
+            snapshot
+        );
+        Assert.Contains("<name>edge</name><description>A synthetic skill.</description><source>global</source><run>Takes q.</run><args>", snapshot);
     }
 
     [Fact]
@@ -297,12 +334,34 @@ public sealed class RunnableSkillTests
             "<skill><name>runner</name><description>A synthetic skill.</description><source>global</source><run>Checks &lt;a&gt; &amp; &lt;b&gt;.</run></skill>\n",
             snapshot
         );
-        Assert.Contains("<run>Second effect.</run>", snapshot);
+        Assert.Contains("<run>Second effect.</run></skill>\n", snapshot);
+        Assert.DoesNotContain("</run><args>", snapshot);
         Assert.Contains("<skill><name>plain</name><description>A synthetic skill.</description><source>global</source></skill>\n", snapshot);
         // Without the runnable skills the catalog returns to the plain form.
         Directory.Delete(Path.Combine(c.Global, "runner"), true);
         Directory.Delete(Path.Combine(c.Global, "second"), true);
         Assert.DoesNotContain(AgentMemory.RunnableSkillsSentence, await Snapshot(c));
+    }
+
+    [Fact]
+    public async Task A_runnable_skill_with_args_shows_its_compact_schema_after_run()
+    {
+        using var c = new Catalog();
+        WriteSkill(
+            c.Global,
+            "schema",
+            "run:\n  entry: scripts/run.py\n  effect: Takes a question.\n  args:\n    type: object\n    additionalProperties: false\n    properties:\n      q:\n        type: string\n        description: \"问题 für <a> & \\\"b\\\"\"\n      n: {type: integer, enum: [1, 2]}\n"
+        );
+        WriteSkill(c.Global, "bare", Valid);
+        var snapshot = await Snapshot(c);
+        Assert.Contains(
+            "  <skill><name>schema</name><description>A synthetic skill.</description><source>global</source><run>Takes a question.</run><args>{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"q\":{\"type\":\"string\",\"description\":\"问题 für &lt;a&gt; &amp; \\\"b\\\"\"},\"n\":{\"type\":\"integer\",\"enum\":[1,2]}}}</args></skill>\n",
+            snapshot
+        );
+        Assert.Contains(
+            "  <skill><name>bare</name><description>A synthetic skill.</description><source>global</source><run>Does one bounded thing.</run></skill>\n",
+            snapshot
+        );
     }
 
     [Fact]
@@ -319,6 +378,11 @@ public sealed class RunnableSkillTests
         Skills.ValidateArgs(advisor.Args, new JsonObject { ["question"] = "q", ["model"] = "m", ["effort"] = "high", ["waitSeconds"] = 60 });
         var entry = await skills.ReadEntryAsync("advisor", "main");
         Assert.Equal("global", entry.Info.SourceType);
+        // Its schema fits the catalog limit and is what the catalog shows.
+        Assert.Equal(advisor.Args.ToJsonText(), advisor.ArgsText);
+        Assert.True(advisor.ArgsText!.Length <= Skills.MaxArgsLength);
+        var snapshot = await new AgentMemory(c.Agents, skills).BuildAsync("main", "main/s", "a/wire");
+        Assert.Contains("</run><args>" + advisor.ArgsText.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;") + "</args></skill>\n", snapshot);
     }
 
     [Fact]

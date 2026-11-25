@@ -117,7 +117,7 @@ internal sealed partial class AgentMemory(
             blocks.Append(
                 "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, run `ctl skill load <name>`\nto load its full instructions and resource list.\n"
             );
-            // Only a catalog that lists a runnable skill gains the sentence and <run> elements;
+            // Only a catalog that lists a runnable skill gains the sentence and <run>/<args> elements;
             // any other catalog keeps its bytes (D-request-prefix-stability).
             if (catalog.Any(skill => skill.Run is not null))
                 blocks.Append(RunnableSkillsSentence).Append('\n');
@@ -135,7 +135,11 @@ internal sealed partial class AgentMemory(
                     .Append(skill.SourceType)
                     .Append("</source>");
                 if (skill.Run is { } run)
+                {
                     blocks.Append("<run>").Append(Xml(run.Effect)).Append("</run>");
+                    if (run.ArgsText is { } args)
+                        blocks.Append("<args>").Append(Xml(args)).Append("</args>");
+                }
                 blocks.Append("</skill>\n");
             }
             blocks.Append("</available_skills>\n");
@@ -158,7 +162,7 @@ internal sealed partial class AgentMemory(
     }
 
     internal const string RunnableSkillsSentence =
-        "A skill with a `<run>` element can also be run directly, without loading it, with `ctl skill run <name> --args @args`. `<run>` says what running it does; `ctl skill run <name> --help` shows its arguments.";
+        "A skill with a `<run>` element can also be run directly, without loading it, with `ctl skill run <name> --args @args` and the arguments object in `values.args`. `<run>` says what running it does; `<args>` is the JSON Schema of its arguments, and a skill without `<args>` takes none.";
 
     private static string Xml(string value) =>
         value
