@@ -373,11 +373,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             return null;
         var row = Catalog.Get(canonical);
         var agent = SessionCatalog.Text(row?["agent"]) ?? "main";
-        var path = Path.Combine(root, "state", "sessions", canonical + ".json");
-        if (File.Exists(path))
+        if (Storage.Authority.ReadEnvelope(canonical, agent) is { } rootValue)
         {
-            var document = SessionAuthorityDocument.Load(path, canonical, agent);
-            var rootValue = document.CloneRoot();
             if (rootValue["nextMessageSeq"] is JsonValue value)
             {
                 if (value.TryGetValue<long>(out var detachedNext))

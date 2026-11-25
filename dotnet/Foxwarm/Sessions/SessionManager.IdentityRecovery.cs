@@ -30,7 +30,7 @@ internal sealed partial class SessionManager
                     );
                 if (
                     !backward
-                    && (target is null || !File.Exists(IdentityJournal.AuthorityPath(record.NewId)))
+                    && (target is null || !Storage.Authority.Exists(record.NewId))
                 )
                     throw new InvalidDataException(
                         "Finishing identity intent requires its existing durable target."
@@ -53,11 +53,14 @@ internal sealed partial class SessionManager
                     throw new InvalidDataException(
                         "Rollback intent conflicts with committed identity authority."
                     );
-                var file = File.Exists(IdentityJournal.AuthorityPath(to))
-                    ? IdentityJournal.AuthorityPath(to)
-                    : IdentityJournal.AuthorityPath(from);
+                var stored =
+                    await Storage.Authority.ReadRawAsync(to)
+                    ?? await Storage.Authority.ReadRawAsync(from)
+                    ?? throw new FileNotFoundException(
+                        "Pending identity authority is missing."
+                    );
                 var raw =
-                    JsonNode.Parse(await File.ReadAllTextAsync(file)) as JsonObject
+                    stored.Document as JsonObject
                     ?? throw new InvalidDataException(
                         "Pending identity authority must be an object."
                     );
@@ -101,7 +104,7 @@ internal sealed partial class SessionManager
                         record.OwnedAgentPreparation
                     );
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
-                IdentityJournal.MoveArtifacts(from, to, record.Version);
+                IdentityJournal.MoveArtifacts(from, to, record.Version, Storage.Authority.MoveIdentity);
                 SqliteArchiveIdentityMove.Rename(ArchiveDatabase, from, to);
                 await Vector.RenameAsync(from, to);
                 if (raw.ContainsKey("id"))
@@ -110,7 +113,7 @@ internal sealed partial class SessionManager
                 raw["aliases"] = new JsonArray(
                     aliases.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
                 );
-                new AtomicJsonFile(root, $"state/sessions/{to}.json").WritePayload(raw);
+                Storage.Authority.ReplaceRaw(to, raw);
                 metadata.Rewrite(from, to, agent, aliases, requireSource: source is not null);
                 deletionChannels.RewriteIdentity(from, to);
                 if (!backward)

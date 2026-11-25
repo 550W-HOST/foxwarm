@@ -902,7 +902,7 @@ internal sealed partial class SessionManager
             pending
             || Catalog.Get(id) is not null
             || sessions.ContainsKey(id)
-            || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))
+            || Storage.Authority.Exists(id)
         )
             return true;
         var archive = Path.Combine(root, "state", "archive-store.sqlite");

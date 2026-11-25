@@ -291,8 +291,8 @@ internal sealed partial class SessionManager
                 if (!operation.JsonDurable.Contains(id))
                 {
                     await DeleteStageAsync(operation, "json-unlink", id);
-                    UnlinkActive(
-                        ((PersistentSessionAuthorityStore)owner.AuthorityStore).AuthorityPath,
+                    Storage.Authority.DeleteAuthority(
+                        owner.AuthorityStore.SessionId,
                         () => operation.JsonRemoved.Add(id)
                     );
                     operation.JsonDurable.Add(id);
@@ -300,8 +300,8 @@ internal sealed partial class SessionManager
                 if (!operation.FrontierDurable.Contains(id))
                 {
                     await DeleteStageAsync(operation, "frontier-unlink", id);
-                    UnlinkActive(
-                        Path.Combine(root, "state", "sessions", id + ".frontier.json"),
+                    Storage.Authority.DeleteLegacyArtifacts(
+                        id,
                         () => operation.FrontierRemoved.Add(id)
                     );
                     operation.FrontierDurable.Add(id);
@@ -481,14 +481,6 @@ internal sealed partial class SessionManager
                 "The canonical session tree changed while preparing deletion. Retry.",
                 "SESSION_DELETE_TREE_CHANGED"
             );
-    }
-
-    private static void UnlinkActive(string path, Action removed)
-    {
-        File.Delete(path);
-        removed();
-        if (Directory.Exists(Path.GetDirectoryName(path)))
-            DirectorySync.Sync(Path.GetDirectoryName(path)!);
     }
 
     private void CompleteDeletedOwner(DeleteOperation operation, string id, SessionOwner owner)
