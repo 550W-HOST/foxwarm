@@ -323,6 +323,8 @@ public sealed partial class ProviderFileConsumerTests
             policy,
             "version: 1\ndefaultAction: deny\nrules:\n- action: allow\n  node: { provider: fixture }\n"
         );
+        // Session creation already read the policy for its skill catalog.
+        f.Manager.Authorization.Invalidate();
         var args = new JsonObject
         {
             ["sourceNode"] = f.Node,
@@ -345,6 +347,7 @@ public sealed partial class ProviderFileConsumerTests
             policy,
             "version: 1\ndefaultAction: deny\nrules:\n- action: allow\n  node: { current: true }\n"
         );
+        f.Manager.Authorization.Invalidate();
         Success(await f.Call("read", Args("source")));
         var explicitMain = await f.Call(
             "ctl",

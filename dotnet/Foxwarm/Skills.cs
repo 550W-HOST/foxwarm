@@ -24,6 +24,15 @@ internal sealed record SkillInfo(
         : $"inherited:{SourceAgent}";
 }
 
+// What a skill listing shows of one skill: nothing, the skill, or the skill with its run entry.
+// A projection of the caller's rules; load and run are still authorized at dispatch.
+internal enum SkillAccess
+{
+    Hidden,
+    Load,
+    Run,
+}
+
 // Knowledge discovery only: entry documents are loaded on demand, never executable tool registration.
 internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
 {

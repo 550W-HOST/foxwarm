@@ -168,7 +168,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             agents,
             skills,
             FrameworkPrompt.TemplatePath(hostPaths?.ResourceRoot ?? AppContext.BaseDirectory),
-            models
+            models,
+            skillAccess: CatalogSkillAccess
         );
         executor = new LocalExecManager(
             this.root,

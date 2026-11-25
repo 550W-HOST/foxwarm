@@ -1,6 +1,6 @@
 # Unit: Skill resolution and runnable skills
 
-Files: `dotnet/Foxwarm/Skills.cs`, `dotnet/Foxwarm/SkillRuns.cs`, `dotnet/Foxwarm.Tests/Tools/RunnableSkillTests.cs`
+Files: `dotnet/Foxwarm/Skills.cs`, `dotnet/Foxwarm/SkillRuns.cs`, `dotnet/Foxwarm/Sessions/SessionManager.SkillVisibility.cs`, `dotnet/Foxwarm.Tests/Tools/RunnableSkillTests.cs`, `dotnet/Foxwarm.Tests/Tools/SkillAccessTests.cs`
 
 ## Purpose
 
@@ -18,6 +18,12 @@ Files: `dotnet/Foxwarm/Skills.cs`, `dotnet/Foxwarm/SkillRuns.cs`, `dotnet/Foxwar
 
 `Skills.ReadEntryAsync` resolves the name exactly as `LoadAsync` does (Agent-local, inherited, global; the first valid match wins, so a non-runnable local skill shadows a runnable global one; nested skills are rejected), rechecks the entry path, reads it as strict UTF-8 (a leading BOM is dropped; an empty entry is an error) and returns it with the SHA-256 of its bytes. Every skill root is a Main server directory, so the entry is always read on the Main server, whatever the Session's current Node. `Skills.ValidateArgs` checks run arguments against the schema; errors name the field (`args.question`) and what it expects. The errors of `skill run` are the `skill load` error for an unknown skill, "has no runnable entry; load it with `ctl skill load <name>`", the invalid block's reason, a missing, non-UTF-8 or empty entry, argument errors, and the ordinary failures of the run itself.
 
+## Skill access
+
+**User decisions (2026-11-25).** Whether an Agent may use a skill is decided by the existing rules on the `skill` and `run_skill` builtins, matched by `skillName` and `agentName`; there is no separate skill configuration and no `source` (global, local, inherited) matcher (U7). A local skill that shadows a global one runs with the caller's own authority, so a name grant reaching it gives nothing new.
+
+**Listings.** The catalog ([Session domain](./session-domain.md)) and `skill list` show a skill only when `skill load` of it might be allowed and show its run entry only when `run_skill` of it might be. `SessionManager.SkillAccessFor` probes each skill with the known-argument visibility evaluator: `skill` with `{action: load, skillName}` and `agentName` and `path` known (absent, or the listing's own `agentName`), and `run_skill` with `skillName`, `agentName` and `script` known while `mode`, `timeoutSecs` and `args` stay unknown, so a rule that denies only background runs keeps `<run>`. A conditional allow or an ask lists the skill. Visibility never authorizes: load and run are decided at dispatch, and a rule change reaches a catalog at its next snapshot rebuild (`skill list` sees it at once). `skill` and `run_skill` have no Node facts. `skill list` propagates an unavailable global policy like any call; the catalog's fallback is in the Session domain.
+
 ## Tests
 
-`RunnableSkillTests` covers valid and invalid `run` blocks, the effect and args length limits, the compact `args` text, entry containment (`..`, absolute, backslash, missing, a linked file or directory, non-UTF-8), the entry hash, local, inherited and global resolution with shadowing and nested-skill rejection, argument validation including values built in code, the catalog's prefix guard and `<run>`/`<args>` elements, and the `skill run` command forms.
+`RunnableSkillTests` covers valid and invalid `run` blocks, the effect and args length limits, the compact `args` text, entry containment (`..`, absolute, backslash, missing, a linked file or directory, non-UTF-8), the entry hash, local, inherited and global resolution with shadowing and nested-skill rejection, argument validation including values built in code, the catalog's prefix guard and `<run>`/`<args>` elements, and the `skill run` command forms. `SkillAccessTests` covers the catalog and `skill list` filters (see the Session domain for the cases).

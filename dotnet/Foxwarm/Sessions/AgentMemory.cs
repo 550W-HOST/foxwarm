@@ -11,7 +11,10 @@ internal sealed partial class AgentMemory(
     Skills skills,
     string? frameworkTemplatePath = null,
     HostModels? models = null,
-    Action<string>? warning = null
+    Action<string>? warning = null,
+    // What the catalog may show of each skill for (Agent, Session), evaluated once per build;
+    // null, or a null result, lists every skill as it is.
+    Func<string, string, Func<SkillInfo, SkillAccess>?>? skillAccess = null
 )
 {
     public async Task<string> BuildAsync(
@@ -110,9 +113,19 @@ internal sealed partial class AgentMemory(
                     }
             }
         }
-        var catalog = await skills.ListAsync(agentName);
+        var listed = await skills.ListAsync(agentName);
         cancellationToken.ThrowIfCancellationRequested();
-        if (catalog.Count > 0)
+        var access = listed.Count > 0 ? skillAccess?.Invoke(agentName, sessionId) : null;
+        var catalog = listed
+            .Select(skill => (Skill: skill, Access: access?.Invoke(skill) ?? SkillAccess.Run))
+            .Where(entry => entry.Access != SkillAccess.Hidden)
+            .Select(entry =>
+                entry.Access == SkillAccess.Run || entry.Skill.Run is null
+                    ? entry.Skill
+                    : entry.Skill with { Run = null }
+            )
+            .ToArray();
+        if (catalog.Length > 0)
         {
             blocks.Append(
                 "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, run `ctl skill load <name>`\nto load its full instructions and resource list.\n"

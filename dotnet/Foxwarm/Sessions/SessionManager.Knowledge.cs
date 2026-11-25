@@ -84,7 +84,12 @@ internal sealed partial class SessionManager
         var action = RequiredString(args, "action").Trim().ToLowerInvariant();
         if (action == "list")
         {
-            var list = await skills.ListAsync(agent);
+            // Filtered like the catalog, from the caller's live context; an unavailable policy
+            // fails this call as it fails every call.
+            var access = SkillAccessFor(VisibilityFor(source), OptionalString(args, "agentName"));
+            var list = (await skills.ListAsync(agent))
+                .Where(info => access(info) != SkillAccess.Hidden)
+                .ToArray();
             return new JsonObject
             {
                 ["agent"] = agent,
