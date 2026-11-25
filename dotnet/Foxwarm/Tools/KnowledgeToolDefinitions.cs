@@ -30,7 +30,7 @@ internal static class KnowledgeToolDefinitions
                         ["skillName"] = new JsonObject
                         {
                             ["type"] = "string",
-                            ["description"] = "Skill to read when action is load.",
+                            ["description"] = "Skill to read or copy.",
                         },
                         ["path"] = new JsonObject
                         {
@@ -52,7 +52,7 @@ internal static class KnowledgeToolDefinitions
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Destination: a file when --path names a file, otherwise a directory that receives the files. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes).",
+                                "Destination: a file when path names a file, otherwise a directory that receives the files. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes).",
                         },
                         ["node"] = new JsonObject
                         {
