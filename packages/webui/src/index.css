@@ -208,7 +208,7 @@ html.dark {
 .foxwarm-chat-md-label,
 .foxwarm-chat-lg-label { display: none; }
 
-.foxwarm-chat-root[data-compact-composer="true"] .foxwarm-inline-composer-editor {
+.foxwarm-chat-root[data-compact-composer="true"] .foxwarm-inline-composer-editor .cm-content {
   min-height: 35px;
 }
 
@@ -1452,12 +1452,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   line-height: var(--foxwarm-console-line-ui) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea::placeholder {
-  color: var(--foxwarm-console-text-dim) !important;
-  opacity: 0.8;
-}
-
-.foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
+.foxwarm-inline-composer-editor .cm-content[data-empty="true"]::before {
   color: var(--foxwarm-color-text-muted);
   content: attr(data-placeholder);
   pointer-events: none;
@@ -1466,17 +1461,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   top: 0.5rem;
 }
 
-.foxwarm-composer-caret-anchor {
-  display: inline-block;
-  width: 0.25rem;
-  margin-inline-start: -0.25rem;
-  min-height: 1em;
-  overflow: hidden;
-  vertical-align: text-bottom;
-  white-space: nowrap;
-}
-
-html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
+html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor .cm-content[data-empty="true"]::before {
   color: var(--foxwarm-console-text-dim) !important;
   opacity: 0.8;
 }
