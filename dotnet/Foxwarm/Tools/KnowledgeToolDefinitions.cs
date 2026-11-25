@@ -12,7 +12,7 @@ internal static class KnowledgeToolDefinitions
                 ["name"] = "skill",
                 ["strict"] = false,
                 ["description"] =
-                    "List available skills, or read a skill's instructions or one of its resources. Skills may come from the Agent, its inherited Agents, or the global collection. Loading instructions does not enable additional tools.",
+                    "List available skills, read a skill's instructions or one of its resources, or copy skill files to a Node. Skills may come from the Agent, its inherited Agents, or the global collection. Loading instructions does not enable additional tools.",
                 ["parameters"] = new JsonObject
                 {
                     ["type"] = "object",
@@ -23,9 +23,9 @@ internal static class KnowledgeToolDefinitions
                         ["action"] = new JsonObject
                         {
                             ["type"] = "string",
-                            ["enum"] = new JsonArray("list", "load"),
+                            ["enum"] = new JsonArray("list", "load", "copy"),
                             ["description"] =
-                                "list shows available skills; load reads a skill or one of its resources.",
+                                "list shows available skills; load reads a skill or one of its resources; copy copies skill files to a Node.",
                         },
                         ["skillName"] = new JsonObject
                         {
@@ -36,7 +36,7 @@ internal static class KnowledgeToolDefinitions
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Resource inside the skill, relative to its directory. Omit to read the skill's instructions and resource list.",
+                                "Resource inside the skill, relative to its directory. For load, omit to read the skill's instructions and resource list; for copy, omit to copy the whole skill.",
                         },
                         ["startLine"] = new JsonObject
                         {
@@ -47,6 +47,22 @@ internal static class KnowledgeToolDefinitions
                         {
                             ["type"] = "number",
                             ["description"] = "Last line of the resource to read.",
+                        },
+                        ["targetPath"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] =
+                                "Destination: a file when --path names a file, otherwise a directory that receives the files. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes).",
+                        },
+                        ["node"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Node that receives the files. Defaults to the current Node.",
+                        },
+                        ["overwrite"] = new JsonObject
+                        {
+                            ["type"] = "boolean",
+                            ["description"] = "Allow replacement of existing destination files. Defaults to false.",
                         },
                         ["agentName"] = new JsonObject
                         {

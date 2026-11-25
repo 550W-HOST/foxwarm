@@ -49,7 +49,7 @@
   {
     "id": "skills",
     "tool": { "source": "builtin", "name": "skill" },
-    "args": { "action": ["list", "load"], "agentName": { "exists": false } },
+    "args": { "action": ["list", "load", "copy"], "agentName": { "exists": false } },
     "action": "allow"
   },
   {

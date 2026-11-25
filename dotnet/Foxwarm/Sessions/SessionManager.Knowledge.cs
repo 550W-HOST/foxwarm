@@ -83,6 +83,28 @@ internal sealed partial class SessionManager
             ? " --agent-name " + agent
             : "";
 
+    // The commands that reach this skill's files, each named only when the caller might be
+    // allowed to use it for this skill (the visibility help uses), as one sentence.
+    private string ResourceCommands(SessionOwner source, string skill, JsonObject args)
+    {
+        var flag = AgentFlag(args);
+        JsonObject Known(JsonObject value)
+        {
+            if (args["agentName"] is { } agent)
+                value["agentName"] = agent.DeepClone();
+            return value;
+        }
+        var clauses = new List<string> { $"Read a resource with `ctl skill load {skill} <path>{flag}`" };
+        if (ToolVisible(source, "builtin", "skill", fixedArgs: Known(new() { ["action"] = "copy", ["skillName"] = skill })))
+            clauses.Add($"copy files to a Node with `ctl skill copy {skill} <target-path> --path <path>{flag}`");
+        if (ToolVisible(source, "builtin", "run_skill", fixedArgs: Known(new() { ["skillName"] = skill })))
+            clauses.Add($"run a ToolScript file with `ctl skill run {skill} --script <path>{flag}`");
+        return (
+            clauses.Count == 1 ? clauses[0]
+            : string.Join(", ", clauses.Take(clauses.Count - 1)) + " and " + clauses[^1]
+        ) + ".";
+    }
+
     internal async Task<JsonObject> SkillAsync(SessionOwner source, JsonObject args)
     {
         Keys(args, ["action", "skillName", "agentName", "startLine", "endLine"], ["action"]);
@@ -123,7 +145,7 @@ internal sealed partial class SessionManager
         var output =
             $"Skill: {info.Name}"
             + (string.IsNullOrEmpty(info.Description) ? "" : $"\nDescription: {info.Description}")
-            + $"\nSource: {info.SourceLabel}\nPaths in this skill are relative to its directory. Read a resource with `ctl skill load {info.Name}{AgentFlag(args)} <path>`."
+            + $"\nSource: {info.SourceLabel}\nPaths in this skill are relative to its directory. {ResourceCommands(source, info.Name, args)}"
             + (CurrentNode(source) == "master" ? $"\nOn master, the skill directory is {info.Directory}." : "");
         if (info.Resources.Length > 0)
             output +=

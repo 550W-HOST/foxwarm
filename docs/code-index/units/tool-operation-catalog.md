@@ -95,7 +95,7 @@ Notation:
 | `node:browser_*`; custom Node tool; MCP tool | `env.browser`; `env.tool`; `mcp.call` | P |
 | `run_script`, `start_toolscript_run` | from a file: `env.read(source)`; inline: **Self** | P; S `node:read` of the file source (master and remote); N each `call_tool`/`ctl()`; R `model-request`: `model.request` per host call, assessed as this invocation |
 | `continue_script` | **Self** | N; R `model-request` |
-| `run_skill` | `agent.view(skill-agent)`: the skill subsystem discloses the entry, as `skill load` discloses `SKILL.md` | P; N each `call_tool`/`ctl()`; R `model-request`, assessed as this invocation. No source-read sub-request. |
+| `run_skill` | `agent.view(skill-agent)`: the skill subsystem discloses the entry, or with `script` another ToolScript file of the skill, as `skill load` discloses `SKILL.md` | P; N each `call_tool`/`ctl()`; R `model-request`, assessed as this invocation (with `script` among its raw arguments). No source-read sub-request. |
 | `list/get/cancel_toolscript_run`, `cancel_transfer`, `wait`, `image_crop` | **Self** (owner-scoped) | — |
 | `submit_compact_plan` | **Self** | S `argsFilePath` read, invalid-plan save and repair edit as Node read/write/edit |
 | `ctl` | front end | resolves to the target capability |
@@ -110,7 +110,7 @@ Notation:
 | `move_session` / `delete_session` | `session.manage(move)`, `[agent.create]`, `[env.read]`/`[env.write]` memory legs / `session.manage(delete)` | P |
 | `recall` | `history.read(target, mode)`, or `history.search` for Agent scope | P |
 | `get_archived_messages/blocks` | `history.read(exact)` | P |
-| `list_agents` / `skill` | `agent.list` / `agent.view` | P |
+| `list_agents` / `skill` | `agent.list` / `agent.view`; `skill` `copy`: `agent.view(skill-agent)` for the files the skill subsystem discloses | P; `skill` `copy`: S `target-write`, one `node:<node>/write` per destination file, checked as the target leg of `copy_between_nodes` before the first write ([skills](./skills.md#skill-access)) |
 | `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session (its ID, Node and runtime; none for `convertSession`); existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]` in its ID's Agent; tree `[env.read]` of the source Agent's and `[env.write]` of the new Agent's memory directory for `inheritMemory`; `[session.manage(move)]` of the source (default the caller) into the new Agent for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
 | `set_agent_rules` / `set_agent_inherit` | `agent.manage(rules)` / `agent.manage(inherit)`, `[agent.view(inherit)]` | P. Subsumed: the `refreshSnapshots` refresh of the target Agent and inheriting Agents. |
 | `node` (one branch per action) | list: `node.list` / inspect: `node.view` / select: `node.select` / create, ensure, destroy: `node.lifecycle(action)` | P; S `node:<selected>/get_default_cwd` probe for a remote Node that advertises it (optional: a denial only omits the default cwd); R the final Node identity at the lifecycle effect (create: the Provider parent; ensure: the existing or parent identity; destroy: the Node) |

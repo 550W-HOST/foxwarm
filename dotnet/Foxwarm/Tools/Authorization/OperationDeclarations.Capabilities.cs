@@ -377,8 +377,19 @@ internal static partial class OperationDeclarations
             [
                 Branch("list", "list", Op("agent.view", "targetAgent=skill-agent")),
                 Branch("load", "load", Op("agent.view", "targetAgent=skill-agent")),
+                // The skill subsystem discloses the files; their destinations are the
+                // target-write sub-requests, checked like any write on that Node.
+                Branch("copy", "copy", Op("agent.view", "targetAgent=skill-agent")),
             ],
-            [Primary()]
+            [
+                Primary(),
+                Sub(
+                    "target-write",
+                    "node:write",
+                    "write of each destination file on the target Node",
+                    "action:copy"
+                ) with { PathArg = "targetPath" },
+            ]
         ) with
         {
             Normalize = ActionNormalization.TrimLower,

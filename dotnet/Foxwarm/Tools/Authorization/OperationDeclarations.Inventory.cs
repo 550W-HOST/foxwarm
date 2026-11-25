@@ -104,6 +104,13 @@ internal static partial class OperationDeclarations
         ),
         Site("Sessions/SessionManager.FileDelivery.cs", "SendFileAsync", 1, Tool, "builtin:send_file#primary"),
         Site(
+            "Tools/SessionToolExecutor.Skills.cs",
+            "CopySkillAsync",
+            1,
+            File,
+            "builtin:skill#target-write"
+        ),
+        Site(
             "Sessions/SessionManager.FileDelivery.cs",
             "ExportImageAsync",
             1,

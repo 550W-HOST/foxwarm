@@ -183,11 +183,15 @@ internal static class ToolScriptToolDefinitions
             "foreground",
             "background"
           ],
-          "description": "Run mode. Defaults to the skill's own mode."
+          "description": "Run mode. Defaults to the skill's own mode for its entry, otherwise foreground."
         },
         "timeoutSecs": {
           "type": "number",
-          "description": "Time budget in seconds, as for run_script. Defaults to the skill's own budget, otherwise 30."
+          "description": "Time budget in seconds, as for run_script. Defaults to the skill's own budget for its entry, otherwise 30."
+        },
+        "script": {
+          "type": "string",
+          "description": "ToolScript file of the skill to run instead of its entry, relative to the skill directory. Its arguments are not checked."
         },
         "agentName": {
           "type": "string",

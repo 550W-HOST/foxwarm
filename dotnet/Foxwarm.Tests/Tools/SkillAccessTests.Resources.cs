@@ -210,7 +210,7 @@ public sealed partial class SkillAccessTests
         Assert.Equal(master.Replace("\nOn master, the skill directory is " + demo + ".", ""), elsewhere);
         Assert.Contains("\nFILE: demo/SKILL.md\n", elsewhere);
         Assert.Contains("ctl skill load demo <path>", elsewhere);
-        Assert.Contains("ctl skill load demo --agent-name main <path>", Output(await host.Ctl(remote, "skill load demo --agent-name main")));
+        Assert.Contains("ctl skill load demo <path> --agent-name main", Output(await host.Ctl(remote, "skill load demo --agent-name main")));
         Assert.Contains("\n- references/guide.md\n", elsewhere);
     }
 

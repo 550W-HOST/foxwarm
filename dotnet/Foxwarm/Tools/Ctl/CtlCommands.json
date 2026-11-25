@@ -37,7 +37,7 @@
     },
     {
       "name": "skill",
-      "summary": "List, load and run skills.",
+      "summary": "List, load, copy and run skills.",
       "copy": {
         "user": "List skills and show their instructions."
       }
@@ -2590,9 +2590,64 @@
       ]
     },
     {
+      "path": "skill copy",
+      "summary": "Copy a skill or some of its files to a Node.",
+      "help": "Copies from wherever the skill is installed, so it works from any Node. Give --path to copy one resource file or directory; omit it to copy the whole skill. The destination is checked like any write on that Node. Run copied scripts there with exec.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "skill",
+        "fixed": {
+          "action": "copy"
+        }
+      },
+      "params": [
+        {
+          "name": "skillName",
+          "type": "string",
+          "kind": "positional",
+          "help": "Skill to copy from.",
+          "required": true
+        },
+        {
+          "name": "targetPath",
+          "type": "string",
+          "kind": "positional",
+          "help": "Destination: a file when --path names a file, otherwise a directory that receives the files. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes).",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "kind": "flag",
+          "help": "Resource file or directory to copy, relative to the skill directory. Omit to copy the whole skill."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node that receives the files. Defaults to the current Node."
+        },
+        {
+          "name": "overwrite",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Allow replacement of existing destination files. Defaults to false."
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent whose available skills to use. Defaults to this Session's Agent."
+        }
+      ]
+    },
+    {
       "path": "skill run",
       "summary": "Run a skill's entry script without loading the skill.",
-      "help": "Only a skill listed with a `<run>` element can be run. `ctl skill run <name> --help` shows what running it does and the arguments --args takes. The entry runs as an ordinary ToolScript run: it returns the script's result, pauses for `continue_script` at its time budget, and each tool call it makes is checked as yours.",
+      "help": "Without --script, only a skill listed with a `<run>` element can be run; `ctl skill run <name> --help` shows what running it does and the arguments --args takes. --script runs another ToolScript file of the skill instead, and its --args are passed unchecked. Either way it runs as an ordinary ToolScript run: it returns the script's result, pauses for `continue_script` at its time budget, and each tool call it makes is checked as yours.",
       "ingress": [
         "model"
       ],
@@ -2622,13 +2677,19 @@
             "background"
           ],
           "kind": "flag",
-          "help": "Run mode. Defaults to the skill's own mode."
+          "help": "Run mode. Defaults to the skill's own mode for its entry, otherwise foreground."
         },
         {
           "name": "timeoutSecs",
           "type": "number",
           "kind": "flag",
-          "help": "Time budget in seconds, as for run_script. Defaults to the skill's own budget, otherwise 30."
+          "help": "Time budget in seconds, as for run_script. Defaults to the skill's own budget for its entry, otherwise 30."
+        },
+        {
+          "name": "script",
+          "type": "string",
+          "kind": "flag",
+          "help": "ToolScript file of the skill to run instead of its entry, relative to the skill directory, such as examples/report.py."
         },
         {
           "name": "agentName",

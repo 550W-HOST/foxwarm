@@ -51,7 +51,7 @@ Mechanics: [model requests](./tool-operation-rules.md#model-requests).
 
 **User decision (2026-11-15).** Unedited generated isolation layers may be regenerated automatically.
 
-This design needs no regeneration: generated layers keep generator 2 and their version-1 rules (engineering choice). Reconciliation stays as [owned by isolation migration](./isolation-migration.md):
+This design needs no regeneration: generated layers keep their version-1 rules (engineering choice; generator 3 later regenerated unedited layers for skill copy and runs, [isolation migration](./isolation-migration.md)). Reconciliation stays as [owned by isolation migration](./isolation-migration.md):
 - a layer is Main-owned when its stored digest equals the marker's `rulesDigest`;
 - it is regenerated when `CurrentDigest` differs from the current plan;
 - adding an operation rule counts as an edit.

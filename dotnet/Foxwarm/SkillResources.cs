@@ -15,8 +15,54 @@ internal sealed record SkillResource(
     internal string Display => Info.Name + "/" + Path;
 }
 
+// One file of a skill copy: its resource path, its Main server path and its destination.
+internal sealed record SkillCopyFile(string Path, string FullPath, string Target, long Bytes);
+
 internal sealed partial class Skills
 {
+    // Bounds of one `skill copy` (engineering constants, no product contract): the listing cap
+    // and a total size. Over either, nothing is written.
+    internal const int MaxCopyFiles = 200;
+    internal const long MaxCopyBytes = 64L * 1024 * 1024;
+
+    // What `skill copy` writes: without a path the whole skill (SKILL.md and every listed
+    // resource) into targetPath as a directory; a file to targetPath itself; a directory's
+    // resources into targetPath, keeping their layout below it. Links, skipped names and empty
+    // directories are never copied.
+    internal static IReadOnlyList<SkillCopyFile> CopyPlan(SkillInfo info, string? path, string targetPath)
+    {
+        static string Under(string root, string relative) =>
+            root.EndsWith('/') ? root + relative : root + "/" + relative;
+        List<(string Path, string Target)> items;
+        var truncated = false;
+        if (path is null)
+        {
+            var (files, more) = Resources(info.Directory);
+            truncated = more;
+            items = [("SKILL.md", Under(targetPath, "SKILL.md")), .. files.Select(file => (file, Under(targetPath, file)))];
+        }
+        else
+        {
+            var resource = ResourcePath(info, path);
+            truncated = resource.Truncated;
+            items = resource.IsDirectory
+                ? resource.Files.Select(file => (file, Under(targetPath, file[resource.Path.Length..]))).ToList()
+                : [(resource.Path, targetPath)];
+        }
+        var plan = items
+            .Select(item =>
+            {
+                var full = System.IO.Path.Combine(info.Directory, item.Path);
+                return new SkillCopyFile(item.Path, full, item.Target, new FileInfo(full).Length);
+            })
+            .ToArray();
+        if (truncated || plan.Length > MaxCopyFiles || plan.Sum(file => file.Bytes) > MaxCopyBytes)
+            throw new InvalidDataException(
+                $"Copying {(path is null ? "skill" : $"`{path}` of skill")} `{info.Name}` would exceed {MaxCopyFiles} files or {MaxCopyBytes / (1024 * 1024)} MiB; copy a subdirectory with --path instead."
+            );
+        return plan;
+    }
+
     // A path inside a resolved skill, contained as the run entry is (relative, `/`-separated, no
     // empty, `.` or `..` segment, no colon or backslash, no reparse point), with no directory
     // component the resource listing skips (.git, node_modules, …). A trailing `/` names a

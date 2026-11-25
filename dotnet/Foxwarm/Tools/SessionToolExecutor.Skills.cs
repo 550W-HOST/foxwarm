@@ -9,12 +9,101 @@ internal sealed partial class SessionToolExecutor
     // structured read results are available; every other form is the Session manager's.
     private async Task<JsonObject> ExecuteSkillAsync(JsonObject args, CancellationToken token)
     {
-        if (
-            args.ContainsKey("path")
-            && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant() == "load"
-        )
+        var action = SessionWait.Text(args["action"])?.Trim().ToLowerInvariant();
+        if (action == "load" && args.ContainsKey("path"))
             return await ReadSkillResourceAsync(args, token);
+        if (action == "copy")
+            return await CopySkillAsync(args, token);
         return await ExecuteAgentAsync("skill", args, token);
+    }
+
+    // `skill copy`: files read through the skill subsystem on the Main server, written to a
+    // Node through the target leg of copy_between_nodes. The `skill` rule covers the source;
+    // each destination file is checked as a write on that Node before anything is written.
+    private async Task<JsonObject> CopySkillAsync(JsonObject args, CancellationToken token)
+    {
+        ToolRegistry.Keys(
+            args,
+            ["action", "skillName", "targetPath", "path", "node", "overwrite", "agentName"]
+        );
+        var name =
+            SessionWait.Text(args["skillName"])?.Trim() is { Length: > 0 } skillName
+                ? skillName
+                : throw new InvalidDataException("skillName is required.");
+        var targetPath =
+            ToolRegistry.Text(args, "targetPath") is { } target && target.Trim().Length > 0
+                ? target
+                : throw new InvalidDataException("targetPath is required.");
+        var path = args.ContainsKey("path")
+            ? ToolRegistry.Text(args, "path") ?? throw new InvalidDataException("path must be a string.")
+            : null;
+        var node = ToolRegistry.Text(args, "node")?.Trim() is { Length: > 0 } named ? named : ExecutionNode;
+        var overwrite = args["overwrite"] switch
+        {
+            null => false,
+            JsonValue flag when flag.TryGetValue<bool>(out var value) => value,
+            _ => throw new InvalidDataException("overwrite must be boolean."),
+        };
+        var agent = Skills.RequestedAgent(SessionWait.Text(args["agentName"]), hosted.Agent);
+        var info = await sessions.SkillCatalog.ResolveAsync(name, agent);
+        var plan = Skills.CopyPlan(info, path, targetPath);
+        var files = Files ?? sessions.IdentityWorkspace(hosted);
+        foreach (var file in plan)
+            await sessions.AuthorizeNodeFileAsync(hosted, node, file.Target, "write", files, token);
+        var cwd = node == ExecutionNode ? ExecutionCwd : null;
+        var copied = new JsonArray();
+        long total = 0;
+        foreach (var file in plan)
+        {
+            var bytes = await File.ReadAllBytesAsync(file.FullPath, token);
+            var entry = new JsonObject
+            {
+                ["path"] = file.Path,
+                ["bytes"] = (long)bytes.Length,
+                ["sha256"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)),
+            };
+            try
+            {
+                using var input = new MemoryStream(bytes, writable: false);
+                await sessions.WriteNodeStreamAsync(
+                    hosted,
+                    node,
+                    file.Target,
+                    input,
+                    bytes.Length,
+                    overwrite,
+                    files,
+                    token,
+                    sessionCwd: cwd
+                );
+                total += bytes.Length;
+            }
+            catch (Exception error)
+                when (error is IOException or Foxwarm.Nodes.NodeProviderException or InvalidDataException)
+            {
+                // An existing file without overwrite, or another write failure, fails that file.
+                entry.Remove("sha256");
+                entry["error"] = error.Message;
+            }
+            copied.Add(entry);
+        }
+        var result = new JsonObject
+        {
+            ["skill"] = info.Name,
+            ["sourceType"] = info.SourceType,
+            ["agent"] = info.SourceAgent,
+            ["node"] = node,
+            ["targetPath"] = targetPath,
+            ["files"] = copied,
+            ["totalBytes"] = total,
+        };
+        // A model sees the first 50 files; a script gets all of them.
+        if (!Programmatic && copied.Count > 50)
+        {
+            result["files"] = new JsonArray(copied.Take(50).Select(item => item?.DeepClone()).ToArray());
+            result["moreFiles"] = copied.Count - 50;
+        }
+        return result;
     }
 
     // `skill load <name> <path>`: read through the skill subsystem on the Main server, under the
@@ -104,38 +193,54 @@ internal sealed partial class SessionToolExecutor
         + (resource.Truncated ? "\n- ... (resource listing truncated)" : "")
         + "\n";
 
-    // `ctl skill run`: the entry is read through the skill subsystem on the Main server (never a
-    // Node read), its args are checked against the skill's schema, and it then runs exactly as
-    // an inline run_script with the caller's authority. Every nested call keeps its own gate.
+    // `ctl skill run`: the entry (or with `script`, another ToolScript file of the skill) is read
+    // through the skill subsystem on the Main server (never a Node read), an entry's args are
+    // checked against the skill's schema, and it then runs exactly as an inline run_script with
+    // the caller's authority. Every nested call keeps its own gate.
     private async Task<JsonObject> ExecuteRunSkillAsync(JsonObject args, CancellationToken token)
     {
-        ToolRegistry.Keys(args, ["skillName", "args", "mode", "timeoutSecs", "agentName"]);
+        ToolRegistry.Keys(args, ["skillName", "args", "mode", "timeoutSecs", "agentName", "script"]);
         var name =
             SessionWait.Text(args["skillName"])?.Trim() is { Length: > 0 } skillName
                 ? skillName
                 : throw new InvalidDataException("skillName is required.");
         var agent = Skills.RequestedAgent(SessionWait.Text(args["agentName"]), hosted.Agent);
-        var entry = await sessions.SkillCatalog.ReadEntryAsync(name, agent, token);
         var input = args["args"] ?? new JsonObject();
-        try
+        SkillEntry entry;
+        if (args.ContainsKey("script"))
         {
-            Skills.ValidateArgs(entry.Run.Args, input);
-        }
-        catch (InvalidDataException error)
-        {
-            throw new InvalidDataException(
-                $"Invalid arguments for skill `{entry.Info.Name}`: {error.Message} `ctl skill run {entry.Info.Name} --help` lists them."
+            // A resource declares no schema, so its args pass unchecked, and the entry's
+            // mode and budget do not apply to it.
+            entry = await sessions.SkillCatalog.ReadScriptAsync(
+                name,
+                agent,
+                ToolRegistry.Text(args, "script") ?? throw new InvalidDataException("script must be a string."),
+                token
             );
+        }
+        else
+        {
+            entry = await sessions.SkillCatalog.ReadEntryAsync(name, agent, token);
+            try
+            {
+                Skills.ValidateArgs(entry.Run!.Args, input);
+            }
+            catch (InvalidDataException error)
+            {
+                throw new InvalidDataException(
+                    $"Invalid arguments for skill `{entry.Info.Name}`: {error.Message} `ctl skill run {entry.Info.Name} --help` lists them."
+                );
+            }
         }
         var start = new JsonObject
         {
             ["code"] = entry.Code,
             ["args"] = input.DeepClone(),
-            ["mode"] = SessionWait.Text(args["mode"]) ?? entry.Run.Mode,
+            ["mode"] = SessionWait.Text(args["mode"]) ?? entry.Run?.Mode ?? "foreground",
         };
         if (args["timeoutSecs"] is { } timeout)
             start["timeoutSecs"] = timeout.DeepClone();
-        else if (entry.Run.TimeoutSecs is { } seconds)
+        else if (entry.Run?.TimeoutSecs is { } seconds)
             start["timeoutSecs"] = seconds;
         return await ExecuteToolScriptAsync("run_skill", start, token, entry);
     }

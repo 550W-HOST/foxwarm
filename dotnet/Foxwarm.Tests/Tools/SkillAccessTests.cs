@@ -12,7 +12,11 @@ public sealed partial class SkillAccessTests
 {
     private const string Runnable = "run:\n  entry: scripts/run.py\n  effect: Returns one.\n";
 
-    private static JsonArray RestrictedWorkerRules() =>
+    private static JsonArray RestrictedWorkerRules() => TemplateRules("restricted-worker");
+
+    private static JsonArray ChannelAssistantRules() => TemplateRules("channel-assistant");
+
+    private static JsonArray TemplateRules(string template) =>
         JsonNode
             .Parse(
                 File.ReadAllText(
@@ -22,7 +26,7 @@ public sealed partial class SkillAccessTests
                         "agent-management",
                         "references",
                         "memory-templates",
-                        "restricted-worker.rules.json"
+                        template + ".rules.json"
                     )
                 )
             )!
@@ -152,20 +156,35 @@ public sealed partial class SkillAccessTests
     }
 
     [Fact]
-    public async Task A_template_restricted_Agent_lists_skills_without_run_and_agrees_with_dispatch()
+    public async Task Template_restricted_Agents_list_skills_as_their_rules_allow_and_agree_with_dispatch()
     {
         await using var host = await Host.Create();
+        host.Write("advisor");
         host.Write("demo");
         host.Write("plain", "", entry: null);
+        // The worker template runs its own skills except the advisor, which forks.
         var worker = await host.Agent("worker", RestrictedWorkerRules());
-        var snapshot = Snapshot(worker);
-        Assert.Equal(FullCatalog(Line("demo"), Line("plain")), CatalogOf(snapshot));
-        Assert.DoesNotContain(AgentMemory.RunnableSkillsSentence, snapshot);
-        // What the catalog offers is what the rules let the worker do.
-        Assert.Equal(["demo", "plain"], await host.Listed(worker));
+        Assert.Equal(
+            FullCatalog(Line("advisor"), Line("demo", "Returns one."), Line("plain")),
+            CatalogOf(Snapshot(worker))
+        );
+        Assert.Equal(["advisor", "demo", "plain"], await host.Listed(worker));
         Assert.Contains("Skill: demo", SessionWait.Text((await host.Ctl(worker, "skill load demo"))["output"]));
-        Assert.Equal("tool_authorization_denied", (await host.Ctl(worker, "skill run demo")).FailureCode());
-        Assert.Null((await host.Ctl(worker, "skill run demo --help"))["output"]);
+        Assert.NotNull((await host.Ctl(worker, "skill run demo --help"))["output"]);
+        Assert.Equal("tool_authorization_denied", (await host.Ctl(worker, "skill run advisor")).FailureCode());
+        Assert.Null((await host.Ctl(worker, "skill run advisor --help"))["output"]);
+        Assert.Equal(
+            "tool_authorization_denied",
+            (await host.Ctl(worker, "skill run demo --agent-name main")).FailureCode()
+        );
+        // The channel-assistant template reads and copies skills but runs none.
+        var assistant = await host.Agent("assistant", ChannelAssistantRules());
+        var snapshot = Snapshot(assistant);
+        Assert.Equal(FullCatalog(Line("advisor"), Line("demo"), Line("plain")), CatalogOf(snapshot));
+        Assert.DoesNotContain(AgentMemory.RunnableSkillsSentence, snapshot);
+        Assert.Equal(["advisor", "demo", "plain"], await host.Listed(assistant));
+        Assert.Equal("tool_authorization_denied", (await host.Ctl(assistant, "skill run demo")).FailureCode());
+        Assert.Null((await host.Ctl(assistant, "skill run demo --help"))["output"]);
     }
 
     [Fact]
@@ -260,7 +279,7 @@ public sealed partial class SkillAccessTests
     {
         await using var host = await Host.Create();
         host.Write("demo");
-        var worker = await host.Agent("worker", RestrictedWorkerRules());
+        var worker = await host.Agent("worker", ChannelAssistantRules());
         Assert.Equal(FullCatalog(Line("demo")), CatalogOf(Snapshot(worker)));
         await host.Policy("version: 1\nrules: [unclosed\n");
         Assert.Equal(FullCatalog(Line("demo", "Returns one.")), CatalogOf(await Rebuilt(host, worker)));

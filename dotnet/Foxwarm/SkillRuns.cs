@@ -20,19 +20,33 @@ internal sealed record SkillRun(
     string? ArgsText
 );
 
-// A runnable skill's entry as read for one run: UTF-8 source and the hash of its bytes.
-internal sealed record SkillEntry(SkillInfo Info, SkillRun Run, string Path, string Code, string Sha256)
+// A ToolScript source of a skill as read for one run: the declared entry (Run set) or another
+// ToolScript resource run with `--script` (Script set), its UTF-8 source and the hash of its bytes.
+internal sealed record SkillEntry(
+    SkillInfo Info,
+    SkillRun? Run,
+    string? Script,
+    string Path,
+    string Code,
+    string Sha256
+)
 {
-    // Run-record provenance.
-    internal JsonObject Provenance() =>
-        new()
+    // Run-record provenance: `entry` or `script` says which one ran.
+    internal JsonObject Provenance()
+    {
+        var provenance = new JsonObject
         {
             ["name"] = Info.Name,
             ["sourceType"] = Info.SourceType,
             ["agent"] = Info.SourceAgent,
-            ["entry"] = Run.Entry,
-            ["sha256"] = Sha256,
         };
+        if (Script is not null)
+            provenance["script"] = Script;
+        else
+            provenance["entry"] = Run!.Entry;
+        provenance["sha256"] = Sha256;
+        return provenance;
+    }
 }
 
 internal sealed partial class Skills
@@ -76,6 +90,39 @@ internal sealed partial class Skills
         var info = await RunnableAsync(name, agent);
         var run = info.Run!;
         var path = EntryPath(info.Directory, run.Entry);
+        var (code, hash) = await ReadSourceAsync(path, $"The entry `{run.Entry}` of skill `{info.Name}`", token);
+        return new SkillEntry(info, run, null, path, code, hash);
+    }
+
+    // Another ToolScript file of a skill, for `skill run <name> --script <path>`: resolved as
+    // load resolves the skill (no `run` block is needed), contained as a resource, read like the
+    // entry. Its extension is not checked; non-ToolScript source fails in the VM.
+    internal async Task<SkillEntry> ReadScriptAsync(
+        string name,
+        string agent,
+        string script,
+        CancellationToken token = default
+    )
+    {
+        var info = await ResolveAsync(name, agent);
+        var resource = ResourcePath(info, script);
+        if (resource.IsDirectory)
+            throw NotAResource(info.Name, script);
+        var (code, hash) = await ReadSourceAsync(
+            resource.FullPath,
+            $"The script `{resource.Path}` of skill `{info.Name}`",
+            token
+        );
+        return new SkillEntry(info, null, resource.Path, resource.FullPath, code, hash);
+    }
+
+    // Strict UTF-8 without a leading BOM, never empty, with the SHA-256 of the file's bytes.
+    private static async Task<(string Code, string Sha256)> ReadSourceAsync(
+        string path,
+        string label,
+        CancellationToken token
+    )
+    {
         var bytes = await File.ReadAllBytesAsync(path, token);
         string code;
         try
@@ -84,23 +131,13 @@ internal sealed partial class Skills
         }
         catch (DecoderFallbackException)
         {
-            throw new InvalidDataException(
-                $"The entry `{run.Entry}` of skill `{info.Name}` is not valid UTF-8."
-            );
+            throw new InvalidDataException($"{label} is not valid UTF-8.");
         }
         if (code.StartsWith('\uFEFF'))
             code = code[1..];
         if (string.IsNullOrWhiteSpace(code))
-            throw new InvalidDataException(
-                $"The entry `{run.Entry}` of skill `{info.Name}` is empty."
-            );
-        return new SkillEntry(
-            info,
-            run,
-            path,
-            code,
-            Convert.ToHexStringLower(SHA256.HashData(bytes))
-        );
+            throw new InvalidDataException($"{label} is empty.");
+        return (code, Convert.ToHexStringLower(SHA256.HashData(bytes)));
     }
 
     // The skill `name` resolves to, which must be runnable; Run is set on the result.
