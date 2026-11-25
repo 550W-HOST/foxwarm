@@ -13,7 +13,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 | Add or change a WebUI/MCP identity, scope browser chat, or diagnose login | [Entry identities and WebUI scope](references/identities.md) |
 | Write ordered rules for internal Agents/Sessions or external MCP callers | [Tool policy syntax and examples](references/tool-policy.md) |
 | Allow or deny what calls do (read a path, select a Node, send to a Session) whichever tool does it | [Operation rules](references/tool-policy.md#operation-rules) |
-| Restrict one Agent and the Agents created from it | [Agent-local layers](references/tool-policy.md#agent-local-layers) and the [agent-management templates](../agent-management/references/memory-templates/) |
+| Restrict one Agent and the Agents created from it | [Agent-local layers](references/tool-policy.md#agent-local-layers) and the agent-management templates (`ctl skill load agent-management references/memory-templates/`) |
 | Read and merge the existing policy, install a candidate, and confirm behavior | [Safe updates and troubleshooting](references/policy-updates.md) |
 | Connect an MCP client/server or exchange explicit replies between instances | Load [mcp-management](../mcp-management/SKILL.md) |
 | Create/migrate an Agent, edit inheritance/memory, or review a migrated legacy isolated Agent | Load [agent-management](../agent-management/SKILL.md) |
@@ -29,7 +29,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 - Concise top-level `session`/`node` selectors support identity patterns, current-Node and Provider scope without a Session-to-Node permission binding. Use the policy reference for multi-endpoint and owned-Task semantics.
 - Configuration changes that would send a stored secret somewhere new follow the caller's authorization for unrestricted master `exec` unless a top-level `secrets` rule names them or the caller's Agent owns them; see [Stored secrets](references/tool-policy.md#stored-secrets).
 - Authorize the resolved concrete builtin, Node tool, or MCP server/tool, not `ctl` or an inbound wrapper such as `foxwarm_call`. `ctl` commands are checked as the capability they run.
-- Legacy Agent isolation is [retired](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation): formerly isolated Agents carry a generated Agent-local layer instead. Agent lifecycle belongs to `agent-management`, not this skill.
+- Legacy Agent isolation is retired: formerly isolated Agents carry a generated Agent-local layer instead. Agent lifecycle belongs to `agent-management`, not this skill.
 - Tool rules are not an operating-system or network sandbox. A permitted `exec` can use the chosen environment's commands, files, credentials, and network; path rules do not constrain arbitrary shell effects.
 - Tool rules govern Foxwarm tools only. Web search or image generation built into a model are controlled by the model configuration, so give restricted Agents a model without them.
 

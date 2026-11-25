@@ -141,6 +141,49 @@ public sealed partial class ProviderFileConsumerTests
     }
 
     [Fact]
+    public async Task A_large_skill_resource_read_without_a_master_read_spools_to_the_current_Node()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create();
+        Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
+        var skill = Path.Combine(f.Manager.AgentDirectory("main"), "skills", "big");
+        Directory.CreateDirectory(Path.Combine(skill, "references"));
+        await File.WriteAllTextAsync(Path.Combine(skill, "SKILL.md"), "---\ndescription: Big.\n---\n");
+        var content = string.Concat(Enumerable.Range(1, 5000).Select(i => $"entry-{i:D5}\n"));
+        await File.WriteAllTextAsync(Path.Combine(skill, "references", "large.txt"), content);
+        await File.WriteAllTextAsync(
+            Path.Combine(f.Data, "state", "tool-authorization.yaml"),
+            "version: 1\ndefaultAction: deny\nrules:\n- action: allow\n  node: { current: true }\n- action: allow\n  match: { tool: { source: builtin, name: skill } }\n"
+        );
+        f.Manager.Authorization.Invalidate();
+        var definitions = WorkspaceTools.Definitions();
+        foreach (var item in KnowledgeToolDefinitions.Definitions().Concat(UnifiedToolDefinitions.All()))
+            definitions.Add(item?.DeepClone());
+        await using var mcp = new Foxwarm.McpClient(f.Data);
+        var registry = SessionToolExecutor.CreateRegistry(definitions, mcp, _ => f.Work, f.Manager.Nodes, f.Manager.NodeProviders);
+        var tools = new SessionToolExecutor(new WorkspaceTools(f.Work), f.Owner, f.Manager, registry);
+        tools.BeginTurn();
+        var result = (
+            await tools.ExecuteAsync(
+                new JsonObject
+                {
+                    ["id"] = "big",
+                    ["name"] = "ctl",
+                    ["args"] = new JsonObject { ["command"] = "skill load big references/large.txt" },
+                },
+                default
+            )
+        )!.AsObject();
+        Success(result);
+        Assert.Equal(f.Node, result["outputFullNode"]!.GetValue<string>());
+        var saved = await File.ReadAllTextAsync(f.FilePath(result["outputFullPath"]!.GetValue<string>()));
+        Assert.StartsWith("FILE: big/references/large.txt\nentry-00001\n", saved);
+        Assert.Contains("entry-05000", saved);
+        Assert.False(Directory.Exists(Path.Combine(f.Work, ".temp", "tool-output")));
+    }
+
+    [Fact]
     public async Task Remote_guard_storage_denial_preserves_the_completed_read_without_a_false_locator()
     {
         if (!OperatingSystem.IsLinux())

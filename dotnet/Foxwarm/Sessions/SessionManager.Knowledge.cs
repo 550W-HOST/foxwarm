@@ -77,9 +77,17 @@ internal sealed partial class SessionManager
         }
     }
 
+    // Commands in skill output name the same Agent as the call they answer.
+    private static string AgentFlag(JsonObject args) =>
+        args["agentName"] is { } raw && SessionWait.Text(raw)?.Trim() is { Length: > 0 } agent
+            ? " --agent-name " + agent
+            : "";
+
     internal async Task<JsonObject> SkillAsync(SessionOwner source, JsonObject args)
     {
-        Keys(args, ["action", "skillName", "agentName"], ["action"]);
+        Keys(args, ["action", "skillName", "agentName", "startLine", "endLine"], ["action"]);
+        if (args.ContainsKey("startLine") || args.ContainsKey("endLine"))
+            throw new InvalidDataException("startLine and endLine apply only to a resource path.");
         var agent = Skills.RequestedAgent(OptionalString(args, "agentName"), source.Agent);
         var action = RequiredString(args, "action").Trim().ToLowerInvariant();
         if (action == "list")
@@ -110,15 +118,18 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("skill.action must be \"list\" or \"load\".");
         var name = RequiredString(args, "skillName");
         var (info, content) = await skills.LoadAsync(name, agent);
+        // Resources are reached through the skill subsystem from any Node; the Main server path
+        // is shown only where Node tools resolve it (user decision 2026-11-25, U8).
         var output =
             $"Skill: {info.Name}"
             + (string.IsNullOrEmpty(info.Description) ? "" : $"\nDescription: {info.Description}")
-            + $"\nSource: {info.SourceLabel}\nMetadata: {info.MetadataPath}\nSkill directory: {info.Directory}\nRelative paths in this skill are relative to the skill directory.";
+            + $"\nSource: {info.SourceLabel}\nPaths in this skill are relative to its directory. Read a resource with `ctl skill load {info.Name}{AgentFlag(args)} <path>`."
+            + (CurrentNode(source) == "master" ? $"\nOn master, the skill directory is {info.Directory}." : "");
         if (info.Resources.Length > 0)
             output +=
                 "\n\nSkill resources (supporting files, not eagerly loaded):\n"
                 + string.Join('\n', info.Resources.Select(path => "- " + path))
                 + (info.ResourcesTruncated ? "\n- ... (resource listing truncated)" : "");
-        return Output(output + $"\n\nFILE: {info.MetadataPath}\n{content}\n");
+        return Output(output + $"\n\nFILE: {info.Name}/SKILL.md\n{content}\n");
     }
 }

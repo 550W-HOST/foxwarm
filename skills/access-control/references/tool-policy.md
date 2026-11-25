@@ -288,7 +288,7 @@ An Agent can also carry its own ordered rule list. Set it with `create_agent({ru
 - **Scope.** Layers apply to internal Sessions only. Inbound MCP callers have no Agent and remain governed by the global policy alone.
 - **Compatibility.** Older Main server versions do not enforce Agent-local layers. Do not run an installation that relies on them with such a version.
 
-Two node-selector details matter for allowlists. A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and the endpoints of file transfers, so scope an environment allowance with `tool: {source: node}` unless those are intended. `node: {current: true}` also matches `master` when a Session is placed there, so put an explicit master deny first. The [agent-management templates](../../agent-management/references/memory-templates/) include complete reviewed layers for a restricted worker and a channel assistant.
+Two node-selector details matter for allowlists. A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and the endpoints of file transfers, so scope an environment allowance with `tool: {source: node}` unless those are intended. `node: {current: true}` also matches `master` when a Session is placed there, so put an explicit master deny first. The agent-management templates (`ctl skill load agent-management references/memory-templates/`) include complete reviewed layers for a restricted worker and a channel assistant.
 
 ## Operation rules
 

@@ -217,26 +217,45 @@ internal sealed partial class Skills
     // directory a real directory or regular file, never a reparse point.
     internal static string EntryPath(string directory, string entry)
     {
-        var segments = entry.Split('/');
-        if (
-            entry.Contains('\\')
-            || entry.Contains(':')
-            || Path.IsPathRooted(entry)
-            || segments.Any(segment => segment.Length == 0 || segment is "." or "..")
-        )
+        if (!RelativeShape(entry))
             throw new InvalidDataException(
                 $"`run.entry` `{entry}` must be a relative path inside the skill directory."
             );
+        return Contained(directory, entry.Split('/'), directoryLast: false, skipNames: false)
+            ?? throw new InvalidDataException(
+                $"`run.entry` `{entry}` is not a regular file in the skill directory."
+            );
+    }
+
+    // `/`-separated and relative, without empty, `.` or `..` segments, colons or backslashes.
+    private static bool RelativeShape(string path) =>
+        !path.Contains('\\')
+        && !path.Contains(':')
+        && !Path.IsPathRooted(path)
+        && path.Split('/').All(segment => segment.Length > 0 && segment is not ("." or ".."));
+
+    // The full path of `segments` below `directory` when every component exists as a real
+    // directory (the last one a regular file unless directoryLast) and none is a reparse point.
+    // With skipNames, no directory component may be a name the resource listing skips.
+    private static string? Contained(
+        string directory,
+        string[] segments,
+        bool directoryLast,
+        bool skipNames
+    )
+    {
         var current = directory;
         for (var index = 0; index < segments.Length; index++)
         {
             current = Path.Combine(current, segments[index]);
-            var last = index == segments.Length - 1;
-            var exists = last ? File.Exists(current) : Directory.Exists(current);
-            if (!exists || (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException(
-                    $"`run.entry` `{entry}` is not a regular file in the skill directory."
-                );
+            var asDirectory = index < segments.Length - 1 || directoryLast;
+            var exists = asDirectory ? Directory.Exists(current) : File.Exists(current);
+            if (
+                !exists
+                || (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0
+                || (skipNames && asDirectory && Skip.Contains(segments[index]))
+            )
+                return null;
         }
         return current;
     }

@@ -1290,7 +1290,6 @@ internal sealed partial class SessionToolExecutor(
                 "create_child_session",
                 "send_to_session",
                 "refresh_session_snapshot",
-                "skill",
                 "set_agent_inherit",
                 "set_agent_rules",
                 "session",
@@ -1316,6 +1315,7 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 owner.ExecuteToolScriptAsync(name, args, token);
         handlers["run_skill"] = (owner, args, token) => owner.ExecuteRunSkillAsync(args, token);
+        handlers["skill"] = (owner, args, token) => owner.ExecuteSkillAsync(args, token);
         foreach (
             var name in new[] { "create_timer", "list_timers", "update_timer", "delete_timer" }
         )

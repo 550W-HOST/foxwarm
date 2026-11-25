@@ -11,6 +11,8 @@ public sealed partial class CompactLifecycleTests
     [InlineData("json-dispatcher", true)]
     [InlineData("legacy", true)]
     [InlineData("list", false)]
+    [InlineData("resource", false)]
+    [InlineData("ctl-resource", false)]
     [InlineData("external", false)]
     [InlineData("malformed", false)]
     [InlineData("duplicate", false)]
@@ -54,6 +56,14 @@ public sealed partial class CompactLifecycleTests
         }
         else if (kind == "list")
             args["action"] = "list";
+        // A resource read prunes like an ordinary read.
+        else if (kind == "resource")
+            args["path"] = "references/guide.md";
+        else if (kind == "ctl-resource")
+        {
+            name = "ctl";
+            args = new JsonObject { ["command"] = "skill load fixture references/guide.md" };
+        }
         var skillOutput = "SKILL_MIDDLE:" + new string('s', 10000);
         async Task Append(string role, JsonObject part)
         {

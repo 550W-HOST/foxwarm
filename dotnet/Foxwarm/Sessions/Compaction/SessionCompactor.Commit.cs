@@ -282,7 +282,12 @@ internal sealed partial class SessionCompactor
             }
             if (
                 name != "load_skill"
-                && !(name == "skill" && SessionWait.Text(args?["action"]) == "load")
+                && !(
+                    name == "skill"
+                    && SessionWait.Text(args?["action"]) == "load"
+                    // A resource read is an ordinary read, not a skill load.
+                    && args?.ContainsKey("path") != true
+                )
             )
                 continue;
             var skill = SessionWait.Text(args?["skillName"]);

@@ -41,7 +41,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
     internal static string RequestedAgent(string? agentName, string callerAgent) =>
         string.IsNullOrWhiteSpace(agentName) ? callerAgent : agentName.Trim();
 
-    private static readonly HashSet<string> Skip = new(StringComparer.Ordinal)
+    private static readonly IReadOnlySet<string> Skip = new HashSet<string>(StringComparer.Ordinal)
     {
         ".git",
         "build",
@@ -209,7 +209,14 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         );
     }
 
-    private static (string[] Files, bool Truncated) Resources(string root)
+    // The skill `name` resolves to, as load and run resolve it; the caller reads inside it.
+    internal Task<SkillInfo> ResolveAsync(string name, string agent) =>
+        FindAsync(name, agent, false, Task.FromResult);
+
+    // Files under `start` (the skill directory or a directory inside it) as paths relative to
+    // the skill directory: links and Skip directories are left out, and so is the root SKILL.md.
+    // Stops after 200 files.
+    internal static (string[] Files, bool Truncated) Resources(string root, string? start = null)
     {
         var files = new List<string>();
         var truncated = false;
@@ -257,7 +264,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
                 }
             }
         }
-        Walk(root);
+        Walk(start ?? root);
         return (files.ToArray(), truncated);
     }
 

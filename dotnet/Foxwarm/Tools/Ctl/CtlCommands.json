@@ -2513,7 +2513,8 @@
     },
     {
       "path": "skill load",
-      "summary": "Read a skill's instructions and resource list.",
+      "summary": "Read a skill's instructions and resource list, or one of its resources.",
+      "help": "Resources are read from wherever the skill is installed, so this works from any Node. Large files are shown as excerpts with their size; give a line range to read a section.",
       "ingress": [
         "model",
         "user"
@@ -2532,6 +2533,33 @@
           "kind": "positional",
           "help": "Skill to read.",
           "required": true
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "kind": "positional",
+          "ingress": [
+            "model"
+          ],
+          "help": "Resource to read, relative to the skill directory, such as references/guide.md. A directory lists its files. Omit to read the skill's instructions and resource list."
+        },
+        {
+          "name": "startLine",
+          "type": "number",
+          "kind": "flag",
+          "ingress": [
+            "model"
+          ],
+          "help": "First line of the resource to read, counting from 1."
+        },
+        {
+          "name": "endLine",
+          "type": "number",
+          "kind": "flag",
+          "ingress": [
+            "model"
+          ],
+          "help": "Last line of the resource to read."
         },
         {
           "name": "agentName",

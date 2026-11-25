@@ -12,7 +12,7 @@ internal static class KnowledgeToolDefinitions
                 ["name"] = "skill",
                 ["strict"] = false,
                 ["description"] =
-                    "List available skills or read a skill's instructions and resource list. Skills may come from the Agent, its inherited Agents, or the global collection. Read any needed resource files separately; loading instructions does not enable additional tools.",
+                    "List available skills, or read a skill's instructions or one of its resources. Skills may come from the Agent, its inherited Agents, or the global collection. Loading instructions does not enable additional tools.",
                 ["parameters"] = new JsonObject
                 {
                     ["type"] = "object",
@@ -24,12 +24,29 @@ internal static class KnowledgeToolDefinitions
                         {
                             ["type"] = "string",
                             ["enum"] = new JsonArray("list", "load"),
-                            ["description"] = "list shows available skills; load reads one skill.",
+                            ["description"] =
+                                "list shows available skills; load reads a skill or one of its resources.",
                         },
                         ["skillName"] = new JsonObject
                         {
                             ["type"] = "string",
                             ["description"] = "Skill to read when action is load.",
+                        },
+                        ["path"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] =
+                                "Resource inside the skill, relative to its directory. Omit to read the skill's instructions and resource list.",
+                        },
+                        ["startLine"] = new JsonObject
+                        {
+                            ["type"] = "number",
+                            ["description"] = "First line of the resource to read, counting from 1.",
+                        },
+                        ["endLine"] = new JsonObject
+                        {
+                            ["type"] = "number",
+                            ["description"] = "Last line of the resource to read.",
                         },
                         ["agentName"] = new JsonObject
                         {

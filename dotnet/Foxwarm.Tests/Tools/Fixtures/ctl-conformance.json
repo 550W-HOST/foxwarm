@@ -10,6 +10,8 @@
     { "command": "session view a/b --parts '[]' --before 4", "descriptor": { "toolId": "builtin:view_session", "args": { "sessionId": "a/b", "before": 4, "parts": [] } } },
     { "command": "history recall --preview-length 1234.5 --limit 2", "descriptor": { "toolId": "builtin:recall", "args": { "limit": 2, "previewLength": 1234.5 } } },
     { "command": "ctl skill load node-setup", "descriptor": { "toolId": "builtin:skill", "args": { "action": "load", "skillName": "node-setup" } } },
+    { "command": "skill load code-index references/guide.md --start-line 10 --end-line 40", "descriptor": { "toolId": "builtin:skill", "args": { "action": "load", "skillName": "code-index", "path": "references/guide.md", "startLine": 10, "endLine": 40 } } },
+    { "command": "skill load agent-management references/memory-templates/ --agent-name other", "descriptor": { "toolId": "builtin:skill", "args": { "action": "load", "skillName": "agent-management", "path": "references/memory-templates/", "agentName": "other" } } },
     { "command": "memory read 'my notes.md' --start-line 3", "descriptor": { "toolId": "builtin:read_memory", "args": { "filePath": "my notes.md", "startLine": 3 } } },
     { "command": "memory edit MEMORY.md --old-text=\"a b\" --new-text='c d'", "descriptor": { "toolId": "builtin:edit_memory", "args": { "filePath": "MEMORY.md", "oldText": "a b", "newText": "c d" } } },
     { "command": "memory edit MEMORY.md --old-text @old --new-text @new", "values": { "old": "first\nline", "new": "second" }, "descriptor": { "toolId": "builtin:edit_memory", "args": { "filePath": "MEMORY.md", "oldText": "first\nline", "newText": "second" } } },
