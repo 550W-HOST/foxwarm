@@ -60,7 +60,10 @@ try
     if (launcher?.StopRequested.IsCancellationRequested == true)
         return;
 
-    var configuration = new ModelConfiguration(HostPaths.Capture(applicationRoot));
+    var captured = HostPaths.Capture(applicationRoot);
+    // Held until the process exits, after the host below has drained and disposed.
+    using var installation = InstallationLock.Acquire(captured.DataRoot);
+    var configuration = new ModelConfiguration(captured);
     var paths = configuration.Paths;
     var http = await HttpServerSettings.CaptureAsync(configuration, paths.DataRoot);
     var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);

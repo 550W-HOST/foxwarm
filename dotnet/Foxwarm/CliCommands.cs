@@ -24,7 +24,11 @@ internal static class CliCommands
             var input =
                 JsonNode.Parse(await Console.In.ReadLineAsync() ?? "") as JsonObject
                 ?? throw new InvalidDataException("Expected a CLI input document.");
-            var configuration = new ModelConfiguration(HostPaths.Capture(applicationRoot));
+            var paths = HostPaths.Capture(applicationRoot);
+            // The archive command migrates stored data, so it refuses to run beside Main.
+            using var installation =
+                command == "--cli-archive" ? InstallationLock.Acquire(paths.DataRoot) : null;
+            var configuration = new ModelConfiguration(paths);
             if (command == "--cli-model")
                 await ModelAsync(configuration, input);
             else

@@ -13,6 +13,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Release packages, installers and package controls](../units/release-packages.md)
 - [Desktop packages, installer and qualification](../units/desktop-packages.md)
 - [Host startup, configuration, and HTTP ingress](../units/host-runtime.md)
+- [Installation lock](../units/installation-lock.md): one Main process per data directory.
 - [Skill resolution and runnable skills](../units/skills.md)
 - [Packed and loose HTTP resources](../units/http-assets.md)
 - [Windows Desktop host](../units/desktop-windows.md)

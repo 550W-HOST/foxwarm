@@ -6,6 +6,8 @@ namespace Foxwarm.Desktop;
 internal sealed partial class DesktopWindow
 {
     private MainHost? host;
+    // Held while local Main runs in this process; released after it is disposed, so a later start can take it.
+    private InstallationLock? localLock;
     // The current start of local Main: its endpoint, or null after a failed start. Null while stopped.
     private Task<Uri?>? local;
     private string localError = "";
@@ -35,7 +37,9 @@ internal sealed partial class DesktopWindow
     {
         try
         {
-            var configuration = new ModelConfiguration(HostPaths.ForDataRoot(data));
+            var paths = HostPaths.ForDataRoot(data);
+            localLock ??= InstallationLock.Acquire(paths.DataRoot);
+            var configuration = new ModelConfiguration(paths);
             var dist = HttpAssets.WebUiDirectory(configuration.Paths);
             if (dist is null)
                 throw new InvalidDataException(
@@ -82,6 +86,7 @@ internal sealed partial class DesktopWindow
                 host = null;
                 await failed.DisposeAsync();
             }
+            ReleaseLocalLock();
             return null;
         }
     }
@@ -139,5 +144,12 @@ internal sealed partial class DesktopWindow
         localAuthenticated = false;
         if (running is not null)
             await running.DisposeAsync();
+        ReleaseLocalLock();
+    }
+
+    private void ReleaseLocalLock()
+    {
+        localLock?.Dispose();
+        localLock = null;
     }
 }

@@ -28,6 +28,9 @@ This is not a scan of historical error text. A Session already durably idle with
 
 ### Graceful shutdown and crash are not interchangeable
 
+One Main process uses a data directory at a time. A second Main started on it exits at entry instead of sharing its state; the hold ends with the first process however it exits ([installation lock](../units/installation-lock.md#d-installation-lock)).
+
+
 Current Main-local shutdown first closes turn admission and lets accepted owner work drain while dependencies remain available. A genuine final, terminal wait/handoff, or user Stop keeps normal idle finalization. An unfinished shutdown-owned yield retains the existing busy recovery checkpoint instead of appending a fake terminal model error. A bounded forced exit has crash-like semantics, not proof that every service child has acknowledged exit.
 
 Session workers retain their separate generation/incarnation fencing and drain/handback protocol. Neither path promises that user subprocesses survive OS shutdown, Node loss, resource destruction, or external termination. The rationale and exact safe points remain in [local shutdown](../threads/session-lifecycle.md#d-lifecycle-main-local-shutdown); do not generalize its hooks to every placement.

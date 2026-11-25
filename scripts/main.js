@@ -8,6 +8,16 @@ const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { coreExecutable } = require('./core-executable');
 
+function alive(pid) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
 // This is the package/directory Main execution boundary, not the public foxwarm CLI.
 // Keep stdin and terminal ownership unchanged. A separate connection asks Main to
 // drain when this foreground launcher is terminated, including a hard parent kill.
@@ -20,6 +30,7 @@ async function main() {
   let stopping = false;
   const pidFile = path.join(path.dirname(__dirname), 'foxwarm.pid');
   let pid;
+  let previousPid;
   let exitSignal;
   if (windows) {
     server = net.createServer(socket => {
@@ -57,6 +68,11 @@ async function main() {
       let pidError;
       child.once('spawn', () => {
         try {
+          try {
+            previousPid = fs.readFileSync(pidFile, 'utf8');
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
           fs.writeFileSync(pidFile, `${child.pid}\n`);
           pid = `${child.pid}\n`;
         } catch (error) {
@@ -78,7 +94,11 @@ async function main() {
     if (server?.listening) server.close();
     if (pid) {
       try {
-        if (fs.readFileSync(pidFile, 'utf8') === pid) fs.unlinkSync(pidFile);
+        if (fs.readFileSync(pidFile, 'utf8') === pid) {
+          // A Main refused by the data-directory lock must not erase the running Main's record.
+          if (previousPid && alive(Number(previousPid))) fs.writeFileSync(pidFile, previousPid);
+          else fs.unlinkSync(pidFile);
+        }
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }

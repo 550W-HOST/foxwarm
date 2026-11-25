@@ -48,6 +48,7 @@ internal sealed class MainLog : IDisposable
             is Foxwarm.Secrets.SecretUnavailableException
                 or Foxwarm.Secrets.SecretStoreLockedException
                 or ControlPipeUnavailableException
+                or InstallationLockedException
         )
             return error.GetType().Name + ": " + error.Message;
         if (Foxwarm.Sessions.SessionAuthorityErrors.Detail(error) is { } diagnostic)

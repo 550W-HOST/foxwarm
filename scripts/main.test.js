@@ -126,6 +126,31 @@ test('directory and resolved package execution keep installation identity, confi
   }
 });
 
+test('a second Main on the same data directory exits until the running Main is gone', linux, async t => {
+  const f = fixture(t);
+  const first = await f.launch();
+  const pid = await f.ready(first);
+  const lockFile = path.join(f.data, 'state/main.lock');
+  assert.equal(fs.readFileSync(lockFile, 'utf8'), `${pid}\n`);
+  const refused = await f.launch();
+  assert.deepEqual(await refused.exited, { code: 1, signal: null }, refused.text);
+  assert.match(refused.text, /Another Foxwarm Main is already running with data directory/);
+  assert(!refused.text.includes('Main started'));
+  assert(running(pid));
+  // The refused launcher leaves the running Main's record for the stop and restart controls.
+  assert.equal(fs.readFileSync(path.join(f.app, 'foxwarm.pid'), 'utf8'), `${pid}\n`);
+  // A crash-equivalent stop releases the lock without any cleanup.
+  process.kill(pid, 'SIGKILL');
+  await first.exited;
+  await until(() => !running(pid), 'Killed Main is still running.');
+  assert(fs.existsSync(lockFile));
+  const next = await f.launch();
+  const nextPid = await f.ready(next);
+  assert.equal(fs.readFileSync(lockFile, 'utf8'), `${nextPid}\n`);
+  next.child.kill('SIGTERM');
+  assert.deepEqual(await next.exited, { code: 0, signal: null }, next.text);
+});
+
 function longTemporaryDirectory(f) {
   const directory = path.join(f.root, 't'.repeat(Math.max(1, 106 - Buffer.byteLength(f.root) - 1)));
   fs.mkdirSync(directory);
