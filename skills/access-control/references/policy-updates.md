@@ -4,7 +4,7 @@
 
 ## Read, merge, review, install
 
-1. Confirm authority and the requested callers, concrete capabilities, targets, and allow/deny outcome. Resolve the data directory before locating `state/tool-authorization.yaml`; use [foxwarm-maintenance](../../foxwarm-maintenance/SKILL.md) if necessary.
+1. Confirm authority and the requested callers, concrete capabilities, targets, and allow/deny outcome. Resolve the data directory before locating `state/tool-authorization.yaml`; use the `foxwarm-maintenance` skill if necessary.
 2. Read the entire current policy on `master`. If it is absent, distinguish that from a read failure: absence means internal default-allow compatibility, not an empty deny policy. Do not proceed from a truncated excerpt, expired copy, or unreadable file.
 3. Preserve unrelated rules, IDs, `defaultAction`, and intended ordering. Merge only the requested change. Decide whether this is a deny patch or a caller allowlist; a generated rules fragment is neither a complete policy nor an automatic merge. Review earlier broad rules and all external exposure before inserting a new allow. Do not blindly append/prepend a fragment: earlier allows can bypass its restrictions, while new allows ahead of existing denies can expand access. If another operator changed the policy while you prepared the candidate, merge again from the current file rather than replacing their work.
 4. Write the full candidate to a new permitted private path on `master`, for example `$fw_tmp/tool-authorization-candidate.yaml`. Native file tools on another selected Node do not write a master candidate; use `ctl tool call` with an explicit master tool ID. Do not overwrite the active authority directly.

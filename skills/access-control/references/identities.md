@@ -14,7 +14,7 @@ One configured identity may declare both `webui` and `mcp` with the same token. 
 
 ## Configuration
 
-Resolve the installation's data directory and app configuration first; load [foxwarm-maintenance](../../foxwarm-maintenance/SKILL.md) when that location is unknown. The default app file is `state/config.yaml` under the data directory. Preserve the existing app settings and identities when merging this example:
+Resolve the installation's data directory and app configuration first; load the `foxwarm-maintenance` skill when that location is unknown. The default app file is `state/config.yaml` under the data directory. Preserve the existing app settings and identities when merging this example:
 
 ```yaml
 access:
@@ -61,7 +61,7 @@ Unknown fields are rejected. These tokens are explicit YAML values, not environm
 
 For webhook senders (GitHub, Cloudflare, scripts), verification choices and response codes, see the public Webhooks documentation page; send noisy or untrusted public events to a Session whose Agent has only the tools it needs.
 
-For inbound endpoint/client configuration, follow [mcp-management](../../mcp-management/SKILL.md) and its [inbound reference](../../mcp-management/references/inbound.md).
+For inbound endpoint/client configuration, follow the `mcp-management` skill and its inbound reference (`ctl skill load mcp-management references/inbound.md`).
 
 ## Restricted WebUI behavior
 

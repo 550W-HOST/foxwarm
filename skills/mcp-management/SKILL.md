@@ -13,7 +13,7 @@ Use this skill to choose the MCP connection or messaging workflow. MCP tools are
 | Connect Foxwarm to another MCP server, list servers, discover/call tools, or change a connection | [Outbound connections](references/outbound.md) |
 | Connect an external client to Foxwarm's `/mcp` endpoint, send work to a Session, or use permitted Node tools | [Inbound access](references/inbound.md) |
 | Let one Foxwarm Session receive explicit replies from another instance without polling its history | [Explicit instance replies](references/instance-replies.md) |
-| Configure an entry identity, restrict WebUI Sessions, or grant/deny concrete tools | Load [access-control](../access-control/SKILL.md) |
+| Configure an entry identity, restrict WebUI Sessions, or grant/deny concrete tools | Load the `access-control` skill |
 
 ## Keep the lifecycles separate
 
@@ -27,5 +27,5 @@ Never print or commit real tokens, environment secrets, or private headers. Obta
 ## Related skills
 
 - The `agent-management` skill: Agent lifecycle, inheritance, local rules, and default Node.
-- [node-setup](../node-setup/SKILL.md): Node pairing and bootstrap.
-- [toolscript-automation](../toolscript-automation/SKILL.md): orchestration of dependent tool calls.
+- The `node-setup` skill: Node pairing and bootstrap.
+- The `toolscript-automation` skill: orchestration of dependent tool calls.

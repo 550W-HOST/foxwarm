@@ -16,15 +16,15 @@ Tool routing rules are not OS, network or resource isolation. A Provider label, 
 
 **Choose where work runs.** For disposable environments, register the [container Provider](../examples/container/README.md) with a profile whose image has the project's toolchain plus Git and Python 3; each assignment then gets its own container. For existing Linux machines, the [SSH adapter guide](../examples/linux-ssh/README.md) supplies private connection configuration and `nodeProviders` registration; those hosts are shared between assignments and have no lifecycle. Any other authenticated non-master Node also works. No Provider is registered by default.
 
-**Create the worker Agent once.** Use one worker Agent for all assignments and restrict it with an Agent-local allowlist, starting from agent-management's [restricted-worker rules](../../agent-management/references/memory-templates/restricted-worker.rules.json):
+**Create the worker Agent once.** Use one worker Agent for all assignments and restrict it with an Agent-local allowlist, starting from the `agent-management` skill's restricted-worker rules (`ctl skill load agent-management references/memory-templates/restricted-worker.rules.json`):
 
 ```text
 create_agent({agentName:"developer-worker", createMainSession:false, rules:<contents of restricted-worker.rules.json>})
 ```
 
-Then write the matching [memory template](../../agent-management/references/memory-templates/restricted-worker.md) to the new Agent's `memory/MEMORY.md`. Agent folders are siblings, so use the absolute path `<parent of your agent_folder>/developer-worker/memory/MEMORY.md` and read it back once. The layer keeps the worker's tools on its current Node, lets it report through its Task and ask its parent through a parent-owned Task, and denies `master`, memory writes and everything else. These rules govern Foxwarm tools only, so also give the worker Agent a model without built-in web search or image generation. [Restrict an Agent](../../agent-management/references/OPERATIONS.md#restrict-an-agent) explains each rule.
+Then write the matching memory template (`ctl skill load agent-management references/memory-templates/restricted-worker.md`) to the new Agent's `memory/MEMORY.md`. Agent folders are siblings, so use the absolute path `<parent of your agent_folder>/developer-worker/memory/MEMORY.md` and read it back once. The layer keeps the worker's tools on its current Node, lets it report through its Task and ask its parent through a parent-owned Task, and denies `master`, memory writes and everything else. These rules govern Foxwarm tools only, so also give the worker Agent a model without built-in web search or image generation. "Restrict an Agent" in the `agent-management` skill (`ctl skill load agent-management references/OPERATIONS.md`) explains each rule.
 
-**Let the global policy pass these calls.** A local layer only narrows. With the default `defaultAction: allow` and no conflicting rules, nothing more is needed. If the instance policy denies by default, merge reviewed allows for the coordinator and the worker Agent; [access-control's policy reference](../../access-control/references/tool-policy.md) is the canonical syntax. This is a **fragment**, not a replacement policy:
+**Let the global policy pass these calls.** A local layer only narrows. With the default `defaultAction: allow` and no conflicting rules, nothing more is needed. If the instance policy denies by default, merge reviewed allows for the coordinator and the worker Agent; the `access-control` policy reference (`ctl skill load access-control references/tool-policy.md`) is the canonical syntax. This is a **fragment**, not a replacement policy:
 
 ```yaml
 rules:

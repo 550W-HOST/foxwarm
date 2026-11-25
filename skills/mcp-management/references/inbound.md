@@ -4,9 +4,9 @@ Inbound MCP lets an external client use selected existing capabilities or queue 
 
 ## Prepare the receiving instance
 
-1. Load [access-control](../../access-control/SKILL.md) and merge a private identity into `access.identities` with `surfaces.mcp: {}`. If the same identity needs restricted browser chat, explicitly declare its `webui.sessions` too; neither surface grants the other.
+1. Load the `access-control` skill and merge a private identity into `access.identities` with `surfaces.mcp: {}`. If the same identity needs restricted browser chat, explicitly declare its `webui.sessions` too; neither surface grants the other.
 2. Grant only the required concrete tools in the existing policy. Review first-match ordering and identity-neutral rules. External-unmatched calls are denied, including when the policy is absent or its internal default is allow.
-3. Apply the complete app candidate through WebUI Setup Config or `set_config` with `target: config`. A running Main HTTP listener can enable its first MCP identity immediately; without that listener, the result requires an approved restart. With no identity declaring `mcp`, authentication is refused. Identity deletion, token rotation, and MCP-surface removal close only the affected contexts and streams. The policy has its separate [safe update workflow](../../access-control/references/policy-updates.md).
+3. Apply the complete app candidate through WebUI Setup Config or `set_config` with `target: config`. A running Main HTTP listener can enable its first MCP identity immediately; without that listener, the result requires an approved restart. With no identity declaring `mcp`, authentication is refused. Identity deletion, token rotation, and MCP-surface removal close only the affected contexts and streams. The policy has its separate safe update workflow in the `access-control` skill (`ctl skill load access-control references/policy-updates.md`).
 4. Use the receiving instance's `/mcp` URL on its existing HTTP port, retaining any reverse-proxy deployment prefix. Use HTTPS over an untrusted network. Send one `Authorization: Bearer <identity-token>` header on every request; WebUI cookies, the instance token, and Node pairing credentials do not authenticate MCP.
 
 A headless receiving instance can set `bot.enableWebUI: false` and `bot.enableTrigger: false`. An MCP or webhook identity still enables the shared HTTP server and Node connections. `enableTrigger` no longer serves a route; it only keeps the HTTP server running when nothing else needs it.
@@ -41,7 +41,7 @@ Accepted means queued, not completed or answered. The receiving Session runs und
 
 `ctl` takes `command` text and optional `values` for `@name` arguments, with the same grammar as the model's `ctl`. Each command runs the wrapper operation above with the same validation, policy and results; `node select` changes only this MCP context's Node, as `foxwarm_node` does.
 
-For send/read, use an exact internal Session ID, not `<main>` or `<parent>`. Session-list permission exposes a bounded global catalog rather than filtering by per-Session read grants. The [policy reference](../../access-control/references/tool-policy.md) explains caller versus target matching and concrete authorization; do not allow the inbound wrapper name as a substitute.
+For send/read, use an exact internal Session ID, not `<main>` or `<parent>`. Session-list permission exposes a bounded global catalog rather than filtering by per-Session read grants. The `access-control` policy reference (`ctl skill load access-control references/tool-policy.md`) explains caller versus target matching and concrete authorization; do not allow the inbound wrapper name as a substitute.
 
 `foxwarm_discover` accepts `sources: ["node"]`, `["mcp"]`, or `["builtin"]` (or combinations). Builtin discovery currently supports `node_pair_list` and `node_pair_approve` only. Do not infer that arbitrary internal builtins are exposed. Node selection does not grant Node tool permission, and approving pairing grants trust rather than tool access.
 
@@ -60,7 +60,7 @@ Navigation invokes this external tool, not internal `view_session` or `recall`. 
 - First-party CLI Nodes must negotiate protocol v3 and advertise external-owner support.
 - Configured outbound MCP servers expose only the tools allowed by this external identity's rules.
 
-Supported Node tools are `read`, `write`, `edit`, and `exec`. Inbound MCP does not expose execution on `master`, executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general Agent/Session management. Agent rules and default Nodes belong to the `agent-management` skill; Node bootstrap belongs to [node-setup](../../node-setup/SKILL.md).
+Supported Node tools are `read`, `write`, `edit`, and `exec`. Inbound MCP does not expose execution on `master`, executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general Agent/Session management. Agent rules and default Nodes belong to the `agent-management` skill; Node bootstrap belongs to the `node-setup` skill.
 
 An `exec` result returns its actual `execId`. Read it with `foxwarm_exec_result` while the same MCP context lives; do not substitute a PID. Each context retains at most 20 command records, evicts completed records when needed, and rejects another start when 20 remain unresolved. Contexts expire after 15 minutes of inactivity; deletion/restart loses result ownership, not necessarily the already-started OS process. A dropped connection does not mean a mutation was cancelled. Do not automatically repeat an effect with an unknown outcome.
 
