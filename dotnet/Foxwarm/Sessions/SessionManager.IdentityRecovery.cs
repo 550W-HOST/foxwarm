@@ -13,7 +13,7 @@ internal sealed partial class SessionManager
         {
             if (identityStartupComplete)
                 return;
-            if (IdentityJournal.Read() is { } record)
+            if (Storage.Identities.ReadPendingMove() is { } record)
             {
                 var metadata = new SessionIdentityMetadata(root, Catalog);
                 metadata.Open();
@@ -91,7 +91,12 @@ internal sealed partial class SessionManager
                         record.OwnedAgentPreparation
                     );
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
-                IdentityJournal.MoveArtifacts(from, to, record.Version, Storage.Authority.MoveIdentity);
+                Storage.Identities.MoveArtifacts(
+                    from,
+                    to,
+                    record.Version,
+                    Storage.Authority.MoveIdentity
+                );
                 Storage.Archive.RenameIdentity(from, to);
                 await Vector.RenameAsync(from, to);
                 if (raw.ContainsKey("id"))
@@ -104,7 +109,7 @@ internal sealed partial class SessionManager
                 metadata.Rewrite(from, to, agent, aliases, requireSource: source is not null);
                 deletionChannels.RewriteIdentity(from, to);
                 if (!backward)
-                    await archiveIdentities.CommitRenameAsync(record.OldId, record.NewId);
+                    await Storage.Identities.CommitRenameAsync(record.OldId, record.NewId);
                 if (record.OwnsAgent)
                 {
                     if (backward)
@@ -115,9 +120,9 @@ internal sealed partial class SessionManager
                             record.OwnedAgentPreparation
                         );
                 }
-                IdentityJournal.Clear();
+                Storage.Identities.ClearPendingMove();
             }
-            await archiveIdentities.InitializeAsync(Catalog);
+            await Storage.Identities.InitializeAsync(Catalog);
             identityStartupComplete = true;
         }
         finally

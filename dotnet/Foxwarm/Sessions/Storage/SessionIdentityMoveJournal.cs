@@ -262,3 +262,70 @@ internal sealed class SessionIdentityMoveException(
 {
     internal JsonObject Details { get; } = (JsonObject)details.DeepClone();
 }
+
+/// <summary>
+/// Committed Session identities and the pending identity move: reservations of retired IDs,
+/// rename commits and the move intent that startup recovery replays. The file implementation is
+/// <see cref="FileIdentityLedger"/>.
+/// </summary>
+internal interface IIdentityLedger
+{
+    /// <summary>Fails startup when stored identity evidence is inconsistent.</summary>
+    void ValidateStartupEvidence(bool allowPendingIdentityRecovery = false);
+
+    Task InitializeAsync(SessionCatalog catalog);
+    bool IsReserved(string sessionId);
+    void ValidateRename(string oldId, string newId);
+    Task CommitRenameAsync(string oldId, string newId);
+
+    SessionIdentityMoveRecord? ReadPendingMove();
+    void WritePendingMove(SessionIdentityMoveRecord record);
+    void ClearPendingMove();
+
+    /// <summary>
+    /// Moves the per-Session artifacts of an identity move; <paramref name="moveAuthority"/>
+    /// moves the authority itself first.
+    /// </summary>
+    void MoveArtifacts(
+        string fromId,
+        string toId,
+        int version,
+        Action<string, string> moveAuthority
+    );
+}
+
+/// <summary>
+/// File-mode identity ledger: <c>state/session-id-reservations.jsonl</c> with its SQLite mirror
+/// and <c>state/session-id-move-pending.json</c>.
+/// </summary>
+internal sealed class FileIdentityLedger(string dataRoot) : IIdentityLedger
+{
+    private readonly CommittedArchiveIdentity committed = new(dataRoot);
+
+    private SessionIdentityMoveJournal Journal => new(dataRoot);
+
+    public void ValidateStartupEvidence(bool allowPendingIdentityRecovery = false) =>
+        CommittedArchiveIdentity.ValidateStartupEvidence(dataRoot, allowPendingIdentityRecovery);
+
+    public Task InitializeAsync(SessionCatalog catalog) => committed.InitializeAsync(catalog);
+
+    public bool IsReserved(string sessionId) => committed.IsReserved(sessionId);
+
+    public void ValidateRename(string oldId, string newId) => committed.ValidateRename(oldId, newId);
+
+    public Task CommitRenameAsync(string oldId, string newId) =>
+        committed.CommitRenameAsync(oldId, newId);
+
+    public SessionIdentityMoveRecord? ReadPendingMove() => Journal.Read();
+
+    public void WritePendingMove(SessionIdentityMoveRecord record) => Journal.Write(record);
+
+    public void ClearPendingMove() => Journal.Clear();
+
+    public void MoveArtifacts(
+        string fromId,
+        string toId,
+        int version,
+        Action<string, string> moveAuthority
+    ) => Journal.MoveArtifacts(fromId, toId, version, moveAuthority);
+}

@@ -41,7 +41,6 @@ internal sealed partial class SessionManager
     internal Func<string, string, Task>? BeforeIdentityStage { get; set; }
     // The SQLite Archive file: read by the activity index, which still opens it directly, and by tests.
     internal string ArchiveDatabase => ((SqliteArchiveStore)Storage.Archive).DatabasePath;
-    private SessionIdentityMoveJournal IdentityJournal => new(root);
 
     internal WorkspaceTools IdentityWorkspace(
         SessionOwner owner,
@@ -297,7 +296,7 @@ internal sealed partial class SessionManager
             }
             await targetCreation.WaitAsync(token);
             targetHeld = true;
-            if (IdentityJournal.Read() is not null)
+            if (Storage.Identities.ReadPendingMove() is not null)
                 throw new InvalidOperationException(
                     "A pending identity move requires recovery before another move can start."
                 );
@@ -320,7 +319,7 @@ internal sealed partial class SessionManager
                 );
             if (await IdReservedAsync(target))
                 throw new InvalidDataException("Target Session ID is already reserved.");
-            archiveIdentities.ValidateRename(old, target);
+            Storage.Identities.ValidateRename(old, target);
             deletionChannels.ValidateIdentityAuthority();
             if (ClaudeRuntimeState.IsExternal(owner.Entry.Snapshot().AuthorityEnvelope))
             {
@@ -473,7 +472,7 @@ internal sealed partial class SessionManager
         unresolvedIdentityMove = record;
         try
         {
-            IdentityJournal.Write(record);
+            Storage.Identities.WritePendingMove(record);
             if (record.OwnsAgent)
             {
                 await IdentityStageAsync(operation, "before-agent-copy");
@@ -501,7 +500,7 @@ internal sealed partial class SessionManager
                 await IdentityStageAsync(operation, "before-mutation");
                 mutated = true;
                 details["stage"] = "paths";
-                IdentityJournal.MoveArtifacts(
+                Storage.Identities.MoveArtifacts(
                     record.OldId,
                     record.NewId,
                     record.Version,
@@ -542,13 +541,13 @@ internal sealed partial class SessionManager
                 details["channelsMoved"] = true;
                 record = record with { Phase = "finishing" };
                 operation.Record = record;
-                IdentityJournal.Write(record);
+                Storage.Identities.WritePendingMove(record);
                 unresolvedIdentityMove = record;
                 await IdentityStageAsync(operation, "before-alias-commit");
                 details["stage"] = "alias";
                 try
                 {
-                    await archiveIdentities.CommitRenameAsync(record.OldId, record.NewId);
+                    await Storage.Identities.CommitRenameAsync(record.OldId, record.NewId);
                 }
                 catch (ArchiveIdentityCommittedException)
                 {
@@ -563,7 +562,7 @@ internal sealed partial class SessionManager
                         record.OwnedAgent!,
                         record.OwnedAgentPreparation
                     );
-                IdentityJournal.Clear();
+                Storage.Identities.ClearPendingMove();
                 unresolvedIdentityMove = null;
             });
         }
@@ -592,7 +591,7 @@ internal sealed partial class SessionManager
             try
             {
                 record = record with { Phase = "rolling-back" };
-                IdentityJournal.Write(record);
+                Storage.Identities.WritePendingMove(record);
                 unresolvedIdentityMove = record;
             }
             catch (Exception error)
@@ -623,7 +622,7 @@ internal sealed partial class SessionManager
                     });
                     await Attempt(() =>
                     {
-                        IdentityJournal.MoveArtifacts(
+                        Storage.Identities.MoveArtifacts(
                             record.NewId,
                             record.OldId,
                             record.Version,
@@ -674,7 +673,7 @@ internal sealed partial class SessionManager
                 {
                     if (record.OwnsAgent)
                         await RemoveMoveOwnedAgentAsync(record);
-                    IdentityJournal.Clear();
+                    Storage.Identities.ClearPendingMove();
                     unresolvedIdentityMove = null;
                 }
                 catch (Exception error)

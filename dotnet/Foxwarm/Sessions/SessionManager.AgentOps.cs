@@ -884,7 +884,7 @@ internal sealed partial class SessionManager
     private async Task<bool> IdReservedAsync(string id)
     {
         await EnsureIdentityStartupAsync();
-        if (archiveIdentities.IsReserved(id))
+        if (Storage.Identities.IsReserved(id))
             return true;
         lock (lifecycle)
             if (

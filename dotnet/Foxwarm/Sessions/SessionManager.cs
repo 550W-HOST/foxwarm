@@ -28,7 +28,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal IEnumerable<string> ExecLogRoots() => agents.ExecLogRoots();
 
     private readonly SessionDeletionChannels deletionChannels;
-    private readonly CommittedArchiveIdentity archiveIdentities;
     private readonly HttpClient http = ProviderHttpRequest.CreateClient();
     private readonly Foxwarm.McpClient mcp;
     private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
@@ -120,13 +119,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
         authorization = new ToolAuthorizationAuthority(this.root);
-        CommittedArchiveIdentity.ValidateStartupEvidence(
-            this.root,
-            allowPendingIdentityRecovery: true
-        );
+        Storage.Identities.ValidateStartupEvidence(allowPendingIdentityRecovery: true);
         Directory.CreateDirectory(this.root);
         deletionChannels = new(this.root);
-        archiveIdentities = new(this.root);
         Catalog = new SessionCatalog(this.root);
         Tasks = new TaskService(
             this,
@@ -138,7 +133,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
-        var recoveringMove = IdentityJournal.Read();
+        var recoveringMove = Storage.Identities.ReadPendingMove();
         agents = new AgentCatalog(
             this.root,
             workspaceRoot,
