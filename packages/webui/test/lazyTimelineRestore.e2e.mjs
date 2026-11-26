@@ -82,7 +82,7 @@ async function openFixture(shape) {
   await page.evaluate(sessionId => window.foxwarmTest.switchToSession(sessionId), fixtureSessionId)
   await page.waitForFunction((sessionId) => {
     const root = document.querySelector('.foxwarm-chat-root')
-    return (root?.textContent || '').includes(`session ${sessionId}`)
+    return root?.dataset.chatSessionId === sessionId
   }, { timeout: 15_000 }, fixtureSessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
   return { browser, page }

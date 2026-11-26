@@ -43,6 +43,8 @@ before(async () => {
     Date.now = () => window.fixture.now
     window.fixture.setNow = value => { window.fixture.now = value }
     window.fetch = async input => {
+      // Chat preferences read the installation's send-key default once; only CTX expansion is counted.
+      if (String(input).includes('/webui/settings')) return new Response(JSON.stringify({settings:{}}),{status:200,headers:{'Content-Type':'application/json'}})
       window.fixture.fetches.push(String(input))
       const parent = String(input).includes('/40/expand')
       return new Response(JSON.stringify({sessionId:'fixture/main',blockId:parent?40:41,expansionKind:parent?'child-blocks':'messages',messages:parent?[${JSON.stringify(ctx(41))}]:[

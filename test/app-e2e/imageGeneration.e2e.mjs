@@ -38,7 +38,7 @@ function history(id) {
 
 async function openSession(id) {
   await page.evaluate(value => window.foxwarmTest.switchToSession(value), id)
-  await page.waitForFunction(value => (document.querySelector('.foxwarm-chat-root')?.textContent || '').includes(`session ${value}`), { timeout: 15_000 }, id)
+  await page.waitForFunction(value => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === value, { timeout: 15_000 }, id)
   await page.waitForSelector('[role="textbox"][aria-label="Message"]', { timeout: 15_000 })
 }
 

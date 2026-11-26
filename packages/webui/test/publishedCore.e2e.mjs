@@ -118,10 +118,11 @@ try {
     assert.equal(bundle.status, 200); assert((await bundle.text()).length > 0)
   }
   const models = JSON.stringify({ default: 'fixture', providers: { fixture: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], asyncCompact: false } } }, null, 2) + '\n'
-  await page.evaluate(() => { location.hash = 'setup' })
-  await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
-  // First-run Models opens in the form view; this proof writes exact YAML through the editor.
-  await page.waitForSelector('[data-models-view="yaml"]'); await page.click('[data-models-view="yaml"]')
+  // A new installation offers only the first-run Models step, which opens in the form view;
+  // this proof writes exact YAML through the editor.
+  await page.waitForSelector('[data-first-run-surface] [data-setup-first-run]')
+  assert.equal(await page.$('#setup-tab-models'), null)
+  await page.waitForSelector('[data-setup-first-run] [data-models-view="yaml"]'); await page.click('[data-setup-first-run] [data-models-view="yaml"]')
   const editor = '[aria-label="Models YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor)
   await page.evaluate(async value => {
@@ -133,11 +134,14 @@ try {
     editor.getModel().setValue(value)
   }, models)
   const saved = page.waitForResponse(response => response.url().endsWith('/api/setup/models') && response.request().method() === 'POST')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models')?.click())
+  await page.evaluate(() => [...document.querySelectorAll('[data-setup-first-run] button')].find(button => button.textContent === 'Save and continue')?.click())
   const saveResponse = await saved
   assert.equal(saveResponse.status(), 200, await saveResponse.text())
   await until(async () => (await readFile(join(data, 'state/models.yaml'), 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === models, 'original setup saves model configuration')
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, false)
+  // The save's welcome Session replaces the first-run surface.
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main'
+    && !document.querySelector('[data-first-run-surface]'), { timeout: 15000 })
   assert.equal(requests.length, 0)
   const created = await api('POST', '/api/sessions', {})
   assert.equal(created.status, 200)
