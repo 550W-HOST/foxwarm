@@ -8,7 +8,7 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 
 Storage: `AgentCatalog` reads and replaces `state/agents.json` and `state/installation.json` as the `Agents` and `Installation` state documents ([storage context](./storage-context.md#state-documents)).
 
-Agent memory composition and the memory manifest read through `IAgentFileStore` ([storage context](./storage-context.md#agent-memory-files)).
+Agent memory composition and the memory manifest read through `IAgentFileStore` ([storage context](./storage-context.md#agent-files)).
 
 ## Stable symbols and callers
 

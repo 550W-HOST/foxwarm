@@ -130,7 +130,7 @@ public sealed class S3BlobStoreTests
     }
 
     [Fact]
-    public async Task The_context_puts_images_artifacts_and_the_authority_on_the_selected_backend()
+    public async Task The_context_puts_images_artifacts_Agent_files_and_the_authority_on_the_selected_backend()
     {
         await using var bucket = await S3TestBucket.CreateAsync();
         using var temp = new TempDirectory();
@@ -143,6 +143,7 @@ public sealed class S3BlobStoreTests
         await postgres.OpenBlobsAsync(new BlobSettings(BlobBackend.Postgres, null), "default", CancellationToken.None);
         Assert.IsType<Foxwarm.Hosted.Postgres.PgBlobStore>(postgres.ImageBlobs);
         Assert.IsType<Foxwarm.Hosted.Postgres.PgBlobStore>(postgres.ArtifactBlobs);
+        Assert.IsType<Foxwarm.Hosted.Postgres.PgBlobStore>(postgres.AgentFileBlobs);
 
         var s3 = new PostgresStorageContext(database, temp.Path);
         var settings = bucket.Settings with
@@ -158,7 +159,14 @@ public sealed class S3BlobStoreTests
             images,
             Assert.IsType<Foxwarm.Hosted.Postgres.Authority.PostgresSessionAuthorityBackend>(s3.Authority).ImageBlobs
         );
+        // The Agent store is rebuilt over the S3 store of large Agent files.
+        Assert.Same(
+            Assert.IsType<S3BlobStore>(s3.AgentFileBlobs),
+            Assert.IsType<Foxwarm.Hosted.Postgres.PgAgentFileStore>(s3.AgentFiles).Blobs
+        );
         Assert.Empty(s3.Missing);
+        await s3.AgentFileBlobs.CreateAsync("alpha/00", new byte[] { 1 }, false, CancellationToken.None);
+        Assert.Contains("t/default/agent-files/alpha/00", await bucket.KeysAsync());
         await s3.ArtifactBlobs.CreateAsync("art_c/1.json", new byte[] { 1 }, false, CancellationToken.None);
         Assert.Contains("t/default/artifacts/art_c/1.json", await bucket.KeysAsync());
         // The context owns the S3 client both stores share: disposing it closes the client.

@@ -16,7 +16,8 @@ namespace Foxwarm.Hosted;
 internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDisposable
 {
     private int disposed;
-    // The S3 client shared by both S3 blob stores; null on the PostgreSQL blob backend.
+    // The S3 client shared by the S3 blob stores (images, artifacts, Agent files); null on the
+    // PostgreSQL blob backend.
     private IDisposable? s3Client;
 
     private ISessionAuthorityBackend? authority;

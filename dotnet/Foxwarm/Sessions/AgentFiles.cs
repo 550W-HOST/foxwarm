@@ -15,12 +15,37 @@ internal sealed record AgentFileEntry(
 );
 
 /// <summary>
-/// Read access to Agent memory and the installation's prompt files. Paths are relative and
-/// '/'-separated; a null Agent addresses the installation level beside the Agent folders. A
-/// locator names where a file lives and is shown in the composed system prompt, so it must be
-/// stable for an unchanged installation (D-request-prefix-stability). Listings are unordered;
-/// callers order them. The file implementation is <see cref="FileAgentFiles"/>.
+/// A file or directory of the Agent file store. <see cref="Generation"/> identifies a file's
+/// content for conditional writes and is 0 for directories; a file's generation changes
+/// whenever its content does.
 /// </summary>
+internal sealed record AgentFileStat(
+    string Path,
+    bool IsDirectory,
+    long Length,
+    long Generation,
+    DateTime LastWriteUtc
+);
+
+/// <summary>A file's bytes with the generation they were read at.</summary>
+internal sealed record AgentFileContent(byte[] Bytes, long Generation);
+
+/// <summary>
+/// Agent files and the installation's prompt files. Paths are relative and '/'-separated; a
+/// null Agent addresses the installation level beside the Agent folders. A locator names where
+/// a file lives and is shown in the composed system prompt, so it must be stable for an
+/// unchanged installation (D-request-prefix-stability). Listings are in ordinal name order.
+/// The file implementation is <see cref="FileAgentFiles"/>; hosted mode keeps them in the
+/// tenant database (<c>PgAgentFileStore</c>).
+/// </summary>
+/// <remarks>
+/// The write half takes store paths (<see cref="AgentFilePaths"/>) and runs in one lane per
+/// Agent. An <c>expectedGeneration</c> of null writes unconditionally, 0 requires the file to
+/// be absent and any other value requires the file to be at that generation; a failed
+/// expectation is <see cref="AgentFileConflictException"/>. Writes create missing parent
+/// directories. A missing file is <see cref="FileNotFoundException"/>, a missing Agent
+/// <see cref="DirectoryNotFoundException"/>, an invalid path <see cref="AgentFilePathException"/>.
+/// </remarks>
 internal interface IAgentFileStore
 {
     string Locator(string? agent, string path);
@@ -34,11 +59,97 @@ internal interface IAgentFileStore
     /// <paramref name="filePattern"/>, only files matching it, as the platform matches names.
     /// </summary>
     IReadOnlyList<AgentFileEntry> List(string? agent, string directory, string? filePattern = null);
+
+    /// <summary>The file or directory at <paramref name="path"/>, or null when there is none.</summary>
+    AgentFileStat? Stat(string? agent, string path);
+
+    Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token);
+
+    /// <summary>Creates or replaces a file and returns its new generation.</summary>
+    Task<long> WriteAsync(
+        string? agent,
+        string path,
+        ReadOnlyMemory<byte> content,
+        long? expectedGeneration,
+        CancellationToken token
+    );
+
+    /// <summary>
+    /// Removes a file, or a directory: an empty one, or with <paramref name="recursive"/> its
+    /// whole tree. The expectation applies to files only. The parent directory stays.
+    /// </summary>
+    Task DeleteAsync(
+        string? agent,
+        string path,
+        bool recursive,
+        long? expectedGeneration,
+        CancellationToken token
+    );
+
+    /// <summary>
+    /// Moves a file or directory within one Agent. An existing target fails, except a file
+    /// replacing a file with <paramref name="overwrite"/>.
+    /// </summary>
+    Task RenameAsync(string? agent, string from, string to, bool overwrite, CancellationToken token);
+
+    /// <summary>Creates a directory and its parents; an existing directory is kept.</summary>
+    Task MakeDirectoryAsync(string? agent, string path, CancellationToken token);
 }
 
-/// <summary>Agent folders as <see cref="AgentCatalog"/> lays them out.</summary>
+/// <summary>The failures both store implementations report, with the same texts.</summary>
+internal static class AgentFileErrors
+{
+    internal static FileNotFoundException NotFound(string path) =>
+        new("No such file or directory: " + path);
+
+    internal static DirectoryNotFoundException NoAgent(string? agent) =>
+        new($"Agent '{agent}' does not exist.");
+
+    internal static IOException IsDirectory(string path) => new("Is a directory: " + path);
+
+    internal static IOException NotDirectory(string path) => new("Not a directory: " + path);
+
+    internal static IOException NotEmpty(string path) => new("Directory not empty: " + path);
+
+    internal static AgentFileConflictException Exists(string path) =>
+        new("File already exists: " + path);
+
+    internal static AgentFileConflictException Changed(string path) =>
+        new("File changed since it was read: " + path);
+
+    internal static IOException Root() =>
+        new("An Agent's own directory can't be removed or moved.");
+
+    internal static IOException IntoItself(string path) =>
+        new("A directory can't be moved into itself: " + path);
+
+    internal static IOException Link(string path) =>
+        new("Agent file paths can't pass through a symbolic link: " + path);
+
+    /// <summary>The generation a file implementation reports for content: never 0.</summary>
+    internal static long ContentGeneration(ReadOnlySpan<byte> content)
+    {
+        Span<byte> hash = stackalloc byte[32];
+        System.Security.Cryptography.SHA256.HashData(content, hash);
+        return (System.Buffers.Binary.BinaryPrimitives.ReadInt64BigEndian(hash) & long.MaxValue) | 1;
+    }
+
+    internal static long? Normalize(long? expectedGeneration) =>
+        expectedGeneration is < 0
+            ? throw new ArgumentOutOfRangeException(nameof(expectedGeneration))
+            : expectedGeneration;
+}
+
+/// <summary>
+/// Agent folders as <see cref="AgentCatalog"/> lays them out. Reads keep their file behavior;
+/// the write half takes store paths, refuses to pass through a symbolic link, replaces a file
+/// by renaming a complete temporary file over it, and reports a file's content hash as its
+/// generation.
+/// </summary>
 internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
 {
+    private readonly AgentWriteLanes lanes = new();
+
     private string Directory(string? agent) =>
         agent is null ? agents.AgentRoot : agents.SourceDirectory(agent);
 
@@ -70,6 +181,7 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
                     null,
                     null
                 ))
+                .OrderBy(entry => entry.Name, StringComparer.Ordinal)
                 .ToArray();
         return new DirectoryInfo(full)
             .GetFileSystemInfos()
@@ -87,6 +199,246 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
                     file?.LastWriteTimeUtc
                 );
             })
+            .OrderBy(entry => entry.Name, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    public AgentFileStat? Stat(string? agent, string path)
+    {
+        AgentFilePaths.Require(path, allowRoot: true);
+        var full = Resolve(agent, path, lookup: true);
+        if (System.IO.Directory.Exists(full))
+            return new(path, true, 0, 0, System.IO.Directory.GetLastWriteTimeUtc(full));
+        if (!File.Exists(full))
+            return null;
+        var info = new FileInfo(full);
+        return new(
+            path,
+            false,
+            info.Length,
+            AgentFileErrors.ContentGeneration(File.ReadAllBytes(full)),
+            info.LastWriteTimeUtc
+        );
+    }
+
+    public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token)
+    {
+        AgentFilePaths.Require(path);
+        var full = Resolve(agent, path, lookup: true);
+        if (System.IO.Directory.Exists(full))
+            throw AgentFileErrors.IsDirectory(path);
+        if (!File.Exists(full))
+            throw AgentFileErrors.NotFound(path);
+        var bytes = await File.ReadAllBytesAsync(full, token).ConfigureAwait(false);
+        return new(bytes, AgentFileErrors.ContentGeneration(bytes));
+    }
+
+    public Task<long> WriteAsync(
+        string? agent,
+        string path,
+        ReadOnlyMemory<byte> content,
+        long? expectedGeneration,
+        CancellationToken token
+    )
+    {
+        AgentFilePaths.Require(path);
+        expectedGeneration = AgentFileErrors.Normalize(expectedGeneration);
+        return lanes.RunAsync(
+            agent ?? "",
+            async () =>
+            {
+                var full = Resolve(agent, path);
+                if (System.IO.Directory.Exists(full))
+                    throw AgentFileErrors.IsDirectory(path);
+                await CheckExpectationAsync(full, path, expectedGeneration, token).ConfigureAwait(false);
+                CreateParents(agent, path);
+                var temporary = Path.Combine(
+                    Path.GetDirectoryName(full)!,
+                    "." + Path.GetFileName(full) + "." + Guid.NewGuid().ToString("N") + ".tmp"
+                );
+                try
+                {
+                    await using (
+                        var output = new FileStream(
+                            temporary,
+                            FileMode.CreateNew,
+                            FileAccess.Write,
+                            FileShare.None,
+                            8192,
+                            true
+                        )
+                    )
+                    {
+                        await output.WriteAsync(content, token).ConfigureAwait(false);
+                        await output.FlushAsync(token).ConfigureAwait(false);
+                        output.Flush(flushToDisk: true);
+                    }
+                    File.Move(temporary, full, overwrite: true);
+                }
+                catch
+                {
+                    File.Delete(temporary);
+                    throw;
+                }
+                return AgentFileErrors.ContentGeneration(content.Span);
+            },
+            token
+        );
+    }
+
+    public Task DeleteAsync(
+        string? agent,
+        string path,
+        bool recursive,
+        long? expectedGeneration,
+        CancellationToken token
+    )
+    {
+        AgentFilePaths.Require(path, allowRoot: true);
+        if (path.Length == 0)
+            throw AgentFileErrors.Root();
+        expectedGeneration = AgentFileErrors.Normalize(expectedGeneration);
+        return lanes.RunAsync(
+            agent ?? "",
+            async () =>
+            {
+                var full = Resolve(agent, path);
+                if (System.IO.Directory.Exists(full))
+                {
+                    if (!recursive && System.IO.Directory.EnumerateFileSystemEntries(full).Any())
+                        throw AgentFileErrors.NotEmpty(path);
+                    System.IO.Directory.Delete(full, recursive);
+                    return true;
+                }
+                if (!File.Exists(full))
+                    throw AgentFileErrors.NotFound(path);
+                await CheckExpectationAsync(full, path, expectedGeneration, token).ConfigureAwait(false);
+                File.Delete(full);
+                return true;
+            },
+            token
+        );
+    }
+
+    public Task RenameAsync(string? agent, string from, string to, bool overwrite, CancellationToken token)
+    {
+        AgentFilePaths.Require(from, allowRoot: true);
+        AgentFilePaths.Require(to, allowRoot: true);
+        if (from.Length == 0 || to.Length == 0)
+            throw AgentFileErrors.Root();
+        return lanes.RunAsync(
+            agent ?? "",
+            () =>
+            {
+                var source = Resolve(agent, from);
+                var target = Resolve(agent, to);
+                var directory = System.IO.Directory.Exists(source);
+                if (!directory && !File.Exists(source))
+                    throw AgentFileErrors.NotFound(from);
+                if (from == to)
+                    return Task.FromResult(true);
+                if (directory && AgentFilePaths.Within(to, from))
+                    throw AgentFileErrors.IntoItself(from);
+                if (System.IO.Directory.Exists(target))
+                    throw directory ? AgentFileErrors.Exists(to) : AgentFileErrors.IsDirectory(to);
+                if (File.Exists(target) && (directory || !overwrite))
+                    throw AgentFileErrors.Exists(to);
+                CreateParents(agent, to);
+                if (directory)
+                    System.IO.Directory.Move(source, target);
+                else
+                    File.Move(source, target, overwrite);
+                return Task.FromResult(true);
+            },
+            token
+        );
+    }
+
+    public Task MakeDirectoryAsync(string? agent, string path, CancellationToken token)
+    {
+        AgentFilePaths.Require(path);
+        return lanes.RunAsync(
+            agent ?? "",
+            () =>
+            {
+                var full = Resolve(agent, path);
+                if (File.Exists(full))
+                    throw AgentFileErrors.NotDirectory(path);
+                CreateParents(agent, path);
+                System.IO.Directory.CreateDirectory(full);
+                return Task.FromResult(true);
+            },
+            token
+        );
+    }
+
+    // The physical path of a store path. The Agent's directory must exist, and no existing
+    // component below it may be a symbolic link, so a write can't leave the directory.
+    private string Resolve(string? agent, string path, bool lookup = false)
+    {
+        var root = Directory(agent);
+        if (!System.IO.Directory.Exists(root) || IsLink(root))
+            throw AgentFileErrors.NoAgent(agent);
+        var current = root;
+        var walked = "";
+        foreach (var segment in path.Length == 0 ? [] : path.Split('/'))
+        {
+            current = Path.Combine(current, segment);
+            walked = walked.Length == 0 ? segment : walked + "/" + segment;
+            if (!Path.Exists(current) && !IsLink(current))
+                break;
+            if (IsLink(current))
+                throw AgentFileErrors.Link(walked);
+            if (walked != path && File.Exists(current))
+            {
+                if (lookup)
+                    break;
+                throw AgentFileErrors.NotDirectory(walked);
+            }
+        }
+        return path.Length == 0 ? root : Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar));
+    }
+
+    private void CreateParents(string? agent, string path)
+    {
+        var parent = AgentFilePaths.Parent(path);
+        if (parent.Length > 0)
+            System.IO.Directory.CreateDirectory(Resolve(agent, parent));
+    }
+
+    private static bool IsLink(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task CheckExpectationAsync(
+        string full,
+        string path,
+        long? expected,
+        CancellationToken token
+    )
+    {
+        if (expected is null)
+            return;
+        if (!File.Exists(full))
+        {
+            if (expected != 0)
+                throw AgentFileErrors.Changed(path);
+            return;
+        }
+        if (expected == 0)
+            throw AgentFileErrors.Exists(path);
+        var current = AgentFileErrors.ContentGeneration(
+            await File.ReadAllBytesAsync(full, token).ConfigureAwait(false)
+        );
+        if (current != expected)
+            throw AgentFileErrors.Changed(path);
     }
 }
