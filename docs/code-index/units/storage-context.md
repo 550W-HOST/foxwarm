@@ -131,7 +131,7 @@ The contract both representations implement:
   - Envelope read: returns the value without `history`.
   - Delete: removes the value; Archive rows stay.
 
-The test-only `SegmentedAuthorityBackend` implements this representation in memory over the ordinary SQLite Archive. The contract suite runs every case against both backends.
+The shared `SessionSegmentPlanner` holds the delta planner and segment policy. The [hosted backend](./hosted-session-authority.md) and the test-only in-memory `SegmentedAuthorityBackend` (over the SQLite Archive) use it; the contract suite runs on every backend.
 
 ## Open Questions
 
@@ -171,4 +171,4 @@ A runtime without a `master` Node (every hosted installation) needs a capability
 
 ## Tests
 
-`SessionAuthorityContractTests` (abstract) runs as `FileSessionAuthorityContractTests` and `SegmentedSessionAuthorityContractTests`. `SegmentedSessionAuthorityTests` compares the segmented value with the file document after the same commits and counts what each kind of commit rewrites. `FileSessionAuthorityBackendTests` covers the file backend's own reads, moves and deletion stages. `TaskRowStoreTests` runs one Task action sequence over the SQLite rows and test-only in-memory rows and requires identical results. `StateDocumentsTests` covers absence, replacement, owner-only mode, the timers' parent rule and the Node registry's backup fallback. `InstanceCredentialsTests` covers create-once, owner-only mode and strict decoding. `AgentFilesTests` pins the prompt locators to the existing paths and covers link reporting in listings. `FileAuthorityTestExtensions` exposes the file paths that file-mode tests stage or inspect.
+`SessionAuthorityContractTests` (abstract) runs as `FileSessionAuthorityContractTests`, `SegmentedSessionAuthorityContractTests` and `PostgresSessionAuthorityContractTests`. `SegmentedAuthorityCountTests` (in memory and Postgres) compares the segmented value with the file document after the same commits and counts what each kind of commit rewrites. `FileSessionAuthorityBackendTests` covers the file backend's own reads, moves and deletion stages. `TaskRowStoreTests` runs one Task action sequence over the SQLite rows and test-only in-memory rows and requires identical results. `StateDocumentsTests` covers absence, replacement, owner-only mode, the timers' parent rule and the Node registry's backup fallback. `InstanceCredentialsTests` covers create-once, owner-only mode and strict decoding. `AgentFilesTests` pins the prompt locators to the existing paths and covers link reporting in listings. `FileAuthorityTestExtensions` exposes the file paths that file-mode tests stage or inspect.
