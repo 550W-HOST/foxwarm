@@ -1,6 +1,6 @@
 # Unit: Hosted database access, schema and fencing
 
-Files: `dotnet/Foxwarm/Hosted/Postgres/PgDatabase.cs`, `dotnet/Foxwarm/Hosted/Postgres/TenantDb.cs`, `dotnet/Foxwarm/Hosted/Schema/SchemaMigrator.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0001_foundation.sql`, `dotnet/Foxwarm/Hosted/HostedBootstrap.cs`, `dotnet/Foxwarm/Hosted/HostedCli.cs`, `dotnet/Foxwarm.Tests/Hosted/TenantDbTests.cs`, `dotnet/Foxwarm.Tests/Hosted/SchemaTests.cs`, `dotnet/Foxwarm.Tests/Hosted/SchemaLint.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedSourceRulesTests.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/PostgresServer.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/PgTcpProxy.cs`, `scripts/test/acquire-hosted-fixtures.sh`
+Files: `dotnet/Foxwarm/Hosted/Postgres/PgDatabase.cs`, `dotnet/Foxwarm/Hosted/Postgres/TenantDb.cs`, `dotnet/Foxwarm/Hosted/Schema/SchemaMigrator.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0001_foundation.sql`, `dotnet/Foxwarm/Hosted/HostedBootstrap.cs`, `dotnet/Foxwarm/Hosted/HostedCli.cs`, `dotnet/Foxwarm.Tests/Hosted/TenantDbTests.cs`, `dotnet/Foxwarm.Tests/Hosted/SchemaTests.cs`, `dotnet/Foxwarm.Tests/Hosted/SchemaLint.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedSourceRulesTests.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/PostgresServer.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/PgTcpProxy.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/S3Server.cs`, `dotnet/Foxwarm.Tests/Hosted/S3ServerTests.cs`, `scripts/test/acquire-hosted-fixtures.sh`
 Secondary files: `dotnet/Foxwarm/Foxwarm.csproj`, `dotnet/Foxwarm/Program.cs`, `dotnet/Foxwarm/Hosted/Licenses/Npgsql-LICENSE.txt`, `dotnet/Foxwarm.Desktop/Foxwarm.Desktop.csproj`, `dotnet/Foxwarm.Desktop.Mac/Foxwarm.Desktop.Mac.csproj`, `scripts/test/run-tests.mjs`, `scripts/test/managed-preparation.test.mjs`, `.github/workflows/tests.yml`
 
 ## Purpose
@@ -41,11 +41,13 @@ Npgsql is pinned to 10.0.4. Npgsql 11 requires `Microsoft.Extensions.*` 11, whic
   - `TenantDb.Write`/`WriteAsync` sets them with `set_config(…, true)`, which makes them transaction-local.
   - In the same round trip, it checks that the lease row is `active`, unexpired and at this epoch, locking it `FOR KEY SHARE`. That check gives a clean `TenantFencedException` before any work.
 - **Every tenant table has the statement-level `BEFORE INSERT OR UPDATE OR DELETE` trigger `foxwarm_fence()`.**
-  - It repeats the check with the same lock and raises SQLSTATE `FW001`.
+  - It repeats the check with the same lock (`foxwarm_require_lease()`) and raises SQLSTATE `FW001`.
+  - The only cluster-table write of the runtime role, `foxwarm_raise_reader_version`, runs the same check.
   - The helper maps `FW001` to `TenantFencedException` and raises `TenantDb.Fenced`, which the lease monitor uses to fence the runtime at once.
 - **Takeover and renewal.**
   - A takeover selects the lease row `FOR UPDATE` before raising the epoch. It therefore waits for every in-flight writer of the old epoch, and none can commit after it.
   - The owner's renewal updates only non-key columns (`expires_at`). `FOR KEY SHARE` doesn't conflict with that, so renewal never queues behind long write transactions.
+- **Timeouts.** Each transaction also sets a transaction-local `statement_timeout` (15 s) and `idle_in_transaction_session_timeout` (10 s). The server then ends a partitioned owner's transaction on its own, which bounds how long it can delay a takeover ([self-fence](./hosted-runtime.md#d-hosted-self-fence)).
 - **Reads** (`Read`/`ReadAsync`) set only the tenant, run `READ ONLY` (`REPEATABLE READ` with `snapshot: true`), and need no lease.
 - **Closing.** `Close()` makes the helper refuse every later transaction. Self-fencing uses it.
 
@@ -107,14 +109,15 @@ Migrations create these by calling `foxwarm_tenant_table(table, privileges)` rig
 - **`PostgresServer` setup.** It creates non-superuser owner and runtime roles and migrates a template database once.
 - **`HostedTestDatabase`** gives each test its own copy of the template.
 - **`PgTcpProxy`** is a loopback proxy whose directions can be held or severed, which simulates partitions and lost `COMMIT` replies.
+- **`S3Server`** (classes with `[Trait("Backend", "s3")]`) runs one VersityGW per process with its POSIX backend under a short `/tmp` path, root credentials passed through the environment, and an ephemeral loopback port. It is selected by `FOXWARM_TEST_VERSITYGW`, or by `FOXWARM_TEST_S3_URL` with its key variables; each test takes its own bucket name.
 - **Runner and CI.**
-  - `scripts/test/run-tests.mjs managed` excludes `Backend=postgres` with a printed notice when neither variable is set.
-  - The CI job `managed-hosted` gets PostgreSQL through `acquire-hosted-fixtures.sh`, which downloads pinned packages from the permanent PGDG archive with SHA-256 checks, and runs `--filter=Backend=postgres`.
+  - Without its fixture, `scripts/test/run-tests.mjs managed` excludes `Backend=postgres` or `Backend=s3` and prints a "… batch not run" notice.
+  - The CI job `managed-hosted` gets both servers through `acquire-hosted-fixtures.sh`, which downloads pinned packages with SHA-256 checks: PostgreSQL from the permanent PGDG archive, VersityGW from its release. It runs `--filter=Backend=postgres|Backend=s3|Backend=neutral`; the neutral rerun is in [hosted runtime](./hosted-runtime.md#tests).
 - **What the tests cover.**
   - `TenantDbTests`: epoch fencing, expiry, trigger fencing of raw writes, RLS separation, takeover waiting for in-flight writers while renewal doesn't, lost-commit verification, retries, read-only reads, statement timeout, `Close`.
   - `SchemaMigratorTests`: idempotent and concurrent migration, the reader-floor fence, refusal of changed migrations and of a different runtime role.
   - `SchemaLintTests`: the lint rules on the real schema and on nonconforming examples.
-  - `HostedSourceRulesTests`: keeps Npgsql inside `Hosted/`, and connections and transactions inside `PgDatabase`, `TenantDb` and the migrator.
+  - `HostedSourceRulesTests`: keeps Npgsql inside `Hosted/`, and connections and transactions inside `PgDatabase`, `TenantDb`, the migrator, the lease and the replica registry.
 
 ## Open Questions
 
