@@ -22,7 +22,7 @@
     />
     <ProjectReference
       Include="../Foxwarm/Foxwarm.csproj"
-      AdditionalProperties="FoxwarmConsoleEntry=false;ArtifactTargetRid=$(RuntimeIdentifier)"
+      AdditionalProperties="FoxwarmConsoleEntry=false;FoxwarmHosted=false;ArtifactTargetRid=$(RuntimeIdentifier)"
     />
   </ItemGroup>
   <!-- Keep Main's resource-relative paths beneath AppContext.BaseDirectory. The

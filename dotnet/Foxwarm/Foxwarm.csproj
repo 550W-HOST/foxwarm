@@ -63,6 +63,25 @@
       CopyToPublishDirectory="PreserveNewest"
     />
   </ItemGroup>
+  <!-- Hosted mode (PostgreSQL-backed storage). This is its only build switch: the client
+       packages, their notices and the Hosted sources are present exactly when it is on. -->
+  <PropertyGroup>
+    <FoxwarmHosted Condition="'$(FoxwarmHosted)' == ''">true</FoxwarmHosted>
+    <DefineConstants Condition="'$(FoxwarmHosted)' == 'true'">$(DefineConstants);FOXWARM_HOSTED</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(FoxwarmHosted)' == 'true'">
+    <PackageReference Include="Npgsql" Version="10.0.4" />
+    <EmbeddedResource Include="Hosted/Schema/Migrations/*.sql" LogicalName="Foxwarm.Hosted.Migrations.%(Filename)%(Extension)" />
+    <Content
+      Include="Hosted/Licenses/*.txt"
+      Link="%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+  </ItemGroup>
+  <ItemGroup Condition="'$(FoxwarmHosted)' != 'true'">
+    <Compile Remove="Hosted/**" />
+  </ItemGroup>
   <!-- Prefer an explicit target; source builds use the SDK's portable RID. -->
   <PropertyGroup>
     <MontyTargetRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</MontyTargetRid>
