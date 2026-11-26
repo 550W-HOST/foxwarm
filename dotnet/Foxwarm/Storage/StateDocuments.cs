@@ -13,6 +13,8 @@ internal enum StateDocumentName
     McpOAuth,
     Agents,
     Installation,
+    Secrets,
+    SecretExposures,
 }
 
 /// <summary>Write-stage observation for tests of the file implementation.</summary>
@@ -32,6 +34,9 @@ internal interface IStateDocument
 {
     /// <summary>Where the document lives, for diagnostics only.</summary>
     string Locator { get; }
+
+    /// <summary>Whether the document exists.</summary>
+    bool Exists();
 
     /// <summary>The current text, or null when the document doesn't exist.</summary>
     string? ReadText();
@@ -118,6 +123,20 @@ internal sealed class FileStateDocuments(string dataRoot) : IStateDocuments
                 options,
                 Absence.Exists
             ),
+            StateDocumentName.Secrets => new File(
+                root,
+                "state/secrets.json",
+                options,
+                Absence.Exists,
+                privateFile: true
+            ),
+            StateDocumentName.SecretExposures => new File(
+                root,
+                "state/secret-exposures.json",
+                options,
+                Absence.Exists,
+                privateFile: true
+            ),
             _ => throw new ArgumentOutOfRangeException(nameof(name)),
         };
 
@@ -153,6 +172,8 @@ internal sealed class FileStateDocuments(string dataRoot) : IStateDocuments
         );
 
         public string Locator => file.FilePath;
+
+        public bool Exists() => System.IO.File.Exists(file.FilePath);
 
         public string? ReadText()
         {

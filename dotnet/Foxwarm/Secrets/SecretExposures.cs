@@ -20,7 +20,7 @@ internal sealed class SecretExposures : IDisposable
     private const int MaximumLabels = 512;
     private static readonly TimeSpan PersistDelay = TimeSpan.FromSeconds(5);
 
-    private readonly string path;
+    private readonly Foxwarm.Storage.IStateDocument file;
     private readonly TimeProvider clock;
     private readonly object gate = new();
     private readonly object writeGate = new();
@@ -31,9 +31,9 @@ internal sealed class SecretExposures : IDisposable
     private bool loaded;
     private bool disposed;
 
-    internal SecretExposures(string path, TimeProvider? clock = null)
+    internal SecretExposures(Foxwarm.Storage.IStateDocument file, TimeProvider? clock = null)
     {
-        this.path = Path.GetFullPath(path);
+        this.file = file;
         this.clock = clock ?? TimeProvider.System;
     }
 
@@ -125,12 +125,7 @@ internal sealed class SecretExposures : IDisposable
                 return;
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                new AtomicJsonFile(
-                    Path.GetDirectoryName(path)!,
-                    Path.GetFileName(path),
-                    privateFile: true
-                ).WritePayload(payload);
+                file.ReplaceText(payload.ToJsonText());
                 written = version;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -155,12 +150,12 @@ internal sealed class SecretExposures : IDisposable
         if (loaded)
             return;
         loaded = true;
-        if (!File.Exists(path))
+        if (!file.Exists())
             return;
         try
         {
             if (
-                JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8))?["labels"]
+                JsonNode.Parse(file.ReadText() ?? throw new FileNotFoundException())?["labels"]
                 is not JsonObject labels
             )
                 return;

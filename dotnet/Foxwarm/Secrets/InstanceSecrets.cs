@@ -14,7 +14,10 @@ internal sealed partial class InstanceSecrets : IDisposable
     private readonly TimeProvider clock;
     private readonly List<(string Id, Func<IEnumerable<KnownSecret>> Values)> sources = new();
     private InstanceKeys? keys;
-    private readonly string dataRoot;
+    private readonly IKeyRing keyRing;
+
+    // Opens the persistent text-redaction cache with its derived key; null leaves it memory-only.
+    private readonly Func<byte[], Foxwarm.Models.ITextRedactionStore?> openTextRedaction;
     private readonly object textRedactorGate = new();
     private Foxwarm.Models.TextRedactor? textRedactor;
     private Foxwarm.Models.TextRedactionKnownLabels textRedactionKnownLabels = Foxwarm
@@ -38,15 +41,37 @@ internal sealed partial class InstanceSecrets : IDisposable
     internal SecretExposures Exposures { get; }
     internal Exception? KeyError { get; private set; }
 
-    internal InstanceSecrets(string dataRoot, TimeProvider? clock = null)
+    internal InstanceSecrets(
+        string dataRoot,
+        TimeProvider? clock = null,
+        IKeyRing? keyRing = null,
+        Foxwarm.Storage.IStateDocuments? documents = null,
+        Func<byte[], Foxwarm.Models.ITextRedactionStore?>? openTextRedaction = null
+    )
     {
         this.clock = clock ?? TimeProvider.System;
         var root = Path.GetFullPath(dataRoot);
-        this.dataRoot = root;
-        KeyPath = InstanceKeys.DefaultPath(root);
-        Store = new SecretStore(Path.Combine(root, "state", "secrets.json"), OpenKeys, this.clock);
+        this.keyRing = keyRing ?? new FileKeyRing(InstanceKeys.DefaultPath(root));
+        KeyPath = this.keyRing.Locator;
+        this.openTextRedaction =
+            openTextRedaction
+            ?? (
+                key =>
+                    Foxwarm.Models.TextRedactionStore.Open(
+                        Path.Combine(root, "state", Foxwarm.Models.TextRedactionStore.FileName),
+                        key,
+                        Foxwarm.Models.TextRedactor.DefaultKnownBytes,
+                        this.clock
+                    )
+            );
+        documents ??= new Foxwarm.Storage.FileStateDocuments(root);
+        Store = new SecretStore(
+            documents.Open(Foxwarm.Storage.StateDocumentName.Secrets),
+            OpenKeys,
+            this.clock
+        );
         Exposures = new SecretExposures(
-            Path.Combine(root, "state", "secret-exposures.json"),
+            documents.Open(Foxwarm.Storage.StateDocumentName.SecretExposures),
             this.clock
         );
         Store.Changed += Invalidate;
@@ -115,11 +140,11 @@ internal sealed partial class InstanceSecrets : IDisposable
             try
             {
                 // Never mint a replacement key for an existing store: restore the original.
-                if (!File.Exists(KeyPath) && File.Exists(Store.FilePath))
+                if (!keyRing.Exists && Store.Exists)
                     throw new SecretStoreLockedException(
                         "The secret store is locked: the instance key file is missing."
                     );
-                keys = InstanceKeys.OpenOrCreate(KeyPath);
+                keys = keyRing.OpenOrCreate();
                 KeyError = null;
                 return keys;
             }
@@ -150,12 +175,7 @@ internal sealed partial class InstanceSecrets : IDisposable
             // A request still finishing during shutdown runs without the closed store.
             var store = disposed
                 ? null
-                : Foxwarm.Models.TextRedactionStore.Open(
-                    Path.Combine(dataRoot, "state", Foxwarm.Models.TextRedactionStore.FileName),
-                    opened.Derive(InstanceKeys.TextRedactionStorePurpose, 64),
-                    Foxwarm.Models.TextRedactor.DefaultKnownBytes,
-                    clock
-                );
+                : openTextRedaction(opened.Derive(InstanceKeys.TextRedactionStorePurpose, 64));
             textRedactor = new Foxwarm.Models.TextRedactor(
                 opened.Derive(InstanceKeys.TextRedactionPlaceholderPurpose),
                 store: store,

@@ -34,31 +34,17 @@ internal sealed class RemoteExecAuthority
     private readonly Dictionary<string, Claim> claims = new(StringComparer.Ordinal);
     private readonly byte[] secret;
 
-    internal RemoteExecAuthority(string root)
+    internal RemoteExecAuthority(
+        string root,
+        Foxwarm.Storage.IInstanceCredentials? credentials = null
+    )
     {
-        var file = Path.Combine(root, "state", "node_event_capability_secret");
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        FileStream? created = null;
-        try
-        {
-            created = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        }
-        catch (IOException) when (File.Exists(file)) { }
-        if (created is not null)
-        {
-            using (created)
-            {
-                if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                var bytes = Encoding.ASCII.GetBytes(
-                    Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)) + "\n"
-                );
-                created.Write(bytes);
-                created.Flush(true);
-                DirectorySync.Sync(Path.GetDirectoryName(file)!);
-            }
-        }
-        var text = File.ReadAllText(file).Trim();
+        var text = (credentials ?? new Foxwarm.Storage.FileInstanceCredentials(root))
+            .ReadOrCreate(
+                Foxwarm.Storage.InstanceCredentialName.NodeEventCapability,
+                () => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)) + "\n"
+            )
+            .Trim();
         if (text.Length != 64 || !text.All(Uri.IsHexDigit))
             throw new InvalidDataException("Node event capability secret is malformed.");
         secret = Convert.FromHexString(text);

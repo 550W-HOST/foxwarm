@@ -48,15 +48,13 @@ internal sealed partial class ModelConfiguration
                 var values = new List<KnownSecret>();
                 if (Access.ReservedInstanceToken is { Length: > 0 } token)
                     values.Add(new KnownSecret("instance-token", token));
-                var capability = Path.Combine(
-                    Paths.DataRoot,
-                    "state",
-                    "node_event_capability_secret"
-                );
-                if (File.Exists(capability))
-                    values.Add(
-                        new KnownSecret("node-event-secret", File.ReadAllText(capability).Trim())
-                    );
+                if (
+                    new Foxwarm.Storage.FileInstanceCredentials(Paths.DataRoot).Read(
+                        Foxwarm.Storage.InstanceCredentialName.NodeEventCapability
+                    )
+                    is { } capability
+                )
+                    values.Add(new KnownSecret("node-event-secret", capability.Trim()));
                 return values;
             }
         );

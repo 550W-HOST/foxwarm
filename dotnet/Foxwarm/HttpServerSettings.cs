@@ -33,7 +33,8 @@ internal sealed record HttpServerSettings(
 
     internal static async Task<HttpServerSettings> CaptureAsync(
         ModelConfiguration configuration,
-        string dataRoot
+        string dataRoot,
+        Foxwarm.Storage.IInstanceCredentials? credentials = null
     )
     {
         var value = configuration.AppConfiguration["bot"]?["httpPort"];
@@ -59,7 +60,7 @@ internal sealed record HttpServerSettings(
             || configuration.Access.Snapshot.Values.Any(identity =>
                 identity.Mcp || identity.Webhook is not null
             );
-        var token = http ? await LoadOrCreateTokenAsync(dataRoot) : "";
+        var token = http ? await LoadOrCreateTokenAsync(dataRoot, credentials) : "";
         if (http && string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
         return new(
@@ -107,9 +108,12 @@ internal sealed record HttpServerSettings(
 
     // Desktop deliberately ignores the server bind/port/public URL settings. Kestrel
     // owns the listener; its actual bound address is published after start.
-    internal static async Task<HttpServerSettings> CaptureDesktopAsync(string dataRoot)
+    internal static async Task<HttpServerSettings> CaptureDesktopAsync(
+        string dataRoot,
+        Foxwarm.Storage.IInstanceCredentials? credentials = null
+    )
     {
-        var token = await LoadOrCreateTokenAsync(dataRoot);
+        var token = await LoadOrCreateTokenAsync(dataRoot, credentials);
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
         var portPath = Path.Combine(dataRoot, "state", "desktop-port");
@@ -129,39 +133,31 @@ internal sealed record HttpServerSettings(
         );
     }
 
-    internal static async Task<string?> ReadExistingTokenAsync(string dataRoot)
-    {
-        var path = Path.Combine(dataRoot, "state", "token");
-        try
-        {
-            return SessionGoal.Trim(
-                new UTF8Encoding(false, true).GetString(await File.ReadAllBytesAsync(path))
-            );
-        }
-        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
-    }
+    internal static Task<string?> ReadExistingTokenAsync(
+        string dataRoot,
+        Foxwarm.Storage.IInstanceCredentials? credentials = null
+    ) =>
+        Task.FromResult(
+            (credentials ?? new Foxwarm.Storage.FileInstanceCredentials(dataRoot)).Read(
+                Foxwarm.Storage.InstanceCredentialName.HttpToken
+            )
+                is { } text
+                ? SessionGoal.Trim(text)
+                : null
+        );
 
-    private static async Task<string> LoadOrCreateTokenAsync(string dataRoot)
-    {
-        if (await ReadExistingTokenAsync(dataRoot) is { } existing)
-            return existing;
-        var path = Path.Combine(dataRoot, "state", "token");
-        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var options = new FileStreamOptions
-        {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.Write,
-        };
-        if (!OperatingSystem.IsWindows())
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        await using var stream = new FileStream(path, options);
-        await stream.WriteAsync(Encoding.UTF8.GetBytes(token));
-        return token;
-    }
+    private static Task<string> LoadOrCreateTokenAsync(
+        string dataRoot,
+        Foxwarm.Storage.IInstanceCredentials? credentials
+    ) =>
+        Task.FromResult(
+            SessionGoal.Trim(
+                (credentials ?? new Foxwarm.Storage.FileInstanceCredentials(dataRoot)).ReadOrCreate(
+                    Foxwarm.Storage.InstanceCredentialName.HttpToken,
+                    () => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()
+                )
+            )
+        );
 }
 
 internal sealed record PublicWebAddress(

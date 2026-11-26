@@ -38,7 +38,7 @@ internal sealed partial class SecretStore
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
     internal static partial Regex NamePattern();
 
-    private readonly string path;
+    private readonly Foxwarm.Storage.IStateDocument file;
     private readonly Func<InstanceKeys> keys;
     private readonly TimeProvider clock;
     private readonly object gate = new();
@@ -50,14 +50,20 @@ internal sealed partial class SecretStore
     private readonly Dictionary<string, string> plaintext = new(StringComparer.Ordinal);
     private long generation = 1;
 
-    internal SecretStore(string path, Func<InstanceKeys> keys, TimeProvider? clock = null)
+    internal SecretStore(
+        Foxwarm.Storage.IStateDocument file,
+        Func<InstanceKeys> keys,
+        TimeProvider? clock = null
+    )
     {
-        this.path = Path.GetFullPath(path);
+        this.file = file;
         this.keys = keys;
         this.clock = clock ?? TimeProvider.System;
     }
 
-    internal string FilePath => path;
+    internal string FilePath => file.Locator;
+
+    internal bool Exists => file.Exists();
 
     // Changes on every value or metadata change; consumers re-resolve when it moves.
     internal long Generation => Interlocked.Read(ref generation);
@@ -394,7 +400,7 @@ internal sealed partial class SecretStore
         try
         {
             loaded =
-                JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8)) as JsonObject
+                JsonNode.Parse(file.ReadText() ?? throw new FileNotFoundException()) as JsonObject
                 ?? throw new InvalidDataException();
         }
         catch (Exception error)
@@ -434,12 +440,12 @@ internal sealed partial class SecretStore
         if (document is not null)
             return document;
         JsonObject loaded;
-        if (File.Exists(path))
+        if (file.Exists())
             loaded = Read();
         else
             loaded = new JsonObject { ["version"] = 1, ["entries"] = new JsonObject() };
         document = loaded;
-        if (Prune(loaded, Now()) && File.Exists(path))
+        if (Prune(loaded, Now()) && file.Exists())
         {
             // Expired retired values are removed from disk at the next opportunity.
             try
@@ -499,11 +505,7 @@ internal sealed partial class SecretStore
     {
         if (next["keyId"] is null)
             next["keyId"] = EnsureKey().Id;
-        new AtomicJsonFile(
-            Path.GetDirectoryName(path)!,
-            Path.GetFileName(path),
-            privateFile: true
-        ).WritePayload(next);
+        file.ReplaceText(next.ToJsonText());
     }
 
     private (byte[] Key, string Id) EnsureKey()

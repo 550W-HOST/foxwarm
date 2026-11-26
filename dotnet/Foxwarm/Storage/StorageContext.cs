@@ -17,6 +17,7 @@ internal interface IStorageContext
     Foxwarm.Models.ILlmJournalStore Journal { get; }
     Foxwarm.ToolScript.IToolScriptRunStore ToolScriptRuns { get; }
     IStateDocuments Documents { get; }
+    IInstanceCredentials Credentials { get; }
 }
 
 /// <summary>Construction seams of the file stores, used only by tests.</summary>
@@ -38,6 +39,7 @@ internal sealed class FileStorageContext : IStorageContext
         Journal = new Foxwarm.Models.LlmRequestJournalStore(DataRoot);
         ToolScriptRuns = new Foxwarm.ToolScript.ToolScriptRunStore(DataRoot);
         Documents = new FileStateDocuments(DataRoot);
+        Credentials = new FileInstanceCredentials(DataRoot);
         Authority = new FileSessionAuthorityBackend(
             DataRoot,
             options?.AuthorityStageHook,
@@ -62,4 +64,6 @@ internal sealed class FileStorageContext : IStorageContext
     public Foxwarm.ToolScript.IToolScriptRunStore ToolScriptRuns { get; }
 
     public IStateDocuments Documents { get; }
+
+    public IInstanceCredentials Credentials { get; }
 }

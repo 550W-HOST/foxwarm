@@ -5,6 +5,31 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Secrets;
 
+/// <summary>
+/// Where the installation master key is kept. A key is created at most once: once it
+/// exists it is always read back, and a malformed or unreadable key is an error, never a
+/// reason to create another. The file implementation is <see cref="FileKeyRing"/>.
+/// </summary>
+internal interface IKeyRing
+{
+    /// <summary>Where the key lives, for diagnostics only.</summary>
+    string Locator { get; }
+
+    bool Exists { get; }
+
+    InstanceKeys OpenOrCreate();
+}
+
+/// <summary>The key file <c>keys/secrets.key</c> beside <c>state/</c>.</summary>
+internal sealed class FileKeyRing(string path) : IKeyRing
+{
+    public string Locator { get; } = Path.GetFullPath(path);
+
+    public bool Exists => File.Exists(Locator);
+
+    public InstanceKeys OpenOrCreate() => InstanceKeys.OpenOrCreate(Locator);
+}
+
 // One installation master key outside state/. Features never use it directly: each
 // derives an independent key from its purpose label, so a new consumer cannot weaken
 // an existing one and copies of state/ alone do not carry decryptable secrets.

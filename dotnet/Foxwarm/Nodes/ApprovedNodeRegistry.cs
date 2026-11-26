@@ -20,22 +20,20 @@ internal sealed partial class ApprovedNodeRegistry
     internal event Action<string>? Expired;
     internal static long Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    internal ApprovedNodeRegistry(string root, Foxwarm.Storage.IStateDocuments? documents = null)
+    internal ApprovedNodeRegistry(
+        string root,
+        Foxwarm.Storage.IStateDocuments? documents = null,
+        Foxwarm.Storage.IInstanceCredentials? credentials = null
+    )
     {
         file = (documents ?? new Foxwarm.Storage.FileStateDocuments(root)).Open(
             Foxwarm.Storage.StateDocumentName.Nodes,
             new(stage => WriteStage?.Invoke(stage))
         );
         data = Load();
-        var tokenPath = Path.Combine(root, "state", "node_token");
-        Directory.CreateDirectory(Path.GetDirectoryName(tokenPath)!);
-        if (!File.Exists(tokenPath))
-        {
-            File.WriteAllText(tokenPath, Token());
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(tokenPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        PairingToken = File.ReadAllText(tokenPath, new UTF8Encoding(false, true)).Trim();
+        PairingToken = (credentials ?? new Foxwarm.Storage.FileInstanceCredentials(root))
+            .ReadOrCreate(Foxwarm.Storage.InstanceCredentialName.NodePairingToken, Token)
+            .Trim();
         if (PairingToken.Length == 0)
             throw new InvalidDataException("Node pairing token is empty.");
         Cleanup();

@@ -49,10 +49,14 @@ internal sealed partial class NodeConnectionHub : IDisposable
         Action<JsonNode?>? PathMetadata
     );
 
-    internal NodeConnectionHub(string root, Foxwarm.Storage.IStateDocuments? documents = null)
+    internal NodeConnectionHub(
+        string root,
+        Foxwarm.Storage.IStateDocuments? documents = null,
+        Foxwarm.Storage.IInstanceCredentials? credentials = null
+    )
     {
-        Registry = new(root, documents);
-        ExecClaims = new(root);
+        Registry = new(root, documents, credentials);
+        ExecClaims = new(root, credentials);
         ExternalExec = new(ExecClaims);
         Registry.Expired += id => RejectSocket(id, "Pairing request expired after 1 hour");
         expiry = new Timer(

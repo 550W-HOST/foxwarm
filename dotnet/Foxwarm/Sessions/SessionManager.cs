@@ -95,7 +95,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
         RecallTargets = new(this.root);
-        Nodes = new(this.root, Storage.Documents);
+        Nodes = new(this.root, Storage.Documents, Storage.Credentials);
         Nodes.Registry.ConfigureLimits(() =>
             (
                 (int)(
