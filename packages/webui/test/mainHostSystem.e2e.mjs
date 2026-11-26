@@ -46,7 +46,8 @@ try {
 
   await page.click('[data-system-tab="agents"]')
   await page.waitForSelector('[data-architecture-agent-id="main"]')
-  assert.match(await page.$eval('[data-system-summary="agents"]', element => element.textContent), /\d+ agents/)
+  // Only main exists: the count reads in the singular.
+  assert.equal(await page.$eval('[data-system-summary="agents"]', element => element.textContent), '1 agent')
   assert.equal((await state(page)).workbench.tabsById['system:agents'].section, 'agents')
   await shot(page, 'system-agents.png')
 

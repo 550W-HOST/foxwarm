@@ -59,8 +59,11 @@ export function AgentRegistryCard({ agent, usage, selected, onSelect }: { agent:
             <p className="mt-0.5 truncate text-[11px] text-fw-text-muted">{agent.inherit ? `inherits ${agent.inherit}` : 'independent memory'}</p>
           </div>
         </div>
-        <UsagePie usage={usage?.count ? usage : undefined} loaded />
-        {agentPolicyBadge(agent)}
+        {/* The usage circle stays at the right edge whether or not a policy badge is shown. */}
+        <div className="flex shrink-0 items-center gap-2" data-agent-card-status>
+          {agentPolicyBadge(agent)}
+          <UsagePie usage={usage?.count ? usage : undefined} loaded />
+        </div>
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
         <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.sessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">sessions</div></div>

@@ -352,6 +352,7 @@ export default function SystemView({
     totalOutputTokens: globalSummary.outputTokens,
     cost: globalSummary.cost,
   }
+  const agentCount = agentRegistry.length || summary.agentCount
 
   const visibleSessions = useMemo(
     () => filterArchitectureSessions(sessions, statusFilter, searchQuery, { nodeId: nodeFilter, model: modelFilter })
@@ -577,8 +578,7 @@ export default function SystemView({
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <main className="min-w-0">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
-            <div><h2 className="text-sm font-semibold text-fw-text-strong">Agent registry</h2><p className="mt-0.5 text-xs text-fw-text-muted">Manage persistent workspace owners and open self-owned memory in Code.</p></div>
-            <div className="flex items-center gap-2"><span className="text-xs text-fw-text-muted" data-system-summary="agents">{agentRegistry.length || summary.agentCount} agents</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
+            <div className="flex items-center gap-2"><span className="text-xs text-fw-text-muted" data-system-summary="agents">{agentCount} agent{agentCount === 1 ? '' : 's'}</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
           </div>
           {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger">{agentRegistryError}</div> : null}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

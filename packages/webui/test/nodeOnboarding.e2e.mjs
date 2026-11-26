@@ -122,7 +122,11 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   }
   assert.ok(Math.max(...positions) - Math.min(...positions) < 1, 'the section switch retains its horizontal position')
   await page.waitForSelector('[data-node-surface]')
-  await page.waitForFunction(() => document.body.innerText.includes('1 pending approvals'))
+  const pendingCount = () => page.$eval('[data-node-pending-count]', element => element.textContent).catch(() => '')
+  await until(async () => await pendingCount() === '1 pending approval', 'one pending approval reads in the singular')
+  // A pending pairing is not a Node yet: neither a card nor counted as online.
+  assert.equal(await page.$eval('[data-system-summary="nodes"]', element => element.textContent), 'Online 1 · Total 2')
+  assert.equal(await page.$$eval('[data-system-node-id]', cards => cards.length), 2)
   const nodeText = await page.$eval('[data-node-surface]', element => element.textContent)
   assert.ok(nodeText.includes('master') && nodeText.includes('offline-example') && nodeText.includes('Offline'))
   assert.equal(await page.$('input[aria-label="Search sessions, models, tools"]'), null)
@@ -158,10 +162,10 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   await screenshot('new-nodes-literal-path.png')
   const readCount = commandReadCount()
   const second = await registry.createPendingPairing('synthetic-second-laptop')
-  await page.waitForFunction(() => document.body.innerText.includes('2 pending approvals'), { timeout: 8000 })
+  await until(async () => await pendingCount() === '2 pending approvals', 'two pending approvals read in the plural', 8000)
   assert.equal(commandReadCount(), readCount, 'pending refresh does not reload pairing credentials')
   await click('Approve')
-  await page.waitForFunction(() => document.body.innerText.includes('1 pending approvals'))
+  await until(async () => await pendingCount() === '1 pending approval', 'approval leaves one pending approval')
   assert.equal((await registry.listApprovedNodes()).length, 2)
   // Stop the remaining client first so it cannot request pairing again after rejection.
   second.kill('SIGKILL'); await once(second, 'exit')

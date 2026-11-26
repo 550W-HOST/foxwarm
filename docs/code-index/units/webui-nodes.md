@@ -9,7 +9,7 @@ Owns the Nodes section of the [System page](./webui-system-view.md): connected N
 
 ## Exports and function index
 
-- `SystemNodes` — Node cards, Online/Total summary, pending approval count and the New nodes action.
+- `SystemNodes` — Node cards, Online/Total summary, pending approval count ("1 pending approval", "N pending approvals") and the New nodes action. Online/Total count only the `/nodes` directory; a pending pairing is not a Node until approved and appears only in the pending count (`nodeOnboarding.e2e.mjs`).
 - `NodeOverviewCard` — directory identity, type, online/protocol state, recent activity, service versions and the Sessions placed on the Node.
 - `NodeActionsModal` — native modal dialog for editable existing launch commands, explicit one-time token reissue and descendant-aware deletion; owns abortable requests and secret lifetime.
 - `useNodeDirectory` — directory-only initial read and visibility-aware 30-second refresh, with cancellation and request-identity publication fencing. System owns one instance and passes Node identities to the Nodes section, Session filters, the inspector and Agent isolation choices. The composer [Node picker](./webui-chat-composer.md#d-composer-session-node-picker) owns another, enabled only for a remote current Node; `enabled: false` performs no reads, and `loaded` reports whether any read has succeeded.
