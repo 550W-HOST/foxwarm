@@ -42,7 +42,14 @@ public sealed class SessionControl
             return new(count, false, false);
         }
         entry.RevokeExternalRun?.Invoke();
-        var handle = entry.BeginStop(runQueued: true);
+        var handle = entry.BeginStop(runQueued: true, out var idle);
+        if (idle)
+        {
+            // The turn ended after the snapshot above; run the queue as for an idle Session.
+            await entry.SaveLane.ClearWaitAsync().ConfigureAwait(false);
+            registry.Trigger(sessionId);
+            return new(count, false, false);
+        }
         if (handle is not null)
         {
             handle.Cancel();

@@ -304,6 +304,9 @@ internal sealed partial class SessionCompactor
                 entry.NotifyProcessorReleased();
                 run.PipelineDone.TrySetResult();
                 await FinishAsync(run);
+                // A Stop that found this claim but no turn: a turn processor finalizes it.
+                if (entry.HasUnobservedStop)
+                    _ = hosted.StartProcessing();
             }
         }
     }
