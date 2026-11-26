@@ -15,35 +15,50 @@ internal sealed record HostedBootstrap(
     string? DatabaseUrl,
     string? MigrateDatabaseUrl,
     string Tenant,
-    string AppRole
+    string AppRole,
+    string? ReplicaName = null,
+    string? AdvertiseAddress = null,
+    int HealthPort = HostedBootstrap.DefaultHealthPort,
+    string? ScratchRoot = null
 )
 {
-    internal const string ModeVariable = "FOXWARM_MODE";
     internal const string DefaultTenant = "default";
     internal const string DefaultAppRole = "foxwarm_app";
+    internal const int DefaultHealthPort = 3081;
 
-    /// <summary>Whether the process environment selects hosted mode.</summary>
-    internal static bool Selected(IDictionary? environment = null)
-    {
-        var mode = Read(environment ?? Environment.GetEnvironmentVariables(), ModeVariable);
-        return mode switch
-        {
-            null or "" or "file" => false,
-            "hosted" => true,
-            _ => throw new HostedBootstrapException(
-                $"{ModeVariable} must be `file` or `hosted`, not `{mode}`."
-            ),
-        };
-    }
+    /// <summary>The replica's ephemeral local directory; never tenant state.</summary>
+    internal string RequireScratchRoot() =>
+        Path.GetFullPath(ScratchRoot ?? Path.Combine(Path.GetTempPath(), "foxwarm-replica"));
 
     internal static HostedBootstrap FromEnvironment(IDictionary? environment = null)
     {
         environment ??= Environment.GetEnvironmentVariables();
+        var advertise = Read(environment, "FOXWARM_ADVERTISE_ADDRESS");
+        if (!string.IsNullOrEmpty(advertise))
+            try
+            {
+                StandbyForwarder.ParseAddress(advertise);
+            }
+            catch (FormatException error)
+            {
+                throw new HostedBootstrapException("FOXWARM_ADVERTISE_ADDRESS: " + error.Message);
+            }
+        var healthPort = Read(environment, "FOXWARM_HEALTH_PORT") is { Length: > 0 } port
+            ? int.TryParse(port, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number)
+                && number is >= 1 and <= 65535
+                ? number
+                : throw new HostedBootstrapException("FOXWARM_HEALTH_PORT must be a port number.")
+            : DefaultHealthPort;
+        var replica = Read(environment, "FOXWARM_REPLICA_ID");
         return new(
             Secret(environment, "FOXWARM_DATABASE_URL"),
             Secret(environment, "FOXWARM_MIGRATE_DATABASE_URL"),
             Name(environment, "FOXWARM_TENANT", DefaultTenant),
-            Name(environment, "FOXWARM_APP_ROLE", DefaultAppRole)
+            Name(environment, "FOXWARM_APP_ROLE", DefaultAppRole),
+            string.IsNullOrEmpty(replica) ? null : Name(environment, "FOXWARM_REPLICA_ID", ""),
+            string.IsNullOrEmpty(advertise) ? null : advertise,
+            healthPort,
+            Read(environment, "FOXWARM_SCRATCH_DIR") is { Length: > 0 } scratch ? scratch : null
         );
     }
 

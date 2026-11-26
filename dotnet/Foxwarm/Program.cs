@@ -63,6 +63,25 @@ if (args.Contains("--tui", StringComparer.Ordinal))
     Environment.ExitCode = 2;
     return;
 }
+// FOXWARM_MODE selects the deployment shape: file mode (the default) or hosted mode.
+switch (Environment.GetEnvironmentVariable("FOXWARM_MODE"))
+{
+    case null or "" or "file":
+        break;
+    case "hosted":
+#if FOXWARM_HOSTED
+        Environment.ExitCode = await Foxwarm.Hosted.HostedEntry.RunAsync();
+#else
+        Console.Error.WriteLine("This build of Foxwarm doesn't include hosted mode.");
+        Environment.ExitCode = 2;
+#endif
+        return;
+    case var mode:
+        Console.Error.WriteLine($"FOXWARM_MODE must be `file` or `hosted`, not `{mode}`.");
+        Environment.ExitCode = 2;
+        return;
+}
+
 try
 {
     var background = args.Contains("--windows-background", StringComparer.Ordinal);

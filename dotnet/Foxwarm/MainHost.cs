@@ -93,7 +93,8 @@ internal sealed class MainHost : IAsyncDisposable
         ModelConfiguration configuration,
         HttpServerSettings http,
         string? distRoot = null,
-        bool captureDiagnostics = false
+        bool captureDiagnostics = false,
+        Foxwarm.Storage.IStorageContext? storage = null
     ) =>
         CreateAsync(
             args,
@@ -103,7 +104,8 @@ internal sealed class MainHost : IAsyncDisposable
             http,
             distRoot,
             configuration.Paths,
-            captureDiagnostics: captureDiagnostics
+            captureDiagnostics: captureDiagnostics,
+            storage: storage
         );
 
     internal static async Task<MainHost> CreateAsync(
@@ -115,7 +117,9 @@ internal sealed class MainHost : IAsyncDisposable
         string? distRoot,
         HostPaths? paths = null,
         Foxwarm.Channels.ChannelTransportDependencies? channelDependencies = null,
-        bool captureDiagnostics = false
+        bool captureDiagnostics = false,
+        // The runtime's stores; null builds today's file stores under dataRoot.
+        Foxwarm.Storage.IStorageContext? storage = null
     )
     {
         if (http.HttpEnabled)
@@ -139,7 +143,8 @@ internal sealed class MainHost : IAsyncDisposable
                 options,
                 configuration.Models,
                 paths?.SkillsRoot,
-                paths
+                paths,
+                storage: storage
             );
         }
         catch (Exception error)
