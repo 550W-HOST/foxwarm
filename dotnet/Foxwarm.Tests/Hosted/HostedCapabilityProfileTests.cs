@@ -307,6 +307,22 @@ public sealed class HostedCapabilityProfileTests
             "resident",
             await PlacedAsync("resident", manager => manager.Nodes.Registry.Create("resident"))
         );
+        // The prompt's A1 instruction: a Node-less Session lists Nodes and selects a listed one. A
+        // Provider Node that the Provider doesn't list is refused as in file mode; it is created
+        // with the Provider's lifecycle first.
+        await using (var selecting = await Fixture.Create(RuntimeCapabilities.Hosted))
+        {
+            var listed = await selecting.Ctl("node list");
+            Succeeded(listed);
+            Assert.Contains($"\"{Fixture.Provider}/target\"", listed.ToJsonString());
+            Succeeded(await selecting.Ctl($"node select {Fixture.Provider}/target"));
+            Assert.Equal(Fixture.Provider + "/target", selecting.Manager.CurrentNode(selecting.Owner));
+            var status = await selecting.Call("node", new JsonObject { ["action"] = "status" });
+            Assert.Equal(Fixture.Provider + "/target", SessionWait.Text(status["currentNode"]));
+            Assert.Contains("not admitted", Error(await selecting.Ctl($"node select {Fixture.Provider}/box")) ?? "");
+        }
+        await using (var fileSelecting = await Fixture.Create(RuntimeCapabilities.File))
+            Assert.Contains("not admitted", Error(await fileSelecting.Ctl($"node select {Fixture.Provider}/box")) ?? "");
         // File mode keeps today's placement: master, and any named default as given.
         await using var file = await Fixture.Create(RuntimeCapabilities.File, "missing-node");
         Assert.Equal(

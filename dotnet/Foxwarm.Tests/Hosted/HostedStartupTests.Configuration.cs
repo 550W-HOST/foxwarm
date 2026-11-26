@@ -33,7 +33,12 @@ public sealed partial class HostedStartupTests
             new(null, null, PostgresServer.Tenant, PostgresServer.AppRole, ScratchRoot: Scratch, KekFile: Kek, AgentsRoot: Agents);
     }
 
-    private static Replica StartHosted(PgDatabase database, HostedFiles files, Action<IStorageContext>? built = null)
+    private static Replica StartHosted(
+        PgDatabase database,
+        HostedFiles files,
+        Action<IStorageContext>? built = null,
+        string? fileStores = null
+    )
     {
         Replica? replica = null;
         replica = Start(
@@ -48,7 +53,7 @@ public sealed partial class HostedStartupTests
                     $"bot: {{httpHost: 127.0.0.1, httpPort: {replica.PublicPort}}}\nhealth: {{port: 3081}}\n"
                 );
                 var tenant = new PostgresStorageContext(context.Database, files.Scratch);
-                var storage = HostedTestBackend.Compose(tenant, files.Scratch);
+                var storage = HostedTestBackend.Compose(tenant, fileStores ?? files.Scratch);
                 built?.Invoke(storage);
                 var runtime = await HostedEntry.BuildRuntimeAsync(tenant, storage, files.Bootstrap, deployment);
                 replica.Runtimes.Add(runtime);

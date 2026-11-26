@@ -18,11 +18,11 @@ The filtered text is prompt input; this unit does not write Session authority or
 ## Grammar
 
 - Wrappers occupy complete lines with optional surrounding spaces or tabs, outside fenced Markdown, and are not nested. The opening wrapper is `<foxwarm-if` followed by one or more ` name="value"` attributes, each separated by exactly one space, then `>`. The closing wrapper is `</foxwarm-if>`.
-- Supported attributes are `model-id` (matched against the concrete model identity) and `runtime` (`foxwarm` or `claude-code`). Each may appear once. A block is kept only when every attribute matches.
+- Supported attributes are `model-id` (matched against the concrete model identity), `runtime` (`foxwarm` or `claude-code`) and `master-node` (`true` or `false`: whether the runtime has a master Node, [capability profile](./hosted-capabilities.md#d-capability-profile)). Each may appear once. A block is kept only when every attribute matches.
 - An attribute value is a space-separated list of patterns. Only `*` is a wildcard; matching is case-sensitive and anchored. The value matches when at least one positive pattern matches (or there are no positive patterns) and no `!`-prefixed pattern matches. An empty value is the single empty pattern.
 - Unknown or repeated attributes, single quotes, irregular spacing, and malformed, orphaned, unclosed or nested markup remain literal text. A matching pair keeps only its body; a nonmatching pair removes wrapper and body.
 
-Runtime is fixed when a Session is created, and external-runtime snapshots are built separately without a model marker, so the runtime condition does not change snapshot identity or reuse. A Claude Code snapshot uses the CLI-reported model name (empty before the first run), not a Foxwarm configuration key; Claude Code blocks should therefore select `runtime="claude-code"`.
+The capability profile is fixed for the process, so `master-node` never changes a running installation's snapshots; the bundled framework prompt uses it for the hosted copy. Runtime is fixed when a Session is created, and external-runtime snapshots are built separately without a model marker, so the runtime condition does not change snapshot identity or reuse. A Claude Code snapshot uses the CLI-reported model name (empty before the first run), not a Foxwarm configuration key; Claude Code blocks should therefore select `runtime="claude-code"`.
 
 ## Design Decisions
 
