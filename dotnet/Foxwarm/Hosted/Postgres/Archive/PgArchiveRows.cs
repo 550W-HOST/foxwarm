@@ -151,6 +151,37 @@ internal static partial class PgArchiveRows
         return true;
     }
 
+    /// <summary>Whether none of the given rows is stored exactly; the Verify check of a rollback.</summary>
+    internal static bool Absent(
+        PgTx tx,
+        string sessionId,
+        IReadOnlyList<ArchiveMessageRecord> messages,
+        IReadOnlyList<PreparedArchiveBlock> blocks
+    )
+    {
+        if (messages.Count > 0)
+        {
+            using var command = tx.Command(
+                "SELECT count(*) FROM archive_messages m JOIN unnest($2::bigint[], $3::text[], $4::float8[], $5::text[], $6::text[])"
+                    + " AS r(seq, agent, ts, role, json) ON m.session_id = $1 AND m.seq = r.seq AND m.agent = r.agent"
+                    + " AND m.timestamp = r.ts AND m.role = r.role AND m.message_json = r.json",
+                [sessionId, .. MessageKeys(messages)]
+            );
+            if ((long)command.ExecuteScalar()! != 0)
+                return false;
+        }
+        foreach (var block in blocks)
+        {
+            using var command = tx.Command(
+                "SELECT 1 FROM archive_blocks WHERE session_id = $1 AND " + BlockMatch,
+                [sessionId, .. BlockValues(block)]
+            );
+            if (command.ExecuteScalar() is not null)
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>
     /// Removes exactly the rows of <paramref name="messages"/>; any row that isn't stored
     /// exactly as given throws <see cref="InvalidDataException"/> and removes nothing.

@@ -82,7 +82,18 @@ internal static class HostedTestBackend
     private sealed class MixedStorageContext(PostgresStorageContext hosted, FileStorageContext file)
         : IStorageContext
     {
-        private readonly HashSet<string> missing = [.. hosted.Missing];
+        // Authority, Archive and the identity ledger are one group: the file Authority writes
+        // the SQLite Archive directly and a move rewrites all three, so they come from one side.
+        private static readonly string[] SessionGroup = ["Authority", "Archive", "Identities"];
+        private readonly HashSet<string> missing = Missing(hosted);
+
+        private static HashSet<string> Missing(PostgresStorageContext hosted)
+        {
+            var missing = new HashSet<string>(hosted.Missing);
+            if (SessionGroup.Any(missing.Contains))
+                missing.UnionWith(SessionGroup);
+            return missing;
+        }
 
         private T Pick<T>(Func<IStorageContext, T> store, [CallerMemberName] string name = "") =>
             store(missing.Contains(name) ? file : hosted);
