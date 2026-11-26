@@ -199,6 +199,15 @@ internal sealed partial class TextRedactor
                 kind: TextRedactionFailureKind.Timeout
             );
         }
+        catch (HttpRequestException error)
+            when (Foxwarm.Net.EgressFailure.Reason(error) is { } reason)
+        {
+            throw new TextRedactionException(
+                "Text detection connection failed; no model request was sent. " + reason,
+                Foxwarm.Net.EgressDeniedException.Find(error) is null,
+                kind: TextRedactionFailureKind.Connection
+            );
+        }
         catch (HttpRequestException)
         {
             throw new TextRedactionException(

@@ -199,6 +199,9 @@ internal sealed class ModelRequestOwner(
         Task manifestCompletion = Task.CompletedTask;
         var interaction = diagnostics?.Begin(journalIteration);
         bool? redactionRequired = null;
+        // Targets this request's egress policy refused: never retried, not counted against
+        // their route health, passed over like ineligible ones.
+        var refused = new HashSet<string>(StringComparer.Ordinal);
         try
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
@@ -223,7 +226,10 @@ internal sealed class ModelRequestOwner(
                     journalAttempt = 0;
                 }
                 if (explicitSelectionChanged)
+                {
                     redactionRequired = null;
+                    refused.Clear();
+                }
                 // Route health is shared by every Session. When a failover route's primary
                 // target redacts, every request on it admits only redacting targets from its
                 // first attempt, so a cooling primary never starts a request on a plain one.
@@ -234,8 +240,12 @@ internal sealed class ModelRequestOwner(
                 )
                     redactionRequired = true;
                 var redactingCatalog = catalog;
-                Func<string, bool>? eligible =
+                Func<string, bool>? redacting =
                     redactionRequired == true ? target => Redacts(redactingCatalog, target) : null;
+                Func<string, bool>? eligible =
+                    refused.Count == 0
+                        ? redacting
+                        : target => !refused.Contains(target) && redacting?.Invoke(target) != false;
                 var selection = request is null
                     ? null
                     : routing.Select(request, cacheKey, eligible);
@@ -622,6 +632,11 @@ internal sealed class ModelRequestOwner(
                             true,
                             true
                         ),
+                        // A blocked address stays blocked: no retry, and the reason is kept.
+                        _ when Foxwarm.Net.EgressDeniedException.Find(error) is { } denied =>
+                            ModelAttemptFailure.Refused(denied),
+                        _ when Foxwarm.Net.EgressCertificateException.Find(error) is { } chain =>
+                            new ModelAttemptFailure(chain.Message, "request-error", true, true),
                         _ => new ModelAttemptFailure(error.Message, "request-error", true, true),
                     };
                     if (
@@ -689,8 +704,24 @@ internal sealed class ModelRequestOwner(
                         || routing.Select(request!, cacheKey, eligible).TargetKey
                             != selection!.TargetKey
                     );
+                // A refused target is final for this request; a failover route moves on to
+                // another eligible target without waiting.
+                if (failure.PolicyRefusal)
+                {
+                    refused.Add(leaf.Key);
+                    failsOver =
+                        request is not null
+                        && routing.Select(
+                            request,
+                            cacheKey,
+                            target => !refused.Contains(target) && redacting?.Invoke(target) != false
+                        ) is { } alternative
+                        && !refused.Contains(alternative.TargetKey)
+                        && redacting?.Invoke(alternative.TargetKey) != false;
+                }
                 var final =
-                    !failure.Retryable
+                    failure.PolicyRefusal ? !failsOver || attempt == maxAttempts
+                    : !failure.Retryable
                     || terminalTarget
                     || attempt == maxAttempts
                     || cause is not null && !failsOver;
@@ -701,7 +732,7 @@ internal sealed class ModelRequestOwner(
                 var explanation = cause is null
                     ? null
                     : ModelAttemptFailure.ConfigurationExplanation(cause, leaf);
-                var retryDelay = final
+                var retryDelay = final || failure.PolicyRefusal
                     ? 0
                     : RetryDelay(
                         attempt,

@@ -29,6 +29,18 @@ internal sealed class ModelAttemptFailure(
     /// </summary>
     internal string? Cause { get; } = cause;
 
+    /// <summary>
+    /// The egress policy refused the target's address: repeating it can't succeed and says
+    /// nothing about the provider, so it isn't retried or counted.
+    /// </summary>
+    internal bool PolicyRefusal { get; private init; }
+
+    internal static ModelAttemptFailure Refused(Exception denied, string? prefix = null) =>
+        new((prefix is null ? "" : prefix + " ") + denied.Message, "request-error", false, false, null, denied)
+        {
+            PolicyRefusal = true,
+        };
+
     internal static ModelAttemptFailure Empty() =>
         new("Selected model disallows an empty completed response.", "response-error", true, true);
 

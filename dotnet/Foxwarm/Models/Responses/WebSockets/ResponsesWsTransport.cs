@@ -327,6 +327,18 @@ internal sealed class ResponsesWsTransport(
                         .ConfigureAwait(false);
                 }
                 catch (Exception error)
+                    when (
+                        !caller.IsCancellationRequested
+                        && !deadline.IsCancellationRequested
+                        && Foxwarm.Net.EgressDeniedException.Find(error) is { } denied
+                    )
+                {
+                    throw ModelAttemptFailure.Refused(
+                        denied,
+                        "OpenAI Responses WebSocket handshake failed."
+                    );
+                }
+                catch (Exception error)
                     when (!caller.IsCancellationRequested && !deadline.IsCancellationRequested)
                 {
                     throw new ModelAttemptFailure(
@@ -335,6 +347,11 @@ internal sealed class ResponsesWsTransport(
                                 socket.HttpStatusCode != 0
                                     ? " (HTTP " + (int)socket.HttpStatusCode + ")."
                                     : "."
+                            )
+                            + (
+                                Foxwarm.Net.EgressCertificateException.Find(error) is { } chain
+                                    ? " " + chain.Message
+                                    : ""
                             ),
                         "request-error",
                         true,

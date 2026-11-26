@@ -58,7 +58,10 @@ internal sealed partial class MatrixChannel
                 }
                 catch (Exception error) when (!stopping.IsCancellationRequested)
                 {
-                    if (error is MatrixApiException { Code: "M_UNKNOWN_TOKEN" })
+                    if (
+                        error is MatrixApiException { Code: "M_UNKNOWN_TOKEN" }
+                        || ChannelFailure.Refused(error)
+                    )
                         throw;
                     health.Fail(SyncPath, error);
                     await RecoverAsync();
@@ -120,7 +123,10 @@ internal sealed partial class MatrixChannel
             }
             catch (Exception error) when (!stopping.IsCancellationRequested)
             {
-                if (error is MatrixApiException { Code: "M_UNKNOWN_TOKEN" })
+                if (
+                    error is MatrixApiException { Code: "M_UNKNOWN_TOKEN" }
+                    || ChannelFailure.Refused(error)
+                )
                     throw;
                 health.Fail(SyncPath, error);
                 await RecoverAsync();
@@ -150,7 +156,8 @@ internal sealed partial class MatrixChannel
                     return;
                 }
             }
-            catch (Exception) when (!stopping.IsCancellationRequested) { }
+            catch (Exception error)
+                when (!stopping.IsCancellationRequested && !ChannelFailure.Refused(error)) { }
             await delay(TimeSpan.FromMilliseconds(Random.Shared.Next(5000, 10000)), stopping.Token);
         }
         stopping.Token.ThrowIfCancellationRequested();

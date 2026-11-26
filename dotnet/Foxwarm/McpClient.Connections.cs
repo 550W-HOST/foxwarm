@@ -169,7 +169,9 @@ internal sealed partial class McpClient
             {
                 // Use the exact configuration which supplied this connection's credentials,
                 // even if a concurrent mutation has already published another configuration.
-                throw new InvalidOperationException(SafeError(error.Message, config));
+                throw new InvalidOperationException(
+                SafeError(Foxwarm.Net.EgressFailure.Reason(error) ?? error.Message, config)
+            );
             }
         }
         var cancelled = false;
@@ -567,7 +569,9 @@ internal sealed partial class McpClient
                 await disposable.DisposeAsync();
             if (error is OperationCanceledException && token.IsCancellationRequested)
                 throw;
-            throw new InvalidOperationException(SafeError(error.Message, config));
+            throw new InvalidOperationException(
+                SafeError(Foxwarm.Net.EgressFailure.Reason(error) ?? error.Message, config)
+            );
         }
     }
 

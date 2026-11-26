@@ -224,11 +224,13 @@ internal static class SetupProviderRequests
                 504
             );
         }
-        catch
+        catch (Exception error)
         {
             throw new SetupProviderRequestException(
                 "upstream",
-                "Provider model list request failed.",
+                Foxwarm.Net.EgressFailure.Reason(error) is { } reason
+                    ? "Provider model list request failed. " + reason
+                    : "Provider model list request failed.",
                 502
             );
         }

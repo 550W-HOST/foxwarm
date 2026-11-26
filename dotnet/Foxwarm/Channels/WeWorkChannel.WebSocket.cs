@@ -87,6 +87,7 @@ internal sealed partial class WeWorkChannel
                 lifetime.Token
             );
             var connected = false;
+            var refused = false;
             try
             {
                 await Foxwarm.Net.EgressHttp.ConnectWebSocketAsync(
@@ -145,7 +146,13 @@ internal sealed partial class WeWorkChannel
             {
                 // A connection that was up and dropped reconnects by itself; one that cannot
                 // be opened is the failure to report (cleared when a subscription succeeds).
-                if (connected)
+                if (ChannelFailure.Refused(error))
+                {
+                    // Reported once; no reconnect until the channel is reconfigured.
+                    health.Fail(SocketPath, error);
+                    refused = true;
+                }
+                else if (connected)
                     health.Log(error);
                 else
                     health.Fail(SocketPath, error);
@@ -159,6 +166,8 @@ internal sealed partial class WeWorkChannel
                         socket = null;
                 RejectPending(new IOException("WeWork AIBot WebSocket closed"), connection);
             }
+            if (refused)
+                return;
             if (!stopped)
                 await delay(
                     TimeSpan.FromMilliseconds(

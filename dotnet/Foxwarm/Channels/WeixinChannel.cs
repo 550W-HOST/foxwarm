@@ -112,10 +112,13 @@ internal sealed class WeixinChannel : IManagedChannel
                 failures++;
                 // Only a failed poll is a polling failure; a message the router could not
                 // handle arrives after the poll succeeded.
-                if (!polled)
+                if (!polled || ChannelFailure.Refused(error))
                     health.Fail(PollingPath, error);
                 else
                     health.Log(error);
+                // A refused endpoint stays refused: polling ends until reconfiguration.
+                if (ChannelFailure.Refused(error))
+                    return;
                 await api.DelayAsync(failures >= 3 ? 30000 : 2000);
             }
         }

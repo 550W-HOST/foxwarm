@@ -79,6 +79,12 @@ internal sealed partial class McpOAuthService
 
     internal static McpOAuthException SafeError(Exception error) =>
         error as McpOAuthException
+        ?? (Foxwarm.Net.EgressDeniedException.Find(error) is { } denied
+            ? new McpOAuthException("endpoint", denied.Message, denied)
+            : null)
+        ?? (Foxwarm.Net.EgressCertificateException.Find(error) is { } chain
+            ? new McpOAuthException("connection", chain.Message, chain)
+            : null)
         ?? (
             error is AuthorityCommittedException
                 ? Error(

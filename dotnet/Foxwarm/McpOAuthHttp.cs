@@ -5,7 +5,8 @@ using Foxwarm.Net;
 
 namespace Foxwarm;
 
-internal sealed class McpOAuthException(string code, string message) : Exception(message)
+internal sealed class McpOAuthException(string code, string message, Exception? inner = null)
+    : Exception(message, inner)
 {
     internal string Code => code;
 }

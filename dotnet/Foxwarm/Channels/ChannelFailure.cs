@@ -19,6 +19,13 @@ internal sealed class ChannelFailure(string stage, Exception error) : IOExceptio
             _ => Sentence(fallbackSubject, error),
         };
 
+    /// <summary>
+    /// The egress policy refused the channel's endpoint. Reconnecting can't help: the failure
+    /// is reported once and the channel stays failed until it is reconfigured or restarted.
+    /// </summary>
+    internal static bool Refused(Exception error) =>
+        Foxwarm.Net.EgressDeniedException.Find(error) is not null;
+
     internal static string Sentence(string subject, Exception error) =>
         subject + " failed: " + Cause(error) + ".";
 
@@ -49,6 +56,8 @@ internal sealed class ChannelFailure(string stage, Exception error) : IOExceptio
             {
                 ChannelFailure => null,
                 ChannelProblem problem => problem.Message,
+                Foxwarm.Net.EgressDeniedException denied => denied.Message.TrimEnd('.'),
+                Foxwarm.Net.EgressCertificateException chain => chain.Message.TrimEnd('.'),
                 TelegramApiException telegram => Telegram(telegram.Code),
                 QQBotApiException qq => qq.Status is { } status
                     ? $"QQ Bot API returned HTTP {status}"

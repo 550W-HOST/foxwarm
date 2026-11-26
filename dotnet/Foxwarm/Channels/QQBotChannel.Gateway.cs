@@ -156,6 +156,9 @@ internal sealed partial class QQBotChannel
                     health.Fail(GatewayPath, failure);
                 else
                     health.Log(failure);
+                // A refused endpoint stays refused: no reconnect until reconfiguration.
+                if (ChannelFailure.Refused(error))
+                    return;
                 nextDelay = null;
             }
             finally

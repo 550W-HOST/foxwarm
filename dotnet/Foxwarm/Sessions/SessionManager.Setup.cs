@@ -269,6 +269,8 @@ internal sealed partial class SessionManager
         // Provider rejections name their cause; other failures keep the redacted generic text.
         static string SetupTestFailure(Exception error, ConcreteHostModel model)
         {
+            if (Foxwarm.Net.EgressFailure.Reason(error) is { } reason)
+                return reason;
             var failure = error switch
             {
                 ModelAttemptFailure known => known,

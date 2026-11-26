@@ -30,7 +30,8 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
 
     internal static async Task<OutboundMcpFixture> CreateAsync(
         string? publicBaseUrl = null,
-        JsonObject? mainMetadata = null
+        JsonObject? mainMetadata = null,
+        RuntimeCapabilities? capabilities = null
     )
     {
         var f = new OutboundMcpFixture();
@@ -71,7 +72,7 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
                 );
                 models = new ModelConfiguration(f.Data).Models;
             }
-            f.Manager = new(f.Data, f.Work, options, models);
+            f.Manager = new(f.Data, f.Work, options, models, capabilities: capabilities);
             await f.Manager.LoadMainHostAsync();
             f.First = await f.Manager.CreateNamedAsync("main", "first", null, null);
             f.Second = await f.Manager.CreateNamedAsync("main", "second", null, null);

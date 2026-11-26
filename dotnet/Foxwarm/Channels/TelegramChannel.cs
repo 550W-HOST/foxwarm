@@ -152,8 +152,11 @@ internal sealed class TelegramChannel : IManagedChannel
                     break;
                 }
                 catch (Exception error)
-                    when (error is HttpRequestException or OperationCanceledException
-                        || error is TelegramApiException { Code: 429 or >= 500 }
+                    when (
+                        (
+                            error is HttpRequestException or OperationCanceledException
+                            || error is TelegramApiException { Code: 429 or >= 500 }
+                        ) && !ChannelFailure.Refused(error)
                     )
                 {
                     health.Fail(PollingPath, error);
@@ -165,6 +168,12 @@ internal sealed class TelegramChannel : IManagedChannel
                 }
                 catch (TelegramApiException error) when (error.Code is 401 or 409)
                 {
+                    skipSync = true;
+                    throw;
+                }
+                catch (Exception error) when (ChannelFailure.Refused(error))
+                {
+                    // The closing sync would be refused as well.
                     skipSync = true;
                     throw;
                 }
