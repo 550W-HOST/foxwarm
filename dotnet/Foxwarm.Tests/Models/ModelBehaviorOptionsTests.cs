@@ -77,7 +77,7 @@ public sealed class ModelBehaviorOptionsTests
         );
         using var handler = new EmptyResponseHandler(providerType);
         using var http = new HttpClient(handler);
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var configuration = new ModelConfiguration(
             HostPaths.ForDataRoot(temp.Path, environment: _ => null)
         );

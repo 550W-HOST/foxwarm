@@ -25,7 +25,7 @@ public sealed class ResponsesWsTests
                 return response;
             }
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var catalog = HostModels.Parse(
             new JsonObject
             {
@@ -121,7 +121,7 @@ public sealed class ResponsesWsTests
                 return response;
             }
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,
@@ -140,7 +140,7 @@ public sealed class ResponsesWsTests
     public async Task Real_socket_full_then_owned_append_suffix_preserves_headers_and_compressed_events()
     {
         await using var peer = await WsPeer.StartAsync();
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var options = Options(peer.Uri) with
         {
             ExtraHeaders = new JsonObject
@@ -189,7 +189,7 @@ public sealed class ResponsesWsTests
     public async Task System_prompt_leads_the_chain_and_a_changed_prompt_starts_a_fresh_request()
     {
         await using var peer = await WsPeer.StartAsync();
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         ResponsesWsChatService Service(string prompt) =>
             new(
                 Options(peer.Uri) with
@@ -261,7 +261,7 @@ public sealed class ResponsesWsTests
     public async Task Pending_caller_stop_discards_without_poisoning_other_sessions_and_lowlevel_never_reuses()
     {
         await using var peer = await WsPeer.StartAsync();
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,
@@ -309,7 +309,7 @@ public sealed class ResponsesWsTests
                     ? new JsonObject { ["status"] = "completed", ["output"] = new JsonArray() }
                     : Response(number)
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,
@@ -336,7 +336,7 @@ public sealed class ResponsesWsTests
     {
         await using var peer = await WsPeer.StartAsync();
         var clock = new ManualWsClock();
-        await using var transport = new ResponsesWsTransport(clock, diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, clock, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,
@@ -386,7 +386,7 @@ public sealed class ResponsesWsTests
     {
         await using var peer = await WsPeer.StartAsync();
         var clock = new ManualWsClock();
-        await using var transport = new ResponsesWsTransport(clock, diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, clock, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,
@@ -422,7 +422,7 @@ public sealed class ResponsesWsTests
     )
     {
         await using var peer = await WsPeer.StartAsync((_, number) => ToolResponse(number));
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var store = new AssistantAppendStore(postrename);
         var tools = new EffectCounter();
         var registry = new SessionRegistry(
@@ -473,7 +473,7 @@ public sealed class ResponsesWsTests
         await using var peer = await WsPeer.StartAsync(
             (_, number) => number == 1 ? ToolResponse(number) : Response(number)
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var store = new AssistantAppendStore(null);
         var tools = new EffectCounter();
         var registry = new SessionRegistry(
@@ -592,7 +592,7 @@ public sealed class ResponsesWsTests
         await using var peer = await WsPeer.StartAsync();
         peer.ReplyToClose = false;
         var clock = new ManualWsClock();
-        await using var transport = new ResponsesWsTransport(clock, diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, clock, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,
@@ -619,7 +619,7 @@ public sealed class ResponsesWsTests
     public async Task Prior_finalized_caller_cannot_cancel_the_same_resource_reused_by_a_new_caller()
     {
         await using var peer = await WsPeer.StartAsync();
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,
@@ -696,7 +696,7 @@ public sealed class ResponsesWsTests
                 return response;
             }
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var service = new ResponsesWsChatService(
             Options(peer.Uri),
             transport,

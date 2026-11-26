@@ -213,7 +213,7 @@ public sealed class AnthropicMessageEffortTests
                     )
                 )
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = Options(
             extraFields: new JsonObject { ["stream"] = false },
             headers: configured is null ? null : new JsonObject { ["anthropic-beta"] = configured },

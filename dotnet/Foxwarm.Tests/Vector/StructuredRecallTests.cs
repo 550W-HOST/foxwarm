@@ -272,7 +272,7 @@ public sealed class StructuredRecallTests
                 .ToArray()
         );
         await manager.Vector.ForceAsync(owner.Id, 0, 3);
-        await using var mcp = new Foxwarm.McpClient(f.Work);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Work);
         var definitions = new JsonArray(ArchiveRecallTool.Definition());
         foreach (var definition in ToolScriptToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());

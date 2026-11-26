@@ -87,8 +87,6 @@ public sealed class EgressFileModeParityTests
         using var after = ProviderHttpRequest.CreateClient(File);
         Same(before, after);
         Assert.IsType<ProviderResponseDecodingHandler>(HandlerOf(after));
-        using var tests = ProviderHttpRequest.CreateClient();
-        Same(before, tests);
     }
 
     [Fact]
@@ -209,7 +207,9 @@ public sealed class EgressFileModeParityTests
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
-        using var proxy = new Foxwarm.Asr.AsrProxy(null, CancellationToken.None);
+        // Its stream's supplied-invoker handshake runs through the real caller in
+        // AsrRoutesTests.Stream (file mode).
+        using var proxy = new Foxwarm.Asr.AsrProxy(null, CancellationToken.None, File);
         var after = (HttpClient)
             typeof(Foxwarm.Asr.AsrProxy)
                 .GetField("http", BindingFlags.Instance | BindingFlags.NonPublic)!

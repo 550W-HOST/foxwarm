@@ -26,7 +26,7 @@ public sealed class MainExecCwdTests
         string work
     )
     {
-        var mcp = new Foxwarm.McpClient(data);
+        var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var definitions = LocalExecManager.Definitions();
         var registry = SessionToolExecutor.CreateRegistry(definitions, mcp, _ => work);
         var tools = new SessionToolExecutor(new WorkspaceTools(work), owner, manager, registry);

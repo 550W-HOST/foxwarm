@@ -258,7 +258,7 @@ public sealed class SessionIdentityInterleavingTests
         );
         Assert.Null(definition["parameters"]!["required"]);
         using var temp = new TempDirectory();
-        await using var mcp = new Foxwarm.McpClient(temp.Path);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, temp.Path);
         var registry = SessionToolExecutor.CreateRegistry(
             new JsonArray(definition.DeepClone()),
             mcp,

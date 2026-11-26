@@ -14,7 +14,7 @@ public sealed class TextRedactionPersistenceTests
     public async Task A_store_copied_without_the_key_cannot_be_read()
     {
         await using var detector = await TextRedactionStoreContractTests.DetectorAsync();
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var temp = new TempDirectory();
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
@@ -65,7 +65,7 @@ public sealed class TextRedactionPersistenceTests
     public async Task An_unusable_store_does_not_fail_redaction()
     {
         await using var detector = await TextDetectionPeer.StartAsync("Alice");
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
             KnownLabels = TextRedactionKnownLabels.All,

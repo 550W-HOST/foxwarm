@@ -32,7 +32,7 @@ public sealed class HostedResponsesWsImageTests
                     ),
                 }
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var options = new ResponsesClientOptions(
             peer.Uri,
             "wire",
@@ -109,7 +109,7 @@ public sealed class HostedResponsesWsImageTests
                         },
                     }
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var options = new ResponsesClientOptions(
             peer.Uri,
             "wire",
@@ -177,7 +177,7 @@ public sealed class HostedResponsesWsImageTests
                     }
                     : ResponsesWsTests.Response(number)
         );
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var document = JsonNode
             .Parse(
                 """

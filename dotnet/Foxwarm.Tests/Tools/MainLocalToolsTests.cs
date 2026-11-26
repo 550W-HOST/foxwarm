@@ -40,7 +40,7 @@ public sealed partial class MainLocalToolsTests
             );
             await f.Manager.LoadAsync();
             f.Owner = await f.Manager.CreateNamedAsync("main", "tools", null, null);
-            f.mcp = new(Path.Combine(f.Temp.Path, "data"));
+            f.mcp = new(Foxwarm.Net.EgressPolicy.Unguarded, Path.Combine(f.Temp.Path, "data"));
             var defs = MainLocalToolDefinitions.Definitions();
             defs.Add(ArtifactToolDefinition.Definition());
             foreach (var definition in ToolScriptToolDefinitions.Definitions())
@@ -1291,7 +1291,7 @@ public sealed partial class MainLocalToolsTests
             Encoding.UTF8.GetBytes("version: 1\ndefaultAction: allow"),
             CancellationToken.None
         );
-        await using var mcp = new Foxwarm.McpClient(Path.Combine(temp.Path, "mcp"));
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, Path.Combine(temp.Path, "mcp"));
         var definitions = MainLocalToolDefinitions.Definitions();
         foreach (var definition in ArchiveControlTools.Definitions().OfType<JsonObject>())
             definitions.Add(definition.DeepClone());

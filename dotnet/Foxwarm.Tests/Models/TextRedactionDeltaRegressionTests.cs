@@ -195,7 +195,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         );
         await using var q = await Provider.StartAsync(_ => (200, Answer("plain answer")));
         var catalog = Route(p.BaseUri, q.BaseUri, detector.Endpoint, null, 1);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
         var owner = new ModelRequestOwner(
             http,
@@ -253,7 +253,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             alternativeRedacts ? detector.Endpoint : null,
             null
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
         var owner = new ModelRequestOwner(
             http,
@@ -436,7 +436,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             );
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
             KnownLabels = TextRedactionKnownLabels.All,
@@ -628,7 +628,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             await RespondNames(context, text, "Alice");
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
         var placeholder = keys.Secrets.TextRedactor().Placeholder(Encoding.UTF8.GetBytes("Alice"));
         await using var p = await Provider.StartAsync(n =>
@@ -694,7 +694,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             );
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
             KnownLabels = TextRedactionKnownLabels.All,

@@ -52,7 +52,7 @@ public sealed class UnifiedToolSearchTests
     private static async Task<(ToolRegistry Registry, IAsyncDisposable Mcp, TempDirectory Temp)> Registry()
     {
         var temp = new TempDirectory();
-        var mcp = new Foxwarm.McpClient(temp.Path);
+        var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, temp.Path);
         return (new ToolRegistry(mcp, _ => temp.Path), mcp, temp);
     }
 

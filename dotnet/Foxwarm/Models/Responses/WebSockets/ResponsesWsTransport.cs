@@ -6,13 +6,16 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Models;
 
 internal sealed class ResponsesWsTransport(
+    // The runtime's policy; file mode passes EgressPolicy.Unguarded.
+    Foxwarm.Net.EgressPolicy egress,
     TimeProvider? clock = null,
     Func<ClientWebSocket>? socketFactory = null,
-    Action<JsonObject>? diagnostics = null,
-    Foxwarm.Net.EgressPolicy? egress = null
+    Action<JsonObject>? diagnostics = null
 ) : IAsyncDisposable
 {
-    private readonly Foxwarm.Net.EgressPolicy egress = egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+    private readonly Foxwarm.Net.EgressPolicy egress = egress;
+
+    internal Foxwarm.Net.EgressPolicy Egress => egress;
 
     internal TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     internal const int IdleLimit = 5;

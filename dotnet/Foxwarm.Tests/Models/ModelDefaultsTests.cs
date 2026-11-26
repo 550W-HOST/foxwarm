@@ -209,7 +209,8 @@ public sealed class ModelDefaultsTests
                 http,
                 leaf,
                 new(new Uri("http://localhost"), "m", "a/m", "", "", 10),
-                "cache"
+                "cache",
+                Foxwarm.Net.EgressPolicy.Unguarded
             )
         );
     }

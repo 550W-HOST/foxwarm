@@ -48,7 +48,7 @@ public sealed partial class ShellHttpTests
             fixture.Connection = registered.Headers.GetValues("X-Foxwarm-Connection").Single();
         }
         await fixture.Manager.SelectNodeAsync(fixture.Owner, "shell");
-        await using var mcp = new Foxwarm.McpClient(fixture.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, fixture.Data);
         var tools = PresentationTools(fixture, mcp);
         var args = new JsonObject { ["command"] = "echo sample" };
         var call = new JsonObject
@@ -116,7 +116,7 @@ public sealed partial class ShellHttpTests
         await using var fixture = new Fixture();
         await fixture.Start();
         await fixture.Manager.SelectNodeAsync(fixture.Owner, "shell");
-        await using var mcp = new Foxwarm.McpClient(fixture.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, fixture.Data);
         var tools = PresentationTools(fixture, mcp);
         var execution = tools.ExecuteAsync(
             new JsonObject

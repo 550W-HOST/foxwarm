@@ -399,7 +399,7 @@ public sealed class SessionDeletionTests
         await using var manager = Manager(temp.Path);
         await manager.LoadAsync();
         var source = await manager.RequiredAsync("source");
-        await using var mcp = new Foxwarm.McpClient(Path.Combine(temp.Path, "data"));
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, Path.Combine(temp.Path, "data"));
         var registry = SessionToolExecutor.CreateRegistry(
             new JsonArray(
                 AgentToolDefinitions

@@ -20,12 +20,13 @@ internal sealed partial class McpClient : IAsyncDisposable
     private bool closed;
 
     internal McpClient(
+        // The runtime's policy; file mode passes EgressPolicy.Unguarded.
+        Foxwarm.Net.EgressPolicy egress,
         string root,
         string? publicBaseUrl = null,
         string? configPath = null,
         Foxwarm.Storage.IStateDocuments? documents = null,
-        Foxwarm.Storage.IConfigDocumentStore? configDocuments = null,
-        Foxwarm.Net.EgressPolicy? egress = null
+        Foxwarm.Storage.IConfigDocumentStore? configDocuments = null
     )
     {
         configuration = configDocuments is null ? new(root, configPath) : new(configDocuments);

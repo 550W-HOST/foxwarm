@@ -48,7 +48,7 @@ public sealed class MainToolScriptTests
                 await f.Manager.LoadMainHostAsync();
                 f.Owner = await f.Manager.CreateNamedAsync("main", "script", null, null);
                 f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
-                f.mcp = new(f.Data);
+                f.mcp = new(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
                 var definitions = WorkspaceTools.Definitions();
                 definitions.Add(ArchiveRecallTool.Definition());
                 foreach (var item in FileDeliveryDefinitions.Definitions())

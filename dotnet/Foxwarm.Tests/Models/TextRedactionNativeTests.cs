@@ -101,7 +101,7 @@ public sealed class TextRedactionNativeTests
             new()
         );
         using var root = new TempDirectory();
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         async Task<ChatResult> Request(InstanceSecrets secrets, JsonObject[] history)
         {
             var owner = new ModelRequestOwner(

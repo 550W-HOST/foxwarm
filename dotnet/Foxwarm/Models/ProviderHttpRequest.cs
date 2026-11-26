@@ -6,10 +6,10 @@ namespace Foxwarm.Models;
 
 internal static class ProviderHttpRequest
 {
-    // Product code passes the runtime's policy (source rule); tests may omit it.
-    internal static HttpClient CreateClient(Foxwarm.Net.EgressPolicy? egress = null) =>
+    // The runtime's policy; file mode passes EgressPolicy.Unguarded.
+    internal static HttpClient CreateClient(Foxwarm.Net.EgressPolicy egress) =>
         Foxwarm.Net.EgressHttp.Client(
-            egress ?? Foxwarm.Net.EgressPolicy.Unguarded,
+            egress,
             Foxwarm.Net.EgressPurpose.Model,
             new Foxwarm.Net.EgressHandlerOptions
             {

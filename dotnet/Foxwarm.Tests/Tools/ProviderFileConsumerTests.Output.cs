@@ -160,7 +160,7 @@ public sealed partial class ProviderFileConsumerTests
         var definitions = WorkspaceTools.Definitions();
         foreach (var item in KnowledgeToolDefinitions.Definitions().Concat(UnifiedToolDefinitions.All()))
             definitions.Add(item?.DeepClone());
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var registry = SessionToolExecutor.CreateRegistry(definitions, mcp, _ => f.Work, f.Manager.Nodes, f.Manager.NodeProviders);
         var tools = new SessionToolExecutor(new WorkspaceTools(f.Work), f.Owner, f.Manager, registry);
         tools.BeginTurn();

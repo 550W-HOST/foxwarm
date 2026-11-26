@@ -44,7 +44,7 @@ public sealed class NodePrivateCredentialTests
             if (isolation is not null)
                 Manager.Nodes.Registry.Create("bound");
             Owner = await Manager.CreateNamedAsync("main", "credential-owner", null, null);
-            mcp = new(data);
+            mcp = new(Foxwarm.Net.EgressPolicy.Unguarded, data);
             var registry = SessionToolExecutor.CreateRegistry(
                 NodeToolDefinitions.All(),
                 mcp,

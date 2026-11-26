@@ -125,7 +125,7 @@ public sealed partial class TextRedactionTests
     {
         const string secret = "张三😀";
         await using var detector = await TextDetectionPeer.StartAsync(secret);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var settings = new TextRedactionOptions(
             detector.Endpoint,
             "detector-credential",
@@ -163,7 +163,7 @@ public sealed partial class TextRedactionTests
     public async Task Malformed_offsets_fail_closed_and_unknown_categories_are_redacted()
     {
         await using var detector = await TextDetectionPeer.StartAsync("😀");
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
         detector.Transform = value =>
         {
@@ -203,7 +203,7 @@ public sealed partial class TextRedactionTests
             await context.Response.WriteAsync("failure");
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var catalog = Catalog(detector.Endpoint, new Uri("http://127.0.0.1:1"));
         var routing = new ModelRouting();
         using var temp = new TempDirectory();
@@ -273,7 +273,7 @@ public sealed partial class TextRedactionTests
             catch (OperationCanceledException) { }
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var stop = new CancellationTokenSource();
         var catalog = Catalog(detector.Endpoint, new("http://127.0.0.1:1"));
         using var keys = new TextRedactionKeys();

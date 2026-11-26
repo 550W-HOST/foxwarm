@@ -26,7 +26,7 @@ public sealed class ResponsesWsCancellationTests
         if (ending == "disconnect")
             peer.CloseAfterRequest = WebSocketCloseStatus.InternalServerError;
         var clock = new ManualWsClock();
-        await using var transport = new ResponsesWsTransport(clock, diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, clock, diagnostics: _ => { });
         using var original = new CancellationTokenSource();
         using var attempt = new CancellationTokenSource();
         var request = transport.RequestAsync(

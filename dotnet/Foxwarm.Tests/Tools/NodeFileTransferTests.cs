@@ -186,7 +186,7 @@ public sealed partial class NodeFileTransferTests
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
             )!
             .SetValue(f.Manager, authority);
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var definitions = ToolScriptToolDefinitions.Definitions();
         foreach (var definition in WorkspaceTools.Definitions())
             definitions.Add(definition?.DeepClone());

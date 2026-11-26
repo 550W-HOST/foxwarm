@@ -15,7 +15,7 @@ public sealed partial class TextRedactionTests
     {
         const string value = "alice@example.test";
         await using var detector = await TextDetectionPeer.StartAsync(value);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
         using var keys = new TextRedactionKeys();
         var first = await new TextRedactor(keys.Secrets.TextRedactionPlaceholderKey())
@@ -85,7 +85,7 @@ public sealed partial class TextRedactionTests
                 byPlaceholder[placeholder] = candidate;
         }
         await using var detector = await TextDetectionPeer.StartAsync(first, second!);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
         var scope = redactor.Begin(http, options, default);
         var redacted = await scope.RedactAsync("to " + first);
@@ -106,7 +106,7 @@ public sealed partial class TextRedactionTests
     public async Task Unavailable_instance_key_fails_enabled_requests_before_detection_or_send()
     {
         await using var detector = await TextDetectionPeer.StartAsync("input");
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var catalog = Catalog(detector.Endpoint, new("http://127.0.0.1:1"));
         using var temp = new TempDirectory();
         // An existing store whose key file is missing is locked; no replacement key is minted.
@@ -205,7 +205,7 @@ public sealed partial class TextRedactionTests
         detector.Labels["2026-11-09"] = "PRIVATE_DATE";
         detector.Labels["https://example.test/x"] = "private_url";
         detector.Labels["bob@example.test"] = "private_email";
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var redactor = new TextRedactor(Key);
         var defaults = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
         var kept = await redactor.Begin(http, defaults, default).RedactAsync(text);
@@ -235,7 +235,7 @@ public sealed partial class TextRedactionTests
             "mcp.args",
             " " + indexed + " "
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
         var scope = new TextRedactor(Key, knownLabels: TextRedactionKnownLabels.All).Begin(
             http,

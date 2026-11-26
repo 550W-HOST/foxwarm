@@ -66,7 +66,7 @@ public sealed class MainTimerToolsTests
                 );
                 await f.Manager.LoadMainHostAsync();
                 f.Owner = await f.Manager.CreateNamedAsync("main", "source", null, null);
-                f.mcp = new(f.Data);
+                f.mcp = new(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
                 var definitions = TimerToolDefinitions.Definitions();
                 foreach (var item in UnifiedToolDefinitions.All())
                     definitions.Add(item?.DeepClone());

@@ -133,7 +133,7 @@ public sealed partial class ProviderFileConsumerTests
             f.Manager = new(f.Data, f.Work, options, models);
             await f.Manager.LoadAsync();
             f.Owner = await f.Manager.CreateNamedAsync("main", "provider", null, null);
-            f.mcp = new(f.Data);
+            f.mcp = new(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
             var definitions = WorkspaceTools.Definitions();
             definitions.Add(ArtifactToolDefinition.Definition());
             foreach (

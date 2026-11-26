@@ -1,132 +1,165 @@
-using System.Text.RegularExpressions;
+using System.Net;
+using System.Net.Sockets;
+using System.Net.WebSockets;
 
 namespace Foxwarm.Tests.Net;
 
 /// <summary>
-/// Keeps outbound connections of the Main server inside <c>EgressHttp</c>: no other file
-/// constructs an HTTP client, a socket handler or a WebSocket client, or connects a WebSocket
-/// itself. The factory applies the runtime's egress policy; a client built anywhere else would
-/// reach internal destinations from a hosted tenant. HTTP/3 is refused too, because QUIC
-/// connections don't pass the factory's connect callback.
+/// Keeps outbound connections of the Main server inside <c>EgressHttp</c>. The rule reads the
+/// compiled <c>Foxwarm</c> assembly's IL (<see cref="EgressIlScan"/>): no type but the
+/// reviewed owners below constructs an HTTP client, a terminal handler, a WebSocket client, a
+/// socket or a TLS stream, connects a WebSocket without the factory's invoker, gives the MCP
+/// SDK a transport without the factory's client, or asks for HTTP/3 (QUIC connections don't
+/// pass the factory's connect callback).
 /// </summary>
-public sealed partial class EgressSourceRulesTests
+public sealed class EgressSourceRulesTests
 {
-    // The factory itself.
-    private static readonly string[] Owners = ["Net/EgressHttp.cs", "Net/EgressPolicy.cs"];
-
-    // Sockets that aren't tenant egress: the P1 standby forwards the public listener to the
-    // owner replica (track FW replaces it).
-    private static readonly string[] SocketOwners = ["Hosted/StandbyForwarder.cs"];
-
-    [GeneratedRegex(
-        @"\bnew\s+(?:System\.Net\.Http\.)?(?:HttpClient|SocketsHttpHandler|HttpClientHandler|ClientWebSocket)\b|\b(?:HttpClient|SocketsHttpHandler|HttpClientHandler|ClientWebSocket)\??\s+\w+\s*=\s*new\s*\(|\bHttpClientHandler\b|\bSocketsHttpHandler\b|\bVersion30\b|\bRequestVersionOrHigher\b|\bProviderHttpRequest\.CreateClient\(\s*\)"
-    )]
-    private static partial Regex ClientConstruction();
-
-    [GeneratedRegex(@"\bnew\s+(?:System\.Net\.Sockets\.)?(?:Socket|TcpClient)\s*\(")]
-    private static partial Regex RawSocket();
-
-    [GeneratedRegex(@"\bClientWebSocket\b|EgressHttp\.WebSocket\(")]
-    private static partial Regex WebSocketUse();
-
-    [GeneratedRegex(@"\.ConnectAsync\(")]
-    private static partial Regex DirectConnect();
-
-    internal static IEnumerable<string> Violations(string relative, string source)
+    // Each reviewed owner, with why it may.
+    private static readonly Dictionary<string, string> Owners = new(StringComparer.Ordinal)
     {
-        if (Owners.Contains(relative))
-            yield break;
-        // Comment lines may name the types.
-        var lines = source
-            .Split('\n')
-            .Select((line, index) => (Text: line, Number: index + 1))
-            .Where(line => !line.Text.TrimStart().StartsWith("//", StringComparison.Ordinal))
-            .ToArray();
-        var webSockets = lines.Any(line => WebSocketUse().IsMatch(line.Text));
-        foreach (var (text, number) in lines)
-        {
-            foreach (Match match in ClientConstruction().Matches(text))
-                yield return $"{relative}:{number}: {match.Value.Trim()}";
-            if (!SocketOwners.Contains(relative))
-                foreach (Match match in RawSocket().Matches(text))
-                    yield return $"{relative}:{number}: {match.Value.Trim()}";
-            // A WebSocket connected without the factory skips the guarded invoker.
-            if (webSockets)
-                foreach (Match match in DirectConnect().Matches(text))
-                    yield return $"{relative}:{number}: WebSocket {match.Value.Trim()}";
-        }
-    }
+        ["Foxwarm.Net.EgressHttp"] = "the factory",
+        ["Foxwarm.Net.EgressPolicy"] = "the guarded connector's socket to a checked address",
+        ["Foxwarm.Hosted.StandbyForwarder"] =
+            "replica infrastructure: a standby forwards the public listener to the owner replica",
+    };
+
+    private static string Assembly(Type type) => type.Assembly.Location;
 
     [Fact]
-    public void OnlyTheFactoryBuildsOutboundClients()
+    public void OnlyReviewedOwnersBuildOutboundConnections()
     {
-        var root = Path.Combine(
-            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
-                ?? throw new InvalidOperationException("FOXWARM_REPO_ROOT is required."),
-            "dotnet",
-            "Foxwarm"
-        );
-        var violations = new List<string>();
-        var scanned = 0;
-        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
-        {
-            var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-            if (
-                relative.StartsWith("bin/", StringComparison.Ordinal)
-                || relative.StartsWith("obj/", StringComparison.Ordinal)
-            )
-                continue;
-            scanned++;
-            violations.AddRange(Violations(relative, File.ReadAllText(file)));
-        }
-        Assert.True(scanned > 500, $"only {scanned} files scanned");
-        Assert.Empty(violations);
+        var hits = EgressIlScan.Scan(Assembly(typeof(Foxwarm.Net.EgressHttp)));
+        var unexpected = hits.Where(hit => !Owners.ContainsKey(hit.Type)).Select(hit => hit.ToString()).ToArray();
+        Assert.Empty(unexpected);
+        // The scan sees the owners' own constructions, so it reads the right IL.
+        Assert.Contains(hits, hit => hit.Type == "Foxwarm.Net.EgressHttp" && hit.Construct == "new System.Net.Http.SocketsHttpHandler");
+        Assert.Contains(hits, hit => hit.Type == "Foxwarm.Net.EgressPolicy" && hit.Construct == "new System.Net.Sockets.Socket");
+        // Every owner still needs its exception.
+        Assert.All(Owners.Keys, owner => Assert.Contains(hits, hit => hit.Type == owner));
     }
 
     [Theory]
-    [InlineData("var client = new HttpClient();")]
-    [InlineData("using var client = new HttpClient(handler) { Timeout = x };")]
-    [InlineData("private static readonly HttpClient DefaultHttp = new() { Timeout = t };")]
-    [InlineData("private readonly HttpClient? http = new(handler);")]
-    [InlineData("var handler = new SocketsHttpHandler { UseProxy = false };")]
-    [InlineData("HttpMessageHandler inner = new HttpClientHandler();")]
-    [InlineData(": DelegatingHandler(new System.Net.Http.SocketsHttpHandler())")]
-    [InlineData("internal readonly ClientWebSocket Socket = new();")]
-    [InlineData("using var upstream = new ClientWebSocket();")]
-    [InlineData("var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp);")]
-    [InlineData("using var tcp = new TcpClient(\"10.0.0.1\", 5432);")]
-    [InlineData("request.Version = HttpVersion.Version30;")]
-    [InlineData("request.VersionPolicy = HttpVersionPolicy.RequestVersionOrHigher;")]
-    [InlineData("var http = ProviderHttpRequest.CreateClient();")]
-    public void TheRuleFindsEachKindOfConstruction(string line)
+    [InlineData(nameof(ForbiddenIdioms.TargetTypedClient), "new System.Net.Http.HttpClient")]
+    [InlineData(nameof(ForbiddenIdioms.ExpressionBodiedClient), "new System.Net.Http.HttpClient")]
+    [InlineData(nameof(ForbiddenIdioms.ExpressionBodiedClient), "new System.Net.Http.HttpClientHandler")]
+    [InlineData(nameof(ForbiddenIdioms.TargetTypedHandler), "new System.Net.Http.SocketsHttpHandler")]
+    [InlineData(".ctor", "new System.Net.Http.HttpClient")]
+    [InlineData(nameof(ForbiddenIdioms.OwnTerminalHandler), "new Foxwarm.Tests.Net.ForbiddenIdioms+Terminal")]
+    [InlineData(nameof(ForbiddenIdioms.TargetTypedSocket), "new System.Net.Sockets.Socket")]
+    [InlineData(nameof(ForbiddenIdioms.Tcp), "new System.Net.Sockets.TcpClient")]
+    [InlineData(nameof(ForbiddenIdioms.Tls), "new System.Net.Security.SslStream")]
+    [InlineData(nameof(ForbiddenIdioms.WebSocketClient), "new System.Net.WebSockets.ClientWebSocket")]
+    [InlineData(nameof(ForbiddenIdioms.DirectWebSocketConnect), "ClientWebSocket.ConnectAsync without an invoker")]
+    [InlineData(nameof(ForbiddenIdioms.Http3), "HttpVersion.Version30")]
+    [InlineData(nameof(ForbiddenIdioms.ClientVersionPolicy), "HttpClient.DefaultVersionPolicy")]
+    [InlineData(nameof(ForbiddenIdioms.SdkOwnedClient), "new ModelContextProtocol.Client.HttpClientTransport without a client")]
+    public void TheRuleFindsEachIdiom(string method, string construct)
     {
-        var source = "namespace Foxwarm;\nclass Sample\n{\n    void M()\n    {\n        " + line + "\n    }\n}\n";
-        Assert.NotEmpty(Violations("Channels/Sample.cs", source));
-        // The factory may.
-        Assert.Empty(Violations("Net/EgressHttp.cs", source));
+        var hits = EgressIlScan.Scan(
+            Assembly(typeof(ForbiddenIdioms)),
+            type => type == typeof(ForbiddenIdioms).FullName
+        );
+        Assert.Contains(hits, hit => hit.Construct == construct && hit.Method.Contains(method, StringComparison.Ordinal));
     }
 
     [Fact]
-    public void TheRuleFindsAWebSocketConnectedOutsideTheFactory()
+    public void TheFactoryFormsPass()
     {
-        const string direct = """
-            var socket = EgressHttp.WebSocket();
-            await socket.ConnectAsync(uri, token);
-            """;
-        Assert.Single(Violations("Channels/Sample.cs", direct));
-        const string guarded = """
-            var socket = EgressHttp.WebSocket();
-            await EgressHttp.ConnectWebSocketAsync(egress, EgressPurpose.Channel, socket, uri, null, token);
-            """;
-        Assert.Empty(Violations("Channels/Sample.cs", guarded));
-        // Other ConnectAsync calls (pipes, MCP sessions) aren't WebSockets.
-        Assert.Empty(Violations("Vector/VectorChild.cs", "await pipe.ConnectAsync(timeout.Token);"));
-        // Comments and the egress-aware client calls pass.
-        Assert.Empty(
-            Violations(
-                "Models/Sample.cs",
-                "// new HttpClient() was here\nvar http = ProviderHttpRequest.CreateClient(egress);"
-            )
+        var hits = EgressIlScan.Scan(
+            Assembly(typeof(AllowedIdioms)),
+            type => type == typeof(AllowedIdioms).FullName
         );
+        Assert.Empty(hits);
     }
 }
+
+// Compiled, never run: the forms the rule must recognise, in the spellings this tree uses.
+#pragma warning disable CA2000, CS1998
+internal sealed class ForbiddenIdioms
+{
+    private readonly HttpClient field = new() { Timeout = TimeSpan.FromSeconds(1) };
+
+    internal static HttpClient TargetTypedClient()
+    {
+        HttpClient client = new();
+        return client;
+    }
+
+    internal static HttpClient ExpressionBodiedClient() => new(new HttpClientHandler { UseCookies = false });
+
+    internal static HttpMessageHandler TargetTypedHandler()
+    {
+        SocketsHttpHandler handler = new() { UseProxy = false };
+        return handler;
+    }
+
+    // The field initializer runs in the constructor.
+    internal HttpClient Field() => field;
+
+    internal sealed class Terminal : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
+            throw new NotSupportedException();
+    }
+
+    internal static HttpMessageHandler OwnTerminalHandler() => new Terminal();
+
+    internal static Socket TargetTypedSocket()
+    {
+        Socket socket = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        return socket;
+    }
+
+    internal static TcpClient Tcp() => new("10.0.0.1", 5432);
+
+    internal static System.Net.Security.SslStream Tls(Stream inner) => new(inner);
+
+    internal static ClientWebSocket WebSocketClient() => new();
+
+    internal static async Task DirectWebSocketConnect(ClientWebSocket socket, Uri uri) =>
+        await socket.ConnectAsync(uri, CancellationToken.None);
+
+    internal static void Http3(HttpRequestMessage request) => request.Version = HttpVersion.Version30;
+
+    internal static void ClientVersionPolicy(HttpClient client) =>
+        client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher;
+
+    internal static object SdkOwnedClient() =>
+        new ModelContextProtocol.Client.HttpClientTransport(
+            new ModelContextProtocol.Client.HttpClientTransportOptions { Endpoint = new Uri("http://x") }
+        );
+}
+
+internal sealed class AllowedIdioms
+{
+    internal static HttpClient Client(Foxwarm.Net.EgressPolicy egress) =>
+        Foxwarm.Net.EgressHttp.Client(egress, Foxwarm.Net.EgressPurpose.Model);
+
+    internal static async Task Connect(Foxwarm.Net.EgressPolicy egress, Uri uri)
+    {
+        using var socket = Foxwarm.Net.EgressHttp.WebSocket();
+        await Foxwarm.Net.EgressHttp.ConnectWebSocketAsync(
+            egress,
+            Foxwarm.Net.EgressPurpose.Channel,
+            socket,
+            uri,
+            null,
+            CancellationToken.None
+        );
+    }
+
+    internal static async Task ConnectThrough(ClientWebSocket socket, Uri uri, HttpMessageInvoker invoker) =>
+        await socket.ConnectAsync(uri, invoker, CancellationToken.None);
+
+    internal static object SdkWithClient(HttpClient http) =>
+        new ModelContextProtocol.Client.HttpClientTransport(
+            new ModelContextProtocol.Client.HttpClientTransportOptions { Endpoint = new Uri("http://x") },
+            http,
+            ownsHttpClient: true
+        );
+
+    // Copying a request's own version (the OAuth retry) is no upgrade.
+    internal static HttpRequestMessage Copy(HttpRequestMessage request) =>
+        new(request.Method, request.RequestUri) { Version = request.Version, VersionPolicy = request.VersionPolicy };
+}
+#pragma warning restore CA2000, CS1998

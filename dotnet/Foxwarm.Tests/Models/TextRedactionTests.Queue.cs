@@ -34,7 +34,7 @@ public sealed partial class TextRedactionTests
             return false;
         };
         var redactor = new TextRedactor(Enumerable.Range(41, 32).Select(i => (byte)i).ToArray());
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         // Four requests at once: the last waits about 450 ms, longer than one call's timeout.
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 400);
         var results = await Task.WhenAll(
@@ -68,7 +68,7 @@ public sealed partial class TextRedactionTests
             return false;
         };
         var redactor = new TextRedactor(Enumerable.Range(77, 32).Select(i => (byte)i).ToArray());
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var first = redactor.Begin(http, options, CancellationToken.None).DetectAsync("first");
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -138,7 +138,7 @@ public sealed partial class TextRedactionTests
             .ToList();
         IReadOnlyList<JsonObject>? sent = null;
         var service = new TextRedactionChatService(
-            ProviderHttpRequest.CreateClient(),
+            ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded),
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 Instructions = "Instructions for " + names[1],
@@ -180,7 +180,7 @@ public sealed partial class TextRedactionTests
             .Select(text => ChatResult.Text(text + " slot").AssistantMessage!)
             .ToList();
         var service = new TextRedactionChatService(
-            ProviderHttpRequest.CreateClient(),
+            ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded),
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 TextRedactorSource = () =>

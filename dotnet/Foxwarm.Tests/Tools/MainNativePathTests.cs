@@ -29,7 +29,7 @@ public sealed class MainNativePathTests
         string work
     )
     {
-        var mcp = new Foxwarm.McpClient(data);
+        var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var definitions = WorkspaceTools.Definitions();
         foreach (var entry in LocalExecManager.Definitions())
             definitions.Add(entry!.DeepClone());

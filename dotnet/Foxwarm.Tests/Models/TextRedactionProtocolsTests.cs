@@ -225,7 +225,7 @@ public sealed class TextRedactionProtocolsTests
                 },
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys();
         var owner = new ModelRequestOwner(
             http,

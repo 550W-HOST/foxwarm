@@ -71,7 +71,7 @@ public sealed class NodePolicyCliTests
                 await cli.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15))
             );
             Assert.True(f.Manager.Nodes.Connected("official"));
-            await using var mcp = new Foxwarm.McpClient(f.Data);
+            await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
             var definitions = WorkspaceTools.Definitions();
             foreach (
                 var group in new[]

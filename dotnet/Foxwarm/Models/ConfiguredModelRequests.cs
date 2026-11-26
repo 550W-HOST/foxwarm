@@ -128,11 +128,12 @@ internal static class ConfiguredModelRequests
         ConcreteHostModel model,
         ResponsesClientOptions options,
         string cacheKey,
+        Foxwarm.Net.EgressPolicy egress,
         Action<string, ResponsesStreamProgress>? progress = null
     )
     {
         return new ConcreteRequestHistory.ChatService(
-            CreatePreparedService(http, model, options, cacheKey, progress),
+            CreatePreparedService(http, model, options, cacheKey, egress, progress),
             model.Key,
             options.HistoryCompatibility
         );
@@ -145,11 +146,11 @@ internal static class ConfiguredModelRequests
         ConcreteHostModel model,
         ResponsesClientOptions options,
         string cacheKey,
+        // The policy of a request-owned WebSocket transport when the caller passes none.
+        Foxwarm.Net.EgressPolicy egress,
         Action<string, ResponsesStreamProgress>? progress = null,
         ResponsesWsTransport? websockets = null,
-        ModelRequestScope scope = ModelRequestScope.LowLevel,
-        // The policy of a request-owned WebSocket transport when the caller passes none.
-        Foxwarm.Net.EgressPolicy? egress = null
+        ModelRequestScope scope = ModelRequestScope.LowLevel
     )
     {
         if (options.TextRedaction is { } redaction)
@@ -174,10 +175,10 @@ internal static class ConfiguredModelRequests
                         model,
                         prepared,
                         cacheKey,
+                        egress,
                         restoredProgress,
                         websockets,
-                        scope,
-                        egress
+                        scope
                     )
             );
         }

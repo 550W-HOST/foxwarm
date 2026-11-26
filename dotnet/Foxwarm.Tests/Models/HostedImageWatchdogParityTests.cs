@@ -64,9 +64,9 @@ public sealed class HostedImageWatchdogParityTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, context.Token);
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var stop = new CancellationTokenSource();
-        await using var transport = new ResponsesWsTransport(clock, diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, clock, diagnostics: _ => { });
         var options = new ResponsesClientOptions(
             peer.Uri,
             "m",
@@ -145,8 +145,8 @@ public sealed class HostedImageWatchdogParityTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, context.Token);
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
-        await using var transport = new ResponsesWsTransport(clock, diagnostics: _ => { });
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, clock, diagnostics: _ => { });
         var options = new ResponsesClientOptions(
             peer.Uri,
             "m",
@@ -182,6 +182,7 @@ public sealed class HostedImageWatchdogParityTests
                 catalog.Resolve("a/m"),
                 options,
                 "cache",
+                Foxwarm.Net.EgressPolicy.Unguarded,
                 websockets: transport,
                 progress: (_, progress) =>
                 {
@@ -251,7 +252,7 @@ public sealed class HostedImageWatchdogParityTests
             new JsonObject()
         );
         var request = ConfiguredModelRequests
-            .CreatePreparedService(http, models.Resolve("a/m"), options, "cache")
+            .CreatePreparedService(http, models.Resolve("a/m"), options, "cache", Foxwarm.Net.EgressPolicy.Unguarded)
             .ChatAsync("s", [], stop.Token);
         await stream.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(request.IsCompleted);

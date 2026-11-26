@@ -252,7 +252,7 @@ public sealed partial class NodeFileTransferTests
         var bytes = new byte[128 * 1024];
         await File.WriteAllBytesAsync(Path.Combine(f.Work, "source.bin"), bytes);
         using var foreground = new CancellationTokenSource();
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var registry = SessionToolExecutor.CreateRegistry(
             FileDeliveryDefinitions.Definitions(),
             mcp,

@@ -23,7 +23,7 @@ public sealed class ProviderTransportParityTests
         await using var peer = new LoopbackResponsesServer(
             (stream, _) => Reply(stream, Completed, encoding)
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var model = Catalog(peer.BaseUri, encoding).Resolve("a/wire");
         var options = ConfiguredModelRequests.Plan(
             model,
@@ -34,7 +34,7 @@ public sealed class ProviderTransportParityTests
             "turn"
         );
         var result = await ConfiguredModelRequests
-            .CreateService(http, model, options, "cache")
+            .CreateService(http, model, options, "cache", Foxwarm.Net.EgressPolicy.Unguarded)
             .ChatAsync("s", [], default);
         Assert.Contains("decoded answer", result.AssistantMessage!.ToJsonString());
         Assert.Equal(
@@ -56,7 +56,7 @@ public sealed class ProviderTransportParityTests
                     400
                 )
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = Options(peer.BaseUri) with
         {
             ExtraHeaders = new JsonObject { ["Accept-Encoding"] = "gzip" },
@@ -81,7 +81,7 @@ public sealed class ProviderTransportParityTests
                     cookie: index == 0 ? "provider-session=first; Path=/" : null
                 )
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var owner = new ModelRequestOwner(http, Options(peer.BaseUri), new ModelRouting());
         var catalog = Catalog(peer.BaseUri);
         await Request(owner, catalog, "a/wire");
@@ -103,7 +103,7 @@ public sealed class ProviderTransportParityTests
                     "gzip"
                 )
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = Options(peer.BaseUri) with
         {
             ExtraFields = new JsonObject { ["stream"] = false },

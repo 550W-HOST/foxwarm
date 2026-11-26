@@ -59,7 +59,7 @@ public sealed class MainFileDeliveryTests
             f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options));
             await f.Manager.LoadAsync();
             f.Owner = await f.Manager.CreateNamedAsync("main", "source", null, null);
-            f.mcp = new(f.Data);
+            f.mcp = new(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
             var definitions = FileDeliveryDefinitions.Definitions();
             foreach (var item in UnifiedToolDefinitions.All())
                 definitions.Add(item?.DeepClone());

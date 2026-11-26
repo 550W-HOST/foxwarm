@@ -133,7 +133,7 @@ public sealed partial class MainLocalToolsTests
     {
         using var temp = new TempDirectory();
         // Registration checks structure/placement, not the coordinator-owned editorial copy.
-        await using var mcp = new Foxwarm.McpClient(temp.Path);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, temp.Path);
         var registry = SessionToolExecutor.CreateRegistry(
             new JsonArray(ArtifactToolDefinition.Definition()),
             mcp,

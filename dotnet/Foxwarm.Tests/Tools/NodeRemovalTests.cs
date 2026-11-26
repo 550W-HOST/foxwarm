@@ -36,7 +36,7 @@ public sealed class NodeRemovalTests
             null,
             initialNode: "offline"
         );
-        await using var mcp = new Foxwarm.McpClient(data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var definitions = NodeToolDefinitions.All();
         foreach (var definition in UnifiedToolDefinitions.All())
             definitions.Add(definition?.DeepClone());

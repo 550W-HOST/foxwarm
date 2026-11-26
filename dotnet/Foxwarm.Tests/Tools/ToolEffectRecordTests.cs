@@ -76,7 +76,7 @@ public sealed class ToolEffectRecordTests
         );
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "effects", null, null);
-        await using var mcp = new Foxwarm.McpClient(data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var definitions = LocalExecManager.Definitions();
         foreach (var definition in ToolScriptToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());

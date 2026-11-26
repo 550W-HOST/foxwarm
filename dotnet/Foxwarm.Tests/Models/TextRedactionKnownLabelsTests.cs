@@ -44,7 +44,7 @@ public sealed class TextRedactionKnownLabelsTests
             await MissLater(context, text);
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var redactor = new TextRedactor(TextRedactionTests.Key);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var first = redactor.Begin(http, options, default);
@@ -129,7 +129,7 @@ public sealed class TextRedactionKnownLabelsTests
                 }.ToJsonString(),
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var owner = new ModelRequestOwner(
             http,
             new(provider.BaseUri, "m", "p/m", "", "", 100),
@@ -193,7 +193,7 @@ public sealed class TextRedactionKnownLabelsTests
             }
             return response;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         const string text = "mixed-value person-value";
         using (var store = TextRedactionStore.Open(path, key, 1 << 20)!)

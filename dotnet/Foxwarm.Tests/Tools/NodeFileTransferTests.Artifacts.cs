@@ -15,7 +15,7 @@ public sealed partial class NodeFileTransferTests
         var socket = await f.Connect("resident");
         await f.Manager.SelectNodeAsync(f.Owner, "resident");
         await f.Owner.UpdateCwdAsync("/remote/captured");
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var registry = SessionToolExecutor.CreateRegistry(
             new JsonArray(ArtifactToolDefinition.Definition()),
             mcp,

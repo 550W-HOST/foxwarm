@@ -35,7 +35,7 @@ public sealed class MainBrowserFailureTests
                 Path.Combine(temp.Path, "missing-node")
             )
         );
-        await using var mcp = new Foxwarm.McpClient(data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var registry = new ToolRegistry(mcp, _ => work);
         registry.Register(
             JsonNode

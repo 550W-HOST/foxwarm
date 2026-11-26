@@ -313,12 +313,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in UnifiedToolDefinitions.All())
             definitions.Add(definition?.DeepClone());
         mcp = new Foxwarm.McpClient(
+            Capabilities.Egress,
             this.root,
             SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"]),
             hostPaths?.McpConfigPath,
             Storage.Documents,
-            ConfigDocuments,
-            Capabilities.Egress
+            ConfigDocuments
         );
         mcp.Configuration.StdioAvailable = Capabilities.StdioMcp;
         tools = SessionToolExecutor.CreateRegistry(

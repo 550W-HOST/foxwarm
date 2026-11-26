@@ -29,7 +29,7 @@ public sealed class HttpErrorClassificationTests
                 await release.Task;
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var stop = new CancellationTokenSource();
         var catalog = HostModels.Parse(
             new JsonObject
@@ -56,7 +56,7 @@ public sealed class HttpErrorClassificationTests
             "cache",
             "turn"
         );
-        var service = ConfiguredModelRequests.CreateService(http, model, options, "cache");
+        var service = ConfiguredModelRequests.CreateService(http, model, options, "cache", Foxwarm.Net.EgressPolicy.Unguarded);
         var request = service.ChatAsync("s", [], stop.Token);
         try
         {
@@ -136,7 +136,7 @@ public sealed class HttpErrorClassificationTests
             },
             new JsonObject()
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var retries = new List<ModelRetryEvent>();
         var owner = new ModelRequestOwner(
             http,

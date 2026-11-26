@@ -24,11 +24,11 @@ internal sealed partial class AsrProxy : IDisposable
     internal AsrProxy(
         ModelConfiguration? configuration,
         CancellationToken stopped,
-        Foxwarm.Net.EgressPolicy? egress = null
+        Foxwarm.Net.EgressPolicy egress
     )
     {
         // The ASR service is a deployment setting, not the tenant's: the operator purpose.
-        this.egress = egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+        this.egress = egress;
         http = Foxwarm.Net.EgressHttp.Client(
             this.egress,
             Foxwarm.Net.EgressPurpose.Deployment,

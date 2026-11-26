@@ -176,7 +176,7 @@ public sealed class ModelUpstreamIdTests
     )
     {
         await using var peer = await WsPeer.StartAsync((_, number) => Response(number));
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         await ExerciseAsync(peer.Uri, "openai-ws", peer.Requests, transport, compatible);
     }
 
@@ -305,7 +305,7 @@ public sealed class ModelUpstreamIdTests
     )
     {
         await using var peer = await WsPeer.StartAsync();
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         using var http = new HttpClient();
         var document = Document(peer.Uri, "openai-ws", compatible);
         var second = document["providers"]!["p"]!["models"]![1]!.AsObject();

@@ -32,7 +32,7 @@ public sealed partial class TextRedactionTests
                     Encoding.UTF8.GetBytes("{}")
                 )
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var catalog = Catalog(detector.Endpoint, peer.BaseUri);
         using var keys = new TextRedactionKeys();
         var owner = new ModelRequestOwner(
@@ -85,7 +85,7 @@ public sealed partial class TextRedactionTests
             catch (OperationCanceledException) { }
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var provider = new Uri("http://127.0.0.1:1");
         var catalog = Catalog(detector.Endpoint, provider);
         using var keys = new TextRedactionKeys();

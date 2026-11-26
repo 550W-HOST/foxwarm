@@ -220,7 +220,7 @@ public sealed class SecretBoundaryTests
         );
         Assert.Contains("provider-key", catalog.MissingSecrets["referenced"]);
         Assert.False(catalog.MissingSecrets.ContainsKey("literal"));
-        _ = new Foxwarm.Asr.AsrProxy(configuration, default);
+        _ = new Foxwarm.Asr.AsrProxy(configuration, default, Foxwarm.Net.EgressPolicy.Unguarded);
         Assert.True(configuration.Secrets.Locked);
         Assert.Contains("locked", configuration.Secrets.LockError!.Message);
         Assert.Throws<SecretStoreLockedException>(() =>

@@ -23,7 +23,7 @@ public sealed class TextRedactionPlaceholderTests
             "Alice",
             "Bob"
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var redactor = new TextRedactor(
             TextRedactionTests.Key,
             knownLabels: TextRedactionKnownLabels.All
@@ -63,7 +63,7 @@ public sealed class TextRedactionPlaceholderTests
         var storeKey = Enumerable.Range(0, 64).Select(index => (byte)index).ToArray();
         var path = Path.Combine(temp.Path, TextRedactionStore.FileName);
         await using var detector = await TextDetectionPeer.StartAsync(Core);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
             KnownLabels = TextRedactionKnownLabels.All,

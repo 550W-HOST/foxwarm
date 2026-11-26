@@ -612,8 +612,8 @@ public sealed partial class ResponsesPrefixCommitTests
     private sealed class Owner : IAsyncDisposable
     {
         private readonly TempDirectory temp = new();
-        private readonly HttpClient http = ProviderHttpRequest.CreateClient();
-        private readonly ResponsesWsTransport transport = new(diagnostics: _ => { });
+        private readonly HttpClient http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
+        private readonly ResponsesWsTransport transport = new(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         internal readonly LlmRequestJournalStore Journal;
         internal readonly Foxwarm.Secrets.InstanceSecrets Secrets;
         internal readonly PersistentSessionAuthorityStore Store;

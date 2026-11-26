@@ -175,7 +175,7 @@ public sealed partial class NodeFileTransferTests
             await File.WriteAllTextAsync(file, "return 99");
         else
             File.Delete(file);
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var tools = SourceTools(f, mcp);
         var running = tools.ExecuteAsync(
             new JsonObject
@@ -221,7 +221,7 @@ public sealed partial class NodeFileTransferTests
         var file = Path.Combine(f.Work, "source.py");
         await File.WriteAllTextAsync(file, "ask_agent('continue?')\nreturn 73");
         var reply = await SourceReadReply(f, file);
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var tools = SourceTools(f, mcp);
         var running = tools.ExecuteAsync(
             new JsonObject
@@ -280,7 +280,7 @@ public sealed partial class NodeFileTransferTests
             Assert.IsAssignableFrom<JsonValue>(reply);
         // Display-only replies lack path metadata; this exercises the captured-cwd fallback.
         await f.Owner.UpdateCwdAsync(f.Work);
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var tools = SourceTools(f, mcp);
         var running = tools.ExecuteAsync(
             new JsonObject
@@ -310,7 +310,7 @@ public sealed partial class NodeFileTransferTests
         );
         var reply = await SourceReadReply(f, file);
         File.Delete(file);
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var tools = SourceTools(f, mcp);
         var running = tools.ExecuteAsync(
             new JsonObject
@@ -339,7 +339,7 @@ public sealed partial class NodeFileTransferTests
         var reply = await SourceReadReply(f, file);
         Assert.NotNull(reply["inlineData"]);
         Assert.Null(reply["content"]);
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var tools = SourceTools(f, mcp);
         var running = tools.ExecuteAsync(
             new JsonObject
@@ -418,7 +418,7 @@ public sealed partial class NodeFileTransferTests
             );
             f.Manager.Authorization.Invalidate();
         }
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var tools = SourceTools(f, mcp);
         var running = tools.ExecuteAsync(
             new JsonObject
@@ -461,7 +461,7 @@ public sealed partial class NodeFileTransferTests
         );
         var reply = await SourceReadReply(f, file);
         Assert.True(reply["truncated"]!.GetValue<bool>());
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var tools = SourceTools(f, mcp);
         var running = tools.ExecuteAsync(
             new JsonObject

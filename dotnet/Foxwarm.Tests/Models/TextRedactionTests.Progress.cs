@@ -12,7 +12,7 @@ public sealed partial class TextRedactionTests
     {
         const string secret = "Ada \"Quoted\" \\path\n\t\u0001私😀</b>";
         await using var detector = await TextDetectionPeer.StartAsync(secret);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var settings = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var scope = new TextRedactor(Key).Begin(http, settings, default);
         var key = await scope.RedactAsync(secret);

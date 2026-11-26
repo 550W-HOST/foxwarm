@@ -212,7 +212,7 @@ public abstract class TextRedactionStoreContractTests
             5,
             async (_, connection, _) => await AnswerAsync(connection)
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         await using var owner = await CreateAsync();
         var catalog = Catalog(provider.BaseUri, detector.Endpoint, batchBytes, 0.5);
         var first = User(Early);

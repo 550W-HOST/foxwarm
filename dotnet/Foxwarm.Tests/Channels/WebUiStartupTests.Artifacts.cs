@@ -44,7 +44,7 @@ public sealed partial class WebUiStartupTests
         await using var manager = new SessionManager(data, work, options, config.Models);
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "chart-owner", null, null);
-        await using var mcp = new McpClient(data);
+        await using var mcp = new McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var registry = SessionToolExecutor.CreateRegistry(
             new JsonArray(ArtifactToolDefinition.Definition()),
             mcp,

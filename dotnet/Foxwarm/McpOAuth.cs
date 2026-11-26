@@ -52,12 +52,12 @@ internal sealed partial class McpOAuthService
         Func<string, JsonObject?> getConfiguredServer,
         Action<string> closeConnections,
         CancellationToken shutdown,
+        Foxwarm.Net.EgressPolicy egress,
         Action<AtomicJsonWriteStage>? writeStage = null,
-        Foxwarm.Storage.IStateDocuments? documents = null,
-        Foxwarm.Net.EgressPolicy? egress = null
+        Foxwarm.Storage.IStateDocuments? documents = null
     )
     {
-        Egress = egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+        Egress = egress;
         store = (documents ?? new Foxwarm.Storage.FileStateDocuments(root)).Open(
             Foxwarm.Storage.StateDocumentName.McpOAuth,
             new(writeStage)

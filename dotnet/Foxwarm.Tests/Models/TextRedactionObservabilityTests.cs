@@ -143,7 +143,7 @@ public sealed partial class TextRedactionObservabilityTests
         {
             Detector = detector,
             Provider = provider,
-            Http = ProviderHttpRequest.CreateClient(),
+            Http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded),
             Temp = temp,
             Journal = new LlmRequestJournalStore(temp.Path),
             Keys = new TextRedactionKeys(allLabels: true),

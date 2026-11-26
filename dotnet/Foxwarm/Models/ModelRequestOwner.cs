@@ -483,6 +483,9 @@ internal sealed class ModelRequestOwner(
                     leaf,
                     options,
                     providerCache,
+                    // Every product owner passes its runtime's transport; an owner built
+                    // without one (unit tests) is file mode's.
+                    websockets?.Egress ?? Foxwarm.Net.EgressPolicy.Unguarded,
                     progress,
                     websockets,
                     scope

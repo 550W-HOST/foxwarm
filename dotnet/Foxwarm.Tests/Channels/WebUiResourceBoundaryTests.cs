@@ -391,7 +391,7 @@ public sealed class WebUiResourceBoundaryTests
             f.Image = ImageCodecTests.Raster(SKEncodedImageFormat.Png);
             var source = Path.Combine(work, "published.png");
             await File.WriteAllBytesAsync(source, f.Image);
-            await using (var mcp = new McpClient(data))
+            await using (var mcp = new McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data))
             {
                 var registry = SessionToolExecutor.CreateRegistry(
                     new JsonArray(ArtifactToolDefinition.Definition()),

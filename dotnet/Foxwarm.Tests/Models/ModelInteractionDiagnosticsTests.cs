@@ -296,7 +296,7 @@ public sealed class ModelInteractionDiagnosticsTests
                     );
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var owner = new ModelRequestOwner(
             http,
             Options(peer.BaseUri),
@@ -341,7 +341,7 @@ public sealed class ModelInteractionDiagnosticsTests
                     )
                 )
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         await Request(
             new(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
             HostModels.Parse(Catalog(peer.BaseUri), new JsonObject())
@@ -399,7 +399,7 @@ public sealed class ModelInteractionDiagnosticsTests
                 );
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var result = await Request(
             new(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
             HostModels.Parse(Catalog(peer.BaseUri), new JsonObject())
@@ -455,8 +455,8 @@ public sealed class ModelInteractionDiagnosticsTests
                 await context.Send(response);
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         var catalogJson = Catalog(peer.Uri, "openai-ws");
         catalogJson["providers"]!["a"]!["imageGeneration"] = new JsonObject { ["enabled"] = true };
         await Request(
@@ -499,8 +499,8 @@ public sealed class ModelInteractionDiagnosticsTests
                 await context.Send(ResponsesPrefixCommitTests.Completed(Answer()));
             }
         );
-        using var http = ProviderHttpRequest.CreateClient();
-        await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         await Request(
             new(
                 http,
@@ -534,7 +534,7 @@ public sealed class ModelInteractionDiagnosticsTests
                     Encoding.UTF8.GetBytes("terminal evidence " + OldToken)
                 )
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         await Assert.ThrowsAsync<ModelRequestException>(() =>
             Request(
                 new(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),

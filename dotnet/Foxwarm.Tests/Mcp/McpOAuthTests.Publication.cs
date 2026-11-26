@@ -76,6 +76,7 @@ public sealed partial class McpOAuthTests
             f.Mcp.AuthorizationServer,
             _ => closes++,
             CancellationToken.None,
+            Foxwarm.Net.EgressPolicy.Unguarded,
             stage =>
             {
                 if (fail && stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync)

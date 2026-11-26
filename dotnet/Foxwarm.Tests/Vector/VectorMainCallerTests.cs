@@ -18,7 +18,7 @@ public sealed class VectorMainCallerTests
     )
     {
         var workspace = manager.IdentityWorkspace(owner)!.ToolDirectory;
-        await using var mcp = new Foxwarm.McpClient(Path.Combine(workspace, ".vector-test-mcp"));
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, Path.Combine(workspace, ".vector-test-mcp"));
         var registry = SessionToolExecutor.CreateRegistry(
             new JsonArray(ArchiveRecallTool.Definition()),
             mcp,

@@ -14,7 +14,7 @@ public sealed class TextRedactionConcurrencyTests
     public async Task Concurrent_literal_passes_send_and_register_the_first_memoized_result()
     {
         await using var detector = await TextDetectionPeer.StartAsync();
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var redactor = new TextRedactor(
             TextRedactionTests.Key,
             knownLabels: TextRedactionKnownLabels.All
@@ -171,7 +171,7 @@ public sealed class TextRedactionConcurrencyTests
             },
         };
         using var root = new TempDirectory();
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         async Task<ChatResult> Request(InstanceSecrets secrets, string instructions)
         {
             var owner = new ModelRequestOwner(
@@ -278,7 +278,7 @@ public sealed class TextRedactionConcurrencyTests
             );
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
             KnownLabels = TextRedactionKnownLabels.All,
@@ -383,7 +383,7 @@ public sealed class TextRedactionConcurrencyTests
     public async Task A_literal_input_equal_to_a_cached_form_does_not_change_that_cached_occurrence()
     {
         await using var detector = await TextDetectionPeer.StartAsync("Alice");
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var redactor = new TextRedactor(
             TextRedactionTests.Key,
             knownLabels: TextRedactionKnownLabels.All

@@ -90,7 +90,7 @@ public sealed class TextRedactionRegressionTests
             );
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var redactor = keys.Secrets.TextRedactor();
@@ -203,7 +203,7 @@ public sealed class TextRedactionRegressionTests
     public async Task Placeholders_restore_only_for_the_request_that_registered_them()
     {
         await using var detector = await TextDetectionPeer.StartAsync("alice@corp.example");
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var redactor = new TextRedactor(Enumerable.Range(40, 32).Select(i => (byte)i).ToArray());
         var placeholder = await redactor
@@ -368,7 +368,7 @@ public sealed class TextRedactionRegressionTests
     public async Task Unchanged_history_reuses_detection_beyond_two_thousand_slots()
     {
         await using var detector = await TextDetectionPeer.StartAsync();
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var redactor = new TextRedactor(Enumerable.Range(80, 32).Select(i => (byte)i).ToArray());
         List<JsonObject> History(int count) =>
@@ -401,7 +401,7 @@ public sealed class TextRedactionRegressionTests
     public async Task Raw_arguments_are_kept_or_written_without_escapes()
     {
         await using var detector = await TextDetectionPeer.StartAsync("Bob");
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var redactor = new TextRedactor(Enumerable.Range(120, 32).Select(i => (byte)i).ToArray());
         JsonObject Call(string raw) =>
@@ -455,7 +455,7 @@ public sealed class TextRedactionRegressionTests
     {
         var names = Enumerable.Range(0, 200).Select(i => "person-" + i).ToArray();
         await using var detector = await TextDetectionPeer.StartAsync(names);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var redactor = new TextRedactor(
             Key,
@@ -477,7 +477,7 @@ public sealed class TextRedactionRegressionTests
     {
         double? received = -1;
         var service = new TextRedactionChatService(
-            ProviderHttpRequest.CreateClient(),
+            ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded),
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 HardTimeoutMs = timeoutMs,
@@ -577,7 +577,7 @@ public sealed class TextRedactionRegressionTests
                 },
                 new()
             );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
         var owner = new ModelRequestOwner(
             http,
@@ -638,7 +638,7 @@ public sealed class TextRedactionRegressionTests
             await context.Response.WriteAsync("""{"error":"too large"}""");
             return true;
         };
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
         string? body = null;
         await using var peer = new LoopbackResponsesServer(

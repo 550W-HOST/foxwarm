@@ -274,7 +274,7 @@ public sealed class StartupDiagnosticsTests
         var sync = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG");
         using var output = new StringWriter();
         using var errors = new StringWriter();
-        await using var transport = new ResponsesWsTransport();
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded);
         using var socket = new ClientWebSocket();
         using var invoker = new HttpMessageInvoker(new SocketsHttpHandler());
         var resource = new ResponsesWsResource(transport, socket, "fixture", invoker);
@@ -335,7 +335,7 @@ public sealed class StartupDiagnosticsTests
         peer.CloseReplyStatus = (WebSocketCloseStatus)code;
         if (active)
             peer.CloseAfterRequest = (WebSocketCloseStatus)code;
-        await using var transport = new ResponsesWsTransport();
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded);
         var service = new ResponsesWsChatService(
             ResponsesWsTests.Options(peer.Uri),
             transport,
@@ -414,7 +414,7 @@ public sealed class StartupDiagnosticsTests
             await release.Task;
         };
         var clock = new ManualWsClock();
-        await using var transport = new ResponsesWsTransport(clock);
+        await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, clock);
         var service = new ResponsesWsChatService(
             ResponsesWsTests.Options(peer.Uri),
             transport,

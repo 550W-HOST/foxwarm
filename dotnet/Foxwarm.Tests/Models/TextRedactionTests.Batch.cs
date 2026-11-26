@@ -15,7 +15,7 @@ public sealed partial class TextRedactionTests
     {
         await using var detector = await TextDetectionPeer.StartAsync("Alice", "Bob");
         var redactor = new TextRedactor(Enumerable.Range(60, 32).Select(i => (byte)i).ToArray());
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
             BatchBytes = 4096,
@@ -86,7 +86,7 @@ public sealed partial class TextRedactionTests
             return response;
         };
         var redactor = new TextRedactor(Enumerable.Range(70, 32).Select(i => (byte)i).ToArray());
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
 
         var found = await redactor.DetectBatchAsync(
@@ -134,7 +134,7 @@ public sealed partial class TextRedactionTests
             .ToList();
         IReadOnlyList<JsonObject>? sent = null;
         var service = new TextRedactionChatService(
-            ProviderHttpRequest.CreateClient(),
+            ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded),
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 Instructions = "Instructions",
@@ -174,7 +174,7 @@ public sealed partial class TextRedactionTests
             .ToList();
         IReadOnlyList<JsonObject>? sent = null;
         var service = new TextRedactionChatService(
-            ProviderHttpRequest.CreateClient(),
+            ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded),
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 TextRedactorSource = () =>
@@ -199,7 +199,7 @@ public sealed partial class TextRedactionTests
     {
         await using var detector = await TextDetectionPeer.StartAsync("Acme", "Alice");
         var redactor = new TextRedactor(Enumerable.Range(100, 32).Select(i => (byte)i).ToArray());
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var keep = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
             KeepValues = ["acme"],
@@ -229,7 +229,7 @@ public sealed partial class TextRedactionTests
         var tag = "foxwarm" + "-message";
         await using var detector = await TextDetectionPeer.StartAsync(platform, tag, "Alice");
         var redactor = new TextRedactor(Enumerable.Range(110, 32).Select(i => (byte)i).ToArray());
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var scope = redactor.Begin(http, options, default);
         var text = $"<{tag} type=\"channel\" channelType=\"{platform}\">Ask Alice</{tag}>";

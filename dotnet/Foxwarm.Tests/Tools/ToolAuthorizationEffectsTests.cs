@@ -104,7 +104,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             definitions.Add(definition?.DeepClone());
         foreach (var definition in SessionSettingsDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
-        var mcp = new Foxwarm.McpClient(Path.Combine(root, "data"));
+        var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, Path.Combine(root, "data"));
         var registry = SessionToolExecutor.CreateRegistry(
             definitions,
             mcp,

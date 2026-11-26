@@ -22,7 +22,7 @@ public sealed partial class NodeFileTransferTests
             "run:\n  entry: scripts/run.py\n  effect: Returns its input.\n  args:\n    type: object\n    properties:\n      n: {type: integer}\n",
             code: "return {'n': args['n'], 'from': 'entry'}\n"
         );
-        await using var mcp = new Foxwarm.McpClient(f.Data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data);
         var definitions = ToolScriptToolDefinitions.Definitions();
         foreach (var item in UnifiedToolDefinitions.All())
             definitions.Add(item?.DeepClone());

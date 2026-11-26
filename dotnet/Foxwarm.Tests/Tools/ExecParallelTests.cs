@@ -43,7 +43,7 @@ public sealed class ExecParallelTests
         );
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "calls", null, null);
-        await using var mcp = new Foxwarm.McpClient(data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var registry = new ToolRegistry(mcp, _ => work);
         var releases = new ConcurrentDictionary<string, TaskCompletionSource>();
         var starts = new ConcurrentDictionary<string, TaskCompletionSource>();
@@ -108,7 +108,7 @@ public sealed class ExecParallelTests
         );
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "calls", null, null);
-        await using var mcp = new Foxwarm.McpClient(data);
+        await using var mcp = new Foxwarm.McpClient(Foxwarm.Net.EgressPolicy.Unguarded, data);
         var registry = new ToolRegistry(mcp, _ => work);
         var effects = 0;
         registry.Register(

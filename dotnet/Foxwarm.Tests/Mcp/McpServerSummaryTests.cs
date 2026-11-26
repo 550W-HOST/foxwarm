@@ -8,7 +8,7 @@ public sealed class McpServerSummaryTests
     public async Task Summaries_omit_url_header_and_env_credentials()
     {
         using var temp = new TempDirectory();
-        await using var mcp = new McpClient(temp.Path);
+        await using var mcp = new McpClient(Foxwarm.Net.EgressPolicy.Unguarded, temp.Path);
         await mcp.ConfigureAsync(
             new JsonObject
             {
@@ -103,7 +103,7 @@ public sealed class McpServerSummaryTests
     public async Task Error_redaction_distinguishes_username_from_username_only_credential()
     {
         using var temp = new TempDirectory();
-        await using var client = new McpClient(temp.Path);
+        await using var client = new McpClient(Foxwarm.Net.EgressPolicy.Unguarded, temp.Path);
         await client.ConfigureAsync(
             new JsonObject { ["name"] = "remote", ["url"] = "https://a:sec%2Fret@example.test/mcp" },
             default
@@ -129,7 +129,7 @@ public sealed class McpServerSummaryTests
     public async Task Error_redaction_covers_URL_query_user_info_and_fragment()
     {
         using var temp = new TempDirectory();
-        await using (var mcp = new McpClient(temp.Path))
+        await using (var mcp = new McpClient(Foxwarm.Net.EgressPolicy.Unguarded, temp.Path))
             await mcp.ConfigureAsync(
                 new JsonObject
                 {

@@ -114,7 +114,7 @@ public sealed class GeneratedImageReplayAdmissionTests
         var hosted = new SessionOwner("s", "main", config.Models) { Archive = store.Archive };
         var agents = new AgentCatalog(temp.Path, temp.Path);
         var defaults = new ResponsesClientOptions(uri, "m", "a/m", "synthetic", "", 1000);
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var requests = new ModelRequestOwner(
             http,
             defaults,

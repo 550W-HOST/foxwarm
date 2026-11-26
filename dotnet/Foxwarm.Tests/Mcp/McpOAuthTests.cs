@@ -96,7 +96,7 @@ public sealed partial class McpOAuthTests
             "fixture-client-secret",
             (await f.Mcp.ListServersAsync(default)).ToJsonString()
         );
-        await using var fresh = new McpClient(f.Data, PublicBase);
+        await using var fresh = new McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data, PublicBase);
         Assert.Single(await fresh.ListToolsAsync("peer", default, f.First, f.First.McpGeneration));
         Assert.Equal(
             "persisted",
@@ -322,6 +322,6 @@ public sealed partial class McpOAuthTests
         Assert.Throws<McpOAuthException>(() =>
             McpOAuthHttp.Endpoint("http://production.example/token")
         );
-        Assert.Throws<McpOAuthException>(() => new McpClient(f.Data).OAuth.PublicUrl("/callback"));
+        Assert.Throws<McpOAuthException>(() => new McpClient(Foxwarm.Net.EgressPolicy.Unguarded, f.Data).OAuth.PublicUrl("/callback"));
     }
 }

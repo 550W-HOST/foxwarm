@@ -104,9 +104,9 @@ public sealed class ModelConnectionFallbackTests
             "cache",
             "turn"
         );
-        using var http = ProviderHttpRequest.CreateClient();
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var result = await ConfiguredModelRequests
-            .CreateService(http, model, options, "cache")
+            .CreateService(http, model, options, "cache", Foxwarm.Net.EgressPolicy.Unguarded)
             .ChatAsync("s", [], default);
         Assert.Contains("fallback answer", result.AssistantMessage!.ToJsonString());
         var request = await peer.Request;

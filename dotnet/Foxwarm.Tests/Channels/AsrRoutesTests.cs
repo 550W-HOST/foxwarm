@@ -83,8 +83,7 @@ public sealed partial class AsrRoutesTests
             File.WriteAllText(path, "asrService:\n  url: " + url + "\n");
             using var proxy = new AsrProxy(
                 new ModelConfiguration(temp.Path),
-                CancellationToken.None
-            );
+                CancellationToken.None, Foxwarm.Net.EgressPolicy.Unguarded);
             Assert.True(proxy.Configured);
         }
     }
