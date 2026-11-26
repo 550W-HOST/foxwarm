@@ -15,7 +15,10 @@ const unix = { skip: process.platform !== 'linux' && 'Linux fixture process chec
 const linux = { skip: unix.skip || (!hasTmux && 'tmux is not installed') };
 
 // The fixture Main reads its installation root, records its PID and token, and stops on
-// SIGTERM unless the installation contains `fake-ignore-term`.
+// SIGTERM unless the installation contains `fake-ignore-term`. With `fake-startup-failure`
+// it reports that file's text as a fatal startup failure, like Main: on stderr and in the
+// FOXWARM_STARTUP_FAILURE_LOG file. `fake-lost-output` then erases the pane, as tmux does
+// with output it had not read when the pane's process exited.
 const fakeMain = `#!/bin/bash
 root="$2"; shift 2
 if [ "$1" = --inspect-upgrade ]; then
@@ -24,8 +27,11 @@ if [ "$1" = --inspect-upgrade ]; then
   exit
 fi
 data="$(cat "$root/data_dir")"
-if [ -e "$root/fake-bind-failure" ]; then
-  echo "Main fatal startup failure at host start: IOException / AddressInUseException / AddressAlreadyInUse" >&2
+if [ -e "$root/fake-startup-failure" ]; then
+  line="Main fatal startup failure at host start: $(cat "$root/fake-startup-failure")"
+  echo "$line" >&2
+  [ -z "\${FOXWARM_STARTUP_FAILURE_LOG:-}" ] || echo "$line" >> "$FOXWARM_STARTUP_FAILURE_LOG"
+  [ ! -e "$root/fake-lost-output" ] || printf '\\033c\\033[3J' >&2
   exit 1
 fi
 mkdir -p "$data/state"
@@ -102,6 +108,8 @@ function fixture(t) {
   }
   return { root, makePackage, install, control, run, tmux, withoutTmux };
 }
+
+const bindFailure = 'IOException / AddressInUseException / AddressAlreadyInUse';
 
 function waitFor(condition, ms = 5000) {
   const end = Date.now() + ms;
@@ -543,7 +551,7 @@ test('start reports a port conflict and leaves nothing running when Main cannot 
   const f = fixture(t);
   const dir = path.join(f.root, 'foxwarm');
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
-  fs.writeFileSync(path.join(dir, 'fake-bind-failure'), '');
+  fs.writeFileSync(path.join(dir, 'fake-startup-failure'), bindFailure);
   fs.mkdirSync(path.join(f.root, 'foxwarm-data/state'), { recursive: true });
   fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'bot:\n  httpPort: 3456\n');
   const tmux = f.control(dir, 'start');
@@ -556,6 +564,58 @@ test('start reports a port conflict and leaves nothing running when Main cannot 
   assert.equal(background.status, 1);
   assert.match(background.stderr, /port 3456 is already in use/);
   assert.doesNotMatch(background.stdout, /Started/);
+});
+
+// tmux closes the terminal of a pane whose process has exited, discarding output it has not
+// read yet, so an immediate failure can be missing from the pane. Main also records it in the
+// error log named by FOXWARM_STARTUP_FAILURE_LOG, and start reports any fatal failure.
+test('start reports the startup failure that the pane lost, and any other fatal failure', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  fs.writeFileSync(path.join(dir, 'fake-lost-output'), '');
+  fs.writeFileSync(path.join(dir, 'fake-startup-failure'), bindFailure);
+  fs.mkdirSync(path.join(f.root, 'foxwarm-data/state'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'bot:\n  httpPort: 3456\n');
+  const lost = f.control(dir, 'start');
+  assert.equal(lost.status, 1);
+  assert.match(lost.stderr, /port 3456 is already in use/);
+  assert.doesNotMatch(f.tmux('capture-pane', '-p', '-J', '-S', '-', '-t', '=release-fixture:=foxwarm'), /AddressInUse/);
+
+  const locked = 'InstallationLockedException: Another Foxwarm Main is already running with data directory /data.';
+  fs.writeFileSync(path.join(dir, 'fake-startup-failure'), locked);
+  const tmux = f.control(dir, 'start');
+  assert.equal(tmux.status, 1);
+  assert(tmux.stderr.includes(`Foxwarm exited during startup. Main fatal startup failure at host start: ${locked}`), tmux.stderr);
+
+  f.withoutTmux();
+  const background = f.control(dir, 'start');
+  assert.equal(background.status, 1);
+  assert(background.stderr.includes(locked), background.stderr);
+  assert.doesNotMatch(background.stdout, /Started/);
+});
+
+// Until the detached launch chain (subshell, nohup, bash, env) has reached Main, the recorded
+// PID belongs to a launcher process that does not look like this installation's Main.
+test('without tmux, start waits while the launch chain has not reached Main yet', unix, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  const bin = f.withoutTmux();
+  // nohup continues only after start has inspected the recorded PID's command once.
+  const checked = path.join(f.root, 'ownership-checked');
+  for (const name of ['nohup', 'ps']) {
+    const real = fs.readlinkSync(path.join(bin, name));
+    fs.rmSync(path.join(bin, name));
+    const script = name === 'ps'
+      ? `[ "$1" != -ww ] || : > '${checked}'\nexec '${real}' "$@"`
+      : `while [ ! -e '${checked}' ]; do sleep 0.02; done\nexec '${real}' "$@"`;
+    fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${script}\n`, { mode: 0o755 });
+  }
+  const started = ok(f.control(dir, 'start'));
+  assert.match(started.stdout, /Started 0\.9\.0 in the background/);
+  assert.equal(fs.readFileSync(path.join(dir, 'foxwarm.pid'), 'utf8'), `${mainPid(dir)}\n`);
+  ok(f.control(dir, 'stop'));
 });
 
 test('restart checks that Main can be launched before stopping the running one', linux, t => {

@@ -3,6 +3,8 @@ using Foxwarm.Channels.WebUi;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
+MainLog.TakeStartupFailureLog();
+
 // The launcher supplies its known installation identity independently of payload resources.
 // This internal entry metadata is not a public CLI configuration option.
 string? applicationRoot = null;

@@ -16,6 +16,7 @@ RELEASES="https://github.com/550W-HOST/foxwarm/releases"
 STOP_SECONDS=60
 OUT_OFFSET=0
 ERR_OFFSET=0
+LAUNCHED=""
 
 log() { printf '[foxwarm] %s\n' "$*"; }
 fail() { printf '[foxwarm] %s\n' "$*" >&2; exit 1; }
@@ -55,12 +56,18 @@ launcher() {
   fi
 }
 
+# The optional argument is the file where Main also records a fatal startup failure.
 main_command() {
   local unset="" set="" name
   # A long-lived tmux server may have a different environment from this invocation.
   for name in FOXWARM_DATA_DIR MCP_CONFIG_PATH DOTNET_ROOT; do
     if [ -n "${!name:-}" ]; then set+=" $(printf '%q' "$name=${!name}")"; else unset+=" -u $name"; fi
   done
+  if [ -n "${1:-}" ]; then
+    set+=" $(printf '%q' "FOXWARM_STARTUP_FAILURE_LOG=$1")"
+  else
+    unset+=" -u FOXWARM_STARTUP_FAILURE_LOG"
+  fi
   local command="exec env$unset$set $(printf '%q' "PATH=$PATH")"
   # Resolve the selected release now so a later update does not move a running Main.
   command+=" $(launcher "$(cd "$CURRENT" && pwd -P)") --installation-root $(printf '%q' "$ROOT")"
@@ -163,23 +170,30 @@ http_port() {
 
 file_size() { local size; size="$( { wc -c < "$1"; } 2>/dev/null || echo 0)"; printf '%s' "$((size))"; }
 
-# What this start has printed: the pane in tmux mode, otherwise the log bytes appended since
-# OUT_OFFSET/ERR_OFFSET were recorded before launch.
+# What this start has printed: the pane in tmux mode, and the log bytes appended since
+# OUT_OFFSET/ERR_OFFSET were recorded before launch. In tmux mode the error log holds only
+# Main's fatal startup failure, which the pane can lose: tmux closes the terminal of a pane
+# whose process has exited and discards output it has not read yet.
 startup_output() {
   if [ -n "$PANE" ]; then
     tmux capture-pane -p -J -S - -t "$PANE" 2>/dev/null || true
-  else
-    log_paths
-    { tail -c "+$((OUT_OFFSET + 1))" "$STDOUT_LOG"; tail -c "+$((ERR_OFFSET + 1))" "$STDERR_LOG"; } 2>/dev/null || true
   fi
+  log_paths
+  { tail -c "+$((OUT_OFFSET + 1))" "$STDOUT_LOG"; tail -c "+$((ERR_OFFSET + 1))" "$STDERR_LOG"; } 2>/dev/null || true
 }
 
 startup_failed() {
-  case "$(startup_output)" in
+  local output fatal=""
+  output="$(startup_output)"
+  case "$output" in
     *AddressInUse*) fail "Foxwarm could not start: port $(http_port) is already in use. Stop the program that uses it, or set bot.httpPort in $CONFIG_PATH to a free port." ;;
     *AddressNotAvailable*) fail "Foxwarm could not start: bot.httpHost in $CONFIG_PATH is not an address of this computer." ;;
+    *'Main fatal startup failure at '*)
+      fatal="${output#*Main fatal startup failure at }"
+      fatal="${fatal%%$'\n'*}"
+      fatal=" Main fatal startup failure at ${fatal%$'\r'}" ;;
   esac
-  fail "Foxwarm exited during startup. Use '$ROOT/foxwarmctl' attach for the pane or log paths."
+  fail "Foxwarm exited during startup.$fatal Use '$ROOT/foxwarmctl' attach for the pane or log paths."
 }
 
 # Success means Main is serving: it is alive and has reported its listener. A process that is
@@ -187,7 +201,12 @@ startup_failed() {
 wait_ready() {
   local i out
   for ((i = 0; i < 300; i++)); do
-    running || startup_failed
+    if ! running; then
+      # A detached launch keeps the recorded PID through cd, nohup, bash and env, whose
+      # commands are not yet Main's. Only the end of that process is a failed start.
+      if [ -n "$LAUNCHED" ] && alive "$LAUNCHED"; then sleep 0.2; continue; fi
+      startup_failed
+    fi
     out="$(startup_output)"
     case "$out" in
       *'Main HTTP listening'*|*'Main started without HTTP'*) return 0 ;;
@@ -203,12 +222,15 @@ foreign_hint() {
 
 cmd_start() {
   local command
-  command="$(main_command)"
+  log_paths
+  # A pane can lose the output of a Main that exits at once, so Main also records a fatal
+  # startup failure in the error log. Detached, its stderr already is that log.
+  if have tmux; then command="$(main_command "$STDERR_LOG")"; else command="$(main_command)"; fi
   find_main
   [ "$STATE" != running ] || fail "Foxwarm is already running (PID $PID, $MODE)."
-  log_paths
   OUT_OFFSET="$(file_size "$STDOUT_LOG")"
   ERR_OFFSET="$(file_size "$STDERR_LOG")"
+  mkdir -p "$LOG_DIR"
   if have tmux; then
     case "$STATE" in
       foreign) fail "$(foreign_hint)" ;;
@@ -227,12 +249,11 @@ cmd_start() {
     # Record even an early-exiting Main; validation rejects dead or reused PIDs.
     if [ -n "$PID" ]; then printf '%s\n' "$PID" > "$PID_FILE"; fi
   else
-    log_paths
-    mkdir -p "$LOG_DIR"
     # nohup ignores terminal hangups; redirected descriptors do not retain the SSH
     # channel. exec keeps the recorded PID through the shell/env/runtime launch chain.
     (cd "$ROOT" && exec nohup bash -c "$command") </dev/null >>"$STDOUT_LOG" 2>>"$STDERR_LOG" &
-    printf '%s\n' "$!" > "$PID_FILE"
+    LAUNCHED="$!"
+    printf '%s\n' "$LAUNCHED" > "$PID_FILE"
   fi
   wait_ready
   if [ "$MODE" = tmux ]; then

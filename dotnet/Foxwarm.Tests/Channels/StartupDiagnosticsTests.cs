@@ -184,6 +184,10 @@ public sealed class StartupDiagnosticsTests
             $"bot: {{httpPort: {((IPEndPoint)occupied.LocalEndpoint).Port}}}\n"
         );
         start.Environment["FOXWARM_SYNC_FILE_LOG"] = "1";
+        // A launcher's own file receives the same fatal lines in every stage, including
+        // entry failures before any Main log exists.
+        var failureLog = Path.Combine(temp.Path, "launcher-errors.log");
+        start.Environment[MainLog.StartupFailureLogVariable] = failureLog;
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
@@ -195,6 +199,27 @@ public sealed class StartupDiagnosticsTests
             var error = await stderr;
             Assert.DoesNotContain("secret-invalid-value", error);
             Assert.DoesNotContain("Unhandled exception", error);
+            // Synchronous JSON logging has no console target, so the composition/start line
+            // reaches stderr only through the file log; the entry line always does.
+            var recorded = File.ReadAllLines(failureLog);
+            Assert.All(
+                recorded,
+                line =>
+                    Assert.StartsWith(
+                        "Main fatal startup failure at ",
+                        line,
+                        StringComparison.Ordinal
+                    )
+            );
+            var entry = Assert.Single(
+                error.Split('\n').Select(line => line.TrimEnd('\r')),
+                line =>
+                    line.StartsWith(
+                        "Main fatal startup failure at entry: ",
+                        StringComparison.Ordinal
+                    )
+            );
+            Assert.Equal(entry, recorded[^1]);
             var logPath = Path.Combine(state, "logs", "foxwarm.log");
             if (failure == "configuration")
             {
@@ -206,6 +231,7 @@ public sealed class StartupDiagnosticsTests
                 .Select(line => JsonNode.Parse(line)!.AsObject())
                 .ToArray();
             var fatal = Assert.Single(records, row => row["level"]!.GetValue<int>() >= 50);
+            Assert.Equal(new[] { fatal["msg"]!.ToString(), entry }, recorded);
             Assert.Contains(
                 failure == "catalog" ? "IOException" : "AddressAlreadyInUse",
                 fatal["msg"]!.ToString()
