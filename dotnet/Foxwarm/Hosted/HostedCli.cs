@@ -4,8 +4,9 @@ using Foxwarm.Hosted.Schema;
 namespace Foxwarm.Hosted;
 
 /// <summary>
-/// The hosted-mode operator commands: <c>db migrate</c> and <c>db status</c>. They run beside
-/// or before the replicas and never start a runtime.
+/// The hosted-mode operator commands: <c>db migrate</c>, <c>db status</c>, <c>hosted import</c>,
+/// <c>hosted token</c> and <c>hosted health</c>. They run beside or before the replicas and never
+/// start a runtime.
 /// </summary>
 internal static class HostedCli
 {
@@ -32,6 +33,10 @@ internal static class HostedCli
                     return await StatusAsync(bootstrap, output);
                 case ["hosted", "import", .. var options]:
                     return await ImportAsync(bootstrap, options, output, error);
+                case ["hosted", "token", .. var options]:
+                    return await TokenAsync(bootstrap, options, output, error);
+                case ["hosted", "health", .. var options]:
+                    return await HealthAsync(bootstrap, options, error);
                 default:
                     await error.WriteLineAsync(Usage);
                     return UsageError;
@@ -52,7 +57,113 @@ internal static class HostedCli
     internal const string Usage =
         "Usage: foxwarm db migrate [--app-role <role>] [--tenant <name>] | foxwarm db status\n"
         + "       foxwarm hosted import --data-root <dir> [--tenant <name>] [--journal] [--dry-run]\n"
-        + "                              [--report <file>] [--deployment-config <file>]";
+        + "                              [--report <file>] [--deployment-config <file>]\n"
+        + "       foxwarm hosted token [--tenant <name>]\n"
+        + "       foxwarm hosted health [--ready]";
+
+    /// <summary>
+    /// <c>foxwarm hosted token</c>: prints the tenant's sign-in token (the HTTP token instance
+    /// credential) for the operator. It reads with the replica's environment (runtime database URL
+    /// and key-encryption keys) and writes nothing: no lease, no data key creation or rewrap.
+    /// Whoever holds the database URL and the KEK can already decrypt the tenant, so it exposes
+    /// nothing new. Exit 1 while the tenant has no token yet: the first owner creates it.
+    /// </summary>
+    private static async Task<int> TokenAsync(
+        HostedBootstrap bootstrap,
+        string[] options,
+        TextWriter output,
+        TextWriter error
+    )
+    {
+        var tenant = bootstrap.Tenant;
+        for (var index = 0; index < options.Length; index++)
+            switch (options[index])
+            {
+                case "--tenant" when index + 1 < options.Length:
+                    tenant = options[++index];
+                    break;
+                default:
+                    await error.WriteLineAsync("Unknown hosted token option: " + options[index]);
+                    await error.WriteLineAsync(Usage);
+                    return UsageError;
+            }
+        var (current, previous) = bootstrap.RequireKeks();
+        await using var database = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm-token");
+        var tenantId = new TenantDb(database, 0, 0).Read(tx =>
+            tx.Scalar("SELECT tenant_id FROM tenants WHERE name = $1", tenant) as int?
+        ) ?? throw new HostedBootstrapException(
+            $"Tenant {tenant} doesn't exist; `foxwarm db migrate --tenant {tenant}` creates it."
+        );
+        var tenantDb = new TenantDb(database, tenantId, 0);
+        string? token;
+        try
+        {
+            token = new HostedKeyRing(tenantDb, current, previous).OpenExisting() is { } keys
+                ? new PgInstanceCredentials(tenantDb, () => keys).Read(
+                    Storage.InstanceCredentialName.HttpToken
+                )
+                : null;
+        }
+        catch (TenantKeysLockedException locked)
+        {
+            throw new HostedBootstrapException(locked.Message);
+        }
+        if (token is null)
+        {
+            await error.WriteLineAsync(
+                $"Tenant {tenant} has no sign-in token yet; start a replica first, and its first owner creates it."
+            );
+            return 1;
+        }
+        await output.WriteLineAsync(token.Trim());
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>foxwarm hosted health</c>: the container health check. It probes this replica's health
+    /// listener, at <c>health.port</c> of the deployment configuration the replica reads, on the
+    /// local host: <c>/livez</c> by default, so a working standby is healthy; <c>--ready</c> probes
+    /// <c>/readyz</c>. Exit 0 when the endpoint answers 200, otherwise 1.
+    /// </summary>
+    private static async Task<int> HealthAsync(HostedBootstrap bootstrap, string[] options, TextWriter error)
+    {
+        var path = options switch
+        {
+            [] => "/livez",
+            ["--ready"] => "/readyz",
+            _ => null,
+        };
+        if (path is null)
+        {
+            await error.WriteLineAsync(Usage);
+            return UsageError;
+        }
+        try
+        {
+            var endpoint = bootstrap.RequireDeployment().HealthEndpoint;
+            var address = endpoint.Address.Equals(System.Net.IPAddress.Any)
+                ? System.Net.IPAddress.Loopback
+                : endpoint.Address.Equals(System.Net.IPAddress.IPv6Any)
+                    ? System.Net.IPAddress.IPv6Loopback
+                    : endpoint.Address;
+            using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
+            {
+                Timeout = TimeSpan.FromSeconds(3),
+            };
+            using var response = await http.GetAsync(
+                new UriBuilder("http", address.ToString(), endpoint.Port, path).Uri
+            );
+            if (response.StatusCode == System.Net.HttpStatusCode.OK)
+                return 0;
+            await error.WriteLineAsync($"{path}: {(int)response.StatusCode}");
+            return 1;
+        }
+        catch (Exception failure)
+        {
+            await error.WriteLineAsync($"{path}: {failure.Message}");
+            return 1;
+        }
+    }
 
     /// <summary>
     /// <c>foxwarm hosted import</c> (<see cref="Import.HostedImport"/>). Tenant rows are written

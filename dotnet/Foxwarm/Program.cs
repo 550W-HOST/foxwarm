@@ -26,7 +26,7 @@ if (await Foxwarm.Vector.VectorChild.TryRunAsync(args))
 if (await Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args))
     return;
 
-if (args is ["db", ..] or ["hosted", "import", ..])
+if (args is ["db", ..] or ["hosted", "import" or "token" or "health", ..])
 {
 #if FOXWARM_HOSTED
     Environment.ExitCode = await Foxwarm.Hosted.HostedCli.RunAsync(args, Console.Out, Console.Error);

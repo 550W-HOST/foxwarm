@@ -108,6 +108,43 @@ internal sealed class HostedKeyRing(
             return opened ??= Open();
     }
 
+    /// <summary>
+    /// Opens the DEK without writing anything, for operator commands that run beside the owner:
+    /// no creation and no rewrap. Returns null when the tenant has no DEK yet; a DEK that neither
+    /// KEK unwraps is locked as in <see cref="OpenOrCreate"/>.
+    /// </summary>
+    internal InstanceKeys? OpenExisting()
+    {
+        var stored = database.Read(tx =>
+        {
+            using var command = tx.Command("SELECT key_id, kek_id, nonce, wrapped FROM tenant_keys");
+            using var reader = command.ExecuteReader();
+            return reader.Read()
+                ? new StoredKey(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    (byte[])reader.GetValue(2),
+                    (byte[])reader.GetValue(3)
+                )
+                : null;
+        });
+        if (stored is null)
+            return null;
+        foreach (var kek in new[] { current, previous })
+            if (kek is not null && stored.KekId == kek.KeyId)
+                return InstanceKeys.FromKey(
+                    stored.KeyId,
+                    kek.Unwrap(database.TenantId, stored.KeyId, stored.Nonce, stored.Wrapped)
+                        ?? throw new TenantKeysLockedException(
+                            $"The tenant data key doesn't unwrap with key-encryption key {stored.KekId}: the key file holds a different key with the same ID."
+                        ),
+                    Locator
+                );
+        throw new TenantKeysLockedException(
+            $"The tenant data key is wrapped by key-encryption key {stored.KekId}, which neither FOXWARM_KEK_FILE nor FOXWARM_KEK_PREVIOUS_FILE holds."
+        );
+    }
+
     private sealed record StoredKey(string KeyId, string KekId, byte[] Nonce, byte[] Wrapped);
 
     private InstanceKeys Open()
