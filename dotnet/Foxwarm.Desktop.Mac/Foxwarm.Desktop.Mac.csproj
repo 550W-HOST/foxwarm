@@ -20,11 +20,16 @@
       Include="../../packages/webui/public/favicon.LICENSE.txt"
       LogicalName="Foxwarm-icon-LICENSE.txt"
     />
-    <ProjectReference
-      Include="../Foxwarm/Foxwarm.csproj"
-      AdditionalProperties="FoxwarmConsoleEntry=false;ArtifactTargetRid=$(RuntimeIdentifier)"
-    />
+    <ProjectReference Include="../Foxwarm/Foxwarm.csproj" />
   </ItemGroup>
+  <!-- Core's properties also go to the references the SDK adds for Core's own project
+       references. MSBuild would otherwise build those a second time, with other global
+       properties, into the same output directory. -->
+  <ItemDefinitionGroup>
+    <ProjectReference>
+      <AdditionalProperties>FoxwarmConsoleEntry=false;ArtifactTargetRid=$(RuntimeIdentifier)</AdditionalProperties>
+    </ProjectReference>
+  </ItemDefinitionGroup>
   <!-- Keep Main's resource-relative paths beneath AppContext.BaseDirectory. The
        Apple SDK cannot infer locations for Content inherited through project references.
        It also links every bundled dylib into the executable unless it is a PluginLibrary,
