@@ -28,40 +28,36 @@ internal sealed partial class AgentMemory
 {
     internal AgentMemoryManifest Manifest(string agent)
     {
+        // Throws when the Agent does not exist.
         var root = agents.MemoryDirectory(agent);
         var files = new List<AgentMemoryFile>();
         void Walk(string directory, int depth)
         {
-            if (depth > 12 || files.Count >= 2000 || !Directory.Exists(directory))
+            if (depth > 12 || files.Count >= 2000)
                 return;
             foreach (
-                var entry in new DirectoryInfo(directory)
-                    .GetFileSystemInfos()
+                var entry in this.files.List(agent, "memory" + directory)
                     .OrderBy(item => item.Name, StringComparer.CurrentCulture)
             )
             {
                 if (files.Count >= 2000)
                     break;
-                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                if (entry.IsLink)
                     continue;
-                if (entry is DirectoryInfo)
-                    Walk(entry.FullName, depth + 1);
-                else if (
-                    entry is FileInfo file
-                    && file.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
-                )
+                if (entry.IsDirectory)
+                    Walk(directory + "/" + entry.Name, depth + 1);
+                else if (entry.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
                     files.Add(
                         new(
-                            Path.GetRelativePath(root, file.FullName)
-                                .Replace(Path.DirectorySeparatorChar, '/'),
-                            file.FullName,
-                            file.Length,
-                            (file.LastWriteTimeUtc.Ticks - DateTime.UnixEpoch.Ticks) / 10000.0
+                            (directory + "/" + entry.Name)[1..],
+                            entry.Locator,
+                            entry.Length!.Value,
+                            (entry.LastWriteUtc!.Value.Ticks - DateTime.UnixEpoch.Ticks) / 10000.0
                         )
                     );
             }
         }
-        Walk(root, 0);
+        Walk("", 0);
         var priorities = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             ["00_SYSTEM.md"] = 0,

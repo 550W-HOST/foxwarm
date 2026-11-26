@@ -188,6 +188,9 @@ internal sealed partial class AgentCatalog
 
     public string MemoryDirectory(string name) => Path.Combine(AgentDirectory(name), "memory");
 
+    /// <summary>The directory holding the Agent folders and the installation prompt files.</summary>
+    internal string AgentRoot => agentRoot;
+
     public string FrameworkSystemPath => Path.Combine(agentRoot, FrameworkPrompt.FileName);
     public string FrameworkLocalPath => Path.Combine(agentRoot, FrameworkPrompt.LocalFileName);
     public string MainFallbackSystemPath =>

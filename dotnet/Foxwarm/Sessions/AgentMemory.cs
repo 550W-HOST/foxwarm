@@ -14,9 +14,12 @@ internal sealed partial class AgentMemory(
     Action<string>? warning = null,
     // What the catalog may show of each skill for (Agent, Session), evaluated once per build;
     // null, or a null result, lists every skill as it is.
-    Func<string, string, Func<SkillInfo, SkillAccess>?>? skillAccess = null
+    Func<string, string, Func<SkillInfo, SkillAccess>?>? skillAccess = null,
+    IAgentFileStore? files = null
 )
 {
+    private readonly IAgentFileStore files = files ?? new FileAgentFiles(agents);
+
     public async Task<string> BuildAsync(
         string agentName,
         string sessionId,
@@ -41,34 +44,49 @@ internal sealed partial class AgentMemory(
         else
         {
             // A legacy copy still present at startup was edited and keeps replacing the bundled base.
-            var replacement =
-                File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
-                : File.Exists(agents.MainFallbackSystemPath) ? agents.MainFallbackSystemPath
-                : null;
-            var frameworkPath =
-                replacement ?? (File.Exists(frameworkTemplatePath) ? frameworkTemplatePath : null);
-            if (frameworkPath is not null)
+            const string mainCopy = "memory/" + FrameworkPrompt.FileName;
+            var (replacementAgent, replacement) =
+                files.FileExists(null, FrameworkPrompt.FileName)
+                    ? ((string?)null, (string?)FrameworkPrompt.FileName)
+                : files.FileExists("main", mainCopy) ? ("main", mainCopy)
+                : (null, null);
+            if (replacement is not null)
                 AppendBlock(
                     blocks,
-                    frameworkPath == agents.MainFallbackSystemPath ? "main" : "framework",
-                    frameworkPath != agents.MainFallbackSystemPath || agentName != "main"
-                        ? "inherited"
-                        : "self",
-                    frameworkPath,
+                    replacementAgent ?? "framework",
+                    replacementAgent is null || agentName != "main" ? "inherited" : "self",
+                    files.Locator(replacementAgent, replacement),
                     ConditionalMemory.FilterConditionalMemorySource(
-                        await File.ReadAllTextAsync(frameworkPath, cancellationToken),
+                        await files.ReadTextAsync(replacementAgent, replacement, cancellationToken),
                         concreteModelId,
                         runtime
                     )
                 );
-            if (File.Exists(agents.FrameworkLocalPath))
+            else if (File.Exists(frameworkTemplatePath))
+                // The bundled base is a program resource, not Agent state.
                 AppendBlock(
                     blocks,
                     "framework",
                     "inherited",
-                    agents.FrameworkLocalPath,
+                    frameworkTemplatePath,
                     ConditionalMemory.FilterConditionalMemorySource(
-                        await File.ReadAllTextAsync(agents.FrameworkLocalPath, cancellationToken),
+                        await File.ReadAllTextAsync(frameworkTemplatePath, cancellationToken),
+                        concreteModelId,
+                        runtime
+                    )
+                );
+            if (files.FileExists(null, FrameworkPrompt.LocalFileName))
+                AppendBlock(
+                    blocks,
+                    "framework",
+                    "inherited",
+                    files.Locator(null, FrameworkPrompt.LocalFileName),
+                    ConditionalMemory.FilterConditionalMemorySource(
+                        await files.ReadTextAsync(
+                            null,
+                            FrameworkPrompt.LocalFileName,
+                            cancellationToken
+                        ),
                         concreteModelId,
                         runtime
                     )
@@ -76,41 +94,44 @@ internal sealed partial class AgentMemory(
 
             foreach (var sourceAgent in agents.InheritanceChain(agentName))
             {
-                var memoryDir = Path.Combine(agents.SourceDirectory(sourceAgent), "memory");
-                if (Directory.Exists(memoryDir))
-                    foreach (
-                        var path in Directory
-                            .EnumerateFiles(memoryDir, "*.md", SearchOption.TopDirectoryOnly)
-                            .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal)
+                foreach (
+                    var entry in files
+                        .List(sourceAgent, "memory", "*.md")
+                        .OrderBy(item => item.Name, StringComparer.Ordinal)
+                )
+                {
+                    var fileName = entry.Name;
+                    var path = entry.Locator;
+                    if (
+                        fileName == FrameworkPrompt.FileName
+                        || fileName.Equals("ONBOOT.md", StringComparison.OrdinalIgnoreCase)
                     )
-                    {
-                        var fileName = Path.GetFileName(path);
-                        if (
-                            fileName == FrameworkPrompt.FileName
-                            || fileName.Equals("ONBOOT.md", StringComparison.OrdinalIgnoreCase)
-                        )
-                            continue;
-                        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                            throw new InvalidDataException(
-                                "Agent memory file cannot be a symbolic link."
-                            );
-                        var (visible, body) = FilterFrontMatter(
-                            await File.ReadAllTextAsync(path, cancellationToken),
-                            sessionId
+                        continue;
+                    if (entry.IsLink)
+                        throw new InvalidDataException(
+                            "Agent memory file cannot be a symbolic link."
                         );
-                        if (visible)
-                            AppendBlock(
-                                blocks,
-                                sourceAgent,
-                                sourceAgent == agentName ? "self" : "inherited",
-                                path,
-                                ConditionalMemory.FilterConditionalMemorySource(
-                                    body,
-                                    concreteModelId,
-                                    runtime
-                                )
-                            );
-                    }
+                    var (visible, body) = FilterFrontMatter(
+                        await files.ReadTextAsync(
+                            sourceAgent,
+                            "memory/" + fileName,
+                            cancellationToken
+                        ),
+                        sessionId
+                    );
+                    if (visible)
+                        AppendBlock(
+                            blocks,
+                            sourceAgent,
+                            sourceAgent == agentName ? "self" : "inherited",
+                            path,
+                            ConditionalMemory.FilterConditionalMemorySource(
+                                body,
+                                concreteModelId,
+                                runtime
+                            )
+                        );
+                }
             }
         }
         var listed = await skills.ListAsync(agentName);
