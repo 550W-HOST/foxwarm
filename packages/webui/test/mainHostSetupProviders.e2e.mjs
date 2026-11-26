@@ -149,6 +149,8 @@ try {
   assert.equal(tested.body.success, true)
   assert.equal(tested.body.text, 'setup test response')
   assert.equal(testRequests.length, 1)
+  // A key and model check declares no tools.
+  assert.deepEqual(testRequests[0].tools, [])
   const modelsAfter = await readFile(fixture.modelPath, 'utf8')
   assert.equal(modelsAfter, modelsBefore)
   const treeAfter = await fixture.api('GET', '/api/agents/tree')
