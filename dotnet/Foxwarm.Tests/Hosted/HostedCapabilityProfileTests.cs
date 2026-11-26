@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Hosted;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
@@ -451,18 +452,47 @@ public sealed class HostedCapabilityProfileTests
     public async Task Default_tool_declarations_are_byte_identical_across_profiles()
     {
         await using var file = await Fixture.Create(RuntimeCapabilities.File);
-        await using var hosted = await Fixture.Create(RuntimeCapabilities.Hosted);
         var declarations = file.Manager.ModelDefinitions(file.Owner).ToJsonString();
         Assert.Contains("\"exec\"", declarations);
-        Assert.Equal(declarations, hosted.Manager.ModelDefinitions(hosted.Owner).ToJsonString());
-        Assert.Equal(
-            file.Manager.RuntimeModelDefinitions(file.Owner).ToJsonString(),
-            hosted.Manager.RuntimeModelDefinitions(hosted.Owner).ToJsonString()
+        foreach (var profile in new[] { TenantProfile.Hosted, TenantProfile.Operator })
+        {
+            await using var tenant = await Fixture.Create(RuntimeCapabilities.For(profile));
+            Assert.Equal(declarations, tenant.Manager.ModelDefinitions(tenant.Owner).ToJsonString());
+            Assert.Equal(
+                file.Manager.RuntimeModelDefinitions(file.Owner).ToJsonString(),
+                tenant.Manager.RuntimeModelDefinitions(tenant.Owner).ToJsonString()
+            );
+            Assert.Equal(
+                file.Manager.ToolRegistry.ModelDefinitions().ToJsonString(),
+                tenant.Manager.ToolRegistry.ModelDefinitions().ToJsonString()
+            );
+        }
+    }
+
+    [Fact]
+    public void A_stored_profile_selects_its_capabilities()
+    {
+        static object Features(RuntimeCapabilities set) =>
+            (set.MasterNode, set.MainTerminalsAndCode, set.StdioMcp, set.ClaudeRuntime, set.ExecutableProviders, set.LogsView);
+        // The deployment's egress rules go into each profile's own egress policy.
+        var rules = Foxwarm.Net.EgressRules.Parse(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"deny": ["10.0.0.0/8"], "allow": {"hosted": ["10.0.0.4"], "operator": ["10.0.0.5"]}}""")
         );
-        Assert.Equal(
-            file.Manager.ToolRegistry.ModelDefinitions().ToJsonString(),
-            hosted.Manager.ToolRegistry.ModelDefinitions().ToJsonString()
-        );
+        var hosted = RuntimeCapabilities.For(TenantProfiles.Parse("hosted"), rules);
+        var @operator = RuntimeCapabilities.For(TenantProfiles.Parse("operator"), rules);
+        Assert.Equal(Features(RuntimeCapabilities.Hosted), Features(hosted));
+        Assert.Equal(Features(RuntimeCapabilities.Operator), Features(@operator));
+        Assert.Equal(Foxwarm.Net.EgressProfile.Hosted, hosted.Egress.Profile);
+        Assert.Equal(Foxwarm.Net.EgressProfile.Operator, @operator.Egress.Profile);
+        Assert.False(hosted.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.4")));
+        Assert.True(hosted.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.5")));
+        Assert.False(@operator.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.5")));
+        Assert.True(@operator.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.4")));
+        Assert.Equal(Foxwarm.Net.EgressProfile.Operator, RuntimeCapabilities.Operator.Egress.Profile);
+        // The operator profile has file mode's features; only its stores and egress differ.
+        Assert.Equal(Features(RuntimeCapabilities.File), Features(RuntimeCapabilities.Operator));
+        Assert.Throws<InvalidDataException>(() => TenantProfiles.Parse("file"));
+        Assert.Throws<InvalidDataException>(() => TenantProfiles.Parse(null));
     }
 
     [Fact]
