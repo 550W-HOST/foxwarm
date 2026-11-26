@@ -140,6 +140,8 @@ There's no cross-store unit of work in file mode: each step is its own durable s
 
 Vector indexing stays outside any such scope; it is derived and rebuilt from the Archive.
 
+[2026-11-26] Hosted P1 keeps these sequences as they are over database stores (approved plan C2). The authority store's own commit (Archive rows, segments, head) is one `TenantDb` transaction, and the catalog projection stays after it. A unit of work would be one `TenantDb.Write` passed to several stores; there is no P1 consumer ([hosted database](./hosted-database.md)).
+
 ### Configuration split (bootstrap, deployment, tenant)
 
 This classification of current settings is for a hosted mode; file mode reads all of them from one configuration as today.

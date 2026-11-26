@@ -17,7 +17,7 @@ Ensures that at most one Main process uses a data directory. Without it, two Mai
 - **Not held by:** `--cli-model` and `--cli-archive` (supported beside a running Main), `--inspect-upgrade` (runs read-only beside Main during source builds), `--version`, the exec, Vector and terminal helpers, or tests that compose `MainHost` directly.
 - **When held elsewhere:** the entry fails with `InstallationLockedException`. Main exits with code 1 and its fatal line names the data directory. On Unix, where the file can be read with ordinary tools, it also points to the recorded PID.
 - **Controls:** source stop and restart, the Windows background service, and container restarts all wait for the previous Main to exit before starting another, so none of them meets a held lock. When a second foreground launch is refused, `scripts/main.js` restores the running Main's `foxwarm.pid` record instead of removing it ([source entry](./source-main-entry.md)).
-- **Hosted mode** has no data root. Tenant leases and fencing replace this lock there (storage design, P1).
+- **Hosted mode** has no data root. Tenant leases and fencing replace this lock there ([hosted write fence](./hosted-database.md#d-hosted-write-fence)).
 
 ## Tests
 
