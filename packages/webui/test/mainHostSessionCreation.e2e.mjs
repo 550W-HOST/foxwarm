@@ -24,6 +24,8 @@ async function openDialog() {
   await waitForWebUiReady(page)
   await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('[role="dialog"] input[placeholder^="Random ID"]')
+  await page.$eval('[data-creation-more-options]', details => { if (!details.open) details.querySelector('summary').click() })
+  await page.waitForFunction(() => document.querySelector('[data-creation-more-options]')?.open === true)
 }
 async function submit(path) {
   const response = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === path)

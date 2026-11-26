@@ -61,9 +61,12 @@ export default function AgentCreationMenu({
   // Unknown until checked; the dialog stays the default while an alternative runtime may exist.
   const [alternativeRuntime, setAlternativeRuntime] = useState<boolean | null>(null)
   const [creatingDirectly, setCreatingDirectly] = useState(false)
+  // Session ID and runtime are rarely changed; they wait behind More options.
+  const [moreOptionsOpen, setMoreOptionsOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const agentIdInputRef = useRef<HTMLInputElement>(null)
   const sessionIdInputRef = useRef<HTMLInputElement>(null)
+  const createButtonRef = useRef<HTMLButtonElement>(null)
   const newAgentButtonRef = useRef<HTMLButtonElement>(null)
 
   const defaultAgent = agents.some(agent => agent.id === currentAgent)
@@ -74,7 +77,7 @@ export default function AgentCreationMenu({
     if (!mode) return
     const timer = window.setTimeout(() => {
       if (mode === 'agent') agentIdInputRef.current?.focus()
-      else if (agents.length > 0) sessionIdInputRef.current?.focus()
+      else if (agents.length > 0) createButtonRef.current?.focus()
       else newAgentButtonRef.current?.focus()
     }, 0)
     return () => window.clearTimeout(timer)
@@ -166,6 +169,7 @@ export default function AgentCreationMenu({
     setSessionAgent(request?.agent && agents.some(agent => agent.id === request.agent) ? request.agent : defaultAgent)
     setSessionId('')
     setRuntime('foxwarm')
+    setMoreOptionsOpen(false)
     setClaudeAvailable(false)
     setError('')
   }
@@ -335,6 +339,9 @@ export default function AgentCreationMenu({
                     </p>
                   )}
                 </fieldset>
+                <details data-creation-more-options open={moreOptionsOpen} onToggle={event => setMoreOptionsOpen(event.currentTarget.open)}>
+                  <summary className="cursor-pointer select-none text-sm font-medium text-fw-text hover:text-fw-text-strong">More options</summary>
+                  <div className="mt-3 space-y-4">
                 <label className="block text-sm font-medium text-fw-text-strong">
                   Session ID <span className="font-normal text-fw-text-muted">(optional)</span>
                   <input ref={sessionIdInputRef} value={sessionId} onChange={event => setSessionId(event.target.value)} autoComplete="off" placeholder={RANDOM_SESSION_ID_PLACEHOLDER} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" />
@@ -346,6 +353,8 @@ export default function AgentCreationMenu({
                     { value: 'claude-code', label: `Claude Code${claudeAvailable ? '' : ' — unavailable'}`, disabled: !claudeAvailable },
                   ]} />
                 </label>
+                  </div>
+                </details>
               </div>
             )}
 
@@ -353,7 +362,7 @@ export default function AgentCreationMenu({
 
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={closeDialog} disabled={loading} className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover">Cancel</button>
-              <button type="submit" disabled={loading || (mode === 'session' && (agents.length === 0 || (runtime === 'claude-code' && !claudeAvailable)))} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50">
+              <button ref={createButtonRef} type="submit" disabled={loading || (mode === 'session' && (agents.length === 0 || (runtime === 'claude-code' && !claudeAvailable)))} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50">
                 {loading ? 'Creating…' : 'Create'}
               </button>
             </div>

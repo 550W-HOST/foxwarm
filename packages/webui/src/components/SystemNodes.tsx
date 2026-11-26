@@ -25,19 +25,25 @@ function NodeOverviewCard({ node, sessions, onSelectSession, onAction }: { node:
   const incompatible = node.protocolStatus === 'upgrade-required'
   const shown = expanded ? sessions : getArchitectureNodePreview(sessions, new Set())
   const active = sessions.filter(isSessionRuntimeActive).length
+  // The label is shown once: the type only when it says something the name and ID don't.
+  const typeLabel = node.type !== node.displayName && node.type !== node.id ? node.type : ''
+  const nodeTypeLine = [typeLabel, node.lastSeenAt ? `Last seen ${new Date(node.lastSeenAt).toLocaleString()}` : ''].filter(Boolean).join(' · ')
   return <article data-system-node-id={node.id} className="flex min-w-0 flex-col rounded-xl border border-fw-border bg-fw-surface p-4">
     <div className="flex items-center justify-between gap-2">
       <h3 className="truncate font-semibold text-fw-text-strong">{node.displayName}</h3>
       {node.unavailable ? <StatusBadge tone="warning">Unavailable</StatusBadge> : <NodeStatusBadge online={node.online} />}
     </div>
-    <p className="mt-1 break-all font-mono text-xs text-fw-text-muted">{node.id}</p>
-    {node.unavailable ? <p className="mt-2 text-xs text-fw-text-muted">Not in the node directory.</p> : <p className="mt-2 text-xs text-fw-text-muted">{node.type}{node.lastSeenAt ? ` · Last seen ${new Date(node.lastSeenAt).toLocaleString()}` : ''}</p>}
+    {node.id !== node.displayName ? <p className="mt-1 break-all font-mono text-xs text-fw-text-muted">{node.id}</p> : null}
+    {node.unavailable ? <p className="mt-2 text-xs text-fw-text-muted">Not in the node directory.</p> : nodeTypeLine ? <p className="mt-2 text-xs text-fw-text-muted">{nodeTypeLine}</p> : null}
     {!node.unavailable && (node.availability === 'error' || node.availability === 'unavailable') ? <div className="mt-2"><StatusBadge tone="warning">Unavailable</StatusBadge></div> : null}
     {incompatible ? <div className="mt-2"><StatusBadge tone="warning">Upgrade required</StatusBadge></div> : null}
     {node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
-    {Object.keys(node.services).length ? <div className="mt-3 flex flex-wrap gap-1.5">
-      {Object.entries(node.services).map(([name, version]) => <span key={name} className="rounded bg-fw-canvas px-2 py-1 text-xs text-fw-text-muted">{name} v{version}</span>)}
-    </div> : null}
+    {Object.keys(node.services).length ? <details className="mt-3" data-system-node-details>
+      <summary className="cursor-pointer select-none text-xs text-fw-text-muted hover:text-fw-text">Details</summary>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {Object.entries(node.services).map(([name, version]) => <span key={name} className="rounded bg-fw-canvas px-2 py-1 text-xs text-fw-text-muted">{name} v{version}</span>)}
+      </div>
+    </details> : null}
     {node.credentialManaged ? <div className="mt-3 flex flex-wrap gap-2">
       {node.type === 'cli-node' || node.type === 'shell-node' ? <button type="button" className="rounded-lg border border-fw-border px-2 py-1 text-xs hover:bg-fw-hover" onClick={() => onAction('command')}>Start command</button> : null}
       <button type="button" className="rounded-lg border border-fw-border px-2 py-1 text-xs text-fw-danger hover:bg-fw-hover" onClick={() => onAction('delete')}>Delete</button>

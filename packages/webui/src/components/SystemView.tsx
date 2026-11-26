@@ -6,7 +6,7 @@ import type { TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
 import SystemNodes from './SystemNodes'
 import SystemTimers, { SessionTimersSection } from './SystemTimers'
-import SystemWebhooks from './SystemWebhooks'
+import SystemWebhooks, { useWebhookList } from './SystemWebhooks'
 import SystemUsage from './SystemUsage'
 import SystemActivity from './SystemActivity'
 import type { ActivityFilters } from '../activity'
@@ -36,13 +36,14 @@ export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
   { id: 'sessions', label: 'Sessions' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'timers', label: 'Timers' },
-  { id: 'webhooks', label: 'Webhooks' },
   { id: 'usage', label: 'Usage' },
   { id: 'activity', label: 'Activity' },
+  // Shown once a webhook exists, or when a route opens it.
+  { id: 'webhooks', label: 'Webhooks' },
 ]
 
 const SECTION_SUBTITLES: Record<SystemSection, string> = {
-  agents: 'Agent workspaces, inheritance, isolation and memory.',
+  agents: 'Agent workspaces, inheritance and memory.',
   sessions: 'Session state, placement and usage, and how sessions work together.',
   nodes: 'Connected nodes, the sessions running on them, and new node setup.',
   timers: 'Scheduled messages and scripts, their next runs and recent results.',
@@ -118,6 +119,7 @@ export default function SystemView({
     else if (rect.right > bounds.right - 16) strip.scrollLeft += rect.right - (bounds.right - 16)
   }, [phone, section])
   const setSection = useCallback((next: SystemSection) => { setSectionState(next); onSectionChangeRef.current?.(next) }, [])
+  const webhookList = useWebhookList()
   const [agentRegistry, setAgentRegistry] = useState<AgentRegistryEntry[]>([])
   const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>(agentRequest?.agent || 'main')
   useEffect(() => {
@@ -476,7 +478,7 @@ export default function SystemView({
   const sectionTabs = (
     <div ref={sectionTabsRef} className={phone ? 'mobile-system-tabs -mx-4 overflow-x-auto px-4' : undefined}>
       <div className={`inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5 ${phone ? 'mobile-glass-surface' : ''}`} role="tablist">
-        {SYSTEM_SECTIONS.map(item => (
+        {SYSTEM_SECTIONS.filter(item => item.id !== 'webhooks' || section === 'webhooks' || webhookList.webhooks.length > 0).map(item => (
           <button key={item.id} type="button" role="tab" aria-selected={section === item.id} data-active={section === item.id} data-system-tab={item.id} onClick={() => setSection(item.id)} className={tabClass(section === item.id, 'foxwarm-system-tab', phone)}>{item.label}</button>
         ))}
       </div>

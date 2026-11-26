@@ -135,10 +135,17 @@ async function clickButtonByText(text) {
   await handle.dispose()
 }
 
-async function openSessionDialog() {
+async function openSessionDialog({ moreOptions = true } = {}) {
   await page.click('button[aria-label="New session"]')
   await page.waitForSelector('[role="dialog"]')
   await page.waitForFunction(() => document.querySelector('#creation-dialog-title')?.textContent === 'New session')
+  if (moreOptions) await openMoreOptions()
+}
+
+// Session ID and Runtime sit behind a collapsed More options disclosure.
+async function openMoreOptions() {
+  await page.$eval('[data-creation-more-options]', details => { if (!details.open) details.querySelector('summary').click() })
+  await page.waitForFunction(() => document.querySelector('[data-creation-more-options]')?.open === true)
 }
 
 function availabilityResponse() {
@@ -191,11 +198,14 @@ after(async () => {
 
 test('the shared plus opens New session directly and submits the selected Agent tag', async () => {
   await resetFixture()
-  await openSessionDialog()
+  await openSessionDialog({ moreOptions: false })
 
   assert.equal(await page.$('[role="menu"]'), null)
   assert.equal(await page.$eval('button[title="research"]', button => button.getAttribute('aria-pressed')), 'true')
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('placeholder')?.startsWith('Random ID')), true)
+  // The dialog opens ready to create: optional fields are collapsed and Create has focus.
+  assert.equal(await page.$eval('[data-creation-more-options]', details => details.open), false)
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('type')), 'submit')
+  await openMoreOptions()
 
   await page.click('button[title="main"]')
   await page.type('input[placeholder^="Random ID"]', 'planned-session')

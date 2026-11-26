@@ -246,7 +246,7 @@ try {
   await context.close()
   const administrator = await host.openApp()
   await administrator.evaluate(() => window.foxwarmTest.switchToSession('chat'))
-  await administrator.waitForFunction(() => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session chat'))
+  await administrator.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId?.startsWith('chat'))
   await administrator.waitForSelector('.foxwarm-model-selector-trigger')
   assert.equal(await administrator.$('[data-webui-role="webui"]'), null)
   await host.stop()

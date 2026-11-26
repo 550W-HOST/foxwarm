@@ -101,6 +101,8 @@ const overflow = page => page.evaluate(() => {
   return { width, page: document.scrollingElement.scrollWidth - width, system: Math.max(root.scrollWidth - root.clientWidth, scroller.scrollWidth - scroller.clientWidth), offenders: offenders.slice(0, 12), count: offenders.length }
 })
 const openSection = async (page, id) => {
+  // Webhooks joins the strip once the configured webhook has loaded.
+  await page.waitForSelector(`[data-system-tab="${id}"]`)
   await page.$eval(`[data-system-tab="${id}"]`, element => element.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
   if (page.viewport()?.hasTouch) await page.tap(`[data-system-tab="${id}"]`)
   else await page.click(`[data-system-tab="${id}"]`)

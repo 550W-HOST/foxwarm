@@ -1,4 +1,4 @@
-// System page over a real C# Main: Agents | Sessions | Nodes | Timers | Webhooks | Usage and the entry points of the former pages.
+// System page over a real C# Main: Agents | Sessions | Nodes | Timers | Usage | Activity (Webhooks once one exists) and the entry points of the former pages.
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -28,7 +28,7 @@ try {
   // Sidebar entry is "System" and opens on Sessions.
   await page.click('button[title="Open System"]')
   await page.waitForSelector('h1::-p-text(System)')
-  assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage', 'Activity'])
+  assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Usage', 'Activity'])
   await page.waitForSelector('[data-system-section="sessions"] [data-architecture-session-id="worker"]')
   assert.deepEqual(await page.$$eval('[data-system-summary]', items => items.map(item => item.getAttribute('data-system-summary'))), ['sessions'])
   assert.match(await page.$eval('[data-system-summary="sessions"]', element => element.textContent), /0 active.*0 waiting.*0 queued/)
@@ -55,6 +55,9 @@ try {
   await page.waitForSelector('[data-node-surface] [data-system-node-id="master"] [data-system-node-session="worker"]')
   assert.match(await page.$eval('[data-system-summary="nodes"]', element => element.textContent), /Online 1 · Total 1/)
   assert.match(await page.$eval('[data-system-node-id="master"]', element => element.textContent), /3 sessions here/)
+  // The Node's label appears once, and its service versions wait behind Details.
+  assert.equal(await page.$eval('[data-system-node-id="master"]', element => element.textContent.match(/master/g).length), 1)
+  assert.equal(await page.$eval('[data-system-node-id="master"] [data-system-node-details]', details => details.open), false)
   await shot(page, 'system-nodes.png')
   await page.click('[data-system-node-session="worker"]')
   await page.waitForSelector('[data-system-section="sessions"] [data-architecture-inspector-session-id="worker"]')

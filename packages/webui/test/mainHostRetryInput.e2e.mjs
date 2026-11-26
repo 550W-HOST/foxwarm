@@ -70,7 +70,7 @@ try {
     const id = await create('input-' + model, model), task = 'input-' + model
     if (model === 'responses') {
       await page.evaluate(id => window.foxwarmTest.switchToSession(id), id)
-      await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, id)
+      await page.waitForFunction(id => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId?.startsWith(id), {}, id)
       await page.type('[role="textbox"][aria-label="Message"]', 'RCASE:' + task); await page.click('button[aria-label="Send message"]')
     }
     else { await post(id, 'RCASE:seed-' + model); await done(id, 'seed-' + model, 0); await post(id, 'RCASE:' + task) }

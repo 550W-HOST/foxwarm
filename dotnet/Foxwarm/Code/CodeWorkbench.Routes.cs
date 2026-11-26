@@ -7,6 +7,27 @@ namespace Foxwarm.Code;
 
 internal sealed partial class CodeWorkbench
 {
+    // The installers refuse a directory with `.git`; the same marker identifies a source checkout,
+    // the only installation where the npm preparation commands work.
+    private bool SourceCheckout => Path.Exists(Path.Combine(applicationRoot, ".git"));
+
+    private string SourceOptionsHtml() =>
+        SourceCheckout
+            ? $$"""
+                <section class="option">
+                  <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
+                  <code>npm run build:code</code>
+                </section>
+                <section class="option">
+                  <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
+                  <code>npm run download:code</code>
+                </section>
+                <p class="hint">The npm commands require a source checkout. Code assets are stored in <span class="path">{{WebUtility.HtmlEncode(
+                Assets
+            )}}</span>.</p>
+                """
+            : "";
+
     private string UnavailableHtml() =>
         $$"""
             <!doctype html>
@@ -41,7 +62,7 @@ internal sealed partial class CodeWorkbench
               <main>
                 <p class="eyebrow">Optional component</p>
                 <h1>Code is not installed</h1>
-                <p>This Foxwarm installation does not currently include the optional browser workbench assets. Choose one preparation method, then reload this page.</p>
+                <p>This Foxwarm installation does not currently include the optional browser workbench assets.{{(SourceCheckout ? " Choose one preparation method, then reload this page." : "")}}</p>
                 <section class="option">
                   <strong>Download Code OSS for Foxwarm {{WebUtility.HtmlEncode(
                 ProductVersion.Value
@@ -54,17 +75,7 @@ internal sealed partial class CodeWorkbench
                 InstallCommand(Assets, true)
             )}}</code></details>
                 </section>
-                <section class="option">
-                  <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
-                  <code>npm run build:code</code>
-                </section>
-                <section class="option">
-                  <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
-                  <code>npm run download:code</code>
-                </section>
-                <p class="hint">The npm commands require a source checkout. Code assets are stored in <span class="path">{{WebUtility.HtmlEncode(
-                Assets
-            )}}</span>.</p>
+            {{SourceOptionsHtml()}}
               </main>
             </body>
             </html>

@@ -237,7 +237,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const searchHistoryIndexRef = useRef<number | null>(null)
   const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
-  const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  // The ID line adds something only beside a working directory; the ID itself stays in Copy ID.
+  const sessionHeaderSubtitle = sessionRecord?.cwd?.trim() ? formatSessionHeaderSubtitle(sessionId, sessionRecord.cwd) : null
   const sentVersionEnabled = sessionRecord?.textRedaction === true
   const sentVersion = useMemo(() => ({ sessionId, enabled: sentVersionEnabled }), [sessionId, sentVersionEnabled])
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
@@ -1631,13 +1632,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   return (
     <SessionQuestionsContext.Provider value={sessionQuestions}>
-    <div ref={chatRootRef} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} data-chat-session-id={sessionId} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
         compact={mobileUi}
-        subtitle={webUiIdentityMode || mobileUi ? null : (
+        subtitle={webUiIdentityMode || mobileUi || !sessionHeaderSubtitle ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>

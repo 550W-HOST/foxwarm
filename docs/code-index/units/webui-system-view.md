@@ -26,7 +26,7 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 
 ### Page and navigation
 
-- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes | Timers | Webhooks | Usage switch. There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total; Timers: timers / paused / failing; Webhooks: webhooks / need attention; Usage: cost, tokens and requests for the chosen period).
+- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes | Timers | Usage | Activity switch, with Webhooks last once a webhook exists or when a route opens that section ([D-webui-system-webhooks](#d-webui-system-webhooks)). The Agents subtitle is "Agent workspaces, inheritance and memory." There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total; Timers: timers / paused / failing; Webhooks: webhooks / need attention; Usage: cost, tokens and requests for the chosen period).
 - Phones (root viewport below 768 px, outside a Workbench tab header) use the [mobile page header](../threads/webui-mobile-shell.md#d-mobile-shell-presentation) instead: a circular Back action, the title System, the header badges and the section switch, over content that scrolls beneath it. The switch keeps every section in one row that scrolls sideways and brings the selected section into view; the page itself never scrolls sideways. The scroller clears the shell's bottom safe band. The per-section subtitle is desktop only. Section grids, filter rows and inspectors stack in one column at that width. [2026-11-22, user request] Crossing 768 px restyles the page in place: the open section, its modals (such as New nodes) and their local state stay mounted; `nodeOnboarding.e2e.mjs` checks this with the modal open.
 - The Workbench tab keeps its persisted identity `system:agents` / type `agents` and stores the current `section`; App writes section changes back through `updateTab`, so reload restores the section. The tab title is System.
 - Entry points: the Sidebar and mobile Workspace tools "System" button; `#agents`, `#architecture`, `#system` (System tab, current section); `#nodes`, `#tab/system:nodes` and the status-bar Open Nodes action (System on Nodes); `#timers` (System on Timers); `#webhooks` (System on Webhooks); `#usage` and the status-bar Total's "Open in System › Usage" (System on Usage, the latter with its period); the Session inspector's "View in Timers" (Timers filtered to that Session). The former `system:nodes` route settles on `#tab/system:agents`.
@@ -53,7 +53,7 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 
 ### Nodes section
 
-- Lists real directory Nodes plus unavailable cards for placement IDs outside the directory, each with the Sessions placed on it by effective placement. Selecting one switches to Sessions (List) with that Session inspected; there is no second inspector. Directory, pending-approval and onboarding ownership are in [webui-nodes](./webui-nodes.md).
+- Lists real directory Nodes plus unavailable cards for placement IDs outside the directory, each with the Sessions placed on it by effective placement. A card names the Node once: the mono ID only when it differs from the display name, the type only when it differs from both; service versions sit behind a collapsed **Details** disclosure. Selecting one switches to Sessions (List) with that Session inspected; there is no second inspector. Directory, pending-approval and onboarding ownership are in [webui-nodes](./webui-nodes.md).
 
 ### Timers section
 
@@ -117,6 +117,8 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 ### D-webui-system-webhooks
 
 [2026-11-08, user decision] Webhooks are configured only in the YAML access configuration; System gains a fifth, read-only Webhooks section for status rather than a structured editor. It shows where each webhook delivers, whether its target exists, the address to give the sending service and recent results, so a misconfigured source can be diagnosed without reading logs. Secrets never reach the page.
+
+[2026-11-26, user decision 2 on the OOBE review] Most installations have no webhook, so the Webhooks tab is hidden until `GET /api/webhooks` lists one; it is then the last tab. `#webhooks` and the Setup › Config link still open the section, which shows the tab while it is selected.
 
 ### D-webui-system-activity
 

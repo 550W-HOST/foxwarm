@@ -140,7 +140,7 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes('PAYLOAD-DONE') && document.body.innerText.includes('note.txt'))
   const other = await create('redacted', 'anthropic')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), other)
-  await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, other)
+  await page.waitForFunction(id => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId?.startsWith(id), {}, other)
   assert.equal((await fixture.api('POST', route(other) + '/message', { text: 'Qualify redacted reasoning projection.' })).status, 202)
   await until(async () => { const value = await history(other); return !value.session.busy && value.messages.some(row => row.parts.some(part => part.text === 'REDACTED-DONE')) }, 'redacted canonical response')
   await page.waitForSelector('[data-reasoning-handoff]')

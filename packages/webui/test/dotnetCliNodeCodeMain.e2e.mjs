@@ -81,8 +81,8 @@ for (const runtime of ['dotnet']) {
     assert.equal((await rawApi('GET', gitUrl('content') + '&path=renamed.txt&ref=' + commit)).bytes.toString(), 'first\nselected second\nselected third\nlast\n')
     const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'code-owner' }); assert.equal(created.status, 200); const id = created.body.sessionId
     page = await fixture.openApp(); page.on('pageerror', error => errors.push(error.message))
-    await page.evaluate(id => { window.codePreviousHelper = window.foxwarmTest; window.codeAlreadySelected = [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(id)); window.foxwarmTest.switchToSession(id) }, id)
-    await page.waitForFunction(id => [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(id)) && (window.codeAlreadySelected || window.foxwarmTest !== window.codePreviousHelper), {}, id)
+    await page.evaluate(id => { window.codePreviousHelper = window.foxwarmTest; window.codeAlreadySelected = [...document.querySelectorAll('.foxwarm-chat-root')].some(root => root.dataset.chatSessionId?.includes(id)); window.foxwarmTest.switchToSession(id) }, id)
+    await page.waitForFunction(id => [...document.querySelectorAll('.foxwarm-chat-root')].some(root => root.dataset.chatSessionId?.includes(id)) && (window.codeAlreadySelected || window.foxwarmTest !== window.codePreviousHelper), {}, id)
     await page.evaluate(() => window.foxwarmTest.sendMessage('CLI-CODE'))
     await until(async () => { const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')); return state.history.some(row => row.parts?.some(part => part.text?.includes('CLI-CODE-DONE'))) }, 'normal model remote file turn', 30000)
     await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')

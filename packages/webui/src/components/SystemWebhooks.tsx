@@ -18,7 +18,7 @@ async function webhookRequest<T>(path: string): Promise<T> {
 }
 
 /** Reloads on deliveries, handler progress and configuration saves while mounted. */
-function useWebhookList() {
+export function useWebhookList() {
   const [webhooks, setWebhooks] = useState<WebhookRow[]>([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')

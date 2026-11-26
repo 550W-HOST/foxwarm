@@ -154,10 +154,10 @@ try {
   // The active target Chat must show both its identity and the renamed header.
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, target)
   await page.waitForFunction(id => {
-    const subtitle = document.querySelector('.foxwarm-chat-root [data-session-header-subtitle]')
+    const root = document.querySelector('.foxwarm-chat-root')
     return location.hash === '#tab/' + encodeURIComponent('chat:' + id)
-      && subtitle?.textContent.split(' · ')[0] === 'session ' + id
-      && subtitle.parentElement?.previousElementSibling?.textContent === 'Observed name'
+      && root?.dataset.chatSessionId === id
+      && root.querySelector('[data-content-header-title]')?.textContent === 'Observed name'
   }, {}, target)
   held.release(); await final(target, 'HELD-DONE')
 
