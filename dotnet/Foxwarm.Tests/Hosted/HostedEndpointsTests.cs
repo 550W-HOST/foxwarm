@@ -317,8 +317,18 @@ public sealed class HostedEndpointsTests
         await second.ConnectAsync(IPAddress.Loopback, forwarder.Port);
         await UntilAsync(() => forwarder.Connections == 2, "two connections are held");
         using var excess = new TcpClient();
-        await excess.ConnectAsync(IPAddress.Loopback, forwarder.Port);
-        Assert.True(await EndedAsync(excess, TimeSpan.FromSeconds(2)), "the excess connection wasn't ended");
+        bool ended;
+        try
+        {
+            await excess.ConnectAsync(IPAddress.Loopback, forwarder.Port);
+            ended = await EndedAsync(excess, TimeSpan.FromSeconds(2));
+        }
+        catch (SocketException error) when (error.SocketErrorCode == SocketError.ConnectionReset)
+        {
+            // The reset can arrive before the client's connect completes: ended all the same.
+            ended = true;
+        }
+        Assert.True(ended, "the excess connection wasn't ended");
         Assert.Equal(2, forwarder.Connections);
         Assert.False(await EndedAsync(first, TimeSpan.FromMilliseconds(200)));
     }
