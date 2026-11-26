@@ -51,10 +51,18 @@ internal static class McpOAuthHttp
             : await egress.Resolver(host, token);
         var allowPrivate =
             SameOrigin(resource, endpoint) || Loopback(resource.Host) && Loopback(endpoint.Host);
+        // The deployment's policy first, so a refused endpoint is named as one.
+        if (addresses.Length > 0 && !egress.AllowsHost(host) && addresses.Any(egress.Denies))
+            throw new McpOAuthException(
+                "endpoint",
+                EgressDeniedException.Copy(host),
+                new EgressDeniedException(host, null)
+            );
+        // File mode's own rule, with its earlier address classification.
         if (
             addresses.Length == 0
-            || !allowPrivate && addresses.Any(EgressAddresses.IsInternal)
-            || !egress.AllowsHost(host) && addresses.Any(egress.Denies)
+            || !allowPrivate
+                && addresses.Any(address => EgressAddresses.IsInternal(address, translated: false))
         )
             throw new McpOAuthException(
                 "endpoint",

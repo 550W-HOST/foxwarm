@@ -131,13 +131,25 @@ internal sealed record EgressRules(
             .ToArray();
     }
 
-    /// <summary>A CIDR, or a single address as a full-length prefix; null for anything else.</summary>
+    /// <summary>
+    /// A CIDR, or a single address as a full-length prefix, in the effective address space
+    /// (<see cref="EgressAddresses.EffectiveNetwork"/>); null for anything else.
+    /// </summary>
     internal static IPNetwork? Network(string text)
     {
         if (text.Contains('/'))
-            return IPNetwork.TryParse(text, out var network) ? network : null;
+            return IPNetwork.TryParse(text.Trim('[', ']'), out var network)
+                ? EgressAddresses.EffectiveNetwork(network)
+                : null;
         return IPAddress.TryParse(text.Trim('[', ']'), out var address)
-            ? new IPNetwork(address, address.AddressFamily == AddressFamily.InterNetwork ? 32 : 128)
+            ? EgressAddresses.EffectiveNetwork(
+                new IPNetwork(
+                    EgressAddresses.Effective(address),
+                    EgressAddresses.Effective(address).AddressFamily == AddressFamily.InterNetwork
+                        ? 32
+                        : 128
+                )
+            )
             : null;
     }
 }
@@ -148,18 +160,18 @@ internal sealed record EgressAllowList(
     IReadOnlySet<string> Hosts
 )
 {
-    internal static EgressAllowList Empty { get; } =
-        new([], new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    internal static EgressAllowList Empty { get; } = new([], new HashSet<string>(StringComparer.Ordinal));
 
     internal static EgressAllowList Parse(IEnumerable<(string Path, string Text)> entries)
     {
         var networks = new List<IPNetwork>();
-        var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Host names in their wire form (EgressAddresses.HostKey), as connections name them.
+        var hosts = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (path, text) in entries)
             if (EgressRules.Network(text) is { } network)
                 networks.Add(network);
-            else if (Uri.CheckHostName(text.TrimEnd('.')) == UriHostNameType.Dns)
-                hosts.Add(text.TrimEnd('.'));
+            else if (EgressAddresses.HostKey(text) is { } host)
+                hosts.Add(host);
             else
                 throw new InvalidDataException(
                     $"`{path}` must be an IP address, a CIDR or a host name."
@@ -168,7 +180,7 @@ internal sealed record EgressAllowList(
     }
 
     internal bool Contains(IPAddress address) =>
-        Networks.Any(network => network.Contains(address));
+        EgressAddresses.Candidates(address).Any(candidate => Networks.Any(network => network.Contains(candidate)));
 }
 
 /// <summary>
@@ -207,19 +219,101 @@ internal static class EgressAddresses
         IPNetwork.Parse("ff00::/8"),
     ];
 
-    /// <summary>An IPv4-mapped IPv6 address as its IPv4 address; anything else unchanged.</summary>
-    internal static IPAddress Normalize(IPAddress address) =>
-        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+    private static readonly IPNetwork Nat64 = IPNetwork.Parse("64:ff9b::/96");
+    private static readonly IPNetwork Nat64Local = IPNetwork.Parse("64:ff9b:1::/48");
+    private static readonly IPNetwork SixToFour = IPNetwork.Parse("2002::/16");
 
-    internal static bool IsInternal(IPAddress address)
+    /// <summary>
+    /// The address in the effective address space rules are compared in, which is also the
+    /// address a guarded socket connects to: an IPv4-mapped address as its IPv4 address, a
+    /// scoped IPv6 address without its scope, anything else unchanged.
+    /// </summary>
+    internal static IPAddress Effective(IPAddress address)
     {
-        address = Normalize(address);
-        if (address.AddressFamily == AddressFamily.InterNetwork)
-            return InternalV4.Any(network => network.Contains(address));
-        // A scoped address (fe80::1%2) compares by its bytes.
-        if (address.ScopeId != 0)
-            address = new IPAddress(address.GetAddressBytes());
-        return InternalV6.Any(network => network.Contains(address));
+        if (address.IsIPv4MappedToIPv6)
+            return address.MapToIPv4();
+        if (address.AddressFamily == AddressFamily.InterNetworkV6 && address.ScopeId != 0)
+            return new IPAddress(address.GetAddressBytes());
+        return address;
+    }
+
+    /// <summary>
+    /// A rule in the effective address space: a network inside <c>::ffff:0:0/96</c> becomes
+    /// the IPv4 network it maps. Other IPv6 networks stay IPv6, so a rule wider than the
+    /// mapped range (<c>::/16</c>) doesn't extend to native IPv4 destinations.
+    /// </summary>
+    internal static IPNetwork EffectiveNetwork(IPNetwork network)
+    {
+        if (
+            network.PrefixLength >= 96 && network.BaseAddress.IsIPv4MappedToIPv6
+        )
+            return new IPNetwork(network.BaseAddress.MapToIPv4(), network.PrefixLength - 96);
+        return network;
+    }
+
+    /// <summary>
+    /// The IPv4 address a NAT64 or 6to4 address carries: <c>64:ff9b::/96</c> and
+    /// <c>64:ff9b:1::/48</c> in the last 32 bits, <c>2002::/16</c> in bits 16–47. Null for any
+    /// other address. The connection still goes to the IPv6 address.
+    /// </summary>
+    internal static IPAddress? EmbeddedV4(IPAddress address)
+    {
+        address = Effective(address);
+        if (address.AddressFamily != AddressFamily.InterNetworkV6)
+            return null;
+        var bytes = address.GetAddressBytes();
+        if (Nat64.Contains(address) || Nat64Local.Contains(address))
+            return new IPAddress(bytes[12..16]);
+        if (SixToFour.Contains(address))
+            return new IPAddress(bytes[2..6]);
+        return null;
+    }
+
+    /// <summary>
+    /// The forms of an address the rules apply to: its effective address and, for a NAT64 or
+    /// 6to4 address, the IPv4 address it carries.
+    /// </summary>
+    internal static IReadOnlyList<IPAddress> Candidates(IPAddress address)
+    {
+        var effective = Effective(address);
+        return EmbeddedV4(effective) is { } embedded ? [effective, embedded] : [effective];
+    }
+
+    /// <summary>
+    /// Whether the address is in the default deny set. <paramref name="translated"/> also
+    /// checks the IPv4 address a NAT64 or 6to4 address carries; file-mode OAuth's unrelated
+    /// private endpoint check keeps its earlier classification without it.
+    /// </summary>
+    internal static bool IsInternal(IPAddress address, bool translated)
+    {
+        var candidates = translated ? Candidates(address) : [Effective(address)];
+        return candidates.Any(candidate =>
+            candidate.AddressFamily == AddressFamily.InterNetwork
+                ? InternalV4.Any(network => network.Contains(candidate))
+                : InternalV6.Any(network => network.Contains(candidate))
+        );
+    }
+
+    /// <summary>
+    /// A host name in the form connections name it: IDNA ASCII, lower case, without a trailing
+    /// dot. Null when the text isn't a DNS name.
+    /// </summary>
+    internal static string? HostKey(string host)
+    {
+        host = host.Trim().TrimEnd('.');
+        if (host.Length == 0)
+            return null;
+        string ascii;
+        try
+        {
+            ascii = new System.Globalization.IdnMapping().GetAscii(host);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        ascii = ascii.ToLowerInvariant();
+        return Uri.CheckHostName(ascii) == UriHostNameType.Dns ? ascii : null;
     }
 }
 
@@ -284,19 +378,23 @@ internal sealed class EgressPolicy
         Profile == EgressProfile.Operator ? rules.OperatorAllow : rules.HostedAllow;
 
     /// <summary>Whether a host name is an allow exception, so its addresses aren't checked.</summary>
-    internal bool AllowsHost(string host) => Guarded && Allow.Hosts.Contains(host.TrimEnd('.'));
+    internal bool AllowsHost(string host) =>
+        Guarded && EgressAddresses.HostKey(host) is { } key && Allow.Hosts.Contains(key);
 
     /// <summary>Whether this policy refuses a connection to the address.</summary>
     internal bool Denies(IPAddress address)
     {
         if (!Guarded)
             return false;
-        var normalized = EgressAddresses.Normalize(address);
-        if (Allow.Contains(normalized) || Allow.Contains(address))
+        // Rules and candidates compare in the effective address space; the IPv4 rules also
+        // apply to the IPv4 address a NAT64 or 6to4 address carries.
+        var candidates = EgressAddresses.Candidates(address);
+        bool Matches(IPNetwork network) => candidates.Any(network.Contains);
+        if (Allow.Networks.Any(Matches))
             return false;
-        if (rules.Deny.Any(network => network.Contains(normalized) || network.Contains(address)))
+        if (rules.Deny.Any(Matches))
             return true;
-        return Profile == EgressProfile.Hosted && EgressAddresses.IsInternal(address);
+        return Profile == EgressProfile.Hosted && EgressAddresses.IsInternal(address, translated: true);
     }
 
     /// <summary>
@@ -331,8 +429,9 @@ internal sealed class EgressPolicy
         foreach (var address in addresses)
             try
             {
-                // An IPv4-mapped address is connected as IPv4: the socket isn't dual-mode.
-                var endpoint = new IPEndPoint(EgressAddresses.Normalize(address), port);
+                // The effective address: an IPv4-mapped address is connected as IPv4, the
+                // address its rules were checked as.
+                var endpoint = new IPEndPoint(EgressAddresses.Effective(address), port);
                 return await Connector(endpoint, token).ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OperationCanceledException)

@@ -43,6 +43,13 @@ public sealed class EgressMatrixTests
             "[::127.0.0.1]",
             "[::10.0.0.1]",
             "[::a9fe:a9fe]",
+            // NAT64 and 6to4 forms embed the IPv4 address the rules apply to.
+            "[64:ff9b::a00:1]",
+            "[64:ff9b::7f00:1]",
+            "[64:ff9b::a9fe:a9fe]",
+            "[64:ff9b:1::c0a8:1]",
+            "[2002:a00:1::1]",
+            "[2002:a9fe:a9fe::]",
         ];
 
     public static TheoryData<string> DeniedLiterals => new(Literals);
@@ -231,7 +238,13 @@ public sealed class EgressMatrixTests
 
         // The deployment's deny set (here the loopback range, as it would be the mesh or the
         // database) holds for the operator profile too, in every form.
-        var denying = fixture.Operator(EgressRules.Parse(Yaml("deny: [127.0.0.0/8, \"::1\"]")));
+        var denying = fixture.Operator(
+            EgressRules.Parse(Yaml("deny: [127.0.0.0/8, \"::1\", 10.0.0.0/8]"))
+        );
+        // The deny set applies to the IPv4 address a NAT64 or 6to4 address embeds.
+        foreach (var embedded in new[] { "64:ff9b::a00:1", "2002:a00:5::1", "64:ff9b::7f00:1" })
+            Assert.True(denying.Denies(IPAddress.Parse(embedded)), embedded);
+        Assert.False(denying.Denies(IPAddress.Parse("64:ff9b::808:808")));
         foreach (
             var url in new[]
             {
@@ -265,6 +278,9 @@ public sealed class EgressMatrixTests
         Assert.True(Denied(await GetAsync(hosted, $"http://127.0.0.2:{fixture.Port}/ok")));
         Assert.True(Denied(await GetAsync(hosted, $"http://other.internal:{fixture.Port}/ok")));
         Assert.True(Denied(await GetAsync(hosted, $"http://[::1]:{fixture.Port}/ok")));
+        // An allowed IPv4 network covers its NAT64 form too.
+        Assert.False(hosted.Denies(IPAddress.Parse("64:ff9b::7f00:1")));
+        Assert.True(hosted.Denies(IPAddress.Parse("64:ff9b::7f00:2")));
         // The hosted exceptions aren't the operator's.
         var @operator = fixture.Operator(rules);
         Assert.True(Denied(await GetAsync(@operator, $"http://gateway.internal:{fixture.Port}/ok")));
@@ -358,11 +374,58 @@ public sealed class EgressMatrixTests
         );
     }
 
+    [Theory]
+    // Each rule form against each input form of the same IPv4 endpoint.
+    [InlineData("198.51.100.7")]
+    [InlineData("\"::ffff:198.51.100.7\"")]
+    [InlineData("198.51.100.0/24")]
+    [InlineData("\"::ffff:198.51.100.0/120\"")]
+    [InlineData("\"[::ffff:198.51.100.7]\"")]
+    public void DeploymentRulesMatchAnIPv4EndpointInEitherForm(string rule)
+    {
+        var rules = EgressRules.Parse(Yaml($"deny: [{rule}]"));
+        var @operator = EgressPolicy.Operator(rules);
+        foreach (var input in new[] { "198.51.100.7", "::ffff:198.51.100.7", "64:ff9b::c633:6407", "2002:c633:6407::1" })
+            Assert.True(@operator.Denies(IPAddress.Parse(input)), $"{rule} / {input}");
+        Assert.False(@operator.Denies(IPAddress.Parse("198.51.101.7")));
+        // An allow exception matches both forms too.
+        var allowed = EgressPolicy.Hosted(EgressRules.Parse(Yaml($"allow: {{hosted: [{rule}]}}")));
+        foreach (var input in new[] { "198.51.100.7", "::ffff:198.51.100.7", "64:ff9b::c633:6407" })
+            Assert.False(allowed.Denies(IPAddress.Parse(input)), $"{rule} / {input}");
+    }
+
+    [Fact]
+    public void AnIPv6RuleWiderThanTheMappedRangeStaysIPv6()
+    {
+        var rules = EgressRules.Parse(Yaml("deny: [\"2001:db8::/32\", \"::/8\"]"));
+        var @operator = EgressPolicy.Operator(rules);
+        Assert.True(@operator.Denies(IPAddress.Parse("2001:db8::1")));
+        Assert.True(@operator.Denies(IPAddress.Parse("::1")));
+        // Native IPv4 isn't inside ::/8 because its mapped form is.
+        Assert.False(@operator.Denies(IPAddress.Parse("8.8.8.8")));
+        Assert.False(@operator.Denies(IPAddress.Parse("::ffff:8.8.8.8")));
+    }
+
+    [Fact]
+    public void HostExceptionsCompareInTheirWireForm()
+    {
+        var policy = EgressPolicy.Hosted(EgressRules.Parse(Yaml("allow: {hosted: [Bücher.Example.]}")));
+        Assert.True(policy.AllowsHost("xn--bcher-kva.example"));
+        Assert.True(policy.AllowsHost("bücher.example"));
+        Assert.True(policy.AllowsHost("BÜCHER.example."));
+        Assert.True(policy.AllowsHost(new Uri("https://bücher.example/").IdnHost));
+        Assert.False(policy.AllowsHost("buecher.example"));
+        Assert.False(policy.AllowsHost("bucher.example"));
+        // The ASCII spelling in the configuration is the same exception.
+        var ascii = EgressPolicy.Hosted(EgressRules.Parse(Yaml("allow: {hosted: [xn--bcher-kva.example]}")));
+        Assert.True(ascii.AllowsHost("bücher.example"));
+    }
+
     [Fact]
     public void TheDefaultDenySetCoversEveryRangeOfThePlan()
     {
         foreach (var host in Literals)
-            Assert.True(EgressAddresses.IsInternal(Address(host)), host);
+            Assert.True(EgressAddresses.IsInternal(Address(host), translated: true), host);
         foreach (
             var host in new[]
             {
@@ -377,9 +440,13 @@ public sealed class EgressMatrixTests
                 "::ffff:8.8.8.8",
                 "2001:4860:4860::8888",
                 "64:ff9b::808:808",
+                "64:ff9b:1::808:808",
+                "2002:808:808::1",
+                // Teredo isn't decoded.
+                "2001:0:4136:e378:8000:63bf:3fff:fdd2",
             }
         )
-            Assert.False(EgressAddresses.IsInternal(IPAddress.Parse(host)), host);
+            Assert.False(EgressAddresses.IsInternal(IPAddress.Parse(host), translated: true), host);
     }
 
     private static System.Text.Json.Nodes.JsonNode Yaml(string text) =>
