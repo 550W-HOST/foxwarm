@@ -53,6 +53,19 @@ internal sealed record WakeupRow(
     int Attempts
 );
 
+/// <summary>What one row's renewal established.</summary>
+internal enum RenewalOutcome
+{
+    /// <summary>Extended under the predicate.</summary>
+    Renewed,
+
+    /// <summary>Still this grant's, but locked by another transaction and skipped: proves nothing.</summary>
+    Unproved,
+
+    /// <summary>Taken over, released, expired, or its tenant isn't active: the grant is lost.</summary>
+    Lost,
+}
+
 /// <summary>Why a replica may not take a tenant at all (as opposed to "held by another").</summary>
 internal sealed class LeaseRefusedException(string message) : Exception(message);
 
@@ -345,6 +358,74 @@ internal sealed class TenantLease
         command.Parameters.Add(new NpgsqlParameter<long> { TypedValue = grant.Epoch });
         command.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
         return await command.ExecuteNonQueryAsync(token).ConfigureAwait(false) == 1;
+    }
+
+    /// <summary>
+    /// Renews a batch of this replica's grants in one transaction. Each row is renewed only
+    /// under P1's predicate (owner, epoch, active, unexpired) and while its tenant is
+    /// <c>active</c>, so an expired, released, foreign or suspended row is never revived.
+    /// With <paramref name="skipLocked"/>, rows another transaction holds locked (a takeover's
+    /// <c>FOR UPDATE</c>) are skipped instead of waited for; <c>FOR NO KEY UPDATE</c> doesn't
+    /// conflict with writers' <c>FOR KEY SHARE</c>. Returns one outcome per row, in input order,
+    /// from the committed transaction. Throws on a lock timeout (55P03) or a connection failure,
+    /// when nothing is known.
+    /// </summary>
+    internal static async Task<RenewalOutcome[]> RenewBatchAsync(
+        PgDatabase control,
+        string replica,
+        IReadOnlyList<(int TenantId, long Epoch)> rows,
+        TimeSpan ttl,
+        TimeSpan lockTimeout,
+        bool skipLocked,
+        CancellationToken token
+    )
+    {
+        await using var connection = await control.OpenAsync(token).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        await using (var timeout = new NpgsqlCommand("SELECT set_config('lock_timeout', $1, true)", connection, transaction))
+        {
+            timeout.Parameters.Add(new NpgsqlParameter<string>
+            {
+                TypedValue = Math.Max(1, (long)lockTimeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms",
+            });
+            await timeout.ExecuteScalarAsync(token).ConfigureAwait(false);
+        }
+        // Every part of the statement reads one snapshot: the final join sees each row as it was
+        // before the update, so a row that wasn't renewed but matched was skipped as locked.
+        await using var renew = new NpgsqlCommand(
+            "WITH batch AS (SELECT * FROM unnest($1::integer[], $2::bigint[]) WITH ORDINALITY AS b (tenant_id, epoch, ord)),"
+                + " candidates AS (SELECT l.tenant_id FROM tenant_leases l"
+                + " JOIN batch b ON b.tenant_id = l.tenant_id AND b.epoch = l.epoch"
+                + " JOIN tenants t ON t.tenant_id = l.tenant_id"
+                + " WHERE l.owner_replica = $3 AND l.state = 'active' AND l.expires_at > now() AND t.state = 'active'"
+                + (skipLocked ? " FOR NO KEY UPDATE OF l SKIP LOCKED)," : " FOR NO KEY UPDATE OF l),")
+                + " renewed AS (UPDATE tenant_leases l SET expires_at = now() + make_interval(secs => $4)"
+                + " FROM candidates c WHERE l.tenant_id = c.tenant_id RETURNING l.tenant_id, l.epoch)"
+                + " SELECT r.tenant_id IS NOT NULL,"
+                + " coalesce(l.owner_replica = $3 AND l.epoch = b.epoch AND l.state = 'active'"
+                + " AND l.expires_at > now() AND t.state = 'active', false)"
+                + " FROM batch b LEFT JOIN renewed r ON r.tenant_id = b.tenant_id AND r.epoch = b.epoch"
+                + " LEFT JOIN tenant_leases l ON l.tenant_id = b.tenant_id"
+                + " LEFT JOIN tenants t ON t.tenant_id = b.tenant_id ORDER BY b.ord",
+            connection,
+            transaction
+        );
+        renew.Parameters.Add(new NpgsqlParameter<int[]> { TypedValue = [.. rows.Select(row => row.TenantId)] });
+        renew.Parameters.Add(new NpgsqlParameter<long[]> { TypedValue = [.. rows.Select(row => row.Epoch)] });
+        renew.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
+        renew.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
+        var outcomes = new RenewalOutcome[rows.Count];
+        await using (var reader = await renew.ExecuteReaderAsync(token).ConfigureAwait(false))
+        {
+            var index = 0;
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+                outcomes[index++] = reader.GetBoolean(0)
+                    ? RenewalOutcome.Renewed
+                    : reader.GetBoolean(1) ? RenewalOutcome.Unproved : RenewalOutcome.Lost;
+        }
+        // Not cancellable: the outcome is published only after a commit that is known.
+        await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
+        return outcomes;
     }
 
     /// <summary>

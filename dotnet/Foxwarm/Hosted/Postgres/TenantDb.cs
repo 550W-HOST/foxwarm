@@ -42,6 +42,13 @@ internal sealed class TenantDb
     internal const string FenceSqlState = "FW001";
     internal const int MaxAttempts = 3;
 
+    /// <summary>Transactions one tenant runs at once by default (plan §7.2).</summary>
+    internal const int DefaultMaxInFlight = 8;
+
+    // The TenantDb whose permit this logical flow holds: a transaction body that calls the
+    // same helper again (directly or in work it starts) doesn't take a second permit.
+    private static readonly AsyncLocal<TenantDb?> holding = new();
+
     private const string LeaseCheck =
         "SELECT 1 FROM tenant_leases WHERE tenant_id = $1 AND epoch = $2 AND state = 'active'"
         + " AND expires_at > now() FOR KEY SHARE";
@@ -50,6 +57,7 @@ internal sealed class TenantDb
     private readonly string statementTimeout;
     private readonly string idleTimeout;
     private volatile bool closed;
+    private readonly SemaphoreSlim inFlight;
 
     /// <param name="statementTimeout">Bound of one statement, default 15 s.</param>
     /// <param name="idleTimeout">
@@ -57,14 +65,23 @@ internal sealed class TenantDb
     /// bound how long a partitioned owner's open transaction can hold the lease lock and delay
     /// a takeover: the server ends it on its own.
     /// </param>
+    /// <param name="maxInFlight">
+    /// The tenant's statement cap: transactions it runs at once, each holding one connection of
+    /// the shared pool. Further ones wait for a slot, so one busy tenant can't take the whole
+    /// pool. Lease control traffic uses its own data source and doesn't count.
+    /// </param>
     internal TenantDb(
         PgDatabase database,
         int tenantId,
         long epoch,
         TimeSpan? statementTimeout = null,
-        TimeSpan? idleTimeout = null
+        TimeSpan? idleTimeout = null,
+        int maxInFlight = DefaultMaxInFlight
     )
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlight, 1);
+        inFlight = new SemaphoreSlim(maxInFlight, maxInFlight);
+        MaxInFlight = maxInFlight;
         this.database = database;
         TenantId = tenantId;
         Epoch = epoch;
@@ -80,6 +97,11 @@ internal sealed class TenantDb
 
     internal long Epoch { get; }
 
+    internal int MaxInFlight { get; }
+
+    /// <summary>Transactions running now, for diagnostics and tests.</summary>
+    internal int InFlight => MaxInFlight - inFlight.CurrentCount;
+
     /// <summary>
     /// Raised once per refused write that observed a lost lease, before the exception reaches
     /// the caller. The lease monitor fences the runtime on it.
@@ -90,6 +112,24 @@ internal sealed class TenantDb
     internal void Close() => closed = true;
 
     internal T Write<T>(Func<PgTx, T> body, PgWriteOptions? options = null)
+    {
+        if (holding.Value == this)
+            return WriteCore(body, options);
+        inFlight.Wait();
+        var previous = holding.Value;
+        holding.Value = this;
+        try
+        {
+            return WriteCore(body, options);
+        }
+        finally
+        {
+            holding.Value = previous;
+            inFlight.Release();
+        }
+    }
+
+    private T WriteCore<T>(Func<PgTx, T> body, PgWriteOptions? options)
     {
         options ??= new();
         for (var attempt = 1; ; attempt++)
@@ -139,6 +179,26 @@ internal sealed class TenantDb
         Func<PgTx, CancellationToken, Task<T>> body,
         PgWriteOptions? options = null,
         CancellationToken token = default
+    )
+    {
+        if (holding.Value == this)
+            return await WriteCoreAsync(body, options, token).ConfigureAwait(false);
+        await inFlight.WaitAsync(token).ConfigureAwait(false);
+        holding.Value = this;
+        try
+        {
+            return await WriteCoreAsync(body, options, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            inFlight.Release();
+        }
+    }
+
+    private async Task<T> WriteCoreAsync<T>(
+        Func<PgTx, CancellationToken, Task<T>> body,
+        PgWriteOptions? options,
+        CancellationToken token
     )
     {
         options ??= new();
@@ -194,6 +254,24 @@ internal sealed class TenantDb
     /// </summary>
     internal T Read<T>(Func<PgTx, T> body, bool snapshot = false)
     {
+        if (holding.Value == this)
+            return ReadCore(body, snapshot);
+        inFlight.Wait();
+        var previous = holding.Value;
+        holding.Value = this;
+        try
+        {
+            return ReadCore(body, snapshot);
+        }
+        finally
+        {
+            holding.Value = previous;
+            inFlight.Release();
+        }
+    }
+
+    private T ReadCore<T>(Func<PgTx, T> body, bool snapshot)
+    {
         CheckOpen();
         using var connection = Open();
         using var transaction = connection.BeginTransaction(
@@ -223,6 +301,26 @@ internal sealed class TenantDb
         Func<PgTx, CancellationToken, Task<T>> body,
         bool snapshot = false,
         CancellationToken token = default
+    )
+    {
+        if (holding.Value == this)
+            return await ReadCoreAsync(body, snapshot, token).ConfigureAwait(false);
+        await inFlight.WaitAsync(token).ConfigureAwait(false);
+        holding.Value = this;
+        try
+        {
+            return await ReadCoreAsync(body, snapshot, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            inFlight.Release();
+        }
+    }
+
+    private async Task<T> ReadCoreAsync<T>(
+        Func<PgTx, CancellationToken, Task<T>> body,
+        bool snapshot,
+        CancellationToken token
     )
     {
         CheckOpen();
