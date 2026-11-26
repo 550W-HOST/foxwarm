@@ -129,28 +129,41 @@ function directStep(name, command, args, timeoutMs = 180_000, env = {}) {
 }
 
 // Classes with the Backend=postgres trait need the disposable PostgreSQL fixture
-// (FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL). Without it they are excluded with
-// an explicit notice, never reported as passed.
+// (FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL), and Backend=s3 classes the S3 one
+// (FOXWARM_TEST_VERSITYGW or FOXWARM_TEST_S3_URL). Without its fixture a batch is
+// excluded with an explicit notice, never reported as passed. With PostgreSQL, the
+// selected classes that carry Backend=neutral run a second time on the hosted stores.
 function managedHostedSelection(filter, env = process.env) {
-  if (env.FOXWARM_TEST_PG_PREFIX || env.FOXWARM_TEST_PG_URL) return { filter, notice: null }
-  const excluded = 'Backend!=postgres'
+  const postgres = Boolean(env.FOXWARM_TEST_PG_PREFIX || env.FOXWARM_TEST_PG_URL)
+  const s3 = Boolean(env.FOXWARM_TEST_VERSITYGW || env.FOXWARM_TEST_S3_URL)
+  const excluded = [...(postgres ? [] : ['Backend!=postgres']), ...(s3 ? [] : ['Backend!=s3'])]
+  const selected = excluded.length ? [...(filter ? [`(${filter})`] : []), ...excluded].join('&') : filter
+  const notices = [
+    ...(postgres ? [] : ['Hosted batch not run: set FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL to include Backend=postgres tests and the hosted run of Backend=neutral tests.']),
+    ...(s3 ? [] : ['S3 batch not run: set FOXWARM_TEST_VERSITYGW or FOXWARM_TEST_S3_URL to include Backend=s3 tests.']),
+  ]
   return {
-    filter: filter ? `(${filter})&${excluded}` : excluded,
-    notice: 'Hosted batch not run: set FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL to include Backend=postgres tests.',
+    filter: selected,
+    neutral: postgres ? (filter ? `(${filter})&Backend=neutral` : 'Backend=neutral') : null,
+    notice: notices.length ? notices.join('\n') : null,
   }
 }
 
 function managedGroup() {
   const hosted = managedHostedSelection(managedFilter)
   if (hosted.notice) console.log(hosted.notice)
+  const testArgs = filter => ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal',
+    ...(filter ? ['--filter', filter] : []),
+    '--', 'RunConfiguration.TreatNoTestsAsError=true']
   return {
     name: 'managed',
     steps: [
       { ...directStep('restore', 'dotnet', ['restore', 'dotnet/Foxwarm.sln'], 600_000), prepareDependencies: true },
       // Build plus serial tests measured 27.5 minutes in CI; leave room for suite growth.
-      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal',
-        ...(hosted.filter ? ['--filter', hosted.filter] : []),
-        '--', 'RunConfiguration.TreatNoTestsAsError=true'], 2_400_000),
+      directStep('dotnet', 'dotnet', testArgs(hosted.filter), 2_400_000),
+      ...(hosted.neutral
+        ? [directStep('dotnet-hosted-neutral', 'dotnet', testArgs(hosted.neutral), 1_200_000, { FOXWARM_TEST_BACKEND: 'postgres' })]
+        : []),
     ],
     env: { FOXWARM_REPO_ROOT: repoRoot },
   }

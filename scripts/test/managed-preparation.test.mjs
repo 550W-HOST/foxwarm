@@ -26,7 +26,7 @@ global.setTimeout = (callback, delay, ...args) => original(callback, delay === 2
   await fs.writeFile(path.join(bin, 'dotnet'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const args = process.argv.slice(2), root = ${JSON.stringify(root)};
-fs.appendFileSync(${JSON.stringify(journal)}, JSON.stringify({args, proxy:process.env.HTTPS_PROXY, data:process.env.FOXWARM_DATA_DIR}) + '\\n');
+fs.appendFileSync(${JSON.stringify(journal)}, JSON.stringify({args, proxy:process.env.HTTPS_PROXY, data:process.env.FOXWARM_DATA_DIR, backend:process.env.FOXWARM_TEST_BACKEND}) + '\\n');
 if (args[0] === 'restore') {
   assert.equal(process.env.HTTPS_PROXY, 'http://toolchain-proxy.invalid:8123');
   if (process.env.FIXTURE_RESTORE_FAIL) process.exit(19);
@@ -51,7 +51,7 @@ if (args[0] === 'restore') {
   } else console.log('Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Fixture.Tests.dll (net10.0)');
 }
 `, { mode: 0o755 })
-  async function run({ fail = false, pending = false, filter, postgres = '' } = {}) {
+  async function run({ fail = false, pending = false, filter, postgres = '', s3 = '' } = {}) {
     try {
       const result = await execFileAsync(process.execPath, ['scripts/test/run-tests.mjs', 'managed', ...(filter ? [`--filter=${filter}`] : [])], {
         cwd: repo, timeout: 20_000,
@@ -60,7 +60,8 @@ if (args[0] === 'restore') {
           FOXWARM_TEST_ARTIFACT_DIR: path.join(root, 'artifacts'), FIXTURE_RESTORE_FAIL: fail ? '1' : '',
           HTTPS_PROXY: 'http://toolchain-proxy.invalid:8123', HTTP_PROXY: 'http://toolchain-proxy.invalid:8123',
           OPENAI_API_KEY: 'synthetic-must-not-reach-test', CONFIG_PATH: path.join(root, 'unused-config.yaml'),
-          FOXWARM_TEST_PG_PREFIX: postgres, FOXWARM_TEST_PG_URL: '' },
+          FOXWARM_TEST_PG_PREFIX: postgres, FOXWARM_TEST_PG_URL: '',
+          FOXWARM_TEST_VERSITYGW: s3, FOXWARM_TEST_S3_URL: '' },
       })
       return { code: 0, ...result }
     } catch (error) { return error }
@@ -80,6 +81,7 @@ test('managed dependency preparation uses the caller toolchain before isolated n
   assert.equal(result.code, 0, result.stdout + result.stderr)
   const calls = await f.calls()
   assert.deepEqual(calls.map(call => call.args[0]), ['restore', 'test'])
+  assert(calls[1].args.includes('Backend!=postgres&Backend!=s3'))
   assert.equal(calls[0].args[1], 'dotnet/Foxwarm.sln')
   assert.equal(calls[1].args[1], 'dotnet/Foxwarm.sln')
 })
@@ -103,7 +105,7 @@ test('a managed runtime deadline fails even when the child handles termination w
 test('managed selections pass the complete VSTest filter as one argument', unix, async t => {
   const f = await fixture(t)
   const filter = 'FullyQualifiedName~Foxwarm.Tests.Alpha&FullyQualifiedName!~Foxwarm.Tests.Beta'
-  const result = await f.run({ filter, postgres: '/fixture/postgres' })
+  const result = await f.run({ filter, postgres: '/fixture/postgres', s3: '/fixture/versitygw' })
   assert.equal(result.code, 0, result.stdout + result.stderr)
   const args = (await f.calls())[1].args
   assert.equal(args[args.indexOf('--filter') + 1], filter)
@@ -115,14 +117,34 @@ test('without a PostgreSQL fixture the hosted batch is excluded with a notice', 
   const result = await f.run({ filter })
   assert.equal(result.code, 0, result.stdout + result.stderr)
   assert.match(result.stdout, /Hosted batch not run: set FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL/)
-  const args = (await f.calls())[1].args
-  assert.equal(args[args.indexOf('--filter') + 1], `(${filter})&Backend!=postgres`)
+  assert.match(result.stdout, /S3 batch not run: set FOXWARM_TEST_VERSITYGW or FOXWARM_TEST_S3_URL/)
+  const calls = await f.calls()
+  assert.equal(calls.length, 2)
+  const args = calls[1].args
+  assert.equal(args[args.indexOf('--filter') + 1], `(${filter})&Backend!=postgres&Backend!=s3`)
 })
 
 test('with a PostgreSQL fixture and no selection every managed test runs', unix, async t => {
   const f = await fixture(t)
-  const result = await f.run({ postgres: '/fixture/postgres' })
+  const result = await f.run({ postgres: '/fixture/postgres', s3: '/fixture/versitygw' })
   assert.equal(result.code, 0, result.stdout + result.stderr)
-  assert.doesNotMatch(result.stdout, /Hosted batch not run/)
-  assert(!(await f.calls())[1].args.includes('--filter'))
+  assert.doesNotMatch(result.stdout, /batch not run/)
+  const calls = await f.calls()
+  assert.deepEqual(calls.map(call => call.args[0]), ['restore', 'test', 'test'])
+  assert(!calls[1].args.includes('--filter'))
+  assert.equal(calls[1].backend, undefined)
+  // The neutral classes run once more against the hosted stores.
+  assert.equal(calls[2].args[calls[2].args.indexOf('--filter') + 1], 'Backend=neutral')
+  assert.equal(calls[2].backend, 'postgres')
+})
+
+test('a managed selection with a PostgreSQL fixture reruns its neutral part on the hosted stores', unix, async t => {
+  const f = await fixture(t)
+  const result = await f.run({ filter: 'Backend=postgres|Backend=neutral', postgres: '/fixture/postgres' })
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const [, first, second] = await f.calls()
+  // Without the S3 fixture only its batch is excluded.
+  assert.equal(first.args[first.args.indexOf('--filter') + 1], '(Backend=postgres|Backend=neutral)&Backend!=s3')
+  assert.equal(second.args[second.args.indexOf('--filter') + 1], '(Backend=postgres|Backend=neutral)&Backend=neutral')
+  assert.equal(second.backend, 'postgres')
 })
