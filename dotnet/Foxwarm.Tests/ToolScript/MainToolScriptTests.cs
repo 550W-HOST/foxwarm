@@ -41,6 +41,9 @@ public sealed class MainToolScriptTests
                         "",
                         713
                     );
+                // Cases write state/tool-authorization.yaml; with every Session store hosted,
+                // nothing else creates the state directory.
+                Directory.CreateDirectory(Path.Combine(f.Data, "state"));
                 f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options), skillsRoot);
                 await f.Manager.LoadMainHostAsync();
                 f.Owner = await f.Manager.CreateNamedAsync("main", "script", null, null);
