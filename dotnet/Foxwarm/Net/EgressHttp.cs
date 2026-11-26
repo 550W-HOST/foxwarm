@@ -182,6 +182,51 @@ internal static class EgressHttp
         };
         if (options.ConnectTimeout is { } timeout)
             handler.ConnectTimeout = timeout;
+        // Chain building could otherwise fetch a missing intermediate from the certificate's
+        // AIA URL over the runtime's own HTTP client, outside the connect callback.
+        handler.SslOptions.CertificateChainPolicy = OfflineChainPolicy();
+        handler.SslOptions.RemoteCertificateValidationCallback = ValidateOffline;
         return handler;
+    }
+
+    /// <summary>
+    /// The chain policy of guarded TLS: what SslStream uses without one (no revocation check,
+    /// the root excluded from revocation, system trust, the server-authentication EKU), with
+    /// certificate downloads disabled. Host names are checked by SslStream either way.
+    /// </summary>
+    internal static System.Security.Cryptography.X509Certificates.X509ChainPolicy OfflineChainPolicy()
+    {
+        var policy = new System.Security.Cryptography.X509Certificates.X509ChainPolicy
+        {
+            DisableCertificateDownloads = true,
+            RevocationMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck,
+            RevocationFlag = System.Security.Cryptography.X509Certificates.X509RevocationFlag.ExcludeRoot,
+            TrustMode = System.Security.Cryptography.X509Certificates.X509ChainTrustMode.System,
+        };
+        policy.ApplicationPolicy.Add(new System.Security.Cryptography.Oid("1.3.6.1.5.5.7.3.1"));
+        return policy;
+    }
+
+    // The default decision (no policy errors), except that an incomplete chain, which a
+    // download would have completed, is reported as such rather than as an untrusted server.
+    private static bool ValidateOffline(
+        object sender,
+        System.Security.Cryptography.X509Certificates.X509Certificate? certificate,
+        System.Security.Cryptography.X509Certificates.X509Chain? chain,
+        System.Net.Security.SslPolicyErrors errors
+    )
+    {
+        if (errors == System.Net.Security.SslPolicyErrors.None)
+            return true;
+        if (
+            chain?.ChainStatus.Any(status =>
+                status.Status
+                == System.Security.Cryptography.X509Certificates.X509ChainStatusFlags.PartialChain
+            ) == true
+        )
+            throw new EgressCertificateException(
+                (sender as System.Net.Security.SslStream)?.TargetHostName ?? ""
+            );
+        return false;
     }
 }

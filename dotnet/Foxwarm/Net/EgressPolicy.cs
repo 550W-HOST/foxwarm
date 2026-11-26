@@ -43,9 +43,52 @@ internal sealed class EgressDeniedException(string host, IPAddress? address)
     internal string Host => host;
     internal IPAddress? Address => address;
 
-    // Draft copy; the coordinator owns the final text.
-    private static string Copy(string host) =>
-        $"Connections to {host} are not allowed: it is an internal network address.";
+    // Coordinator-approved copy (2026-11-27). The cause may be a configured deny, not only an
+    // internal address.
+    internal static string Copy(string host) =>
+        $"Can't connect to {host}: its address is blocked by this deployment's network policy.";
+
+    /// <summary>The denial an error was caused by, through its inner exceptions.</summary>
+    internal static EgressDeniedException? Find(Exception? error)
+    {
+        for (; error is not null; error = error.InnerException)
+            if (error is EgressDeniedException denied)
+                return denied;
+        return null;
+    }
+}
+
+/// <summary>
+/// A TLS server whose certificate chain is incomplete. A guarded connection doesn't download
+/// missing intermediate certificates, so the server must send its full chain.
+/// </summary>
+internal sealed class EgressCertificateException(string host)
+    : System.Security.Authentication.AuthenticationException(Copy(host))
+{
+    internal string Host => host;
+
+    // Draft copy for the coordinator.
+    internal static string Copy(string host) =>
+        $"TLS certificate validation failed for {host}: the server didn't send its full certificate chain, and this deployment doesn't download missing intermediate certificates.";
+
+    internal static EgressCertificateException? Find(Exception? error)
+    {
+        for (; error is not null; error = error.InnerException)
+            if (error is EgressCertificateException found)
+                return found;
+        return null;
+    }
+}
+
+/// <summary>The reason a guarded connection failed by policy, for callers that show one.</summary>
+internal static class EgressFailure
+{
+    /// <summary>
+    /// The refusal's or the incomplete chain's text, found through inner exceptions; null for
+    /// any other failure. Neither names a resolved address.
+    /// </summary>
+    internal static string? Reason(Exception? error) =>
+        EgressDeniedException.Find(error)?.Message ?? EgressCertificateException.Find(error)?.Message;
 }
 
 /// <summary>
