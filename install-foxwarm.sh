@@ -131,6 +131,29 @@ if [ -e "$FOXWARM_DIR/.git" ]; then
   fail "$FOXWARM_DIR is a source checkout. Update it from source, or choose another --dir and pass --data-dir to reuse its data."
 fi
 
+# The scalar value of bot.KEY in config.yaml, the setting Main reads: a key directly under
+# the top-level bot mapping, without quotes or a trailing comment. Keys elsewhere, at the
+# top level or nested deeper, are not Main's setting. foxwarmctl reads it the same way.
+bot_setting() {
+  awk -v key="$2" '
+    { sub(/\r$/, "") }
+    /^[ \t]*$/ || /^[ \t]*#/ { next }
+    /^[^ \t]/ { bot = ($0 ~ /^bot:[ \t]*$/ || $0 ~ /^bot:[ \t]+#/); indent = ""; next }
+    !bot || !match($0, /^ +/) { next }
+    {
+      if (indent == "") indent = substr($0, 1, RLENGTH)
+      if (RLENGTH != length(indent)) next
+      line = substr($0, RLENGTH + 1)
+      if (substr(line, 1, length(key) + 1) != key ":") next
+      value = substr(line, length(key) + 2)
+      if (value != "" && value !~ /^[ \t]/) next
+      sub(/^[ \t]+/, "", value); sub(/[ \t]+#.*$/, "", value); sub(/[ \t]+$/, "", value)
+      if (value ~ /^".*"$/ || value ~ /^'\''.*'\''$/) value = substr(value, 2, length(value) - 2)
+      print value
+      exit
+    }' "$1/state/config.yaml" 2>/dev/null || true
+}
+
 # Print where to sign in once Foxwarm is running (the start command has already confirmed it).
 show_signin() {
   local data="$1" token="" port host i
@@ -139,11 +162,10 @@ show_signin() {
     [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: '$FOXWARM_DIR/foxwarmctl' status"
     sleep 0.5
   done
-  # config.yaml may not exist yet; under pipefail the failed sed must not end the installer.
-  port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$data/state/config.yaml" 2>/dev/null | sed -n 1p || true)"
-  port="${port:-3001}"
+  port="$(bot_setting "$data" httpPort)"
+  case "$port" in ''|*[!0-9]*) port=3001 ;; esac
   # A specific bot.httpHost is the only address Main answers on.
-  host="$(sed -n "s/^ *httpHost: *['\"]\{0,1\}\([0-9A-Fa-f:.]*\).*/\1/p" "$data/state/config.yaml" 2>/dev/null | sed -n 1p || true)"
+  host="$(bot_setting "$data" httpHost)"
   case "$host" in
     ''|0.0.0.0|::) host=localhost ;;
     *:*) host="[$host]" ;;
@@ -157,8 +179,19 @@ show_signin() {
     warn "The sign-in token is not ready yet. When startup finishes, read it with: cat '$data/state/token'"
     echo "WebUI: http://${host}:${port}/"
   fi
+  [ "$LOOPBACK" = false ] || loopback_hint "$data"
   echo
-  echo "Control: '$FOXWARM_DIR/foxwarmctl' status | stop | restart | update | attach"
+  # Older releases have no link command.
+  verbs="status | stop | restart | update | attach"
+  if grep -q '^cmd_link()' "$FOXWARM_DIR/foxwarmctl" 2>/dev/null; then verbs="$verbs | link"; fi
+  echo "Control: '$FOXWARM_DIR/foxwarmctl' $verbs"
+}
+
+# A new installation listens on this computer only. An existing installation, or data that
+# Main has already used, keeps its binding: config.yaml is never replaced.
+LOOPBACK=false
+loopback_hint() {
+  echo "Only this computer can connect. To allow other devices, set bot.httpHost to 0.0.0.0 in '$1/state/config.yaml' and run '$FOXWARM_DIR/foxwarmctl' restart."
 }
 
 if [ -e "$FOXWARM_DIR/runtime/current/release.json" ]; then
@@ -245,6 +278,9 @@ package_rid="$(sed -n 's/^ *"rid": *"\([^"]*\)".*/\1/p' "$STAGING/release.json")
 [ "$package_rid" = "$RID" ] || fail "$PACKAGE is for $package_rid, not $RID."
 RELEASE="$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$STAGING/release.json")"
 
+# Main creates the token when it first serves HTTP, so data without a token and without a
+# config.yaml belongs to no installation yet.
+if [ ! -e "$FOXWARM_DATA_DIR/state/config.yaml" ] && [ ! -e "$FOXWARM_DATA_DIR/state/token" ]; then LOOPBACK=true; fi
 mkdir -p "$FOXWARM_DATA_DIR/state" "$FOXWARM_DATA_DIR/agents"
 FOXWARM_DATA_DIR="$(cd "$FOXWARM_DATA_DIR" && pwd -P)"
 printf '%s\n' "$FOXWARM_DATA_DIR" > "$FOXWARM_DIR/data_dir"
@@ -261,8 +297,21 @@ mv "$STAGING" "$FOXWARM_DIR/runtime/$RELEASE"
 ln -sfn "$RELEASE" "$FOXWARM_DIR/runtime/current"
 cp "$FOXWARM_DIR/runtime/current/foxwarmctl" "$FOXWARM_DIR/foxwarmctl"
 log "Installed Foxwarm $RELEASE in $FOXWARM_DIR"
+if [ "$LOOPBACK" = true ]; then
+  # The release's initial settings, which first-run Setup would otherwise write, plus the
+  # loopback address. Main's own default, used without this installer, stays 0.0.0.0.
+  # noclobber: a config.yaml that appeared meanwhile is never replaced.
+  template="$FOXWARM_DIR/runtime/current/templates/config.example.yaml"
+  if ! (set -C; {
+    if [ -f "$template" ]; then cat "$template"; echo; fi
+    printf 'bot:\n  # 127.0.0.1 accepts only this computer; 0.0.0.0 also accepts other devices.\n  httpHost: 127.0.0.1\n'
+  } > "$FOXWARM_DATA_DIR/state/config.yaml") 2>/dev/null; then
+    LOOPBACK=false
+  fi
+fi
 
 if [ "$START" = false ]; then
+  [ "$LOOPBACK" = false ] || loopback_hint "$FOXWARM_DATA_DIR"
   echo "Start it with: '$FOXWARM_DIR/foxwarmctl' start"
   exit 0
 fi

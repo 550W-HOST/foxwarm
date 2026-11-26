@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Control a Foxwarm release installation: start, stop, restart, status, attach, run, update, version.
+# Control a Foxwarm release installation: start, stop, restart, status, attach, link, run, update, version.
 # The installer places this script in the installation directory beside runtime/current.
 set -euo pipefail
 
@@ -31,6 +31,7 @@ Usage: foxwarmctl COMMAND
   restart            Stop, then start
   status             Show whether Foxwarm is running
   attach             Attach to the tmux pane, or show background log paths
+  link               Print the WebUI sign-in link
   run                Run Foxwarm in the foreground
   update [VERSION]   Install the latest or the given release and restart if running
          [--package FILE] [--force]
@@ -149,6 +150,7 @@ log_paths() {
   fi
   case "$data" in '~') data="$HOME" ;; '~/'*) data="$HOME/${data#\~/}" ;; esac
   case "$data" in '') data="$ROOT" ;; /*) ;; *) data="$ROOT/$data" ;; esac
+  DATA_ROOT="$data"
   CONFIG_PATH="$data/state/config.yaml"
   LOG_DIR="$data/state/logs"
   STDOUT_LOG="$LOG_DIR/foxwarm.stdout.log"
@@ -160,12 +162,51 @@ logs_hint() {
   printf 'Logs: %s and %s.' "$STDOUT_LOG" "$STDERR_LOG"
 }
 
+# The scalar value of bot.KEY in config.yaml, the setting Main reads: a key directly under
+# the top-level bot mapping, without quotes or a trailing comment. Keys elsewhere, at the
+# top level or nested deeper, are not Main's setting. The installer reads it the same way.
+bot_setting() {
+  log_paths
+  awk -v key="$1" '
+    { sub(/\r$/, "") }
+    /^[ \t]*$/ || /^[ \t]*#/ { next }
+    /^[^ \t]/ { bot = ($0 ~ /^bot:[ \t]*$/ || $0 ~ /^bot:[ \t]+#/); indent = ""; next }
+    !bot || !match($0, /^ +/) { next }
+    {
+      if (indent == "") indent = substr($0, 1, RLENGTH)
+      if (RLENGTH != length(indent)) next
+      line = substr($0, RLENGTH + 1)
+      if (substr(line, 1, length(key) + 1) != key ":") next
+      value = substr(line, length(key) + 2)
+      if (value != "" && value !~ /^[ \t]/) next
+      sub(/^[ \t]+/, "", value); sub(/[ \t]+#.*$/, "", value); sub(/[ \t]+$/, "", value)
+      if (value ~ /^".*"$/ || value ~ /^'\''.*'\''$/) value = substr(value, 2, length(value) - 2)
+      print value
+      exit
+    }' "$CONFIG_PATH" 2>/dev/null || true
+}
+
 # Main listens on bot.httpPort from the selected data root's config.yaml, else 3001.
 http_port() {
   local port
+  port="$(bot_setting httpPort)"
+  case "$port" in ''|*[!0-9]*) port=3001 ;; esac
+  printf '%s' "$port"
+}
+
+# The sign-in link the installer prints. A specific bot.httpHost is the only address Main
+# answers on; a wildcard listener is reached through localhost.
+cmd_link() {
+  local host token
   log_paths
-  port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$CONFIG_PATH" 2>/dev/null | sed -n 1p)"
-  printf '%s' "${port:-3001}"
+  token="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$DATA_ROOT/state/token" 2>/dev/null || true)"
+  [ -n "$token" ] || fail "There is no sign-in token in $DATA_ROOT/state/token yet. Foxwarm creates it when it first starts: '$ROOT/foxwarmctl' start"
+  host="$(bot_setting httpHost)"
+  case "$host" in
+    ''|0.0.0.0|::) host=localhost ;;
+    *:*) host="[$host]" ;;
+  esac
+  printf 'http://%s:%s/#token=%s\n' "$host" "$(http_port)" "$token"
 }
 
 file_size() { local size; size="$( { wc -c < "$1"; } 2>/dev/null || echo 0)"; printf '%s' "$((size))"; }
@@ -426,6 +467,7 @@ case "${1:-}" in
   restart) check_launcher; cmd_stop keep; cmd_start ;;
   status) cmd_status ;;
   attach) cmd_attach ;;
+  link) cmd_link ;;
   run) eval "$(main_command)" ;;
   update) shift; cmd_update "$@" ;;
   version) cat "$CURRENT/release.json" ;;
