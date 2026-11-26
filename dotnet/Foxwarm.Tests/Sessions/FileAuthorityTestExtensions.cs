@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
@@ -53,4 +54,24 @@ internal static class IdentityJournalTestExtensions
             version,
             (source, target) => journal.MoveArtifact("state/sessions", ".json", source, target)
         );
+}
+
+/// <summary>Catalog seeding for tests on either backend.</summary>
+internal static class SessionCatalogTestStores
+{
+    /// <summary>Writes projected copies of raw rows as they are, through either store's test seam.</summary>
+    internal static void Upsert(this ISessionCatalogStore store, IEnumerable<JsonObject> rows)
+    {
+        switch (store)
+        {
+            case SessionCatalog file:
+                file.Upsert(rows);
+                break;
+            case Foxwarm.Hosted.Postgres.PgSessionCatalog hosted:
+                hosted.Upsert(rows);
+                break;
+            default:
+                throw new NotSupportedException(store.GetType().Name);
+        }
+    }
 }

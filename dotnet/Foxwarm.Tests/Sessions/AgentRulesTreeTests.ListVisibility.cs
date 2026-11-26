@@ -79,7 +79,7 @@ public sealed partial class AgentRulesTreeTests
     private static void SeedSessions(ExternalChannelFixture f)
     {
         var source = f.Owner.Id;
-        f.Manager.Catalog.File().Upsert([
+        f.Manager.Catalog.Upsert([
             SessionCatalogTests.Row("main/peer1", 6),
             SessionCatalogTests.Row("main/peer2", 5),
             SessionCatalogTests.Row("main/peer3", 4),

@@ -18,6 +18,10 @@ aliases, canonical parent projections, additive Sidebar grouping indexes, and
 maintained counts. Session semantic
 state remains in one authoritative JSON file per Session.
 
+A hosted tenant keeps the same rows, counts, indexes and query order in its
+PostgreSQL catalog tables, with no migration path of its own
+([hosted catalog](../units/hosted-session-catalog.md)).
+
 ## Current flow
 
 ```text

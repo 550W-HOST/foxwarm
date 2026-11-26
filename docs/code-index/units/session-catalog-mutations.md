@@ -1,6 +1,6 @@
 # Unit: Session catalog authority, identity, deletion, and presentation mutations
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Authority.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Deletion.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Identity.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Presentation.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalogRules.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Authority.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Deletion.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Identity.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Presentation.cs`
 
 ## Purpose
 
@@ -12,6 +12,8 @@ Part of the file `ISessionCatalogStore` ([storage context](./storage-context.md#
 - Identity helpers update canonical IDs/aliases and parent normalization while preserving alias ambiguity and reserved-ID rules.
 - Presentation helpers commit display name/parent/pinned/sidebar/channel-facing fields without entering Session authority validation.
 - Deletion helpers remove projection rows, aliases, counts, and dependent catalog metadata after the manager has completed its lifecycle claim.
+
+The presentation rules (archive, pin, parent, move and promote, last channel), deletion selection and the identity rewrite are `SessionCatalogRules`. Each reads rows through `ICatalogRowView` inside the store's transaction and returns the result and the rows to write; the store writes them, runs the presentation-mutation hook and raises its revision. The file catalog and the [hosted catalog](./hosted-session-catalog.md) share them, so error codes, sibling ranks and traversal order are one implementation.
 
 `RenameIfUnnamed` sets a label only when the row has none, checking and writing under the catalog gate; [automatic Session titles](./session-auto-title.md) use it so a concurrently set name wins.
 
@@ -30,6 +32,6 @@ This unit cannot reconstruct active history, authorize a Session mutation, or by
 
 `packages/webui/test/mainHostPresentation.e2e.mjs` drives zero-owner cold presentation commands, missing-authority versus offline-Node reads, immutable JSON/Archive controls, real SQLite rollback, original Sidebar/Architecture actions and catalog fields surviving a held semantic save and restart.
 
-`dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`; `SessionIdentityMoveTests.cs`; `SessionDeletionTests.cs`; `SessionPresentationTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`; `SessionIdentityMoveTests.cs`; `SessionDeletionTests.cs`; `SessionPresentationTests.cs`; the backend-neutral `SessionCatalogContractTests`.
 
 `SetLastChannel` records external channel instance/type and conversation metadata in the catalog presentation lane. It does not copy that metadata into per-Session JSON authority; [external channels](./dotnet-external-channels.md) owns ingress and the retained best-channel readers.

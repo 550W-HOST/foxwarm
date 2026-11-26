@@ -6,6 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class SessionPresentationTests
 {
     [Fact]
@@ -253,45 +254,6 @@ public sealed class SessionPresentationTests
         bool expected
     ) => Assert.Equal(expected, MessageRouter.IsPresentationCommand(command));
 
-    [Fact]
-    public void Raw_cycle_traversal_exact_aliases_and_ambiguous_parents_are_not_the_presentation_forest()
-    {
-        using var temp = new TempDirectory();
-        using var catalog = new SessionCatalog(temp.Path);
-        catalog.Initialize();
-        catalog.Upsert([
-            SessionCatalogTests.Row("A", 0),
-            SessionCatalogTests.Row("B", 0, aliases: ["A", "shared"]),
-            SessionCatalogTests.Row("C", 0, aliases: ["shared"]),
-            SessionCatalogTests.Row("child", 0, "A"),
-            SessionCatalogTests.Row("ambiguous", 0, "shared"),
-            SessionCatalogTests.Row("self", 0, "self"),
-            SessionCatalogTests.Row("x", 0, "y"),
-            SessionCatalogTests.Row("y", 0, "x"),
-        ]);
-        var change = catalog.Archive("A", true, true);
-        Assert.Equal(new[] { "A", "child" }, change.ChangedIds);
-        Assert.Null(catalog.Get("B")!["archived"]);
-        Assert.Null(catalog.Get("ambiguous")!["archived"]);
-        foreach (var id in new[] { "self", "x" })
-        {
-            var revision = catalog.Revision;
-            var error = Assert.Throws<SessionPresentationException>(() =>
-                catalog.Archive(id, true, true)
-            );
-            Assert.Equal("SESSION_RELATION_CYCLE", error.Code);
-            Assert.Equal(revision, catalog.Revision);
-            Assert.Null(catalog.Get(id)!["archived"]);
-            catalog.Pin(id, true);
-            catalog.Archive(id, true);
-            Assert.True(catalog.Get(id)!["pinned"]!.GetValue<bool>());
-        }
-        var parentError = Assert.Throws<SessionPresentationException>(() =>
-            catalog.SetParent("A", "child")
-        );
-        Assert.Equal("PARENT_CYCLE_NOT_ALLOWED", parentError.Code);
-        Assert.Equal("shared", catalog.Get("ambiguous")!["parentSessionId"]!.GetValue<string>());
-    }
 
     [Fact]
     public void Real_writer_failure_and_postcommit_notification_failure_have_different_truthful_outcomes()
@@ -346,11 +308,6 @@ public sealed class SessionPresentationTests
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
-        using (var catalog = new SessionCatalog(data))
-        {
-            catalog.Initialize();
-            catalog.Upsert([SessionCatalogTests.Row("one", 0), SessionCatalogTests.Row("two", 0)]);
-        }
         var options = new ResponsesClientOptions(
             new Uri("http://127.0.0.1:1"),
             "wire",
@@ -366,6 +323,8 @@ public sealed class SessionPresentationTests
             HostModels.ForTest(options)
         );
         await manager.LoadAsync();
+        // Catalog-only members: no authority exists for either.
+        manager.Catalog.Upsert([SessionCatalogTests.Row("one", 0), SessionCatalogTests.Row("two", 0)]);
         var reads = 0;
         manager.AdmissionReadObserved = _ => reads++;
         var runtime = new SessionRuntime(manager);

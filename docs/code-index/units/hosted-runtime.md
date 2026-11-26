@@ -88,6 +88,7 @@ The hosted entry then shuts the runtime down and exits (hosted startup, batch 3)
   - **Replacement.** A replacement is one fenced upsert. A lost `COMMIT` is resolved by checking for the written generation and text.
   - **What file mode's extras turn into.** Absence is "no row". `ReadFirstAvailable` reads the current version only: retained backups exist for torn files, and a transactional replace can't tear. `EnsureDurable` is a no-op.
   - **Installation document.** Writing it raises `tenants.min_reader_version` in the same transaction through `foxwarm_raise_reader_version`, which checks the lease and never lowers the value.
+- **Session catalog** (`PgSessionCatalog`, migration 0200): [hosted catalog](./hosted-session-catalog.md).
 
 ## Tests
 

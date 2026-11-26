@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
@@ -8,28 +7,7 @@ internal sealed partial class SessionCatalog
     public DeleteSelection SelectDeletion(string requested, bool recursive)
     {
         lock (gate)
-        {
-            var root = Text(RequiredMain(requested)["id"])!;
-            if (recursive)
-            {
-                var tree = DescendantsLocked(root);
-                return new(root, [root, .. tree.Descendants], tree.Direct, tree.PostOrder);
-            }
-            var direct = Rows($"SELECT {Columns} FROM session_catalog ORDER BY session_id")
-                .Where(row =>
-                    Text(row["parentSessionId"]) is { } raw
-                    && Text(Resolve(raw)["sessionId"]) == root
-                )
-                .Select(row => Text(row["id"])!)
-                .OrderBy(
-                    id => id,
-                    Comparer<string>.Create(
-                        (a, b) => SidebarCollation.Compare(a, b, CompareOptions.None)
-                    )
-                )
-                .ToArray();
-            return new(root, [root], direct, [root]);
-        }
+            return SessionCatalogRules.SelectDeletion(this, requested, recursive);
     }
 
     public void RemoveForDeletion(string id)

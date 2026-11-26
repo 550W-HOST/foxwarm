@@ -82,7 +82,7 @@ internal sealed partial class WebUIChannel
                             statusCode: 500
                         );
                     }
-                    catch (Microsoft.Data.Sqlite.SqliteException error)
+                    catch (System.Data.Common.DbException error)
                     {
                         return Results.Json(
                             new JsonObject

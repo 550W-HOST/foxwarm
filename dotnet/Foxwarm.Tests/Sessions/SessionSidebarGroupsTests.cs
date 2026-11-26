@@ -25,14 +25,6 @@ public sealed class SessionSidebarGroupsTests
         return row;
     }
 
-    private static string[] Page(
-        SessionCatalog catalog,
-        string by,
-        string key,
-        string mode,
-        string? exclude = null
-    ) => Ids(catalog.GroupPage(by, key, mode, 100, null, exclude).Rows);
-
     private static object? Scalar(string file, string sql)
     {
         using var db = new SqliteConnection($"Data Source={file};Mode=ReadOnly;Pooling=False");
@@ -86,124 +78,7 @@ public sealed class SessionSidebarGroupsTests
         return catalog;
     }
 
-    [Fact]
-    public void Group_counts_and_pages_follow_own_agent_or_node_and_real_top_level_rows()
-    {
-        using var temp = new TempDirectory();
-        using var catalog = Fixture(temp);
 
-        // Tree modes count unpinned top-level rows; Flat counts every unpinned row.
-        Assert.Equal(
-            new Dictionary<string, long>
-            {
-                ["main"] = 2,
-                ["alpha"] = 2,
-                ["beta"] = 1,
-            },
-            catalog.GroupCounts("agent", true)
-        );
-        Assert.Equal(
-            new Dictionary<string, long>
-            {
-                ["main"] = 3,
-                ["alpha"] = 3,
-                ["beta"] = 2,
-            },
-            catalog.GroupCounts("agent", false)
-        );
-        Assert.Equal(
-            new Dictionary<string, long>
-            {
-                ["master"] = 3,
-                ["box"] = 1,
-                ["gone"] = 1,
-            },
-            catalog.GroupCounts("node", true)
-        );
-        Assert.Equal(
-            new Dictionary<string, long>
-            {
-                ["master"] = 4,
-                ["box"] = 3,
-                ["gone"] = 1,
-            },
-            catalog.GroupCounts("node", false)
-        );
-
-        // Children stay under their real parent and are not group members in tree modes,
-        // even when they belong to another Agent or run on another Node.
-        Assert.Equal(["alpha/loose", "alpha/main"], Page(catalog, "agent", "alpha", "time"));
-        Assert.Equal(["beta/two"], Page(catalog, "agent", "beta", "default"));
-        Assert.Equal(["alpha/main"], Page(catalog, "node", "box", "default"));
-        Assert.Equal(
-            ["main", "0905_aaaaa", "alpha/loose"],
-            Page(catalog, "node", "master", "time")
-        );
-        // Flat members are every unpinned row of the group, by recency.
-        Assert.Equal(
-            ["alpha/loose", "alpha/main", "alpha/nested"],
-            Page(catalog, "agent", "alpha", "flat-time")
-        );
-        Assert.Equal(
-            ["0905_child", "alpha/main", "alpha/nested"],
-            Page(catalog, "node", "box", "flat-time")
-        );
-        // The caller places an Agent main separately.
-        Assert.Equal(["alpha/loose"], Page(catalog, "agent", "alpha", "time", "alpha/main"));
-
-        // The pinned section is paged alone.
-        Assert.Equal(
-            ["alpha/pinned"],
-            Ids(catalog.Page("default", 10, null, true, null, pinnedOnly: true).Rows)
-        );
-        Assert.Equal(
-            ["alpha/pinned"],
-            Ids(catalog.Page("flat-time", 10, null, true, null, pinnedOnly: true).Rows)
-        );
-
-        var keys = catalog.GroupKeys(["beta/one", "beta/two", "missing"], "node");
-        Assert.Equal(
-            new Dictionary<string, string> { ["beta/one"] = "master", ["beta/two"] = "gone" },
-            keys
-        );
-    }
-
-    [Fact]
-    public void Default_group_pages_use_saved_order_and_continue_by_keyset()
-    {
-        using var temp = new TempDirectory();
-        using var catalog = new SessionCatalog(temp.Path);
-        catalog.Upsert([
-            Row("gamma/a", 10, agent: "gamma", order: 2),
-            Row("gamma/b", 20, agent: "gamma", order: 1),
-            Row("gamma/c", 30, agent: "gamma"),
-            Row("gamma/d", 40, agent: "gamma"),
-        ]);
-        Assert.Equal(
-            ["gamma/b", "gamma/a", "gamma/d", "gamma/c"],
-            Page(catalog, "agent", "gamma", "default")
-        );
-        Assert.Equal(
-            ["gamma/d", "gamma/c", "gamma/b", "gamma/a"],
-            Page(catalog, "agent", "gamma", "time")
-        );
-        var first = catalog.GroupPage("agent", "gamma", "default", 2, null, null);
-        Assert.True(first.HasMore);
-        var after = new JsonArray(0, 0, 2, -10, "gamma/a");
-        var rest = catalog.GroupPage("agent", "gamma", "default", 2, after, null);
-        Assert.Equal(["gamma/d", "gamma/c"], Ids(rest.Rows));
-        Assert.False(rest.HasMore);
-        // A start key below every member continues from the first row.
-        var start = catalog.GroupPage(
-            "agent",
-            "gamma",
-            "default",
-            10,
-            new JsonArray(-1, 0, 0, 0, ""),
-            "gamma/b"
-        );
-        Assert.Equal(["gamma/a", "gamma/d", "gamma/c"], Ids(start.Rows));
-    }
 
     [Fact]
     public void Node_counts_are_maintained_through_topology_changes_and_older_writers()

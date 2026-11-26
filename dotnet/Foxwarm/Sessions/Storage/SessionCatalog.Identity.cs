@@ -37,32 +37,20 @@ internal sealed partial class SessionCatalog
         lock (gate)
         {
             EnsureInitialized();
-            var source = Get(from);
-            var existing = Get(to);
-            if (source is not null && existing is not null)
-                throw new InvalidDataException(
-                    "Identity recovery has conflicting exact Main lifetimes."
-                );
-            if (source is null && (requireSource || existing is null))
-                throw new InvalidDataException("Identity move lacks its exact Main lifetime.");
-            var row = source ?? existing!;
-            row["id"] = to;
-            row["agent"] = agent;
-            row["aliases"] = new JsonArray(
-                aliases.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+            var rewrite = SessionCatalogRules.RewriteIdentity(
+                this,
+                from,
+                to,
+                agent,
+                aliases,
+                requireSource
             );
-            var direct = IdentityChildren(from);
-            var children = direct.Where(child => Text(child["id"]) != from).ToArray();
-            if (Text(row["parentSessionId"]) == from)
-                row["parentSessionId"] = to;
-            foreach (var child in children)
-                child["parentSessionId"] = to;
             Execute(db!, "BEGIN IMMEDIATE");
             try
             {
-                if (source is not null)
+                if (rewrite.HasSource)
                     Execute(db!, "DELETE FROM session_catalog WHERE session_id=$p0", from);
-                WriteRowsLocked([Project(row), .. children.Select(Project)]);
+                WriteRowsLocked(rewrite.Rows);
                 NormalizeParents(
                     db!,
                     new HashSet<string>(aliases, StringComparer.Ordinal) { from, to }
@@ -75,9 +63,7 @@ internal sealed partial class SessionCatalog
                 Execute(db!, "ROLLBACK");
                 throw;
             }
-            return direct
-                .Select(child => Text(child["id"]) == from ? to : Text(child["id"])!)
-                .ToArray();
+            return rewrite.Direct;
         }
     }
 
@@ -85,8 +71,8 @@ internal sealed partial class SessionCatalog
     {
         lock (gate)
         {
-            var id = Text(RequiredMain(parent, "parentSessionId")["id"])!;
-            ValidateParent(child, id);
+            var id = Text(SessionCatalogRules.RequiredMain(this, parent, "parentSessionId")["id"])!;
+            SessionCatalogRules.ValidateParent(this, child, id);
             return id;
         }
     }

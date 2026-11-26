@@ -6,6 +6,7 @@ namespace Foxwarm.Tests;
 
 // Sidebar ordering by subtree activity and the recent-activity initial child window,
 // through the real list queries over a catalog-only Session manager.
+[Trait("Backend", "neutral")]
 public sealed class SessionListActivityTests
 {
     private const long Hour = 3_600_000;
@@ -32,7 +33,7 @@ public sealed class SessionListActivityTests
         );
         var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
         await manager.LoadAsync();
-        manager.Catalog.File().Upsert(rows);
+        manager.Catalog.Upsert(rows);
         return (manager, new SessionListQueries(new SessionRuntime(manager), () => Now));
     }
 
@@ -79,7 +80,7 @@ public sealed class SessionListActivityTests
         await using var _ = manager;
         var ordered = manager.Catalog.Get("ordered")!;
         ordered["sidebarOrder"] = 1;
-        manager.Catalog.File().Upsert([ordered]);
+        manager.Catalog.Upsert([ordered]);
 
         Assert.Equal(
             ["quiet", "busy-alone", "tail", "stale", "ordered"],
