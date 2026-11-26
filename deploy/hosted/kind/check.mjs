@@ -76,9 +76,13 @@ const kubectl = (argv, options) => run('kubectl', ['--context', context, '-n', n
 const json = async argv => JSON.parse((await kubectl([...argv, '-o', 'json'])).stdout)
 const time = value => (value ? Date.parse(value) : NaN)
 
-/** GET on a pod's health port through the API server's pod proxy; null unless it answers 200. */
+/**
+ * GET on a pod's health port through the API server's pod proxy; null unless it answers 200.
+ * Bounded: a pod whose container is gone but which is still listed leaves the proxy call to
+ * its vanished address hanging for about 30 s otherwise.
+ */
 async function health(pod, route) {
-  const result = await kubectl(['get', '--raw', `/api/v1/namespaces/${namespace}/pods/${pod}:3002/proxy${route}`], { allowFailure: true })
+  const result = await kubectl(['get', '--raw', '--request-timeout=3s', `/api/v1/namespaces/${namespace}/pods/${pod}:3002/proxy${route}`], { allowFailure: true })
   return result.code === 0 ? result.stdout : null
 }
 async function replicaPods() {
@@ -87,7 +91,8 @@ async function replicaPods() {
 async function statuses() {
   const rows = []
   for (const pod of await replicaPods()) {
-    if (pod.status.phase !== 'Running') continue
+    // A deleted pod can still list as Running for a moment after its container exits.
+    if (pod.status.phase !== 'Running' || pod.metadata.deletionTimestamp) continue
     const text = await health(pod.metadata.name, '/status')
     if (!text) continue
     try {
