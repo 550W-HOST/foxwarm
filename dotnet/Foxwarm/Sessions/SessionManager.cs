@@ -715,6 +715,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             ResolveAncestry = CatalogMetadata,
             MainMetadata = OverlayMainMetadata,
+            MasterNode = Capabilities.MasterNode,
         };
         hosted.RunningExecCount = () => RunningExecs(hosted).Length;
         hosted.Archive = store.Archive;

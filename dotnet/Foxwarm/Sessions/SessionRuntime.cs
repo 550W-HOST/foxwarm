@@ -293,6 +293,13 @@ internal sealed partial class SessionOwner
     internal string ExecutionNode(JsonObject authority) =>
         SessionManager.ResolveExecutionNode(authority);
 
+    // False when the runtime has no master Node (RuntimeCapabilities.MasterNode).
+    internal bool MasterNode { get; init; } = true;
+
+    // The current Node as Session presentation reports it: null for none.
+    internal string? PresentedNode(JsonObject authority) =>
+        SessionManager.PresentedNode(ExecutionNode(authority), MasterNode);
+
     public SessionMetadata Metadata()
     {
         var result = Entry.WithState(state =>
@@ -361,7 +368,7 @@ internal sealed partial class SessionOwner
         dto["runningExecs"] = RunningExecCount?.Invoke() ?? 0;
         Entry.WithState(state =>
         {
-            dto["currentNode"] = ExecutionNode(state.AuthorityEnvelope);
+            dto["currentNode"] = PresentedNode(state.AuthorityEnvelope);
             dto["cwd"] = state.AuthorityEnvelope["cwd"]?.DeepClone();
         });
         return dto;

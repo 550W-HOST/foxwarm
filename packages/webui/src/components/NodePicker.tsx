@@ -9,7 +9,8 @@ type NodeOption = { id: string; label: string; selectable: boolean; reason: stri
 
 export default function NodePicker({ sessionId, currentNode = 'master', disabled, onChangeNode }: {
   sessionId: string
-  currentNode?: string
+  // Null is a Session without a Node, which only a runtime without master has.
+  currentNode?: string | null
   disabled: boolean
   onChangeNode: (nodeId: string, signal: AbortSignal) => Promise<void>
 }) {
@@ -25,14 +26,16 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   const centeredRef = useRef(false)
   const pendingRef = useRef<AbortController | null>(null)
   const wasOpenRef = useRef(false)
-  const remote = currentNode !== 'master'
+  const none = currentNode === null
+  const remote = currentNode !== null && currentNode !== 'master'
   // Master is the Main server itself; only remote placements need live status.
   const directory = useNodeDirectory({ enabled: remote })
   const problem = remote && directory.loaded && !directory.error
     ? describeExecutionNodeProblem(directory.nodes, currentNode)
     : null
-  const triggerLabel = problem ? `Execution node: ${currentNode} · ${problem}` : `Execution node: ${currentNode}`
-  const TriggerIcon = problem ? ServerOff : Server
+  const triggerLabel = none ? 'Execution node: none'
+    : problem ? `Execution node: ${currentNode} · ${problem}` : `Execution node: ${currentNode}`
+  const TriggerIcon = problem || none ? ServerOff : Server
 
   const positionPopup = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
@@ -138,7 +141,7 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
     }
   }
 
-  const options = nodes.some(node => node.id === currentNode) || loading ? nodes : [
+  const options = currentNode === null || nodes.some(node => node.id === currentNode) || loading ? nodes : [
     ...nodes, { id: currentNode, label: currentNode, selectable: false, reason: 'Unavailable' },
   ]
 

@@ -19,6 +19,11 @@ internal sealed partial class SessionManager
         return node.Length > 0 ? node : "master";
     }
 
+    // How a resolved execution Node is presented. Without a master Node, master (the unset
+    // default) is no Node and is reported as null; file mode reports it unchanged.
+    internal static string? PresentedNode(string resolved, bool masterNode) =>
+        resolved == "master" && !masterNode ? null : resolved;
+
     internal Task<JsonObject> UpdateProviderExecCwdAsync(
         SessionOwner owner,
         string node,

@@ -57,7 +57,13 @@ internal sealed partial class MessageRouter
             output +=
                 $"`{sid}`"
                 + (SessionWait.Text(row["displayName"]) is { } display ? " (" + display + ")" : "")
-                + $" - {row["messageCount"]} msgs - node: `{SessionWait.Text(row["currentNode"]) ?? "master"}`"
+                + $" - {row["messageCount"]} msgs - node: "
+                // Null without a master Node is a Session without a Node.
+                + (
+                    SessionWait.Text(row["currentNode"]) is { } node ? $"`{node}`"
+                    : manager.Capabilities.MasterNode ? "`master`"
+                    : "none"
+                )
                 + "\n";
             var channels = bindings
                 .Where(pair =>

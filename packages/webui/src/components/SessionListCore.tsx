@@ -42,7 +42,7 @@ export interface Session {
   archived?: boolean
   pinned?: boolean
   sidebarOrder?: number | null
-  currentNode?: string
+  currentNode?: string | null
   cwd?: string | null
   model?: string | null
   modelKey?: string

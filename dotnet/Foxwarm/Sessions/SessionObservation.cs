@@ -254,7 +254,9 @@ internal static class SessionStatus
         string Value(string key) => SessionWait.Text(status[key]) ?? status[key]?.ToJsonText() ?? "";
         static string Count(JsonNode? value) =>
             (SessionWait.Number(value) ?? 0).ToString("N0", System.Globalization.CultureInfo.CurrentCulture);
-        var node = status["node"]!.AsObject();
+        // Null for a Session without a Node, which only a runtime without master has.
+        var node = status["node"] as JsonObject;
+        var agentDirectory = status.ContainsKey("agentDirectory");
         var usage = status["lastUsage"] as JsonObject;
         var usageText = usage is null
             ? "none"
@@ -269,7 +271,15 @@ internal static class SessionStatus
         var children = (status["recentChildren"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
         var images = (long)(SessionWait.Number(status["images"]) ?? 0);
         return "📊 *Session Status*\n\n"
-            + $"- session id: `{Value("sessionId")}`\n- name: {SessionWait.Text(status["displayName"]) ?? "unset"}\n- agent id/name: `{Value("agent")}`\n- current node: `{SessionWait.Text(node["id"])}` (connected={(SessionCatalog.Flag(node["connected"]) ? "true" : "false")}, type={SessionWait.Text(node["type"])})\n- agent directory: `{Value("agentDirectory")}`\n- current cwd: {(SessionWait.Text(status["cwd"]) is { } cwd ? $"`{cwd}`" : $"not set (defaults to current node agent directory; master: `{Value("agentDirectory")}`)")}\n"
+            + $"- session id: `{Value("sessionId")}`\n- name: {SessionWait.Text(status["displayName"]) ?? "unset"}\n- agent id/name: `{Value("agent")}`\n"
+            + (
+                node is null
+                    ? "- current node: none\n"
+                    : $"- current node: `{SessionWait.Text(node["id"])}` (connected={(SessionCatalog.Flag(node["connected"]) ? "true" : "false")}, type={SessionWait.Text(node["type"])})\n"
+            )
+            // Without a master Node there is no Agent directory to show.
+            + (agentDirectory ? $"- agent directory: `{Value("agentDirectory")}`\n" : "")
+            + $"- current cwd: {(SessionWait.Text(status["cwd"]) is { } cwd ? $"`{cwd}`" : agentDirectory ? $"not set (defaults to current node agent directory; master: `{Value("agentDirectory")}`)" : "not set")}\n"
             + (
                 SessionWait.Text(status["parentSessionId"]) is { } parent
                     ? $"- parent session id: `{parent}`\n"
@@ -500,15 +510,14 @@ internal sealed partial class SessionManager
         var children = administrator
             ? CatalogMetadataOffset(0, 10, parent: statusTarget.Id).Page
             : VisibleChildren(SessionVisibilityFor(source), statusTarget.Id, 10);
-        var currentNode = SessionWait.Text(dto["currentNode"])!;
+        // Null without a master Node when the Session has no Node of its own.
+        var currentNode = SessionWait.Text(dto["currentNode"]);
         var status = new JsonObject { ["sessionId"] = meta.Id };
         if (meta.DisplayName is not null)
             status["displayName"] = meta.DisplayName;
         status["agent"] = statusTarget.Agent;
-        // Without a master Node, master (the unset default) is no Node, and the Agent directory
-        // is not a path any tool reaches.
-        var noNode = currentNode == "master" && !Capabilities.MasterNode;
-        status["node"] = noNode ? null : new JsonObject
+        // Without a master Node, the Agent directory is not a path any tool reaches.
+        status["node"] = currentNode is null ? null : new JsonObject
         {
             ["id"] = currentNode,
             ["connected"] = NodeProviders.Connected(currentNode),
