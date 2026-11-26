@@ -178,7 +178,6 @@ public sealed class TenantKeysTests
                 ["FOXWARM_KEK_FILE"] = current,
                 ["FOXWARM_KEK_PREVIOUS_FILE"] = previous,
                 ["FOXWARM_DEPLOYMENT_CONFIG"] = deployment,
-                ["FOXWARM_AGENTS_DIR"] = Path.Combine(temp.Path, "agents"),
                 ["FOXWARM_HEALTH_PORT"] = "1",
             }
         );
@@ -187,10 +186,8 @@ public sealed class TenantKeysTests
         Assert.Equal(previousKeys.KeyId, prior!.KeyId);
         Assert.Equal(4100, bootstrap.RequireDeployment().PublicEndpoint.Port);
         Assert.Equal(4181, bootstrap.RequireDeployment().HealthPort);
-        Assert.Equal(Path.Combine(temp.Path, "agents"), bootstrap.RequireAgentsRoot());
         var empty = HostedBootstrap.FromEnvironment(new System.Collections.Hashtable());
         Assert.Contains("FOXWARM_DEPLOYMENT_CONFIG", Assert.Throws<HostedBootstrapException>(empty.RequireDeployment).Message);
-        Assert.Contains("FOXWARM_AGENTS_DIR", Assert.Throws<HostedBootstrapException>(empty.RequireAgentsRoot).Message);
         File.WriteAllText(current, "{\"version\":1}");
         Assert.Contains("FOXWARM_KEK_FILE", Assert.Throws<HostedBootstrapException>(() => bootstrap.RequireKeks()).Message);
     }
