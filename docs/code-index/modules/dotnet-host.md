@@ -23,6 +23,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Hosted blobs](../units/hosted-blobs.md): image and artifact blobs on S3 or PostgreSQL, the backend selection and streamed channel image sends.
 - [Hosted Session authority](../units/hosted-session-authority.md): heads, immutable segments and envelope parts, the one-transaction commit with its Archive rows, and the segment policy.
 - [Hosted import](../units/hosted-import.md): `foxwarm hosted import`, copying a stopped file installation into an `importing` tenant, verifying it and activating it.
+- [Hosted packaging and failover drills](../units/hosted-packaging.md): the `hosted` image target, the Compose stack, the Helm chart, `hosted token` and `hosted health`, and the drills and measurements.
 - [Skill resolution and runnable skills](../units/skills.md)
 - [Packed and loose HTTP resources](../units/http-assets.md)
 - [Windows Desktop host](../units/desktop-windows.md)

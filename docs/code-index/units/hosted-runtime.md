@@ -7,7 +7,7 @@ Secondary files: `dotnet/Foxwarm/Program.cs`, `dotnet/Foxwarm/MainHost.cs`, `dot
 
 A hosted tenant has one owner replica at a time, and any number of standbys. This unit owns how a replica gets, keeps and loses that ownership, and what a standby does while it waits. It also owns the tenant's storage context, whose stores are added by the store tracks.
 
-The write fence that makes a lost lease harmless is in [hosted database](./hosted-database.md#d-hosted-write-fence).
+The write fence that makes a lost lease harmless is in [hosted database](./hosted-database.md#d-hosted-write-fence). The image, the Compose and Helm deployments and the drills that exercise these contracts are in [hosted packaging](./hosted-packaging.md).
 
 ## D-hosted-lease
 
