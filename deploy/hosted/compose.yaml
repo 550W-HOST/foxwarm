@@ -12,7 +12,6 @@ name: foxwarm-hosted
 x-replica: &replica
   image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
   restart: unless-stopped
-  init: true
   read_only: true
   user: "1000:1000"
   depends_on:

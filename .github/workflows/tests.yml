@@ -339,6 +339,7 @@ jobs:
           docker inspect -f 'user={{.Config.User}} entrypoint={{json .Config.Entrypoint}} healthcheck={{json .Config.Healthcheck.Test}}' "$FOXWARM_HOSTED_IMAGE"
           docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$FOXWARM_HOSTED_IMAGE" | grep -x 'FOXWARM_MODE=hosted'
           test "$(docker inspect -f '{{.Config.User}}' "$FOXWARM_HOSTED_IMAGE")" = 1000:1000
+          test "$(docker inspect -f '{{index .Config.Entrypoint 0}}' "$FOXWARM_HOSTED_IMAGE")" = /usr/bin/tini
           docker run --rm --read-only --entrypoint sh "$FOXWARM_HOSTED_IMAGE" -c '
             set -eu
             test "$(id -u)" = 1000

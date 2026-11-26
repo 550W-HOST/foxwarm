@@ -45,7 +45,7 @@ RUN npm run build:assets \
 # no tools for Agents: no Chromium, git or Python.
 FROM debian:trixie-slim AS hosted
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata libicu76 libssl3t64 \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata libicu76 libssl3t64 tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin foxwarm \
     && mkdir -p /scratch /agents /etc/foxwarm \
@@ -66,7 +66,9 @@ USER 1000:1000
 # /livez, so a waiting standby counts as healthy; orchestrators route on /readyz themselves.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
     CMD ["/app/Foxwarm", "hosted", "health"]
-ENTRYPOINT ["/usr/local/bin/foxwarm-hosted"]
+# tini is PID 1: it forwards signals to Foxwarm, passes on its exit code and reaps orphaned
+# descendants of the processes Foxwarm starts (ToolScript workers, Node providers).
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/foxwarm-hosted"]
 
 FROM node:24.17.0-trixie-slim AS base
 

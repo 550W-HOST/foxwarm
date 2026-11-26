@@ -12,7 +12,7 @@ Build the `hosted` target of the repository `Dockerfile` from the repository roo
 docker build --target hosted -t foxwarm-hosted:local .
 ```
 
-It is the same native build as the default image, on `debian:trixie-slim` with CA certificates, time zones and the ICU and OpenSSL libraries Foxwarm loads. It contains no tools for Agents (no Chromium, git or Python): Agents run commands on Nodes, not in the replica.
+It is the same native build as the default image, on `debian:trixie-slim` with CA certificates, time zones, the ICU and OpenSSL libraries Foxwarm loads, and tini as the init process. It contains no tools for Agents (no Chromium, git or Python): Agents run commands on Nodes, not in the replica.
 
 | | |
 | --- | --- |
