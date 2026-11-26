@@ -117,7 +117,7 @@ internal sealed class HttpServer
             builder.Services.AddSingleton(server);
             builder.Services.AddSingleton<
                 Microsoft.Extensions.Hosting.IHostLifetime,
-                Foxwarm.Hosted.Runtimes.HostControlledLifetime
+                HostControlledLifetime
             >();
         }
         if (shutdownTimeout is { } timeout)
