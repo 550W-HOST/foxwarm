@@ -51,7 +51,9 @@ internal static class HostedEntry
             ),
             database,
             (context, token) => CreateRuntimeAsync(context, bootstrap, deployment, token),
-            line => Console.Error.WriteLine(line)
+            line => Console.Error.WriteLine(line),
+            // A runtime that doesn't stop by its fence's deadline ends the process there.
+            exit: Environment.Exit
         );
         var code = await replica.RunAsync(stop.Token).ConfigureAwait(false);
         Console.Error.WriteLine($"[hosted] Replica {replica.Replica} exits with code {code}.");

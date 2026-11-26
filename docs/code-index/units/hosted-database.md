@@ -51,6 +51,8 @@ Npgsql is pinned to 10.0.4. Npgsql 11 requires `Microsoft.Extensions.*` 11, whic
 - **Timeouts.** Each transaction also sets a transaction-local `statement_timeout` (15 s) and `idle_in_transaction_session_timeout` (10 s). The server then ends a partitioned owner's transaction on its own, which bounds how long it can delay a takeover ([self-fence](./hosted-runtime.md#d-hosted-self-fence)).
 - **Reads** (`Read`/`ReadAsync`) set only the tenant, run `READ ONLY` (`REPEATABLE READ` with `snapshot: true`), and need no lease.
 - **Closing.** `Close()` makes the helper refuse every later transaction. Self-fencing uses it.
+- **Statement cap (plan §7.2).** A `TenantDb` runs at most `maxInFlight` transactions at once (default 8), each holding one pooled connection; further ones wait for a slot. A transaction body that calls the same helper again, directly or in work it starts, takes no second slot, so nesting can't deadlock. The limit is a constructor input; per-tenant overrides come with the operator limits.
+- **Control data source.** `PgDatabase.Control` is a replica's separate two-connection pool for lease renewal, release and the fencing path ([grant renewal](./hosted-runtime.md#d-hosted-grant-renewal)). Tenant traffic never uses it, so neither the shared pool nor the statement cap can delay a renewal.
 
 ### D-hosted-tenant-tables
 
