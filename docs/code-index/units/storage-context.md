@@ -96,8 +96,9 @@ The Node registry's write-stage hook is the registry's `WriteStage` test propert
 
 `IBlobStore` (`Storage/BlobStore.cs`) holds immutable content under string keys: `Exists`, `CreateAsync` (create once; an existing key is kept and reported, or refused), `ReadAllAsync`, `OpenRead`, `List` (keys directly under a prefix) and `LocalPath` (the local file for zero-copy sends, null when blobs aren't local). The context has one store per use:
 
-- **Image originals:** `ImageBlobFiles` keeps `state/image-blobs/<first two>/<blob ID>`, its containment check, flushed writes and directory syncs up to `state/`. `ImageBlobStore` keeps blob IDs, verification of an existing blob's bytes, and legacy path references, which exist only in file mode ([images](./images.md)). WebUI blob routes use `Exists`; channel image delivery uses `LocalPath`. The provider variant cache stays a local per-process cache. Session authority stores receive the same blob store through the authority backend.
+- **Image originals:** `ImageBlobFiles` keeps `state/image-blobs/<first two>/<blob ID>`, its containment check, flushed writes and directory syncs up to `state/`. `ImageBlobStore` keeps blob IDs, verification of an existing blob's bytes, and legacy path references, which exist only in file mode ([images](./images.md)). WebUI blob routes use `Exists`; channel image delivery sends the `LocalPath` file, or a streamed scratch copy when the blob isn't local ([hosted blobs](./hosted-blobs.md#callers-without-a-local-file)). The provider variant cache stays a local per-process cache. Session authority stores receive the same blob store through the authority backend.
 - **Artifacts:** `ArtifactBlobFiles` keeps the owner-only directories and files under `state/artifacts`, keyed `<artifact ID>/<revision>.json` and `<artifact ID>/resources/<SHA-256>`. `ArtifactStore` keeps validation and per-artifact ordering; resources are created before the exclusively created revision ([artifacts](./dotnet-artifacts.md)).
+- **Hosted mode** keeps both on S3 or PostgreSQL, as the deployment selects ([hosted blobs](./hosted-blobs.md)).
 
 ### Agent memory files
 

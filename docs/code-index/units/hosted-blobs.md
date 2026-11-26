@@ -1,0 +1,51 @@
+# Unit: Hosted blobs on S3 and PostgreSQL
+
+Files: `dotnet/Foxwarm/Hosted/Blobs/BlobSettings.cs`, `dotnet/Foxwarm/Hosted/Blobs/S3BlobStore.cs`, `dotnet/Foxwarm/Hosted/Blobs/ForwardReadStream.cs`, `dotnet/Foxwarm/Hosted/Postgres/Blobs/PgBlobStore.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Blobs.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0700_blobs.sql`, `dotnet/Foxwarm/Hosted/Licenses/AWSSDK-LICENSE.txt`, `dotnet/Foxwarm.Tests/Storage/BlobStoreContractTests.cs`, `dotnet/Foxwarm.Tests/Storage/PostgresBlobStoreTests.cs`, `dotnet/Foxwarm.Tests/Storage/S3BlobStoreTests.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/S3TestBucket.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/S3ConditionalProxy.cs`, `dotnet/Foxwarm.Tests/Channels/GeneratedImageChannelDeliveryTests.cs`
+Secondary files: `dotnet/Foxwarm/Storage/BlobStore.cs`, `dotnet/Foxwarm/Hosted/Config/DeploymentConfiguration.cs`, `dotnet/Foxwarm/Hosted/HostedEntry.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelTurns.cs`, `dotnet/Foxwarm.Tests/Hosted/DeploymentConfigurationTests.cs`
+
+## Purpose
+
+A hosted tenant's image originals and artifact revisions and resources are [`IBlobStore`](./storage-context.md#blobs) contents held outside the replica: in an S3-compatible bucket or in PostgreSQL. The owning classes (`ImageBlobStore`, `ArtifactStore`) and their keys are the same as in file mode; this unit owns the two backends, their selection and the callers that needed a local file.
+
+## D-hosted-blob-backend
+
+**Approved plan §6 (user decision U6(c)), with the deployment shape set by the coordinator (2026-11-26).**
+
+- **Selection.** The deployment configuration's `blobs` block ([hosted configuration](./hosted-config.md#d-hosted-config-split)). `blobs.backend` is `s3` or `postgres`, required, with no default. `blobs.s3` exists exactly with `s3` and requires `endpoint` (an http or https URL without a path), `region`, `bucket` (S3 bucket naming rules), `pathStyle` (boolean), and `accessKeyIdFile` and `secretAccessKeyFile` (absolute paths of mounted files; surrounding whitespace isn't part of a value). Any other key, a missing key or an invalid value refuses startup with exit 78, naming the key. The credentials never appear in the YAML. The entry reads the credential files before standing by, so a missing file fails at once, and again when it builds the runtime.
+- **Wiring.** `PostgresStorageContext` builds the PostgreSQL stores (`images`, `artifacts`) in its `CreateImageBlobs`/`CreateArtifactBlobs` slots. `HostedEntry.CreateRuntimeAsync`, after the missing-stores refusal, calls `OpenBlobsAsync` with the deployment's settings; for S3 it reads the credentials, probes the endpoint once and replaces both stores, then rebuilds the authority, which holds the image store. An S3 request refused with a 4xx (wrong bucket, credentials) is `HostedStartupException` (exit 78); an unreachable endpoint fails as it is (exit 1), so the orchestrator retries.
+- **Key layout on S3:** `t/<tenant>/<store>/<key>` in the deployment bucket, `<tenant>` being the tenant name. The bucket is the operator's; Foxwarm never creates or deletes buckets.
+- **Retention** is file mode's: nothing deletes blobs in P1, and the runtime role has no `DELETE` on the blob tables. Collection of unreferenced blobs that respects the backup window is P3.
+
+## S3 backend
+
+`S3BlobStore` over AWSSDK.S3 with an explicit service URL, authentication region, path style and static credentials (no credential chain).
+
+- **Create once.** With conditional writes, a `PUT` with `If-None-Match: *`; 412 means the key exists, 409 (a concurrent conditional write in flight) is retried a few times. A 412 for a create that must not find the key (`keepExisting: false`) compares the stored bytes: equal bytes are this write's own earlier attempt (an SDK retry after a lost response), so the create succeeds; other bytes fail like an existing file.
+- **Probe.** `S3Blobs.ProbeConditionalWritesAsync` runs once per runtime build: a conditional `PUT` of `t/<tenant>/.probe/conditional-write`, and when that creates it, a second one. 412 on either means supported; a second success means the endpoint ignores the header; 501 or `NotImplemented` means it rejects it. The probe object stays, so a restart probes with one request.
+- **Fallback** without conditional writes: `HEAD`, then an unconditional `PUT`. That is safe under the single owner because keys are immutable and the owning class's lane serializes the creates of one key: `ArtifactStore` serializes the publications of one artifact, and image keys are their content digest.
+- **Reads.** `OpenRead` returns the forward-only response stream, with the length from the response; `ReadAllAsync` reads exactly that length. `List` pages `ListObjectsV2` with the `/` delimiter and returns the keys directly under the prefix. `LocalPath` is null. A missing key is `FileNotFoundException`; other S3 and transport failures are `IOException`, so callers treat them like failed file reads. The interface's synchronous members wait for their request.
+
+### D-hosted-blob-unfenced-writes
+
+S3 writes aren't covered by the database fence. A write from an owner that has lost its lease is harmless:
+
+- Keys are immutable and created once. A late create either finds its key existing and changes nothing, or lands on a key no committed state refers to: the fenced owner's database commit that would reference it fails. The new owner's create of that key fails like an existing file or, for an image, finds the same bytes (image keys are content digests, and reads verify them).
+- At worst the late object is an orphan, which P3's collection removes. File mode leaves the same orphan when it crashes between the blob write and the commit. An orphan artifact revision is visible to `LatestRevisionAsync` exactly as after such a crash.
+- Without conditional writes, a create delayed past a takeover could still replace a new owner's object of the same key. The lease's timing makes that unlikely (an owner fences itself 10 s before a takeover can happen), but only endpoints with conditional writes rule it out; production should use one.
+
+## PostgreSQL backend
+
+`PgBlobStore(TenantDb, store)` over migration 0700: `blob_objects(store, key, byte_length, chunk_count, sha256)` and `blob_chunks(store, key, chunk, data)`, both tenant tables with `COLLATE "C"` keys; chunk data is stored out of line without compression.
+
+- **Create.** One fenced write transaction inserts the object row with `ON CONFLICT DO NOTHING` and then each 1 MiB chunk, so a key is visible only complete. A concurrent create of the same key waits for the first transaction on the primary key, then finds the row. A lost `COMMIT` is resolved by an object row with this content's length and digest.
+- **Reads.** `ReadAllAsync` reads the chunks in order in one read transaction and checks their total against the row. `OpenRead` reads the row, then fetches one chunk per short read transaction when the reader reaches it, so a stream holds at most one chunk. `List` is a key range below `<prefix>/` in byte order, keeping names without a further `/`.
+
+## Callers without a local file
+
+`LocalPath` had one production caller, channel delivery of a generated image (`SessionManager.DeliverGeneratedImageAsync`). Channel file sends need a file (they check it, measure it, hash it and re-read chunks), so when the blob isn't local and some bound channel can send files, `ImageBlobStore.CopyToFileAsync` streams the blob into `<data root>/.temp/image-delivery/<id>/` (the replica's scratch space in hosted mode) while verifying length and digest. The copy is sent and removed after every channel's send. File mode keeps sending the blob file itself. The WebUI blob and artifact routes and the artifact tool already use `Exists`, `ReadAllAsync` and `List`. `FileAuthorityTestExtensions` (file-only tests) is the only other `LocalPath` user.
+
+## Tests
+
+`BlobStoreContractTests` runs on the file artifact store, PostgreSQL, S3, and S3 behind `S3ConditionalProxy` in its ignoring mode: create-once and keep-existing, empty content, concurrent creates of one key, whole and streamed reads of a 4 MiB + 12,345-byte object, and listing across seven-key S3 pages. Concurrent creates have exactly one winner on PostgreSQL and S3 with conditional writes; the file store (depending on the file system's link support) and the S3 fallback may report more than one, holding one winner's content. `PostgresBlobStoreTests` covers fenced creates of new and existing keys leaving no rows, lost-`COMMIT` resolution in both directions, the chunk layout, lazy chunk fetching and a short chunk failing the read. `S3BlobStoreTests` covers the key layout, the probe against the fixture and against ignoring and rejecting endpoints (the proxy answers 200 to a refused conditional `PUT`, or 501 to every one), the late-create behavior above, the context's backend selection including the rebuilt authority, and startup refusals for a missing bucket, wrong credentials and a missing credential file. The proxy keeps the client's host and headers so signatures stay valid.
+
+Backend-neutral classes that reach the stores through a `SessionManager`: `WebUiDownloadTests`, `WebUiResourceBoundaryTests`, `WebUiStartupTests`, `HttpCompressionTests`, `WebUiContinuousHistoryTests`, `SeparateImageGenerationTests`, `UnsupportedImageInputTests`, `VisionInputParityTests` and `GeneratedImageChannelDeliveryTests`. The test backend gives them the PostgreSQL blob stores: the neutral run's only prerequisite is the PostgreSQL fixture, and every caller sees the same `IBlobStore` behavior on either backend, which the contract suite checks against S3 separately.
