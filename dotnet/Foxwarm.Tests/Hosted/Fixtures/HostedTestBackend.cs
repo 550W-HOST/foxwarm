@@ -24,6 +24,15 @@ internal static class HostedTestBackend
 
     internal static bool Active { get; private set; }
 
+    /// <summary>The key-encryption key of every test tenant, generated per test process.</summary>
+    internal static readonly KeyEncryptionKey Kek = KeyEncryptionKey.From(
+        Foxwarm.Secrets.InstanceKeys.FromKey(
+            "test-kek",
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(32),
+            "test"
+        )
+    );
+
     [ModuleInitializer]
     internal static void Initialize()
     {
@@ -45,7 +54,13 @@ internal static class HostedTestBackend
     {
         var full = Path.GetFullPath(root);
         var tenant = tenants.GetOrAdd(full, key => new Lazy<Tenant>(() => Open(key))).Value;
-        return Compose(new PostgresStorageContext(tenant.Database, full), full);
+        return Compose(
+            new PostgresStorageContext(tenant.Database, full)
+            {
+                KeyRing = new HostedKeyRing(tenant.Database, Kek),
+            },
+            full
+        );
     }
 
     /// <summary>The hosted stores that exist and file stores under <paramref name="root"/> for the rest.</summary>

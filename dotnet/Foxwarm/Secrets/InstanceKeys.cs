@@ -55,6 +55,29 @@ internal sealed class InstanceKeys
         this.master = master;
     }
 
+    internal const int KeyBytes = 32;
+
+    /// <summary>
+    /// Keys from a master key held elsewhere (a hosted tenant's data key). Every purpose derives
+    /// exactly as from the key file with the same key.
+    /// </summary>
+    internal static InstanceKeys FromKey(string keyId, ReadOnlySpan<byte> key, string locator)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(keyId);
+        if (key.Length != KeyBytes)
+            throw new InvalidDataException("Instance key must be 32 bytes.");
+        return new InstanceKeys(locator, keyId, key.ToArray());
+    }
+
+    /// <summary>A new key ID in the key file's format (16 hex digits).</summary>
+    internal static string NewKeyId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
+
+    /// <summary>
+    /// A copy of the master key, only for wrapping it under a key-encryption key. Features
+    /// derive their keys with <see cref="Derive"/>.
+    /// </summary>
+    internal byte[] ExportForWrapping() => (byte[])master.Clone();
+
     internal static string DefaultPath(string dataRoot) =>
         Path.Combine(Path.GetFullPath(dataRoot), "keys", "secrets.key");
 

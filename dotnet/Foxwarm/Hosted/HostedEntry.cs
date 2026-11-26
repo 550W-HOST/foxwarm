@@ -2,7 +2,9 @@ using System.Net;
 using System.Runtime.InteropServices;
 using Foxwarm.Hosted.Lease;
 using Foxwarm.Hosted.Postgres;
+using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 
 namespace Foxwarm.Hosted;
 
@@ -16,10 +18,14 @@ internal static class HostedEntry
     internal static async Task<int> RunAsync()
     {
         HostedBootstrap bootstrap;
+        DeploymentConfiguration deployment;
         try
         {
             bootstrap = HostedBootstrap.FromEnvironment();
             bootstrap.RequireDatabaseUrl();
+            deployment = bootstrap.RequireDeployment();
+            // Checked before standing by, so a missing key file fails at once.
+            _ = bootstrap.RequireKeks();
         }
         catch (HostedBootstrapException error)
         {
@@ -35,16 +41,15 @@ internal static class HostedEntry
                 bootstrap.Tenant,
                 bootstrap.ReplicaName ?? Environment.MachineName,
                 bootstrap.AdvertiseAddress,
-                new IPEndPoint(IPAddress.Any, bootstrap.HealthPort),
-                // The public listener comes from the deployment configuration, which doesn't
-                // exist yet; until then a standby forwards nothing.
-                PublicEndpoint: null,
+                deployment.HealthEndpoint,
+                // A standby forwards the public listener the owner's host binds.
+                deployment.PublicEndpoint,
                 LeaseTimings.Default,
                 DrainBound: TimeSpan.FromSeconds(8),
                 AgentCatalog.ReaderVersion
             ),
             database,
-            (context, token) => CreateRuntimeAsync(context, bootstrap),
+            (context, token) => CreateRuntimeAsync(context, bootstrap, deployment),
             line => Console.Error.WriteLine(line)
         );
         var code = await replica.RunAsync(stop.Token).ConfigureAwait(false);
@@ -63,10 +68,14 @@ internal static class HostedEntry
     }
 
     /// <summary>
-    /// Builds the tenant runtime. It refuses while this build lacks a PostgreSQL store or the
-    /// tenant configuration documents, so a hosted replica never runs over files.
+    /// Builds the tenant runtime. It refuses while this build lacks a PostgreSQL store, so a
+    /// hosted replica never runs over files.
     /// </summary>
-    internal static Task<IHostedRuntime> CreateRuntimeAsync(HostedRuntimeContext context, HostedBootstrap bootstrap)
+    internal static Task<IHostedRuntime> CreateRuntimeAsync(
+        HostedRuntimeContext context,
+        HostedBootstrap bootstrap,
+        DeploymentConfiguration deployment
+    )
     {
         var storage = new PostgresStorageContext(context.Database, bootstrap.RequireScratchRoot());
         if (storage.Missing.Count > 0)
@@ -75,8 +84,64 @@ internal static class HostedEntry
                     + string.Join(", ", storage.Missing)
                     + " stores; hosted mode can't start."
             );
-        throw new HostedStartupException(
-            "This build reads no tenant configuration documents; hosted mode can't start."
+        return BuildRuntimeAsync(storage, storage, bootstrap, deployment);
+    }
+
+    /// <summary>
+    /// <see cref="MainHost"/> over the tenant: the key ring is opened first (a locked tenant
+    /// refuses), then the configuration owner reads the tenant documents with the deployment
+    /// configuration, and the host starts on the deployment's listener. Production passes the
+    /// complete context as <paramref name="storage"/>; tests may compose it.
+    /// </summary>
+    internal static async Task<IHostedRuntime> BuildRuntimeAsync(
+        PostgresStorageContext tenant,
+        IStorageContext storage,
+        HostedBootstrap bootstrap,
+        DeploymentConfiguration deployment
+    )
+    {
+        ModelConfiguration configuration;
+        HostPaths paths;
+        try
+        {
+            var (current, previous) = bootstrap.RequireKeks();
+            var keys = new HostedKeyRing(tenant.Database, current, previous);
+            keys.OpenOrCreate();
+            tenant.KeyRing = keys;
+            paths = HostPaths.ForDataRoot(bootstrap.RequireScratchRoot()) with
+            {
+                AgentsRoot = bootstrap.RequireAgentsRoot(),
+            };
+            configuration = new ModelConfiguration(
+                paths,
+                new ConfigurationSources(
+                    tenant.ConfigDocuments(bootstrap.ReplicaName ?? Environment.MachineName),
+                    deployment.Root,
+                    // The persistent text-redaction cache comes with its PostgreSQL store (JR);
+                    // until then it stays in memory rather than on the replica's disk.
+                    hostPaths => new Foxwarm.Secrets.InstanceSecrets(
+                        hostPaths.DataRoot,
+                        keyRing: keys,
+                        documents: storage.Documents,
+                        openTextRedaction: _ => null
+                    ),
+                    storage.Credentials
+                )
+            );
+        }
+        catch (Exception error)
+            when (error is TenantKeysLockedException or HostedBootstrapException or InvalidDataException)
+        {
+            throw new HostedStartupException(error.Message);
+        }
+        var http = await HttpServerSettings
+            .CaptureAsync(configuration, paths.DataRoot, storage.Credentials)
+            .ConfigureAwait(false);
+        var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
+        return new MainHostRuntime(
+            await MainHost
+                .CreateAsync([], configuration, http, distRoot, captureDiagnostics: true, storage: storage)
+                .ConfigureAwait(false)
         );
     }
 }

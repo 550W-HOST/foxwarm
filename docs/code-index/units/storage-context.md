@@ -149,20 +149,9 @@ Vector indexing stays outside any such scope; it is derived and rebuilt from the
 
 [2026-11-26] Hosted P1 keeps these sequences over database stores (plan C2); the authority's own commit is one `TenantDb` transaction ([hosted database](./hosted-database.md), [hosted context](./hosted-runtime.md#d-hosted-storage-context)).
 
-### Configuration split (bootstrap, deployment, tenant)
+### Configuration split and documents
 
-This classification of current settings is for a hosted mode; file mode reads all of them from one configuration as today.
-
-- **Bootstrap** (process environment, needed before any store opens): data directory selection (`FOXWARM_DATA_DIR`, the `data_dir` pointer), `paths.agentsDir`, `paths.skillsDir`, `paths.mcpConfigPath`, `bot.httpHost`, `bot.httpPort`, the storage selection and its connection settings (new), and the secret-key source.
-- **Deployment** (operator-owned, shared by all tenants): `url`, `dbWorkers`, `sessionWorkers`, `vector` (endpoint and index switches), `vectorMaintenance`, `asrService`, `nodeProviders`, `claudeCode`, `bot.enableWebUI`, `bot.enableTrigger`, `bot.enableTUI`, the model provider registry and credentials in `models.yaml` where the operator supplies them, and global skills and the framework prompt addition.
-- **Tenant** (per installation in a hosted deployment): `bot.name`, `access`, `channels`, `agentTree`, `nodeTree`, `agentDefaultNode`, `handoffConfirmation`, `sessionAutoTitle`, the compaction and memory thresholds under `llm`, tool authorization, MCP server configuration, and tenant-supplied model entries and keys.
-- **Retired or legacy:** `llm.ollamaBaseUrl`, `llm.contextLimit`, `llm.maxOutput`, `llm.providerImageOutputFormat`, and the `llm` provider URL and key fields. They are read for compatibility and don't need a hosted home.
-
-Open: whether tenants may bring their own model providers or only select from operator-provided ones, and whether `nodeProviders` is ever tenant-scoped.
-
-### Configuration documents
-
-[2026-11-26, resolved in hosted P1] The seam exists: [configuration documents](#configuration-documents). Original deferral note: deferred to the hosted phase that splits the configuration (P1). `config.yaml`, `models.yaml`, `tool-authorization.yaml`, `mcp.json` and `webui.json` stay file reads in their owners. The split decides which keys stay in deployment files and which move to tenant documents, so a whole-file seam now would be reshaped. The tool-authorization policy has physical-file guarantees that a tenant-policy store must replace with equivalent ones, not drop: the native file-kind check (a regular file, absent only when missing), the regular-file handle check, the byte limit, and the `policy-read` operation rule that protects the physical `PolicyPath` from Agent tools ([tool authorization](./tool-authorization.md), [operation rules](./tool-operation-rules.md)).
+[2026-11-26, resolved in hosted P1] The split of bootstrap, deployment and tenant settings and the tenant configuration documents, with the tool-authorization guarantees that replace the policy file checks, are in [hosted configuration](./hosted-config.md). File mode reads all settings from one configuration as before, through [configuration documents](#configuration-documents).
 
 ### Agent folders beyond memory reads
 

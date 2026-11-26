@@ -18,17 +18,21 @@ internal sealed record HostedBootstrap(
     string AppRole,
     string? ReplicaName = null,
     string? AdvertiseAddress = null,
-    int HealthPort = HostedBootstrap.DefaultHealthPort,
-    string? ScratchRoot = null
+    string? ScratchRoot = null,
+    string? DeploymentConfigPath = null,
+    string? KekFile = null,
+    string? KekPreviousFile = null,
+    string? AgentsRoot = null
 )
 {
     internal const string DefaultTenant = "default";
     internal const string DefaultAppRole = "foxwarm_app";
-    internal const int DefaultHealthPort = 3081;
 
     /// <summary>The replica's ephemeral local directory; never tenant state.</summary>
     internal string RequireScratchRoot() =>
-        Path.GetFullPath(ScratchRoot ?? Path.Combine(Path.GetTempPath(), "foxwarm-replica"));
+        System.IO.Path.GetFullPath(
+            ScratchRoot ?? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "foxwarm-replica")
+        );
 
     internal static HostedBootstrap FromEnvironment(IDictionary? environment = null)
     {
@@ -43,12 +47,6 @@ internal sealed record HostedBootstrap(
             {
                 throw new HostedBootstrapException("FOXWARM_ADVERTISE_ADDRESS: " + error.Message);
             }
-        var healthPort = Read(environment, "FOXWARM_HEALTH_PORT") is { Length: > 0 } port
-            ? int.TryParse(port, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number)
-                && number is >= 1 and <= 65535
-                ? number
-                : throw new HostedBootstrapException("FOXWARM_HEALTH_PORT must be a port number.")
-            : DefaultHealthPort;
         var replica = Read(environment, "FOXWARM_REPLICA_ID");
         return new(
             Secret(environment, "FOXWARM_DATABASE_URL"),
@@ -57,10 +55,56 @@ internal sealed record HostedBootstrap(
             Name(environment, "FOXWARM_APP_ROLE", DefaultAppRole),
             string.IsNullOrEmpty(replica) ? null : Name(environment, "FOXWARM_REPLICA_ID", ""),
             string.IsNullOrEmpty(advertise) ? null : advertise,
-            healthPort,
-            Read(environment, "FOXWARM_SCRATCH_DIR") is { Length: > 0 } scratch ? scratch : null
+            Path(environment, "FOXWARM_SCRATCH_DIR"),
+            Path(environment, DeploymentConfiguration.Variable),
+            Path(environment, "FOXWARM_KEK_FILE"),
+            Path(environment, "FOXWARM_KEK_PREVIOUS_FILE"),
+            Path(environment, "FOXWARM_AGENTS_DIR")
         );
     }
+
+    /// <summary>The deployment configuration, read from <c>FOXWARM_DEPLOYMENT_CONFIG</c>.</summary>
+    internal DeploymentConfiguration RequireDeployment() =>
+        DeploymentConfiguration.Load(
+            DeploymentConfigPath
+                ?? throw new HostedBootstrapException(
+                    $"Hosted mode needs {DeploymentConfiguration.Variable}, the path of the deployment configuration."
+                )
+        );
+
+    /// <summary>The shared Agent folders (<c>FOXWARM_AGENTS_DIR</c>); required by an owner.</summary>
+    internal string RequireAgentsRoot() =>
+        System.IO.Path.GetFullPath(
+            AgentsRoot
+                ?? throw new HostedBootstrapException(
+                    "Hosted mode needs FOXWARM_AGENTS_DIR, the shared volume of Agent folders."
+                )
+        );
+
+    /// <summary>The current and previous key-encryption keys; the current one is required.</summary>
+    internal (Postgres.KeyEncryptionKey Current, Postgres.KeyEncryptionKey? Previous) RequireKeks() =>
+        (
+            Kek(KekFile ?? throw new HostedBootstrapException(
+                "Hosted mode needs FOXWARM_KEK_FILE, the key-encryption key file."
+            ), "FOXWARM_KEK_FILE"),
+            KekPreviousFile is null ? null : Kek(KekPreviousFile, "FOXWARM_KEK_PREVIOUS_FILE")
+        );
+
+    private static Postgres.KeyEncryptionKey Kek(string path, string variable)
+    {
+        try
+        {
+            return Postgres.KeyEncryptionKey.Load(path);
+        }
+        catch (Exception error)
+            when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            throw new HostedBootstrapException($"{variable} can't be used: {error.Message}");
+        }
+    }
+
+    private static string? Path(IDictionary environment, string variable) =>
+        Read(environment, variable) is { Length: > 0 } value ? value : null;
 
     /// <summary>The runtime database URL; required by replicas.</summary>
     internal string RequireDatabaseUrl() =>

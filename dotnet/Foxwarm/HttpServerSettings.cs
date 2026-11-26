@@ -37,15 +37,7 @@ internal sealed record HttpServerSettings(
         Foxwarm.Storage.IInstanceCredentials? credentials = null
     )
     {
-        var value = configuration.AppConfiguration["bot"]?["httpPort"];
-        var port =
-            value is null ? 3001
-            : SessionWait.Number(value) is { } configured
-            && configured >= 1
-            && configured <= 65535
-            && configured == Math.Truncate(configured)
-                ? (int)configured
-            : throw new InvalidDataException("bot.httpPort must be a port number.");
+        var port = ListenPort(configuration.AppConfiguration["bot"]?["httpPort"]);
         var bindAddress = ListenAddress(configuration.AppConfiguration["bot"]?["httpHost"]);
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
         var address = PublicWebAddress.Capture(port, configuredUrl, bindAddress);
@@ -74,6 +66,16 @@ internal sealed record HttpServerSettings(
     }
 
     internal const string WildcardAddress = "0.0.0.0";
+
+    // bot.httpPort is the port Main listens on, default 3001.
+    internal static int ListenPort(JsonNode? value) =>
+        value is null ? 3001
+        : SessionWait.Number(value) is { } configured
+        && configured >= 1
+        && configured <= 65535
+        && configured == Math.Truncate(configured)
+            ? (int)configured
+        : throw new InvalidDataException("bot.httpPort must be a port number.");
 
     // bot.httpHost is the address Main listens on: an IPv4 or IPv6 literal, default the IPv4
     // wildcard. Host names, including localhost, are rejected so the listener is exactly one

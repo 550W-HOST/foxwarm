@@ -6,9 +6,23 @@ using YamlDotNet.Serialization;
 
 namespace Foxwarm.Models;
 
+/// <summary>
+/// The stores of a configuration that doesn't live in data-root files (hosted mode): the
+/// tenant's configuration documents, the operator's deployment configuration (already checked
+/// to hold only deployment paths), the instance secrets and the instance credentials.
+/// </summary>
+internal sealed record ConfigurationSources(
+    IConfigDocumentStore Documents,
+    JsonObject Deployment,
+    Func<HostPaths, Foxwarm.Secrets.InstanceSecrets> Secrets,
+    IInstanceCredentials Credentials
+);
+
 internal sealed partial class ModelConfiguration
 {
     private readonly object gate = new();
+    private readonly JsonObject? deployment;
+    private readonly IInstanceCredentials? credentials;
     private readonly SemaphoreSlim mutation = new(1);
     private readonly SemaphoreSlim appPersistence = new(1);
     private readonly JsonObject app;
@@ -167,10 +181,15 @@ internal sealed partial class ModelConfiguration
         : this(HostPaths.ForDataRoot(dataRoot)) { }
 
     internal ModelConfiguration(HostPaths paths)
+        : this(paths, null) { }
+
+    internal ModelConfiguration(HostPaths paths, ConfigurationSources? sources)
     {
+        deployment = sources?.Deployment;
+        credentials = sources?.Credentials;
         // The app file's location is captured before it is read; its `paths` section can move
         // only the other documents.
-        var captured = new FileConfigDocuments(paths);
+        var captured = sources?.Documents ?? new FileConfigDocuments(paths);
         ActivePath = captured.Locator(ConfigDocumentName.Models);
         TemplatePath = Path.Combine(paths.ResourceRoot, "templates", "models.example.yaml");
         AppTemplatePath = Path.Combine(paths.ResourceRoot, "templates", "config.example.yaml");
@@ -178,12 +197,12 @@ internal sealed partial class ModelConfiguration
         AppRaw = captured.Read(ConfigDocumentName.Config) is { } appBytes
             ? ConfigDocumentText.Decode(appBytes)
             : "";
-        app = ConfigurationYaml.Parse(AppRaw, "app config");
+        app = Effective(ConfigurationYaml.Parse(AppRaw, "app config"), tenantDocument: true);
         AppConfigurationRules.Validate(app);
-        Paths = paths.WithConfiguration(app);
-        Documents = new FileConfigDocuments(Paths);
+        Paths = sources is null ? paths.WithConfiguration(app) : paths;
+        Documents = sources?.Documents ?? new FileConfigDocuments(Paths);
         Access = new(app);
-        Secrets = new Foxwarm.Secrets.InstanceSecrets(Paths.DataRoot);
+        Secrets = sources?.Secrets(Paths) ?? new Foxwarm.Secrets.InstanceSecrets(Paths.DataRoot);
         RegisterSecretSources();
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(app);
@@ -310,6 +329,21 @@ internal sealed partial class ModelConfiguration
             end--;
         var next = lines.Take(start).Concat(replacement.Split('\n')).Concat(lines.Skip(end));
         return string.Join('\n', next) + (hasNewline ? "\n" : "");
+    }
+
+    // The operator's deployment settings in hosted mode; null in file mode.
+    internal JsonObject? Deployment => (JsonObject?)deployment?.DeepClone();
+
+    // The effective app configuration of an app document: the document itself in file mode,
+    // otherwise the tenant document with the deployment settings laid over it. A tenant document
+    // being installed or read at startup may hold no deployment or unavailable settings.
+    private JsonObject Effective(JsonObject document, bool tenantDocument = false)
+    {
+        if (deployment is null)
+            return document;
+        if (tenantDocument)
+            AppConfigurationSplit.RequireTenantDocument(document);
+        return AppConfigurationSplit.Merge(deployment, document);
     }
 
     internal string ReadCurrentAppRaw() =>

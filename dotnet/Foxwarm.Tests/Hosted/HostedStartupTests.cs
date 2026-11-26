@@ -21,7 +21,7 @@ namespace Foxwarm.Tests.Hosted;
 /// host, so the file part is never used by two hosts at once.
 /// </summary>
 [Trait("Backend", "postgres")]
-public sealed class HostedStartupTests
+public sealed partial class HostedStartupTests
 {
     private static readonly LeaseTimings Timings = new(
         TimeSpan.FromSeconds(6),
@@ -85,7 +85,13 @@ public sealed class HostedStartupTests
 
     private static async Task<IHostedRuntime> MainRuntimeAsync(HostedRuntimeContext context, string dataRoot, int port)
     {
-        var storage = HostedTestBackend.Compose(new PostgresStorageContext(context.Database, dataRoot), dataRoot);
+        var storage = HostedTestBackend.Compose(
+            new PostgresStorageContext(context.Database, dataRoot)
+            {
+                KeyRing = new HostedKeyRing(context.Database, HostedTestBackend.Kek),
+            },
+            dataRoot
+        );
         var configuration = new ModelConfiguration(HostPaths.ForDataRoot(dataRoot));
         var desktop = await HttpServerSettings.CaptureDesktopAsync(dataRoot);
         var http = desktop with
@@ -274,7 +280,11 @@ public sealed class HostedStartupTests
             {
                 try
                 {
-                    return await HostedEntry.CreateRuntimeAsync(context, bootstrap);
+                    return await HostedEntry.CreateRuntimeAsync(
+                        context,
+                        bootstrap,
+                        DeploymentConfiguration.Parse("health: {port: 3081}\n")
+                    );
                 }
                 catch (Exception error)
                 {

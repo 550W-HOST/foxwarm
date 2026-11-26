@@ -28,7 +28,7 @@ internal sealed partial class ModelConfiguration
         Secrets.AddSource(
             "config",
             () =>
-                AppLiterals(ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config"))
+                AppLiterals(Effective(ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config")))
                     .Concat(
                         Access.Snapshot.Select(pair => new KnownSecret(
                             "access." + pair.Key,
@@ -44,9 +44,9 @@ internal sealed partial class ModelConfiguration
                 if (Access.ReservedInstanceToken is { Length: > 0 } token)
                     values.Add(new KnownSecret("instance-token", token));
                 if (
-                    new Foxwarm.Storage.FileInstanceCredentials(Paths.DataRoot).Read(
-                        Foxwarm.Storage.InstanceCredentialName.NodeEventCapability
-                    )
+                    (
+                        credentials ?? new Foxwarm.Storage.FileInstanceCredentials(Paths.DataRoot)
+                    ).Read(Foxwarm.Storage.InstanceCredentialName.NodeEventCapability)
                     is { } capability
                 )
                     values.Add(new KnownSecret("node-event-secret", capability.Trim()));
@@ -87,7 +87,7 @@ internal sealed partial class ModelConfiguration
         catch (Exception error) when (error is IOException or InvalidDataException) { }
         try
         {
-            var current = ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
+            var current = Effective(ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config"));
             if (current["channels"] is JsonObject channels)
                 foreach (var (id, channel) in channels)
                     Add(channel, "channel", id);

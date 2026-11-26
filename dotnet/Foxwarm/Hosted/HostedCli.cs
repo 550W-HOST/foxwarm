@@ -14,11 +14,16 @@ internal static class HostedCli
     /// <summary>Configuration or schema refused (EX_CONFIG).</summary>
     internal const int ConfigurationError = 78;
 
-    internal static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
+    internal static async Task<int> RunAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        System.Collections.IDictionary? environment = null
+    )
     {
         try
         {
-            var bootstrap = HostedBootstrap.FromEnvironment();
+            var bootstrap = HostedBootstrap.FromEnvironment(environment);
             switch (args)
             {
                 case ["db", "migrate", .. var options]:
@@ -97,6 +102,8 @@ internal static class HostedCli
             await output.WriteLineAsync(
                 $"unknown  {SchemaStatus.Label(item.Version, item.Name)} (reader floor {item.ReaderFloor})"
             );
+        if (status.Unknown.Count == 0 && status.Pending.Count == 0)
+            await TenantKeysAsync(database, output);
         if (status.Refusal() is { } refusal)
         {
             await output.WriteLineAsync("Replicas of this build would refuse to start: " + refusal);
@@ -104,5 +111,35 @@ internal static class HostedCli
         }
         await output.WriteLineAsync("Replicas of this build can run against this schema.");
         return 0;
+    }
+
+    // Which key-encryption key wraps each tenant's data key: after a KEK rotation, every tenant
+    // should name the new KEK before the previous one is removed. Each tenant is read under its
+    // own row-level security setting.
+    private static async Task TenantKeysAsync(PgDatabase database, TextWriter output)
+    {
+        var tenants = new TenantDb(database, 0, 0).Read(tx =>
+        {
+            using var command = tx.Command("SELECT tenant_id, name FROM tenants ORDER BY name COLLATE \"C\"");
+            using var reader = command.ExecuteReader();
+            var rows = new List<(int Id, string Name)>();
+            while (reader.Read())
+                rows.Add((reader.GetInt32(0), reader.GetString(1)));
+            return rows;
+        });
+        foreach (var (id, name) in tenants)
+        {
+            var key = new TenantDb(database, id, 0).Read(tx =>
+            {
+                using var command = tx.Command("SELECT key_id, kek_id FROM tenant_keys");
+                using var reader = command.ExecuteReader();
+                return reader.Read() ? (reader.GetString(0), reader.GetString(1)) : ((string, string)?)null;
+            });
+            await output.WriteLineAsync(
+                key is var (keyId, kekId)
+                    ? $"tenant  {name}: data key {keyId} wrapped by key-encryption key {kekId}"
+                    : $"tenant  {name}: no data key yet"
+            );
+        }
     }
 }

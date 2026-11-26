@@ -214,9 +214,12 @@ internal sealed partial class ModelConfiguration
             if (Documents.Exists(ConfigDocumentName.Config))
                 return false;
             var bytes = await File.ReadAllBytesAsync(AppTemplatePath, token);
-            var seeded = ConfigurationYaml.Parse(
-                new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF'),
-                "app config template"
+            var seeded = Effective(
+                ConfigurationYaml.Parse(
+                    new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF'),
+                    "app config template"
+                ),
+                tenantDocument: true
             );
             AppConfigurationRules.Validate(seeded);
             // Never replace a document created concurrently by another writer.
@@ -316,13 +319,13 @@ internal sealed partial class ModelConfiguration
         System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access
     )> ValidateAppCandidateAsync(string raw)
     {
-        var config = ConfigurationYaml.Parse(raw, "app config");
+        var config = Effective(ConfigurationYaml.Parse(raw, "app config"), tenantDocument: true);
         AppConfigurationRules.Validate(config);
         var access = AccessConfiguration.Normalize(config["access"], config.ContainsKey("access"));
         Access.Validate(access);
         AccessConfiguration.Validate(
             access,
-            await HttpServerSettings.ReadExistingTokenAsync(Paths.DataRoot) ?? ""
+            await HttpServerSettings.ReadExistingTokenAsync(Paths.DataRoot, credentials) ?? ""
         );
         return (config, access);
     }
