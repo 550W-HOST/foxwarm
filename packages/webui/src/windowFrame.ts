@@ -56,6 +56,11 @@ const HOST_PLATFORMS = new Set(['windows', 'macos'])
 export const FRAME_INTERACTIVE = 'button, a[href], input, select, textarea, summary, label, iframe, [contenteditable=""], [contenteditable="true"], [role="button"], [role="tab"], [role="menu"], [role="menuitem"], [role="dialog"], [role="listbox"], [role="option"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]'
 /** Floating layers that may cover a drag surface; they always keep their clicks. */
 export const FRAME_FLOATING = '[role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag]'
+/**
+ * Full-window layers (the image viewer, an expanded artifact, a window-wide details panel).
+ * While one is open its own title row replaces the page's: only its drag surfaces count.
+ */
+export const FRAME_LAYER = '[data-frame-layer]'
 const FILL_CLASS = 'foxwarm-frame-fill'
 const HOLE_CLASS = 'foxwarm-frame-hole'
 
@@ -134,9 +139,22 @@ export function frameEdgeFillCandidates(surface: FrameRect, width: number, reach
 
 const toRect = (r: DOMRect): FrameRect => ({ x: r.left, y: r.top, w: r.width, h: r.height })
 
-/** Drag surfaces that are currently active: in a title-band row, or outside any row. */
-function activeDragSurfaces(doc: Document): HTMLElement[] {
+/**
+ * The open full-window layer that is on top: the last rendered one in document order (a
+ * viewer opened from an expanded artifact is portalled after it). Null when none is open.
+ */
+export function activeFrameLayer(doc: Document = document): Element | null {
+  const layers = [...doc.querySelectorAll(FRAME_LAYER)].filter(layer => layer.getClientRects().length > 0)
+  return layers[layers.length - 1] ?? null
+}
+
+/**
+ * Drag surfaces that are currently active: in a title-band row, or outside any row. While a
+ * full-window layer is open only its own surfaces are; the page beneath reports nothing.
+ */
+function activeDragSurfaces(doc: Document, layer: Element | null = activeFrameLayer(doc)): HTMLElement[] {
   return [...doc.querySelectorAll<HTMLElement>('[data-frame-drag]')].filter(drag => {
+    if (layer && !layer.contains(drag)) return false
     const row = drag.closest('[data-frame-row]')
     return !row || row.hasAttribute('data-frame-in-band')
   })
@@ -155,20 +173,22 @@ const snapOutward = (r: DOMRect): FrameRect => {
 
 /**
  * Drag rectangles in whole CSS px relative to the viewport: active drag surfaces minus their
- * interactive descendants and minus every floating layer. Surfaces are snapped to the
- * nearest pixel and holes outward before subtracting, so a rectangle never reaches into a
- * control at fractional positions (rounding a fractional x and width separately can add a
- * pixel at the right edge).
+ * interactive descendants and minus every floating layer other than one that contains the
+ * surface (a full-window layer's own title row). Surfaces are snapped to the nearest pixel
+ * and holes outward before subtracting, so a rectangle never reaches into a control at
+ * fractional positions (rounding a fractional x and width separately can add a pixel at the
+ * right edge).
  */
 export function collectFrameDragRects(doc: Document = document): number[][] {
-  const floating = [...doc.querySelectorAll(FRAME_FLOATING)].map(el => snapOutward(el.getBoundingClientRect()))
+  const floating = [...doc.querySelectorAll(FRAME_FLOATING)].map(el => ({ el, box: snapOutward(el.getBoundingClientRect()) }))
   const rects: FrameRect[] = []
   for (const drag of activeDragSurfaces(doc)) {
     const box = drag.getBoundingClientRect()
     if (box.width < 1 || box.height < 1) continue
     let parts = [snapNearest(box)]
     const own = [...drag.querySelectorAll(FRAME_INTERACTIVE)].map(el => snapOutward(el.getBoundingClientRect()))
-    for (const hole of [...own, ...floating]) parts = parts.flatMap(part => subtractRect(part, hole))
+    const above = floating.filter(layer => !layer.el.contains(drag)).map(layer => layer.box)
+    for (const hole of [...own, ...above]) parts = parts.flatMap(part => subtractRect(part, hole))
     rects.push(...parts)
   }
   return rects
@@ -462,7 +482,10 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
   const layout = () => {
     const zones = readZones()
     const isNarrow = !!narrow?.matches
+    // A full-window layer owns the title row, in narrow windows too (the strip steps aside).
+    const layer = activeFrameLayer(document)
     root.toggleAttribute('data-foxwarm-frame-narrow', isNarrow)
+    root.toggleAttribute('data-foxwarm-frame-layer', !!layer)
     // Controls at the top left (macOS lights): the title row's first segment starts after them.
     root.toggleAttribute('data-foxwarm-frame-leading', zones.left > 0)
     if (isNarrow && !strip) {
@@ -475,9 +498,11 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       strip.remove()
       strip = null
     }
-    const rows = [...document.querySelectorAll<HTMLElement>('[data-frame-row]')]
-    if (isNarrow) {
-      rows.forEach(clearRow)
+    const allRows = [...document.querySelectorAll<HTMLElement>('[data-frame-row]')]
+    // Narrow windows lay out only a layer's rows; the mobile shell keeps its strip.
+    const rows = isNarrow ? allRows.filter(row => layer?.contains(row)) : allRows
+    if (isNarrow) allRows.filter(row => !rows.includes(row)).forEach(clearRow)
+    if (!rows.length) {
       renderFills([])
       renderHoles([])
       return
@@ -495,7 +520,8 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       element.style.setProperty('--foxwarm-frame-pad-left', `${plan.left}px`)
       element.style.setProperty('--foxwarm-frame-pad-right', `${plan.right}px`)
     }
-    renderFills(computeFrameEdgeFills(document))
+    // A layer's title row spans the window itself; the page's fills wait until it closes.
+    renderFills(layer ? [] : computeFrameEdgeFills(document))
     renderHoles(computeFrameNoDragHoles(document))
   }
 
@@ -566,6 +592,10 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     relayout()
   })
   rowObserver.observe(document.body, { childList: true, subtree: true })
+  // Full-window layers open and close without adding rows: a dialog's `open`, an artifact's
+  // `data-frame-layer` toggled in place.
+  const layerObserver = new MutationObserver(() => { observeRows(); relayout() })
+  layerObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open', 'data-frame-layer'] })
   // Theme changes and boot completion change the surface under the overlay controls.
   const themeObserver = new MutationObserver(relayout)
   themeObserver.observe(root, { attributes: true, attributeFilter: ['class', 'style', 'data-foxwarm-theme', 'data-foxwarm-boot-ready'] })
@@ -588,6 +618,7 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       watchedControls.clear()
       document.fonts?.removeEventListener('loadingdone', relayout)
       rowObserver.disconnect()
+      layerObserver.disconnect()
       themeObserver.disconnect()
       reportObserver?.disconnect()
       narrow?.removeEventListener('change', relayout)
@@ -596,6 +627,7 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       if (overlay) setFrameChromeColor(null)
       root.removeAttribute('data-foxwarm-frame-narrow')
       root.removeAttribute('data-foxwarm-frame-leading')
+      root.removeAttribute('data-foxwarm-frame-layer')
       probe.remove()
       fills.remove()
       holes.remove()

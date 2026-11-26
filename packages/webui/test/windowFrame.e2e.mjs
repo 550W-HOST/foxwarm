@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { extname, join, normalize, resolve } from 'node:path'
 import test from 'node:test'
@@ -32,6 +32,8 @@ const layouts = {
 // Two tabs per pane: a top/bottom split, and row splits by the right pane's share of the workbench width.
 const fourTabs = [...tabs, chat('tidepool/billing')]
 layouts.column = { tabs: fourTabs, root: { id: 's1', kind: 'split', direction: 'column', sizes: [50, 50], children: [pane('p1', fourTabs.slice(0, 2)), pane('p2', fourTabs.slice(2))] } }
+// A Session with a tool image and a delivered image, for the full-window image viewer.
+layouts.images = { tabs: [chat('gallery/files')], root: pane('p1', [chat('gallery/files')]) }
 for (const right of [50, 40, 25]) layouts[`split${right}`] = { tabs: fourTabs, root: { id: 's1', kind: 'split', direction: 'row', sizes: [100 - right, right], children: [pane('p1', fourTabs.slice(0, 2)), pane('p2', fourTabs.slice(2))] } }
 
 let demo, server, browser, base
@@ -1040,4 +1042,132 @@ test('brand row under a Windows host: a name that does not fit is truncated as b
     assertHostContract(await inspect(page), 'windows long name')
     assert.deepEqual(errors, [])
   } finally { await close() }
+})
+
+async function openImageViewer(page) {
+  await page.waitForSelector('[aria-label="Preview revenue-by-plan.png"]')
+  await page.click('[aria-label="Preview revenue-by-plan.png"]')
+  await page.waitForSelector('[data-image-preview][open]')
+  await page.waitForFunction(() => document.querySelector('[data-image-preview] .image-preview-stage img')?.naturalWidth > 0)
+  await settle(page)
+}
+
+function imageViewerLayout(page) {
+  return page.evaluate(() => {
+    const box = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }
+    const dialog = document.querySelector('[data-image-preview]')
+    const title = dialog.querySelector('h2'), range = document.createRange()
+    range.selectNodeContents(title)
+    return {
+      header: box(dialog.querySelector('header')), title: box(title), text: range.getBoundingClientRect().toJSON(),
+      position: dialog.querySelector('[data-image-preview-position]')?.textContent,
+      controls: [...dialog.querySelectorAll('button')].map(button => ({ name: button.getAttribute('aria-label'), ...box(button) })),
+      body: box(dialog.querySelector('.image-preview-body')),
+      strip: document.querySelector('.foxwarm-frame-strip') ? getComputedStyle(document.querySelector('.foxwarm-frame-strip')).display : null,
+      layer: document.documentElement.hasAttribute('data-foxwarm-frame-layer'),
+    }
+  })
+}
+
+test('image viewer under a host frame: its header is the title row and the reported regions describe only the viewer until it closes', async () => {
+  for (const [host, width, dark] of [[WINDOWS, 1280, false], [WINDOWS, 1280, true], [MACOS, 1280, false], [MACOS, 1280, true], [WINDOWS, 700, false], [MACOS, 700, true]]) {
+    const height = 800
+    const label = `${host.platform} ${width}px ${dark ? 'dark' : 'light'}`
+    // The narrow shell opens a Session from its own route.
+    const { page, errors, close } = await open({ host, width, height, layout: 'images', dark, query: width < 768 ? '#session/gallery%2Ffiles' : '' })
+    try {
+      await page.waitForSelector('[aria-label="Preview revenue-by-plan.png"]')
+      await settle(page)
+      const before = await inspect(page)
+      await openImageViewer(page)
+      const info = await inspect(page)
+      // No reported rectangle covers a viewer control, and no control sits under the window controls.
+      assertHostContract(info, label, 4)
+      const layout = await imageViewerLayout(page)
+      assert.equal(layout.position, '2 / 2', `${label}: the Session's tool image comes first`)
+      assert.equal(layout.header.top, 0)
+      assert.equal(layout.header.bottom, Math.max(host.top, 36), `${label}: the header is as tall as the title row`)
+      assert.ok(layout.text.left >= host.left && layout.text.right <= width - host.right, `${label}: the title clears the controls`)
+      for (const control of layout.controls.filter(control => control.bottom <= layout.header.bottom)) {
+        assert.ok(control.left >= host.left && control.right <= width - host.right, `${label}: "${control.name}" clears the controls`)
+      }
+      // The regions describe the viewer: its header around its controls, nothing of the page beneath.
+      assert.ok(info.regions.length > 0)
+      for (const region of info.regions) assert.ok(region[1] >= 0 && region[1] + region[3] <= layout.header.bottom, `${label}: region ${region} is outside the viewer's title row`)
+      const middle = Math.round(layout.header.bottom / 2)
+      for (const [x, y] of [[Math.round((layout.text.right + layout.title.right) / 2), middle], [Math.round(layout.text.left + 4), middle], [width - host.right - 3, middle], [Math.round(layout.text.left + 4), 2]]) {
+        assert.ok(inRegion(info.regions, x, y), `${label}: (${x}, ${y}) in the header drags`)
+      }
+      assert.ok(!inRegion(info.regions, width / 2, layout.body.top + 20), `${label}: the image area does not drag`)
+      assert.equal(layout.body.top, layout.header.bottom, `${label}: the image card starts below the title row`)
+      assert.deepEqual([layout.body.left, width - layout.body.right, height - layout.body.bottom], [8, 8, 8], `${label}: even gutters`)
+      assert.equal(layout.layer, true)
+      if (width < 768) assert.equal(layout.strip, 'none', `${label}: the narrow strip steps aside for the viewer's title row`)
+      if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) {
+        await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
+        // The host draws its controls outside the page; outline their zones for review.
+        await page.evaluate(host => {
+          const zone = document.createElement('div')
+          zone.dataset.screenshotZone = ''
+          zone.style.cssText = `position:fixed;top:0;${host.left ? `left:0;width:${host.left}px` : `right:0;width:${host.right}px`};height:${host.top}px;outline:1px dashed #d33;outline-offset:-1px;pointer-events:none`
+          document.querySelector('[data-image-preview]').appendChild(zone)
+        }, host)
+        await page.screenshot({ path: `${process.env.FOXWARM_E2E_SCREENSHOT_DIR}/image-viewer-${host.platform}-${width}-${dark ? 'dark' : 'light'}.png` })
+        await page.evaluate(() => document.querySelector('[data-screenshot-zone]').remove())
+      }
+      await page.keyboard.press('Escape')
+      await page.waitForFunction(() => !document.querySelector('[data-image-preview]'))
+      await settle(page)
+      const after = await inspect(page)
+      assert.deepEqual(after.regions, before.regions, `${label}: closing restores the page's regions`)
+      assert.equal(after.fills, before.fills)
+      if (width < 768) assert.equal(await page.$eval('.foxwarm-frame-strip', strip => getComputedStyle(strip).display), 'block')
+      assert.deepEqual(errors, [])
+    } finally { await close() }
+  }
+})
+
+test('image viewer under macOS full screen reports nothing and keeps a plain title row', async () => {
+  const { page, errors, close } = await open({ host: { platform: 'macos', left: 0, right: 0, top: 0, state: ['fullscreen'] }, layout: 'images' })
+  try {
+    await openImageViewer(page)
+    const info = await inspect(page)
+    assert.deepEqual(info.regions, [])
+    const layout = await imageViewerLayout(page)
+    assert.deepEqual([layout.header.top, layout.header.bottom], [0, 36])
+    assert.ok(layout.text.left >= 14)
+    assert.deepEqual(errors, [])
+  } finally { await close() }
+})
+
+test('image viewer without a frame provider is unchanged', async () => {
+  const { page, errors, close } = await open({ layout: 'images' })
+  try {
+    await openImageViewer(page)
+    const state = await page.evaluate(() => {
+      const header = document.querySelector('[data-image-preview] header'), body = document.querySelector('[data-image-preview] .image-preview-body')
+      return { height: header.getBoundingClientRect().height, inBand: header.hasAttribute('data-frame-in-band'), border: getComputedStyle(body).borderTopWidth, layer: document.documentElement.hasAttribute('data-foxwarm-frame-layer'), messages: window.__frameMessages.length }
+    })
+    assert.deepEqual(state, { height: 61, inBand: false, border: '0px', layer: false, messages: 0 })
+    assert.deepEqual(errors, [])
+  } finally { await close() }
+})
+
+test('PWA window-controls overlay: the open image viewer is the drag region and no viewer control drags', async () => {
+  for (const overlay of [{ left: 0, right: 186, top: 33 }, { left: 78, right: 0, top: 30 }]) {
+    const label = `controls ${overlay.left ? 'left' : 'right'}`
+    const { page, errors, close } = await open({ overlay, layout: 'images' })
+    try {
+      await openImageViewer(page)
+      const region = await chromiumDragRegion(page)
+      const info = await inspect(page)
+      const layout = await imageViewerLayout(page)
+      for (const control of info.interactive) assert.deepEqual(region.filter(part => overlaps(part, control)), [], `${label}: "${control.name}" is a window-drag area`)
+      assert.equal(layout.header.bottom, 36)
+      assert.ok(inRegion(region, Math.round((layout.text.right + layout.title.right) / 2), 18), `${label}: the header drags`)
+      assert.ok(!inRegion(region, info.width / 2, 200), `${label}: the page's drag surfaces under the viewer do not reach through`)
+      for (const part of region) assert.ok(part[1] + part[3] <= layout.header.bottom + 0.5, `${label}: ${part} lies outside the viewer's title row`)
+      assert.deepEqual(errors, [])
+    } finally { await close() }
+  }
 })

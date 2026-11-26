@@ -2714,15 +2714,50 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .image-preview-action:hover { background: var(--foxwarm-color-hover); }
 .image-preview-action:disabled { opacity: .4; cursor: default; }
 .image-preview-action:focus-visible { outline: 2px solid var(--foxwarm-color-focus-ring); outline-offset: -2px; }
+.image-preview-position { flex: none; margin-right: 8px; color: var(--foxwarm-color-text-muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.image-preview-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .image-preview-stage { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
 .image-preview-surface { position: relative; }
 .image-preview-stage img { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: block; max-width: none; max-height: none; object-fit: contain; cursor: zoom-in; }
 .image-preview-stage[data-actual-size] { overflow: auto; }
 .image-preview-stage[data-actual-size] img { cursor: zoom-out; }
+.image-preview-stage[data-dragging], .image-preview-stage[data-dragging] img { cursor: grabbing; }
+/* Previous/next sit at the sides of the image area: shown on hover or focus, always on touch screens. */
+.image-preview-nav {
+  position: absolute; top: 50%; z-index: 1; display: inline-flex; width: 44px; height: 64px; margin-top: -32px; align-items: center; justify-content: center;
+  border: 1px solid var(--foxwarm-color-border); border-radius: 10px; color: var(--foxwarm-color-text);
+  background: color-mix(in srgb, var(--foxwarm-color-surface) 88%, transparent); box-shadow: 0 2px 8px rgb(0 0 0 / .12);
+  opacity: 0; transition: opacity 120ms ease-out;
+}
+.image-preview-nav[data-direction="previous"] { left: max(12px, env(safe-area-inset-left)); }
+.image-preview-nav[data-direction="next"] { right: max(12px, env(safe-area-inset-right)); }
+.image-preview-body:hover .image-preview-nav, .image-preview-nav:focus-visible { opacity: 1; }
+.image-preview-nav:hover { background: var(--foxwarm-color-surface); }
+.image-preview-nav:focus-visible { outline: 2px solid var(--foxwarm-color-focus-ring); outline-offset: 2px; }
+.image-preview-nav:disabled { visibility: hidden; }
+@media (hover: none) { .image-preview-nav { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .image-preview-nav { transition: none; } }
 .image-preview-stage > [role="status"] { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
 .image-preview-loading { position: absolute; color: var(--foxwarm-color-text-muted); font-size: 14px; }
 .image-preview-error { flex: none; padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); color: var(--foxwarm-color-warning); font-size: 12px; }
-@media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action { border: 1px solid ButtonText; } }
+@media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action, .image-preview-nav { border: 1px solid ButtonText; } .image-preview-nav { background: Canvas; } }
+/* Under a window frame the viewer is a full-window layer ([D-window-frame]): its header is the
+ * window's title row on the chrome, clear of the window controls and a drag surface around its
+ * controls, and the image area is one card below it, as in popup leaves. */
+html[data-foxwarm-frame] .image-preview-dialog { background: var(--foxwarm-color-canvas-edge); }
+html[data-foxwarm-frame] .image-preview-header {
+  gap: 2px; min-height: 0; height: var(--foxwarm-frame-title-height);
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 max(14px, var(--foxwarm-frame-left, 0px));
+  border-bottom: 0; background: transparent;
+}
+html[data-foxwarm-frame] .image-preview-header h2 { font-size: 12.5px; color: var(--foxwarm-color-text-strong); }
+html[data-foxwarm-window~="inactive"] .image-preview-header h2 { color: var(--foxwarm-color-text-muted); }
+html[data-foxwarm-frame] .image-preview-position { font-size: 12px; }
+html[data-foxwarm-frame] .image-preview-action { width: 32px; height: 32px; border-radius: 6px; }
+html[data-foxwarm-frame] .image-preview-action:hover:not(:disabled) { background: color-mix(in srgb, var(--foxwarm-color-text-strong) 9%, transparent); }
+html[data-foxwarm-frame] .image-preview-body { margin: 0 var(--foxwarm-frame-gutter) var(--foxwarm-frame-gutter); overflow: hidden; border: 1px solid var(--foxwarm-color-border); border-radius: 10px; background: var(--foxwarm-color-canvas); }
+html[data-foxwarm-frame] .image-preview-error { padding-top: 0; }
+@media (forced-colors: active) { html[data-foxwarm-frame] .image-preview-body { border-color: CanvasText; } }
 
 /* Window frame (windowFrame.ts). Inputs: html[data-foxwarm-frame] and
  * --foxwarm-frame-left/right/top, set by a Desktop host or, in an installed PWA's
@@ -2769,9 +2804,11 @@ html[data-foxwarm-frame] :is([data-frame-row][data-frame-in-band] [data-frame-dr
   app-region: drag; -webkit-app-region: drag; user-select: none; -webkit-user-select: none;
 }
 html[data-foxwarm-frame] [data-frame-drag] :is(button, a[href], input, select, textarea, summary, label, iframe, [contenteditable], [role="button"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]),
-html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag], .foxwarm-frame-hole) {
+html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag], [data-frame-layer], .foxwarm-frame-hole) {
   app-region: no-drag; -webkit-app-region: no-drag;
 }
+/* A full-window layer ([data-frame-layer]) owns the title row while it is open, narrow windows included. */
+html[data-foxwarm-frame-layer] .foxwarm-frame-strip { display: none; }
 @media (forced-colors: active) { .foxwarm-frame-strip { background: Canvas; } }
 
 /* While a dnd-kit drag is active (tab, pane or session) the cursor stays `grabbing` over every

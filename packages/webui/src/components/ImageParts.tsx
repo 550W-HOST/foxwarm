@@ -6,22 +6,31 @@ import { requestImageDownloadUrl, triggerBrowserDownload } from './downloadShare
 
 export const WebUiImageSessionContext = createContext<string | null>(null)
 
+export const isImagePart = (part: MessagePart) => !!(part.inlineData || part.inlineDataRef || part.inlineDataUnavailable)
+
+export const imagePartMimeType = (part: MessagePart): string => part.inlineDataRef?.mimeType
+  || part.inlineData?.mimeType
+  || part.inlineDataUnavailable?.mimeType
+  || part.inlineDataUnavailable?.mime_type
+  || 'application/octet-stream'
+
+/** The displayed URL of an image part: a scoped blob URL under a scoped WebUI identity, or inline data. */
+export function imagePartSource(part: MessagePart, webUiSessionId: string | null): string | null {
+  const imageUrl = part.inlineDataRef?.apiPath ? makeApiUrl(part.inlineDataRef.apiPath) : null
+  if (imageUrl && webUiSessionId && part.inlineDataRef?.blobId) {
+    imageUrl.pathname = makeApiUrl(`/sessions/${encodeURIComponent(webUiSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`).pathname
+  }
+  return imageUrl?.toString() || (part.inlineData ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` : null)
+}
+
 export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[200px]' }: { part: MessagePart; label: string; imageClassName?: string }) {
   const [failed, setFailed] = useState(false)
   const [preview, setPreview] = useState(false)
   const [downloadPending, setDownloadPending] = useState(false)
   const [downloadError, setDownloadError] = useState('')
   const webUiSessionId = useContext(WebUiImageSessionContext)
-  const mimeType = part.inlineDataRef?.mimeType
-    || part.inlineData?.mimeType
-    || part.inlineDataUnavailable?.mimeType
-    || part.inlineDataUnavailable?.mime_type
-    || 'application/octet-stream'
-  const imageUrl = part.inlineDataRef?.apiPath ? makeApiUrl(part.inlineDataRef.apiPath) : null
-  if (imageUrl && webUiSessionId && part.inlineDataRef?.blobId) {
-    imageUrl.pathname = makeApiUrl(`/sessions/${encodeURIComponent(webUiSessionId)}/blobs/${encodeURIComponent(part.inlineDataRef.blobId)}`).pathname
-  }
-  const src = imageUrl?.toString() || (part.inlineData ? `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` : null)
+  const mimeType = imagePartMimeType(part)
+  const src = imagePartSource(part, webUiSessionId)
 
   if (!src || failed) {
     return <div className="text-xs text-fw-text-muted">Image unavailable</div>
@@ -61,7 +70,7 @@ export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[
         />
         <div className="foxwarm-image-hover-overlay absolute inset-0 bg-fw-overlay/0 transition rounded-lg pointer-events-none" />
       </button>
-      {preview && <ImagePreviewDialog src={src} mimeType={mimeType} title={label} onClose={() => setPreview(false)} />}
+      {preview && <ImagePreviewDialog src={src} mimeType={mimeType} title={label} galleryItem={part} onClose={() => setPreview(false)} />}
     </>
   )
 }

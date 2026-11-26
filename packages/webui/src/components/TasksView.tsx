@@ -387,8 +387,8 @@ export default function TasksView({ onBack, onOpenSession: navigateToSession, mo
   }
 
   const detailPanel = selectedId && (
-    <aside ref={detailRef} data-task-details data-task-narrow={isNarrow || undefined} {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="tasks-detail-panel text-fw-text">
-      <div className="mb-4 flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
+    <aside ref={detailRef} data-task-details data-task-narrow={isNarrow || undefined} data-frame-layer={isNarrow || undefined} {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="tasks-detail-panel text-fw-text">
+      <div className="tasks-detail-head mb-4 flex items-center justify-between gap-2" data-frame-row={isNarrow ? 'column' : undefined} data-frame-drag={isNarrow ? '' : undefined}><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
       {taskWarning && <p role="alert" data-task-warning="detail" className="mb-4 rounded border border-fw-danger/40 bg-fw-danger/10 p-2 text-xs text-fw-danger lg:hidden">{taskWarning}</p>}
       {detailsLoading ? <p role="status" className="text-sm text-fw-text-muted">Loading task details…</p>
         : detailsError ? <p role="alert" className="text-sm text-fw-danger">{detailsError}</p>

@@ -26,6 +26,9 @@ import {
 import { countPastedTextCharacters, getPastedTextPreview } from '../pastedText'
 import { PastedTextModal } from './PastedTextBlock'
 import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
+import { ImageGalleryContext, useImageGalleryStore, type ImageGalleryEntry } from './imageGallery'
+
+const NO_DRAFT_IMAGES: readonly ImageGalleryEntry[] = []
 
 export interface InlineComposerEditorHandle {
   focus: () => void
@@ -662,11 +665,23 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const activeAttachmentChip = activeAttachmentRef ? findChip(activeAttachmentRef) : null
   const activeAttachment = activeAttachmentChip?.segment.type === 'attachment' ? activeAttachmentChip.segment : null
   const activeAttachmentFile = activeAttachment ? resolveAttachmentFile(activeAttachment.ref) : undefined
-  const activeImageSrc = useMemo(
-    () => activeAttachment && activeAttachmentFile && isSafeImagePreviewMime(activeAttachment.mimeType) ? URL.createObjectURL(activeAttachmentFile) : undefined,
-    [activeAttachment, activeAttachmentFile],
-  )
-  useEffect(() => () => { if (activeImageSrc) URL.revokeObjectURL(activeImageSrc) }, [activeImageSrc])
+  // While an image is previewed, the viewer switches among the draft's own previewable
+  // images in draft order. Object URLs are made from the editor-owned Files for that time only.
+  const draftImages = useMemo((): ImageGalleryEntry[] | null => {
+    if (!activeAttachment || !activeAttachmentFile || !isSafeImagePreviewMime(activeAttachment.mimeType)) return null
+    const view = viewRef.current
+    const images = (view ? getComposerChips(view.state) : []).flatMap(chip => {
+      if (chip.segment.type !== 'attachment' || !isSafeImagePreviewMime(chip.segment.mimeType)) return []
+      const file = chip.segment.ref === activeAttachment.ref ? activeAttachmentFile : resolveAttachmentFile(chip.segment.ref)
+      return file ? [{ segment: chip.segment, file }] : []
+    })
+    const sequence = images.some(image => image.segment.ref === activeAttachment.ref) ? images : [{ segment: activeAttachment, file: activeAttachmentFile }]
+    return sequence.map(({ segment, file }) => ({ key: `draft:${segment.ref}`, src: URL.createObjectURL(file), mimeType: segment.mimeType, title: segment.name }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the draft cannot change under the modal viewer
+  }, [activeAttachment, activeAttachmentFile])
+  useEffect(() => () => { for (const image of draftImages || []) URL.revokeObjectURL(image.src) }, [draftImages])
+  const activeImageSrc = activeAttachment ? draftImages?.find(image => image.key === `draft:${activeAttachment.ref}`)?.src : undefined
+  const draftGallery = useImageGalleryStore(draftImages || NO_DRAFT_IMAGES)
 
   return (
     <div
@@ -711,7 +726,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           }}
         />
       )}
-      {!disabled && activeAttachment && activeImageSrc && <ImagePreviewDialog src={activeImageSrc} mimeType={activeAttachment.mimeType} title={activeAttachment.name} onClose={() => setActiveAttachmentRef(null)} />}
+      {!disabled && activeAttachment && activeImageSrc && <ImageGalleryContext.Provider value={draftGallery}>
+        <ImagePreviewDialog src={activeImageSrc} mimeType={activeAttachment.mimeType} title={activeAttachment.name} galleryItem={`draft:${activeAttachment.ref}`} onClose={() => setActiveAttachmentRef(null)} />
+      </ImageGalleryContext.Provider>}
       {!disabled && activeAttachment && activeAttachmentChip && !activeImageSrc && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActiveAttachmentRef(null) }}>
           <div role="dialog" aria-modal="true" aria-label="Attachment information" className="w-full max-w-lg rounded-lg border border-fw-border bg-fw-surface p-4 shadow-xl">

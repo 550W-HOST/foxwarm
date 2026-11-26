@@ -33,7 +33,7 @@ before(async()=>{
  const bundle=await build({stdin:{contents:`
  import React,{useState} from 'react';import{createRoot}from'react-dom/client';import ChatTimeline from './src/components/ChatTimeline';import{initializeThemeRuntime}from'./src/theme';initializeThemeRuntime();
  const initial=${JSON.stringify(messages)};
- function Fixture(){const[messages,setMessages]=useState(initial),[view,setView]=useState('conversation');window.fixture={messages:()=>messages,setView,tail:()=>setMessages(initial.slice(0,-1)),finish:()=>setMessages([...initial.slice(0,-1),{role:'model',parts:[{text:'Updated final reply.',providerMeta:{openaiResponses:{outputItem:{phase:'final_answer'}}}}],__meta:{seq:8}}]),missing:()=>setMessages([...initial,{role:'model',parts:[{functionCall:{id:'missing',name:'send_file',args:{filePath:'missing.pdf'}}}]},{role:'tool',parts:[{functionResponse:{tool_use_id:'missing',name:'send_file',response:{fileDelivery:${JSON.stringify(receipt('missing','missing.pdf'))}}}}]}]),duplicate:()=>setMessages([...initial,initial[6]])};return <ChatTimeline sessionId="demo/main" messages={messages} historyMessages={messages} timelineView={view} showUsageBadge={false} showTimeDividers={false} isMobile={innerWidth<768} renderMessageFooter={()=> <div data-queue-marker>1 queued</div>}/>};createRoot(document.getElementById('root')).render(<Fixture/>);
+ function Fixture(){const[messages,setMessages]=useState(initial),[view,setView]=useState('conversation');window.fixture={messages:()=>messages,set:setMessages,setView,tail:()=>setMessages(initial.slice(0,-1)),finish:()=>setMessages([...initial.slice(0,-1),{role:'model',parts:[{text:'Updated final reply.',providerMeta:{openaiResponses:{outputItem:{phase:'final_answer'}}}}],__meta:{seq:8}}]),missing:()=>setMessages([...initial,{role:'model',parts:[{functionCall:{id:'missing',name:'send_file',args:{filePath:'missing.pdf'}}}]},{role:'tool',parts:[{functionResponse:{tool_use_id:'missing',name:'send_file',response:{fileDelivery:${JSON.stringify(receipt('missing','missing.pdf'))}}}}]}]),duplicate:()=>setMessages([...initial,initial[6]])};return <ChatTimeline sessionId="demo/main" messages={messages} historyMessages={messages} timelineView={view} showUsageBadge={false} showTimeDividers={false} isMobile={innerWidth<768} renderMessageFooter={()=> <div data-queue-marker>1 queued</div>}/>};createRoot(document.getElementById('root')).render(<Fixture/>);
  `,loader:'tsx',resolveDir:new URL('..',import.meta.url).pathname},bundle:true,platform:'browser',format:'esm',write:false,jsx:'automatic'})
  await writeFile(path.join(dir,'report.png'),png)
  await writeFile(path.join(dir,'notes.pdf'),'downloaded supporting notes')
@@ -134,5 +134,44 @@ test('the expanded tool download action also requests a fresh signed URL',async(
   const signed=await page.evaluate(()=>window.downloaded.href)
   const response=await fetch(signed)
   assert.equal(response.status,200);assert.equal(await response.text(),'downloaded supporting notes')
+ }finally{await page.close()}
+})
+
+test('the viewer switches among every image of the Session in display order, in every view',async()=>{
+ const sharp=(await import('node:module')).createRequire(import.meta.url)('sharp')
+ const png=async width=>(await sharp({create:{width,height:30,channels:3,background:'#3a7588'}}).png().toBuffer()).toString('base64')
+ const [attached,tool,generated]=await Promise.all([40,50,60].map(png))
+ const gallery=[
+  {role:'user',parts:[{text:'Compare <attachment-ref ref="attachment1" /> with the chart.'},{text:'<foxwarm-image name="attachment1_photo.png" />'},{inlineData:{mimeType:'image/png',data:attached}}],__meta:{seq:1}},
+  {role:'model',parts:[{functionCall:{id:'read-a',name:'read',args:{filePath:'chart.png'}}}],__meta:{seq:2}},
+  {role:'tool',parts:[{functionResponse:{tool_use_id:'read-a',name:'read',response:{output:'Read chart.png'}}},{toolUseId:'read-a',inlineData:{mimeType:'image/png',data:tool}}],__meta:{seq:3}},
+  // A generated image, and a format the viewer doesn't render inline, which never joins the sequence.
+  {role:'model',parts:[{text:'Here is a variant.',providerMeta:{openaiResponses:{outputItem:{phase:'final_answer'}}}},{inlineData:{mimeType:'image/png',data:generated}},{inlineData:{mimeType:'image/svg+xml',data:Buffer.from('<svg/>').toString('base64')}}],__meta:{seq:4}},
+  ...messages.slice(1,4).map((message,index)=>({...message,__meta:{seq:5+index}})),
+ ]
+ const page=await newPage();await page.setViewport({width:1100,height:900});await page.goto(url)
+ try{
+  await page.waitForSelector('[data-delivery-id="one"]')
+  await page.evaluate(messages=>window.fixture.set(messages),gallery)
+  const current=()=>page.evaluate(()=>{const dialog=document.querySelector('[data-image-preview]'),img=dialog.querySelector('.image-preview-stage img');return{title:dialog.querySelector('h2').textContent,position:dialog.querySelector('[data-image-preview-position]')?.textContent,width:img?.naturalWidth,src:img?.getAttribute('src').slice(0,10)}})
+  const loaded=()=>page.waitForFunction(()=>document.querySelector('[data-image-preview] .image-preview-stage img')?.naturalWidth>0)
+  for(const view of['detailed','grouped','conversation']){
+   await page.evaluate(view=>window.fixture.setView(view),view)
+   await page.waitForSelector('[aria-label="Preview report.png"]')
+   const mounted=await page.$$eval('.foxwarm-image-item img',images=>images.length)
+   assert.equal(mounted,2,`${view}: the tool image's card is collapsed, so only the attachment and the generated image have thumbnails`)
+   await page.click('[aria-label="Preview report.png"]');await page.waitForSelector('[data-image-preview][open]');await loaded()
+   assert.deepEqual(await current(),{title:'report.png',position:'4 / 4',width:1,src:'/nested/do'},`${view}: the reply image opens at its place in the sequence`)
+   const walk=[]
+   for(let step=0;step<3;step++){await page.keyboard.press('ArrowLeft');await loaded();walk.unshift(await current())}
+   assert.deepEqual(walk.map(item=>[item.title,item.position,item.width,item.src]),[['photo.png','1 / 4',40,'data:image'],['Image 1','2 / 4',50,'data:image'],['Image 1','3 / 4',60,'data:image']],`${view}: attachment, tool image, generated image, delivered image (${mounted} thumbnails mounted)`)
+   await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
+   assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Preview report.png')
+  }
+  // A user attachment opens at its own position.
+  await page.evaluate(()=>window.fixture.setView('detailed'))
+  await page.click('[aria-label="Open photo.png"]');await page.waitForSelector('[data-image-preview][open]');await loaded()
+  assert.equal((await current()).position,'1 / 4')
+  await page.click('[aria-label="Close image preview"]')
  }finally{await page.close()}
 })
