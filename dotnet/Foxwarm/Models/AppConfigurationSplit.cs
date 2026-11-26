@@ -23,6 +23,7 @@ internal static class AppConfigurationSplit
         "blobs",
         "journal.retentionDays",
         "health",
+        "egress",
     ];
 
     /// <summary>

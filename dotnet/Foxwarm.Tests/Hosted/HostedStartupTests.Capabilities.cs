@@ -125,7 +125,14 @@ public sealed partial class HostedStartupTests
                 )
         );
         IStorageContext? storage = null;
-        var replica = StartHosted(database.OpenApp(), files, built => storage = built, fileStores);
+        // The scripted model listens on loopback: the deployment allows it as an egress exception.
+        var replica = StartHosted(
+            database.OpenApp(),
+            files,
+            built => storage = built,
+            fileStores,
+            "egress: {allow: {hosted: [127.0.0.1]}}\n"
+        );
         await WaitUntilAsync(
             () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
             TimeSpan.FromSeconds(60),

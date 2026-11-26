@@ -37,7 +37,8 @@ public sealed partial class HostedStartupTests
         PgDatabase database,
         HostedFiles files,
         Action<IStorageContext>? built = null,
-        string? fileStores = null
+        string? fileStores = null,
+        string deploymentExtra = ""
     )
     {
         Replica? replica = null;
@@ -51,6 +52,7 @@ public sealed partial class HostedStartupTests
                     await Task.Delay(10, token);
                 var deployment = DeploymentConfiguration.Parse(
                     $"bot: {{httpHost: 127.0.0.1, httpPort: {replica.PublicPort}}}\nhealth: {{port: 3081}}\nblobs: {{backend: postgres}}\n"
+                        + deploymentExtra
                 );
                 var tenant = new PostgresStorageContext(context.Database, files.Scratch);
                 var storage = HostedTestBackend.Compose(tenant, fileStores ?? files.Scratch);

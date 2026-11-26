@@ -210,7 +210,10 @@ internal static class HostedEntry
                 distRoot,
                 captureDiagnostics: true,
                 storage: storage,
-                capabilities: RuntimeCapabilities.Hosted,
+                capabilities: RuntimeCapabilities.Hosted with
+                {
+                    Egress = Foxwarm.Net.EgressPolicy.Hosted(deployment.Egress),
+                },
                 jsonStdoutLog: true,
                 logTenant: bootstrap.Tenant
             )

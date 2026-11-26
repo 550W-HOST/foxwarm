@@ -14,13 +14,15 @@ namespace Foxwarm.Hosted;
 /// <see cref="AppConfigurationSplit"/>, in the app configuration's shape: the public listener is
 /// <c>bot.httpHost</c> and <c>bot.httpPort</c> with file mode's rules and default, and the health
 /// listener port is <c>health.port</c>, which is required. The blob backend is <c>blobs</c>
-/// (<see cref="BlobSettings"/>), also required.
+/// (<see cref="BlobSettings"/>), also required. <c>egress</c> holds the egress guard's
+/// deployment rules (<see cref="Foxwarm.Net.EgressRules"/>).
 /// </summary>
 internal sealed record DeploymentConfiguration(
     JsonObject Root,
     IPEndPoint PublicEndpoint,
     int HealthPort,
-    BlobSettings Blobs
+    BlobSettings Blobs,
+    Foxwarm.Net.EgressRules Egress
 )
 {
     internal const string Variable = "FOXWARM_DEPLOYMENT_CONFIG";
@@ -56,7 +58,8 @@ internal sealed record DeploymentConfiguration(
                 root,
                 new IPEndPoint(address, port),
                 RequiredHealthPort(root),
-                BlobSettings.Parse(root["blobs"])
+                BlobSettings.Parse(root["blobs"]),
+                Foxwarm.Net.EgressRules.Parse(root["egress"])
             );
         }
         catch (InvalidDataException error)
