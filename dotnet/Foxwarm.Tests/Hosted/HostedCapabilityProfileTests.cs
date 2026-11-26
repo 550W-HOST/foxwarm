@@ -136,8 +136,8 @@ public sealed class HostedCapabilityProfileTests
     private static void Succeeded(JsonObject result) =>
         Assert.True(Error(result) is null, result.ToJsonString());
 
-    private static void Unavailable(JsonObject result) =>
-        Assert.Contains("Node is not available: master", Error(result) ?? result.ToJsonString());
+    private const string NoNode =
+        "This Session has no Node. Select one with `ctl node select <node-id>`; `ctl node list` shows the available Nodes.";
 
     [Fact]
     public async Task Node_list_omits_master_and_a_master_target_fails_before_any_effect()
@@ -160,13 +160,45 @@ public sealed class HostedCapabilityProfileTests
 
         await File.WriteAllTextAsync(f.Marker, "before");
         var outside = Path.Combine(f.Temp.Path, "outside.txt");
-        var calls = new (string Name, JsonObject Args)[]
+        // Through the Session's current Node, which it doesn't have.
+        var current = new (string Name, JsonObject Args)[]
         {
             ("exec", new() { ["command"] = $"echo changed > '{f.Marker}'" }),
             ("write", new() { ["filePath"] = outside, ["content"] = "x" }),
             ("write", new() { ["filePath"] = f.Marker, ["content"] = "x", ["overwrite"] = true }),
             ("edit", new() { ["filePath"] = f.Marker, ["oldText"] = "before", ["newText"] = "x" }),
             ("read", new() { ["filePath"] = f.Marker }),
+            (
+                "ctl",
+                new()
+                {
+                    ["command"] = "tool call node:current/write --args @a",
+                    ["values"] = new JsonObject
+                    {
+                        ["a"] = new JsonObject { ["filePath"] = outside, ["content"] = "x" },
+                    },
+                }
+            ),
+            ("run_script", new() { ["filePath"] = f.Marker }),
+            ("send_file", new() { ["filePath"] = f.Marker }),
+            (
+                "skill",
+                new()
+                {
+                    ["action"] = "copy",
+                    ["skillName"] = "demo",
+                    ["targetPath"] = outside,
+                }
+            ),
+        };
+        foreach (var (name, args) in current)
+        {
+            var error = Error(await f.Call(name, args));
+            Assert.True(error == NoNode, $"{name} {args.ToJsonString()}: {error}");
+        }
+        // Naming master, or a Main-local file.
+        var calls = new (string Name, JsonObject Args)[]
+        {
             ("node", new() { ["action"] = "select", ["nodeId"] = "master" }),
             ("ctl", new() { ["command"] = "node select master" }),
             (
@@ -190,23 +222,17 @@ public sealed class HostedCapabilityProfileTests
                     ["targetPath"] = outside,
                 }
             ),
-            ("run_script", new() { ["filePath"] = f.Marker }),
-            ("send_file", new() { ["filePath"] = f.Marker }),
-            (
-                "skill",
-                new()
-                {
-                    ["action"] = "copy",
-                    ["skillName"] = "demo",
-                    ["targetPath"] = outside,
-                }
-            ),
+            ("run_script", new() { ["node"] = "master", ["filePath"] = f.Marker }),
+            ("send_file", new() { ["node"] = "master", ["filePath"] = f.Marker }),
             ("node_bootstrap_info", new() { ["filePath"] = outside }),
             ("node_create_auth_token", new() { ["nodeId"] = "paired", ["filePath"] = outside }),
             ("set_config", new() { ["target"] = "config", ["filePath"] = f.Marker }),
         };
         foreach (var (name, args) in calls)
-            Unavailable(await f.Call(name, args));
+        {
+            var error = Error(await f.Call(name, args));
+            Assert.True(error == "Node is not available: master", $"{name} {args.ToJsonString()}: {error}");
+        }
         // A move from configuration has nothing that could authorize it.
         var move = await f.Call(
             "add_secret",
@@ -428,6 +454,11 @@ public sealed class HostedCapabilityProfileTests
     public async Task The_file_profile_keeps_master_paths_maintenance_and_the_file_prompt()
     {
         await using var f = await Fixture.Create(RuntimeCapabilities.File);
+        // A file-mode Session always has a Node: unset is master, where file tools run.
+        await File.WriteAllTextAsync(f.Marker, "on master");
+        var read = await f.Call("read", new JsonObject { ["filePath"] = f.Marker });
+        Succeeded(read);
+        Assert.Contains("on master", read.ToJsonString());
         Assert.Contains("foxwarm-maintenance", (await f.Ctl("skill list")).ToJsonString());
         Assert.Contains("On master", (await f.Ctl("skill load demo")).ToJsonString());
         var prompt = SessionWait.Text(f.Owner.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"])!;

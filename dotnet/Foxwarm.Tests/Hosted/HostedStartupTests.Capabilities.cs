@@ -179,7 +179,8 @@ public sealed partial class HostedStartupTests
             "the turn completes"
         );
         var tools = results!.ToJsonString();
-        Assert.Contains("Node is not available: master", tools);
+        // The history JSON escapes the copy's backticks and angle brackets.
+        Assert.Contains("This Session has no Node. Select one with", tools);
         Assert.Equal("kept", await File.ReadAllTextAsync(Path.Combine(files.Agents, "main", "memory", "NOTES.md")));
         // The prompt the model received names no Main-local path.
         var request = (await model.RequestAt(0)).Body;

@@ -449,7 +449,9 @@ internal sealed class ToolRegistry(
             await RefreshNodeAsync(target, token);
         var resolved = Resolve(resolvedInvocation, resolvedArgs, currentNode);
         if (!MasterNode && TargetsMaster(resolved))
-            throw RuntimeCapabilities.MasterUnavailable();
+            throw currentNode == "master" && !NamesMaster(resolvedInvocation, resolvedArgs, invocation, args, resolved)
+                ? RuntimeCapabilities.NoCurrentNode()
+                : RuntimeCapabilities.MasterUnavailable();
         // A move from configuration needs what reading the value directly would: a master read
         // of the file holding it. Without master no tool reads the tenant documents.
         if (!MasterNode && resolved is { Source: "builtin", Name: "add_secret" } && resolved.Args.ContainsKey("fromConfig"))
@@ -457,6 +459,36 @@ internal sealed class ToolRegistry(
                 "fromConfig is not available on this server: no tool reads its configuration documents. Give the value with value or filePath."
             );
         return resolved;
+    }
+
+    // Whether a call that targets master names it, rather than reaching it through the Session's
+    // current Node. A Node tool names it only as a call_tool target; for a builtin, the call is
+    // resolved again with another current Node, which is pure for builtins, and still targets
+    // master only when an argument names it.
+    private bool NamesMaster(
+        string resolvedInvocation,
+        JsonObject resolvedArgs,
+        string invocation,
+        JsonObject args,
+        ResolvedTool resolved
+    )
+    {
+        if (resolved.Source == "node")
+            return invocation == "call_tool"
+                && (
+                    Text(args, "toolId") is { } id && id.StartsWith("node:master/", StringComparison.Ordinal)
+                    || TargetNode(Text(args, "nodeId"), "") == "master"
+                );
+        if (resolved.Source != "builtin")
+            return true;
+        try
+        {
+            return TargetsMaster(Resolve(resolvedInvocation, resolvedArgs, "\u0000current"));
+        }
+        catch (InvalidDataException)
+        {
+            return true;
+        }
     }
 
     // Whether a resolved call reads, writes or runs anything on master: a Node tool there, a
