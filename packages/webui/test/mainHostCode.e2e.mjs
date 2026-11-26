@@ -337,6 +337,14 @@ try {
   await setup.waitForFunction(() => document.body.innerText.includes('Models') && document.body.innerText.includes('Setup'))
   stage('original App terminal and cwd')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]')
+  // The panel toggle reattaches a running terminal of its target that no App tab shows. The
+  // official Code terminal is one as soon as the App's registry lists it, which depends on when
+  // the App last refreshed that list. End it and let the opened list show the current registry,
+  // so the toggle starts the App's own terminal.
+  for (const terminal of (await owned.api('GET', '/api/terminals')).body.terminals) assert.equal((await owned.api('DELETE', '/api/terminals/' + encodeURIComponent(terminal.id))).status, 200)
+  await page.click('[data-sidebar-nav="terminal"] button[aria-label="Terminals"]')
+  await page.waitForFunction(() => document.querySelector('[data-terminal-list]')?.textContent.includes('No running terminals'))
+  await page.click('[data-sidebar-nav="terminal"] button[aria-label="Terminals"]'); await page.waitForSelector('[data-terminal-list]', { hidden: true })
   const appTerminalsBefore = (await owned.api('GET', '/api/terminals')).body.terminals
   await page.click('[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]')
   await until(async () => (await owned.api('GET', '/api/terminals')).body.terminals.length === appTerminalsBefore.length + 1, 'original App terminal backend', 30000)
