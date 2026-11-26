@@ -4,6 +4,7 @@ using Foxwarm.Hosted;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Sessions;
 using Foxwarm.Storage;
+using Npgsql;
 
 namespace Foxwarm.Tests.Hosted;
 
@@ -79,7 +80,16 @@ internal static class HostedTestBackend
         var database = server.CreateDatabaseAsync().GetAwaiter().GetResult();
         var tenantId = database.TenantIdAsync().GetAwaiter().GetResult();
         var epoch = database.TakeLeaseAsync(tenantId, "test:" + root).GetAwaiter().GetResult();
-        return new Tenant(database, new TenantDb(database.OpenApp(), tenantId, epoch));
+        // The root's pool lives as long as the test process: a later manager on the same root
+        // must see the same database, and nothing says when a root is done. Its idle
+        // connections close within seconds instead of Npgsql's default five minutes, so a
+        // serial run holds only the connections in use, not one or more for every root so far.
+        var app = new NpgsqlConnectionStringBuilder(database.AppConnectionString)
+        {
+            ConnectionIdleLifetime = 2,
+            ConnectionPruningInterval = 1,
+        };
+        return new Tenant(database, new TenantDb(database.OpenApp(app.ConnectionString), tenantId, epoch));
     }
 
     private sealed record Tenant(HostedTestDatabase Owner, TenantDb Database);
