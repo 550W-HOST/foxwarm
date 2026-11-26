@@ -435,7 +435,8 @@ internal sealed partial class ImportRun : IAsyncDisposable
     {
         if (settings?.S3 is not { } s3)
             return "blobs:\n  backend: postgres\n";
-        static string Quoted(string value) => System.Text.Json.JsonSerializer.Serialize(value);
+        // A JSON string is a YAML double-quoted scalar; the DOM form needs no serializer metadata.
+        static string Quoted(string value) => System.Text.Json.Nodes.JsonValue.Create(value).ToJsonString();
         return "blobs:\n  backend: s3\n  s3:\n"
             + $"    endpoint: {Quoted(s3.Endpoint.ToString().TrimEnd('/'))}\n"
             + $"    region: {Quoted(s3.Region)}\n"

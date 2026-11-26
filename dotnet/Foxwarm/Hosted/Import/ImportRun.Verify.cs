@@ -168,7 +168,7 @@ internal sealed partial class ImportRun
                     if (File.Exists(Path.Combine(source.State, "sessions", id + ".json")))
                     {
                         report.Fail($"Catalog member {id} doesn't load after import.");
-                        failures.Add(id);
+                        failures.Add(JsonValue.Create(id));
                     }
                 }
                 else
@@ -186,7 +186,7 @@ internal sealed partial class ImportRun
                 else
                 {
                     report.Fail($"Catalog member {id} fails to load after import: {error.Message}");
-                    failures.Add(id);
+                    failures.Add(JsonValue.Create(id));
                 }
             }
             finally

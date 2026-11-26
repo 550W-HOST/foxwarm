@@ -36,11 +36,11 @@ internal sealed class ImportReport
 
     internal List<string> Failures { get; } = [];
 
-    internal void Refuse(string message) => Root["refusals"]!.AsArray().Add(message);
+    internal void Refuse(string message) => Root["refusals"]!.AsArray().Add(JsonValue.Create(message));
 
     internal IReadOnlyList<string> Refusals => Root["refusals"]!.AsArray().Select(item => item!.GetValue<string>()).ToArray();
 
-    internal void Warn(string message) => Root["warnings"]!.AsArray().Add(message);
+    internal void Warn(string message) => Root["warnings"]!.AsArray().Add(JsonValue.Create(message));
 
     internal void NotImported(string what, long count, string reason) =>
         Root["notImported"]!.AsArray().Add(new JsonObject { ["what"] = what, ["count"] = count, ["reason"] = reason });
