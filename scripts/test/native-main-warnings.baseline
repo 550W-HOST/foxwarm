@@ -35,7 +35,6 @@ IL3050 | dotnet/Foxwarm/McpOAuth.Consent.cs | Foxwarm.McpOAuthService.<DiscoverA
 IL3050 | dotnet/Foxwarm/McpOAuth.Consent.cs | Foxwarm.McpOAuthService.<RegisterAsync>d__N.MoveNext() | System.Text.Json.JsonSerializer.Deserialize<DynamicClientRegistrationResponse>(JsonNode,JsonSerializerOptions)
 IL3050 | dotnet/Foxwarm/Models/ModelConfiguration.cs | Foxwarm.Models.ModelConfiguration.ChannelsYamlForObject(JsonObject) | YamlDotNet.Serialization.SerializerBuilder.SerializerBuilder()
 IL3050 | dotnet/Foxwarm/Sessions/External/RuntimeMcpService.cs | Foxwarm.Sessions.RuntimeMcpService.<>c__DisplayClassN.<<HandleAsync>b__2>d.MoveNext() | System.Text.Json.JsonSerializer.SerializeToNode<IDictionary`2<String,JsonElement>>(IDictionary`2<String,JsonElement>,JsonSerializerOptions)
-IL3050 | dotnet/Foxwarm/Tools/ToolResponseFormatting.cs | Foxwarm.Tools.ToolResponseFormatting..cctor() | YamlDotNet.Serialization.SerializerBuilder.SerializerBuilder()
 IL3050 | dotnet/Foxwarm/Vector/VectorChild.cs | Foxwarm.Vector.VectorChild.<TryRunAsync>d__N.MoveNext() | System.Text.Json.JsonSerializer.Deserialize<VectorConfiguration>(JsonNode,JsonSerializerOptions)
 IL3050 | dotnet/Foxwarm/Vector/VectorService.cs | Foxwarm.Vector.VectorService.<SearchAsync>d__N.MoveNext() | System.Text.Json.JsonSerializer.Deserialize<VectorSearchResult>(JsonNode,JsonSerializerOptions)
 IL3050 | dotnet/Foxwarm/Vector/VectorWire.cs | Foxwarm.Vector.VectorWire.<DispatchAsync>d__N.MoveNext() | System.Text.Json.JsonSerializer.Deserialize<ArchiveBlockRecord>(JsonNode,JsonSerializerOptions)

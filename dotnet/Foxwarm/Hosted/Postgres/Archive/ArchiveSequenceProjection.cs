@@ -164,7 +164,7 @@ internal static class ArchiveSequenceProjection
         var system = new JsonArray();
         foreach (var part in parts)
             if (IsText(Path(part, "system")))
-                system.Add(Text(Path(part, "system"), 1600));
+                system.Add(JsonValue.Create(Text(Path(part, "system"), 1600)));
         return new JsonObject
         {
             ["system"] = system,
