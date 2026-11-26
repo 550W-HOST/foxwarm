@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
-internal sealed partial class SessionCatalog : ISessionCatalogStore
+internal sealed partial class SessionCatalog : ISessionCatalogStore, ICatalogRowView
 {
     private readonly object gate = new();
     private readonly string root;

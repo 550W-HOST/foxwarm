@@ -6,6 +6,7 @@ using Xunit.Abstractions;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class SessionListVisibilityScaleTests(ITestOutputHelper output)
 {
     private const int Sessions = 4000;
@@ -33,7 +34,7 @@ public sealed class SessionListVisibilityScaleTests(ITestOutputHelper output)
                 )
             );
         }
-        f.Manager.Catalog.File().Upsert(rows);
+        f.Manager.Catalog.Upsert(rows);
         f.Manager.ChangePresentation(catalog => catalog.SetParent(source, "team1/s1"));
 
         var policies = new Dictionary<string, string>

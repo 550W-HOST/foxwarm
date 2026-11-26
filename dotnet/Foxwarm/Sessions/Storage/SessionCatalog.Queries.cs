@@ -65,7 +65,7 @@ internal sealed partial class SessionCatalog
 
     // Tree-mode Sidebar queries rank by subtree activity; Flat, Architecture and every other
     // reader keep ranking by the row's own last message time.
-    private static string[] OrderColumns(string mode, bool child = false, bool activity = false)
+    internal static string[] OrderColumns(string mode, bool child = false, bool activity = false)
     {
         var rank = activity ? "subtree_rank" : "recent_rank";
         return child
