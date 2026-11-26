@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Hosted.Postgres;
+using Foxwarm.Hosted.Postgres.Archive;
 using Foxwarm.Hosted.Postgres.Authority;
 using Foxwarm.Sessions;
 using Npgsql;
@@ -16,7 +17,7 @@ internal sealed class PgAuthorityFixture : IAsyncDisposable
         Tenant = tenant;
         Backend = new PostgresSessionAuthorityBackend(
             tenant,
-            id => new PgArchiveTestReader(tenant, id),
+            new PgArchiveStore(tenant).ForSession,
             scratch,
             null
         );

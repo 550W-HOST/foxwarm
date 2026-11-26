@@ -271,7 +271,9 @@ public sealed partial class HostedStartupTests
         await using var database = await server.CreateDatabaseAsync();
         using var temp = new TempDirectory();
         var bootstrap = new HostedBootstrap(null, null, PostgresServer.Tenant, PostgresServer.AppRole, ScratchRoot: temp.Path);
+        using var probe = new TempDirectory();
         Exception? refusal = null;
+        IReadOnlyList<string> missing = [];
         var replica = Start(
             temp.Path,
             database.OpenApp(),
@@ -280,6 +282,8 @@ public sealed partial class HostedStartupTests
             {
                 try
                 {
+                    // The stores this build still lacks, from a context of its own.
+                    missing = new PostgresStorageContext(context.Database, probe.Path).Missing;
                     return await HostedEntry.CreateRuntimeAsync(
                         context,
                         bootstrap,
@@ -295,8 +299,11 @@ public sealed partial class HostedStartupTests
         );
         Assert.Equal(HostedExit.Configuration, await replica.Run.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.IsType<HostedStartupException>(refusal);
-        Assert.Contains("Authority", refusal!.Message);
-        Assert.DoesNotContain("Documents", refusal.Message);
+        // The case needs at least one missing store; once every store exists, it has no subject.
+        Assert.NotEmpty(missing);
+        foreach (var name in missing)
+            Assert.Contains(name, refusal!.Message);
+        Assert.DoesNotContain("Documents", refusal!.Message);
         Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));
         // Nothing durable was written to the scratch directory.
         Assert.Empty(Directory.EnumerateFileSystemEntries(temp.Path));

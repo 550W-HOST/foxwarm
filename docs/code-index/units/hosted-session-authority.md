@@ -1,6 +1,6 @@
 # Unit: Hosted Session authority
 
-Files: `dotnet/Foxwarm/Hosted/Schema/Migrations/0100_session_authority.sql`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PostgresSessionAuthorityBackend.cs`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PostgresSessionAuthority.cs`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PgSessionRows.cs`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PgSessionEnvelope.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Authority.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionSegmentPlanner.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityIngress.cs`, `dotnet/Foxwarm.Tests/Hosted/PostgresSessionAuthorityTests.cs`, `dotnet/Foxwarm.Tests/Hosted/PostgresSessionAuthorityStoreTests.cs`, `dotnet/Foxwarm.Tests/Hosted/SessionAuthorityMeasurement.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/PgArchiveTestReader.cs`, `dotnet/Foxwarm.Tests/Storage/SessionSegmentPlannerTests.cs`
+Files: `dotnet/Foxwarm/Hosted/Schema/Migrations/0100_session_authority.sql`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PostgresSessionAuthorityBackend.cs`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PostgresSessionAuthority.cs`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PgSessionRows.cs`, `dotnet/Foxwarm/Hosted/Postgres/Authority/PgSessionEnvelope.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Authority.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionSegmentPlanner.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityIngress.cs`, `dotnet/Foxwarm.Tests/Hosted/PostgresSessionAuthorityTests.cs`, `dotnet/Foxwarm.Tests/Hosted/PostgresSessionAuthorityStoreTests.cs`, `dotnet/Foxwarm.Tests/Hosted/SessionAuthorityMeasurement.cs`, `dotnet/Foxwarm.Tests/Storage/SessionSegmentPlannerTests.cs`
 Secondary files: `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityDocument.cs`, `dotnet/Foxwarm/Sessions/Turns/PersistentSessionAuthorityStore.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthority.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthorityTests.cs`
 
 ## Purpose
@@ -16,7 +16,7 @@ PostgreSQL implementation of the [Session authority backend](./storage-context.m
 - **`session_heads`**, one row per Session ID: `lifetime_id` (unique, chosen at the first commit), `doc_version`, `commit_id`, `envelope`, `parts`, `segment_ids` and `segment_counts`.
   - The **envelope** is the prepared state without history as compact UTF-8 JSON, keeping the position of the `history` property (null there).
   - **Parts.** Every top-level string member of 4 KiB or more as UTF-8 is stored once per value in `session_envelope_parts` and referenced from `parts` (member name to hex SHA-256); the envelope holds null in its place. The rule is generic, with no field list. Strings that aren't valid UTF-16 stay inline.
-- **`session_segments`**, keyed by lifetime and a per-lifetime segment ID: a JSON array of records as the document writer writes them (`codec` 0), compact rather than indented, with its record count and byte length.
+- **`session_segments`**, keyed by lifetime and a per-lifetime segment ID: a JSON array of records as the document writer writes them (`codec` 0), with its record count and byte length. Segments are compact rather than indented (coordinator, 2026-11-26): values equal file mode's by construction, and the file's indentation isn't a contract.
 - **`session_envelope_parts`**, keyed by lifetime and SHA-256.
 - **Compression.** Records, envelope and part values are `bytea` with `lz4` TOAST compression. Segment and part rows are never updated; the runtime role has no `UPDATE` on them.
 
@@ -54,6 +54,8 @@ Segment policy (thresholds go through the coordinator):
 - When the commit writes records and 16 or more trailing kept segments are each below 64 KiB, they join the written records.
 - Saves without history change write only the head, plus a part when a large member changed.
 
+**Known cost (coordinator, 2026-11-26; no policy change).** A commit that replaces large segments right after a checkpoint writes about the stored size of the replaced segments in WAL: deleting them touches every TOAST page they occupy, and each page's first change after a checkpoint is a full-page image. Only compaction, edits to old history, `ReplaceRaw` and `DeleteAuthority` replace large segments; appends and head-only saves don't. The cost is bounded by the document's stored size once per checkpoint cycle. Measured on PostgreSQL 18 with full-page writes on: a 9.2 MB document's compaction wrote 9.56 MB of WAL right after a checkpoint and about 83 KB otherwise; over documents scaled to production sizes, 1.54 MB per compaction against 28 KB. `wal_compression = lz4` doesn't reduce it, because the pages hold already-compressed values.
+
 ### D-hosted-session-operations
 
 **Approved P1 plan §4.3.**
@@ -70,16 +72,12 @@ Segment policy (thresholds go through the coordinator):
 
 ### D-hosted-session-wiring
 
-**Derived.** `PostgresStorageContext.Authority.cs` builds the backend only when the context has an Archive store, because the authority exposes the Archive store's view of the rows it writes (`ISessionAuthority.Archive`). Until the Archive store is integrated the authority stays in `Missing`. The provider variant cache of `ImageBlobStore` lives in the replica's scratch directory; originals go to the context's image blob store.
+**Derived.** `PostgresStorageContext.Authority.cs` builds the backend only when the context has an Archive store, because the authority exposes the Archive store's view of the rows it writes (`ISessionAuthority.Archive`). The test backend treats Authority, Archive and Identities as one group, hosted together or not at all. The provider variant cache of `ImageBlobStore` lives in the replica's scratch directory; originals go to the context's image blob store.
 
 ## Tests
 
-- `PostgresSessionAuthorityContractTests` runs the shared `SessionAuthorityContractTests` on the fixture, with the Archive rows read through the interim `PgArchiveTestReader` until the Archive track's `IArchiveSession` is integrated.
+- `PostgresSessionAuthorityContractTests` runs the shared `SessionAuthorityContractTests` on the fixture, reading the Archive rows through `PgArchiveStore`'s Archive session.
 - `PostgresSegmentedAuthorityCountTests` runs the shared value-equality and rewrite-count cases (`SegmentedAuthorityCountTests`, also run over the in-memory `SegmentedAuthorityBackend`).
 - `PostgresSessionAuthorityStoreTests`: every write fenced after a takeover with all tables unchanged; a lost `COMMIT` in both directions through `PgTcpProxy`; parts written once per value, deleted when unreferenced, and byte-identical raw and envelope values against file mode; the merge and 256 KiB cut over real rows; cancelled compaction; a head changed behind a store; identity moves over an existing target; deletion of every row; a missing segment.
 - `SessionSegmentPlannerTests`: the planner and the cut without a store.
 - `SessionAuthorityMeasurement` runs only with `FOXWARM_SESSION_MEASURE_DIR` set: the p1-plan §4.4 measurement over a directory of Session documents, writing aggregate JSON to `FOXWARM_SESSION_MEASURE_OUT`.
-
-## Open Questions
-
-- The Session lifecycle classes (fork, clear, compact, identity move and recovery) qualify as `Backend=neutral` once the Archive store and identity ledger are integrated and the test backend treats Authority, Archive and Identities as one group.

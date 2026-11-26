@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Hosted.Postgres;
+using Foxwarm.Hosted.Postgres.Archive;
 using Foxwarm.Hosted.Postgres.Authority;
 using Foxwarm.Sessions;
 using Foxwarm.Storage;
@@ -94,7 +95,7 @@ public sealed class PostgresSessionAuthorityStoreTests : IAsyncLifetime
             Timeout = 5,
         }.ConnectionString;
         var tenant = new TenantDb(fixture.Database.OpenApp(routed), fixture.Tenant.TenantId, fixture.Tenant.Epoch);
-        var backend = new PostgresSessionAuthorityBackend(tenant, id => new PgArchiveTestReader(tenant, id), temp.Path, null);
+        var backend = new PostgresSessionAuthorityBackend(tenant, new PgArchiveStore(tenant).ForSession, temp.Path, null);
         var commits = new List<PgSessionCommitStats>();
         backend.Committed = commits.Add;
         var published = new List<long>();
