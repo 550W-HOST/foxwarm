@@ -23,10 +23,11 @@ internal sealed partial class McpClient : IAsyncDisposable
         string root,
         string? publicBaseUrl = null,
         string? configPath = null,
-        Foxwarm.Storage.IStateDocuments? documents = null
+        Foxwarm.Storage.IStateDocuments? documents = null,
+        Foxwarm.Storage.IConfigDocumentStore? configDocuments = null
     )
     {
-        configuration = new(root, configPath);
+        configuration = configDocuments is null ? new(root, configPath) : new(configDocuments);
         OAuth = new(
             root,
             publicBaseUrl,

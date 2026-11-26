@@ -21,13 +21,8 @@ internal sealed partial class ModelConfiguration
         Secrets.AddSource(
             "models",
             () =>
-                File.Exists(ActivePath)
-                    ? ModelLiterals(
-                        ConfigurationYaml.Parse(
-                            File.ReadAllText(ActivePath, Encoding.UTF8),
-                            "models config"
-                        )
-                    )
+                ReadInstalledModelsText() is { } text
+                    ? ModelLiterals(ConfigurationYaml.Parse(text, "models config"))
                     : []
         );
         Secrets.AddSource(
@@ -80,12 +75,9 @@ internal sealed partial class ModelConfiguration
         }
         try
         {
-            if (File.Exists(ActivePath))
+            if (ReadInstalledModelsText() is { } text)
             {
-                var root = ConfigurationYaml.Parse(
-                    File.ReadAllText(ActivePath, Encoding.UTF8),
-                    "models config"
-                );
+                var root = ConfigurationYaml.Parse(text, "models config");
                 if ((root["providers"] ?? root["models"]) is JsonObject providers)
                     foreach (var (key, provider) in providers)
                         Add(provider, "provider", key);

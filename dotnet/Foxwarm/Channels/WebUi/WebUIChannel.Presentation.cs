@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 
 namespace Foxwarm.Channels.WebUi;
 
@@ -58,10 +59,11 @@ internal sealed partial class WebUIChannel
                             throw new InvalidDataException($"{key} is too long.");
                         settings[key] = normalized;
                     }
-                    new AtomicJsonFile(
-                        sessions.DataRoot,
-                        Path.Combine("state", "webui.json")
-                    ).WritePayload(settings);
+                    await sessions.ConfigDocuments.ReplaceAsync(
+                        ConfigDocumentName.WebUi,
+                        new System.Text.UTF8Encoding(false).GetBytes(settings.ToJsonText()),
+                        CancellationToken.None
+                    );
                     return Results.Ok(
                         new JsonObject
                         {
@@ -124,8 +126,10 @@ internal sealed partial class WebUIChannel
     {
         try
         {
-            var path = Path.Combine(sessions.DataRoot, "state", "webui.json");
-            if (File.Exists(path) && JsonNode.Parse(File.ReadAllText(path)) is JsonObject settings)
+            if (
+                sessions.ConfigDocuments.Read(ConfigDocumentName.WebUi) is { } bytes
+                && JsonNode.Parse(ConfigDocumentText.Decode(bytes)) is JsonObject settings
+            )
                 return new JsonObject
                 {
                     ["instanceName"] =

@@ -134,7 +134,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Nodes.Changed += () => TopologyChanged?.Invoke();
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
-        authorization = new ToolAuthorizationAuthority(this.root);
+        // A configuration owner over a database brings its documents; otherwise they are this
+        // manager's files, as they have always been.
+        ConfigDocuments =
+            models.ConfigurationOwner?.Documents is { } configured
+            and not Foxwarm.Storage.FileConfigDocuments
+                ? configured
+                : new Foxwarm.Storage.FileConfigDocuments(this.root, hostPaths?.McpConfigPath);
+        authorization = new ToolAuthorizationAuthority(ConfigDocuments);
         Storage.Identities.ValidateStartupEvidence(allowPendingIdentityRecovery: true);
         Directory.CreateDirectory(this.root);
         deletionChannels = new(this.root, documents: Storage.Documents);
@@ -298,7 +305,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             this.root,
             SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"]),
             hostPaths?.McpConfigPath,
-            Storage.Documents
+            Storage.Documents,
+            ConfigDocuments
         );
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
@@ -648,6 +656,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     }
 
     public string DataRoot => root;
+
+    // The tool authorization policy, MCP servers and WebUI settings of this runtime.
+    internal Foxwarm.Storage.IConfigDocumentStore ConfigDocuments { get; }
 
     internal RecallTargetLog RecallTargets { get; }
     public bool Accepting => accepting;

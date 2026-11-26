@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 using Foxwarm.Tools;
 
 namespace Foxwarm.Models;
@@ -82,7 +83,7 @@ internal sealed partial class ModelConfiguration
                 raw = raw[1..];
             if (target == "models")
             {
-                var firstRun = !File.Exists(ActivePath);
+                var firstRun = !ModelsInstalled;
                 var generation = Secrets.Store.Generation;
                 bool whileLocked;
                 HostModels next;
@@ -93,10 +94,10 @@ internal sealed partial class ModelConfiguration
                     whileLocked = resolvedWhileLocked;
                 }
                 // First-run Setup ends with this save, so it must not install an unfinished key.
-                if (!File.Exists(ActivePath))
+                if (!ModelsInstalled)
                     ModelApiKeys.EnsureUsableForFirstRun(next);
                 await ReplaceRawAsync(
-                    ActivePath,
+                    ConfigDocumentName.Models,
                     bytes,
                     token,
                     () =>
@@ -205,12 +206,12 @@ internal sealed partial class ModelConfiguration
     // config.yaml is never edited, and installations that pre-create models.yaml skip this.
     private async Task<bool> SeedAppAsync(CancellationToken token)
     {
-        if (File.Exists(AppPath) || !File.Exists(AppTemplatePath))
+        if (Documents.Exists(ConfigDocumentName.Config) || !File.Exists(AppTemplatePath))
             return false;
         await appPersistence.WaitAsync(token);
         try
         {
-            if (File.Exists(AppPath))
+            if (Documents.Exists(ConfigDocumentName.Config))
                 return false;
             var bytes = await File.ReadAllBytesAsync(AppTemplatePath, token);
             var seeded = ConfigurationYaml.Parse(
@@ -218,26 +219,9 @@ internal sealed partial class ModelConfiguration
                 "app config template"
             );
             AppConfigurationRules.Validate(seeded);
-            var directory = Path.GetDirectoryName(AppPath)!;
-            Directory.CreateDirectory(directory);
-            var temporary = Path.Combine(
-                directory,
-                "." + Path.GetFileName(AppPath) + "." + Guid.NewGuid().ToString("N") + ".tmp"
-            );
-            try
-            {
-                await File.WriteAllBytesAsync(temporary, bytes, token);
-                // Never replace a file created concurrently by another writer.
-                File.Move(temporary, AppPath, false);
-            }
-            catch (IOException) when (File.Exists(AppPath))
-            {
+            // Never replace a document created concurrently by another writer.
+            if (!await Documents.TryCreateAsync(ConfigDocumentName.Config, bytes, token))
                 return false;
-            }
-            finally
-            {
-                File.Delete(temporary);
-            }
             sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(seeded);
             agentDefaultNode = AppConfigurationRules.AgentDefaultNode(seeded);
             return true;
@@ -276,7 +260,7 @@ internal sealed partial class ModelConfiguration
             var validated = await ValidateAppCandidateAsync(raw);
             if (webhooksLocked)
                 RequireUnchangedWebhooks(validated.Access);
-            await ReplaceRawAsync(AppPath, bytes, token);
+            await ReplaceRawAsync(ConfigDocumentName.Config, bytes, token);
             Secrets.Invalidate();
             return validated;
         }
@@ -361,22 +345,17 @@ internal sealed partial class ModelConfiguration
     private static JsonArray Strings(IEnumerable<string> values) =>
         new(values.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
 
-    private static async Task ReplaceRawAsync(
-        string path,
+    private async Task ReplaceRawAsync(
+        ConfigDocumentName name,
         byte[] bytes,
         CancellationToken token,
         Action? publish = null
     )
     {
-        var file = new AtomicJsonFile(
-            Path.GetDirectoryName(path)!,
-            Path.GetFileName(path),
-            privateFile: true
-        );
         Exception? durability = null;
         try
         {
-            await file.WriteStreamPayloadAsync(stream => stream.Write(bytes), null, token);
+            await Documents.ReplaceAsync(name, bytes, token);
         }
         catch (AuthorityCommittedException error)
         {

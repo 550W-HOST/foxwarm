@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 using YamlDotNet.Serialization;
 
 namespace Foxwarm.Models;
@@ -19,6 +20,9 @@ internal sealed partial class ModelConfiguration
     // key or store file then refreshes the catalog without a configuration change.
     private bool cachedWhileLocked;
     internal HostPaths Paths { get; }
+
+    // Where the app, models and other configuration documents live.
+    internal IConfigDocumentStore Documents { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
     internal string AppTemplatePath { get; }
@@ -164,14 +168,20 @@ internal sealed partial class ModelConfiguration
 
     internal ModelConfiguration(HostPaths paths)
     {
-        ActivePath = paths.ModelsPath;
+        // The app file's location is captured before it is read; its `paths` section can move
+        // only the other documents.
+        var captured = new FileConfigDocuments(paths);
+        ActivePath = captured.Locator(ConfigDocumentName.Models);
         TemplatePath = Path.Combine(paths.ResourceRoot, "templates", "models.example.yaml");
         AppTemplatePath = Path.Combine(paths.ResourceRoot, "templates", "config.example.yaml");
-        AppPath = paths.ConfigPath;
-        AppRaw = File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
+        AppPath = captured.Locator(ConfigDocumentName.Config);
+        AppRaw = captured.Read(ConfigDocumentName.Config) is { } appBytes
+            ? ConfigDocumentText.Decode(appBytes)
+            : "";
         app = ConfigurationYaml.Parse(AppRaw, "app config");
         AppConfigurationRules.Validate(app);
         Paths = paths.WithConfiguration(app);
+        Documents = new FileConfigDocuments(Paths);
         Access = new(app);
         Secrets = new Foxwarm.Secrets.InstanceSecrets(Paths.DataRoot);
         RegisterSecretSources();
@@ -206,10 +216,9 @@ internal sealed partial class ModelConfiguration
     {
         lock (gate)
         {
-            var read = File.Exists(ActivePath) ? ActivePath : TemplatePath;
-            if (!File.Exists(read))
-                throw new InvalidDataException("Models configuration is missing.");
-            var raw = File.ReadAllText(read, Encoding.UTF8);
+            var raw =
+                ReadCurrentModelsRaw()
+                ?? throw new InvalidDataException("Models configuration is missing.");
             var generation = Secrets.Store.Generation;
             if (
                 catalog is not null
@@ -304,20 +313,30 @@ internal sealed partial class ModelConfiguration
     }
 
     internal string ReadCurrentAppRaw() =>
-        File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
+        Documents.Read(ConfigDocumentName.Config) is { } bytes
+            ? ConfigDocumentText.Decode(bytes)
+            : "";
+
+    // Whether a models configuration has been installed; before that, Setup is the first run.
+    internal bool ModelsInstalled => Documents.Exists(ConfigDocumentName.Models);
+
+    // The installed models document as text, or null before the first save.
+    private string? ReadInstalledModelsText() =>
+        Documents.Read(ConfigDocumentName.Models) is { } bytes
+            ? ConfigDocumentText.Decode(bytes)
+            : null;
 
     // The installed models or app file as text, and whether it starts with a UTF-8 byte order
     // mark, for edits that rewrite parts of it in place.
     internal (string Text, bool Bom) ReadInstalledRaw(string target)
     {
-        var path = target == "models" ? ActivePath : AppPath;
-        if (!File.Exists(path))
-            throw new InvalidOperationException(
+        var bytes =
+            Documents.Read(target == "models" ? ConfigDocumentName.Models : ConfigDocumentName.Config)
+            ?? throw new InvalidOperationException(
                 target == "models"
                     ? "No models configuration has been saved yet."
                     : "No app configuration has been saved yet."
             );
-        var bytes = File.ReadAllBytes(path);
         var bom = bytes is [0xEF, 0xBB, 0xBF, ..];
         try
         {
@@ -331,18 +350,17 @@ internal sealed partial class ModelConfiguration
 
     // The models file the catalog reads: the installed file, or the template before the first
     // save. Null when neither exists.
-    internal string? ReadCurrentModelsRaw()
-    {
-        var read = File.Exists(ActivePath) ? ActivePath : TemplatePath;
-        return File.Exists(read) ? File.ReadAllText(read, Encoding.UTF8) : null;
-    }
+    internal string? ReadCurrentModelsRaw() =>
+        ReadInstalledModelsText()
+        ?? (File.Exists(TemplatePath) ? File.ReadAllText(TemplatePath, Encoding.UTF8) : null);
 
     internal JsonObject Diagnostics()
     {
         lock (gate)
         {
-            var exists = File.Exists(ActivePath);
-            var raw = exists ? File.ReadAllText(ActivePath, Encoding.UTF8) : "";
+            var installed = ReadInstalledModelsText();
+            var exists = installed is not null;
+            var raw = installed ?? "";
             var parsed = ConfigurationYaml.Parse(raw, "models config");
             var providers =
                 (parsed["providers"] ?? parsed["models"]) as JsonObject ?? new JsonObject();
