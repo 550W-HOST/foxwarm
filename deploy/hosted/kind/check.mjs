@@ -188,8 +188,13 @@ try {
   const at = event => time(event.lastTimestamp || event.eventTime || event.firstTimestamp)
   const completed = events.find(event => event.involvedObject.kind === 'Job' && event.involvedObject.name === `${release}-migrate` && event.reason === 'Completed')
   assert(completed, 'the migration Job ran and completed')
-  const created = events.filter(event => event.involvedObject.kind === 'ReplicaSet' && event.reason === 'SuccessfulCreate')
+  // The chart's ReplicaSets only, not the fixtures'. Event times have a resolution of one
+  // second, so the same second counts as in order.
+  const replicaSets = new Set((await json(['get', 'replicasets', '-l', 'app.kubernetes.io/instance=' + release])).items.map(set => set.metadata.name))
+  const created = events.filter(event => event.involvedObject.kind === 'ReplicaSet' && replicaSets.has(event.involvedObject.name) && event.reason === 'SuccessfulCreate')
   assert(created.length > 0, 'the Deployment created replicas')
+  const deployment = await json(['get', 'deployment', release])
+  assert(time(deployment.metadata.creationTimestamp) >= Math.floor(at(completed) / 1000) * 1000, 'the Deployment was created after the migration hook completed')
   const firstReplica = Math.min(...created.map(at))
   assert(at(completed) <= firstReplica, 'the migration hook completed before the first replica was created')
   assert((await json(['get', 'jobs'])).items.length === 0, 'the succeeded hook Job was deleted')
