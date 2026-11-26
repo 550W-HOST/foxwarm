@@ -16,7 +16,7 @@ internal sealed class SegmentedAuthorityBackend(string dataRoot) : ISessionAutho
     internal sealed record Head(Guid Lifetime, long Version, string Envelope, long[] Segments);
 
     private readonly Dictionary<string, Head> heads = new(StringComparer.Ordinal);
-    private readonly Dictionary<long, string[]> segments = [];
+    private readonly Dictionary<long, SessionSegmentPiece> segments = [];
     private long nextSegment = 1;
 
     internal string DataRoot { get; } = Path.GetFullPath(dataRoot);
@@ -72,14 +72,15 @@ internal sealed class SegmentedAuthorityBackend(string dataRoot) : ISessionAutho
     public void ReplaceRaw(string sessionId, JsonObject document)
     {
         var envelope = (JsonObject)document.DeepClone();
-        var history = (envelope["history"] as JsonArray ?? [])
-            .Select(node => node!.ToJsonString())
-            .ToArray();
+        var history = envelope["history"] as JsonArray ?? [];
         envelope["history"] = null;
         var lifetime = heads.TryGetValue(sessionId, out var current)
             ? current.Lifetime
             : Guid.NewGuid();
-        var written = history.Length == 0 ? [] : new[] { Insert(history) };
+        var written = SessionSegmentPlanner
+            .Cut(0, history.Count, (writer, index) => history[index]!.WriteTo(writer))
+            .Select(Insert)
+            .ToArray();
         if (current is not null)
             foreach (var segment in current.Segments)
                 segments.Remove(segment);
@@ -105,13 +106,13 @@ internal sealed class SegmentedAuthorityBackend(string dataRoot) : ISessionAutho
 
     internal Head? ReadHead(string sessionId) => heads.GetValueOrDefault(sessionId);
 
-    internal IReadOnlyList<string> ReadSegment(long id) => segments[id];
+    internal SessionSegmentPiece ReadSegment(long id) => segments[id];
 
-    internal long Insert(string[] records)
+    internal long Insert(SessionSegmentPiece piece)
     {
         var id = nextSegment++;
-        segments[id] = records;
-        RecordsWritten += records.Length;
+        segments[id] = piece;
+        RecordsWritten += piece.Count;
         return id;
     }
 
@@ -141,8 +142,8 @@ internal sealed class SegmentedAuthorityBackend(string dataRoot) : ISessionAutho
         // The envelope keeps the history property's position, so the value equals file mode's.
         raw["history"] = new JsonArray(
             head
-                .Segments.SelectMany(id => segments[id])
-                .Select(text => JsonNode.Parse(text))
+                .Segments.SelectMany(id => JsonNode.Parse(segments[id].Records)!.AsArray().ToArray())
+                .Select(node => node?.DeepClone())
                 .ToArray()
         );
         return raw;
@@ -162,7 +163,7 @@ internal sealed class SegmentedSessionAuthority(
 
     // The last committed history root and the record count of each of its segments.
     private SessionHistory? committed;
-    private int[] layout = [];
+    private SessionSegment[] layout = [];
 
     public string SessionId => sessionId;
     public string Agent => agent;
@@ -278,7 +279,13 @@ internal sealed class SegmentedSessionAuthority(
         var loaded = SessionAuthorityCodec.FromAuthority(normalized, sessionId);
         // Later commits recognize the loaded records by reference.
         committed = loaded.History;
-        layout = head.Segments.Select(id => backend.ReadSegment(id).Count).ToArray();
+        layout = head
+            .Segments.Select(id => new SessionSegment(
+                id,
+                backend.ReadSegment(id).Count,
+                backend.ReadSegment(id).Records.Length
+            ))
+            .ToArray();
         return Task.FromResult<SessionSnapshot?>(loaded);
     }
 
@@ -290,45 +297,22 @@ internal sealed class SegmentedSessionAuthority(
             agent,
             callbacks.MainFields?.Invoke(sessionId)
         );
-        // The same record validation the file writer applies to every history record.
-        SessionAuthorityDocument.WriteTo(Stream.Null, state, snapshot.History);
         var current = backend.ReadHead(sessionId);
         var history = snapshot.History;
         // The retained layout describes the head only if nothing else rewrote it meanwhile.
         var known =
-            current is not null && current.Segments.Length == layout.Length ? committed : null;
-        // k: the longest prefix whose records are the committed records themselves.
-        var kept = 0;
-        if (known is not null)
-            while (
-                kept < known.Count
-                && kept < history.Count
-                && ReferenceEquals(known[kept], history[kept])
-            )
-                kept++;
-        // Keep whole segments inside [0, k); rewrite from the first segment that isn't.
-        var keptSegments = new List<long>();
-        var keptLayout = new List<int>();
-        var start = 0;
-        if (known is not null && current is not null)
-            for (var index = 0; index < layout.Length; index++)
-            {
-                if (start + layout[index] > kept)
-                    break;
-                keptSegments.Add(current.Segments[index]);
-                keptLayout.Add(layout[index]);
-                start += layout[index];
-            }
+            current is not null && current.Segments.SequenceEqual(layout.Select(item => item.Id))
+                ? committed
+                : null;
+        var plan = SessionSegmentPlanner.Plan(known, known is null ? [] : layout, history);
+        var kept = layout.Take(plan.KeptSegments).ToList();
         var inserted = new List<long>();
-        if (start < history.Count)
+        // The product planner's pieces, validated and serialized as the document writer does.
+        foreach (var piece in SessionSegmentPlanner.Cut(history, plan.Start))
         {
-            var tail = Enumerable
-                .Range(start, history.Count - start)
-                .Select(index => history[index].ToJsonString())
-                .ToArray();
-            inserted.Add(backend.Insert(tail));
-            keptSegments.AddRange(inserted);
-            keptLayout.Add(tail.Length);
+            var id = backend.Insert(piece);
+            inserted.Add(id);
+            kept.Add(new(id, piece.Count, piece.Records.Length));
         }
         if (backend.FailNextCommit)
         {
@@ -343,11 +327,11 @@ internal sealed class SegmentedSessionAuthority(
                 current?.Lifetime ?? Guid.NewGuid(),
                 (current?.Version ?? 0) + 1,
                 state.ToJsonString(),
-                keptSegments.ToArray()
+                kept.Select(item => item.Id).ToArray()
             )
         );
         committed = history;
-        layout = keptLayout.ToArray();
+        layout = kept.ToArray();
     }
 
     private void CheckBound(SessionSnapshot snapshot)

@@ -94,16 +94,7 @@ public sealed class SessionAuthorityDocument
     // record with the same schema as document ingress, without retaining a mutable history tree.
     internal static void WriteTo(Stream stream, JsonObject state, SessionHistory? history = null)
     {
-        using var writer = new Utf8JsonWriter(
-            stream,
-            new JsonWriterOptions
-            {
-                Encoder = JsonText.Encoder,
-                Indented = true,
-                // Match ToJson's JsonSerializerOptions default, including unknown nested values.
-                MaxDepth = 64,
-            }
-        );
+        using var writer = new Utf8JsonWriter(stream, WriterOptions(indented: true));
         writer.WriteStartObject();
         foreach (var property in state)
         {
@@ -116,8 +107,7 @@ public sealed class SessionAuthorityDocument
                     var index = 0;
                     foreach (var message in history)
                     {
-                        ValidateMessage(message.ToJson(), null, $"history[{index++}]");
-                        message.Data.WriteTo(writer);
+                        WriteRecord(writer, message, index++);
                         FlushBuffer();
                     }
                 }
@@ -145,6 +135,29 @@ public sealed class SessionAuthorityDocument
             if (writer.BytesPending >= 64 * 1024)
                 writer.Flush();
         }
+    }
+
+    /// <summary>
+    /// The writer options of authority JSON: the document writer indents, record segments of
+    /// other representations don't. Encoding and depth are the same either way.
+    /// </summary>
+    internal static JsonWriterOptions WriterOptions(bool indented) =>
+        new()
+        {
+            Encoder = JsonText.Encoder,
+            Indented = indented,
+            // Match ToJson's JsonSerializerOptions default, including unknown nested values.
+            MaxDepth = 64,
+        };
+
+    /// <summary>
+    /// Validates and writes one history record at <paramref name="index"/>, exactly as the
+    /// document writer does for every record it stores.
+    /// </summary>
+    internal static void WriteRecord(Utf8JsonWriter writer, HistoryMessage message, int index)
+    {
+        ValidateMessage(message.ToJson(), null, $"history[{index}]");
+        message.Data.WriteTo(writer);
     }
 
     internal static string ValidateMessageContent(JsonObject message, string label)

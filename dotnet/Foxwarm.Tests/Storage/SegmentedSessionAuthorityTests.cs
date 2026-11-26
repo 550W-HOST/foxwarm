@@ -7,26 +7,29 @@ namespace Foxwarm.Tests;
 /// <summary>
 /// What a head-plus-segments authority rewrites per commit: the storage design's reason to
 /// prefer it over whole-document saves in the hosted mode. Callers still pass complete
-/// snapshots; the store derives the delta from record identity.
+/// snapshots; the store derives the delta from record identity with the shared
+/// <see cref="SessionSegmentPlanner"/>. Every segmented representation runs these cases.
 /// </summary>
-public sealed class SegmentedSessionAuthorityTests : IDisposable
+public abstract class SegmentedAuthorityCountTests : IDisposable
 {
-    private readonly TempDirectory temp = new();
-    private readonly SegmentedAuthorityBackend backend;
+    private protected readonly TempDirectory Temp = new();
 
-    public SegmentedSessionAuthorityTests() => backend = new(temp.Path);
+    private protected abstract ISessionAuthorityBackend Segmented { get; }
 
-    public void Dispose() => temp.Dispose();
+    /// <summary>Head writes and records written since the last reset, and the stored segments.</summary>
+    private protected abstract SegmentedAuthorityCounters Counts { get; }
+
+    public virtual void Dispose() => Temp.Dispose();
 
     private ISessionAuthority Open(string id = "s") =>
-        backend.Open(id, "main", new SessionAuthorityCallbacks());
+        Segmented.Open(id, "main", new SessionAuthorityCallbacks());
 
     [Fact]
     public async Task The_stored_value_equals_the_file_document_after_the_same_commits()
     {
         using var fileRoot = new TempDirectory();
         var file = new Foxwarm.Storage.FileStorageContext(fileRoot.Path).Authority;
-        foreach (var target in new ISessionAuthorityBackend[] { file, backend })
+        foreach (var target in new ISessionAuthorityBackend[] { file, Segmented })
         {
             var store = target.Open("s", "main", new SessionAuthorityCallbacks());
             var history = await Append(store, SessionHistory.Empty, Message(1, "one"));
@@ -41,7 +44,7 @@ public sealed class SegmentedSessionAuthorityTests : IDisposable
             );
         }
         var expected = (await file.ReadRawAsync("s"))!.Document;
-        var actual = (await backend.ReadRawAsync("s"))!.Document;
+        var actual = (await Segmented.ReadRawAsync("s"))!.Document;
         Assert.True(JsonNode.DeepEquals(expected, actual), expected + "\n" + actual);
     }
 
@@ -51,7 +54,7 @@ public sealed class SegmentedSessionAuthorityTests : IDisposable
         var store = Open();
         var history = await Append(store, SessionHistory.Empty, Message(1, "one"));
         history = await Append(store, history, Message(2, "two"));
-        backend.ResetCounters();
+        Counts.ResetCounters();
 
         var queued = SessionQueueJson.FromJson(
             new JsonObject
@@ -64,8 +67,8 @@ public sealed class SegmentedSessionAuthorityTests : IDisposable
             Snapshot("s", history, 3) with { Queue = [queued], Busy = true, BusyStartedAt = 5 },
             SaveKind.Strict
         );
-        Assert.Equal(1, backend.HeadWrites);
-        Assert.Equal(0, backend.RecordsWritten);
+        Assert.Equal(1, Counts.HeadWrites);
+        Assert.Equal(0, Counts.RecordsWritten);
     }
 
     [Fact]
@@ -74,10 +77,10 @@ public sealed class SegmentedSessionAuthorityTests : IDisposable
         var store = Open();
         var history = await Append(store, SessionHistory.Empty, Message(1, "one"));
         history = await Append(store, history, Message(2, "two"));
-        backend.ResetCounters();
+        Counts.ResetCounters();
         await Append(store, history, Message(3, "three"));
-        Assert.Equal(1, backend.RecordsWritten);
-        Assert.Equal(3, backend.SegmentCount);
+        Assert.Equal(1, Counts.RecordsWritten);
+        Assert.Equal(3, Counts.SegmentCount);
     }
 
     [Fact]
@@ -88,16 +91,16 @@ public sealed class SegmentedSessionAuthorityTests : IDisposable
         history = await Append(store, history, Message(2, "two"));
         history = await Append(store, history, Message(3, "three"));
 
-        backend.ResetCounters();
+        Counts.ResetCounters();
         history = history.Replace(2, HistoryMessage.FromJson(Message(3, "retry notice")));
         await store.CommitAsync(Snapshot("s", history, 4), SaveKind.Strict);
-        Assert.Equal(1, backend.RecordsWritten);
+        Assert.Equal(1, Counts.RecordsWritten);
 
-        backend.ResetCounters();
+        Counts.ResetCounters();
         history = history.Replace(0, HistoryMessage.FromJson(Message(1, "redacted")));
         await store.CommitAsync(Snapshot("s", history, 4), SaveKind.Strict);
-        Assert.Equal(3, backend.RecordsWritten);
-        Assert.Equal(1, backend.SegmentCount);
+        Assert.Equal(3, Counts.RecordsWritten);
+        Assert.Equal(1, Counts.SegmentCount);
     }
 
     [Fact]
@@ -107,14 +110,14 @@ public sealed class SegmentedSessionAuthorityTests : IDisposable
         var history = await Append(store, SessionHistory.Empty, Message(1, "one"), id: "old");
         history = await Append(store, history, Message(2, "two"), id: "old");
 
-        backend.ResetCounters();
-        backend.MoveIdentity("old", "new");
+        Counts.ResetCounters();
+        Segmented.MoveIdentity("old", "new");
         store.RebindIdentity("new", "main");
         await store.PersistIdentitySnapshotAsync(Snapshot("new", history, 3));
-        Assert.Equal(0, backend.RecordsWritten);
+        Assert.Equal(0, Counts.RecordsWritten);
 
         await store.CommitAsync(Snapshot("new", SessionHistory.Empty, 3, 1), SaveKind.Strict);
-        Assert.Equal(0, backend.SegmentCount);
+        Assert.Equal(0, Counts.SegmentCount);
     }
 
     [Fact]
@@ -126,17 +129,51 @@ public sealed class SegmentedSessionAuthorityTests : IDisposable
 
         var cold = Open();
         var loaded = (await cold.LoadAsync("s"))!;
-        backend.ResetCounters();
+        Counts.ResetCounters();
         await cold.CommitAsync(loaded with { Busy = true, BusyStartedAt = 5 }, SaveKind.Strict);
-        Assert.Equal(0, backend.RecordsWritten);
+        Assert.Equal(0, Counts.RecordsWritten);
 
-        backend.ResetCounters();
+        Counts.ResetCounters();
         var child = Open("child");
         var suffix = Message(3, "child");
         await child.CommitCanonicalAppendAsync(
             Snapshot("child", loaded.History.AppendJson([suffix]), 4),
             [suffix]
         );
-        Assert.Equal(3, backend.RecordsWritten);
+        Assert.Equal(3, Counts.RecordsWritten);
+    }
+}
+
+/// <summary>The counts a segmented backend under test reports.</summary>
+internal abstract class SegmentedAuthorityCounters
+{
+    internal abstract int HeadWrites { get; }
+    internal abstract int RecordsWritten { get; }
+    internal abstract int SegmentCount { get; }
+
+    internal abstract void ResetCounters();
+}
+
+public sealed class SegmentedSessionAuthorityTests : SegmentedAuthorityCountTests
+{
+    private readonly SegmentedAuthorityBackend memory;
+
+    public SegmentedSessionAuthorityTests()
+    {
+        memory = new(Temp.Path);
+        Counts = new Counters(memory);
+    }
+
+    private protected override ISessionAuthorityBackend Segmented => memory;
+
+    private protected override SegmentedAuthorityCounters Counts { get; }
+
+    private sealed class Counters(SegmentedAuthorityBackend memory) : SegmentedAuthorityCounters
+    {
+        internal override int HeadWrites => memory.HeadWrites;
+        internal override int RecordsWritten => memory.RecordsWritten;
+        internal override int SegmentCount => memory.SegmentCount;
+
+        internal override void ResetCounters() => memory.ResetCounters();
     }
 }
