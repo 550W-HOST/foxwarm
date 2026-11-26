@@ -36,13 +36,14 @@ File members that exist only for inspection, fixtures and test hooks (the SQLite
   - `HasLifetimeRowsAsync`: the Archive half of identity reservation.
   - `SequenceCounts`: catalog message counts.
   - `RenameIdentity`: identity move and recovery.
+  - `RecordDirectEffectAsync`: appends one [direct effect record](./activity-index.md), queued by `ActivityIndex`.
   - `OpenIdentityReader`: usage-overview ownership.
   - `OpenSequenceReader`: the WebUI sequence view.
 - Not rerouted: the Vector owner (`VectorService`, `VectorRuntime`, lexical indexing) opens the Archive by path, because it may run in a separate process; Archive migration, import, export and the archive CLI are file-mode tools; and the [activity index](./activity-index.md) still opens the Archive file for its derived tool-effect tables.
 
 ### Identity ledger
 
-`IIdentityLedger` covers startup identity evidence, reservations of retired IDs, rename validation and commit, the pending identity-move record and the artifact move that carries it out. `FileIdentityLedger` combines `CommittedArchiveIdentity` and `SessionIdentityMoveJournal` unchanged ([identity moves](./archive-identity-and-moves.md)). `MoveArtifacts` takes the authority move as a callback, so the ledger never reaches the authority itself.
+`IIdentityLedger` covers startup identity evidence, reservations of retired IDs, rename validation and commit, the pending identity-move record and the artifact move that carries it out. `FileIdentityLedger` combines `CommittedArchiveIdentity` and `SessionIdentityMoveJournal` unchanged ([identity moves](./archive-identity-and-moves.md)). `MoveArtifacts` takes the authority move as a callback, so the ledger never reaches the authority itself. Intent, graph and alias-merge validation are static helpers shared with the [hosted ledger](./hosted-archive.md).
 
 ### Session catalog
 

@@ -51,4 +51,4 @@ Message-level `providerMeta` accepts independent optional `providerSpecificField
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Storage/CliArchiveCompatibilityTests.cs` keeps settled catalog alias write bindings across the SQLite-only Archive migration without catalog bootstrap. `dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `ArchiveOpaqueFieldsTests.cs`; `ArchiveLineageTests.cs`; `CommittedArchiveBoundaryTests.cs`; `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`.
+`dotnet/Foxwarm.Tests/Storage/CliArchiveCompatibilityTests.cs` keeps settled catalog alias write bindings across the SQLite-only Archive migration without catalog bootstrap. `dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `ArchiveOpaqueFieldsTests.cs`; `ArchiveStoreContractTests.cs`; `CommittedArchiveBoundaryTests.cs`; `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`.

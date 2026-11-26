@@ -38,4 +38,4 @@ Per-Session JSON/history is the only active source used to construct the next li
 - [Archive message store](../units/archive-message-store.md)
 - [Archive branches/lineage](../units/archive-branch-lineage.md)
 - [Session authority JSON](../units/session-authority-json.md)
-- `CompactLifecycleTests`, `CommittedArchiveBoundaryTests`, `ArchiveLineageTests`, `SelectedPromptTests`, and message JSON tests.
+- `CompactLifecycleTests`, `CommittedArchiveBoundaryTests`, `ArchiveStoreContractTests`, `SelectedPromptTests`, and message JSON tests.

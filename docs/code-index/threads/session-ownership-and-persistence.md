@@ -80,7 +80,7 @@ Identity move and Archive reservation code use [Archive identity](../units/archi
 - `dotnet/Foxwarm.Tests/Sessions/SessionIdentityRecoveryTests.cs`
 - `dotnet/Foxwarm.Tests/Sessions/SessionIdentityMoveTests.cs`
 - `dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`
-- `dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`
+- `dotnet/Foxwarm.Tests/Storage/ArchiveStoreContractTests.cs`
 - `dotnet/Foxwarm.Tests/Sessions/CommittedArchiveBoundaryTests.cs`
 
 ## Current boundary

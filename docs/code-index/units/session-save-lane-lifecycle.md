@@ -22,4 +22,4 @@ The active JSON history may be replaced or cleared while immutable Archive rows 
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/ForkClearLifecycleTests.cs`; `SessionDeletionTests.cs`; `CommittedArchiveBoundaryTests.cs`; `ArchiveLineageTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/ForkClearLifecycleTests.cs`; `SessionDeletionTests.cs`; `CommittedArchiveBoundaryTests.cs`; `ArchiveStoreContractTests.cs`.
