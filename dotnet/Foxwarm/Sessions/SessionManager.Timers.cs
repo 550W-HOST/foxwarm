@@ -176,7 +176,7 @@ internal sealed partial class SessionManager
                 if (authorizeTool)
                     agents.RequireSessionTarget(source.Agent, SessionWait.Text(row["agentName"])!);
                 var agent = SessionWait.Text(row["agentName"])!;
-                if (!agents.Exists(agent) || !Directory.Exists(agents.AgentDirectory(agent)))
+                if (!agents.Exists(agent) || !agents.DirectoryExists(agent))
                     throw new InvalidDataException("Timer target Agent does not exist: " + agent);
                 NormalizeTimerSettings(row);
             }
@@ -331,12 +331,7 @@ internal sealed partial class SessionManager
         // drains the accepted slice; retaining this lease would block surviving-child deletion.
         // A separate dispatcher has no foreground batch, wait control or abort slot.
         var dispatcher = new SessionToolExecutor(
-            new WorkspaceTools(
-                agents.AgentDirectory(owner.Agent),
-                pendingWrites,
-                owner.Id,
-                owner.Agent
-            ),
+            AgentWorkspace(owner.Agent, pendingWrites, owner.Id),
             owner,
             this,
             tools,
@@ -354,7 +349,7 @@ internal sealed partial class SessionManager
     {
         var owner = AuthorizationTarget(SessionWait.Text(timer["sessionId"])!);
         var agent = TimerArguments.Optional(timer["agentName"]) ?? owner?.Agent ?? "main";
-        if (!agents.Exists(agent) || !Directory.Exists(agents.AgentDirectory(agent)))
+        if (!agents.Exists(agent) || !agents.DirectoryExists(agent))
             throw new InvalidDataException("Timer target Agent does not exist.");
         var settings = (JsonObject)timer.DeepClone();
         NormalizeTimerSettings(settings);

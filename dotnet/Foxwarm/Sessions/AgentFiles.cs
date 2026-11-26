@@ -96,6 +96,50 @@ internal interface IAgentFileStore
     Task MakeDirectoryAsync(string? agent, string path, CancellationToken token);
 }
 
+/// <summary>
+/// An Agent store: Agent files held by the storage context instead of the Agent folders, with
+/// the Agent lifecycle as operations on it (hosted mode, <c>PgAgentFileStore</c>). An Agent
+/// exists exactly when its root (path <c>""</c>) does; only these operations create or remove
+/// a root, each in one step with the Agent's files.
+/// </summary>
+internal interface IAgentStore : IAgentFileStore
+{
+    /// <summary>Agents that exist, in ordinal order.</summary>
+    IReadOnlyList<string> Agents();
+
+    bool AgentExists(string agent);
+
+    /// <summary>
+    /// Creates an Agent with its first directories and files. An existing Agent fails with
+    /// <see cref="AgentFileConflictException"/>.
+    /// </summary>
+    Task CreateAgentAsync(
+        string agent,
+        IReadOnlyList<string> directories,
+        IReadOnlyList<KeyValuePair<string, byte[]>> files,
+        CancellationToken token
+    );
+
+    /// <summary>Removes an Agent with all of its files; a missing Agent is a no-op.</summary>
+    Task DeleteAgentAsync(string agent, CancellationToken token);
+
+    /// <summary>
+    /// Copies the tree at <paramref name="sourcePath"/> of one Agent to
+    /// <paramref name="targetPath"/> of another existing Agent, replacing files that exist
+    /// there; a missing source copies nothing.
+    /// </summary>
+    Task CopyTreeAsync(
+        string sourceAgent,
+        string sourcePath,
+        string targetAgent,
+        string targetPath,
+        CancellationToken token
+    );
+
+    /// <summary>Every file and empty directory at or below a path, in ordinal path order.</summary>
+    IReadOnlyList<AgentFileStat> Tree(string? agent, string path);
+}
+
 /// <summary>The failures both store implementations report, with the same texts.</summary>
 internal static class AgentFileErrors
 {

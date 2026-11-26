@@ -136,6 +136,6 @@ internal static class HostedTestBackend
 
         public IBlobStore ArtifactBlobs => Pick(context => context.ArtifactBlobs);
 
-        public IAgentFileStore? AgentFiles => Pick(context => context.AgentFiles);
+        public IAgentStore? AgentFiles => Pick(context => context.AgentFiles);
     }
 }

@@ -76,6 +76,12 @@ internal sealed partial class AgentMemory
 
     internal string ResolveSelectedPath(string agentName, string reference)
     {
+        // Selected files are master files, resolved against the Agent folder; without folders
+        // (an Agent store) no reference resolves to one.
+        if (!agents.PhysicalFolders)
+            throw new InvalidDataException(
+                $"systemPromptFiles entry '{reference}' must resolve to an existing ordinary file."
+            );
         var expanded =
             reference == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
             : reference.StartsWith("~/", StringComparison.Ordinal)

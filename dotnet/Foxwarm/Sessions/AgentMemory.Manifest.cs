@@ -28,8 +28,9 @@ internal sealed partial class AgentMemory
 {
     internal AgentMemoryManifest Manifest(string agent)
     {
-        // Throws when the Agent does not exist.
-        var root = agents.MemoryDirectory(agent);
+        // Throws when the Agent does not exist. Over an Agent store the root is its locator.
+        _ = agents.AuthorizationMemoryRoot(agent);
+        var root = agents.Store is { } store ? store.Locator(agent, "memory") : agents.MemoryDirectory(agent);
         var files = new List<AgentMemoryFile>();
         void Walk(string directory, int depth)
         {

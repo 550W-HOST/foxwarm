@@ -105,7 +105,7 @@ internal sealed partial class SessionManager
             try
             {
                 if (inheritMemory)
-                    agents.CopyIdentityMemory(
+                    await agents.CopyIdentityMemoryAsync(
                         SessionCreationDefaults.MemorySourceAgent(sourceSession?.Agent),
                         agentName
                     );

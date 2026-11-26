@@ -58,7 +58,7 @@ internal sealed partial class SessionToolExecutor
         long total = 0;
         foreach (var file in plan)
         {
-            var bytes = await File.ReadAllBytesAsync(file.FullPath, token);
+            var bytes = await info.Source.ReadAllBytesAsync(file.FullPath, token);
             var entry = new JsonObject
             {
                 ["path"] = file.Path,
@@ -136,6 +136,8 @@ internal sealed partial class SessionToolExecutor
             {
                 ["output"] = SkillResourceListing(resource),
             };
+        if (info.Source is not PhysicalSkillFiles)
+            return await ReadStoredSkillResourceAsync(resource, first, last, token);
         byte[] header;
         long size;
         await using (
@@ -181,6 +183,55 @@ internal sealed partial class SessionToolExecutor
         {
             // Structured fields as a programmatic `read` returns them, naming the resource
             // instead of its Main server path.
+            data.Remove("filePath");
+            foreach (var (key, value) in data)
+                result[key] = value?.DeepClone();
+            result["path"] = resource.Path;
+        }
+        return result;
+    }
+
+    // A skill resource in an Agent store, formatted and charged as a resource file is.
+    private async Task<JsonObject> ReadStoredSkillResourceAsync(
+        SkillResource resource,
+        double? first,
+        double? last,
+        CancellationToken token
+    )
+    {
+        var bytes = await resource.Info.Source.ReadAllBytesAsync(resource.FullPath, token);
+        var mime = Foxwarm.Images.RasterImageMime.Detect(
+            bytes.AsSpan(0, (int)Math.Min(Foxwarm.Images.RasterImageMime.HeaderBytes, bytes.Length))
+        );
+        ScriptBudget?.Charge(mime is not null ? checked(12L * bytes.Length) : 32L * 1024 * 1024);
+        if (mime is not null)
+            return new JsonObject
+            {
+                ["output"] = "[Image loaded: " + resource.Display + "]",
+                ["mimeType"] = mime,
+                ["inlineData"] = new JsonObject
+                {
+                    ["mimeType"] = mime,
+                    ["data"] = Convert.ToBase64String(bytes),
+                },
+            };
+        JsonObject? data = null;
+        var text = await FileToolCore.ReadContent(
+            resource.Display,
+            resource.Display,
+            bytes.Length,
+            first,
+            last,
+            (offset, count) =>
+            {
+                var start = (int)Math.Min(offset, bytes.Length);
+                return Task.FromResult(bytes[start..Math.Min(bytes.Length, start + count)]);
+            },
+            Programmatic ? value => data = value : null
+        );
+        var result = new JsonObject { ["output"] = $"FILE: {resource.Display}\n{text}" };
+        if (data is not null)
+        {
             data.Remove("filePath");
             foreach (var (key, value) in data)
                 result[key] = value?.DeepClone();

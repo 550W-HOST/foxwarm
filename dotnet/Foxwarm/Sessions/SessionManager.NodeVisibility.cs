@@ -204,8 +204,8 @@ internal sealed partial class SessionManager
                 context.Session,
                 "master",
                 toolWorkspace,
-                agents.AgentDirectory(context.Agent),
-                agents.MemoryDirectory(context.Agent),
+                agents.AuthorizationAgentRoot(context.Agent),
+                agents.AuthorizationMemoryRoot(context.Agent),
                 CurrentNode: context.CurrentNode
             );
             return context.Policies.All(policy =>
@@ -251,8 +251,8 @@ internal sealed partial class SessionManager
                 context.Session,
                 targetNode,
                 toolWorkspace,
-                agents.AgentDirectory(context.Agent),
-                agents.MemoryDirectory(context.Agent),
+                agents.AuthorizationAgentRoot(context.Agent),
+                agents.AuthorizationMemoryRoot(context.Agent),
                 SourceParent: sourceParent,
                 SessionTarget: sessionTarget,
                 NodeTargets: targets,

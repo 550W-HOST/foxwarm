@@ -28,7 +28,9 @@ public sealed class HostedCapabilityProfileTests
         internal static async Task<Fixture> Create(
             RuntimeCapabilities capabilities,
             string? agentDefaultNode = null,
-            JsonObject? extraApp = null
+            JsonObject? extraApp = null,
+            // The storage context for the data root; null is the file context.
+            Func<string, Foxwarm.Storage.IStorageContext>? storage = null
         )
         {
             var f = new Fixture();
@@ -82,6 +84,7 @@ public sealed class HostedCapabilityProfileTests
                 options,
                 new HostModels(configuration),
                 f.Skills,
+                storage: storage?.Invoke(f.Data),
                 capabilities: capabilities
             );
             await f.Manager.LoadMainHostAsync();
@@ -91,11 +94,11 @@ public sealed class HostedCapabilityProfileTests
             return f;
         }
 
-        // The executor a Session's turns use: the manager's registry over the Agent directory.
+        // The executor a Session's turns use: the manager's registry over the Agent's files.
         internal SessionToolExecutor Executor(SessionOwner owner)
         {
             var tools = new SessionToolExecutor(
-                new WorkspaceTools(Manager.AgentDirectory(owner.Agent)),
+                Manager.AgentWorkspace(owner.Agent),
                 owner,
                 Manager,
                 Manager.ToolRegistry

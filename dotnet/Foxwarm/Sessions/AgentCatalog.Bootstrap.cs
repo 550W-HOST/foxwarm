@@ -4,6 +4,11 @@ internal sealed partial class AgentCatalog
 {
     internal async Task BootstrapMainMemoryAsync(string packageDirectory)
     {
+        if (store is not null)
+        {
+            await BootstrapStoreMainMemoryAsync(store, packageDirectory);
+            return;
+        }
         await RetireCopiedFrameworkPromptAsync();
         var memory = MemoryDirectory("main");
         if (Directory.Exists(memory) && Directory.EnumerateFileSystemEntries(memory).Any())

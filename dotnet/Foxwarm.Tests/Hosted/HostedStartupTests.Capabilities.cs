@@ -11,7 +11,8 @@ using Foxwarm.Storage;
 namespace Foxwarm.Tests.Hosted;
 
 // The hosted capability profile in the hosted runtime (HostedEntry.BuildRuntimeAsync): a turn
-// that uses the Agent's memory and Node tools without a master Node, and the scratch guard.
+// that uses the Agent's memory (in the Agent store) and Node tools without a master Node, and
+// the scratch guard.
 public sealed partial class HostedStartupTests
 {
     // What a replica may keep in FOXWARM_SCRATCH_DIR: its logs, the Provider image cache, upload
@@ -181,7 +182,9 @@ public sealed partial class HostedStartupTests
         var tools = results!.ToJsonString();
         // The history JSON escapes the copy's backticks and angle brackets.
         Assert.Contains("This Session has no Node. Select one with", tools);
-        Assert.Equal("kept", await File.ReadAllTextAsync(Path.Combine(files.Agents, "main", "memory", "NOTES.md")));
+        // The note is in the Agent store, not in an Agent folder.
+        Assert.Equal("kept", await storage.AgentFiles!.ReadTextAsync("main", "memory/NOTES.md", default));
+        Assert.False(Directory.Exists(files.Agents));
         // The prompt the model received names no Main-local path.
         var request = (await model.RequestAt(0)).Body;
         Assert.DoesNotContain(files.Agents, request);
@@ -191,6 +194,6 @@ public sealed partial class HostedStartupTests
         Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
         Assert.Empty(ScratchOutsideAllowlist(files.Scratch));
         Assert.True(File.Exists(Path.Combine(files.Scratch, "state", "logs", "foxwarm.log")));
-        Assert.False(File.Exists(Path.Combine(files.Agents, "main", "scratch-marker")));
+        Assert.False(Directory.Exists(files.Agents));
     }
 }

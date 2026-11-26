@@ -16,7 +16,7 @@ internal sealed partial class SessionToolExecutor
         {
             var name = "result-" + Guid.NewGuid().ToString("N") + ".txt";
             var path = ".temp/tool-output/" + name;
-            var files = new WorkspaceTools(workspace);
+            var files = sessions.AgentFileWorkspace(hosted);
             var mainResult = node == "master";
             if (node != "master" && sessions.NodeProviders.Online(node))
             {

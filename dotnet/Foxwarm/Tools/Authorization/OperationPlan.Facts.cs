@@ -175,6 +175,8 @@ internal sealed partial record OperationPlan
             case "memory-target":
             case "move-memory-target":
                 return ("Agent memory directory", ["MemoryDirectory"]);
+            case "memory-node":
+                return ("AgentCatalog.MemoryCopyNode (master, or the Agent store)", ["MemoryNode"]);
             case "agent-main-node":
                 // InstallDefaultNode may be null: no installation default.
                 return ("SessionCreationDefaults (new Agent effective default)", []);

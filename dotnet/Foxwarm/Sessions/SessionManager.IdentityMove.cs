@@ -55,14 +55,7 @@ internal sealed partial class SessionManager
             node == "master"
                 ? capturedCwd ?? (useLiveCwd && live.Node == "master" ? live.Cwd : null)
                 : null;
-        return new(
-            agents.AgentDirectory(owner.Agent),
-            pendingWrites,
-            owner.Id,
-            owner.Agent,
-            owner,
-            cwd
-        );
+        return AgentWorkspace(owner.Agent, pendingWrites, owner.Id, owner, cwd);
     }
 
     internal bool SameAdmittedLifetime(string first, string second)
@@ -238,16 +231,12 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("Destination Agent does not exist.");
         if (
             create
-            && (agents.Exists(targetAgent) || Directory.Exists(agents.SourceDirectory(targetAgent)))
+            && (agents.Exists(targetAgent) || agents.DirectoryReserved(targetAgent))
         )
             throw new InvalidDataException(
                 "Destination Agent already exists or its directory is reserved."
             );
-        ValidateExecutionEnvironment(
-            owner.Entry.Snapshot().AuthorityEnvelope,
-            agents.SourceDirectory(targetAgent),
-            Directory.GetCurrentDirectory()
-        );
+        ValidateExecutionEnvironment(owner.Entry.Snapshot().AuthorityEnvelope, "", "");
         var app = models.ConfigurationOwner?.AppConfiguration;
         if (
             SessionCatalog.Flag(
@@ -305,8 +294,7 @@ internal sealed partial class SessionManager
                 create
                 && (
                     agents.Exists(targetAgent)
-                    || Directory.Exists(agents.SourceDirectory(targetAgent))
-                    || File.Exists(agents.SourceDirectory(targetAgent))
+                    || agents.DirectoryReserved(targetAgent)
                 )
             )
                 throw new InvalidDataException(
@@ -490,7 +478,7 @@ internal sealed partial class SessionManager
                     }
                 );
                 if (copyMemory)
-                    agents.CopyIdentityMemory(record.OldAgent, record.OwnedAgent!);
+                    await agents.CopyIdentityMemoryAsync(record.OldAgent, record.OwnedAgent!);
                 await IdentityStageAsync(operation, "after-agent-copy");
             }
             await owner.Entry.SaveLane.MutateIdentityAsync(async () =>
@@ -703,9 +691,9 @@ internal sealed partial class SessionManager
                 }
                 if (record.OwnsAgent)
                 {
-                    details["targetAgentDirectory"] = agents.SourceDirectory(record.OwnedAgent!);
+                    details["targetAgentDirectory"] = agents.FolderLocation(record.OwnedAgent!);
                     details["agentMetadataPath"] = Path.Combine(root, "state", "agents.json");
-                    if (record.OwnedAgentPreparation is not null)
+                    if (record.OwnedAgentPreparation is not null && agents.PhysicalFolders)
                         details["agentPreparationDirectory"] = agents.PreparationPath(
                             record.OwnedAgentPreparation
                         );

@@ -167,3 +167,20 @@ internal sealed class AgentWriteLanes
         }
     }
 }
+
+/// <summary>How Agent store paths appear outside the store.</summary>
+internal static class AgentStorePaths
+{
+    /// <summary>
+    /// The endpoint of Agent store access in authorization facts (in place of a Node ID) and,
+    /// for <c>node copy</c>, the caller's own Agent folder. Node IDs can't contain '@'.
+    /// </summary>
+    internal const string Endpoint = "@agent";
+
+    /// <summary>The fact path of a store path: <c>&lt;agent&gt;/&lt;path&gt;</c>.</summary>
+    internal static string Fact(string agent, string path) => path.Length == 0 ? agent : agent + "/" + path;
+
+    /// <summary>Whether a store fact path lies at or below a store root.</summary>
+    internal static bool Within(string path, string root) =>
+        path == root || path.StartsWith(root + "/", StringComparison.Ordinal);
+}

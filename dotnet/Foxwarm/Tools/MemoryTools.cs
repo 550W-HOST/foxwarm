@@ -4,7 +4,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
-internal static class MemoryTools
+internal static partial class MemoryTools
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
@@ -15,7 +15,8 @@ internal static class MemoryTools
         JsonObject args,
         CancellationToken token
     ) =>
-        name switch
+        manager.AgentStore is { } store ? StoreExecuteAsync(store, owner, manager, name, args, token)
+        : name switch
         {
             "read_memory" => ReadAsync(owner, manager, args, token),
             "write_memory" => WriteAsync(owner, manager, args, token),
@@ -32,6 +33,8 @@ internal static class MemoryTools
         JsonObject args
     )
     {
+        if (manager.AgentStore is not null)
+            return StoreAuthorizationFacts(manager, owner, name, args);
         var agent = TargetAgent(manager, owner, args);
         if (name == "apply_patch_memory")
         {
@@ -73,7 +76,7 @@ internal static class MemoryTools
         var name = Text(args, "agentName");
         AgentCatalog.ValidateName(name);
         // Throws when the Agent does not exist.
-        manager.MemoryDirectory(name);
+        manager.MemoryRoot(name);
         return name;
     }
 
@@ -312,6 +315,18 @@ internal static class MemoryTools
                         or FileNotFoundException
             )
         {
+            throw PatchFailure(error, operations, summaries);
+        }
+    }
+
+    // A patch that stopped at one operation: its error, what was applied and what remains.
+    private static InvalidDataException PatchFailure(
+        Exception error,
+        IReadOnlyList<PatchOperation> operations,
+        List<string> summaries
+    )
+    {
+        {
             var applied =
                 summaries.Count == 0
                     ? "No operations were applied."
@@ -326,7 +341,7 @@ internal static class MemoryTools
                     ? "No operations remain."
                     : "Remaining operations:\n"
                         + string.Join('\n', remaining.Select(item => "- " + item));
-            throw new InvalidDataException($"{error.Message}\n{applied}\n{pending}", error);
+            return new InvalidDataException($"{error.Message}\n{applied}\n{pending}", error);
         }
     }
 

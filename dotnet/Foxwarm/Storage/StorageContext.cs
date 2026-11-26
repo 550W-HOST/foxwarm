@@ -29,7 +29,7 @@ internal interface IStorageContext
     /// The Agent store, when the context holds the Agent files; null when they are the Agent
     /// folders of the Agent catalog's layout (<see cref="FileAgentFiles"/>), as in file mode.
     /// </summary>
-    IAgentFileStore? AgentFiles { get; }
+    IAgentStore? AgentFiles { get; }
 }
 
 /// <summary>Construction seams of the file stores, used only by tests.</summary>
@@ -88,5 +88,5 @@ internal sealed class FileStorageContext : IStorageContext
 
     public IBlobStore ArtifactBlobs { get; }
 
-    public IAgentFileStore? AgentFiles => null;
+    public IAgentStore? AgentFiles => null;
 }

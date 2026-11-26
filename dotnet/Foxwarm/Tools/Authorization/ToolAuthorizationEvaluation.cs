@@ -376,9 +376,10 @@ internal static class ToolAuthorizationEvaluation
                     && request.CurrentNode is not null
                     && request.CurrentNode == node;
             var slash = node.IndexOf('/');
+            // The Agent store's endpoint is its own provider, never a remote Node's.
             var provider =
                 slash > 0 ? node[..slash]
-                : node == "master" ? "master"
+                : node is "master" or AgentStorePaths.Endpoint ? node
                 : "authenticated-remote";
             return Pattern(map["provider"]!, provider);
         }
@@ -660,6 +661,10 @@ internal static class ToolAuthorizationEvaluation
     internal static string? PolicyRoot(string text, ToolAuthorizationRequest request) =>
         Base(text, request);
 
+    /// <summary>The Agent store root a policy root names, if any (see <see cref="StoreBase"/>).</summary>
+    internal static string? PolicyStoreRoot(string text, ToolAuthorizationRequest request) =>
+        StoreBase(text, request);
+
     private static HashSet<string> OwnedSecrets(ToolAuthorizationRequest request) =>
         new(
             (request.OwnedSecrets ?? []).Where(name => request.Secrets?.Contains(name) == true),
@@ -746,8 +751,52 @@ internal static class ToolAuthorizationEvaluation
             );
     }
 
+    // A path fact inside a rule root: a master path inside the physical root, or an Agent store
+    // path inside the store root. A root has at most one kind; no path of the other kind is
+    // inside it.
+    private static bool Inside(AuthorizationPath path, string? root, string? store) =>
+        path.Node == AgentStorePaths.Endpoint
+            ? store is not null && path.Resolved is { } resolved && AgentStorePaths.Within(resolved, store)
+            : path.Node == "master" && root is not null && Within(path.Resolved, root);
+
+    // The Agent store root a rule root names: over an Agent store (store paths as the request's
+    // Agent roots), `${agent.dir}` or `${agent.memoryDir}`, optionally followed by a relative
+    // store path. Any other root names no store path, and neither does a malformed suffix.
+    private static string? StoreBase(string text, ToolAuthorizationRequest request)
+    {
+        if (request.Principal != "internal" || !StoreRoots(request))
+            return null;
+        foreach (var (token, root) in new[]
+        {
+            ("${agent.memoryDir}", request.MemoryDirectory!),
+            ("${agent.dir}", request.AgentDirectory!),
+        })
+        {
+            if (!text.StartsWith(token, StringComparison.Ordinal))
+                continue;
+            var rest = text[token.Length..].TrimEnd('/');
+            if (rest.Length == 0)
+                return root;
+            return rest.StartsWith('/') && AgentFilePaths.Problem(rest[1..]) is null ? root + rest : null;
+        }
+        return null;
+    }
+
+    // Whether the request's Agent roots are Agent store paths: a physical root is absolute.
+    private static bool StoreRoots(ToolAuthorizationRequest request) =>
+        request.AgentDirectory is { } directory && !Path.IsPathFullyQualified(directory);
+
     private static string? Base(string text, ToolAuthorizationRequest request)
     {
+        // Over an Agent store the Agent roots are store paths: no master path is inside them.
+        if (
+            StoreRoots(request)
+            && (
+                text.Contains("${agent.dir}", StringComparison.Ordinal)
+                || text.Contains("${agent.memoryDir}", StringComparison.Ordinal)
+            )
+        )
+            return null;
         if (
             request.Principal == "external"
             && (
@@ -782,18 +831,20 @@ internal static class ToolAuthorizationEvaluation
         if (SessionWait.Text(match["allWithin"]) is string all)
         {
             var root = Base(all, request);
+            var store = StoreBase(all, request);
             if (
-                root is null
-                || !paths.All(path => path.Node == "master" && Within(path.Resolved, root))
+                root is null && store is null
+                || !paths.All(path => Inside(path, root, store))
             )
                 return false;
         }
         if (SessionWait.Text(match["anyNotWithin"]) is string any)
         {
             var root = Base(any, request);
+            var store = StoreBase(any, request);
             if (
-                root is null
-                || !paths.Any(path => path.Node != "master" || !Within(path.Resolved, root))
+                root is null && store is null
+                || !paths.Any(path => !Inside(path, root, store))
             )
                 return false;
         }

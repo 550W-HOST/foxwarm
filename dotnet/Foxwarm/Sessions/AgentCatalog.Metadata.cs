@@ -43,6 +43,10 @@ internal sealed partial class AgentCatalog
     internal string SourceDirectory(string name)
     {
         ValidateName(name);
+        // Over an Agent store there is no folder: callers address the store instead, and any
+        // path built from one would name a directory of the replica.
+        if (store is not null)
+            throw new InvalidOperationException("Agent files are in the Agent store; there is no Agent folder.");
         return !canonicalLayout && name == "main" ? workspaceRoot : Path.Combine(agentRoot, name);
     }
 
@@ -58,7 +62,7 @@ internal sealed partial class AgentCatalog
             throw new InvalidDataException(
                 $"Agent '{inherit}' is not inheritable and cannot be used as an inherit source."
             );
-        if (!Exists(inherit) || !Directory.Exists(SourceDirectory(inherit)))
+        if (!Exists(inherit) || !DirectoryExists(inherit))
             throw new InvalidDataException($"Inherited Agent '{inherit}' does not exist.");
         if (InheritanceChain(inherit).Contains(name, StringComparer.Ordinal))
             throw new InvalidDataException("Circular Agent inheritance is not allowed.");

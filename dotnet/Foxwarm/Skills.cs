@@ -15,9 +15,13 @@ internal sealed record SkillInfo(
     bool ResourcesTruncated,
     // The validated `run` block of a runnable skill; RunError says why a present block is not.
     SkillRun? Run = null,
-    string? RunError = null
+    string? RunError = null,
+    // Where Directory's files are read: the file system, or an Agent store.
+    ISkillFiles? Files = null
 )
 {
+    internal ISkillFiles Source => Files ?? PhysicalSkillFiles.Instance;
+
     internal string SourceLabel =>
         SourceType == "global" ? "global"
         : SourceType == "agent-local" ? $"agent:{SourceAgent}"
@@ -75,22 +79,32 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             );
     }
 
-    private IEnumerable<(string Directory, string Type, string? Agent)> Roots(string agent)
+    // An Agent's skills are in its folder, or in the Agent store under the locators of its
+    // files; global skills are always on the file system.
+    private IEnumerable<(string Directory, string Type, string? Agent, ISkillFiles Files)> Roots(string agent)
     {
         foreach (var name in agents.InheritanceChain(agent).Reverse())
-            yield return (
-                Path.Combine(agents.SourceDirectory(name), "skills"),
-                name == agent ? "agent-local" : "agent-inherited",
-                name
-            );
-        yield return (globalRoot, "global", null);
+            yield return agents.Store is { } store
+                ? (
+                    store.Locator(name, "skills"),
+                    name == agent ? "agent-local" : "agent-inherited",
+                    name,
+                    new StoreSkillFiles(store, name)
+                )
+                : (
+                    Path.Combine(agents.SourceDirectory(name), "skills"),
+                    name == agent ? "agent-local" : "agent-inherited",
+                    name,
+                    PhysicalSkillFiles.Instance
+                );
+        yield return (globalRoot, "global", null, PhysicalSkillFiles.Instance);
     }
 
     internal async Task<IReadOnlyList<SkillInfo>> ListAsync(string agent)
     {
         var result = new Dictionary<string, SkillInfo>(StringComparer.Ordinal);
         foreach (var root in Roots(agent))
-        foreach (var name in Discover(root.Directory).Order(StringComparer.CurrentCulture))
+        foreach (var name in Discover(root.Files, root.Directory).Order(StringComparer.CurrentCulture))
         {
             if (result.ContainsKey(name) || Unavailable(name, root.Type))
                 continue;
@@ -119,7 +133,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             name,
             agent,
             true,
-            async info => (info, await File.ReadAllTextAsync(info.MetadataPath))
+            async info => (info, await info.Source.ReadAllTextAsync(info.MetadataPath))
         );
 
     // Resolution shared by load and run: Agent-local, inherited, then global; the first valid
@@ -136,7 +150,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
         foreach (var root in Roots(agent))
         {
             if (
-                !Directory.Exists(Path.Combine(root.Directory, name))
+                !root.Files.DirectoryExists(Path.Combine(root.Directory, name))
                 || Unavailable(name, root.Type)
             )
                 continue;
@@ -164,53 +178,49 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             );
     }
 
-    private static IEnumerable<string> Discover(string root, string relative = "")
+    private static IEnumerable<string> Discover(ISkillFiles files, string root, string relative = "")
     {
-        if (!Directory.Exists(root))
+        if (!files.DirectoryExists(root))
             yield break;
-        foreach (var dir in Directory.EnumerateDirectories(root))
+        foreach (var entry in files.Entries(root).Where(entry => entry.IsDirectory))
         {
-            if (
-                Skip.Contains(Path.GetFileName(dir))
-                || (File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0
-            )
+            var dir = entry.FullPath;
+            if (Skip.Contains(entry.Name) || entry.IsLink)
                 continue;
-            var name =
-                relative.Length == 0
-                    ? Path.GetFileName(dir)
-                    : relative + "/" + Path.GetFileName(dir);
-            if (File.Exists(Path.Combine(dir, "SKILL.md")))
+            var name = relative.Length == 0 ? entry.Name : relative + "/" + entry.Name;
+            if (files.FileExists(Path.Combine(dir, "SKILL.md")))
                 yield return name;
             else
-                foreach (var nested in Discover(dir, name))
+                foreach (var nested in Discover(files, dir, name))
                     yield return nested;
         }
     }
 
     private static async Task<SkillInfo> BuildAsync(
         string name,
-        (string Directory, string Type, string? Agent) root,
+        (string Directory, string Type, string? Agent, ISkillFiles Files) root,
         bool resources
     )
     {
+        var files = root.Files;
         var segments = name.Split('/');
         var parent = root.Directory;
         for (var index = 0; index + 1 < segments.Length; index++)
         {
             parent = Path.Combine(parent, segments[index]);
-            if (File.Exists(Path.Combine(parent, "SKILL.md")))
+            if (files.FileExists(Path.Combine(parent, "SKILL.md")))
                 throw new InvalidDataException(
                     $"Skill '{name}' is inside skill '{string.Join('/', segments.Take(index + 1))}' and is treated as a bundled resource, not an independently loadable skill. Load the parent skill first, then read the referenced resource if needed."
                 );
         }
         var dir = Path.Combine(root.Directory, name);
         var entry = Path.Combine(dir, "SKILL.md");
-        if (!File.Exists(entry))
+        if (!files.FileExists(entry))
             throw new InvalidDataException($"Skill '{name}' not found. Expected: {entry}.");
-        var content = await File.ReadAllTextAsync(entry);
+        var content = await files.ReadAllTextAsync(entry);
         var description = Description(content);
-        var (run, runError) = Run(content, dir);
-        var (files, truncated) = resources ? Resources(dir) : (Array.Empty<string>(), false);
+        var (run, runError) = Run(content, dir, files);
+        var (listed, truncated) = resources ? Resources(files, dir) : (Array.Empty<string>(), false);
         return new SkillInfo(
             name,
             description,
@@ -218,10 +228,11 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             entry,
             root.Type,
             root.Agent,
-            files,
+            listed,
             truncated,
             run,
-            runError
+            runError,
+            files
         );
     }
 
@@ -232,7 +243,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
     // Files under `start` (the skill directory or a directory inside it) as paths relative to
     // the skill directory: links and Skip directories are left out, and so is the root SKILL.md.
     // Stops after 200 files.
-    internal static (string[] Files, bool Truncated) Resources(string root, string? start = null)
+    internal static (string[] Files, bool Truncated) Resources(ISkillFiles source, string root, string? start = null)
     {
         var files = new List<string>();
         var truncated = false;
@@ -240,10 +251,10 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
         {
             if (truncated)
                 return;
-            FileSystemInfo[] entries;
+            IReadOnlyList<SkillFileEntry> entries;
             try
             {
-                entries = new DirectoryInfo(current).GetFileSystemInfos();
+                entries = source.Entries(current);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
@@ -252,22 +263,22 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             }
             foreach (
                 var item in entries
-                    .OrderBy(info => info is DirectoryInfo ? 0 : 1)
+                    .OrderBy(info => info.IsDirectory ? 0 : 1)
                     .ThenBy(info => info.Name, StringComparer.CurrentCulture)
             )
             {
-                if ((item.Attributes & FileAttributes.ReparsePoint) != 0)
+                if (item.IsLink)
                     continue;
-                if (item is DirectoryInfo)
+                if (item.IsDirectory)
                 {
                     if (!Skip.Contains(item.Name))
-                        Walk(item.FullName);
+                        Walk(item.FullPath);
                     if (truncated)
                         return;
                 }
                 else
                 {
-                    var relative = Path.GetRelativePath(root, item.FullName)
+                    var relative = Path.GetRelativePath(root, item.FullPath)
                         .Replace(Path.DirectorySeparatorChar, '/');
                     if (relative == "SKILL.md")
                         continue;

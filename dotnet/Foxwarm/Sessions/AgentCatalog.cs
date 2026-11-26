@@ -4,7 +4,11 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
 
-/// <summary>One-host Agent directories and metadata, with a bounded retained-layout reader.</summary>
+/// <summary>
+/// One-host Agent directories and metadata, with a bounded retained-layout reader. With an
+/// Agent store (hosted mode) the Agents' files and membership are the store's instead of
+/// directories: see <c>AgentCatalog.Store.cs</c>.
+/// </summary>
 internal sealed partial class AgentCatalog
 {
     private readonly string workspaceRoot;
@@ -19,6 +23,7 @@ internal sealed partial class AgentCatalog
     private readonly Action<AtomicJsonWriteStage>? metadataWriteStage;
     private JsonObject metadata = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
+    private readonly IAgentStore? store;
 
     public AgentCatalog(
         string dataRoot,
@@ -29,9 +34,13 @@ internal sealed partial class AgentCatalog
         Func<(int MaxDepth, int MaxChildren)>? treeLimits = null,
         Action<AtomicJsonWriteStage>? metadataWriteStage = null,
         Func<string?>? installDefaultNode = null,
-        Foxwarm.Storage.IStateDocuments? documents = null
+        Foxwarm.Storage.IStateDocuments? documents = null,
+        IAgentStore? store = null
     )
     {
+        if (store is not null && !canonicalLayout)
+            throw new ArgumentException("An Agent store holds the canonical layout only.", nameof(store));
+        this.store = store;
         this.treeLimits = treeLimits ?? (() => (16, 128));
         this.installDefaultNode = installDefaultNode ?? (() => null);
         this.metadataWriteStage = metadataWriteStage;
@@ -85,10 +94,11 @@ internal sealed partial class AgentCatalog
             else
                 metadata = (JsonObject)index.DeepClone();
         }
-        if (createDirectories)
+        if (createDirectories && store is null)
             Directory.CreateDirectory(agentRoot);
         if (
-            Directory.Exists(agentRoot)
+            store is null
+            && Directory.Exists(agentRoot)
             && (File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0
         )
             throw new InvalidDataException("Agent directory root cannot be a symbolic link.");
@@ -113,7 +123,8 @@ internal sealed partial class AgentCatalog
                         );
             }
         if (
-            recoveringOwnedAgent is not null
+            store is null
+            && recoveringOwnedAgent is not null
             && Directory.Exists(Path.Combine(agentRoot, recoveringOwnedAgent))
             && (
                 File.GetAttributes(Path.Combine(agentRoot, recoveringOwnedAgent))
@@ -124,7 +135,9 @@ internal sealed partial class AgentCatalog
     }
 
     private IEnumerable<string> DirectoryMembers() =>
-        Directory
+        store is not null
+            ? store.Agents().Where(name => AgentName().IsMatch(name))
+            : Directory
             .EnumerateDirectories(agentRoot)
             .Where(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
             .Select(Path.GetFileName)
@@ -147,6 +160,8 @@ internal sealed partial class AgentCatalog
                 return true;
             if (!canonicalLayout || !AgentName().IsMatch(name))
                 return false;
+            if (store is not null)
+                return store.AgentExists(name);
             var directory = Path.Combine(agentRoot, name);
             return Directory.Exists(directory)
                 && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0;
@@ -167,6 +182,9 @@ internal sealed partial class AgentCatalog
 
     internal IEnumerable<string> ExecLogRoots()
     {
+        // Agent store Agents have no folder for master exec logs.
+        if (store is not null)
+            yield break;
         if (!canonicalLayout)
             yield return Path.Combine(workspaceRoot, ".temp", "exec");
         foreach (var path in Directory.EnumerateFileSystemEntries(agentRoot))
@@ -214,22 +232,30 @@ internal sealed partial class AgentCatalog
         ValidateName(name);
         if (name == "main" && (!restoreRetained || !canonicalLayout))
             throw new InvalidDataException("The main Agent already exists.");
-        var directory = SourceDirectory(name);
-        var prepared = PreparationPath(
-            preparationName ?? ".create-" + Guid.NewGuid().ToString("N")
-        );
+        var directory = store is null ? SourceDirectory(name) : store.Locator(name, "");
+        var prepared = store is null
+            ? PreparationPath(preparationName ?? ".create-" + Guid.NewGuid().ToString("N"))
+            : directory;
+        if (store is not null && preparationName is not null)
+            ValidatePreparationName(preparationName);
         await createGate.WaitAsync();
         var createdDirectory = false;
         var publishedDirectory = false;
         var committed = false;
         JsonObject? initialMetadata = null;
+        // The state gate is held from the existence check through the metadata commit, so no
+        // other metadata change interleaves, and in the file layout through the directory's
+        // publication. The store creates the Agent's files after the gate is released: a
+        // monitor can't be held across that await, and until the root exists the Agent isn't
+        // a member, as before a directory's publication.
+        var holdState = true;
         Monitor.Enter(stateGate);
         try
         {
             if (
                 (!restoreRetained && Exists(name))
-                || Directory.Exists(directory)
-                || File.Exists(directory)
+                || store is null && (Directory.Exists(directory) || File.Exists(directory))
+                || store is not null && store.AgentExists(name)
             )
                 throw new InvalidDataException(
                     $"Agent '{name}' already exists or its directory is reserved."
@@ -293,17 +319,20 @@ internal sealed partial class AgentCatalog
                 initialMetadata["inherit"] = inherit;
             // Dot-prefixed preparation is not Agent membership. Persist authority before
             // publishing the final directory so restart cannot discover an unrestricted child.
-            if (IdentityEntry(prepared) is not null)
-                throw new AgentIdentityCleanupException([prepared]);
-            Directory.CreateDirectory(prepared);
-            createdDirectory = true;
-            if (preparationName is not null)
-                WriteIdentityProof(prepared, preparationName);
-            Directory.CreateDirectory(Path.Combine(prepared, "memory"));
-            if (initialMemory is not null)
-                File.WriteAllText(Path.Combine(prepared, "memory", "MEMORY.md"), initialMemory);
-            if (initialSoul is not null)
-                File.WriteAllText(Path.Combine(prepared, "memory", "SOUL.md"), initialSoul);
+            if (store is null)
+            {
+                if (IdentityEntry(prepared) is not null)
+                    throw new AgentIdentityCleanupException([prepared]);
+                Directory.CreateDirectory(prepared);
+                createdDirectory = true;
+                if (preparationName is not null)
+                    WriteIdentityProof(prepared, preparationName);
+                Directory.CreateDirectory(Path.Combine(prepared, "memory"));
+                if (initialMemory is not null)
+                    File.WriteAllText(Path.Combine(prepared, "memory", "MEMORY.md"), initialMemory);
+                if (initialSoul is not null)
+                    File.WriteAllText(Path.Combine(prepared, "memory", "SOUL.md"), initialSoul);
+            }
             var next = List()
                 .Where(existing => existing != "main")
                 .Append(name)
@@ -323,7 +352,21 @@ internal sealed partial class AgentCatalog
                 durabilityFailure = error;
             }
             committed = true;
-            Directory.Move(prepared, directory);
+            if (store is null)
+                Directory.Move(prepared, directory);
+            else
+            {
+                Monitor.Exit(stateGate);
+                holdState = false;
+                // The root, the memory directory, the initial memory and the identity proof
+                // appear together, after the metadata, as the published directory does.
+                await store.CreateAgentAsync(
+                    name,
+                    ["memory"],
+                    StoreInitialFiles(initialMemory, initialSoul, preparationName),
+                    CancellationToken.None
+                );
+            }
             publishedDirectory = true;
             lock (stateGate)
             {
@@ -368,10 +411,13 @@ internal sealed partial class AgentCatalog
             if (committed)
             {
                 if (initialMetadata is { Count: > 0 })
-                    metadata[name] = initialMetadata.DeepClone();
+                    lock (stateGate)
+                        metadata[name] = initialMetadata.DeepClone();
                 throw new AuthorityCommittedException(
-                    "Agent metadata committed, but directory publication did not complete. "
-                        + $"Prepared files remain at '{prepared}'.",
+                    store is not null
+                        ? "Agent metadata committed, but the Agent's files were not created."
+                        : "Agent metadata committed, but directory publication did not complete. "
+                            + $"Prepared files remain at '{prepared}'.",
                     error
                 );
             }
@@ -380,7 +426,8 @@ internal sealed partial class AgentCatalog
         }
         finally
         {
-            Monitor.Exit(stateGate);
+            if (holdState)
+                Monitor.Exit(stateGate);
             createGate.Release();
             publication?.Invoke(publishedDirectory);
         }

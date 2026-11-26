@@ -17,7 +17,7 @@ internal sealed partial class PostgresStorageContext
     /// <summary>Large Agent file contents, on the deployment's blob backend.</summary>
     internal IBlobStore AgentFileBlobs => Require(agentFileBlobs);
 
-    partial void CreateAgentFiles(ref IAgentFileStore? store)
+    partial void CreateAgentFiles(ref IAgentStore? store)
     {
         agentFileBlobs ??= new PgBlobStore(Database, PgAgentFileStore.BlobStoreName);
         store = new PgAgentFileStore(Database, agentFileBlobs, () => AgentStoreLimits());

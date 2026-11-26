@@ -17,7 +17,7 @@ namespace Foxwarm.Hosted.Postgres;
 /// <c>agent_file_usage</c> row, which serializes the tenant's writes, allocates generations and
 /// makes the <see cref="AgentStoreLimits"/> checks exact.
 /// </summary>
-internal sealed class PgAgentFileStore : IAgentFileStore
+internal sealed class PgAgentFileStore : IAgentStore
 {
     internal const int InlineBytes = 256 * 1024;
     internal const string BlobStoreName = "agent-files";
@@ -435,7 +435,7 @@ internal sealed class PgAgentFileStore : IAgentFileStore
     }
 
     /// <summary>Agents that exist (have a root row), in ordinal order.</summary>
-    internal IReadOnlyList<string> Agents() =>
+    public IReadOnlyList<string> Agents() =>
         database.Read(tx =>
         {
             using var command = tx.Command("SELECT agent FROM agent_files WHERE path = '' AND agent <> ''");
@@ -446,7 +446,7 @@ internal sealed class PgAgentFileStore : IAgentFileStore
             return names.Order(StringComparer.Ordinal).ToArray();
         });
 
-    internal bool AgentExists(string agent)
+    public bool AgentExists(string agent)
     {
         AgentCatalog.ValidateName(agent);
         return database.Read(tx =>
@@ -458,7 +458,7 @@ internal sealed class PgAgentFileStore : IAgentFileStore
     /// Creates an Agent's root with its first directories and files in one transaction. An
     /// existing Agent fails with <see cref="AgentFileConflictException"/>.
     /// </summary>
-    internal Task CreateAgentAsync(
+    public Task CreateAgentAsync(
         string agent,
         IReadOnlyList<string> directories,
         IReadOnlyList<KeyValuePair<string, byte[]>> files,
@@ -541,7 +541,7 @@ internal sealed class PgAgentFileStore : IAgentFileStore
     }
 
     /// <summary>Removes an Agent's root and every file of it in one transaction; a missing Agent is a no-op.</summary>
-    internal Task DeleteAgentAsync(string agent, CancellationToken token)
+    public Task DeleteAgentAsync(string agent, CancellationToken token)
     {
         AgentCatalog.ValidateName(agent);
         return lanes.RunAsync(
@@ -572,6 +572,137 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                         Verify: tx => tx.Scalar("SELECT 1 FROM agent_files WHERE agent = $1", agent) is null,
                         Retryable: true
                     ),
+                    token
+                ),
+            token
+        );
+    }
+
+    public IReadOnlyList<AgentFileStat> Tree(string? agent, string path)
+    {
+        AgentFilePaths.Require(path, allowRoot: true);
+        var key = Key(agent);
+        var (range, parameters) = Below(path, 3);
+        return database
+            .Read(tx =>
+            {
+                using var command = tx.Command(
+                    "SELECT path, " + Columns + " FROM agent_files WHERE agent = $1 AND path <> ''"
+                        + " AND (path = $2 OR " + range + ")",
+                    [key, path, .. parameters]
+                );
+                using var reader = command.ExecuteReader();
+                var result = new List<AgentFileStat>();
+                while (reader.Read())
+                    result.Add(
+                        new(
+                            reader.GetString(0),
+                            reader.GetString(1) == "dir",
+                            reader.GetInt64(3),
+                            reader.GetInt64(2),
+                            DateTime.SpecifyKind(reader.GetDateTime(4), DateTimeKind.Utc)
+                        )
+                    );
+                return result;
+            })
+            .OrderBy(entry => entry.Path, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public Task CopyTreeAsync(
+        string sourceAgent,
+        string sourcePath,
+        string targetAgent,
+        string targetPath,
+        CancellationToken token
+    )
+    {
+        AgentCatalog.ValidateName(sourceAgent);
+        AgentCatalog.ValidateName(targetAgent);
+        AgentFilePaths.Require(sourcePath, allowRoot: true);
+        AgentFilePaths.Require(targetPath, allowRoot: true);
+        if (sourceAgent == targetAgent && (AgentFilePaths.Within(targetPath, sourcePath) || AgentFilePaths.Within(sourcePath, targetPath)))
+            throw AgentFileErrors.IntoItself(sourcePath);
+        var limit = limits();
+        return lanes.RunAsync(
+            targetAgent,
+            () =>
+                database.WriteAsync(
+                    async (tx, cancel) =>
+                    {
+                        var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                        await RequireAgentAsync(tx, targetAgent, targetAgent, cancel).ConfigureAwait(false);
+                        var (range, parameters) = Below(sourcePath, 3);
+                        var rows = new List<(string Path, string Kind, long Size, byte[]? Sha256, byte[]? Inline, string? BlobKey)>();
+                        await using (
+                            var command = tx.Command(
+                                "SELECT path, kind, size, sha256, inline, blob_key FROM agent_files"
+                                    + " WHERE agent = $1 AND path <> '' AND (path = $2 OR " + range + ")",
+                                [sourceAgent, sourcePath, .. parameters]
+                            )
+                        )
+                        await using (var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false))
+                            while (await reader.ReadAsync(cancel).ConfigureAwait(false))
+                                rows.Add(
+                                    (
+                                        reader.GetString(0),
+                                        reader.GetString(1),
+                                        reader.GetInt64(2),
+                                        reader.IsDBNull(3) ? null : reader.GetFieldValue<byte[]>(3),
+                                        reader.IsDBNull(4) ? null : reader.GetFieldValue<byte[]>(4),
+                                        reader.IsDBNull(5) ? null : reader.GetString(5)
+                                    )
+                                );
+                        long bytes = 0;
+                        long entries = 0;
+                        foreach (var row in rows.OrderBy(row => row.Path, StringComparer.Ordinal))
+                        {
+                            var rest = row.Path.Length == sourcePath.Length ? "" : row.Path[(sourcePath.Length == 0 ? 0 : sourcePath.Length + 1)..];
+                            var target = rest.Length == 0 ? targetPath : targetPath.Length == 0 ? rest : targetPath + "/" + rest;
+                            if (target.Length == 0)
+                                continue;
+                            var current = await RowAtAsync(tx, targetAgent, target, cancel).ConfigureAwait(false);
+                            var children = current is null && await HasChildrenAsync(tx, targetAgent, target, cancel).ConfigureAwait(false);
+                            if (row.Kind == "dir")
+                            {
+                                if (current?.Kind == "file")
+                                    throw AgentFileErrors.NotDirectory(target);
+                                if (current is not null || children)
+                                    continue;
+                                entries += 1 - await PrepareParentsAsync(tx, targetAgent, target, cancel).ConfigureAwait(false);
+                                await InsertDirectoryAsync(tx, targetAgent, target, cancel).ConfigureAwait(false);
+                                continue;
+                            }
+                            if (current?.Kind == "dir" || children)
+                                throw AgentFileErrors.IsDirectory(target);
+                            entries += (current is null ? 1 : 0) - await PrepareParentsAsync(tx, targetAgent, target, cancel).ConfigureAwait(false);
+                            bytes += row.Size - (current?.Size ?? 0);
+                            await tx.ExecuteAsync(
+                                    "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
+                                        + " VALUES ($1, $2, 'file', $3, $4, $5, $6, $7)"
+                                        + " ON CONFLICT (tenant_id, agent, path) DO UPDATE SET kind = 'file',"
+                                        + " size = excluded.size, sha256 = excluded.sha256,"
+                                        + " generation = excluded.generation, inline = excluded.inline,"
+                                        + " blob_key = excluded.blob_key, updated_at = now()",
+                                    cancel,
+                                    targetAgent,
+                                    target,
+                                    row.Size,
+                                    row.Sha256,
+                                    await AllocateGenerationAsync(tx, cancel).ConfigureAwait(false),
+                                    row.Inline is null ? NullBytes() : row.Inline,
+                                    row.BlobKey
+                                )
+                                .ConfigureAwait(false);
+                        }
+                        usage.Admit(limit, bytes, entries);
+                        await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
+                        BeforeCommit?.Invoke();
+                        return true;
+                    },
+                    // A lost COMMIT stays unknown (CommitOutcomeUnknownException); repeating the
+                    // copy is harmless.
+                    new PgWriteOptions(Retryable: true),
                     token
                 ),
             token

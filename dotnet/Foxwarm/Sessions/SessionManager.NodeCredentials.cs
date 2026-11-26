@@ -28,7 +28,7 @@ internal sealed partial class SessionManager
         await AuthorizeToolAsync(
             owner,
             new("node_create_auth_token", "builtin", "node_create_auth_token", args),
-            new WorkspaceTools(AgentDirectory(owner.Agent)),
+            AgentWorkspace(owner.Agent),
             token
         );
         Nodes.Registry.RequireNewNode(
