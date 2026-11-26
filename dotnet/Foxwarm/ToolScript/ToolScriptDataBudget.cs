@@ -184,7 +184,11 @@ internal sealed class ToolScriptDataBudget(long limit = ToolScriptDataBudget.Def
             65536,
             FileOptions.Asynchronous
         );
-        var length = stream.Length;
+        return await ReadRecordAsync(stream, stream.Length, token);
+    }
+
+    internal async Task<JsonObject> ReadRecordAsync(Stream stream, long length, CancellationToken token)
+    {
         if (length > Remaining || length > int.MaxValue)
             throw new ToolScriptDataLimitException(
                 "ToolScript record exceeds the parent materialization budget; the stored record has not been changed."

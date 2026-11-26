@@ -26,7 +26,7 @@ public sealed class TaskRowStoreTests
         }
     }
 
-    private static string Run(TaskStore store)
+    internal static string Run(TaskStore store)
     {
         var results = new JsonArray();
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);

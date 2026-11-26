@@ -6,6 +6,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptSourceTests
 {
     internal static string BundledSkills()

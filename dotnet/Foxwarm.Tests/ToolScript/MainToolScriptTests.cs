@@ -1,11 +1,13 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Tests.Hosted;
 using Foxwarm.Tools;
 using Foxwarm.ToolScript;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class MainToolScriptTests
 {
     internal sealed class Fixture : IAsyncDisposable
@@ -73,6 +75,11 @@ public sealed class MainToolScriptTests
                 throw;
             }
         }
+
+        internal IToolScriptRunStore OpenRunStore() =>
+            HostedTestBackend.Active
+                ? HostedTestBackend.Create(Data).ToolScriptRuns
+                : new ToolScriptRunStore(Data);
 
         internal async Task<JsonObject> Call(string name, JsonObject args) =>
             (
@@ -157,7 +164,7 @@ public sealed class MainToolScriptTests
             "raise RuntimeError('must not reread')"
         );
         await f.Manager.ToolScript.DisposeAsync();
-        await using var restarted = new MainToolScript(f.Data);
+        await using var restarted = new MainToolScript(f.OpenRunStore());
         var context = new ToolScriptContext(
             f.Owner,
             f.Owner.Id,

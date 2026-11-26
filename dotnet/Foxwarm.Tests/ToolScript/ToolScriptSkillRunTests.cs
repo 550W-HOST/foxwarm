@@ -9,6 +9,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 namespace Foxwarm.Tests;
 
 // `ctl skill run`: a runnable skill's entry runs as the caller's inline ToolScript run.
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptSkillRunTests
 {
     private static bool Supported => OperatingSystem.IsLinux() && MontyWorker.IsSupported;

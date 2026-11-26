@@ -4,9 +4,11 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Tests.Hosted;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class TaskReminderHistoryTests
 {
     private const string ReminderText = "Continue the active tasks:";
@@ -356,11 +358,11 @@ public sealed class TaskReminderHistoryTests
         internal int Turns;
         internal string? TaskId;
 
-        private readonly string root;
+        private readonly ITaskRowStore rows;
 
         internal Fixture(string root, Func<int, HttpResponseMessage> response, bool restore = false)
         {
-            this.root = root;
+            rows = HostedTestBackend.Active ? HostedTestBackend.Create(root).Tasks : new SqliteTaskRowStore(root);
             Response = response;
             Store = new PersistentSessionAuthorityStore(root, "s");
             var options = new ResponsesClientOptions(
@@ -386,7 +388,7 @@ public sealed class TaskReminderHistoryTests
             );
             Tasks = new TaskService(
                 null!,
-                new SqliteTaskRowStore(root),
+                rows,
                 id => id,
                 _ => [],
                 _ => null,
@@ -417,13 +419,7 @@ public sealed class TaskReminderHistoryTests
         {
             // A self-created, self-owned active task anchored before any Session message.
             await Tasks.MigrateLegacyGoalAsync("s", title, 0);
-            using var db = new Microsoft.Data.Sqlite.SqliteConnection(
-                $"Data Source={Path.Combine(root, "state", "tasks.sqlite")}"
-            );
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText = "SELECT id FROM tasks";
-            TaskId = command.ExecuteScalar()!.ToString()!;
+            TaskId = rows.Run(TaskRowAccess.Read, db => db.FindLegacyGoal(["s"]));
         }
 
         internal HistoryMessage[] History() =>

@@ -6,6 +6,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 namespace Foxwarm.Tests;
 
 /// <summary>The pinned Monty release's language support and sandbox policy, through the real worker.</summary>
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptMontyLanguageTests
 {
     private static JsonObject Resume(JsonObject paused, JsonNode? input = null, double? timeout = null)

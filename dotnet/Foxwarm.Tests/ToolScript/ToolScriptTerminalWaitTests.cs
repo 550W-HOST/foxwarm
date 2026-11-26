@@ -6,6 +6,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptTerminalWaitTests
 {
     private const string Wait = "call_tool('wait', {'waitForInput': True})";

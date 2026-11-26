@@ -5,6 +5,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptNativeExceptionTests
 {
     private const string SingleCall = "call_tool('read', {'filePath': 'missing-native-file'})";
@@ -125,7 +126,7 @@ public sealed class ToolScriptNativeExceptionTests
         saved["lastHostCall"]!["error"] = "unrelated stale host diagnostic";
         await f.Manager.ToolScript.Store.WriteAsync(saved, default);
         await f.Manager.ToolScript.DisposeAsync();
-        await using var restarted = new MainToolScript(f.Data);
+        await using var restarted = new MainToolScript(f.OpenRunStore());
         var done = await restarted.ExecuteAsync(
             "continue_script",
             new JsonObject

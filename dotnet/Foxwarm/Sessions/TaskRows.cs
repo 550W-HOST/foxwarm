@@ -6,10 +6,10 @@ namespace Foxwarm.Sessions;
 /// <summary>How a <see cref="ITaskRowStore.Run{T}"/> body reaches the rows.</summary>
 internal enum TaskRowAccess
 {
-    /// <summary>Single statements outside an explicit transaction.</summary>
+    /// <summary>Independent statements with no transaction spanning the callback.</summary>
     Direct,
 
-    /// <summary>One serializable read transaction.</summary>
+    /// <summary>One read transaction with a consistent snapshot.</summary>
     Read,
 
     /// <summary>One write transaction that excludes other writers from its start.</summary>

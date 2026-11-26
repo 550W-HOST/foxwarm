@@ -7,6 +7,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptHostTests
 {
     [Fact]
@@ -175,9 +176,7 @@ public sealed class ToolScriptHostTests
         Assert.NotNull(fatal["error"]);
         Assert.True(f.Tools.PolicyUnavailable);
         Assert.False(File.Exists(Path.Combine(f.Work, "fatal-after")));
-        var row = Directory
-            .GetFiles(Path.Combine(f.Data, "state", "toolscript-runs"))
-            .Select(path => JsonNode.Parse(File.ReadAllText(path))!)
+        var row = (await f.Manager.ToolScript.Store.ListAsync(f.Owner.Id, 50, "failed", default))
             .Single(record =>
                 record["error"]
                     ?.ToString()

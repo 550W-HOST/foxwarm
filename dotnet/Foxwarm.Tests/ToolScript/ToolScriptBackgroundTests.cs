@@ -8,6 +8,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 namespace Foxwarm.Tests;
 
 // Background run_script: wait like exec, then detach and report the outcome as an event.
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptBackgroundTests
 {
     private static bool Supported => OperatingSystem.IsLinux() && MontyWorker.IsSupported;
@@ -508,7 +509,7 @@ public sealed class ToolScriptBackgroundTests
                 new JsonObject { ["waitExecIds"] = new JsonArray(runId) }
             );
             await f.Manager.ShutdownAsync();
-            var record = await new ToolScriptRunStore(f.Data).ReadAsync(runId, default);
+            var record = await f.OpenRunStore().ReadAsync(runId, default);
             Assert.Equal("cancelled", SessionWait.Text(record!["status"]));
             Assert.Equal(MainToolScript.ShutdownCancellation, SessionWait.Text(record["error"]));
             Assert.Equal(0, Events(f.Owner, runId));

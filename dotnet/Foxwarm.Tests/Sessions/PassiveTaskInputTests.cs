@@ -5,6 +5,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class PassiveTaskInputTests
 {
     [Theory]
@@ -76,9 +77,7 @@ public sealed class PassiveTaskInputTests
         Assert.Empty(snapshot.Meta["wait"]!["waitAll"]!["deferredQueue"]!.AsArray());
         Assert.False(Assert.Single(snapshot.Queue).Trigger);
         Assert.False(owner.Registry.HasRunnableWork(owner.Entry));
-        var persisted = JsonNode.Parse(
-            await File.ReadAllTextAsync(Path.Combine(temp.Path, "data/state/sessions/owner.json"))
-        )!;
+        var persisted = (await manager.Storage.Authority.ReadRawAsync(owner.Id))!.Document!;
         Assert.Equal(waitId, SessionWait.Text(persisted["meta"]?["wait"]?["id"]));
         Assert.False(persisted["queue"]![0]!["trigger"]!.GetValue<bool>());
         // A stale timeout is ignored without invalidating the original wait token.

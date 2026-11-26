@@ -47,33 +47,15 @@ internal sealed class ToolScriptRunStore(string root) : IToolScriptRunStore
         "state",
         "toolscript-runs"
     );
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> lanes = new(
-        StringComparer.Ordinal
-    );
+    private readonly ToolScriptRunLanes lanes = new();
     internal Func<string, AtomicJsonWriteStage, Task>? StageForTests { get; set; }
 
-    public async Task<IDisposable> AcquireAsync(string id, CancellationToken token)
-    {
-        PathFor(id);
-        var lane = lanes.GetOrAdd(id, _ => new(1, 1));
-        await lane.WaitAsync(token);
-        return new Lane(lane);
-    }
-
-    private sealed class Lane(SemaphoreSlim lane) : IDisposable
-    {
-        public void Dispose() => lane.Release();
-    }
+    public Task<IDisposable> AcquireAsync(string id, CancellationToken token) =>
+        lanes.AcquireAsync(id, token);
 
     internal string PathFor(string id)
     {
-        if (
-            string.IsNullOrWhiteSpace(id)
-            || id.Contains('/')
-            || id.Contains('\\')
-            || id.Contains('\0')
-        )
-            throw new InvalidDataException("Invalid ToolScript runId.");
+        ToolScriptRunLanes.ValidateId(id);
         return Path.Combine(directory, id + ".json");
     }
 
@@ -191,5 +173,30 @@ internal sealed class ToolScriptRunStore(string root) : IToolScriptRunStore
             throw new NotSupportedException(
                 "This Main server cannot continue or cancel a managed ToolScript run. The run, snapshot and lease references were retained."
             );
+    }
+}
+
+/// <summary>The process-local lane shared by the run stores.</summary>
+internal sealed class ToolScriptRunLanes
+{
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> lanes = new(StringComparer.Ordinal);
+
+    internal async Task<IDisposable> AcquireAsync(string id, CancellationToken token)
+    {
+        ValidateId(id);
+        var lane = lanes.GetOrAdd(id, _ => new(1, 1));
+        await lane.WaitAsync(token);
+        return new Lane(lane);
+    }
+
+    private sealed class Lane(SemaphoreSlim lane) : IDisposable
+    {
+        public void Dispose() => lane.Release();
+    }
+
+    internal static void ValidateId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id) || id.Contains('/') || id.Contains('\\') || id.Contains('\0'))
+            throw new InvalidDataException("Invalid ToolScript runId.");
     }
 }

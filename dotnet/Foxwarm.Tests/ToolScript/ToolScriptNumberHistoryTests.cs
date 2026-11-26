@@ -7,6 +7,7 @@ using Foxwarm.ToolScript;
 namespace Foxwarm.Tests.ToolScript;
 
 // ToolScript values reach Session history and its Archive as finite binary64 numbers.
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptNumberHistoryTests
 {
     private static ResponsesClientOptions Options =>
@@ -155,12 +156,15 @@ public sealed class ToolScriptNumberHistoryTests
         );
 
         // The persisted authority carries the same numbers as ECMAScript JSON.
-        var authority = Directory
-            .EnumerateFiles(Path.Combine(data, "state", "sessions"), "*.json")
-            .Select(File.ReadAllText)
-            .Single(text => text.Contains("get_toolscript_run"));
-        Assert.Contains("\"ratio\": 0.1", authority);
-        Assert.Contains("\"arg\": 0.25", authority);
+        var authority = (await manager.Storage.Authority.ReadRawAsync(owner.Id))!.Document!;
+        var persisted = authority["history"]!
+            .AsArray()
+            .Where(row => row?["role"]?.ToString() == "tool")
+            .SelectMany(row => row!["parts"]!.AsArray())
+            .Select(part => part?["functionResponse"])
+            .Single(response => response?["name"]?.ToString() == "get_toolscript_run");
+        Assert.Equal("0.1", persisted!["response"]!["result"]!["ratio"]!.ToJsonString());
+        Assert.Equal("0.25", persisted["response"]!["result"]!["arg"]!.ToJsonString());
     }
 
     [Fact]

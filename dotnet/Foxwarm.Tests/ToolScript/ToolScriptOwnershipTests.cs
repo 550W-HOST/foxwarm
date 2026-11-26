@@ -4,6 +4,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptOwnershipTests
 {
     private static SessionToolExecutor Dispatcher(ScriptFixture f)
@@ -128,24 +129,8 @@ public sealed class ToolScriptOwnershipTests
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (!File.Exists(born))
             await Task.Delay(10, deadline.Token);
-        var records = new List<JsonObject>();
-        foreach (var file in Directory.GetFiles(Path.Combine(f.Data, "state", "toolscript-runs")))
-            records.Add(
-                (
-                    await f.Manager.ToolScript.Store.ReadAsync(
-                        Path.GetFileNameWithoutExtension(file),
-                        default
-                    )
-                )!
-            );
-        var childRecord = Assert.Single(
-            records,
-            record => record["ownerSessionId"]!.GetValue<string>() == f.Owner.Id
-        );
-        var outerRecord = Assert.Single(
-            records,
-            record => record["ownerSessionId"]!.GetValue<string>() == old
-        );
+        var childRecord = Assert.Single(await f.Manager.ToolScript.Store.ListAsync(f.Owner.Id, 2, null, default));
+        var outerRecord = Assert.Single(await f.Manager.ToolScript.Store.ListAsync(old, 2, null, default));
         var id = childRecord["runId"]!.GetValue<string>();
         var cancelled = await Call(
             dispatcher,

@@ -28,9 +28,15 @@ public sealed class ToolScriptLifecycleTests
             ["continuationId"] = paused["continuationId"]!.DeepClone(),
         };
 
+    private static async Task<string> StoredRecord(IToolScriptRunStore store, string id) =>
+        store is ToolScriptRunStore file
+            ? await File.ReadAllTextAsync(file.PathFor(id))
+            : (await store.ReadAsync(id, default))!.ToJsonString();
+
     // The fixtures are real Monty 0.0.19 snapshots written by the earlier Source runtime. A Monty
     // upgrade accepts no earlier snapshot: continuation fails with the restart-the-run error and the
     // record and its snapshot stay as they were.
+    [Trait("Backend", "neutral")]
     [Theory]
     [InlineData("native", "agent")]
     [InlineData("native", "return")]
@@ -93,9 +99,8 @@ public sealed class ToolScriptLifecycleTests
                 },
             };
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        var original = await File.ReadAllBytesAsync(
-            f.Manager.ToolScript.Store.File().PathFor(record["runId"]!.GetValue<string>())
-        );
+        var runId = record["runId"]!.GetValue<string>();
+        var original = await StoredRecord(f.Manager.ToolScript.Store, runId);
         var error = await Assert.ThrowsAsync<NotSupportedException>(() =>
             f.Manager.ToolScript.ExecuteAsync(
                 "continue_script",
@@ -110,14 +115,10 @@ public sealed class ToolScriptLifecycleTests
             )
         );
         Assert.Contains("incompatible", error.Message);
-        Assert.Equal(
-            original,
-            await File.ReadAllBytesAsync(
-                f.Manager.ToolScript.Store.File().PathFor(record["runId"]!.GetValue<string>())
-            )
-        );
+        Assert.Equal(original, await StoredRecord(f.Manager.ToolScript.Store, runId));
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public async Task Actual_native_multislice_64MiB_UTF8_boundary_retains_effects_prefix_and_fails_before_next_hostcall()
     {
@@ -181,6 +182,7 @@ public sealed class ToolScriptLifecycleTests
         Assert.Equal('é', record["stdout"]!.GetValue<string>()[^1]);
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public async Task Active_cancel_returns_request_and_execution_owner_waits_for_started_hostwork_then_settles_cancelled()
     {
@@ -195,8 +197,8 @@ public sealed class ToolScriptLifecycleTests
             async (_, _, _) =>
             {
                 calls++;
-                var files = Directory.GetFiles(Path.Combine(f.Data, "state", "toolscript-runs"));
-                var id = Path.GetFileNameWithoutExtension(files.Single());
+                var records = await f.Manager.ToolScript.Store.ListAsync(f.Owner.Id, 2, "running", default);
+                var id = Assert.Single(records)["runId"]!.GetValue<string>();
                 reached.SetResult(id);
                 await release.Task;
                 await File.WriteAllTextAsync(Path.Combine(f.Work, "settled-effect"), "real");
@@ -317,6 +319,7 @@ public sealed class ToolScriptLifecycleTests
             );
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public async Task Managed_and_incompatible_records_remain_unchanged_and_concurrent_continue_is_single_execution()
     {
@@ -331,38 +334,29 @@ public sealed class ToolScriptLifecycleTests
             new JsonObject { ["sessionId"] = "unknown", ["leaseId"] = "old" }
         );
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        var original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id));
+        var original = await StoredRecord(f.Manager.ToolScript.Store, id);
         foreach (var tool in new[] { "continue_script", "cancel_toolscript_run" })
             await Assert.ThrowsAsync<NotSupportedException>(() =>
                 f.Manager.ToolScript.ExecuteAsync(tool, Resume(run), Context(f), default)
             );
-        Assert.Equal(
-            original,
-            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id))
-        );
+        Assert.Equal(original, await StoredRecord(f.Manager.ToolScript.Store, id));
         record["relatedManagedSessions"] = new JsonArray();
         record["vmRuntime"]!["version"] = "unknown";
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id));
+        original = await StoredRecord(f.Manager.ToolScript.Store, id);
         await Assert.ThrowsAsync<NotSupportedException>(() =>
             f.Manager.ToolScript.ExecuteAsync("continue_script", Resume(run), Context(f), default)
         );
-        Assert.Equal(
-            original,
-            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id))
-        );
+        Assert.Equal(original, await StoredRecord(f.Manager.ToolScript.Store, id));
         record["vmRuntime"]!["version"] = MontyWorker.Version;
         var snapshot = record["snapshotBase64"]!.DeepClone();
         record["snapshotBase64"] = "not-valid-base64";
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        original = await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id));
+        original = await StoredRecord(f.Manager.ToolScript.Store, id);
         await Assert.ThrowsAsync<FormatException>(() =>
             f.Manager.ToolScript.ExecuteAsync("continue_script", Resume(run), Context(f), default)
         );
-        Assert.Equal(
-            original,
-            await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.File().PathFor(id))
-        );
+        Assert.Equal(original, await StoredRecord(f.Manager.ToolScript.Store, id));
         record["snapshotBase64"] = snapshot;
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
         var first = f.Manager.ToolScript.ExecuteAsync(
@@ -381,6 +375,7 @@ public sealed class ToolScriptLifecycleTests
         await Assert.ThrowsAnyAsync<SystemException>(async () => await second);
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public async Task Native_self_and_nested_ancestor_cancellation_do_not_wait_on_their_own_settlement()
     {
@@ -522,6 +517,7 @@ public sealed class ToolScriptLifecycleTests
         Assert.Null(record["waiting"]);
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public async Task Native_shared_container_result_obeys_combined_parent_budget_after_real_started_effect()
     {
@@ -549,6 +545,7 @@ public sealed class ToolScriptLifecycleTests
         Assert.Null(record["snapshotBase64"]);
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public async Task Native_result_beyond_the_worker_memory_limit_fails_with_the_workers_reason_after_real_started_effect()
     {

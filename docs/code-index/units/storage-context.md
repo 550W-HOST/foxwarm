@@ -50,7 +50,7 @@ File members that exist only for inspection, fixtures and test hooks (the SQLite
 
 ### Tasks
 
-`TaskStore` keeps every Task rule: validation, permissions, status and assignment transitions, notification and reminder state, and legacy goal migration. It reaches rows only through `ITaskRowStore` (`Sessions/TaskRows.cs`): `Exists` and `Run(TaskRowAccess, …)` give an `ITaskRows` inside one direct, read or write transaction, with row reads, inserts, field updates, notes, notification settlement, filtered lists and counts, children and the legacy-goal lookup. `SqliteTaskRowStore` holds the SQL, schema and migrations unchanged. A database store implements only the rows, so the rules aren't duplicated. `TaskService` receives the row store from the context.
+`TaskStore` keeps every Task rule: validation, permissions, status and assignment transitions, notification and reminder state, and legacy goal migration. It reaches rows only through `ITaskRowStore` (`Sessions/TaskRows.cs`): `Exists` and `Run(TaskRowAccess, …)` give an `ITaskRows` for direct access or a read or write transaction, with row reads, inserts, field updates, notes, notification settlement, filtered lists and counts, children and the legacy-goal lookup. `SqliteTaskRowStore` holds the file-mode SQL, schema and migrations. `PgTaskRowStore` implements the same row contract in [hosted mode](./hosted-tasks-and-toolscript.md#task-rows). `TaskService` receives the row store from the context.
 
 ### Model request journal and text redaction
 
@@ -60,7 +60,7 @@ File members that exist only for inspection, fixtures and test hooks (the SQLite
 
 ### ToolScript run records
 
-`IToolScriptRunStore` covers the per-run lane, existence, read, owner listing and atomic replace of run records under the run's data budget. `ToolScriptRunStore` (`state/toolscript-runs/<runId>.json`) implements it; `MainToolScript` receives it from the context ([ToolScript](./toolscript.md)). The record path and the write-stage hook stay on the file class for tests.
+`IToolScriptRunStore` covers the per-run lane, existence, read, owner listing and atomic replace of run records under the run's data budget. `ToolScriptRunStore` (`state/toolscript-runs/<runId>.json`) implements it in file mode; `PgToolScriptRunStore` implements it in [hosted mode](./hosted-tasks-and-toolscript.md#toolscript-run-records). `MainToolScript` receives the store from the context ([ToolScript](./toolscript.md)). The record path and the write-stage hook stay on the file class for tests.
 
 ### State documents
 

@@ -2,13 +2,22 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 using Foxwarm.Tools;
 using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptTimerTests
 {
+    private static async Task MakePersistedTimerOverdue(IStateDocument timers)
+    {
+        var document = JsonNode.Parse((await timers.ReadTextAsync())!)!.AsObject();
+        document["timers"]![0]!["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1;
+        timers.ReplaceText(document.ToJsonString());
+    }
+
     private static SessionToolExecutor Dispatcher(ScriptFixture f, SessionOwner? owner = null)
     {
         var definitions = WorkspaceTools.Definitions();
@@ -585,10 +594,7 @@ public sealed class ToolScriptTimerTests
         await f.Manager.ShutdownAsync();
         await f.Manager.DisposeAsync();
         // Make the real persisted record overdue while the process is stopped.
-        var path = Path.Combine(f.Data, "state", "timers.json");
-        var document = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-        document["timers"]![0]!["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1;
-        await File.WriteAllTextAsync(path, document.ToJsonString());
+        await MakePersistedTimerOverdue(f.Manager.Storage.Documents.Open(StateDocumentName.Timers));
         var options = new ResponsesClientOptions(
             new Uri("http://127.0.0.1:1"),
             "wire",
@@ -707,10 +713,7 @@ public sealed class ToolScriptTimerTests
         );
         await f.Manager.ShutdownAsync();
         await f.Manager.DisposeAsync();
-        var path = Path.Combine(f.Data, "state", "timers.json");
-        var document = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-        document["timers"]![0]!["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1;
-        await File.WriteAllTextAsync(path, document.ToJsonString());
+        await MakePersistedTimerOverdue(f.Manager.Storage.Documents.Open(StateDocumentName.Timers));
         var options = new ResponsesClientOptions(
             new Uri("http://127.0.0.1:1"),
             "wire",

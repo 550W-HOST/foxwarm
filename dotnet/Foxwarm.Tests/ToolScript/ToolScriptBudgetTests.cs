@@ -6,6 +6,7 @@ using Monty.V1;
 
 namespace Foxwarm.Tests.ToolScript;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptBudgetTests
 {
     [Fact]

@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tests.Hosted;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class TaskOwnedSourceTests
 {
     [Fact]
@@ -12,8 +14,9 @@ public sealed class TaskOwnedSourceTests
         using var temp = new TempDirectory();
         var aliases = new Dictionary<string, string> { ["old"] = "alpha", ["self"] = "alpha" };
         string Resolve(string id) => aliases.GetValueOrDefault(id, id);
+        var root = Path.Combine(temp.Path, "native");
         using var store = new TaskStore(
-            Path.Combine(temp.Path, "native"),
+            HostedTestBackend.Active ? HostedTestBackend.Create(root).Tasks : new SqliteTaskRowStore(root),
             Resolve,
             id => aliases.Where(pair => pair.Value == id).Select(pair => pair.Key).ToArray()
         );

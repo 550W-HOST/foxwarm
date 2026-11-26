@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tests.Hosted;
 using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
@@ -43,11 +44,12 @@ public sealed class TaskStoreTests
         Assert.Empty(context["tasks"]!.AsArray());
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public void AttachedChildRequiresCommittedOwnerAndBindsTask()
     {
         using var temp = new TempDirectory();
-        using var store = new TaskStore(temp.Path, id => id, _ => []);
+        using var store = OpenStore(temp.Path, id => id, _ => []);
         var created = store.Execute(
             new JsonObject { ["action"] = "create", ["title"] = "child" },
             "parent"
@@ -117,11 +119,12 @@ public sealed class TaskStoreTests
         Assert.Equal(0L, row.GetInt64(5));
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public void CreateClaimUpdateAndTerminalCompletionAreDurable()
     {
         using var temp = new TempDirectory();
-        using var store = new TaskStore(temp.Path, id => id == "old" ? "main" : id, _ => []);
+        using var store = OpenStore(temp.Path, id => id == "old" ? "main" : id, _ => []);
         var created = store.Execute(
             new JsonObject
             {
@@ -164,11 +167,12 @@ public sealed class TaskStoreTests
         );
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public void NonOwnerSessionMayUpdateTitleDescriptionAndNoteButNotStatus()
     {
         using var temp = new TempDirectory();
-        using var store = new TaskStore(temp.Path, id => id, _ => []);
+        using var store = OpenStore(temp.Path, id => id, _ => []);
         var created = store.Execute(
             new JsonObject
             {
@@ -208,7 +212,7 @@ public sealed class TaskStoreTests
                 change["note"] = "shared progress";
             store.Execute(change, "observer");
         }
-        using (var reopened = new TaskStore(temp.Path, value => value, _ => []))
+        using (var reopened = OpenStore(temp.Path, value => value, _ => []))
         {
             var reopenedTask = reopened
                 .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, "observer")
@@ -265,13 +269,14 @@ public sealed class TaskStoreTests
         );
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public void TitleOnlyUpdatePersistsAcrossProjectionsAndRejectsInvalidChangesAtomically()
     {
         using var temp = new TempDirectory();
         string id;
         var title = new string('t', 198) + "😀";
-        using (var store = new TaskStore(temp.Path, value => value, _ => []))
+        using (var store = OpenStore(temp.Path, value => value, _ => []))
         {
             var parent = store
                 .Execute(new JsonObject { ["action"] = "create", ["title"] = "parent" }, "creator")
@@ -375,7 +380,7 @@ public sealed class TaskStoreTests
                 );
             }
         }
-        using var reopened = new TaskStore(temp.Path, value => value, _ => []);
+        using var reopened = OpenStore(temp.Path, value => value, _ => []);
         Assert.Equal(
             title,
             reopened.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload[
@@ -403,11 +408,12 @@ public sealed class TaskStoreTests
         );
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public void AssignmentAndNotificationArgumentsMatchSourceValidation()
     {
         using var temp = new TempDirectory();
-        using var store = new TaskStore(temp.Path, id => id, _ => []);
+        using var store = OpenStore(temp.Path, id => id, _ => []);
 
         foreach (JsonNode? invalid in new JsonNode?[] { null, new JsonObject(), new JsonArray() })
         {
@@ -440,12 +446,13 @@ public sealed class TaskStoreTests
         );
     }
 
+    [Trait("Backend", "neutral")]
     [Fact]
     public async Task IndependentConnectionsAllowOnlyOneSuccessfulClaim()
     {
         using var temp = new TempDirectory();
-        using var first = new TaskStore(temp.Path, id => id, _ => []);
-        using var second = new TaskStore(temp.Path, id => id, _ => []);
+        using var first = OpenStore(temp.Path, id => id, _ => []);
+        using var second = OpenStore(temp.Path, id => id, _ => []);
         var created = first.Execute(
             new JsonObject { ["action"] = "create", ["title"] = "race" },
             "creator"
@@ -513,6 +520,16 @@ public sealed class TaskStoreTests
         Assert.Equal("main", row.GetString(1));
         Assert.Equal(0L, row.GetInt64(2));
     }
+
+    private static TaskStore OpenStore(
+        string root,
+        Func<string, string?> resolve,
+        Func<string, IReadOnlyList<string>> aliases
+    ) => new(
+        HostedTestBackend.Active ? HostedTestBackend.Create(root).Tasks : new SqliteTaskRowStore(root),
+        resolve,
+        aliases
+    );
 
     private sealed class TempDirectory : IDisposable
     {

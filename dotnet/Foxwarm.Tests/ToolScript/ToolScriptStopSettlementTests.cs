@@ -2,9 +2,11 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class ToolScriptStopSettlementTests
 {
     [Theory]
@@ -122,9 +124,8 @@ public sealed class ToolScriptStopSettlementTests
         var tracked = new JsonArray(
             owner.Executor.Tracked.Select(row => (JsonNode)row.DeepClone()).ToArray()
         );
-        var persistedRegistry = JsonNode.Parse(
-            await File.ReadAllTextAsync(Path.Combine(root, "state", "running-exec.json"))
-        );
+        var persistedRegistry = await manager.Storage.Documents.Open(StateDocumentName.RunningExec).ReadTextAsync();
+        Assert.NotNull(persistedRegistry);
         Assert.Single(tracked);
         Assert.False(File.Exists(skipped));
         Assert.False(File.Exists(finished));
@@ -153,7 +154,7 @@ public sealed class ToolScriptStopSettlementTests
         var pid = exec["pid"]!.GetValue<long>();
         var log = exec["logPath"]!.GetValue<string>();
         Assert.True(exec["notifyOnCompletion"]!.GetValue<bool>());
-        Assert.Contains(execId, persistedRegistry!.ToJsonString());
+        Assert.Contains(execId, persistedRegistry);
         Assert.Equal("failed", outer["response"]!["status"]!.GetValue<string>());
         Assert.Contains("not started", outer["response"]!["error"]!.GetValue<string>());
         Assert.Equal(
