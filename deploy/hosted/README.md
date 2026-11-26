@@ -45,11 +45,13 @@ Keep the key-encryption key safe and backed up. The tenant's secrets are encrypt
 
 | Command | Use |
 | --- | --- |
-| `db migrate [--tenant <name>]` | applies schema migrations and creates the tenant; needs the migration URL |
+| `db migrate [--app-role <role>] [--operator-role <role>] [--tenant <name>]` | applies schema migrations and creates the tenant; needs the migration URL |
 | `db status` | lists applied and pending migrations and which key-encryption key wraps each tenant's data key |
 | `hosted token [--tenant <name>]` | prints the tenant's sign-in token; needs the database URL and the key-encryption key |
 | `hosted import --data-root <dir> …` | copies a stopped file-mode installation into a new tenant |
 | `hosted health [--ready]` | the container health check |
+
+Create three database roles before the first migration: the schema owner, which `db migrate` connects as; the runtime role the replicas use (`foxwarm_app` by default, `NOSUPERUSER NOBYPASSRLS`); and the operator role that owns tenant administration (`foxwarm_operator` by default, also `NOBYPASSRLS`, without a login until the operator surface connects as it). `FOXWARM_APP_ROLE` and `FOXWARM_OPERATOR_ROLE` name other roles. A database keeps the roles it was first migrated with.
 
 A replica exits with 0 when stopped, 75 when it lost the tenant (restart it; it comes back as a standby), 78 for a configuration, key or schema refusal that a restart won't fix, and 1 for other failures such as an unreachable database.
 

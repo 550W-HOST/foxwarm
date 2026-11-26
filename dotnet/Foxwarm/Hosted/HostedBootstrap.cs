@@ -22,11 +22,13 @@ internal sealed record HostedBootstrap(
     string? DeploymentConfigPath = null,
     string? KekFile = null,
     string? KekPreviousFile = null,
-    string? AgentsRoot = null
+    string? AgentsRoot = null,
+    string OperatorRole = HostedBootstrap.DefaultOperatorRole
 )
 {
     internal const string DefaultTenant = "default";
     internal const string DefaultAppRole = "foxwarm_app";
+    internal const string DefaultOperatorRole = "foxwarm_operator";
 
     /// <summary>The replica's ephemeral local directory; never tenant state.</summary>
     internal string RequireScratchRoot() =>
@@ -59,7 +61,8 @@ internal sealed record HostedBootstrap(
             Path(environment, DeploymentConfiguration.Variable),
             Path(environment, "FOXWARM_KEK_FILE"),
             Path(environment, "FOXWARM_KEK_PREVIOUS_FILE"),
-            Path(environment, "FOXWARM_AGENTS_DIR")
+            Path(environment, "FOXWARM_AGENTS_DIR"),
+            Name(environment, "FOXWARM_OPERATOR_ROLE", DefaultOperatorRole)
         );
     }
 

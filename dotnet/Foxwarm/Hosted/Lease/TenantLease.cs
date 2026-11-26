@@ -39,6 +39,20 @@ internal sealed record LeaseGrant(int TenantId, string Tenant, string Replica, l
     internal long AcquisitionStart { get; init; }
 }
 
+/// <summary>
+/// When a released tenant must run again without traffic, and the occurrence it is due for
+/// (carried through the activation that the wake-up causes).
+/// </summary>
+internal sealed record WakeupDue(DateTimeOffset DueAt, System.Text.Json.Nodes.JsonObject? Occurrence = null);
+
+/// <summary>A tenant's wake-up row as stored.</summary>
+internal sealed record WakeupRow(
+    DateTimeOffset DueAt,
+    System.Text.Json.Nodes.JsonObject? Occurrence,
+    DateTimeOffset? NextAttemptAt,
+    int Attempts
+);
+
 /// <summary>Why a replica may not take a tenant at all (as opposed to "held by another").</summary>
 internal sealed class LeaseRefusedException(string message) : Exception(message);
 
@@ -132,7 +146,7 @@ internal sealed class TenantLease
             return null;
         await using var update = new NpgsqlCommand(
             "UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
-                + " acquired_at = now(), expires_at = now() + make_interval(secs => $3)"
+                + " acquired_at = now(), expires_at = now() + make_interval(secs => $3), draining_since = NULL"
                 + " FROM tenants t WHERE t.tenant_id = l.tenant_id AND t.name = $1"
                 + " RETURNING l.tenant_id, l.epoch",
             connection,
@@ -341,7 +355,7 @@ internal sealed class TenantLease
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now()"
+            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL"
                 + " WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3 AND state = 'active'"
                 + " RETURNING tenant_id)"
                 + " SELECT pg_notify($4, tenant_id::text) FROM released",
@@ -353,6 +367,132 @@ internal sealed class TenantLease
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Channel });
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Releases the lease at <paramref name="grant"/>'s epoch and, in the same transaction,
+    /// writes the tenant's wake-up row: <paramref name="wakeup"/>, or no row when null (nothing
+    /// due). False, with nothing written, when the grant is no longer current.
+    /// </summary>
+    internal Task<bool> ReleaseWithWakeupAsync(
+        LeaseGrant grant,
+        WakeupDue? wakeup,
+        CancellationToken token
+    ) =>
+        ReleaseUnderLeaseAsync(
+            grant,
+            wakeup is null
+                ? ("SELECT foxwarm_clear_wakeup()", [])
+                : (
+                    "SELECT foxwarm_set_wakeup($1, $2)",
+                    [
+                        new NpgsqlParameter<DateTime> { TypedValue = wakeup.DueAt.UtcDateTime },
+                        Json(wakeup.Occurrence),
+                    ]
+                ),
+            token
+        );
+
+    /// <summary>
+    /// Releases the lease after a start that failed, recording that no replica should try
+    /// for <paramref name="backoff"/> (from database time). An existing wake-up row keeps its due time and
+    /// occurrence; with <paramref name="create"/>, a tenant without one gets a row due now, so
+    /// a scan retries it. False when the grant is no longer current.
+    /// </summary>
+    internal Task<bool> ReleaseAfterFailedStartAsync(
+        LeaseGrant grant,
+        TimeSpan backoff,
+        bool create,
+        CancellationToken token
+    ) =>
+        ReleaseUnderLeaseAsync(
+            grant,
+            (
+                "SELECT foxwarm_wakeup_backoff(now() + make_interval(secs => $1), $2)",
+                [
+                    new NpgsqlParameter<double> { TypedValue = backoff.TotalSeconds },
+                    new NpgsqlParameter<bool> { TypedValue = create },
+                ]
+            ),
+            token
+        );
+
+    private async Task<bool> ReleaseUnderLeaseAsync(
+        LeaseGrant grant,
+        (string Sql, NpgsqlParameter[] Parameters) wakeup,
+        CancellationToken token
+    )
+    {
+        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        try
+        {
+            await using (var context = new NpgsqlCommand(
+                "SELECT set_config('foxwarm.tenant', $1, true), set_config('foxwarm.epoch', $2, true)",
+                connection,
+                transaction
+            ))
+            {
+                context.Parameters.Add(new NpgsqlParameter<string> { TypedValue = grant.TenantId.ToString(System.Globalization.CultureInfo.InvariantCulture) });
+                context.Parameters.Add(new NpgsqlParameter<string> { TypedValue = grant.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture) });
+                await context.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            }
+            await using (var write = new NpgsqlCommand(wakeup.Sql, connection, transaction))
+            {
+                write.Parameters.AddRange(wakeup.Parameters);
+                await write.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            }
+        }
+        catch (PostgresException error) when (error.SqlState == TenantDb.FenceSqlState)
+        {
+            return false;
+        }
+        await using var release = new NpgsqlCommand(
+            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL"
+                + " WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3 AND state = 'active'"
+                + " AND expires_at > now() RETURNING tenant_id)"
+                + " SELECT pg_notify($4, tenant_id::text) FROM released",
+            connection,
+            transaction
+        );
+        release.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
+        release.Parameters.Add(new NpgsqlParameter<string> { TypedValue = grant.Replica });
+        release.Parameters.Add(new NpgsqlParameter<long> { TypedValue = grant.Epoch });
+        release.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Channel });
+        var released = false;
+        await using (var reader = await release.ExecuteReaderAsync(token).ConfigureAwait(false))
+            released = await reader.ReadAsync(token).ConfigureAwait(false);
+        if (!released)
+            return false;
+        await transaction.CommitAsync(token).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>The tenant's wake-up row, or null.</summary>
+    internal async Task<WakeupRow?> ReadWakeupAsync(int tenantId, CancellationToken token)
+    {
+        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT due_at, occurrence::text, next_attempt_at, attempts FROM tenant_wakeups WHERE tenant_id = $1",
+            connection
+        );
+        command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = tenantId });
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        if (!await reader.ReadAsync(token).ConfigureAwait(false))
+            return null;
+        return new(
+            new DateTimeOffset(reader.GetFieldValue<DateTime>(0)),
+            reader.IsDBNull(1) ? null : System.Text.Json.Nodes.JsonNode.Parse(reader.GetString(1))!.AsObject(),
+            reader.IsDBNull(2) ? null : new DateTimeOffset(reader.GetFieldValue<DateTime>(2)),
+            reader.GetInt32(3)
+        );
+    }
+
+    private static NpgsqlParameter Json(System.Text.Json.Nodes.JsonObject? value) =>
+        new()
+        {
+            NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Jsonb,
+            Value = value is null ? DBNull.Value : value.ToJsonString(),
+        };
 
     /// <summary>
     /// Waits as a standby until this replica holds the lease: tries every

@@ -34,8 +34,8 @@ internal sealed class ReplicaRegistry
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "INSERT INTO replicas (replica_id, advertise_address, binary_level, reader_version)"
-                + " VALUES ($1, $2, $3, $4) ON CONFLICT (replica_id) DO UPDATE SET"
+            "INSERT INTO replicas (replica_id, advertise_address, binary_level, reader_version, name)"
+                + " VALUES ($1, $2, $3, $4, $5) ON CONFLICT (replica_id) DO UPDATE SET"
                 + " advertise_address = excluded.advertise_address, binary_level = excluded.binary_level,"
                 + " reader_version = excluded.reader_version, heartbeat_at = now()",
             connection
@@ -48,7 +48,18 @@ internal sealed class ReplicaRegistry
         );
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = binaryLevel });
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = readerVersion });
+        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = LogicalName(replica) });
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The stable name a replica ID was made from (<see cref="NewReplicaId"/>): the same for
+    /// every boot of one logical replica. Placement ranks by it; the lease owner stays the ID.
+    /// </summary>
+    internal static string LogicalName(string replica)
+    {
+        var separator = replica.LastIndexOf('/');
+        return separator > 0 ? replica[..separator] : replica;
     }
 
     internal async Task HeartbeatAsync(string replica, CancellationToken token)

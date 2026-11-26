@@ -73,7 +73,7 @@ export async function processEnvironment(options = {}) {
       run(join(pgBin, 'initdb'), ['-D', join(root, 'pg'), '-U', 'postgres', '--auth=scram-sha-256', '--pwfile=' + join(root, 'pw'), '-E', 'UTF8', '--locale-provider=icu', '--icu-locale=und', '--locale=C.UTF-8'])
       rmSync(join(root, 'pw'))
       run(join(pgBin, 'pg_ctl'), ['-D', join(root, 'pg'), '-l', join(root, 'logs', 'postgres.log'), '-w', '-t', '60', '-o', `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1 -c max_connections=200 ${options.postgresOptions || ''}`, 'start'])
-      environment.psql([`CREATE ROLE foxwarm_owner LOGIN PASSWORD '${ownerPassword}'`, `CREATE ROLE foxwarm_app LOGIN NOBYPASSRLS PASSWORD '${appPassword}'`, 'CREATE DATABASE foxwarm OWNER foxwarm_owner'], 'postgres')
+      environment.psql([`CREATE ROLE foxwarm_owner LOGIN PASSWORD '${ownerPassword}'`, `CREATE ROLE foxwarm_app LOGIN NOBYPASSRLS PASSWORD '${appPassword}'`, 'CREATE ROLE foxwarm_operator NOLOGIN NOBYPASSRLS', 'CREATE DATABASE foxwarm OWNER foxwarm_owner'], 'postgres')
       // VersityGW with a POSIX backend; a bucket is a directory.
       mkdirSync(join(root, 's3', 'foxwarm'), { recursive: true })
       s3Port = await freePort()

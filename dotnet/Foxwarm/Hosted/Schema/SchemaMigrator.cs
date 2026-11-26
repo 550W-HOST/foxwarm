@@ -79,6 +79,7 @@ internal static partial class SchemaMigrator
             singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
             app_role text COLLATE "C" NOT NULL
         );
+        ALTER TABLE schema_info ADD COLUMN IF NOT EXISTS operator_role text COLLATE "C";
         """;
 
     private static readonly Lazy<IReadOnlyList<SchemaMigration>> embedded = new(LoadEmbedded);
@@ -151,18 +152,26 @@ internal static partial class SchemaMigrator
 
     /// <summary>
     /// Applies every missing migration as the schema owner, granting runtime privileges to
-    /// <paramref name="appRole"/>, then makes sure <paramref name="tenant"/> exists with its
-    /// lease row. Returns the migrations applied by this call.
+    /// <paramref name="appRole"/> and operator privileges to <paramref name="operatorRole"/>,
+    /// then makes sure <paramref name="tenant"/> exists with its lease row. Both roles must
+    /// exist and differ; a database keeps the roles it was first migrated with. Returns the
+    /// migrations applied by this call.
     /// </summary>
     internal static async Task<IReadOnlyList<SchemaMigration>> MigrateAsync(
         PgDatabase owner,
         string appRole,
+        string operatorRole,
         string? tenant,
         IReadOnlyList<SchemaMigration>? migrations = null,
         CancellationToken token = default
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appRole);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operatorRole);
+        if (appRole == operatorRole)
+            throw new SchemaIncompatibleException(
+                "The runtime and operator database roles must be different roles."
+            );
         migrations ??= Embedded;
         var applied = new List<SchemaMigration>();
         await using var connection = await owner.OpenAsync(token).ConfigureAwait(false);
@@ -181,24 +190,40 @@ internal static partial class SchemaMigrator
                         throw new SchemaIncompatibleException(
                             $"The runtime database role {appRole} doesn't exist; create it before migrating."
                         );
+                    role.Parameters[0].Value = operatorRole;
+                    if (await role.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+                        throw new SchemaIncompatibleException(
+                            $"The operator database role {operatorRole} doesn't exist; create it before migrating."
+                        );
+                    // A database migrated before the operator role existed records it now.
                     await using (var insert = new NpgsqlCommand(
-                        "INSERT INTO schema_info (app_role) VALUES ($1) ON CONFLICT (singleton) DO NOTHING",
+                        "INSERT INTO schema_info (app_role, operator_role) VALUES ($1, $2)"
+                            + " ON CONFLICT (singleton) DO UPDATE SET operator_role = $2"
+                            + " WHERE schema_info.operator_role IS NULL",
                         connection,
                         transaction
                     ))
                     {
                         insert.Parameters.Add(new NpgsqlParameter<string> { TypedValue = appRole });
+                        insert.Parameters.Add(new NpgsqlParameter<string> { TypedValue = operatorRole });
                         await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
                     }
                     await using var info = new NpgsqlCommand(
-                        "SELECT app_role FROM schema_info",
+                        "SELECT app_role, operator_role FROM schema_info",
                         connection,
                         transaction
                     );
-                    var recorded = (string)(await info.ExecuteScalarAsync(token).ConfigureAwait(false))!;
+                    await using var reader = await info.ExecuteReaderAsync(token).ConfigureAwait(false);
+                    await reader.ReadAsync(token).ConfigureAwait(false);
+                    var recorded = reader.GetString(0);
+                    var recordedOperator = reader.GetString(1);
                     if (recorded != appRole)
                         throw new SchemaIncompatibleException(
                             $"This database grants runtime privileges to {recorded}, not {appRole}."
+                        );
+                    if (recordedOperator != operatorRole)
+                        throw new SchemaIncompatibleException(
+                            $"This database grants operator privileges to {recordedOperator}, not {operatorRole}."
                         );
                 },
                 token
@@ -222,12 +247,13 @@ internal static partial class SchemaMigrator
                             return;
                         }
                         await using (var setting = new NpgsqlCommand(
-                            "SELECT set_config('foxwarm.app_role', $1, true)",
+                            "SELECT set_config('foxwarm.app_role', $1, true), set_config('foxwarm.operator_role', $2, true)",
                             connection,
                             transaction
                         ))
                         {
                             setting.Parameters.Add(new NpgsqlParameter<string> { TypedValue = appRole });
+                            setting.Parameters.Add(new NpgsqlParameter<string> { TypedValue = operatorRole });
                             await setting.ExecuteScalarAsync(token).ConfigureAwait(false);
                         }
                         await ExecuteAsync(connection, transaction, migration.Sql, token)

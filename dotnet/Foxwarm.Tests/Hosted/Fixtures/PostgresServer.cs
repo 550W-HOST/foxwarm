@@ -19,6 +19,7 @@ internal sealed class PostgresServer
     internal const string UrlVariable = "FOXWARM_TEST_PG_URL";
     internal const string OwnerRole = "foxwarm_test_owner";
     internal const string AppRole = "foxwarm_test_app";
+    internal const string OperatorRole = "foxwarm_test_operator";
     internal const string Tenant = "default";
 
     private static readonly Lazy<Task<PostgresServer>> shared = new(StartAsync);
@@ -27,11 +28,13 @@ internal sealed class PostgresServer
     private readonly string superuser;
     private readonly string ownerPassword;
     private readonly string appPassword;
+    private readonly string operatorPassword;
 
     private PostgresServer(
         string superuser,
         string ownerPassword,
         string appPassword,
+        string operatorPassword,
         string template,
         string? socketDirectory
     )
@@ -39,6 +42,7 @@ internal sealed class PostgresServer
         this.superuser = superuser;
         this.ownerPassword = ownerPassword;
         this.appPassword = appPassword;
+        this.operatorPassword = operatorPassword;
         Template = template;
         SocketDirectory = socketDirectory;
     }
@@ -79,6 +83,15 @@ internal sealed class PostgresServer
             Password = appPassword,
         }.ConnectionString;
 
+    internal string Operator(string database) =>
+        new NpgsqlConnectionStringBuilder(superuser)
+        {
+            Database = database,
+            Username = OperatorRole,
+            Password = operatorPassword,
+            Pooling = false,
+        }.ConnectionString;
+
     /// <summary>A fresh database copied from the migrated template, or an empty one.</summary>
     internal async Task<HostedTestDatabase> CreateDatabaseAsync(bool migrated = true)
     {
@@ -114,10 +127,11 @@ internal sealed class PostgresServer
             );
         var ownerPassword = Secret();
         var appPassword = Secret();
+        var operatorPassword = Secret();
         var template = $"fw_template_{Environment.ProcessId}";
-        var server = new PostgresServer(superuser, ownerPassword, appPassword, template, socketDirectory);
+        var server = new PostgresServer(superuser, ownerPassword, appPassword, operatorPassword, template, socketDirectory);
         var admin = server.Superuser("postgres");
-        foreach (var (role, password) in new[] { (OwnerRole, ownerPassword), (AppRole, appPassword) })
+        foreach (var (role, password) in new[] { (OwnerRole, ownerPassword), (AppRole, appPassword), (OperatorRole, operatorPassword) })
             await ExecuteAsync(
                 admin,
                 $"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN"
@@ -127,7 +141,7 @@ internal sealed class PostgresServer
         await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS {template} WITH (FORCE)");
         await ExecuteAsync(admin, $"CREATE DATABASE {template} OWNER {OwnerRole}");
         await using (var owner = new PgDatabase(server.Owner(template), "foxwarm-test-migrate"))
-            await SchemaMigrator.MigrateAsync(owner, AppRole, Tenant);
+            await SchemaMigrator.MigrateAsync(owner, AppRole, OperatorRole, Tenant);
         if (socketDirectory is null)
             AppDomain.CurrentDomain.ProcessExit += (_, _) => DropDatabasesBestEffort(admin);
         return server;
@@ -279,6 +293,8 @@ internal sealed class HostedTestDatabase : IAsyncDisposable
     internal string AppConnectionString => server.App(Name);
 
     internal string OwnerConnectionString => server.Owner(Name);
+
+    internal string OperatorConnectionString => server.Operator(Name);
 
     internal string SuperuserConnectionString => server.Superuser(Name);
 

@@ -7,7 +7,10 @@ namespace Foxwarm.Tests.Hosted;
 /// <c>tenant_id</c> defaulted from the transaction's tenant, forced row-level security with a
 /// policy, and the statement-level fence trigger on every write; every collatable column uses
 /// byte ordering ("C") so paging and keyset order match the SQLite stores. Only the listed
-/// cluster tables may lack a tenant.
+/// cluster tables may lack a tenant. A cluster table has no row-level security, and the runtime
+/// role (<c>schema_info.app_role</c>) only reads it: its writes go through lease-checked
+/// functions, except the replica registration and lease acquisition listed in
+/// <see cref="RuntimeClusterWrites"/>. It can't read operator credentials at all.
 /// </summary>
 internal static class SchemaLint
 {
@@ -18,7 +21,31 @@ internal static class SchemaLint
         "tenant_leases",
         "schema_migrations",
         "schema_info",
+        "tenant_hostnames",
+        "tenant_wakeups",
+        "provider_grants",
+        "operator_documents",
+        "operator_credentials",
     ];
+
+    /// <summary>The runtime role's direct writes to cluster tables (P1's registry and leases).</summary>
+    internal static readonly Dictionary<string, string[]> RuntimeClusterWrites = new()
+    {
+        ["replicas"] = ["INSERT", "UPDATE", "DELETE"],
+        ["tenant_leases"] = ["UPDATE"],
+    };
+
+    // Cluster tables the runtime role mustn't read.
+    private static readonly string[] RuntimeUnreadable = ["operator_credentials"];
+
+    private const string ClusterPrivileges = """
+        SELECT c.relname, c.relrowsecurity, p.privilege, has_table_privilege(i.app_role, c.oid, p.privilege)
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         CROSS JOIN (SELECT app_role FROM schema_info) i
+         CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) AS p (privilege)
+         WHERE c.relkind IN ('r', 'p') AND n.nspname = current_schema() AND c.relname = ANY ($1)
+         ORDER BY 1, 3
+        """;
 
     // pg_trigger.tgtype bits: ROW 1, BEFORE 2, INSERT 4, DELETE 8, UPDATE 16.
     private const string Tables = """
@@ -102,6 +129,25 @@ internal static class SchemaLint
                 problems.Add(
                     $"{reader.GetString(0)}: {(reader.GetBoolean(2) ? "primary key" : "unique index")} {reader.GetString(1)} doesn't start with tenant_id"
                 );
+        }
+        await using (var command = new NpgsqlCommand(ClusterPrivileges, connection))
+        {
+            command.Parameters.Add(new NpgsqlParameter<string[]> { TypedValue = ClusterTables });
+            await using var reader = await command.ExecuteReaderAsync();
+            var reported = new HashSet<string>();
+            while (await reader.ReadAsync())
+            {
+                var table = reader.GetString(0);
+                if (reader.GetBoolean(1) && reported.Add(table))
+                    problems.Add($"{table}: cluster tables have no row-level security");
+                var privilege = reader.GetString(2);
+                var granted = reader.GetBoolean(3);
+                var allowed = privilege == "SELECT"
+                    ? !RuntimeUnreadable.Contains(table)
+                    : RuntimeClusterWrites.TryGetValue(table, out var writes) && writes.Contains(privilege);
+                if (granted && !allowed)
+                    problems.Add($"{table}: the runtime role has {privilege}");
+            }
         }
         await using (var command = new NpgsqlCommand(Collations, connection))
         await using (var reader = await command.ExecuteReaderAsync())

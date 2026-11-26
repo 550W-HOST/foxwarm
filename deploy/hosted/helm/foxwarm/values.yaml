@@ -51,7 +51,8 @@ secrets:
   s3SecretAccessKey: ""
 
 migrate:
-  # The schema owner's URL, used only by the pre-install/pre-upgrade migration Job.
+  # The schema owner's URL, used only by the pre-install/pre-upgrade migration Job. The runtime
+  # role (foxwarm_app) and the operator role (foxwarm_operator) must exist before it runs.
   existingSecret: ""   # key: migrate-database-url
   databaseUrl: ""
   backoffLimit: 3
