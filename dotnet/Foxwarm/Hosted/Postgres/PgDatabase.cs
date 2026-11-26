@@ -11,18 +11,34 @@ internal sealed class PgDatabase : IAsyncDisposable
 {
     private readonly NpgsqlDataSource source;
 
-    internal PgDatabase(string connectionString, string applicationName)
+    /// <summary>Connections of a replica's lease control data source (<see cref="Control"/>).</summary>
+    internal const int ControlConnections = 2;
+
+    internal PgDatabase(string connectionString, string applicationName, int? maxPoolSize = null)
     {
         var settings = new NpgsqlConnectionStringBuilder(PgConnectionString.Normalize(connectionString))
         {
             ApplicationName = applicationName,
         };
+        if (maxPoolSize is { } size)
+            settings.MaxPoolSize = size;
         var builder = new NpgsqlSlimDataSourceBuilder(settings.ConnectionString);
         builder.EnableTransportSecurity();
         builder.EnableArrays();
         source = builder.Build();
         Database = settings.Database ?? "";
+        MaxPoolSize = maxPoolSize;
     }
+
+    /// <summary>
+    /// A replica's reserved data source for lease control traffic: renewal, release and the
+    /// fencing path. Its own small pool, so tenant transactions that saturate the shared pool
+    /// can't delay a renewal past its deadline.
+    /// </summary>
+    internal static PgDatabase Control(string connectionString) =>
+        new(connectionString, "foxwarm-control", ControlConnections);
+
+    internal int? MaxPoolSize { get; }
 
     /// <summary>The database name, for diagnostics.</summary>
     internal string Database { get; }
