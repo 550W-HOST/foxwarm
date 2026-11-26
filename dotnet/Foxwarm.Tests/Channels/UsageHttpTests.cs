@@ -5,6 +5,7 @@ using Foxwarm.Models;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class UsageHttpTests
 {
     [Fact]
