@@ -1,15 +1,15 @@
 # Unit: Storage context and store interfaces
 
-Files: `dotnet/Foxwarm/Storage/StorageContext.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/FileSessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityCodec.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionQueueJson.cs`, `dotnet/Foxwarm/Sessions/Storage/ArchiveStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.Session.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalogStore.cs`, `dotnet/Foxwarm.Tests/Storage/SessionAuthorityContractTests.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthority.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthorityTests.cs`, `dotnet/Foxwarm.Tests/Storage/FileSessionAuthorityBackendTests.cs`, `dotnet/Foxwarm.Tests/Sessions/FileAuthorityTestExtensions.cs`
-Secondary files: `dotnet/Foxwarm/Sessions/SessionManager.AgentOps.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionIdentityMoveJournal.cs`, `dotnet/Foxwarm/Sessions/SessionSequenceProjection.cs`, `dotnet/Foxwarm/Sessions/UsageOverview.cs`
+Files: `dotnet/Foxwarm/Storage/StorageContext.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/FileSessionAuthorityBackend.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityCodec.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionQueueJson.cs`, `dotnet/Foxwarm/Sessions/Storage/ArchiveStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.Session.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalogStore.cs`, `dotnet/Foxwarm/Sessions/TaskRows.cs`, `dotnet/Foxwarm/Sessions/SqliteTaskRowStore.cs`, `dotnet/Foxwarm/Models/LlmJournalStore.cs`, `dotnet/Foxwarm/Models/LlmRequestJournal.Store.cs`, `dotnet/Foxwarm/Models/TextRedactionRecords.cs`, `dotnet/Foxwarm/Storage/StateDocuments.cs`, `dotnet/Foxwarm/Storage/InstanceCredentials.cs`, `dotnet/Foxwarm.Tests/Storage/SessionAuthorityContractTests.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthority.cs`, `dotnet/Foxwarm.Tests/Storage/SegmentedSessionAuthorityTests.cs`, `dotnet/Foxwarm.Tests/Storage/FileSessionAuthorityBackendTests.cs`, `dotnet/Foxwarm.Tests/Storage/TaskRowStoreTests.cs`, `dotnet/Foxwarm.Tests/Storage/StateDocumentsTests.cs`, `dotnet/Foxwarm.Tests/Storage/InstanceCredentialsTests.cs`, `dotnet/Foxwarm.Tests/Sessions/FileAuthorityTestExtensions.cs`
+Secondary files: `dotnet/Foxwarm/Sessions/SessionManager.AgentOps.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionIdentityMoveJournal.cs`, `dotnet/Foxwarm/Sessions/SessionSequenceProjection.cs`, `dotnet/Foxwarm/Sessions/UsageOverview.cs`, `dotnet/Foxwarm/Sessions/TaskStore.cs`, `dotnet/Foxwarm/Secrets/InstanceSecrets.cs`, `dotnet/Foxwarm/HttpServerSettings.cs`, `dotnet/Foxwarm/ToolScript/ToolScriptRunStore.cs`, `dotnet/Foxwarm/Secrets/InstanceKeys.cs`
 
 ## Purpose
 
-Domain code reaches persistent state through storage interfaces instead of data-root paths, so a database-backed implementation can be added without changing domain logic. `IStorageContext` holds one runtime's stores. `FileStorageContext` is file mode: the files and SQLite databases under one data directory, implemented by the existing store classes. The context holds the Session authority backend, the Archive, the identity ledger and the Session catalog. Other stores join it as they get their interfaces.
+Domain code reaches persistent state through storage interfaces instead of data-root paths, so a database-backed implementation can be added without changing domain logic. `IStorageContext` holds one runtime's stores. `FileStorageContext` is file mode: the files and SQLite databases under one data directory, implemented by the existing store classes. The context holds the Session authority backend, the Archive, the identity ledger, the Session catalog, the Task rows, the model request journal, ToolScript run records, the state documents and the instance credentials. Blobs and Agent files join it as they get their interfaces.
 
 ## D-storage-seams
 
-**Derived design.** [2026-11-26] Each store's interface sits at its existing class boundary. The file implementation is today's code, including its failure classification, and is not a generic document store. Interfaces carry no tenant or fencing parameters; a database context binds them per instance. Pure validation and value mapping (`SessionAuthorityCodec`, `SessionQueueJson`, `SessionAuthorityReader.Normalize`, `SessionAuthorityDocument` validation) stay shared static code, so every representation stores and loads the same value.
+**Derived design.** [2026-11-26] Each store's interface sits at its existing class boundary, except small whole-document state, which shares one interface ([D-state-documents](#d-state-documents)). The file implementation is today's code, including its failure classification. Interfaces carry no tenant or fencing parameters; a database context binds them per instance. Pure validation and value mapping (`SessionAuthorityCodec`, `SessionQueueJson`, `SessionAuthorityReader.Normalize`, `SessionAuthorityDocument` validation) stay shared static code, so every representation stores and loads the same value.
 
 `SessionManager` builds a `FileStorageContext` from its data root unless a context is supplied. The atomic-write and canonical-commit test hooks belong to that file context (`FileStorageOptions`). Constructing a file context performs no I/O; `SessionManager` still disposes the catalog when it stops.
 
@@ -47,6 +47,46 @@ File members that exist only for inspection, fixtures and test hooks (the SQLite
 ### Session catalog
 
 `ISessionCatalogStore` is the instance surface of `SessionCatalog` used by Main: authority publication, identity rewrite, exact and alias resolution, topology, list, group, activity and sequence queries, presentation mutations, deletion, the `Changed` event and the presentation-mutation hook. `Exists` and `OpenIdentityRecovery` serve pending identity recovery. Projection rules and value helpers stay static on `SessionCatalog` ([projections](./session-catalog-projection.md), [mutations](./session-catalog-mutations.md)). Migration and upgrade inspection construct their own `SessionCatalog`.
+
+### Tasks
+
+`TaskStore` keeps every Task rule: validation, permissions, status and assignment transitions, notification and reminder state, and legacy goal migration. It reaches rows only through `ITaskRowStore` (`Sessions/TaskRows.cs`): `Exists` and `Run(TaskRowAccess, …)` give an `ITaskRows` inside one direct, read or write transaction, with row reads, inserts, field updates, notes, notification settlement, filtered lists and counts, children and the legacy-goal lookup. `SqliteTaskRowStore` holds the SQL, schema and migrations unchanged. A database store implements only the rows, so the rules aren't duplicated. `TaskService` receives the row store from the context.
+
+### Model request journal and text redaction
+
+`ILlmJournalStore` (`Models/LlmJournalStore.cs`) is what Main uses of the request journal: request admission, attempt starts and results, chat results, redaction records, reconstruction and listing, usage backfill, and the usage and redaction queries with their change events. `LlmRequestJournalStore` implements it explicitly ([model request journal](../threads/model-request-and-streaming.md)). Legacy JSONL migration, the SQLite authority marker and export stay on the file class; startup runs the migration only for a file journal.
+
+`ITextRedactionStore` (`Models/TextRedactionRecords.cs`) is the slot and known-original cache of `TextRedactor`; `TextRedactionStore` implements it unchanged ([persistence](./model-text-redaction-persistence.md)). The same slot digest must return the same ranges after a restart. `InstanceSecrets` opens it through an injectable opener that receives the derived key.
+
+### ToolScript run records
+
+`IToolScriptRunStore` covers the per-run lane, existence, read, owner listing and atomic replace of run records under the run's data budget. `ToolScriptRunStore` (`state/toolscript-runs/<runId>.json`) implements it; `MainToolScript` receives it from the context ([ToolScript](./toolscript.md)). The record path and the write-stage hook stay on the file class for tests.
+
+### State documents
+
+`IStateDocuments.Open(StateDocumentName)` returns an `IStateDocument` for one whole document: `Exists`, `ReadText`, `ReadFirstAvailable` (the current version, then retained backups), `ReplaceText` (atomic; a failure after publication is `AuthorityCommittedException`) and `EnsureDurable`. Parsing, validation, caching and write serialization stay in the owning class:
+
+| Name | File | Owner | File rules kept |
+|---|---|---|---|
+| `Timers` | `state/timers.json` | `MainTimers` | absent only under a directory parent ([timers](./tasks-timers.md)) |
+| `RunningExec` | `state/running-exec.json` | `LocalExecManager` | missing path reads as absent ([local exec](./tools-local-io.md)) |
+| `Channels` | `state/channels.json` | `SessionDeletionChannels` | missing path reads as absent ([deletion storage](./session-deletion-storage.md)) |
+| `Nodes` | `state/nodes.json` | `ApprovedNodeRegistry` | owner-only, three rotated backups plus the legacy `.bak`, fallback reads ([external Nodes](./external-nodes.md)) |
+| `McpOAuth` | `state/mcp-oauth.json` | `McpOAuthService` | owner-only ([MCP OAuth](./dotnet-mcp-oauth.md)) |
+| `Agents`, `Installation` | `state/agents.json`, `state/installation.json` | `AgentCatalog` | reader-level fence unchanged ([Session domain](./session-domain.md), [isolation migration](./isolation-migration.md)) |
+| `Secrets`, `SecretExposures` | `state/secrets.json`, `state/secret-exposures.json` | `SecretStore`, `SecretExposures` | owner-only ([secrets](./dotnet-secrets.md)) |
+
+The Node registry's write-stage hook is the registry's `WriteStage` test property.
+
+### Secrets and instance credentials
+
+- `IKeyRing` (`Secrets/InstanceKeys.cs`) is where the installation master key lives: `Exists` and `OpenOrCreate`. Derivation stays on `InstanceKeys`. `FileKeyRing` is `keys/secrets.key`. `InstanceSecrets` keeps the rule that a missing key is never re-created while an encrypted store exists.
+- `IInstanceCredentials` (`Storage/InstanceCredentials.cs`) reads or creates, once and owner-only, the HTTP token, the Node pairing token and the Node event capability secret. Callers trim and validate. `FileInstanceCredentials` keeps each file's existing creation and decoding (strict UTF-8 for the two tokens; the capability secret is created exclusively, flushed and its directory synced). `HttpServerSettings`, `ApprovedNodeRegistry` and `RemoteExecAuthority` take it; the Node hub receives the context's.
+- `InstanceSecrets` and the HTTP settings are built by the host entry before `SessionManager` and its context exist, so they default to file implementations of the key ring, documents and credentials from the data root. A database composition passes its own.
+
+## D-state-documents
+
+**Derived design.** [2026-11-26] Chosen instead of one interface per state file. Timers, the running-exec registry, channel bindings, the Node registry, MCP OAuth grants, Agent and installation metadata and the encrypted secret documents share one semantics: read the whole document, replace it atomically. One `IStateDocuments` store serves them, with a closed name set: a name is added with its owning class, never chosen by a caller. The file implementation keeps each file's existing failure classification and file mode as per-name rules. A database context maps it to one documents table keyed by tenant and name, with replace under the tenant's lease fence.
 
 ## D-session-authority-representations
 
@@ -100,10 +140,18 @@ This classification of current settings is for a hosted mode; file mode reads al
 
 Open: whether tenants may bring their own model providers or only select from operator-provided ones, and whether `nodeProviders` is ever tenant-scoped.
 
+### Configuration documents
+
+[2026-11-26] Deferred to the hosted phase that splits the configuration (P1). `config.yaml`, `models.yaml`, `tool-authorization.yaml`, `mcp.json` and `webui.json` stay file reads in their owners. The split decides which keys stay in deployment files and which move to tenant documents, so a whole-file seam now would be reshaped. The tool-authorization policy has physical-file guarantees that a tenant-policy store must replace with equivalent ones, not drop: the native file-kind check (a regular file, absent only when missing), the regular-file handle check, the byte limit, and the `policy-read` operation rule that protects the physical `PolicyPath` from Agent tools ([tool authorization](./tool-authorization.md), [operation rules](./tool-operation-rules.md)).
+
+### Activity index
+
+The [activity index](./activity-index.md) keeps opening the Archive SQLite file for its derived tables [2026-11-26]. It gets its own rebuildable interface together with the Vector boundary in P3.
+
 ### Capability profiles
 
 A runtime without a `master` Node (every hosted installation) needs a capability profile fixed when the runtime is built. It decides whether Main-local file tools and exec, stdio MCP servers, executable Node Providers and the Claude Code runtime exist. Default tool declarations must stay byte-identical for an unchanged profile ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)). File mode has nothing that reads a profile yet, so none exists; it arrives with the first runtime that has no `master`.
 
 ## Tests
 
-`SessionAuthorityContractTests` (abstract) runs as `FileSessionAuthorityContractTests` and `SegmentedSessionAuthorityContractTests`. `SegmentedSessionAuthorityTests` compares the segmented value with the file document after the same commits and counts what each kind of commit rewrites. `FileSessionAuthorityBackendTests` covers the file backend's own reads, moves and deletion stages. `FileAuthorityTestExtensions` exposes the file paths that file-mode tests stage or inspect.
+`SessionAuthorityContractTests` (abstract) runs as `FileSessionAuthorityContractTests` and `SegmentedSessionAuthorityContractTests`. `SegmentedSessionAuthorityTests` compares the segmented value with the file document after the same commits and counts what each kind of commit rewrites. `FileSessionAuthorityBackendTests` covers the file backend's own reads, moves and deletion stages. `TaskRowStoreTests` runs one Task action sequence over the SQLite rows and test-only in-memory rows and requires identical results. `StateDocumentsTests` covers absence, replacement, owner-only mode, the timers' parent rule and the Node registry's backup fallback. `InstanceCredentialsTests` covers create-once, owner-only mode and strict decoding. `FileAuthorityTestExtensions` exposes the file paths that file-mode tests stage or inspect.

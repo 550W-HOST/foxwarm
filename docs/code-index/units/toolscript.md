@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/ToolScript/monty-source.json`, `dotnet/Foxwarm/ToolScript
 
 Runs Main-local Monty ToolScript slices, routes the supported host calls, persists run records and opaque waiting snapshots, and resumes or cancels owner-scoped runs without bypassing normal tool/Session boundaries.
 
+Storage: `MainToolScript` reaches run records through `IToolScriptRunStore` ([storage context](./storage-context.md#toolscript-run-records)).
+
 ## Stable methods and callers
 
 - `MainToolScript.NormalizeStartArgs` validates and normalizes starter intent without source I/O for ordinary starts and [script timer registration](./tasks-timers.md#owner-bound-toolscript-timers).

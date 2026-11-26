@@ -7,6 +7,8 @@ Secondary files: `dotnet/Foxwarm/Models/TextRedactor.cs`, `dotnet/Foxwarm/Models
 
 Keeps [reversible text redaction](./model-text-redaction.md) prefix-stable across a Main restart. Within one process an unchanged slot is sent exactly as before because its detection and memoized literal pass are cached and placeholders are deterministic. Re-processing the whole history after a restart would not reproduce the per-turn results: the literal pass would see later known values, and combined detection (`batchBytes`) would see different context. Without persistence every redacting Session therefore paid one uncached provider request per restart.
 
+Storage: `TextRedactor` uses the cache through `ITextRedactionStore`; `InstanceSecrets` opens it through an injectable opener ([storage context](./storage-context.md#model-request-journal-and-text-redaction)).
+
 ## D-model-text-redaction-persistence
 
 [2026-11-10, user decision] Each slot's finished result (its replaced ranges) and the known originals are persisted, so the same history produces byte-identical provider input after a restart without detector calls, and literal masking of new slots, restoration and collision checks continue with the same known set. This replaces the earlier rule (2026-11-03) that the reverse map and detection cache are memory-only. Persisted results are never reused under other settings: a settings change is a new cache identity and re-processes everything.

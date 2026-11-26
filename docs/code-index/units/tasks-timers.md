@@ -7,6 +7,8 @@ Secondary files: `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Timers.cs`, `dotnet
 
 Persists current task authority/notifications and progress checkpoints, parses cron schedules, and schedules Main timers with explicit CRUD and restart behavior.
 
+Storage: `TaskStore` reaches Task rows through `ITaskRowStore` (SQLite in file mode), and `MainTimers` reads and replaces `state/timers.json` as the `Timers` state document ([storage context](./storage-context.md#tasks)).
+
 ## Stable methods and callers
 
 - `TaskProgress.Sequences` and `TaskProgress.IsOrdinaryVisible` define the ordinary-visible sequence input used by model requests and compaction checkpoints. `TaskStore.Execute` owns task records, owner/assignee, parent linkage, title/status/result/description, notification state, and durable CRUD. `TaskStore.MigrateLegacyGoal` creates/updates one legacy Goal task; `TaskStore.TaskContext` checkpoints reminder progress and, when consuming, returns and resets due task context; it appends no Session history or queue rows itself. `SessionChatService` turns consumed context into the persisted reminder row ([D-tasks-reminder-history](#d-tasks-reminder-history)). The method accepts an optional live `anchorSeq` to create/claim/self-assignment/open/active/reset updates so reminder progress is anchored to the source Session message sequence.

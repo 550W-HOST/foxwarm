@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/Sessions/Storage/SessionDeletionChannels.cs`, `dotnet/Fox
 
 Stores persisted channel attachments and deletion/worker cleanup state used while `SessionManager` claims and drains destructive lifecycle operations.
 
+Storage: `SessionDeletionChannels` reads and replaces `state/channels.json` as the `Channels` state document; the legacy catalog evidence is still read from its file ([storage context](./storage-context.md#state-documents)).
+
 ## Stable methods and callers
 
 The channel store owns the existing `channels.json` payload for normal attachment reads/writes, identity rewrite and deletion cleanup; the worker adapter reads retained Worker ownership and cleans inactive target rows without starting a Worker runtime. `SessionManager.Deletion*` owns selection, claims, stage ordering, and final authority/catalog removal; these files are not an independent deletion authority.

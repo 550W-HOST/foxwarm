@@ -45,6 +45,8 @@ Compact-plan failures and context-length/too-large request rejections append the
 
 Raw request/response/error/stream diagnostics remain a separate best-effort debugging surface with existing recent-file housekeeping, not a second journal. Their producer/redaction contract belongs to [raw diagnostics](../units/model-raw-diagnostics.md).
 
+Main reaches the journal through `ILlmJournalStore` ([storage context](../units/storage-context.md#model-request-journal-and-text-redaction)).
+
 ## D-model-usage-cost
 
 **Directly requested observable accounting, implemented by a derived pricing/aggregation design.** It depends on [concrete attempt attribution](./model-routing.md#d-model-routing-concrete-attribution) and provider-reported usage, not token estimates. Pricing resolution and stored cost fields make the calculation reproducible; old records without prices are not evidence for invented historical costs.

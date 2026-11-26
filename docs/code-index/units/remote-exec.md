@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Exec.cs`, `dotnet/Foxwarm/Nodes/N
 
 Dispatches real advertised external exec through the existing authorized tool registry. Main owns transient start-time reservations and Session admission; the official client owns its process, artifacts and pending completion replay. This is not a persistent exec queue, a process-polling service, an external-owner platform or a Worker mailbox.
 
+Storage: the Node event capability secret is read or created through `IInstanceCredentials` ([storage context](./storage-context.md#secrets-and-instance-credentials)).
+
 ## Stable symbols and consumers
 
 - `NodeConnectionHub.ExecuteAsync` reserves the exact identity before exec dispatch. `ExecuteOnceAsync` carries the Main-owned original canonical Session/Agent, captured Node/cwd, exec identity and completion grant over the authenticated connection. Ordinary non-exec tools retain the same correlated transport; Master exec retains `LocalExecManager`.

@@ -8,6 +8,8 @@ Shared algorithm ownership: [native file primitives](./dotnet-node-primitives.md
 
 Implements shared canonical file reads/writes/patches over native or target primitives, native path/cwd rules, persistent native/provider and parallel exec, file delivery, and explicit handoff confirmation.
 
+Storage: `LocalExecManager` reads and replaces `state/running-exec.json` as the `RunningExec` state document ([storage context](./storage-context.md#state-documents)).
+
 ## Stable methods and callers
 
 - `MainNativePaths` resolves native file/exec defaults from the actual Agent directory and explicit Session cwd; the separate generic policy and Agent-local layers authorize physical destinations; `FileToolCore` scans/reads through the [shared native primitives](./dotnet-node-primitives.md); `FileToolCore.WriteBytes` performs ordinary native content writes and `PendingWriteRefs` tracks retryable write artifacts. `FileToolWrite` remains the separate atomic delivery/memory publication owner.

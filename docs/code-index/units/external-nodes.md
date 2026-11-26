@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/Nodes/ApprovedNodeRegistry.cs`, `dotnet/Foxwarm/Nodes/App
 
 Records administrator-approved trust in already-running Node environments, publishes their authenticated WebSocket or exec-only Shell HTTP connections, and dispatches advertised ordinary tools. This is not a Node Provider or environment-creation service. Placement and connection changes follow the [stable request-prefix contract](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability); they continue to govern execution and tool discovery independently.
 
+Storage: the registry reads and replaces `state/nodes.json` as the `Nodes` state document and the pairing token through `IInstanceCredentials` ([storage context](./storage-context.md#state-documents)).
+
 ## Stable symbols and consumers
 
 - `ApprovedNodeRegistry` reads Source-compatible `state/nodes.json` and `state/node_token`, with the Source numbered/legacy backups: each atomic, owner-only update rotates `nodes.json.1.bak`–`.3.bak` and refreshes `nodes.json.bak` through the shared [durable state-file helper](./dotnet-node-primitives.md#durable-state-files), and loading falls back through them in that order, rewriting a recovered registry. Updates persist credential hashes, pending requests and unclaimed pairing credentials. `Create`, `Request`, `Approve`, `Claim`, `Reject`, `Rename`, `Remove`, `Touch` and `Cleanup` implement the trust lifecycle. Credentials are rechecked at registration, so removing and recreating an identity cannot revive a socket authenticated with the old credential.

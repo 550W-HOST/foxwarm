@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/Sessions/AgentCatalog.Bootstrap.cs`, `dotnet/Foxwarm/Sess
 
 Defines stable Session/Agent identity and message shapes used by owner/runtime, JSON authority, catalog authority, model request construction, tools, and WebUI.
 
+Storage: `AgentCatalog` reads and replaces `state/agents.json` and `state/installation.json` as the `Agents` and `Installation` state documents ([storage context](./storage-context.md#state-documents)).
+
 ## Stable symbols and callers
 
 - `SessionIdentity` is the canonical `(sessionId, agent)` lifetime key; `SessionBoundary`/`SessionContinuation` carry fork/continuation relationships.

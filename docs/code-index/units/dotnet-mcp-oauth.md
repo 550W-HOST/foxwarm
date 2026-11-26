@@ -9,6 +9,8 @@ One administrator-selected third-party account authorizes the named server for t
 
 The pinned official Core SDK 2.2.0 exposes OAuth only through per-transport `HttpClientTransportOptions.OAuth`; its reusable discovery, exchange and refresh helpers are internal/private. That provider can start interactive consent and replay insufficient-scope responses, and its refresh lock belongs to a transport. The .NET service therefore implements the required standard OAuth requests through an injected `HttpClient` handler. The SDK continues to own MCP serialization, initialization, transport selection, request dispatch and remote Session termination. There is no reflection or replacement protocol implementation.
 
+Storage: grants are the `McpOAuth` state document ([storage context](./storage-context.md#state-documents)).
+
 ## Stable symbols and callers
 
 - `McpOAuthService.PublicUrl` and `ClientMetadata` derive fixed callback/CIMD addresses from the startup app `url`, preserving its deployment prefix. Missing URL is harmless to normal hosting; OAuth reports an actionable error. Neither request Host nor the ordinary HTTP address fallback creates OAuth authority.
