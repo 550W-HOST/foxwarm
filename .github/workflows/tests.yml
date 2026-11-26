@@ -292,6 +292,77 @@ jobs:
           include-hidden-files: false
           retention-days: 7
 
+  hosted-containers:
+    name: Hosted image, Compose drills and render checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      FOXWARM_HOSTED_IMAGE: foxwarm-hosted:ci
+      FOXWARM_HOSTED_NEXT_IMAGE: foxwarm-hosted:ci-next
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - name: Install helm and kubeconform
+        run: |
+          set -eu
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          cd "$tools"
+          curl -fsSLo helm.tgz https://get.helm.sh/helm-v3.22.1-linux-amd64.tar.gz
+          echo '896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea  helm.tgz' | sha256sum -c -
+          tar -xzf helm.tgz --strip-components=1 linux-amd64/helm
+          curl -fsSLo kubeconform.tgz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          echo '9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  kubeconform.tgz' | sha256sum -c -
+          tar -xzf kubeconform.tgz kubeconform
+          echo "$tools" >> "$GITHUB_PATH"
+      - name: Show container tooling
+        run: |
+          docker version --format 'docker {{.Server.Version}}'
+          docker compose version
+          helm version --short
+          kubeconform -v
+      - name: Build the hosted image
+        run: |
+          docker build --progress=plain --target hosted -t "$FOXWARM_HOSTED_IMAGE" .
+          # Version N+1 of the rolling-update drill: the same build under another tag.
+          docker tag "$FOXWARM_HOSTED_IMAGE" "$FOXWARM_HOSTED_NEXT_IMAGE"
+          docker image ls "$FOXWARM_HOSTED_IMAGE" --format 'size {{.Size}}'
+      - name: Check the hosted image
+        run: |
+          set -eu
+          docker inspect -f 'user={{.Config.User}} entrypoint={{json .Config.Entrypoint}} healthcheck={{json .Config.Healthcheck.Test}}' "$FOXWARM_HOSTED_IMAGE"
+          docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$FOXWARM_HOSTED_IMAGE" | grep -x 'FOXWARM_MODE=hosted'
+          test "$(docker inspect -f '{{.Config.User}}' "$FOXWARM_HOSTED_IMAGE")" = 1000:1000
+          docker run --rm --read-only --entrypoint sh "$FOXWARM_HOSTED_IMAGE" -c '
+            set -eu
+            test "$(id -u)" = 1000
+            test -x /app/Foxwarm && test ! -e /app/Foxwarm.dll
+            for tool in chromium git python3 python node dotnet curl; do
+              if command -v "$tool" >/dev/null; then echo "unexpected tool: $tool"; exit 1; fi
+            done
+            test -s /etc/ssl/certs/ca-certificates.crt && test -d /usr/share/zoneinfo'
+          docker run --rm --entrypoint dpkg-query "$FOXWARM_HOSTED_IMAGE" -W -f '${Package} ${Version}\n' | tee "$RUNNER_TEMP/hosted-packages.txt"
+      - name: Render checks
+        run: deploy/hosted/check-render.sh
+      - name: Compose drills
+        run: node deploy/hosted/drills/run.mjs --env compose --report "$RUNNER_TEMP/hosted-drills.json"
+      - name: Upload drill report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-drills
+          path: |
+            ${{ runner.temp }}/hosted-drills.json
+            ${{ runner.temp }}/hosted-packages.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
   chromium:
     needs: [code-resources, native-test-resources]
     name: Chromium fixtures (${{ matrix.shard }}/8)
