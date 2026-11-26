@@ -147,7 +147,9 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                     if (!await reader.ReadAsync(cancel).ConfigureAwait(false))
                     {
                         await reader.CloseAsync().ConfigureAwait(false);
-                        return HasChildren(tx, key, path) ? new Row("dir", 0, 0, null, null, null) : null;
+                        return await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false)
+                            ? new Row("dir", 0, 0, null, null, null)
+                            : null;
                     }
                     return new Row(
                         reader.GetString(0),
@@ -185,7 +187,7 @@ internal sealed class PgAgentFileStore : IAgentFileStore
         var key = Key(agent);
         var limit = limits();
         if (content.Length > limit.FileBytes)
-            throw FileTooLarge(limit);
+            throw AgentFileErrors.FileTooLarge(path, limit);
         return lanes.RunAsync(
             key,
             async () =>
@@ -197,16 +199,21 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                     .WriteAsync(
                         async (tx, cancel) =>
                         {
-                            var usage = LockUsage(tx);
-                            RequireAgent(tx, key, agent);
-                            var current = RowAt(tx, key, path, forUpdate: true);
-                            if (current?.Kind == "dir" || current is null && HasChildren(tx, key, path))
+                            var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                            await RequireAgentAsync(tx, key, agent, cancel).ConfigureAwait(false);
+                            var current = await RowAtAsync(tx, key, path, cancel).ConfigureAwait(false);
+                            if (
+                                current?.Kind == "dir"
+                                || current is null && await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false)
+                            )
                                 throw AgentFileErrors.IsDirectory(path);
                             Expect(current, path, expectedGeneration);
-                            var entries = (current is null ? 1 : 0) - PrepareParents(tx, key, path);
+                            var entries =
+                                (current is null ? 1 : 0)
+                                - await PrepareParentsAsync(tx, key, path, cancel).ConfigureAwait(false);
                             var bytes = content.Length - (current?.Size ?? 0);
                             usage.Admit(limit, bytes, entries);
-                            generation = AllocateGeneration(tx);
+                            generation = await AllocateGenerationAsync(tx, cancel).ConfigureAwait(false);
                             await tx.ExecuteAsync(
                                     "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
                                         + " VALUES ($1, $2, 'file', $3, $4, $5, $6, $7)"
@@ -222,11 +229,11 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                                     generation,
                                     blobKey is null
                                         ? new NpgsqlParameter<ReadOnlyMemory<byte>> { TypedValue = content }
-                                        : new NpgsqlParameter { Value = DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Bytea },
+                                        : NullBytes(),
                                     blobKey
                                 )
                                 .ConfigureAwait(false);
-                            ApplyUsage(tx, bytes, entries);
+                            await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
                             BeforeCommit?.Invoke();
                             return generation;
                         },
@@ -266,12 +273,12 @@ internal sealed class PgAgentFileStore : IAgentFileStore
             key,
             () =>
                 database.WriteAsync(
-                    (tx, cancel) =>
+                    async (tx, cancel) =>
                     {
-                        _ = LockUsage(tx);
-                        RequireAgent(tx, key, agent);
-                        var current = RowAt(tx, key, path, forUpdate: true);
-                        var children = HasChildren(tx, key, path);
+                        _ = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                        await RequireAgentAsync(tx, key, agent, cancel).ConfigureAwait(false);
+                        var current = await RowAtAsync(tx, key, path, cancel).ConfigureAwait(false);
+                        var children = await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false);
                         if (current is null && !children)
                             throw AgentFileErrors.NotFound(path);
                         long bytes;
@@ -279,7 +286,13 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                         if (current?.Kind == "file")
                         {
                             Expect(current, path, expectedGeneration);
-                            tx.Execute("DELETE FROM agent_files WHERE agent = $1 AND path = $2", key, path);
+                            await tx.ExecuteAsync(
+                                    "DELETE FROM agent_files WHERE agent = $1 AND path = $2",
+                                    cancel,
+                                    key,
+                                    path
+                                )
+                                .ConfigureAwait(false);
                             (bytes, entries) = (-current.Size, -1);
                         }
                         else
@@ -287,16 +300,18 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                             if (children && !recursive)
                                 throw AgentFileErrors.NotEmpty(path);
                             var (range, parameters) = Below(path, 3);
-                            (bytes, entries) = Removed(
-                                tx,
-                                "DELETE FROM agent_files WHERE agent = $1 AND (path = $2 OR " + range + ") RETURNING size",
-                                [key, path, .. parameters]
-                            );
+                            (bytes, entries) = await RemovedAsync(
+                                    tx,
+                                    "DELETE FROM agent_files WHERE agent = $1 AND (path = $2 OR " + range + ") RETURNING size",
+                                    [key, path, .. parameters],
+                                    cancel
+                                )
+                                .ConfigureAwait(false);
                         }
-                        entries += KeepParent(tx, key, path);
-                        ApplyUsage(tx, bytes, entries);
+                        entries += await KeepParentAsync(tx, key, path, cancel).ConfigureAwait(false);
+                        await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
                         BeforeCommit?.Invoke();
-                        return Task.FromResult(true);
+                        return true;
                     },
                     new PgWriteOptions(Verify: tx => StatIn(tx, key, path) is null, Retryable: true),
                     token
@@ -316,20 +331,25 @@ internal sealed class PgAgentFileStore : IAgentFileStore
             key,
             () =>
                 database.WriteAsync(
-                    (tx, cancel) =>
+                    async (tx, cancel) =>
                     {
-                        var usage = LockUsage(tx);
-                        RequireAgent(tx, key, agent);
-                        var source = RowAt(tx, key, from, forUpdate: true);
-                        var directory = source?.Kind == "dir" || source is null && HasChildren(tx, key, from);
+                        var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                        await RequireAgentAsync(tx, key, agent, cancel).ConfigureAwait(false);
+                        var source = await RowAtAsync(tx, key, from, cancel).ConfigureAwait(false);
+                        var directory =
+                            source?.Kind == "dir"
+                            || source is null && await HasChildrenAsync(tx, key, from, cancel).ConfigureAwait(false);
                         if (source is null && !directory)
                             throw AgentFileErrors.NotFound(from);
                         if (from == to)
-                            return Task.FromResult(true);
+                            return true;
                         if (directory && AgentFilePaths.Within(to, from))
                             throw AgentFileErrors.IntoItself(from);
-                        var target = RowAt(tx, key, to, forUpdate: true);
-                        if (target?.Kind == "dir" || target is null && HasChildren(tx, key, to))
+                        var target = await RowAtAsync(tx, key, to, cancel).ConfigureAwait(false);
+                        if (
+                            target?.Kind == "dir"
+                            || target is null && await HasChildrenAsync(tx, key, to, cancel).ConfigureAwait(false)
+                        )
                             throw directory ? AgentFileErrors.Exists(to) : AgentFileErrors.IsDirectory(to);
                         long bytes = 0;
                         long entries = 0;
@@ -337,31 +357,41 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                         {
                             if (directory || !overwrite)
                                 throw AgentFileErrors.Exists(to);
-                            tx.Execute("DELETE FROM agent_files WHERE agent = $1 AND path = $2", key, to);
+                            await tx.ExecuteAsync(
+                                    "DELETE FROM agent_files WHERE agent = $1 AND path = $2",
+                                    cancel,
+                                    key,
+                                    to
+                                )
+                                .ConfigureAwait(false);
                             (bytes, entries) = (-target.Size, -1);
                         }
-                        entries -= PrepareParents(tx, key, to);
+                        entries -= await PrepareParentsAsync(tx, key, to, cancel).ConfigureAwait(false);
                         if (directory)
                         {
                             var (range, parameters) = Below(from, 4);
-                            tx.Execute(
-                                "UPDATE agent_files SET path = $3 || substr(path, char_length($2) + 1)"
-                                    + " WHERE agent = $1 AND (path = $2 OR " + range + ")",
-                                [key, from, to, .. parameters]
-                            );
+                            await tx.ExecuteAsync(
+                                    "UPDATE agent_files SET path = $3 || substr(path, char_length($2) + 1)"
+                                        + " WHERE agent = $1 AND (path = $2 OR " + range + ")",
+                                    cancel,
+                                    [key, from, to, .. parameters]
+                                )
+                                .ConfigureAwait(false);
                         }
                         else
-                            tx.Execute(
-                                "UPDATE agent_files SET path = $3 WHERE agent = $1 AND path = $2",
-                                key,
-                                from,
-                                to
-                            );
-                        entries += KeepParent(tx, key, from);
+                            await tx.ExecuteAsync(
+                                    "UPDATE agent_files SET path = $3 WHERE agent = $1 AND path = $2",
+                                    cancel,
+                                    key,
+                                    from,
+                                    to
+                                )
+                                .ConfigureAwait(false);
+                        entries += await KeepParentAsync(tx, key, from, cancel).ConfigureAwait(false);
                         usage.Admit(limits(), bytes, entries);
-                        ApplyUsage(tx, bytes, entries);
+                        await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
                         BeforeCommit?.Invoke();
-                        return Task.FromResult(true);
+                        return true;
                     },
                     new PgWriteOptions(
                         Verify: tx => StatIn(tx, key, from) is null && StatIn(tx, key, to) is not null,
@@ -381,25 +411,21 @@ internal sealed class PgAgentFileStore : IAgentFileStore
             key,
             () =>
                 database.WriteAsync(
-                    (tx, cancel) =>
+                    async (tx, cancel) =>
                     {
-                        var usage = LockUsage(tx);
-                        RequireAgent(tx, key, agent);
-                        var current = RowAt(tx, key, path, forUpdate: true);
+                        var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                        await RequireAgentAsync(tx, key, agent, cancel).ConfigureAwait(false);
+                        var current = await RowAtAsync(tx, key, path, cancel).ConfigureAwait(false);
                         if (current?.Kind == "file")
                             throw AgentFileErrors.NotDirectory(path);
-                        if (current is not null || HasChildren(tx, key, path))
-                            return Task.FromResult(true);
-                        var entries = 1 - PrepareParents(tx, key, path);
+                        if (current is not null || await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false))
+                            return true;
+                        var entries = 1 - await PrepareParentsAsync(tx, key, path, cancel).ConfigureAwait(false);
                         usage.Admit(limits(), 0, entries);
-                        tx.Execute(
-                            "INSERT INTO agent_files (agent, path, kind, generation) VALUES ($1, $2, 'dir', 0)",
-                            key,
-                            path
-                        );
-                        ApplyUsage(tx, 0, entries);
+                        await InsertDirectoryAsync(tx, key, path, cancel).ConfigureAwait(false);
+                        await ApplyUsageAsync(tx, 0, entries, cancel).ConfigureAwait(false);
                         BeforeCommit?.Invoke();
-                        return Task.FromResult(true);
+                        return true;
                     },
                     new PgWriteOptions(Verify: tx => StatIn(tx, key, path) is not null, Retryable: true),
                     token
@@ -451,8 +477,8 @@ internal sealed class PgAgentFileStore : IAgentFileStore
             if (paths.Any(other => other != file.Key && AgentFilePaths.Within(other, file.Key)))
                 throw AgentFileErrors.NotDirectory(file.Key);
         var limit = limits();
-        if (files.Any(file => file.Value.Length > limit.FileBytes))
-            throw FileTooLarge(limit);
+        if (files.FirstOrDefault(file => file.Value.Length > limit.FileBytes) is { Key: not null } large)
+            throw AgentFileErrors.FileTooLarge(large.Key, limit);
         return lanes.RunAsync(
             agent,
             async () =>
@@ -461,7 +487,9 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                 foreach (var (path, content) in files)
                 {
                     var sha256 = SHA256.HashData(content);
-                    stored.Add((path, content, sha256, await StoreLargeAsync(agent, content, sha256, token).ConfigureAwait(false)));
+                    stored.Add(
+                        (path, content, sha256, await StoreLargeAsync(agent, content, sha256, token).ConfigureAwait(false))
+                    );
                 }
                 // Only directories no file lies below need a row of their own.
                 var empty = directories
@@ -469,41 +497,34 @@ internal sealed class PgAgentFileStore : IAgentFileStore
                     .ToArray();
                 return await database
                     .WriteAsync(
-                        (tx, cancel) =>
+                        async (tx, cancel) =>
                         {
-                            var usage = LockUsage(tx);
-                            if (RowAt(tx, agent, "", forUpdate: true) is not null)
+                            var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                            if (await RowAtAsync(tx, agent, "", cancel).ConfigureAwait(false) is not null)
                                 throw new AgentFileConflictException($"Agent '{agent}' already exists.");
                             var bytes = stored.Sum(file => (long)file.Content.Length);
                             var entries = (long)stored.Count + empty.Length;
                             usage.Admit(limit, bytes, entries);
-                            tx.Execute(
-                                "INSERT INTO agent_files (agent, path, kind, generation) VALUES ($1, '', 'dir', 0)",
-                                agent
-                            );
+                            await InsertDirectoryAsync(tx, agent, "", cancel).ConfigureAwait(false);
                             foreach (var directory in empty)
-                                tx.Execute(
-                                    "INSERT INTO agent_files (agent, path, kind, generation) VALUES ($1, $2, 'dir', 0)",
-                                    agent,
-                                    directory
-                                );
+                                await InsertDirectoryAsync(tx, agent, directory, cancel).ConfigureAwait(false);
                             foreach (var file in stored)
-                                tx.Execute(
-                                    "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
-                                        + " VALUES ($1, $2, 'file', $3, $4, $5, $6, $7)",
-                                    agent,
-                                    file.Path,
-                                    (long)file.Content.Length,
-                                    file.Sha256,
-                                    AllocateGeneration(tx),
-                                    file.BlobKey is null
-                                        ? file.Content
-                                        : new NpgsqlParameter { Value = DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Bytea },
-                                    file.BlobKey
-                                );
-                            ApplyUsage(tx, bytes, entries);
+                                await tx.ExecuteAsync(
+                                        "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
+                                            + " VALUES ($1, $2, 'file', $3, $4, $5, $6, $7)",
+                                        cancel,
+                                        agent,
+                                        file.Path,
+                                        (long)file.Content.Length,
+                                        file.Sha256,
+                                        await AllocateGenerationAsync(tx, cancel).ConfigureAwait(false),
+                                        file.BlobKey is null ? file.Content : NullBytes(),
+                                        file.BlobKey
+                                    )
+                                    .ConfigureAwait(false);
+                            await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
                             BeforeCommit?.Invoke();
-                            return Task.FromResult(true);
+                            return true;
                         },
                         new PgWriteOptions(
                             Verify: tx =>
@@ -527,18 +548,25 @@ internal sealed class PgAgentFileStore : IAgentFileStore
             agent,
             () =>
                 database.WriteAsync(
-                    (tx, cancel) =>
+                    async (tx, cancel) =>
                     {
-                        _ = LockUsage(tx);
-                        var (bytes, entries) = Removed(
-                            tx,
-                            "DELETE FROM agent_files WHERE agent = $1 AND path <> '' RETURNING size",
-                            [agent]
-                        );
-                        tx.Execute("DELETE FROM agent_files WHERE agent = $1 AND path = ''", agent);
-                        ApplyUsage(tx, bytes, entries);
+                        _ = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                        var (bytes, entries) = await RemovedAsync(
+                                tx,
+                                "DELETE FROM agent_files WHERE agent = $1 AND path <> '' RETURNING size",
+                                [agent],
+                                cancel
+                            )
+                            .ConfigureAwait(false);
+                        await tx.ExecuteAsync(
+                                "DELETE FROM agent_files WHERE agent = $1 AND path = ''",
+                                cancel,
+                                agent
+                            )
+                            .ConfigureAwait(false);
+                        await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
                         BeforeCommit?.Invoke();
-                        return Task.FromResult(true);
+                        return true;
                     },
                     new PgWriteOptions(
                         Verify: tx => tx.Scalar("SELECT 1 FROM agent_files WHERE agent = $1", agent) is null,
@@ -567,6 +595,9 @@ internal sealed class PgAgentFileStore : IAgentFileStore
         return agent;
     }
 
+    private static NpgsqlParameter NullBytes() =>
+        new() { Value = DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Bytea };
+
     private async Task<string?> StoreLargeAsync(
         string agent,
         ReadOnlyMemory<byte> content,
@@ -582,14 +613,6 @@ internal sealed class PgAgentFileStore : IAgentFileStore
         return key;
     }
 
-    private static AgentStoreQuotaException FileTooLarge(AgentStoreLimits limit) =>
-        new("fileBytes", $"The file is larger than the Agent store's limit of {Size(limit.FileBytes)} per file.");
-
-    private static string Size(long bytes) =>
-        bytes % (1L << 30) == 0 ? $"{bytes >> 30} GiB"
-        : bytes % (1L << 20) == 0 ? $"{bytes >> 20} MiB"
-        : $"{bytes} bytes";
-
     private sealed record Row(string Kind, long Generation, long Size, byte[]? Sha256, byte[]? Inline, string? BlobKey);
 
     private sealed record UsageRow(long Bytes, long Entries)
@@ -598,62 +621,88 @@ internal sealed class PgAgentFileStore : IAgentFileStore
         internal void Admit(AgentStoreLimits limit, long bytes, long entries)
         {
             if (bytes > 0 && Bytes + bytes > limit.TotalBytes)
-                throw new AgentStoreQuotaException(
-                    "totalBytes",
-                    $"The Agent store is full: this write would exceed its limit of {Size(limit.TotalBytes)}."
-                );
+                throw AgentFileErrors.TotalTooLarge(limit);
             if (entries > 0 && Entries + entries > limit.Files)
-                throw new AgentStoreQuotaException(
-                    "files",
-                    $"The Agent store is full: this write would exceed its limit of {limit.Files} files."
-                );
+                throw AgentFileErrors.TooManyFiles(limit);
         }
     }
 
-    private static UsageRow LockUsage(PgTx tx)
+    private static async Task<object?> ScalarAsync(PgTx tx, string sql, CancellationToken token, params object?[] parameters)
     {
-        using var command = tx.Command(
+        await using var command = tx.Command(sql, parameters);
+        var value = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+        return value is DBNull ? null : value;
+    }
+
+    // Locks the tenant's usage row, creating it on the first write. Every write takes this lock
+    // first, so writes of one tenant (across all of its Agents) run one at a time.
+    private static async Task<UsageRow> LockUsageAsync(PgTx tx, CancellationToken token)
+    {
+        await using var command = tx.Command(
             "INSERT INTO agent_file_usage (bytes, entries) VALUES (0, 0) ON CONFLICT (tenant_id)"
                 + " DO UPDATE SET bytes = agent_file_usage.bytes RETURNING bytes, entries"
         );
-        using var reader = command.ExecuteReader();
-        reader.Read();
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        await reader.ReadAsync(token).ConfigureAwait(false);
         return new(reader.GetInt64(0), reader.GetInt64(1));
     }
 
-    private static long AllocateGeneration(PgTx tx) =>
-        (long)tx.Scalar("UPDATE agent_file_usage SET generation = generation + 1 RETURNING generation")!;
+    private static async Task<long> AllocateGenerationAsync(PgTx tx, CancellationToken token) =>
+        (long)(
+            await ScalarAsync(
+                    tx,
+                    "UPDATE agent_file_usage SET generation = generation + 1 RETURNING generation",
+                    token
+                )
+                .ConfigureAwait(false)
+        )!;
 
-    private static void ApplyUsage(PgTx tx, long bytes, long entries)
+    private static async Task ApplyUsageAsync(PgTx tx, long bytes, long entries, CancellationToken token)
     {
         if (bytes != 0 || entries != 0)
-            tx.Execute(
-                "UPDATE agent_file_usage SET bytes = bytes + $1, entries = entries + $2",
-                bytes,
-                entries
-            );
+            await tx.ExecuteAsync(
+                    "UPDATE agent_file_usage SET bytes = bytes + $1, entries = entries + $2",
+                    token,
+                    bytes,
+                    entries
+                )
+                .ConfigureAwait(false);
     }
 
-    private static void RequireAgent(PgTx tx, string key, string? agent)
+    private static async Task RequireAgentAsync(PgTx tx, string key, string? agent, CancellationToken token)
     {
-        if (key.Length > 0 && tx.Scalar("SELECT 1 FROM agent_files WHERE agent = $1 AND path = ''", key) is null)
+        if (
+            key.Length > 0
+            && await ScalarAsync(tx, "SELECT 1 FROM agent_files WHERE agent = $1 AND path = ''", token, key)
+                .ConfigureAwait(false)
+                is null
+        )
             throw AgentFileErrors.NoAgent(agent);
     }
 
-    private static Row? RowAt(PgTx tx, string key, string path, bool forUpdate = false)
+    private static async Task<Row?> RowAtAsync(PgTx tx, string key, string path, CancellationToken token)
     {
-        using var command = tx.Command(
-            "SELECT kind, generation, size FROM agent_files WHERE agent = $1 AND path = $2"
-                + (forUpdate ? " FOR UPDATE" : ""),
+        await using var command = tx.Command(
+            "SELECT kind, generation, size FROM agent_files WHERE agent = $1 AND path = $2 FOR UPDATE",
             key,
             path
         );
-        using var reader = command.ExecuteReader();
-        return reader.Read()
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        return await reader.ReadAsync(token).ConfigureAwait(false)
             ? new Row(reader.GetString(0), reader.GetInt64(1), reader.GetInt64(2), null, null, null)
             : null;
     }
 
+    private static async Task InsertDirectoryAsync(PgTx tx, string key, string path, CancellationToken token) =>
+        await tx.ExecuteAsync(
+                "INSERT INTO agent_files (agent, path, kind, generation) VALUES ($1, $2, 'dir', 0)",
+                token,
+                key,
+                path
+            )
+            .ConfigureAwait(false);
+
+    // Synchronous, for Stat and lost-COMMIT verification.
     private static AgentFileStat? StatIn(PgTx tx, string key, string path)
     {
         using (
@@ -679,10 +728,16 @@ internal sealed class PgAgentFileStore : IAgentFileStore
             : null;
     }
 
-    private static bool HasChildren(PgTx tx, string key, string path)
+    private static async Task<bool> HasChildrenAsync(PgTx tx, string key, string path, CancellationToken token)
     {
         var (range, parameters) = Below(path, 2);
-        return tx.Scalar("SELECT 1 FROM agent_files WHERE agent = $1 AND " + range + " LIMIT 1", [key, .. parameters])
+        return await ScalarAsync(
+                    tx,
+                    "SELECT 1 FROM agent_files WHERE agent = $1 AND " + range + " LIMIT 1",
+                    token,
+                    [key, .. parameters]
+                )
+                .ConfigureAwait(false)
             is not null;
     }
 
@@ -716,49 +771,59 @@ internal sealed class PgAgentFileStore : IAgentFileStore
 
     // Before an entry is created at path: no ancestor may be a file, and an ancestor's
     // empty-directory row goes, since the new entry makes it implicit. Returns the rows removed.
-    private static int PrepareParents(PgTx tx, string key, string path)
+    private static async Task<int> PrepareParentsAsync(PgTx tx, string key, string path, CancellationToken token)
     {
         var ancestors = AgentFilePaths.Ancestors(path);
         if (ancestors.Length == 0)
             return 0;
         if (
-            tx.Scalar(
-                "SELECT path FROM agent_files WHERE agent = $1 AND path = ANY($2) AND kind = 'file' ORDER BY path LIMIT 1",
-                key,
-                ancestors
-            )
+            await ScalarAsync(
+                    tx,
+                    "SELECT path FROM agent_files WHERE agent = $1 AND path = ANY($2) AND kind = 'file' ORDER BY path LIMIT 1",
+                    token,
+                    key,
+                    ancestors
+                )
+                .ConfigureAwait(false)
             is string file
         )
             throw AgentFileErrors.NotDirectory(file);
-        return tx.Execute(
-            "DELETE FROM agent_files WHERE agent = $1 AND path = ANY($2) AND kind = 'dir'",
-            key,
-            ancestors
-        );
+        return await tx.ExecuteAsync(
+                "DELETE FROM agent_files WHERE agent = $1 AND path = ANY($2) AND kind = 'dir'",
+                token,
+                key,
+                ancestors
+            )
+            .ConfigureAwait(false);
     }
 
-    // After the entry at path is gone, its parent directory stays: as file systems keep it.
+    // After the entry at path is gone, its parent directory stays, as file systems keep it.
     // Returns the rows added.
-    private static int KeepParent(PgTx tx, string key, string path)
+    private static async Task<int> KeepParentAsync(PgTx tx, string key, string path, CancellationToken token)
     {
         var parent = AgentFilePaths.Parent(path);
-        if (parent.Length == 0 || RowAt(tx, key, parent) is not null || HasChildren(tx, key, parent))
+        if (
+            parent.Length == 0
+            || await RowAtAsync(tx, key, parent, token).ConfigureAwait(false) is not null
+            || await HasChildrenAsync(tx, key, parent, token).ConfigureAwait(false)
+        )
             return 0;
-        tx.Execute(
-            "INSERT INTO agent_files (agent, path, kind, generation) VALUES ($1, $2, 'dir', 0)",
-            key,
-            parent
-        );
+        await InsertDirectoryAsync(tx, key, parent, token).ConfigureAwait(false);
         return 1;
     }
 
-    private static (long Bytes, long Entries) Removed(PgTx tx, string sql, object?[] parameters)
+    private static async Task<(long Bytes, long Entries)> RemovedAsync(
+        PgTx tx,
+        string sql,
+        object?[] parameters,
+        CancellationToken token
+    )
     {
-        using var command = tx.Command(sql, parameters);
-        using var reader = command.ExecuteReader();
+        await using var command = tx.Command(sql, parameters);
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         long bytes = 0;
         long entries = 0;
-        while (reader.Read())
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
             bytes -= reader.GetInt64(0);
             entries--;

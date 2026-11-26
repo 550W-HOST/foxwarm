@@ -29,16 +29,16 @@ internal static class AgentFilePaths
     internal static string? Problem(string? path, bool allowRoot = false)
     {
         if (path is null)
-            return "the path is missing";
+            return "it has an empty segment";
         if (path.Length == 0)
-            return allowRoot ? null : "the path is empty";
+            return allowRoot ? null : "it has an empty segment";
         if (path[0] == '/')
-            return "the path is absolute";
+            return "absolute paths aren't allowed";
         if (path.Contains('\\'))
-            return "the path contains a backslash";
+            return "backslashes aren't allowed";
         foreach (var character in path)
             if (char.IsControl(character))
-                return "the path contains a control character";
+                return "control characters aren't allowed";
         int bytes;
         try
         {
@@ -46,20 +46,20 @@ internal static class AgentFilePaths
         }
         catch (ArgumentException)
         {
-            return "the path isn't valid Unicode";
+            return "it isn't valid Unicode";
         }
         if (bytes > MaxPathBytes)
-            return $"the path is longer than {MaxPathBytes} bytes";
+            return $"it is longer than {MaxPathBytes} bytes";
         if (!path.IsNormalized(NormalizationForm.FormC))
-            return "the path isn't in Unicode normalization form C";
+            return "it isn't in Unicode NFC form";
         foreach (var segment in path.Split('/'))
         {
             if (segment.Length == 0)
-                return "the path has an empty segment";
+                return "it has an empty segment";
             if (segment is "." or "..")
-                return "the path has a '.' or '..' segment";
+                return "'.' and '..' segments aren't allowed";
             if (StrictUtf8.GetByteCount(segment) > MaxSegmentBytes)
-                return $"a path segment is longer than {MaxSegmentBytes} bytes";
+                return $"a segment is longer than {MaxSegmentBytes} bytes";
         }
         return null;
     }
@@ -91,7 +91,7 @@ internal static class AgentFilePaths
 
 /// <summary>A path the Agent file store refuses (<see cref="AgentFilePaths"/>).</summary>
 internal sealed class AgentFilePathException(string path, string problem)
-    : ArgumentException($"Invalid Agent file path '{Printable(path)}': {problem}.")
+    : ArgumentException($"Invalid path '{Printable(path)}': {problem}.")
 {
     internal string Problem { get; } = problem;
 

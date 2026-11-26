@@ -115,7 +115,27 @@ internal static class AgentFileErrors
         new("File already exists: " + path);
 
     internal static AgentFileConflictException Changed(string path) =>
-        new("File changed since it was read: " + path);
+        new(path + " changed since it was read. Read it again, then retry.");
+
+    internal static AgentStoreQuotaException FileTooLarge(string path, AgentStoreLimits limit) =>
+        new("fileBytes", $"{path} is larger than the {Size(limit.FileBytes)} limit for one Agent file.");
+
+    internal static AgentStoreQuotaException TotalTooLarge(AgentStoreLimits limit) =>
+        new("totalBytes", $"Agent files are full: this write would exceed the {Size(limit.TotalBytes)} limit.");
+
+    internal static AgentStoreQuotaException TooManyFiles(AgentStoreLimits limit) =>
+        new(
+            "files",
+            "Agent files are full: this write would exceed the limit of "
+                + limit.Files.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)
+                + " files."
+        );
+
+    // 2 GiB, 64 MiB; a limit that isn't a whole number of either is shown in bytes.
+    private static string Size(long bytes) =>
+        bytes >= 1L << 30 && bytes % (1L << 30) == 0 ? $"{bytes >> 30} GiB"
+        : bytes >= 1L << 20 && bytes % (1L << 20) == 0 ? $"{bytes >> 20} MiB"
+        : bytes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + " bytes";
 
     internal static IOException Root() =>
         new("An Agent's own directory can't be removed or moved.");
