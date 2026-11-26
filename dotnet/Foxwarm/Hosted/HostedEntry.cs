@@ -179,6 +179,9 @@ internal static class HostedEntry
                     ),
                     storage.Credentials
                 )
+                {
+                    OperatorCeiling = new OperatorCeilingDocuments(tenant.Database, profile),
+                }
             );
         }
         catch (Exception error)
@@ -229,6 +232,14 @@ internal sealed class MainHostRuntime(MainHost host, PostgresStorageContext tena
     private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal MainHost Host => host;
+
+    /// <summary>
+    /// The operator changed <c>operator_documents</c> (<c>NOTIFY foxwarm_operator</c>): the
+    /// tenant's next authorization check reads its ceiling again. The runtimes host's listener
+    /// calls this for every runtime it serves; a missed signal leaves the previous ceiling in
+    /// force until the next one or a new runtime.
+    /// </summary>
+    internal void OperatorDocumentsChanged() => host.Sessions.Authorization.OperatorCeilingChanged();
 
     public async Task StartAsync()
     {

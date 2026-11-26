@@ -263,4 +263,48 @@ public sealed partial class HostedStartupTests
         next.Stop.Cancel();
         Assert.Equal(HostedExit.Stopped, await next.Run.WaitAsync(TimeSpan.FromSeconds(60)));
     }
+
+    private static async Task OperatorAsync(HostedTestDatabase database, string sql, string text)
+    {
+        await using var connection = new Npgsql.NpgsqlConnection(database.OperatorConnectionString);
+        await connection.OpenAsync();
+        await using var command = new Npgsql.NpgsqlCommand(sql, connection);
+        command.Parameters.Add(Foxwarm.Hosted.Postgres.PgTx.Parameter(text));
+        await command.ExecuteNonQueryAsync();
+    }
+
+    // The runtime reads its tenant's ceiling from operator_documents for its profile, and reads
+    // it again when the runtimes host passes on the operator's change signal.
+    [Fact]
+    public async Task TheRuntimeEvaluatesItsProfilesCeilingAndRereadsItOnTheOperatorSignal()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        await OperatorAsync(
+            database,
+            "INSERT INTO operator_documents (scope, name, text) VALUES ('global', 'ceiling.hosted', $1)",
+            "version: 1\nrules:\n  - id: first\n    tool: {source: node, name: exec}\n    action: deny\n"
+        );
+        using var temp = new TempDirectory();
+        var replica = StartHosted(database.OpenApp(), HostedFiles.Create(temp.Path));
+        await WaitUntilAsync(
+            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
+            TimeSpan.FromSeconds(60),
+            "the hosted runtime serves"
+        );
+        var runtime = (MainHostRuntime)replica.Runtimes[0];
+        var authorization = runtime.Host.Sessions.Authorization;
+        string? RuleId() => authorization.LoadCeiling()?.Value["rules"]?[0]?["id"]?.GetValue<string>();
+        Assert.Equal("first", RuleId());
+        await OperatorAsync(
+            database,
+            "UPDATE operator_documents SET text = $1, generation = generation + 1 WHERE name = 'ceiling.hosted'",
+            "version: 1\nrules:\n  - id: second\n    tool: {source: node, name: exec}\n    action: ask\n"
+        );
+        Assert.Equal("first", RuleId());
+        runtime.OperatorDocumentsChanged();
+        Assert.Equal("second", RuleId());
+        replica.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+    }
 }
