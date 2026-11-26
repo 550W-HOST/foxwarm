@@ -100,21 +100,4 @@ public sealed class ArchiveFrictionTests
                 .Select(block => block.FrictionScore)
         );
     }
-
-    [Fact]
-    public void Score_is_part_of_the_immutable_block_identity_for_duplicate_writes_and_compensation()
-    {
-        using var temp = new TempDirectory();
-        var store = new SqliteArchiveMessageStore(
-            Path.Combine(temp.Path, "archive.sqlite"),
-            "parent"
-        );
-        store.Initialize();
-        store.EnsureBranch();
-        store.WriteBlocks([Block(1, 73)]);
-        Assert.Empty(store.WriteBlocks([Block(1, 73)]));
-        Assert.Throws<InvalidDataException>(() => store.WriteBlocks([Block(1, 74)]));
-        Assert.Throws<IOException>(() => store.RollbackInsertedBlocks([Block(1, 74)]));
-        Assert.Equal(73, Assert.Single(store.ReadBlocks()).FrictionScore);
-    }
 }

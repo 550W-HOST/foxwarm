@@ -190,7 +190,7 @@ public abstract class ArchiveStoreContractTests
                     var session = $"session-{index}";
                     var store = archive.Session(session);
                     start.Wait();
-                    for (var seq = 1; seq <= 8; seq++)
+                    for (var seq = 1; seq <= 16; seq++)
                     {
                         var row = ArchiveMessageRecord.Create(
                             session,
@@ -213,7 +213,7 @@ public abstract class ArchiveStoreContractTests
         start.Set();
         await Task.WhenAll(callers).WaitAsync(TimeSpan.FromSeconds(60));
         for (var index = 0; index < callers.Length; index++)
-            Assert.Equal(8, archive.Store.ForSession($"session-{index}").ReadMessages().Count);
+            Assert.Equal(16, archive.Store.ForSession($"session-{index}").ReadMessages().Count);
     }
 
     [Fact]
@@ -355,6 +355,7 @@ public abstract class ArchiveStoreContractTests
         Assert.False(inherited[0].ToContextMeta().ContainsKey("frictionScore"));
         Assert.Equal(0, inherited[1].ToMessage()["__meta"]!["contextBlock"]!["frictionScore"]!.GetValue<int>());
         Assert.Equal(100, new ArchiveContextReader(child).Expand("child", 3, 6000)!["block"]!["frictionScore"]!.GetValue<int>());
+        Assert.Contains("frictionScore=100", new ArchiveContextReader(child).Block(3)!.ToMessage().ToJsonString());
         Assert.Empty(parent.WriteBlocks([Scored(3, 100)]));
         Assert.Throws<InvalidDataException>(() => parent.WriteBlocks([Scored(3, 99)]));
         Assert.Throws<IOException>(() => parent.RollbackInsertedBlocks([Scored(3, 99)]));
