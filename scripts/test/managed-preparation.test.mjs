@@ -51,7 +51,7 @@ if (args[0] === 'restore') {
   } else console.log('Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Fixture.Tests.dll (net10.0)');
 }
 `, { mode: 0o755 })
-  async function run({ fail = false, pending = false, filter } = {}) {
+  async function run({ fail = false, pending = false, filter, postgres = '' } = {}) {
     try {
       const result = await execFileAsync(process.execPath, ['scripts/test/run-tests.mjs', 'managed', ...(filter ? [`--filter=${filter}`] : [])], {
         cwd: repo, timeout: 20_000,
@@ -59,7 +59,8 @@ if (args[0] === 'restore') {
           NODE_OPTIONS: pending ? `--require=${timerPreload}` : '', FIXTURE_TEST_PENDING: pending ? '1' : '',
           FOXWARM_TEST_ARTIFACT_DIR: path.join(root, 'artifacts'), FIXTURE_RESTORE_FAIL: fail ? '1' : '',
           HTTPS_PROXY: 'http://toolchain-proxy.invalid:8123', HTTP_PROXY: 'http://toolchain-proxy.invalid:8123',
-          OPENAI_API_KEY: 'synthetic-must-not-reach-test', CONFIG_PATH: path.join(root, 'unused-config.yaml') },
+          OPENAI_API_KEY: 'synthetic-must-not-reach-test', CONFIG_PATH: path.join(root, 'unused-config.yaml'),
+          FOXWARM_TEST_PG_PREFIX: postgres, FOXWARM_TEST_PG_URL: '' },
       })
       return { code: 0, ...result }
     } catch (error) { return error }
@@ -102,8 +103,26 @@ test('a managed runtime deadline fails even when the child handles termination w
 test('managed selections pass the complete VSTest filter as one argument', unix, async t => {
   const f = await fixture(t)
   const filter = 'FullyQualifiedName~Foxwarm.Tests.Alpha&FullyQualifiedName!~Foxwarm.Tests.Beta'
-  const result = await f.run({ filter })
+  const result = await f.run({ filter, postgres: '/fixture/postgres' })
   assert.equal(result.code, 0, result.stdout + result.stderr)
   const args = (await f.calls())[1].args
   assert.equal(args[args.indexOf('--filter') + 1], filter)
+})
+
+test('without a PostgreSQL fixture the hosted batch is excluded with a notice', unix, async t => {
+  const f = await fixture(t)
+  const filter = 'FullyQualifiedName~Foxwarm.Tests.Alpha'
+  const result = await f.run({ filter })
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /Hosted batch not run: set FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL/)
+  const args = (await f.calls())[1].args
+  assert.equal(args[args.indexOf('--filter') + 1], `(${filter})&Backend!=postgres`)
+})
+
+test('with a PostgreSQL fixture and no selection every managed test runs', unix, async t => {
+  const f = await fixture(t)
+  const result = await f.run({ postgres: '/fixture/postgres' })
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.doesNotMatch(result.stdout, /Hosted batch not run/)
+  assert(!(await f.calls())[1].args.includes('--filter'))
 })

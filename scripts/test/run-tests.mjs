@@ -128,14 +128,28 @@ function directStep(name, command, args, timeoutMs = 180_000, env = {}) {
   return { name, command, args, timeoutMs, env }
 }
 
+// Classes with the Backend=postgres trait need the disposable PostgreSQL fixture
+// (FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL). Without it they are excluded with
+// an explicit notice, never reported as passed.
+function managedHostedSelection(filter, env = process.env) {
+  if (env.FOXWARM_TEST_PG_PREFIX || env.FOXWARM_TEST_PG_URL) return { filter, notice: null }
+  const excluded = 'Backend!=postgres'
+  return {
+    filter: filter ? `(${filter})&${excluded}` : excluded,
+    notice: 'Hosted batch not run: set FOXWARM_TEST_PG_PREFIX or FOXWARM_TEST_PG_URL to include Backend=postgres tests.',
+  }
+}
+
 function managedGroup() {
+  const hosted = managedHostedSelection(managedFilter)
+  if (hosted.notice) console.log(hosted.notice)
   return {
     name: 'managed',
     steps: [
       { ...directStep('restore', 'dotnet', ['restore', 'dotnet/Foxwarm.sln'], 600_000), prepareDependencies: true },
       // Build plus serial tests measured 27.5 minutes in CI; leave room for suite growth.
       directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal',
-        ...(managedFilter ? ['--filter', managedFilter] : []),
+        ...(hosted.filter ? ['--filter', hosted.filter] : []),
         '--', 'RunConfiguration.TreatNoTestsAsError=true'], 2_400_000),
     ],
     env: { FOXWARM_REPO_ROOT: repoRoot },
