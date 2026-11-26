@@ -4,10 +4,11 @@ namespace Foxwarm.Models;
 
 /// <summary>
 /// The split of the app configuration in hosted mode. The operator's deployment configuration
-/// holds the deployment paths; the tenant's <c>config</c> document holds everything else. The
-/// two key sets are disjoint, so the effective app configuration is the tenant document with
-/// the deployment values laid over it. Settings of features hosted mode doesn't have are
-/// accepted by neither side. File mode reads one app file and never uses this split.
+/// holds the deployment paths; the tenant's <c>config</c> document holds only the paths its
+/// profile allows (<see cref="TenantPaths"/>). The two key sets are disjoint, so the effective
+/// app configuration is the tenant document with the deployment values laid over it. Settings
+/// of features hosted mode doesn't have are accepted by neither side. File mode reads one app
+/// file and never uses this split.
 /// </summary>
 internal static class AppConfigurationSplit
 {
@@ -42,11 +43,47 @@ internal static class AppConfigurationSplit
         "bot.enableTrigger",
     ];
 
-    /// <summary>Refuses deployment and unavailable paths in a tenant <c>config</c> document.</summary>
-    internal static void RequireTenantDocument(JsonObject tenant)
+    /// <summary>
+    /// The paths a hosted tenant's <c>config</c> document may hold, as <c>key</c> or
+    /// <c>bot.child</c>; a key's own children are validated by the app rules.
+    /// </summary>
+    private static readonly IReadOnlyList<string> HostedTenantPaths =
+    [
+        "access",
+        "agentDefaultNode",
+        "agentTree",
+        "bot.name",
+        "channels",
+        "llm",
+        "nodeTree",
+        "sessionAutoTitle",
+    ];
+
+    /// <summary>The operator profile adds the settings of the features only it has.</summary>
+    private static readonly IReadOnlyList<string> OperatorTenantPaths =
+    [
+        .. HostedTenantPaths,
+        "claudeCode",
+    ];
+
+    /// <summary>The paths a tenant <c>config</c> document of <paramref name="profile"/> may hold.</summary>
+    internal static IReadOnlyList<string> TenantPaths(TenantProfile profile) =>
+        profile == TenantProfile.Operator ? OperatorTenantPaths : HostedTenantPaths;
+
+    /// <summary>
+    /// Refuses every path of a tenant <c>config</c> document that its profile doesn't allow,
+    /// naming it: deployment paths, paths of features the profile doesn't have, and unknown paths.
+    /// </summary>
+    internal static void RequireTenantDocument(
+        JsonObject tenant,
+        TenantProfile profile = TenantProfile.Hosted
+    )
     {
+        var allowed = TenantPaths(profile);
         foreach (var path in Present(tenant, deployment: false))
         {
+            if (allowed.Contains(path))
+                continue;
             if (
                 DeploymentPaths.Any(item =>
                     item == path || item.StartsWith(path + ".", StringComparison.Ordinal)
@@ -55,8 +92,9 @@ internal static class AppConfigurationSplit
                 throw new InvalidDataException(
                     $"app config `{path}` is a deployment setting; set it in the deployment configuration."
                 );
-            if (UnavailablePaths.Contains(path))
+            if (UnavailablePaths.Contains(path) || OperatorTenantPaths.Contains(path))
                 throw new InvalidDataException($"app config `{path}` isn't available in hosted mode.");
+            throw new InvalidDataException($"app config `{path}` isn't a tenant setting.");
         }
     }
 

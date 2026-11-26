@@ -183,4 +183,50 @@ public sealed class DeploymentConfigurationTests
             Assert.Throws<HostedBootstrapException>(() => settings.ReadCredentials()).Message
         );
     }
+
+    private static string TenantRefusal(string text, TenantProfile profile) =>
+        Assert.Throws<InvalidDataException>(() =>
+            AppConfigurationSplit.RequireTenantDocument(ConfigurationYaml.Parse(text, "app config"), profile)
+        ).Message;
+
+    // P2 plan §6.1: the tenant document holds only its profile's paths, and a refusal names the
+    // key in the shape P1 uses for unavailable features.
+    [Fact]
+    public void A_tenant_document_holds_only_its_profiles_paths_and_a_refusal_names_the_key()
+    {
+        const string Tenant =
+            "access: {identities: {}}\nagentTree: {maxDepth: 3}\nnodeTree: {maxChildren: 8}\n"
+            + "agentDefaultNode: devbox\nsessionAutoTitle: true\nchannels: {}\n"
+            + "llm: {memoryWarningThresholdPercent: 0.2}\nbot: {name: Fox}\n";
+        foreach (var profile in new[] { TenantProfile.Hosted, TenantProfile.Operator })
+        {
+            AppConfigurationSplit.RequireTenantDocument(ConfigurationYaml.Parse(Tenant, "app config"), profile);
+            foreach (var (text, message) in new[]
+            {
+                // Unknown keys, top-level and under `bot`.
+                ("handoff: true\n", "app config `handoff` isn't a tenant setting."),
+                ("bot: {color: red}\n", "app config `bot.color` isn't a tenant setting."),
+                // Operator settings: a tenant of either profile can't configure a Provider.
+                ("nodeProviders: {extra: {type: executable, command: /bin/true}}\n",
+                    "app config `nodeProviders` is a deployment setting; set it in the deployment configuration."),
+                ("url: https://fox.example\n",
+                    "app config `url` is a deployment setting; set it in the deployment configuration."),
+                ("vector: false\n", "app config `vector` isn't available in hosted mode."),
+                ("paths: {agentsDir: /srv}\n", "app config `paths` isn't available in hosted mode."),
+            })
+                Assert.Equal(message, TenantRefusal(text, profile));
+        }
+        // The Claude runtime's settings belong to the operator profile only.
+        Assert.Equal(
+            "app config `claudeCode` isn't available in hosted mode.",
+            TenantRefusal("claudeCode: {executable: claude}\n", TenantProfile.Hosted)
+        );
+        AppConfigurationSplit.RequireTenantDocument(
+            ConfigurationYaml.Parse("claudeCode: {executable: claude}\n", "app config"),
+            TenantProfile.Operator
+        );
+        // The allowlists never overlap the deployment's paths.
+        foreach (var profile in new[] { TenantProfile.Hosted, TenantProfile.Operator })
+            Assert.Empty(AppConfigurationSplit.TenantPaths(profile).Intersect(AppConfigurationSplit.DeploymentPaths));
+    }
 }

@@ -281,7 +281,11 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
 
     // The hosted configuration owner before the key ring exists: secrets and credentials stay
     // in the scratch directory.
-    internal static ModelConfiguration Hosted(IConfigDocumentStore documents, string scratch) =>
+    internal static ModelConfiguration Hosted(
+        IConfigDocumentStore documents,
+        string scratch,
+        TenantProfile profile = TenantProfile.Hosted
+    ) =>
         new(
             HostPaths.ForDataRoot(scratch),
             new ConfigurationSources(
@@ -290,6 +294,9 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
                 paths => new Foxwarm.Secrets.InstanceSecrets(paths.DataRoot),
                 new FileInstanceCredentials(scratch)
             )
+            {
+                Profile = profile,
+            }
         );
 
     private protected override async Task<Backend> CreateAsync()
@@ -326,6 +333,9 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
                 ("vector: {enabled: false}\n", "vector"),
                 ("bot:\n  enableTrigger: true\n", "bot.enableTrigger"),
                 ("paths:\n  agentsDir: /x\n", "paths"),
+                // Not a tenant setting of any profile.
+                ("handoff: true\n", "handoff"),
+                ("bot:\n  color: red\n", "bot.color"),
             }
         )
         {
@@ -337,6 +347,21 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
         }
         // Tenant settings under `bot` stay tenant settings.
         await configuration.SaveAppAsync("bot:\n  name: Fox\n");
+        Assert.Equal(
+            "app config `handoff` isn't a tenant setting.",
+            (await Assert.ThrowsAsync<InvalidDataException>(() => configuration.SaveAppAsync("handoff: true\n"))).Message
+        );
+
+        // The operator profile also has the Claude runtime's settings, and nothing else more.
+        var operatorProfile = Hosted(backend.Documents, backend.Root, TenantProfile.Operator);
+        await operatorProfile.SaveAppAsync("claudeCode: {credentialLifetimeSeconds: 600}\n");
+        await Assert.ThrowsAsync<InvalidDataException>(() => operatorProfile.SaveAppAsync("url: https://other.example\n"));
+        await Assert.ThrowsAsync<InvalidDataException>(() => operatorProfile.SaveAppAsync("handoff: true\n"));
+        // That stored document refuses a hosted runtime's startup, naming the key.
+        Assert.Contains(
+            "`claudeCode`",
+            Assert.Throws<InvalidDataException>(() => Hosted(backend.Documents, backend.Root)).Message
+        );
     }
 
     [Fact]

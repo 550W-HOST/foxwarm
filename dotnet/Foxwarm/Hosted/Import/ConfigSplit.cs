@@ -24,8 +24,9 @@ internal sealed record ConfigSplitResult(
 /// deployment configuration by cutting whole YAML blocks by line range: top-level blocks, and
 /// the children of <c>bot</c>, which mixes tenant and deployment settings. Every other line,
 /// comments included, stays in the tenant document unchanged. Settings hosted mode refuses
-/// (<see cref="AppConfigurationSplit.UnavailablePaths"/>) are cut into neither and returned with
-/// their values. Both parts are parsed back: their merge must equal the original without the
+/// (<see cref="AppConfigurationSplit.UnavailablePaths"/>) and paths that are neither deployment
+/// nor hosted tenant paths (<see cref="AppConfigurationSplit.TenantPaths"/>) are cut into
+/// neither and returned with their values. Both parts are parsed back: their merge must equal the original without the
 /// dropped settings, and each must pass its own document's rules, or the split is refused.
 /// The draft gets <paramref name="blobsBlock"/> (the backend the import wrote the blobs to)
 /// unless the source already had a <c>blobs</c> block.
@@ -178,7 +179,8 @@ internal static class ConfigSplit
             return "tenant";
         if (path == "journal" || AppConfigurationSplit.DeploymentPaths.Contains(path))
             return "deployment";
-        return "tenant";
+        // What a hosted tenant's document may hold; anything else is reported, not kept.
+        return AppConfigurationSplit.TenantPaths(TenantProfile.Hosted).Contains(path) ? "tenant" : "dropped";
     }
 
     // The line range of each key: from its line, or from the comment lines directly above it at

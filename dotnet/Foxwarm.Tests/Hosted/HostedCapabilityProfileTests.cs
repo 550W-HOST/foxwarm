@@ -321,6 +321,28 @@ public sealed class HostedCapabilityProfileTests
         Assert.NotNull(new McpConfiguration(temp.Path).Snapshot()["local"]);
     }
 
+    // Plan §11 "capability absence" per profile: the hosted profile has no master, stdio MCP or
+    // Claude runtime; the operator profile has file mode's. A tenant of either profile can't
+    // configure a Provider itself (DeploymentConfigurationTests: `nodeProviders` is the
+    // operator's), and grants to hosted tenants are track CH's.
+    [Fact]
+    public async Task Capability_absence_follows_the_stored_profile()
+    {
+        foreach (var (profile, present) in new[] { (TenantProfile.Hosted, false), (TenantProfile.Operator, true) })
+        {
+            await using var f = await Fixture.Create(RuntimeCapabilities.For(profile));
+            Assert.Equal(present, f.Manager.OutboundMcp.Configuration.StdioAvailable);
+            var listed = await f.Ctl("node list");
+            Succeeded(listed);
+            Assert.Equal(present, listed.ToJsonString().Contains("\"master\"", StringComparison.Ordinal));
+            var exec = await f.Call("exec", new JsonObject { ["command"] = "true" });
+            Assert.Equal(present, Error(exec) is null);
+            Assert.Equal(present, f.Manager.Capabilities.ClaudeRuntime);
+            // The deployment's Provider is available to both.
+            Assert.True(f.Manager.NodeProviders.HasProvider(Fixture.Provider));
+        }
+    }
+
     [Fact]
     public async Task New_Sessions_start_on_a_real_default_Node_or_Provider_Node_and_otherwise_without_one()
     {

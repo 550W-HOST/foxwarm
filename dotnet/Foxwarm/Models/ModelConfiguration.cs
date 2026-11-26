@@ -20,12 +20,16 @@ internal sealed record ConfigurationSources(
 {
     /// <summary>The tenant's operator ceiling (hosted mode); null means none.</summary>
     internal Foxwarm.Tools.IOperatorCeilingSource? OperatorCeiling { get; init; }
+
+    /// <summary>The tenant's profile, which selects the paths its <c>config</c> document may hold.</summary>
+    internal TenantProfile Profile { get; init; }
 }
 
 internal sealed partial class ModelConfiguration
 {
     private readonly object gate = new();
     private readonly JsonObject? deployment;
+    private readonly TenantProfile profile;
     private readonly IInstanceCredentials? credentials;
     private readonly SemaphoreSlim mutation = new(1);
     private readonly SemaphoreSlim appPersistence = new(1);
@@ -195,6 +199,7 @@ internal sealed partial class ModelConfiguration
         deployment = sources?.Deployment;
         credentials = sources?.Credentials;
         OperatorCeiling = sources?.OperatorCeiling;
+        profile = sources?.Profile ?? TenantProfile.Hosted;
         // The app file's location is captured before it is read; its `paths` section can move
         // only the other documents.
         var captured = sources?.Documents ?? new FileConfigDocuments(paths);
@@ -349,7 +354,7 @@ internal sealed partial class ModelConfiguration
         if (deployment is null)
             return document;
         if (tenantDocument)
-            AppConfigurationSplit.RequireTenantDocument(document);
+            AppConfigurationSplit.RequireTenantDocument(document, profile);
         return AppConfigurationSplit.Merge(deployment, document);
     }
 
