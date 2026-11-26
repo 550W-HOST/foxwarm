@@ -184,6 +184,60 @@ internal sealed partial class ImageBlobStore(
         }
     }
 
+    /// <summary>
+    /// Streams the referenced blob into a new file at <paramref name="path"/> and validates it
+    /// as <see cref="ReadAsync"/> does, holding one buffer instead of the whole image. For
+    /// sends of a blob that isn't a local file (<see cref="LocalPath"/> is null).
+    /// </summary>
+    internal async Task CopyToFileAsync(
+        JsonObject reference,
+        string path,
+        CancellationToken token = default
+    )
+    {
+        var id = RequireId(
+            SessionWait.Text(reference["blobId"])
+                ?? throw new ImageInputException("Image reference has no blob location.")
+        );
+        long length = 0;
+        string actual;
+        try
+        {
+            await using var source = blobs.OpenRead(id);
+            await using var target = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                65536,
+                FileOptions.Asynchronous
+            );
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[81920];
+            int read;
+            while ((read = await source.ReadAsync(buffer, token)) > 0)
+            {
+                hash.AppendData(buffer, 0, read);
+                await target.WriteAsync(buffer.AsMemory(0, read), token);
+                length += read;
+            }
+            actual = Convert.ToHexStringLower(hash.GetHashAndReset());
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new ImageInputException("Original image blob is unavailable.");
+        }
+        if (
+            SessionWait.Number(reference["byteLength"]) is double expected
+            && expected >= 0
+            && expected != length
+        )
+            throw new ImageInputException("Image blob failed byte-length validation.");
+        var sha = SessionWait.Text(reference["sha256"]) ?? id[..64];
+        if (actual != sha || sha != id[..64])
+            throw new ImageInputException("Image blob failed SHA-256 validation.");
+    }
+
     private string ResolveLegacy(string path)
     {
         var state = AuthorizationPaths.CanonicalPotential(Path.Combine(DataRoot, "state"));

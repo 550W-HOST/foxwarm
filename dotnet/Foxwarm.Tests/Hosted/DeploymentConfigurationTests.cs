@@ -1,5 +1,6 @@
 using System.Net;
 using Foxwarm.Hosted;
+using Foxwarm.Hosted.Blobs;
 using Foxwarm.Models;
 
 namespace Foxwarm.Tests.Hosted;
@@ -10,7 +11,7 @@ public sealed class DeploymentConfigurationTests
     public void The_listener_uses_file_mode_rules_and_the_health_port_is_required()
     {
         var deployment = DeploymentConfiguration.Parse(
-            "url: https://fox.example\nbot:\n  httpHost: '::'\n  httpPort: 3101\njournal:\n  retentionDays: 30\nhealth:\n  port: 3181\n"
+            "url: https://fox.example\nbot:\n  httpHost: '::'\n  httpPort: 3101\njournal:\n  retentionDays: 30\nhealth:\n  port: 3181\nblobs:\n  backend: postgres\n"
         );
         Assert.Equal(new IPEndPoint(IPAddress.IPv6Any, 3101), deployment.PublicEndpoint);
         Assert.Equal(new IPEndPoint(IPAddress.IPv6Any, 3181), deployment.HealthEndpoint);
@@ -18,7 +19,7 @@ public sealed class DeploymentConfigurationTests
         // File mode's default port and wildcard address.
         Assert.Equal(
             new IPEndPoint(IPAddress.Any, 3001),
-            DeploymentConfiguration.Parse("health: {port: 3081}\n").PublicEndpoint
+            DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\n").PublicEndpoint
         );
         foreach (
             var (text, message) in new[]
@@ -65,7 +66,7 @@ public sealed class DeploymentConfigurationTests
     public void The_deployment_and_tenant_key_sets_are_disjoint_and_the_merge_overlays_deployment_values()
     {
         var deployment = DeploymentConfiguration
-            .Parse("url: https://fox.example\nbot: {httpPort: 3101}\nhealth: {port: 3181}\n")
+            .Parse("url: https://fox.example\nbot: {httpPort: 3101}\nhealth: {port: 3181}\nblobs: {backend: postgres}\n")
             .Root;
         var tenant = ConfigurationYaml.Parse("bot: {name: Fox}\nsessionAutoTitle: false\n", "app config");
         AppConfigurationSplit.RequireTenantDocument(tenant);
@@ -92,5 +93,94 @@ public sealed class DeploymentConfigurationTests
                     AppConfigurationSplit.RequireTenantDocument(ConfigurationYaml.Parse(text, "app config"))
                 ).Message
             );
+    }
+    private const string S3 =
+        "blobs:\n  backend: s3\n  s3:\n    endpoint: http://versitygw:7070\n    region: us-east-1\n"
+        + "    bucket: foxwarm-blobs\n    pathStyle: true\n"
+        + "    accessKeyIdFile: /run/secrets/s3-access-key-id\n    secretAccessKeyFile: /run/secrets/s3-secret\n";
+
+    [Fact]
+    public void The_blob_backend_is_required_and_S3_names_its_connection_and_credential_files()
+    {
+        Assert.Equal(
+            new BlobSettings(BlobBackend.Postgres, null),
+            DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\n").Blobs
+        );
+        var s3 = DeploymentConfiguration.Parse("health: {port: 3081}\n" + S3).Blobs;
+        Assert.Equal(BlobBackend.S3, s3.Backend);
+        Assert.Equal(
+            new S3BlobSettings(
+                new Uri("http://versitygw:7070"),
+                "us-east-1",
+                "foxwarm-blobs",
+                true,
+                "/run/secrets/s3-access-key-id",
+                "/run/secrets/s3-secret"
+            ),
+            s3.S3
+        );
+    }
+
+    [Theory]
+    [InlineData("", "`blobs.backend` is required")]
+    [InlineData("blobs: {}\n", "`blobs.backend` is required")]
+    [InlineData("blobs: postgres\n", "`blobs` must be a mapping")]
+    [InlineData("blobs: {backend: files}\n", "`blobs.backend` must be `s3` or `postgres`")]
+    [InlineData("blobs: {backend: postgres, cache: 1}\n", "`blobs.cache` isn't a setting")]
+    [InlineData("blobs: {backend: postgres, s3: {}}\n", "`blobs.s3` applies only with `blobs.backend: s3`")]
+    [InlineData("blobs: {backend: s3}\n", "`blobs.s3` is required")]
+    [InlineData("blobs: {backend: s3, s3: {region: x}}\n", "`blobs.s3.endpoint` is required")]
+    [InlineData("endpoint: ftp://x/", "`blobs.s3.endpoint` must be an http or https URL")]
+    [InlineData("endpoint: http://x/bucket", "`blobs.s3.endpoint` must be an http or https URL")]
+    [InlineData("region: ''", "`blobs.s3.region` must be a nonempty string")]
+    [InlineData("bucket: Foxwarm_Blobs", "`blobs.s3.bucket` must be an S3 bucket name")]
+    [InlineData("pathStyle: 'yes'", "`blobs.s3.pathStyle` must be true or false")]
+    [InlineData("accessKeyIdFile: secrets/id", "`blobs.s3.accessKeyIdFile` must be an absolute path")]
+    [InlineData("secretAccessKey: abc", "`blobs.s3.secretAccessKey` isn't a setting")]
+    public void Invalid_or_missing_blob_settings_refuse_startup_naming_the_key(string change, string message)
+    {
+        var text = change.StartsWith("blobs", StringComparison.Ordinal) || change.Length == 0
+            ? change
+            : Replace(S3, change);
+        Assert.Contains(
+            message,
+            Assert.Throws<HostedBootstrapException>(() =>
+                DeploymentConfiguration.Parse("health: {port: 3081}\n" + text)
+            ).Message
+        );
+
+        static string Replace(string yaml, string change)
+        {
+            var key = change[..change.IndexOf(':')];
+            var lines = yaml.Split('\n').ToList();
+            var index = lines.FindIndex(line => line.TrimStart().StartsWith(key + ":", StringComparison.Ordinal));
+            if (index < 0)
+                lines.Insert(lines.Count - 1, "    " + change);
+            else
+                lines[index] = "    " + change;
+            return string.Join('\n', lines);
+        }
+    }
+
+    [Fact]
+    public void S3_credentials_come_from_the_named_files()
+    {
+        using var temp = new TempDirectory();
+        var settings = DeploymentConfiguration
+            .Parse("health: {port: 3081}\n" + S3.Replace("/run/secrets", temp.Path))
+            .Blobs.S3!;
+        File.WriteAllText(Path.Combine(temp.Path, "s3-access-key-id"), "AKID\n");
+        File.WriteAllText(Path.Combine(temp.Path, "s3-secret"), " secret value \n");
+        Assert.Equal(("AKID", "secret value"), settings.ReadCredentials());
+        File.WriteAllText(Path.Combine(temp.Path, "s3-secret"), "\n");
+        Assert.Contains(
+            "`blobs.s3.secretAccessKeyFile` is empty",
+            Assert.Throws<HostedBootstrapException>(() => settings.ReadCredentials()).Message
+        );
+        File.Delete(Path.Combine(temp.Path, "s3-access-key-id"));
+        Assert.Contains(
+            "`blobs.s3.accessKeyIdFile` can't be read",
+            Assert.Throws<HostedBootstrapException>(() => settings.ReadCredentials()).Message
+        );
     }
 }

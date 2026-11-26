@@ -268,7 +268,7 @@ public sealed class FileConfigDocumentsContractTests : ConfigDocumentsContractTe
 public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContractTests
 {
     internal const string Deployment =
-        "url: https://fox.example\nbot:\n  httpPort: 3101\n  enableWebUI: true\nhealth:\n  port: 3181\n";
+        "url: https://fox.example\nbot:\n  httpPort: 3101\n  enableWebUI: true\nhealth:\n  port: 3181\nblobs:\n  backend: postgres\n";
 
     private static async Task<(HostedTestDatabase Database, TenantDb Tenant)> OpenAsync()
     {

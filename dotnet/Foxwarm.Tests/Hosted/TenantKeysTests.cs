@@ -171,7 +171,7 @@ public sealed class TenantKeysTests
         var currentKeys = InstanceKeys.OpenOrCreate(current);
         var previousKeys = InstanceKeys.OpenOrCreate(previous);
         var deployment = Path.Combine(temp.Path, "deployment.yaml");
-        File.WriteAllText(deployment, "bot: {httpPort: 4100}\nhealth: {port: 4181}\n");
+        File.WriteAllText(deployment, "bot: {httpPort: 4100}\nhealth: {port: 4181}\nblobs: {backend: postgres}\n");
         var bootstrap = HostedBootstrap.FromEnvironment(
             new System.Collections.Hashtable
             {

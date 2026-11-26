@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Hosted.Blobs;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
@@ -12,9 +13,15 @@ namespace Foxwarm.Hosted;
 /// through a rolling restart. It holds only the deployment paths of
 /// <see cref="AppConfigurationSplit"/>, in the app configuration's shape: the public listener is
 /// <c>bot.httpHost</c> and <c>bot.httpPort</c> with file mode's rules and default, and the health
-/// listener port is <c>health.port</c>, which is required.
+/// listener port is <c>health.port</c>, which is required. The blob backend is <c>blobs</c>
+/// (<see cref="BlobSettings"/>), also required.
 /// </summary>
-internal sealed record DeploymentConfiguration(JsonObject Root, IPEndPoint PublicEndpoint, int HealthPort)
+internal sealed record DeploymentConfiguration(
+    JsonObject Root,
+    IPEndPoint PublicEndpoint,
+    int HealthPort,
+    BlobSettings Blobs
+)
 {
     internal const string Variable = "FOXWARM_DEPLOYMENT_CONFIG";
 
@@ -45,7 +52,12 @@ internal sealed record DeploymentConfiguration(JsonObject Root, IPEndPoint Publi
             AppConfigurationRules.Validate(root);
             var address = IPAddress.Parse(HttpServerSettings.ListenAddress(root["bot"]?["httpHost"]));
             var port = HttpServerSettings.ListenPort(root["bot"]?["httpPort"]);
-            return new(root, new IPEndPoint(address, port), RequiredHealthPort(root));
+            return new(
+                root,
+                new IPEndPoint(address, port),
+                RequiredHealthPort(root),
+                BlobSettings.Parse(root["blobs"])
+            );
         }
         catch (InvalidDataException error)
         {

@@ -24,8 +24,9 @@ internal static class HostedEntry
             bootstrap = HostedBootstrap.FromEnvironment();
             bootstrap.RequireDatabaseUrl();
             deployment = bootstrap.RequireDeployment();
-            // Checked before standing by, so a missing key file fails at once.
+            // Checked before standing by, so a missing key or S3 credential file fails at once.
             _ = bootstrap.RequireKeks();
+            _ = deployment.Blobs.S3?.ReadCredentials();
         }
         catch (HostedBootstrapException error)
         {
@@ -69,9 +70,9 @@ internal static class HostedEntry
 
     /// <summary>
     /// Builds the tenant runtime. It refuses while this build lacks a PostgreSQL store, so a
-    /// hosted replica never runs over files.
+    /// hosted replica never runs over files, then puts the blobs on the deployment's backend.
     /// </summary>
-    internal static Task<IHostedRuntime> CreateRuntimeAsync(
+    internal static async Task<IHostedRuntime> CreateRuntimeAsync(
         HostedRuntimeContext context,
         HostedBootstrap bootstrap,
         DeploymentConfiguration deployment
@@ -84,7 +85,10 @@ internal static class HostedEntry
                     + string.Join(", ", storage.Missing)
                     + " stores; hosted mode can't start."
             );
-        return BuildRuntimeAsync(storage, storage, bootstrap, deployment);
+        await storage
+            .OpenBlobsAsync(deployment.Blobs, bootstrap.Tenant, CancellationToken.None)
+            .ConfigureAwait(false);
+        return await BuildRuntimeAsync(storage, storage, bootstrap, deployment).ConfigureAwait(false);
     }
 
     /// <summary>

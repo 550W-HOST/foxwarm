@@ -1,0 +1,159 @@
+using Foxwarm.Hosted;
+using Foxwarm.Hosted.Blobs;
+using Foxwarm.Hosted.Postgres;
+using Foxwarm.Tests.Hosted;
+
+namespace Foxwarm.Tests.Storage;
+
+/// <summary>
+/// S3 blob rules beyond the shared contract: the key layout, the startup probe of conditional
+/// writes, the behavior a write from a fenced owner relies on, and startup failures.
+/// </summary>
+[Trait("Backend", "s3")]
+public sealed class S3BlobStoreTests
+{
+    [Fact]
+    public async Task Keys_are_tenant_and_store_prefixed()
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        await bucket.Store("images", true).CreateAsync("ab.png", new byte[] { 1 }, false, CancellationToken.None);
+        await bucket.Store("artifacts", true).CreateAsync("art_x/1.json", new byte[] { 2 }, false, CancellationToken.None);
+        await bucket.Store("images", true, tenant: "other").CreateAsync("ab.png", new byte[] { 3 }, false, CancellationToken.None);
+        Assert.Equal(
+            ["t/default/artifacts/art_x/1.json", "t/default/images/ab.png", "t/other/images/ab.png"],
+            (await bucket.KeysAsync()).Order(StringComparer.Ordinal)
+        );
+        Assert.False(bucket.Store("artifacts", true).Exists("ab.png"));
+        Assert.Equal([3], await bucket.Store("images", true, tenant: "other").ReadAllAsync("ab.png", CancellationToken.None));
+        Assert.Throws<ArgumentException>(() => bucket.Store("images", true, tenant: ".."));
+    }
+
+    [Fact]
+    public async Task The_probe_finds_conditional_writes_on_the_fixture_and_none_behind_an_ignoring_or_rejecting_endpoint()
+    {
+        await using (var bucket = await S3TestBucket.CreateAsync())
+        {
+            Assert.True(await bucket.ProbeAsync());
+            // A restart finds the probe object and probes the same way.
+            Assert.True(await bucket.ProbeAsync());
+            Assert.Equal(["t/default/" + S3Blobs.ProbeKey], await bucket.KeysAsync());
+        }
+        var server = await S3Server.SharedAsync();
+        foreach (var mode in Enum.GetValues<S3ConditionalProxy.ConditionalMode>())
+        {
+            await using var proxy = await S3ConditionalProxy.StartAsync(server.Endpoint, mode);
+            await using var bucket = await S3TestBucket.CreateAsync(proxy.Endpoint);
+            Assert.False(await bucket.ProbeAsync());
+            Assert.False(await bucket.ProbeAsync());
+            Assert.True(proxy.ConditionalPuts > 0);
+            // The fallback still creates once.
+            var store = bucket.Store("images", conditional: false);
+            Assert.True(await store.CreateAsync("k.png", new byte[] { 1 }, false, CancellationToken.None));
+            Assert.False(await store.CreateAsync("k.png", new byte[] { 2 }, true, CancellationToken.None));
+            await Assert.ThrowsAnyAsync<IOException>(() => store.CreateAsync("k.png", new byte[] { 2 }, false, CancellationToken.None));
+            Assert.Equal([1], await store.ReadAllAsync("k.png", CancellationToken.None));
+        }
+    }
+
+    /// <summary>
+    /// S3 writes aren't fenced by the database. A fenced owner's late create either lands on a
+    /// key nobody created, as an unreferenced orphan, or finds the key existing and changes
+    /// nothing; the new owner's create of a key the old one wrote never takes other content.
+    /// </summary>
+    [Fact]
+    public async Task A_late_create_of_a_fenced_owner_never_replaces_content_and_leaves_at_most_an_orphan()
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        var fenced = bucket.Store("artifacts", true);
+        var owner = bucket.Store("artifacts", true);
+
+        // The new owner published revision 2 first; the fenced owner's revision 2 is refused.
+        Assert.True(await owner.CreateAsync("art_a/2.json", "new"u8.ToArray(), false, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<IOException>(() =>
+            fenced.CreateAsync("art_a/2.json", "old"u8.ToArray(), false, CancellationToken.None)
+        );
+        Assert.False(await fenced.CreateAsync("art_a/2.json", "old"u8.ToArray(), true, CancellationToken.None));
+        Assert.Equal("new"u8.ToArray(), await owner.ReadAllAsync("art_a/2.json", CancellationToken.None));
+
+        // The fenced owner's revision 3 lands, referenced by nothing it could commit. The new
+        // owner can't take that key with other content.
+        Assert.True(await fenced.CreateAsync("art_a/3.json", "orphan"u8.ToArray(), false, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<IOException>(() =>
+            owner.CreateAsync("art_a/3.json", "mine"u8.ToArray(), false, CancellationToken.None)
+        );
+        Assert.Equal("orphan"u8.ToArray(), await owner.ReadAllAsync("art_a/3.json", CancellationToken.None));
+
+        // A retried create finds its own bytes and succeeds.
+        Assert.True(await owner.CreateAsync("art_a/4.json", "retry"u8.ToArray(), false, CancellationToken.None));
+        Assert.True(await owner.CreateAsync("art_a/4.json", "retry"u8.ToArray(), false, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task The_context_puts_images_artifacts_and_the_authority_on_the_selected_backend()
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        using var temp = new TempDirectory();
+        var server = await S3Server.SharedAsync();
+        File.WriteAllText(Path.Combine(temp.Path, "id"), server.AccessKey);
+        File.WriteAllText(Path.Combine(temp.Path, "secret"), server.SecretKey);
+        // No statement runs: the stores are only built.
+        var database = new TenantDb(new Foxwarm.Hosted.Postgres.PgDatabase("Host=/nonexistent;Database=none", "test"), 1, 1);
+        var postgres = new PostgresStorageContext(database, temp.Path);
+        await postgres.OpenBlobsAsync(new BlobSettings(BlobBackend.Postgres, null), "default", CancellationToken.None);
+        Assert.IsType<Foxwarm.Hosted.Postgres.PgBlobStore>(postgres.ImageBlobs);
+        Assert.IsType<Foxwarm.Hosted.Postgres.PgBlobStore>(postgres.ArtifactBlobs);
+
+        var s3 = new PostgresStorageContext(database, temp.Path);
+        var settings = bucket.Settings with
+        {
+            AccessKeyIdFile = Path.Combine(temp.Path, "id"),
+            SecretAccessKeyFile = Path.Combine(temp.Path, "secret"),
+        };
+        await s3.OpenBlobsAsync(new BlobSettings(BlobBackend.S3, settings), "default", CancellationToken.None);
+        var images = Assert.IsType<S3BlobStore>(s3.ImageBlobs);
+        Assert.True(images.ConditionalWrites);
+        Assert.IsType<S3BlobStore>(s3.ArtifactBlobs);
+        Assert.Same(
+            images,
+            Assert.IsType<Foxwarm.Hosted.Postgres.Authority.PostgresSessionAuthorityBackend>(s3.Authority).ImageBlobs
+        );
+        Assert.Empty(s3.Missing);
+        await s3.ArtifactBlobs.CreateAsync("art_c/1.json", new byte[] { 1 }, false, CancellationToken.None);
+        Assert.Contains("t/default/artifacts/art_c/1.json", await bucket.KeysAsync());
+    }
+
+    [Fact]
+    public async Task Missing_keys_fail_like_files_and_refused_settings_fail_startup()
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        var store = bucket.Store("images", true);
+        await Assert.ThrowsAsync<FileNotFoundException>(() => store.ReadAllAsync("none.png", CancellationToken.None));
+        Assert.Throws<FileNotFoundException>(() => store.OpenRead("none.png"));
+        Assert.Empty(store.List("none"));
+
+        using var temp = new TempDirectory();
+        var server = await S3Server.SharedAsync();
+        var id = Path.Combine(temp.Path, "id");
+        var secret = Path.Combine(temp.Path, "secret");
+        File.WriteAllText(id, server.AccessKey + "\n");
+        File.WriteAllText(secret, server.SecretKey + "\n");
+        var settings = bucket.Settings with { AccessKeyIdFile = id, SecretAccessKeyFile = secret };
+        var (client, conditional) = await S3Blobs.OpenAsync(settings, "default", CancellationToken.None);
+        client.Dispose();
+        Assert.True(conditional);
+
+        Assert.Contains(
+            bucket.Name + "-missing",
+            (await Assert.ThrowsAsync<HostedStartupException>(() =>
+                S3Blobs.OpenAsync(settings with { Bucket = bucket.Name + "-missing" }, "default", CancellationToken.None)
+            )).Message
+        );
+        File.WriteAllText(secret, "wrong");
+        await Assert.ThrowsAsync<HostedStartupException>(() => S3Blobs.OpenAsync(settings, "default", CancellationToken.None));
+        File.Delete(secret);
+        Assert.Contains(
+            "blobs.s3.secretAccessKeyFile",
+            (await Assert.ThrowsAsync<HostedStartupException>(() => S3Blobs.OpenAsync(settings, "default", CancellationToken.None))).Message
+        );
+    }
+}

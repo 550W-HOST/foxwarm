@@ -48,7 +48,7 @@ public sealed partial class HostedStartupTests
         var tenantId = await database.TenantIdAsync();
         var epoch = await database.TakeLeaseAsync(tenantId);
         var tenant = new PostgresStorageContext(new TenantDb(database.OpenApp(), tenantId, epoch), files.Scratch);
-        var deployment = DeploymentConfiguration.Parse("health: {port: 3081}\n" + journal);
+        var deployment = DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\n" + journal);
         var error = await Assert.ThrowsAsync<HostedStartupException>(() =>
             HostedEntry.BuildRuntimeAsync(tenant, HostedTestBackend.Compose(tenant, files.Scratch), files.Bootstrap, deployment)
         );
@@ -60,9 +60,9 @@ public sealed partial class HostedStartupTests
     [Fact]
     public void JournalRetentionReadsTheDeploymentDocument()
     {
-        var deployment = DeploymentConfiguration.Parse("health: {port: 3081}\njournal: {retentionDays: 30}\n");
+        var deployment = DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\njournal: {retentionDays: 30}\n");
         Assert.Equal(30, JournalRetentionOptions.FromDeployment(deployment.Root["journal"]).RetentionDays);
-        var unset = DeploymentConfiguration.Parse("health: {port: 3081}\n");
+        var unset = DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\n");
         Assert.Null(JournalRetentionOptions.FromDeployment(unset.Root["journal"]).RetentionDays);
     }
 }

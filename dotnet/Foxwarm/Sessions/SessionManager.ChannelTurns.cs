@@ -380,24 +380,37 @@ internal sealed partial class SessionManager
 
     private async Task DeliverGeneratedImageAsync(SessionOwner owner, JsonObject reference)
     {
+        string? staging = null;
         try
         {
             var blob = SessionWait.Text(reference["blobId"]) ?? "";
             var mime =
                 ImageBlobStore.SafeMime(blob)
                 ?? throw new InvalidDataException("Generated image has no safe raster blob.");
-            await Images.ReadAsync(reference);
             var name =
                 (SessionWait.Text(reference["imageId"]) ?? "image")
                 + "."
                 + ImageBlobStore.Extension(mime);
-            var file = new ChannelFile(
-                Images.LocalPath(blob)
-                    ?? throw new InvalidDataException("Generated image has no local file."),
-                name,
-                mime,
-                true
-            );
+            var path = Images.LocalPath(blob);
+            if (path is not null)
+                await Images.ReadAsync(reference);
+            else if (!AutomaticTargets(owner.Id).Any(target => target.Channel.SendFile is not null))
+                return;
+            else
+            {
+                // Blobs that aren't local files (hosted mode) are streamed into this runtime's
+                // scratch space for the channels' file sends and removed after them.
+                staging = Path.Combine(
+                    root,
+                    ".temp",
+                    "image-delivery",
+                    Guid.NewGuid().ToString("N")
+                );
+                Directory.CreateDirectory(staging);
+                path = Path.Combine(staging, "image." + ImageBlobStore.Extension(mime));
+                await Images.CopyToFileAsync(reference, path);
+            }
+            var file = new ChannelFile(path, name, mime, true);
             foreach (var (_, conversation, channel) in AutomaticTargets(owner.Id))
                 if (channel.SendFile is { } send)
                     try
@@ -414,6 +427,18 @@ internal sealed partial class SessionManager
         catch (Exception error)
         {
             Console.Error.WriteLine("Generated image delivery failed: " + error.Message);
+        }
+        finally
+        {
+            if (staging is not null)
+                try
+                {
+                    Directory.Delete(staging, recursive: true);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    Console.Error.WriteLine("Generated image staging cleanup failed: " + error.Message);
+                }
         }
     }
 }

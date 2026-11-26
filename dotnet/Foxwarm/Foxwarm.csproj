@@ -71,6 +71,7 @@
   </PropertyGroup>
   <ItemGroup Condition="'$(FoxwarmHosted)' == 'true'">
     <PackageReference Include="Npgsql" Version="10.0.4" />
+    <PackageReference Include="AWSSDK.S3" Version="4.1.2.1" />
     <EmbeddedResource Include="Hosted/Schema/Migrations/*.sql" LogicalName="Foxwarm.Hosted.Migrations.%(Filename)%(Extension)" />
     <Content
       Include="Hosted/Licenses/*.txt"

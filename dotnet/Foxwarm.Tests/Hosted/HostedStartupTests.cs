@@ -274,7 +274,7 @@ public sealed partial class HostedStartupTests
     }
 
     [Fact]
-    public async Task TheProductionRuntimeRefusesMissingStoresAndReleasesTheLease()
+    public async Task TheProductionRuntimeHasEveryStoreAndRefusesWithoutKeysReleasingTheLease()
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
@@ -291,12 +291,12 @@ public sealed partial class HostedStartupTests
             {
                 try
                 {
-                    // The stores this build still lacks, from a context of its own.
+                    // The stores this build lacks, from a context of its own.
                     missing = new PostgresStorageContext(context.Database, probe.Path).Missing;
                     return await HostedEntry.CreateRuntimeAsync(
                         context,
                         bootstrap,
-                        DeploymentConfiguration.Parse("health: {port: 3081}\n")
+                        DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\n")
                     );
                 }
                 catch (Exception error)
@@ -308,11 +308,9 @@ public sealed partial class HostedStartupTests
         );
         Assert.Equal(HostedExit.Configuration, await replica.Run.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.IsType<HostedStartupException>(refusal);
-        // The case needs at least one missing store; once every store exists, it has no subject.
-        Assert.NotEmpty(missing);
-        foreach (var name in missing)
-            Assert.Contains(name, refusal!.Message);
-        Assert.DoesNotContain("Documents", refusal!.Message);
+        // Every store has its PostgreSQL implementation now, so the next refusal is the key ring's.
+        Assert.Empty(missing);
+        Assert.Contains("FOXWARM_KEK_FILE", refusal!.Message);
         Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));
         // Nothing durable was written to the scratch directory.
         Assert.Empty(Directory.EnumerateFileSystemEntries(temp.Path));
