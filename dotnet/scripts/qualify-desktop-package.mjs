@@ -227,18 +227,46 @@ try {
 
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, true)
   assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
-  await page.evaluate(() => { location.hash = 'setup' })
-  await page.waitForSelector('#setup-tab-models')
+  // A new installation opens on the first-run surface: the Models step alone, without the
+  // workbench, the Setup rail or anything else that could start a Session first.
+  await page.waitForSelector('[data-first-run-surface] [data-setup-first-run]')
+  assert.deepEqual(await page.evaluate(() => ({
+    title: document.querySelector('#setup-first-run-title')?.textContent,
+    setupRail: !!document.querySelector('#setup-tab-models'),
+    tabStrip: !!document.querySelector('[data-tab-id]'),
+    openSetup: !!document.querySelector('[aria-label="Open setup"]'),
+  })), { title: 'Connect a model', setupRail: false, tabStrip: false, openSetup: false })
   for (const name of ['foxwarm-fs', 'foxwarm-scm', 'foxwarm-terminal', 'foxwarm-webui']) {
     const base = `/vscode-web/extensions/${name}/`
     assert.equal((await api('GET', base + 'package.json')).body.browser, './dist/extension.js')
     assert.equal((await api('GET', base + 'dist/extension.js')).status, 200)
   }
   assert.equal((await fetch(origin + '/node/run.ps1')).status, 200)
-  stage = 'Setup save and native ToolScript turn'
-  const models = JSON.stringify({ default: 'fixture', providers: { fixture: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], asyncCompact: false } } })
-  assert.equal((await api('POST', '/api/setup/models', { yaml: models })).status, 200)
+  stage = 'first-run Models save and welcome handoff'
+  // The first-run form saves exact YAML through its editor and Save and continue, as a user would.
+  const models = `default: fixture\nproviders:\n  fixture:\n    providerType: openai-responses\n    baseUrl: ${provider}\n    models: [wire]\n    asyncCompact: false\n`
+  await page.waitForSelector('[data-setup-first-run] [data-models-view="yaml"]')
+  await page.click('[data-setup-first-run] [data-models-view="yaml"]')
+  const editor = '[data-setup-first-run] [aria-label="Models YAML editor"] [role="textbox"]'
+  await page.waitForSelector(editor)
+  await page.focus(editor)
+  await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')
+  await page.keyboard.sendCharacter(models.replaceAll('\n', '\r\n'))
+  const save = await page.waitForFunction(() => [...document.querySelectorAll('[data-setup-first-run] button')]
+    .find(button => button.textContent === 'Save and continue' && !button.disabled))
+  await save.click()
+  await until(async () => (await readFile(join(data, 'state/models.yaml'), 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === models,
+    'first-run Models saved')
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, false)
+  // The save's welcome Session replaces the first-run surface.
+  await page.waitForFunction(() => location.hash === '#tab/' + encodeURIComponent('chat:main')
+    && document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main'
+    && document.querySelector('.foxwarm-chat-messages [data-chat-message-anchor-key]'), { timeout: 30_000 })
+  assert.equal(await page.$('[data-first-run-surface]'), null)
+  assert.equal(await page.$('[data-tab-id="system:setup"]'), null)
+  assert.deepEqual((await api('GET', '/api/sessions')).body.sessions.map(row => row.id), ['main'])
+
+  stage = 'native ToolScript turn'
   const created = await api('POST', '/api/sessions', {})
   assert.equal(created.status, 200)
   const session = created.body.sessionId
@@ -324,7 +352,7 @@ try {
   assert.equal(await mainStops(), stopsBefore + 1, 'The exit request must stop Main through its normal shutdown')
   await childrenEnded(trayChildren, 'Desktop child processes ended after the exit request')
   Object.assign(summary, {
-    extractedDesktop: true, importsComplete: true, noCoreClr: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true,
+    extractedDesktop: true, importsComplete: true, noCoreClr: true, nativeWebView2Cookie: true, setup: true, firstRunWelcome: true, nativeToolScript: true,
     nativeExecHelper: true, canonicalAgentRoot: true, configuredAgentRoot: true, webSocketCookie: true, artifactDependencies: true,
     extensionBundles: 4, vectorChild: true, mainLoadsNoLanceDb: true, trayIcon: true, closeToTray: true, trayOpen: true, trayExit: true,
     restartPreserved: true, mainShutdown: true, trayStart: true, furtherStartOpens: true, exitRequest: true,
