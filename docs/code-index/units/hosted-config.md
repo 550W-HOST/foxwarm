@@ -54,7 +54,7 @@ A hosted tenant's configuration and secrets live in the database, beside an oper
 
 ## Hosted runtime wiring
 
-`HostedEntry.CreateRuntimeAsync` still refuses first while the build lacks a PostgreSQL store. `BuildRuntimeAsync` then opens the key ring, builds `ModelConfiguration` over `ConfigurationSources` (the tenant documents, the deployment root, `InstanceSecrets` over the hosted key ring and state documents, the context's credentials) and starts `MainHost` on the deployment listener. Configuration, bootstrap and lock failures are `HostedStartupException` (exit 78). The text-redaction cache stays in memory until its PostgreSQL store exists (JR track).
+`HostedEntry.CreateRuntimeAsync` still refuses first while the build lacks a PostgreSQL store. `BuildRuntimeAsync` then opens the key ring, builds `ModelConfiguration` over `ConfigurationSources` (the tenant documents, the deployment root, `InstanceSecrets` over the hosted key ring and state documents, the context's credentials) and starts `MainHost` on the deployment listener. Configuration, bootstrap and lock failures are `HostedStartupException` (exit 78). The text-redaction cache is the tenant's PostgreSQL store under the key ring's derived key, and `journal.retentionDays` configures the owner's [journal retention](./hosted-journal.md#journal-retention).
 
 ## Tests
 

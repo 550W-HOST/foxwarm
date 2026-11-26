@@ -55,9 +55,9 @@ File members that exist only for inspection, fixtures and test hooks (the SQLite
 
 ### Model request journal and text redaction
 
-`ILlmJournalStore` (`Models/LlmJournalStore.cs`) is what Main uses of the request journal: request admission, attempt starts and results, chat results, redaction records, reconstruction and listing, usage backfill, and the usage and redaction queries with their change events. `LlmRequestJournalStore` implements it explicitly ([model request journal](../threads/model-request-and-streaming.md)). Legacy JSONL migration, the SQLite authority marker and export stay on the file class; startup runs the migration only for a file journal.
+`ILlmJournalStore` (`Models/LlmJournalStore.cs`) is what Main uses of the request journal: request admission, attempt starts and results, chat results, redaction records, reconstruction and listing, usage backfill, and the usage and redaction queries with their change events. `LlmRequestJournalStore` implements it explicitly ([model request journal](../threads/model-request-and-streaming.md)). Legacy JSONL migration, the SQLite authority marker and export stay on the file class; startup runs the migration only for a file journal. `PgLlmJournalStore` implements it in [hosted mode](./hosted-journal.md#journal).
 
-`ITextRedactionStore` (`Models/TextRedactionRecords.cs`) is the slot and known-original cache of `TextRedactor`; `TextRedactionStore` implements it unchanged ([persistence](./model-text-redaction-persistence.md)). The same slot digest must return the same ranges after a restart. `InstanceSecrets` opens it through an injectable opener that receives the derived key.
+`ITextRedactionStore` (`Models/TextRedactionRecords.cs`) is the slot and known-original cache of `TextRedactor`; `TextRedactionStore` implements it in file mode ([persistence](./model-text-redaction-persistence.md)) and `PgTextRedactionStore` in [hosted mode](./hosted-journal.md#text-redaction-cache), both over the shared `TextRedactionRecordStore`. The same slot digest must return the same ranges after a restart. `InstanceSecrets` opens it through an injectable opener that receives the derived key.
 
 ### ToolScript run records
 

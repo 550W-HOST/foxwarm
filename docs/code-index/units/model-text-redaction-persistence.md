@@ -1,7 +1,7 @@
 # Unit: Text redaction persistence
 
-Files: `dotnet/Foxwarm/Models/TextRedactionStore.cs`, `dotnet/Foxwarm/Models/TextRedactionStore.Diagnostics.cs`, `dotnet/Foxwarm/Models/TextRedactor.Persistence.cs`
-Secondary files: `dotnet/Foxwarm/Models/TextRedactor.cs`, `dotnet/Foxwarm/Models/TextRedactionScope.cs`, `dotnet/Foxwarm/Models/TextRedactionView.cs`, `dotnet/Foxwarm/Secrets/InstanceSecrets.cs`, `dotnet/Foxwarm/Secrets/InstanceKeys.cs`, `dotnet/Foxwarm.Tests/Models/TextRedactionPersistenceTests.cs`
+Files: `dotnet/Foxwarm/Models/TextRedactionRecordStore.cs`, `dotnet/Foxwarm/Models/TextRedactionStore.cs`, `dotnet/Foxwarm/Models/TextRedactionStore.Diagnostics.cs`, `dotnet/Foxwarm/Models/TextRedactor.Persistence.cs`
+Secondary files: `dotnet/Foxwarm/Models/TextRedactor.cs`, `dotnet/Foxwarm/Models/TextRedactionScope.cs`, `dotnet/Foxwarm/Models/TextRedactionView.cs`, `dotnet/Foxwarm/Secrets/InstanceSecrets.cs`, `dotnet/Foxwarm/Secrets/InstanceKeys.cs`, `dotnet/Foxwarm.Tests/Models/TextRedactionPersistenceTests.cs`, `dotnet/Foxwarm.Tests/Models/TextRedactionStoreContractTests.cs`
 
 ## Purpose
 
@@ -25,6 +25,8 @@ Storage: `TextRedactor` uses the cache through `ITextRedactionStore`; `InstanceS
 
 ## Storage
 
+`TextRedactionRecordStore` owns record identities, payload formats, sealing and write coalescing; a backend only reads sealed records and applies coalesced batches. The file backend is `TextRedactionStore`; the tenant tables of the [hosted cache](./hosted-journal.md#text-redaction-cache) hold the same bytes.
+
 `<data root>/state/text-redaction.sqlite` (WAL, `synchronous=NORMAL`):
 
 | Table | Columns | Notes |
@@ -41,7 +43,7 @@ Storage: `TextRedactor` uses the cache through `ITextRedactionStore`; `InstanceS
 
 ## Tests
 
-`TextRedactionPersistenceTests` covers the acceptance path through `ModelRequestOwner` with real HTTP detector and provider peers: several turns, then a new `InstanceSecrets` over the same data root sends a byte-identical provider body with zero detector calls, with and without `batchBytes`, although a later known value would otherwise mask the first message; a new slot missed by detection is literal-masked with the restored known set; the sent-version view is available after the restart; changed settings re-detect. It also covers that the file contains no originals or placeholders and a copy without the key yields nothing (with the key it is readable), invalid records, the slot LRU bound with day-granular use, known values mirroring the bounded reverse map with collision checks after reload, and an unusable or damaged store.
+`TextRedactionStoreContractTests` (file and PostgreSQL subclasses; the hand-over is a restart or a takeover) covers the acceptance path through `ModelRequestOwner` with real HTTP detector and provider peers: several turns, then a new `InstanceSecrets` over the same data root sends a byte-identical provider body with zero detector calls, with and without `batchBytes`, although a later known value would otherwise mask the first message; a new slot missed by detection is literal-masked with the restored known set; the sent-version view is available after the restart; changed settings re-detect. It also covers invalid records, the slot LRU bound with day-granular use, known values mirroring the bounded reverse map with collision checks after reload. `TextRedactionPersistenceTests` keeps the file-only cases: the file contains no originals or placeholders and a copy without the key yields nothing (with the key it is readable), and an unusable or damaged store.
 
 ## Read-only known-set diagnostic
 
