@@ -10,6 +10,25 @@ internal sealed partial class WebUIChannel
 {
     private void RegisterTerminalRoutes(WebApplication app)
     {
+        var terminalRouter = this.terminalRouter;
+        if (terminalRouter is null)
+        {
+            // Without Main-local terminals (RuntimeCapabilities.MainTerminalsAndCode) the list is
+            // the only route, so the WebUI's registry poll reads an empty, unsupported registry.
+            app.MapGet(
+                "/api/terminals",
+                () =>
+                    Results.Ok(
+                        new JsonObject
+                        {
+                            ["terminals"] = new JsonArray(),
+                            ["supported"] = false,
+                            ["owner"] = "master",
+                        }
+                    )
+            );
+            return;
+        }
         app.MapGet(
             "/api/terminals",
             async (HttpRequest request) =>

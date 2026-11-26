@@ -131,10 +131,13 @@ internal sealed partial class NodeConnectionHub : IDisposable
             );
     }
 
+    // RuntimeCapabilities.MasterNode: whether master is a Node of this runtime.
+    internal bool MasterNode { get; init; } = true;
+
     internal bool Connected(string id)
     {
         if (id == "master")
-            return true;
+            return MasterNode;
         lock (gate)
             return nodes.TryGetValue(id, out var connection)
                 && !connection.Retired
@@ -144,7 +147,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
     internal bool Online(string id)
     {
         if (id == "master")
-            return true;
+            return MasterNode;
         lock (gate)
             return nodes.TryGetValue(id, out var connection)
                 && !connection.Retired

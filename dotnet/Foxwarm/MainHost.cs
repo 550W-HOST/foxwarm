@@ -9,7 +9,7 @@ namespace Foxwarm;
 internal sealed class MainHost : IAsyncDisposable
 {
     private readonly SessionManager sessions;
-    private readonly TerminalRegistry terminals;
+    private readonly TerminalRegistry? terminals;
     private readonly McpInboundHttp? inboundMcp;
     private readonly IHost host;
     private readonly MainLog? log;
@@ -59,7 +59,7 @@ internal sealed class MainHost : IAsyncDisposable
 
     private MainHost(
         SessionManager sessions,
-        TerminalRegistry terminals,
+        TerminalRegistry? terminals,
         IHost host,
         McpInboundHttp? inboundMcp,
         MainLog? log,
@@ -94,7 +94,10 @@ internal sealed class MainHost : IAsyncDisposable
         HttpServerSettings http,
         string? distRoot = null,
         bool captureDiagnostics = false,
-        Foxwarm.Storage.IStorageContext? storage = null
+        Foxwarm.Storage.IStorageContext? storage = null,
+        RuntimeCapabilities? capabilities = null,
+        // Hosted mode: log lines also go to stdout as JSON lines (MainLog).
+        bool jsonStdoutLog = false
     ) =>
         CreateAsync(
             args,
@@ -105,7 +108,9 @@ internal sealed class MainHost : IAsyncDisposable
             distRoot,
             configuration.Paths,
             captureDiagnostics: captureDiagnostics,
-            storage: storage
+            storage: storage,
+            capabilities: capabilities,
+            jsonStdoutLog: jsonStdoutLog
         );
 
     internal static async Task<MainHost> CreateAsync(
@@ -119,9 +124,13 @@ internal sealed class MainHost : IAsyncDisposable
         Foxwarm.Channels.ChannelTransportDependencies? channelDependencies = null,
         bool captureDiagnostics = false,
         // The runtime's stores; null builds today's file stores under dataRoot.
-        Foxwarm.Storage.IStorageContext? storage = null
+        Foxwarm.Storage.IStorageContext? storage = null,
+        // The runtime's features; null is file mode's full profile.
+        RuntimeCapabilities? capabilities = null,
+        bool jsonStdoutLog = false
     )
     {
+        capabilities ??= RuntimeCapabilities.File;
         if (http.HttpEnabled)
             configuration.Access.ReserveInstanceToken(http.Token);
         configuration.Secrets.Open();
@@ -133,7 +142,7 @@ internal sealed class MainHost : IAsyncDisposable
             "",
             configuration.MaxOutput
         );
-        var log = captureDiagnostics ? new MainLog(configuration) : null;
+        var log = captureDiagnostics ? new MainLog(configuration, jsonStdoutLog) : null;
         SessionManager sessions;
         try
         {
@@ -144,7 +153,8 @@ internal sealed class MainHost : IAsyncDisposable
                 configuration.Models,
                 paths?.SkillsRoot,
                 paths,
-                storage: storage
+                storage: storage,
+                capabilities: capabilities
             );
         }
         catch (Exception error)
@@ -169,7 +179,8 @@ internal sealed class MainHost : IAsyncDisposable
         try
         {
             await sessions.LoadMainHostAsync();
-            terminals = new TerminalRegistry(dataRoot, CancellationToken.None);
+            if (capabilities.MainTerminalsAndCode)
+                terminals = new TerminalRegistry(dataRoot, CancellationToken.None);
             var runtime = new SessionRuntime(sessions);
             var router = new MessageRouter(runtime);
             sessions.InitializeChannels(router, configuration, channelDependencies);
@@ -267,7 +278,8 @@ internal sealed class MainHost : IAsyncDisposable
         }
         if (sessions.ManagedChannels is { } managed)
             await managed.DisposeAsync();
-        await terminals.DisposeAsync().ConfigureAwait(false);
+        if (terminals is not null)
+            await terminals.DisposeAsync().ConfigureAwait(false);
         await host.StopAsync().ConfigureAwait(false);
         if (host is IAsyncDisposable asyncHost)
             await asyncHost.DisposeAsync().ConfigureAwait(false);

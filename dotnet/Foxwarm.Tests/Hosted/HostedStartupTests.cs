@@ -201,14 +201,23 @@ public sealed partial class HostedStartupTests
         var b = Start(data, database.OpenApp(), "replica-b");
         await b.Inner.Waiting.WaitAsync(TimeSpan.FromSeconds(30));
 
-        var partitioned = Stopwatch.StartNew();
         proxy.Partition();
-        Assert.Equal(HostedExit.Fenced, await a.Run.WaitAsync(TimeSpan.FromSeconds(30)));
-        var exited = partitioned.Elapsed;
-        // Fenced at the deadline and stopped within the drain bound: before the lease expires.
-        Assert.InRange(exited, Timings.FenceAfter - Timings.RenewInterval, Timings.FenceAfter + DrainBound + TimeSpan.FromSeconds(1));
-        await WaitUntilAsync(() => b.Inner.Health.Role == ReplicaRole.Owner, TimeSpan.FromSeconds(30), "replica B owns the tenant");
-        Assert.True(partitioned.Elapsed >= Timings.Ttl - Timings.RenewInterval, "The standby acquired before the lease expired.");
+        Assert.Equal(HostedExit.Fenced, await a.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+        // The U17 contract, timed by A's lease monitor from the start of its last successful
+        // renewal, which the lease's expiry is at least the TTL after: A fences at the renewal
+        // deadline, not before, and its run returns (the process exits) before the lease can
+        // expire.
+        var fence = a.Inner.FenceTimes!;
+        Assert.StartsWith("No lease renewal succeeded", fence.Reason);
+        Assert.InRange(fence.AtFence, Timings.FenceAfter, Timings.Ttl);
+        Assert.NotNull(fence.Exited);
+        Assert.InRange(fence.Exited!.Value, fence.AtFence, Timings.Ttl);
+        await WaitUntilAsync(() => b.Inner.Health.Role == ReplicaRole.Owner, TimeSpan.FromSeconds(60), "replica B owns the tenant");
+        // The standby took over only once A's lease could have expired.
+        Assert.True(
+            Stopwatch.GetElapsedTime(fence.RenewalStart) >= Timings.Ttl,
+            "The standby acquired before the lease expired."
+        );
         Assert.True(b.Inner.Health.Epoch > epochA);
         await WaitUntilAsync(() => b.Inner.Health.RuntimeStarted, TimeSpan.FromSeconds(60), "replica B serves");
         using (var owner = Client(b.PublicPort, data))

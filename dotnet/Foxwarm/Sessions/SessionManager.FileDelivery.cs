@@ -75,6 +75,7 @@ internal sealed partial class SessionManager
         string? mimeType = null;
         if (node == "master")
         {
+            RequireMasterNode();
             path = files.Paths.FilePath(raw);
             if (!WorkspaceTools.RegularFile(path))
                 throw new InvalidDataException("Not a regular file: " + raw);

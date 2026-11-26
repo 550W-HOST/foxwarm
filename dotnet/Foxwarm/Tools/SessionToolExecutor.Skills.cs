@@ -38,6 +38,8 @@ internal sealed partial class SessionToolExecutor
             ? ToolRegistry.Text(args, "path") ?? throw new InvalidDataException("path must be a string.")
             : null;
         var node = ToolRegistry.Text(args, "node")?.Trim() is { Length: > 0 } named ? named : ExecutionNode;
+        if (node == "master")
+            sessions.RequireMasterNode();
         var overwrite = args["overwrite"] switch
         {
             null => false,

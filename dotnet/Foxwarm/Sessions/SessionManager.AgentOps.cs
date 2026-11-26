@@ -335,6 +335,7 @@ internal sealed partial class SessionManager
                 "Child suffix must use only letters, numbers, hyphens and underscores."
             );
         runtime = ClaudeRuntimeState.ValidateSelection(JsonValue.Create(runtime), present: true);
+        RequireRuntimeAvailable(runtime);
         if (
             fork
             && (
@@ -670,6 +671,7 @@ internal sealed partial class SessionManager
     )
     {
         runtime = ClaudeRuntimeState.ValidateSelection(JsonValue.Create(runtime), present: true);
+        RequireRuntimeAvailable(runtime);
         if (runtime == ClaudeRuntimeState.Kind && forceModel is not null)
             throw new InvalidDataException(
                 "forceModel is not supported for Claude Code Sessions; Claude Code manages its model."
@@ -690,9 +692,10 @@ internal sealed partial class SessionManager
         // User decision 2026-11-06: explicit or same-Agent parent (supplied by the caller as
         // initialNode; a timer's stored owner Node counts as one), Agent default, installation
         // default, then master. Legacy isolation bindings no longer place Sessions (R2).
-        var selectedNode = SessionCreationDefaults.PlacedNode(
-            timerCreation ? timerNode : initialNode,
-            agents.EffectiveDefaultNode(agentName)
+        var placedNode = timerCreation ? timerNode : initialNode;
+        var selectedNode = StartingNode(
+            SessionCreationDefaults.PlacedNode(placedNode, agents.EffectiveDefaultNode(agentName)),
+            placedNode is not null
         );
         return await WithCreationIdentityAsync(
             id,
@@ -745,8 +748,12 @@ internal sealed partial class SessionManager
                         state.AuthorityEnvelope["parentSessionId"] = parentId;
                     if (displayName is not null)
                         state.AuthorityEnvelope["displayName"] = displayName;
-                    state.AuthorityEnvelope["currentNode"] = selectedNode;
-                    if (agents.DefaultCwdFor(agentName, selectedNode) is { } defaultCwd)
+                    if (selectedNode is not null)
+                        state.AuthorityEnvelope["currentNode"] = selectedNode;
+                    if (
+                        selectedNode is not null
+                        && agents.DefaultCwdFor(agentName, selectedNode) is { } defaultCwd
+                    )
                         state.AuthorityEnvelope["cwd"] = defaultCwd;
                     if (model is not null)
                         state.AuthorityEnvelope["model"] = model;

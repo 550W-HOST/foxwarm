@@ -62,7 +62,11 @@ internal sealed partial class SessionManager
                     node.Remove("parentNode");
             return new JsonObject
             {
-                ["currentNode"] = visibility.CurrentNode,
+                // Without a master Node, master (the unset default) is no Node.
+                ["currentNode"] =
+                    visibility.CurrentNode == "master" && !Capabilities.MasterNode
+                        ? null
+                        : visibility.CurrentNode,
                 ["nodes"] = nodes,
                 ["providers"] = providers,
             };
@@ -71,6 +75,9 @@ internal sealed partial class SessionManager
         {
             ToolRegistry.Keys(args, ["action"]);
             var current = CurrentNode(owner);
+            // Without a master Node, master (the unset default) is no Node.
+            if (current == "master" && !Capabilities.MasterNode)
+                return new JsonObject { ["currentNode"] = null, ["connected"] = false };
             var status = new JsonObject
             {
                 ["currentNode"] = current,

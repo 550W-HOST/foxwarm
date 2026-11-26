@@ -141,7 +141,16 @@ internal static class HostedEntry
             .ConfigureAwait(false);
         var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
         var host = await MainHost
-            .CreateAsync([], configuration, http, distRoot, captureDiagnostics: true, storage: storage)
+            .CreateAsync(
+                [],
+                configuration,
+                http,
+                distRoot,
+                captureDiagnostics: true,
+                storage: storage,
+                capabilities: RuntimeCapabilities.Hosted,
+                jsonStdoutLog: true
+            )
             .ConfigureAwait(false);
         // The owner's daily journal retention; it stops when the host disposes the journal.
         tenant.StartJournalRetention(retention);

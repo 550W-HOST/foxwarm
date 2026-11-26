@@ -146,7 +146,11 @@ internal sealed partial class SessionManager
             $"Skill: {info.Name}"
             + (string.IsNullOrEmpty(info.Description) ? "" : $"\nDescription: {info.Description}")
             + $"\nSource: {info.SourceLabel}\nPaths in this skill are relative to its directory. {ResourceCommands(source, info.Name, args)}"
-            + (CurrentNode(source) == "master" ? $"\nOn master, the skill directory is {info.Directory}." : "");
+            + (
+                Capabilities.MasterNode && CurrentNode(source) == "master"
+                    ? $"\nOn master, the skill directory is {info.Directory}."
+                    : ""
+            );
         if (info.Resources.Length > 0)
             output +=
                 "\n\nSkill resources (supporting files, not eagerly loaded):\n"

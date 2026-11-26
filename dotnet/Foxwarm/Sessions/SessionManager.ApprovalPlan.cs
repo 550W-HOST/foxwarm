@@ -385,6 +385,8 @@ internal sealed partial class SessionManager
         if (
             resolved is not { Source: "builtin", Name: "add_secret" }
             || resolved.Args["fromConfig"] is null
+            // Without master the move is refused at resolution (ToolRegistry.ResolveAsync).
+            || !Capabilities.MasterNode
             || models.ConfigurationOwner is not { } configuration
         )
             return [];

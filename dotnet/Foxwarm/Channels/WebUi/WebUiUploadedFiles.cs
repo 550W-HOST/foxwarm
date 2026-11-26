@@ -93,6 +93,12 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 var mime = Mime(SessionWait.Text((entry as JsonObject)?["mimeType"]), filename);
                 await using var source = OpenStaged(path);
                 var isImage = ImageInputPolicy.IsImageInput(mime);
+                // Without a master Node no tool reads the Agent directory, so only images,
+                // which the model sees inline, can be attached.
+                if (!sessions.Capabilities.MasterNode && !isImage)
+                    throw new ImageInputException(
+                        $"\"{filename}\" can't be attached: this server accepts images only."
+                    );
                 byte[]? bytes = null;
                 if (isImage)
                 {
@@ -112,6 +118,37 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         }
                         source.Position = 0;
                     }
+                }
+                if (!sessions.Capabilities.MasterNode)
+                {
+                    if (!isImage || bytes is null)
+                        throw new ImageInputException(
+                            $"\"{filename}\" can't be attached: this server accepts images only."
+                        );
+                    await sessions.WaitForIdentityMutationAsync(owner.Id, token);
+                    sessions.RequireFileIngressOwner(owner);
+                    scoped?.RequireUpload(owner.Id, path);
+                    var inlineId = "image_" + Guid.NewGuid();
+                    var inline = await sessions.Images.PutAsync(bytes, mime, inlineId, token);
+                    parts.Add(
+                        new JsonObject
+                        {
+                            ["inlineDataRef"] = inline,
+                            ["imageMeta"] = new JsonObject
+                            {
+                                ["imageId"] = inlineId,
+                                ["mimeType"] = mime,
+                                ["width"] = inline["width"]?.DeepClone(),
+                                ["height"] = inline["height"]?.DeepClone(),
+                                ["sizeBytes"] = source.Length,
+                                ["sha256"] = inline["sha256"]?.DeepClone(),
+                            },
+                        }
+                    );
+                    scoped?.ConsumeUpload(path);
+                    await source.DisposeAsync();
+                    File.Delete(path);
+                    continue;
                 }
                 await StageAsync(owner, "before-copy");
                 await sessions.WaitForIdentityMutationAsync(owner.Id, token);

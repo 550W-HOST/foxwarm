@@ -18,8 +18,12 @@ internal sealed class MainLog : IDisposable
     private readonly Capture error;
     private readonly bool json = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG") == "1";
     private bool failed;
+    private bool disposed;
     private static MainLog? active;
     private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
+    // Hosted mode: every recorded line is also one JSON line on stdout, for the container's log
+    // collector, instead of the console's raw forwarding.
+    private readonly bool jsonStdout;
 
     // Typed lifecycle diagnostics are INFO only inside Main's capture. Outside Main, stderr
     // remains the diagnostic stream so CLI and private helper stdout framing stays intact.
@@ -106,8 +110,9 @@ internal sealed class MainLog : IDisposable
         );
     }
 
-    internal MainLog(ModelConfiguration configuration)
+    internal MainLog(ModelConfiguration configuration, bool jsonStdout = false)
     {
+        this.jsonStdout = jsonStdout;
         secrets = configuration.Secrets;
         var path = Destination(configuration);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -117,6 +122,7 @@ internal sealed class MainLog : IDisposable
         };
         var suppress =
             json
+            || jsonStdout
             || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FOXWARM_NO_CONSOLE_LOG"));
         var console = !string.IsNullOrEmpty(
             Environment.GetEnvironmentVariable("FOXWARM_LOG_STDERR")
@@ -140,23 +146,37 @@ internal sealed class MainLog : IDisposable
 
     private void Record(string line, bool isError)
     {
+        if (disposed || failed && !jsonStdout)
+            return;
+        var now = DateTimeOffset.Now;
+        string JsonLine() =>
+            JsonData.Serialize(
+                new System.Text.Json.Nodes.JsonObject
+                {
+                    ["level"] = isError ? 50 : 30,
+                    ["time"] = now.ToUnixTimeMilliseconds(),
+                    ["pid"] = Environment.ProcessId,
+                    ["hostname"] = Environment.MachineName,
+                    ["msg"] = line,
+                }
+            );
+        if (jsonStdout)
+            try
+            {
+                stdout.WriteLine(JsonLine());
+                stdout.Flush();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                // A closed stdout leaves the file record.
+            }
         if (failed)
             return;
         try
         {
-            var now = DateTimeOffset.Now;
             file.WriteLine(
                 json
-                    ? JsonData.Serialize(
-                        new System.Text.Json.Nodes.JsonObject
-                        {
-                            ["level"] = isError ? 50 : 30,
-                            ["time"] = now.ToUnixTimeMilliseconds(),
-                            ["pid"] = Environment.ProcessId,
-                            ["hostname"] = Environment.MachineName,
-                            ["msg"] = line,
-                        }
-                    )
+                    ? JsonLine()
                     : "["
                         + now.ToString("yyyy-MM-dd HH:mm:ss.fff ", CultureInfo.InvariantCulture)
                         + now.ToString("zzz", CultureInfo.InvariantCulture).Replace(":", "")
@@ -183,6 +203,7 @@ internal sealed class MainLog : IDisposable
             // Channel ingress can finish a diagnostic concurrently with shutdown.
             // A writer reference already obtained by that callback must stay harmless.
             failed = true;
+            disposed = true;
             Interlocked.CompareExchange(ref active, null, this);
             Console.SetOut(stdout);
             Console.SetError(stderr);

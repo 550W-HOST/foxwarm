@@ -1249,10 +1249,15 @@ internal sealed partial class SessionToolExecutor(
         Foxwarm.McpClient mcp,
         Func<SessionOwner, string> path,
         Foxwarm.Nodes.NodeConnectionHub? nodes = null,
-        Foxwarm.Nodes.NodeProviderRegistry? providers = null
+        Foxwarm.Nodes.NodeProviderRegistry? providers = null,
+        RuntimeCapabilities? capabilities = null
     )
     {
-        var registry = new ToolRegistry(mcp, path, nodes, providers);
+        capabilities ??= RuntimeCapabilities.File;
+        var registry = new ToolRegistry(mcp, path, nodes, providers)
+        {
+            MasterNode = capabilities.MasterNode,
+        };
         var handlers = new Dictionary<
             string,
             Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonObject>>
@@ -1459,6 +1464,9 @@ internal sealed partial class SessionToolExecutor(
             registry.Register(definition, source, DefaultBuiltins.Contains(name), handlers[name]
             );
         }
+        // Main browser tools are master Node tools; without master there are none.
+        if (!capabilities.MasterNode)
+            return registry;
         var browser = new BrowserHost(BrowserHost.DefaultBundlePath());
         foreach (var definition in MainBrowserDefinitions.All(browser).OfType<JsonObject>())
             registry.RegisterBrowser(definition, () => browser.Describe().Available);

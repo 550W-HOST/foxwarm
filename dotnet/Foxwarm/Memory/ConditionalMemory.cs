@@ -8,8 +8,9 @@ public static class ConditionalMemory
     private const string SnapshotHeaderSeparator = "\n\n";
     public const string FoxwarmRuntime = "foxwarm";
 
-    // Each attribute is one condition; all attributes must match (AND).
-    private static readonly string[] ConditionAttributes = ["model-id", "runtime"];
+    // Each attribute is one condition; all attributes must match (AND). `master-node` is "true"
+    // or "false": whether the runtime has a master Node (RuntimeCapabilities.MasterNode).
+    private static readonly string[] ConditionAttributes = ["model-id", "runtime", "master-node"];
     private static readonly Regex ConditionalOpen = new(
         "^[ \\t]*<foxwarm-if((?: [a-z-]+=\"[^\"]*\")+)>[ \\t]*$",
         RegexOptions.CultureInvariant
@@ -40,7 +41,8 @@ public static class ConditionalMemory
     public static string FilterConditionalMemorySource(
         string source,
         string modelId,
-        string runtime = FoxwarmRuntime
+        string runtime = FoxwarmRuntime,
+        bool masterNode = true
     )
     {
         if (
@@ -62,7 +64,15 @@ public static class ConditionalMemory
             output.Append(source, sourceOffset, open.Start - sourceOffset);
             if (
                 range.Conditions.All(condition =>
-                    ListMatches(condition.Value, condition.Key == "runtime" ? runtime : modelId)
+                    ListMatches(
+                        condition.Value,
+                        condition.Key switch
+                        {
+                            "runtime" => runtime,
+                            "master-node" => masterNode ? "true" : "false",
+                            _ => modelId,
+                        }
+                    )
                 )
             )
                 output.Append(source, open.End, close.Start - open.End);

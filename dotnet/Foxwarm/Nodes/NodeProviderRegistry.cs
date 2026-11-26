@@ -60,6 +60,10 @@ internal sealed partial class NodeProviderRegistry
 
     internal bool IsProviderNode(string id) => id.Contains('/');
 
+    internal bool HasProvider(string providerId) => providers.ContainsKey(providerId);
+
+    internal bool MasterNode => native.MasterNode;
+
     internal bool Online(string id) =>
         IsProviderNode(id)
             ? discovered.TryGetValue(id, out var descriptor)
@@ -197,6 +201,8 @@ internal sealed partial class NodeProviderRegistry
         // Fixed native owners never consult optional executable discovery.
         if (id == "master")
         {
+            if (!native.MasterNode)
+                return null;
             var summary = MasterSummary();
             summary["availability"] = "ready";
             return summary;

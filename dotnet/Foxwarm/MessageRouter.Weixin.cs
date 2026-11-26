@@ -31,7 +31,7 @@ internal sealed partial class MessageRouter
                         {
                             "*Weixin channel MVP status*",
                             $"- channelId: `{settings.ChannelId}`",
-                            $"- config: `{configuration.AppPath}`",
+                            ConfigLine(configuration),
                             $"- enabled: `{(config["enabled"]?.GetValue<bool>() == false ? "false" : "true/auto")}`",
                             $"- baseUrl: `{settings.BaseUrl}`",
                             $"- token: `{(string.IsNullOrWhiteSpace(SessionWait.Text(config["token"])) ? "missing" : "configured")}`",
@@ -51,7 +51,7 @@ internal sealed partial class MessageRouter
                             "- `/channel weixin-login`",
                             "- `/channel weixin-wait <session-key>`",
                             $"- `/channel start {settings.ChannelId}`",
-                        }
+                        }.OfType<string>()
                     )
                 );
                 return;
@@ -110,8 +110,10 @@ internal sealed partial class MessageRouter
                             "\n",
                             new[]
                             {
-                                "✅ Weixin login completed and config file updated.",
-                                $"- config: `{configuration.AppPath}`",
+                                runtime.Manager.Capabilities.MasterNode
+                                    ? "✅ Weixin login completed and config file updated."
+                                    : "✅ Weixin login completed and configuration updated.",
+                                ConfigLine(configuration),
                                 $"- channelId: `{settings.ChannelId}`",
                                 $"- baseUrl: `{login.BaseUrl ?? settings.BaseUrl}`",
                                 login.UserId is not null
@@ -134,4 +136,9 @@ internal sealed partial class MessageRouter
                 return;
         }
     }
+
+    // The app configuration file, when it is one on the Main server's machine; a hosted tenant's
+    // configuration is a document edited in Setup, so there is no path to show.
+    private string? ConfigLine(Foxwarm.Models.ModelConfiguration configuration) =>
+        runtime.Manager.Capabilities.MasterNode ? $"- config: `{configuration.AppPath}`" : null;
 }

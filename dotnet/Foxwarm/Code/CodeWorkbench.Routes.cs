@@ -227,6 +227,11 @@ internal sealed partial class CodeWorkbench
             context,
             async () =>
             {
+                if (NodeId(context) == "master" && !nodes.MasterNode)
+                    throw new CodeServiceException(
+                        "UnsupportedNode",
+                        RuntimeCapabilities.MasterUnavailable().Message
+                    );
                 var bytes =
                     NodeId(context) == "master"
                         ? await CodeFileService.ReadFileAsync(

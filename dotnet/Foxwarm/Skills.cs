@@ -34,8 +34,21 @@ internal enum SkillAccess
 }
 
 // Knowledge discovery only: entry documents are loaded on demand, never executable tool registration.
-internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
+internal sealed partial class Skills(AgentCatalog agents, string globalRoot, bool masterNode = true)
 {
+    // Global skills about operating a Main server on its own machine (updates, restarts, data
+    // layout). Without a master Node (RuntimeCapabilities.MasterNode) they are neither listed nor
+    // loadable nor runnable: a hosted installation is upgraded by image rollouts outside Foxwarm.
+    private static readonly IReadOnlySet<string> MasterNodeSkills = new HashSet<string>(
+        StringComparer.Ordinal
+    )
+    {
+        "foxwarm-maintenance",
+    };
+
+    private bool Unavailable(string name, string rootType) =>
+        !masterNode && rootType == "global" && MasterNodeSkills.Contains(name);
+
     // The Agent whose skills the skill tool reads: agentName, trimmed, else the caller's. The
     // handler and the operation plan (`skill-agent`) both use it.
     internal static string RequestedAgent(string? agentName, string callerAgent) =>
@@ -79,7 +92,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         foreach (var root in Roots(agent))
         foreach (var name in Discover(root.Directory).Order(StringComparer.CurrentCulture))
         {
-            if (result.ContainsKey(name))
+            if (result.ContainsKey(name) || Unavailable(name, root.Type))
                 continue;
             try
             {
@@ -122,7 +135,10 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         Exception? last = null;
         foreach (var root in Roots(agent))
         {
-            if (!Directory.Exists(Path.Combine(root.Directory, name)))
+            if (
+                !Directory.Exists(Path.Combine(root.Directory, name))
+                || Unavailable(name, root.Type)
+            )
                 continue;
             try
             {

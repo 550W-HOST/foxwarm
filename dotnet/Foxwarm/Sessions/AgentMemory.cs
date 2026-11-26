@@ -15,7 +15,10 @@ internal sealed partial class AgentMemory(
     // What the catalog may show of each skill for (Agent, Session), evaluated once per build;
     // null, or a null result, lists every skill as it is.
     Func<string, string, Func<SkillInfo, SkillAccess>?>? skillAccess = null,
-    IAgentFileStore? files = null
+    IAgentFileStore? files = null,
+    // RuntimeCapabilities.MasterNode. Without master, the prompt names no Main-local paths: memory
+    // blocks have no path and there is no agent_folder line.
+    bool masterNode = true
 )
 {
     private readonly IAgentFileStore files = files ?? new FileAgentFiles(agents);
@@ -59,7 +62,8 @@ internal sealed partial class AgentMemory(
                     ConditionalMemory.FilterConditionalMemorySource(
                         await files.ReadTextAsync(replacementAgent, replacement, cancellationToken),
                         concreteModelId,
-                        runtime
+                        runtime,
+                        masterNode
                     )
                 );
             else if (File.Exists(frameworkTemplatePath))
@@ -72,7 +76,8 @@ internal sealed partial class AgentMemory(
                     ConditionalMemory.FilterConditionalMemorySource(
                         await File.ReadAllTextAsync(frameworkTemplatePath, cancellationToken),
                         concreteModelId,
-                        runtime
+                        runtime,
+                        masterNode
                     )
                 );
             if (files.FileExists(null, FrameworkPrompt.LocalFileName))
@@ -88,7 +93,8 @@ internal sealed partial class AgentMemory(
                             cancellationToken
                         ),
                         concreteModelId,
-                        runtime
+                        runtime,
+                        masterNode
                     )
                 );
 
@@ -128,7 +134,8 @@ internal sealed partial class AgentMemory(
                             ConditionalMemory.FilterConditionalMemorySource(
                                 body,
                                 concreteModelId,
-                                runtime
+                                runtime,
+                                masterNode
                             )
                         );
                 }
@@ -178,14 +185,17 @@ internal sealed partial class AgentMemory(
             }
             blocks.Append("</available_skills>\n");
         }
-        var directory = $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}";
+        var directory = masterNode
+            ? $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}"
+            : "";
         var bodyText = blocks.ToString().Trim();
+        var composed =
+            directory.Length == 0 ? bodyText
+            : bodyText.Length == 0 ? directory
+            : bodyText + "\n\n" + directory;
         if (externalRuntime)
-            return bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory;
-        var snapshot = ConditionalMemory.BuildCurrentModelSnapshot(
-            concreteModelId,
-            bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory
-        );
+            return composed;
+        var snapshot = ConditionalMemory.BuildCurrentModelSnapshot(concreteModelId, composed);
         var size = MemorySize.Measure(snapshot, models?.Capture());
         if (!size.OverThreshold)
             return snapshot;
@@ -204,23 +214,19 @@ internal sealed partial class AgentMemory(
             .Replace("<", "&lt;", StringComparison.Ordinal)
             .Replace(">", "&gt;", StringComparison.Ordinal);
 
-    private static void AppendBlock(
+    private void AppendBlock(
         StringBuilder output,
         string agent,
         string ownership,
         string path,
         string body
-    ) =>
-        output
-            .Append("\n<memory_file agent=")
-            .Append(agent)
-            .Append("; ownership=")
-            .Append(ownership)
-            .Append("; path=")
-            .Append(path)
-            .Append(">\n")
-            .Append(body)
-            .Append("\n</memory_file>");
+    )
+    {
+        output.Append("\n<memory_file agent=").Append(agent).Append("; ownership=").Append(ownership);
+        if (masterNode)
+            output.Append("; path=").Append(path);
+        output.Append(">\n").Append(body).Append("\n</memory_file>");
+    }
 
     private static (bool Visible, string Body) FilterFrontMatter(string content, string sessionId)
     {

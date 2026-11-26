@@ -367,6 +367,7 @@ internal sealed partial class SessionManager
         CancellationToken token
     )
     {
+        RequireMasterNode();
         var locations = SecretLiteralMove.Parse(args["fromConfig"]);
         var reference = SecretLiteralMove.Reference(name);
         // The moved value is one the caller does not see, filed under a name it chooses, and

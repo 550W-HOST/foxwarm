@@ -36,6 +36,18 @@ internal interface IHostedRuntime : IAsyncDisposable
 /// <summary>What a starting owner gives its runtime.</summary>
 internal sealed record HostedRuntimeContext(LeaseGrant Grant, TenantDb Database, LeaseMonitor Monitor);
 
+/// <summary>A fenced run's timings since the start of the last successful renewal.</summary>
+internal sealed record FenceTiming(
+    string Reason,
+    long RenewalStart,
+    TimeSpan AtFence,
+    TimeSpan? RuntimeStopped
+)
+{
+    /// <summary>When the replica's run returned, so the process exits.</summary>
+    internal TimeSpan? Exited { get; init; }
+}
+
 /// <summary>Settings of one replica process.</summary>
 /// <param name="PublicEndpoint">
 /// Where a standby forwards connections to the owner, the address the owner's host listens on;
@@ -107,6 +119,14 @@ internal sealed class HostedReplica
     /// <summary>The forwarder's port while a standby (tests use an ephemeral port).</summary>
     internal int? ForwarderPort { get; private set; }
 
+    /// <summary>
+    /// How a fenced run ended, measured by the lease monitor from the start of the last successful
+    /// renewal (the lease's expiry is at least the TTL after it): the fence reason, the time at
+    /// the fence, once the runtime had stopped (null when it outlived the drain bound) and when the
+    /// run returned. Diagnostics and the fencing tests read it.
+    /// </summary>
+    internal FenceTiming? FenceTimes { get; private set; }
+
     /// <summary>Completes once the replica is a standby waiting for the lease.</summary>
     internal Task Waiting => waiting.Task;
 
@@ -166,14 +186,22 @@ internal sealed class HostedReplica
         finally
         {
             heartbeatStop.Cancel();
-            if (heartbeat is not null)
-                await heartbeat.ConfigureAwait(false);
-            try
+            // A fenced replica exits within its drain bound, before the lease can expire: it
+            // doesn't wait on a database it may be cut off from. Its row stays, without
+            // heartbeats; rows are diagnostic and ownership is the lease's.
+            if (FenceTimes is { } fenced)
+                FenceTimes = fenced with { Exited = monitor!.SinceRenewal };
+            else
             {
-                using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                await registry.RemoveAsync(Replica, bound.Token).ConfigureAwait(false);
+                if (heartbeat is not null)
+                    await heartbeat.ConfigureAwait(false);
+                try
+                {
+                    using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    await registry.RemoveAsync(Replica, bound.Token).ConfigureAwait(false);
+                }
+                catch (Exception) { }
             }
-            catch (Exception) { }
         }
     }
 
@@ -225,11 +253,19 @@ internal sealed class HostedReplica
         var finished = await Task.WhenAny(stopRequested, current.Fenced, runtime.Stopped).ConfigureAwait(false);
         if (finished == current.Fenced)
         {
+            var atFence = current.FencedSinceRenewal;
             health = health with { Role = ReplicaRole.Fencing, RuntimeStarted = false };
             log($"[hosted] Stopping the runtime within {options.DrainBound.TotalSeconds:0.#} s after fencing.");
             var disposal = runtime.DisposeAsync().AsTask();
-            if (await Task.WhenAny(disposal, Task.Delay(options.DrainBound)).ConfigureAwait(false) != disposal)
+            var stopped = await Task.WhenAny(disposal, Task.Delay(options.DrainBound)).ConfigureAwait(false) == disposal;
+            if (!stopped)
                 log("[hosted] The runtime didn't stop within the drain bound; exiting anyway.");
+            FenceTimes = new(
+                await current.Fenced.ConfigureAwait(false),
+                current.RenewalStart,
+                atFence!.Value,
+                stopped ? current.SinceRenewal : null
+            );
             return HostedExit.Fenced;
         }
         health = health with { Role = ReplicaRole.Stopping, RuntimeStarted = false };
