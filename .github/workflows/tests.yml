@@ -293,9 +293,9 @@ jobs:
           retention-days: 7
 
   hosted-containers:
-    name: Hosted image, Compose drills and render checks
+    name: Hosted image, Compose drills, render checks and Helm on kind
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 90
     env:
       FOXWARM_HOSTED_IMAGE: foxwarm-hosted:ci
       FOXWARM_HOSTED_NEXT_IMAGE: foxwarm-hosted:ci-next
@@ -308,7 +308,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.21.0
-      - name: Install helm and kubeconform
+      - name: Install helm, kubeconform, kind and kubectl
         run: |
           set -eu
           tools="$RUNNER_TEMP/tools"
@@ -320,6 +320,11 @@ jobs:
           curl -fsSLo kubeconform.tgz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
           echo '9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  kubeconform.tgz' | sha256sum -c -
           tar -xzf kubeconform.tgz kubeconform
+          curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  kind' | sha256sum -c -
+          curl -fsSLo kubectl https://dl.k8s.io/release/v1.37.3/bin/linux/amd64/kubectl
+          echo '9a1b55af2795b25dd288dbef62387db9b5530087ab918d28c6ad067f2e3cb07c  kubectl' | sha256sum -c -
+          chmod +x kind kubectl
           echo "$tools" >> "$GITHUB_PATH"
       - name: Show container tooling
         run: |
@@ -327,7 +332,10 @@ jobs:
           docker compose version
           helm version --short
           kubeconform -v
+          kind version
+          kubectl version --client
       - name: Build the hosted image
+        id: image
         run: |
           docker build --progress=plain --target hosted -t "$FOXWARM_HOSTED_IMAGE" .
           # Version N+1 of the rolling-update drill: the same build under another tag.
@@ -353,6 +361,13 @@ jobs:
         run: deploy/hosted/check-render.sh
       - name: Compose drills
         run: node deploy/hosted/drills/run.mjs --env compose --report "$RUNNER_TEMP/hosted-drills.json"
+      # The chart on Kubernetes: hook order, probes, the shared Agents claim and a takeover.
+      - name: Helm chart on kind
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          KIND_NODE_IMAGE: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+        run: node deploy/hosted/kind/check.mjs --report "$RUNNER_TEMP/hosted-kind.json"
       - name: Upload drill report
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -360,6 +375,7 @@ jobs:
           name: hosted-drills
           path: |
             ${{ runner.temp }}/hosted-drills.json
+            ${{ runner.temp }}/hosted-kind.json
             ${{ runner.temp }}/hosted-packages.txt
           if-no-files-found: ignore
           retention-days: 7

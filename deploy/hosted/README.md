@@ -92,7 +92,7 @@ kubectl exec deploy/foxwarm -- /app/Foxwarm hosted token
 
 ## Upgrades
 
-Migrate first, then roll the replicas; the Helm hook does this in order. A replica refuses to start (exit 78) against a schema with a migration it doesn't know whose reader level is above its own, or a tenant that a newer version has marked; downgrade by restoring the database, not by starting an older image. On a graceful stop the owner drains and releases the tenant, and a standby takes over within a few seconds. Requests in that window fail and are retried by clients; WebUI and Node connections reconnect.
+Migrate first, then roll the replicas; the Helm hook does this in order. A replica refuses to start (exit 78) against a schema with a migration it doesn't know whose reader level is above its own, or a tenant that a newer version has marked; downgrade by restoring the database, not by starting an older image. On a graceful stop the owner drains and releases the tenant, and a standby takes over within a few seconds. New requests in that window wait at the standbys and reach the new owner; WebUI and Node connections to the old owner reconnect.
 
 To rotate the key-encryption key, mount the new key as `FOXWARM_KEK_FILE` and the old one as `FOXWARM_KEK_PREVIOUS_FILE`, roll the replicas, check with `db status` that every tenant names the new key, then remove the old one.
 
@@ -117,4 +117,4 @@ The source directory isn't changed. The import verifies what it copied and write
 
 ## Drills
 
-`drills/run.mjs` checks the failover contracts against local processes or this Compose stack: a turn interrupted by killing the owner, a database partition, the upgrade refusals, a rolling update and an import. CI runs them on the Compose stack with `check-render.sh`, which validates the Compose files and the Helm chart. See [hosted packaging](../../docs/code-index/units/hosted-packaging.md).
+`drills/run.mjs` checks the failover contracts against local processes or this Compose stack: a turn interrupted by killing the owner, a database partition, the upgrade refusals, a rolling update and an import. CI runs them on the Compose stack with `check-render.sh`, which validates the Compose files and the Helm chart, and `kind/check.mjs`, which installs the chart on a kind cluster and checks the migration hook, the probes, the shared Agents claim and a takeover after the owner pod is deleted. See [hosted packaging](../../docs/code-index/units/hosted-packaging.md).

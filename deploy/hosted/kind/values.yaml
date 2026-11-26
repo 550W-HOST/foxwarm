@@ -1,0 +1,19 @@
+# Chart values of the kind check (check.mjs). The image, the secrets and the migration URL are
+# set on the command line from the CI image and generate-secrets.sh.
+image:
+  # The image is loaded into the kind node, not pulled.
+  pullPolicy: Never
+deployment:
+  blobs:
+    backend: s3
+    s3:
+      endpoint: http://versitygw:7070
+      region: us-east-1
+      bucket: foxwarm
+      pathStyle: true
+agents:
+  persistence:
+    # The static ReadWriteMany volume of fixtures.yaml.
+    storageClass: foxwarm-agents-rwx
+    accessModes: [ReadWriteMany]
+    size: 1Gi
