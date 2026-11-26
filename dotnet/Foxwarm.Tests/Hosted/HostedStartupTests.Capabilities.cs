@@ -203,4 +203,64 @@ public sealed partial class HostedStartupTests
         Assert.True(File.Exists(Path.Combine(files.Scratch, "state", "logs", "foxwarm.log")));
         Assert.False(Directory.Exists(files.Agents));
     }
+
+    // The runtime's capabilities come from the tenant's stored profile when it is built: the
+    // operator profile is file mode's set over the tenant database, and a profile change takes
+    // effect only in the next runtime.
+    [Fact]
+    public async Task TheRuntimeCapabilitiesComeFromTheTenantsStoredProfile()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator'");
+        using var temp = new TempDirectory();
+        var files = HostedFiles.Create(temp.Path);
+        IStorageContext? storage = null;
+        var replica = StartHosted(database.OpenApp(), files, built => storage = built);
+        await WaitUntilAsync(
+            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
+            TimeSpan.FromSeconds(60),
+            "the hosted runtime serves"
+        );
+        var sessions = ((MainHostRuntime)replica.Runtimes[0]).Host.Sessions;
+        Assert.Equal(
+            RuntimeCapabilities.Operator with { Egress = sessions.Capabilities.Egress },
+            sessions.Capabilities
+        );
+        Assert.Equal(Foxwarm.Net.EgressProfile.Operator, sessions.Capabilities.Egress.Profile);
+        using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
+        {
+            BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+        client.DefaultRequestHeaders.Authorization = new(
+            "Bearer",
+            storage!.Credentials.Read(InstanceCredentialName.HttpToken)
+        );
+        var terminals = await client.GetFromJsonAsync<JsonNode>("api/terminals");
+        Assert.True(terminals!["supported"]!.GetValue<bool>());
+        Assert.NotEqual(
+            HttpStatusCode.NotFound,
+            (await client.GetAsync("api/vscode-web/fs/workspace-roots")).StatusCode
+        );
+        // Changed while the runtime runs: the running runtime keeps its capabilities.
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'hosted'");
+        Assert.Equal(Foxwarm.Net.EgressProfile.Operator, sessions.Capabilities.Egress.Profile);
+        Assert.True(sessions.Capabilities.MasterNode);
+        replica.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+
+        // The next runtime of the tenant is built with the stored profile.
+        var next = StartHosted(database.OpenApp(), files);
+        await WaitUntilAsync(
+            () => next.Inner.Health.Role == ReplicaRole.Owner && next.Inner.Health.RuntimeStarted,
+            TimeSpan.FromSeconds(60),
+            "the next hosted runtime serves"
+        );
+        var nextCapabilities = ((MainHostRuntime)next.Runtimes[0]).Host.Sessions.Capabilities;
+        Assert.Equal(RuntimeCapabilities.Hosted with { Egress = nextCapabilities.Egress }, nextCapabilities);
+        Assert.Equal(Foxwarm.Net.EgressProfile.Hosted, nextCapabilities.Egress.Profile);
+        next.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await next.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+    }
 }

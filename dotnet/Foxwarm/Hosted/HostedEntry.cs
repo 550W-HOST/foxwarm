@@ -151,6 +151,8 @@ internal static class HostedEntry
         ModelConfiguration configuration;
         HostPaths paths;
         JournalRetentionOptions retention;
+        // The tenant's stored profile, fixed for this runtime: a change is a move to a new one.
+        var profile = await TenantProfileStore.ReadAsync(tenant.Database, token).ConfigureAwait(false);
         try
         {
             retention = JournalRetentionOptions.FromDeployment(deployment.Root["journal"]);
@@ -210,10 +212,7 @@ internal static class HostedEntry
                 distRoot,
                 captureDiagnostics: true,
                 storage: storage,
-                capabilities: RuntimeCapabilities.Hosted with
-                {
-                    Egress = Foxwarm.Net.EgressPolicy.Hosted(deployment.Egress),
-                },
+                capabilities: RuntimeCapabilities.For(profile, deployment.Egress),
                 jsonStdoutLog: true,
                 logTenant: bootstrap.Tenant
             )
