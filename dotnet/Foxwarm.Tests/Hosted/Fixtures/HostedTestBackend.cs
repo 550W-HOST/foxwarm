@@ -45,9 +45,12 @@ internal static class HostedTestBackend
     {
         var full = Path.GetFullPath(root);
         var tenant = tenants.GetOrAdd(full, key => new Lazy<Tenant>(() => Open(key))).Value;
-        var hosted = new PostgresStorageContext(tenant.Database, full);
-        return hosted.Missing.Count == 0 ? hosted : new MixedStorageContext(hosted, new FileStorageContext(full));
+        return Compose(new PostgresStorageContext(tenant.Database, full), full);
     }
+
+    /// <summary>The hosted stores that exist and file stores under <paramref name="root"/> for the rest.</summary>
+    internal static IStorageContext Compose(PostgresStorageContext hosted, string root) =>
+        hosted.Missing.Count == 0 ? hosted : new MixedStorageContext(hosted, new FileStorageContext(root));
 
     private static Tenant Open(string root)
     {

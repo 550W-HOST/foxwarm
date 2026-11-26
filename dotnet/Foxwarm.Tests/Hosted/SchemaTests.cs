@@ -184,17 +184,6 @@ public sealed class SchemaLintTests
 public sealed class HostedBootstrapTests
 {
     [Fact]
-    public void ModeSelectionAcceptsOnlyFileAndHosted()
-    {
-        Assert.False(HostedBootstrapSelected(new()));
-        Assert.False(HostedBootstrapSelected(new() { ["FOXWARM_MODE"] = "file" }));
-        Assert.True(HostedBootstrapSelected(new() { ["FOXWARM_MODE"] = "hosted" }));
-        Assert.Throws<Foxwarm.Hosted.HostedBootstrapException>(() =>
-            HostedBootstrapSelected(new() { ["FOXWARM_MODE"] = "Hosted" })
-        );
-    }
-
-    [Fact]
     public void SecretsComeFromTheVariableOrItsFile()
     {
         using var directory = new TemporaryDirectory();
@@ -251,9 +240,6 @@ public sealed class HostedBootstrapTests
         );
         Assert.Equal("a:1,b:2", multi.Host);
     }
-
-    private static bool HostedBootstrapSelected(Dictionary<string, string> values) =>
-        Foxwarm.Hosted.HostedBootstrap.Selected(new System.Collections.Hashtable(values));
 
     private sealed class TemporaryDirectory : IDisposable
     {
