@@ -73,6 +73,12 @@ internal sealed class SessionIdentityMoveJournal(string root)
         {
             return null;
         }
+        return Parse(row);
+    }
+
+    /// <summary>Validates a stored move intent; any store keeps the same evidence rules.</summary>
+    internal static SessionIdentityMoveRecord Parse(JsonObject row)
+    {
         var phase = SessionCatalog.Text(row["phase"]);
         var old = SessionCatalog.Text(row["oldSessionId"]);
         var target = SessionCatalog.Text(row["newSessionId"]);

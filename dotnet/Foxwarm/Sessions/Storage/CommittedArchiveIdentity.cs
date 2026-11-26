@@ -79,33 +79,8 @@ internal sealed partial class CommittedArchiveIdentity(string root)
             }
         }
         ValidateGraph(mappings);
-        foreach (var row in catalogRows)
-        {
-            var canonical = SessionCatalog.Text(row["id"])!;
-            foreach (
-                var alias in (row["aliases"] as JsonArray)
-                    ?.Select(SessionCatalog.Text)
-                    .OfType<string>()
-                    .Reverse()
-                    ?? []
-            )
-            {
-                // Presentation claims are proof only when Main's exact-first resolution uniquely selects this owner.
-                if (resolve(alias) != canonical)
-                    continue;
-                if (mappings.TryGetValue(alias, out _))
-                {
-                    if (Resolve(mappings, alias) != canonical)
-                        throw new InvalidDataException(
-                            "Proven Main alias conflicts with committed Archive identity."
-                        );
-                    continue;
-                }
-                mappings.Add(alias, canonical);
-                ValidateGraph(mappings);
-                rewrite = true;
-            }
-        }
+        if (MergeCatalogAliases(mappings, catalogRows, resolve))
+            rewrite = true;
         return mappings;
     }
 
@@ -237,6 +212,48 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         receipt.Completion.GetAwaiter().GetResult();
     }
 
+    /// <summary>
+    /// Adds the catalog aliases that Main's exact-first resolution uniquely assigns to their
+    /// owner; returns whether any was added. A proven alias that conflicts with a committed
+    /// mapping, or that would create a cycle, throws.
+    /// </summary>
+    internal static bool MergeCatalogAliases(
+        Dictionary<string, string> mappings,
+        IReadOnlyList<JsonObject> catalogRows,
+        Func<string, string?> resolve
+    )
+    {
+        var added = false;
+        foreach (var row in catalogRows)
+        {
+            var canonical = SessionCatalog.Text(row["id"])!;
+            foreach (
+                var alias in (row["aliases"] as JsonArray)
+                    ?.Select(SessionCatalog.Text)
+                    .OfType<string>()
+                    .Reverse()
+                    ?? []
+            )
+            {
+                // Presentation claims are proof only when Main's exact-first resolution uniquely selects this owner.
+                if (resolve(alias) != canonical)
+                    continue;
+                if (mappings.TryGetValue(alias, out _))
+                {
+                    if (Resolve(mappings, alias) != canonical)
+                        throw new InvalidDataException(
+                            "Proven Main alias conflicts with committed Archive identity."
+                        );
+                    continue;
+                }
+                mappings.Add(alias, canonical);
+                ValidateGraph(mappings);
+                added = true;
+            }
+        }
+        return added;
+    }
+
     internal static string Resolve(IReadOnlyDictionary<string, string> mappings, string id)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -249,7 +266,7 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         throw new InvalidDataException("Archive committed identity mappings contain a cycle.");
     }
 
-    private static void ValidateGraph(Dictionary<string, string> mappings)
+    internal static void ValidateGraph(Dictionary<string, string> mappings)
     {
         foreach (var id in mappings.Keys)
             _ = Resolve(mappings, id);

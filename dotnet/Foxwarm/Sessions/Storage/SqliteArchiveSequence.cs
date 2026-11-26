@@ -138,23 +138,44 @@ internal static partial class SqliteArchiveSequence
             "SELECT seq,timestamp FROM archive_messages WHERE session_id=$s AND seq>=$x ORDER BY seq LIMIT 1";
         probe.Parameters.AddWithValue("$s", canonical);
         var at = probe.Parameters.Add("$x", SqliteType.Integer);
+        return WindowStart(
+            position =>
+            {
+                at.Value = position;
+                using var reader = probe.ExecuteReader();
+                return reader.Read() ? (reader.GetInt64(0), reader.GetDouble(1)) : null;
+            },
+            since,
+            min,
+            max
+        );
+    }
+
+    /// <summary>
+    /// The first own seq whose timestamp is at least <paramref name="since"/>, by binary search
+    /// over <paramref name="probe"/>, which returns the first row at or after a seq.
+    /// </summary>
+    internal static long WindowStart(
+        Func<long, (long Seq, double Timestamp)?> probe,
+        double since,
+        long min,
+        long max
+    )
+    {
         long low = min,
             high = max + 1;
         while (low < high)
         {
             var middle = low + (high - low) / 2;
-            at.Value = middle;
-            using var reader = probe.ExecuteReader();
-            if (!reader.Read())
+            if (probe(middle) is not { } row)
             {
                 high = middle;
                 continue;
             }
-            var seq = reader.GetInt64(0);
-            if (reader.GetDouble(1) >= since)
-                high = Math.Min(middle, seq);
+            if (row.Timestamp >= since)
+                high = Math.Min(middle, row.Seq);
             else
-                low = seq + 1;
+                low = row.Seq + 1;
         }
         return low;
     }

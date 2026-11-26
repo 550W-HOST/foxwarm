@@ -33,7 +33,7 @@ internal sealed record ArchiveSequenceCursor(double At, string? SessionId = null
 
 internal static partial class SqliteArchiveSequence
 {
-    private sealed record SpanEntry(
+    internal sealed record SpanEntry(
         ArchiveSpan? Span,
         double LastMessageTime,
         bool Busy,
@@ -49,29 +49,46 @@ internal static partial class SqliteArchiveSequence
         SqliteConnection connection,
         string databasePath,
         SessionCatalog.SequenceSession session
+    ) =>
+        CachedSpan(
+            Spans,
+            (databasePath, session.Id),
+            session,
+            () => SqliteArchiveMessageStore.ResolveReadOnly(connection, session.Id),
+            (canonical, last) => Edge(connection, canonical, last)
+        );
+
+    /// <summary>
+    /// The span of one Session through <paramref name="spans"/>; <paramref name="edge"/> reads
+    /// the first or last own row of a canonical identity.
+    /// </summary>
+    internal static ArchiveSpan? CachedSpan<TKey>(
+        ConcurrentDictionary<TKey, SpanEntry> spans,
+        TKey key,
+        SessionCatalog.SequenceSession session,
+        Func<string> resolve,
+        Func<string, bool, (long Seq, double Timestamp)?> edge
     )
+        where TKey : notnull
     {
-        var key = (databasePath, session.Id);
         if (
-            Spans.TryGetValue(key, out var cached)
+            spans.TryGetValue(key, out var cached)
             && !session.Busy
             && !cached.Busy
             && cached.LastMessageTime == session.LastMessageTime
             && cached.MessageCount == session.MessageCount
         )
             return cached.Span;
-        var canonical =
-            cached?.Span?.Canonical
-            ?? SqliteArchiveMessageStore.ResolveReadOnly(connection, session.Id);
+        var canonical = cached?.Span?.Canonical ?? resolve();
         ArchiveSpan? span = null;
-        if (Edge(connection, canonical, last: true) is { } last)
+        if (edge(canonical, true) is { } last)
         {
             var first = cached?.Span is { } known
                 ? (known.FirstSeq, known.First)
-                : Edge(connection, canonical, last: false)!.Value;
+                : edge(canonical, false)!.Value;
             span = new(canonical, first.Item1, first.Item2, last.Seq, last.Timestamp);
         }
-        Spans[key] = new(span, session.LastMessageTime, session.Busy, session.MessageCount);
+        spans[key] = new(span, session.LastMessageTime, session.Busy, session.MessageCount);
         return span;
     }
 
@@ -97,6 +114,23 @@ internal static partial class SqliteArchiveSequence
         string sessionId,
         ArchiveSpan span,
         ArchiveSequenceCursor? cursor
+    ) =>
+        SeqBefore(
+            sessionId,
+            span,
+            cursor,
+            since => WindowStart(connection, span.Canonical, since, span.FirstSeq, span.LastSeq)
+        );
+
+    /// <summary>
+    /// <see cref="SeqBefore(SqliteConnection, string, ArchiveSpan, ArchiveSequenceCursor?)"/>
+    /// over <paramref name="windowStart"/>, the first own seq at or after a time.
+    /// </summary>
+    internal static long SeqBefore(
+        string sessionId,
+        ArchiveSpan span,
+        ArchiveSequenceCursor? cursor,
+        Func<double, long> windowStart
     )
     {
         if (cursor is null || span.Last < cursor.At)
@@ -110,15 +144,9 @@ internal static partial class SqliteArchiveSequence
                 return Math.Min(span.LastSeq, (cursor.Seq ?? span.FirstSeq) - 1);
             if (order < 0)
                 // Archive timestamps are whole milliseconds: rows at the cursor time are included.
-                return WindowStart(
-                        connection,
-                        span.Canonical,
-                        Math.Floor(cursor.At) + 1,
-                        span.FirstSeq,
-                        span.LastSeq
-                    ) - 1;
+                return windowStart(Math.Floor(cursor.At) + 1) - 1;
         }
-        return WindowStart(connection, span.Canonical, cursor.At, span.FirstSeq, span.LastSeq) - 1;
+        return windowStart(cursor.At) - 1;
     }
 
     /// <summary>Seq/timestamp pairs at or below <paramref name="high"/>, newest first.</summary>
