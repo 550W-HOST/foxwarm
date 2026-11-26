@@ -38,6 +38,36 @@ RUN npm run build:assets \
     && find /out \( -name '*.dbg' -o -name '*.pdb' -o -name '*.xml' \) -delete \
     && test ! -e /out/Foxwarm.dll
 
+# Hosted mode (`--target hosted`): the same native payload on a minimal base for stateless
+# replicas. Tenant state lives in PostgreSQL and object storage; a replica writes only to its
+# scratch directory and the shared Agents volume, so the root filesystem can be read-only. The
+# base has CA certificates, time zones and the ICU and OpenSSL libraries native Main loads, and
+# no tools for Agents: no Chromium, git or Python.
+FROM debian:trixie-slim AS hosted
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata libicu76 libssl3t64 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 1000 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin foxwarm \
+    && mkdir -p /scratch /agents /etc/foxwarm \
+    && chown 1000:1000 /scratch /agents
+COPY --from=build /out /app/
+COPY --chmod=755 docker/hosted-entrypoint.sh /usr/local/bin/foxwarm-hosted
+# Replica-specific settings (FOXWARM_REPLICA_ID, FOXWARM_ADVERTISE_ADDRESS) and secrets come from
+# the orchestrator; the scratch directory is an ephemeral mount, the Agents directory a shared one.
+ENV FOXWARM_MODE=hosted \
+    FOXWARM_SCRATCH_DIR=/scratch \
+    FOXWARM_AGENTS_DIR=/agents \
+    FOXWARM_DEPLOYMENT_CONFIG=/etc/foxwarm/deployment.yaml \
+    TMPDIR=/scratch/.temp \
+    ASPNETCORE_ENVIRONMENT=Production
+WORKDIR /app
+USER 1000:1000
+# Probes the replica's health listener (`health.port` of the deployment configuration) at
+# /livez, so a waiting standby counts as healthy; orchestrators route on /readyz themselves.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["/app/Foxwarm", "hosted", "health"]
+ENTRYPOINT ["/usr/local/bin/foxwarm-hosted"]
+
 FROM node:24.17.0-trixie-slim AS base
 
 RUN apt-get update \
