@@ -645,47 +645,8 @@ public sealed partial class SqliteArchiveMessageStore
         }
     }
 
-    private ArchiveMessageRecord ValidateRecord(ArchiveMessageRecord record)
-    {
-        if (
-            record.SessionId != sessionId
-            || record.Agent.Length == 0
-            || record.Seq <= 0
-            || !double.IsFinite(record.Timestamp)
-            || record.Role is not ("user" or "model" or "tool")
-        )
-            throw new InvalidDataException(
-                "Archive message record is outside the supported current shape."
-            );
-        var parsed = ArchiveMessageRecord.FromStored(
-            record.SessionId,
-            record.Agent,
-            record.Seq,
-            record.Timestamp,
-            record.Role,
-            record.MessageJson
-        );
-        // Historical readers accept row-owned metadata. New writes and exact
-        // compensation retain the current-message admission contract.
-        SessionAuthorityDocument.ValidateMessage(
-            parsed.Message,
-            checked((int)record.Seq),
-            $"archive message {record.Seq}"
-        );
-        var innerTimestamp = SessionAuthorityDocument.ReadFiniteNumber(
-            parsed.Message["__meta"]!["timestamp"]!,
-            $"archive message {record.SessionId}#{record.Seq} timestamp"
-        );
-        if (innerTimestamp != record.Timestamp)
-            throw new InvalidDataException(
-                $"Archive message {record.SessionId}#{record.Seq} timestamp does not match message_json."
-            );
-        if (!JsonNode.DeepEquals(parsed.Message, record.Message))
-            throw new InvalidDataException(
-                "Archive message object does not match its raw message_json."
-            );
-        return parsed;
-    }
+    private ArchiveMessageRecord ValidateRecord(ArchiveMessageRecord record) =>
+        ArchiveRowAdmission.Message(record, sessionId);
 
     internal static void InspectSchema(string path)
     {
