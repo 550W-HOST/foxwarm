@@ -912,6 +912,8 @@ internal sealed partial class SessionManager
             {
                 DataSource = archive,
                 Mode = SqliteOpenMode.ReadOnly,
+                // A pool's prune timer would capture this caller's async context.
+                Pooling = false,
             }.ToString()
         );
         await connection.OpenAsync();
