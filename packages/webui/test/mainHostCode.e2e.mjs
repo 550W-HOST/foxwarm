@@ -28,6 +28,21 @@ function observeNativeDialogs(page, surface) {
     console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'native-dialog', surface, type: dialog.type(), message: dialog.message().slice(0, 2048), elapsedMs: Date.now() - startedAt }))
   })
 }
+/** Resolves when the first request matching `matches` has completed; rejects when it fails or never completes. */
+function settledRequest(page, matches, label, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    const finish = (request, error) => {
+      if (!matches(request)) return
+      cleanup()
+      if (error) reject(new Error(label + ' failed: ' + error)); else resolve(request)
+    }
+    const onFinished = request => finish(request, null)
+    const onFailed = request => finish(request, request.failure()?.errorText || 'request failed')
+    const timer = setTimeout(() => { cleanup(); reject(new Error('Timed out: ' + label)) }, timeout)
+    const cleanup = () => { clearTimeout(timer); page.off('requestfinished', onFinished); page.off('requestfailed', onFailed) }
+    page.on('requestfinished', onFinished); page.on('requestfailed', onFailed)
+  })
+}
 function observePrefixNavigation(page) {
   const pending = new Map(), failed = [], events = [], responses = []
   const path = url => new URL(url || 'about:blank').pathname.slice(0, 256)
@@ -351,8 +366,14 @@ try {
   const killFromList = `[data-terminal-row=${JSON.stringify(appTerminal.id)}] button[aria-label="Kill terminal"]`
   await page.waitForSelector(killFromList, { visible: true })
   page.once('dialog', dialog => { void dialog.accept() })
+  // The backend forgets the terminal before its DELETE response reaches the App. Reloading in
+  // between aborts the App's request, and the App reports that failure in an alert that blocks
+  // the navigation, so the reload waits for the App's own request and list refresh.
+  const killRequest = settledRequest(page, request => request.method() === 'DELETE' && request.url().endsWith('/api/terminals/' + encodeURIComponent(appTerminal.id)), 'original App terminal kill request')
   await page.locator(killFromList).click()
-  await until(async () => (await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).status === 404, 'original App terminal kill from the sidebar list', 30000)
+  await killRequest
+  await page.waitForSelector(`[data-terminal-row=${JSON.stringify(appTerminal.id)}]`, { hidden: true })
+  assert.equal((await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).status, 404, 'original App terminal kill from the sidebar list')
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
   stage('workbench and workspace restore')
