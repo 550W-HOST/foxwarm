@@ -101,6 +101,15 @@ async function waitForAuthority(sessionId, predicate, timeout = 20_000) {
   throw new Error(`Timed out waiting for ${sessionId} authority`)
 }
 
+async function waitForHistory(sessionId, predicate, timeout = 10_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (predicate(await history(sessionId))) return
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`Timed out waiting for ${sessionId} history`)
+}
+
 function assertCommittedCompaction(authority, before, summary) {
   const blockMessage = authority.history[0]
   // The required level-1 block covers every raw message before the kept tail.
@@ -449,7 +458,8 @@ test('WS compact planning and BTW use purpose-scoped request keys without replac
   const raw = await api(`/api/sessions/${encodeURIComponent(syncId)}/history/continuous`)
   assert.deepEqual(raw.messages.slice(0, 20).map(message => message.__meta.seq), Array.from({ length: 20 }, (_, index) => index + 1))
   assert.equal(raw.messages.some(message => message.__meta?.contextBlock), false)
-  assert.equal((await history(syncId)).messages[0].__meta.contextBlock.id, 1)
+  // The authority file can hold the commit a moment before the history route serves it.
+  await waitForHistory(syncId, value => value.messages[0]?.__meta?.contextBlock?.id === 1)
   assert.equal(await page.$('[aria-label="Expand CTX-BLOCK B#1"]'), null)
   await page.click('[aria-label="Open session options"]')
   await page.$$eval('[role="radio"]', buttons => buttons.find(button => button.textContent === 'Detailed').click())
