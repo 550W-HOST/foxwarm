@@ -82,7 +82,7 @@ const time = value => (value ? Date.parse(value) : NaN)
  * its vanished address hanging for about 30 s otherwise.
  */
 async function health(pod, route) {
-  const result = await kubectl(['get', '--raw', '--request-timeout=3s', `/api/v1/namespaces/${namespace}/pods/${pod}:3002/proxy${route}`], { allowFailure: true })
+  const result = await kubectl(['get', '--request-timeout=3s', '--raw', `/api/v1/namespaces/${namespace}/pods/${pod}:3002/proxy${route}`], { allowFailure: true })
   return result.code === 0 ? result.stdout : null
 }
 async function replicaPods() {
