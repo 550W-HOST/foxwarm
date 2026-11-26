@@ -76,9 +76,9 @@ internal sealed partial class SessionManager
         // Null when the Agent's rule chain is invalid: nothing is visible then.
         internal ToolAuthorizationPolicy[]? Layers { get; }
 
-        // The global policy is read on first use; an unavailable policy propagates.
+        // The ceiling and global policy are read on first use; an unavailable policy propagates.
         internal ToolAuthorizationPolicy[] Policies =>
-            policies ??= [manager.authorization.Load(), .. Layers ?? []];
+            policies ??= [.. manager.authorization.GlobalLayers(manager.authorization.Load()), .. Layers ?? []];
 
         internal NodeAuthorizationForest Forest => forest ??= manager.Nodes.Registry.Forest();
     }

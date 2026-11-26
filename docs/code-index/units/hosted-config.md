@@ -1,6 +1,6 @@
 # Unit: Hosted configuration, deployment split and tenant keys
 
-Files: `dotnet/Foxwarm/Hosted/Config/DeploymentConfiguration.cs`, `dotnet/Foxwarm/Hosted/Postgres/Config/PgConfigDocuments.cs`, `dotnet/Foxwarm/Hosted/Postgres/Keys/HostedKeyRing.cs`, `dotnet/Foxwarm/Hosted/Postgres/Keys/PgInstanceCredentials.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Config.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0600_config_documents.sql`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0601_tenant_keys.sql`, `dotnet/Foxwarm/Models/AppConfigurationSplit.cs`, `dotnet/Foxwarm.Tests/Storage/ConfigDocumentsContractTests.cs`, `dotnet/Foxwarm.Tests/Hosted/DeploymentConfigurationTests.cs`, `dotnet/Foxwarm.Tests/Hosted/TenantKeysTests.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedStartupTests.Configuration.cs`
+Files: `dotnet/Foxwarm/Hosted/Config/DeploymentConfiguration.cs`, `dotnet/Foxwarm/Hosted/Config/OperatorCeilingDocuments.cs`, `dotnet/Foxwarm/Hosted/Postgres/Config/PgConfigDocuments.cs`, `dotnet/Foxwarm/Hosted/Postgres/Keys/HostedKeyRing.cs`, `dotnet/Foxwarm/Hosted/Postgres/Keys/PgInstanceCredentials.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Config.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0600_config_documents.sql`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0601_tenant_keys.sql`, `dotnet/Foxwarm/Models/AppConfigurationSplit.cs`, `dotnet/Foxwarm.Tests/Storage/ConfigDocumentsContractTests.cs`, `dotnet/Foxwarm.Tests/Hosted/DeploymentConfigurationTests.cs`, `dotnet/Foxwarm.Tests/Hosted/TenantKeysTests.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedStartupTests.Configuration.cs`
 Secondary files: `dotnet/Foxwarm/Storage/ConfigDocuments.cs`, `dotnet/Foxwarm/Models/ModelConfiguration.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationAuthority.cs`, `dotnet/Foxwarm/Secrets/InstanceKeys.cs`, `dotnet/Foxwarm/HttpServerSettings.cs`, `dotnet/Foxwarm/Hosted/HostedBootstrap.cs`, `dotnet/Foxwarm/Hosted/HostedEntry.cs`, `dotnet/Foxwarm/Hosted/HostedCli.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/HostedTestBackend.cs`
 
 ## Purpose
@@ -37,6 +37,14 @@ A hosted tenant's configuration and secrets live in the database, beside an oper
   | `policy-read` rule protecting `PolicyPath` | `PolicyPath` is null: no policy file exists. The `ctl` and Setup operations keep their operation rules |
   | 10 s fresh-read interval | none: `DirectEdits` is false and the cached policy holds until an installation invalidates it |
 
+## D-hosted-operator-ceiling
+
+**Approved plan P2 §6.2 (track CP2).** The evaluation is [the ceiling layer](./tool-authorization.md#d-operator-ceiling); this is where a hosted runtime gets it.
+
+- **Documents.** Rows of `operator_documents` (migration 0003), written only by the operator role and validated there with `OperatorCeiling.Parse`: one per profile, `scope = 'global'` and name `ceiling.hosted` or `ceiling.operator`, and an optional per-tenant override, `scope = 'tenant'`, the tenant's ID and name `ceiling`. A tenant's override replaces its profile's document; with neither, no ceiling applies.
+- **Reading.** `OperatorCeilingDocuments(tenantDb, profile)` reads the one applicable row in a single statement (override first) through the tenant's `TenantDb`; the runtime role has `SELECT` on the table. `HostedEntry.BuildRuntimeAsync` builds it with the runtime's profile and passes it as `ConfigurationSources.OperatorCeiling`.
+- **Change.** The table's trigger sends `NOTIFY foxwarm_operator`. The runtimes host's listener (F2) calls `MainHostRuntime.OperatorDocumentsChanged` for each runtime it serves, which invalidates that tenant's policy cache; the next check reads the ceiling again. Until a signal arrives, a runtime keeps the ceiling it last read.
+
 ## D-hosted-tenant-keys
 
 **Design U15(a), plan §7 and decision C4; rotation by owner rewrap (coordinator, 2026-11-26).**
@@ -60,5 +68,6 @@ A hosted tenant's configuration and secrets live in the database, beside an oper
 
 - `ConfigDocumentsContractTests` (abstract) runs as `FileConfigDocumentsContractTests` and `PostgresConfigDocumentsContractTests` (`Backend=postgres`, hosted mode): verbatim bytes, create-if-absent, bounded reads, app installation with live settings and restart reporting, the first run and its seed, MCP round trip, and the policy guarantees (compatibility when absent, installation applies at once, byte limit, unparseable policy denies). The file subclass adds the hand-edit fresh-read interval; the PostgreSQL one adds refused keys, the effective configuration, a refused stored document, the install-only cache, read failure and oversize read failing closed, non-UTF-8 refusal and fenced writes.
 - `DeploymentConfigurationTests`: listener and health port rules, the allowlist and refusals naming the key, disjoint sets and the merge.
+- `OperatorCeilingDocumentsTests` (`Backend=postgres`): profile documents, a tenant's override, another tenant's override not read, and the `foxwarm_operator` signal. `HostedStartupTests.TheRuntimeEvaluatesItsProfilesCeilingAndRereadsItOnTheOperatorSignal` runs the wiring in a hosted runtime.
 - `TenantKeysTests` (`Backend=postgres`): create once, wrong and missing KEK, encrypted data without a DEK, rewrap from the previous KEK, `db status`, bootstrap variables, import adoption with equal derived keys, credentials create-once and ciphertext, and fenced key and credential writes.
 - `HostedStartupTests.Configuration`: a first hosted start runs Setup over tenant documents on the deployment listener with the credential token, and a locked tenant exits 78 without generating a key.

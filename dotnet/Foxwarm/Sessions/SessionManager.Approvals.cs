@@ -138,7 +138,7 @@ internal sealed partial class SessionManager
         {
             var rule = new JsonObject
             {
-                ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+                ["layer"] = OperatorCeiling.Label(layer.Layer),
                 ["id"] = SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction",
             };
             if (!seen.Add($"{rule["layer"]}\n{rule["id"]}"))

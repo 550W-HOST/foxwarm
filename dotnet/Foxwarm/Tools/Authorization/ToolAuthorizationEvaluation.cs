@@ -728,7 +728,8 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationPolicy policy,
         ToolAuthorizationRequest request
     ) =>
-        request.Principal == "internal"
+        policy.PassesByDefault ? ToolAuthorizationEffect.Allow
+        : request.Principal == "internal"
             ? AuthorizationDecision.Parse(SessionWait.Text(policy.Value["defaultAction"]))
             : ToolAuthorizationEffect.Deny;
 

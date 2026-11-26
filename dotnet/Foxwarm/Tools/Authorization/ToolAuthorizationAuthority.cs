@@ -142,6 +142,9 @@ internal sealed class ToolAuthorizationAuthority
     private readonly object cacheGate = new();
     private ToolAuthorizationPolicy? cached;
     private long loadedAt;
+    // The operator ceiling as last read; ceilingRead tells "no ceiling applies" from "not read".
+    private ToolAuthorizationPolicy? ceiling;
+    private bool ceilingRead;
 
     // The policy file <data root>/state/tool-authorization.yaml.
     internal ToolAuthorizationAuthority(
@@ -164,6 +167,10 @@ internal sealed class ToolAuthorizationAuthority
 
     private long Now => clock?.Invoke() ?? Environment.TickCount64;
     internal Action<string>? InstallBoundary { get; set; }
+
+    // Where the operator ceiling comes from, set when the runtime is built; null (file mode)
+    // means there is none.
+    internal IOperatorCeilingSource? CeilingSource { get; set; }
 
     // The policy file Agent tools must not read; null when the policy isn't a file.
     internal string? PolicyPath => documents.PhysicalPath(ConfigDocumentName.ToolAuthorization);
@@ -192,11 +199,103 @@ internal sealed class ToolAuthorizationAuthority
         }
     }
 
+    // Drops the cached policy and ceiling. An installation calls it, and so does a change of the
+    // operator ceiling (OperatorCeilingChanged), so the next check reads both again.
     internal void Invalidate()
     {
         lock (cacheGate)
+        {
             cached = null;
+            ceiling = null;
+            ceilingRead = false;
+        }
     }
+
+    // The operator changed a ceiling document (NOTIFY foxwarm_operator): later checks read the
+    // new ceiling, as they read a newly installed tenant policy.
+    internal void OperatorCeilingChanged() => Invalidate();
+
+    private bool CeilingHit(out ToolAuthorizationPolicy? value)
+    {
+        lock (cacheGate)
+        {
+            value = ceiling;
+            return ceilingRead;
+        }
+    }
+
+    private ToolAuthorizationPolicy? CacheCeiling(ToolAuthorizationPolicy? value)
+    {
+        lock (cacheGate)
+        {
+            ceiling = value;
+            ceilingRead = true;
+            return value;
+        }
+    }
+
+    private ToolAuthorizationPolicy? ReadCeiling() =>
+        CeilingSource!.Read() is { } document ? OperatorCeiling.Parse(document.Text) : null;
+
+    // The operator ceiling layer, or null when none applies. It is read and cached like the
+    // policy, and fails closed the same way: two failed reads in a row throw
+    // ToolAuthorizationUnavailableException, and every check then denies.
+    internal ToolAuthorizationPolicy? LoadCeiling()
+    {
+        if (CeilingSource is null)
+            return null;
+        if (CeilingHit(out var value))
+            return value;
+        try
+        {
+            return CacheCeiling(ReadCeiling());
+        }
+        catch
+        {
+            try
+            {
+                return CacheCeiling(ReadCeiling());
+            }
+            catch
+            {
+                throw new ToolAuthorizationUnavailableException();
+            }
+        }
+    }
+
+    internal async Task<ToolAuthorizationPolicy?> LoadCeilingAsync(CancellationToken cancellationToken = default)
+    {
+        if (CeilingSource is null)
+            return null;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CeilingHit(out var value))
+            return value;
+        try
+        {
+            return CacheCeiling(ReadCeiling());
+        }
+        catch
+        {
+            if (retryDelay is null)
+                await Task.Delay(100, cancellationToken);
+            else
+                await retryDelay(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return CacheCeiling(ReadCeiling());
+            }
+            catch
+            {
+                throw new ToolAuthorizationUnavailableException();
+            }
+        }
+    }
+
+    // The layers that precede the Agent layers, in evaluation order: the ceiling when one
+    // applies, then the global policy.
+    internal ToolAuthorizationPolicy[] GlobalLayers(ToolAuthorizationPolicy global) =>
+        LoadCeiling() is { } value ? [value, global] : [global];
 
     // An absent policy is the compatibility policy; anything that can't be read as one bounded
     // value throws, and two failures in a row deny (ToolAuthorizationUnavailableException).
@@ -239,6 +338,9 @@ internal sealed class ToolAuthorizationAuthority
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // Every caller evaluates the ceiling beside the policy; it is read here off the
+        // synchronous evaluation path.
+        await LoadCeilingAsync(cancellationToken);
         var value = Hit();
         if (value is not null)
             return value;

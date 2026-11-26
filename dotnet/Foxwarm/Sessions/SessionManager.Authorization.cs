@@ -544,7 +544,13 @@ internal sealed partial class SessionManager
         string agent,
         ToolAuthorizationPolicy global
     ) =>
-        new (string?, ToolAuthorizationPolicy)[] { (null, global) }
+        // The operator ceiling, when one applies, comes first: it is evaluated before the
+        // tenant's global policy (OperatorCeiling).
+        (
+            authorization.LoadCeiling() is { } ceiling
+                ? new (string?, ToolAuthorizationPolicy)[] { (OperatorCeiling.Layer, ceiling), (null, global) }
+                : new (string?, ToolAuthorizationPolicy)[] { (null, global) }
+        )
             .Concat(
                 agents.NamedRuleLayers(agent).Select(layer => ((string?)layer.Agent, layer.Policy))
             )

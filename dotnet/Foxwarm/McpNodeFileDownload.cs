@@ -104,9 +104,9 @@ internal static class McpNodeFileDownload
                         !principal.Current
                         || node == "master"
                         || !sessions.Nodes.SupportsExternalRead(node)
-                        || !ToolAuthorizationEvaluation
-                            .Evaluate(sessions.Authorization.Load(), permission)
-                            .Allowed
+                        || !sessions
+                            .Authorization.GlobalLayers(sessions.Authorization.Load())
+                            .All(layer => ToolAuthorizationEvaluation.Evaluate(layer, permission).Allowed)
                     )
                         throw new McpInboundSafeException("File download is not permitted.");
                 }

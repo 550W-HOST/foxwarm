@@ -16,7 +16,11 @@ internal sealed record ConfigurationSources(
     JsonObject Deployment,
     Func<HostPaths, Foxwarm.Secrets.InstanceSecrets> Secrets,
     IInstanceCredentials Credentials
-);
+)
+{
+    /// <summary>The tenant's operator ceiling (hosted mode); null means none.</summary>
+    internal Foxwarm.Tools.IOperatorCeilingSource? OperatorCeiling { get; init; }
+}
 
 internal sealed partial class ModelConfiguration
 {
@@ -37,6 +41,10 @@ internal sealed partial class ModelConfiguration
 
     // Where the app, models and other configuration documents live.
     internal IConfigDocumentStore Documents { get; }
+
+    // The operator ceiling the tool authorization evaluates before the tenant policy; null in
+    // file mode.
+    internal Foxwarm.Tools.IOperatorCeilingSource? OperatorCeiling { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
     internal string AppTemplatePath { get; }
@@ -186,6 +194,7 @@ internal sealed partial class ModelConfiguration
     {
         deployment = sources?.Deployment;
         credentials = sources?.Credentials;
+        OperatorCeiling = sources?.OperatorCeiling;
         // The app file's location is captured before it is read; its `paths` section can move
         // only the other documents.
         var captured = sources?.Documents ?? new FileConfigDocuments(paths);

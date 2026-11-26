@@ -162,7 +162,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             and not Foxwarm.Storage.FileConfigDocuments
                 ? configured
                 : new Foxwarm.Storage.FileConfigDocuments(this.root, hostPaths?.McpConfigPath);
-        authorization = new ToolAuthorizationAuthority(ConfigDocuments);
+        authorization = new ToolAuthorizationAuthority(ConfigDocuments)
+        {
+            CeilingSource = models.ConfigurationOwner?.OperatorCeiling,
+        };
         Storage.Identities.ValidateStartupEvidence(allowPendingIdentityRecovery: true);
         Directory.CreateDirectory(this.root);
         deletionChannels = new(this.root, documents: Storage.Documents);
