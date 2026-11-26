@@ -10,6 +10,7 @@ File implementation of `IArchiveSession` ([storage context](./storage-context.md
 
 - `Initialize` validates the source-compatible SQLite schema and enables WAL, `synchronous=FULL`, foreign keys, and bounded busy timeout.
 - `WriteMessages` validates canonical message shape, inserts exact `(session, seq)` rows transactionally, treats identical replay as a no-op, and rejects conflicting payloads.
+- Current-write admission of messages and blocks (`ArchiveRowAdmission`) is shared with the [hosted Archive](./hosted-archive.md), so both admit exactly the same rows.
 - `RollbackInsertedMessages` removes only rows whose stored payload exactly matches the inserted set; pre-existing replay rows are never compensation targets.
 - Each committed write also indexes its `tool` rows into the derived [activity index](./activity-index.md) under its own savepoint; an index failure never fails the Archive rows, and compensation removes their index rows.
 - `ReadMessages`, `ReadMessagesRange`, `ReadMessageBySeq`, `ReadEffectiveMessagesRange`, and page/topology helpers serve local or lineage-bounded read paths. Effective reads apply cumulative branch caps without copying or mutating parent rows.
