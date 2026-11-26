@@ -52,7 +52,8 @@ public sealed partial class HostedStartupTests
         string name,
         Func<HostedRuntimeContext, CancellationToken, Task<IHostedRuntime>>? createRuntime = null,
         int readerVersion = AgentCatalog.ReaderVersion,
-        IReadOnlyList<SchemaMigration>? migrations = null
+        IReadOnlyList<SchemaMigration>? migrations = null,
+        Action<int>? exit = null
     )
     {
         var port = FreePort();
@@ -77,7 +78,8 @@ public sealed partial class HostedStartupTests
                 return runtime;
             }),
             _ => { },
-            migrations
+            migrations,
+            exit
         );
         started = new Replica(replica, Task.Run(() => replica.RunAsync(stop.Token)), stop, port);
         return started;
@@ -224,6 +226,61 @@ public sealed partial class HostedStartupTests
         Assert.Equal(HostedExit.Stopped, await b.Run.WaitAsync(TimeSpan.FromSeconds(60)));
         Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));
         Assert.Equal(0L, await database.ScalarAsync("SELECT count(*) FROM replicas"));
+    }
+
+    // A runtime that starts at once and whose disposal waits for the test.
+    private sealed class StallingRuntime : IHostedRuntime
+    {
+        internal TaskCompletionSource DisposeGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Disposing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task StartAsync() => Task.CompletedTask;
+
+        public Task Stopped { get; } = new TaskCompletionSource().Task;
+
+        public ValueTask DisposeAsync()
+        {
+            Disposing.TrySetResult();
+            return new(DisposeGate.Task);
+        }
+    }
+
+    [Fact]
+    public async Task AFenceDuringAGracefulDrainEndsTheProcessAtItsDeadlineAndReleasesNothing()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        using var temp = new TempDirectory();
+        var runtime = new StallingRuntime();
+        var exited = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a = Start(
+            Path.Combine(temp.Path, "data"),
+            database.OpenApp(),
+            "replica-a",
+            (context, token) => Task.FromResult<IHostedRuntime>(runtime),
+            exit: code =>
+            {
+                Assert.Equal(HostedExit.Fenced, code);
+                exited.TrySetResult(Stopwatch.GetTimestamp());
+            }
+        );
+        await WaitUntilAsync(() => a.Inner.Health.RuntimeStarted, TimeSpan.FromSeconds(30), "replica A serves");
+        // A graceful stop whose drain doesn't end, then the lease is taken over meanwhile.
+        a.Stop.Cancel();
+        await runtime.Disposing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await database.TakeLeaseAsync(await database.TenantIdAsync(), "replica-b/0002");
+
+        Assert.Equal(HostedExit.Fenced, await a.Run.WaitAsync(TimeSpan.FromSeconds(30)));
+        var fence = a.Inner.FenceTimes!;
+        Assert.Null(fence.RuntimeStopped);
+        var fencedAt = fence.RenewalStart + (long)(fence.AtFence.TotalSeconds * Stopwatch.Frequency);
+        var elapsed = Stopwatch.GetElapsedTime(fencedAt, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        // The drain bound counts from the fence, not from the stop request.
+        Assert.InRange(elapsed, DrainBound, DrainBound + TimeSpan.FromSeconds(1));
+        // Nothing was released: the takeover's lease stands.
+        Assert.Equal("replica-b/0002", await database.ScalarAsync("SELECT owner_replica FROM tenant_leases"));
+        Assert.Equal("active", await database.ScalarAsync("SELECT state FROM tenant_leases"));
+        runtime.DisposeGate.SetResult();
     }
 
     [Fact]

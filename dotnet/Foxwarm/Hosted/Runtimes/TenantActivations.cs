@@ -23,37 +23,49 @@ internal enum ActivationCause
 /// doesn't cancel the shared activation. A grant this replica holds is never acquired again:
 /// a new generation over a held grant reuses it. A runtime is published, and its gate opens,
 /// only after its start completed while its grant was still current; a build that finishes
-/// after its grant was lost is disposed, never published.
+/// after its grant was lost is disposed, never published. Grants are renewed by the replica's
+/// <see cref="GrantRenewer"/>; a lost grant fences its generation through the
+/// <see cref="FenceSupervisor"/>, whether that generation is building, published or stopping.
 /// </summary>
 internal sealed class TenantActivations : IAsyncDisposable
 {
+    private const string Expired = "No lease renewal succeeded within the fence deadline.";
+
     private readonly object gate = new();
     private readonly Dictionary<string, Slot> slots = new(StringComparer.Ordinal);
-    private readonly PgDatabase database;
+    private readonly PgDatabase control;
     private readonly string replica;
     private readonly int readerVersion;
     private readonly LeaseTimings timings;
     private readonly GenerationFactory factory;
+    private readonly GrantRenewer renewer;
+    private readonly FenceSupervisor supervisor;
     private readonly Func<long> clock;
     private readonly CancellationTokenSource stopping = new();
     private bool disposed;
 
+    /// <param name="control">The replica's control data source: acquisition, wake-ups and releases.</param>
     internal TenantActivations(
-        PgDatabase database,
+        PgDatabase control,
         string replica,
         int readerVersion,
         LeaseTimings timings,
         GenerationFactory factory,
+        GrantRenewer renewer,
+        FenceSupervisor supervisor,
         Func<long>? clock = null
     )
     {
         timings.Validate();
-        this.database = database;
+        this.control = control;
         this.replica = replica;
         this.readerVersion = readerVersion;
         this.timings = timings;
         this.factory = factory;
+        this.renewer = renewer;
+        this.supervisor = supervisor;
         this.clock = clock ?? System.Diagnostics.Stopwatch.GetTimestamp;
+        renewer.GrantLost += (handle, reason) => _ = FenceHandleAsync(handle);
     }
 
     /// <summary>How long a failed start keeps every replica from trying again, by attempt.</summary>
@@ -118,46 +130,110 @@ internal sealed class TenantActivations : IAsyncDisposable
     }
 
     /// <summary>
-    /// Fences exactly <paramref name="id"/>: latches its gate, drops its grant and disposes it.
-    /// False, changing nothing, when <paramref name="id"/> isn't the published generation, so a
-    /// late fence never lands on its replacement. Returns once the runtime is disposed.
+    /// Fences exactly <paramref name="id"/>, published or stopping: supervised as
+    /// <see cref="FenceSupervisor.FenceAsync"/> describes, and its grant is lost (never
+    /// released). False, changing nothing, when <paramref name="id"/> isn't such a generation,
+    /// so a late fence never lands on its replacement. Returns once the stop is confirmed, or
+    /// once the supervisor gave up on it.
     /// </summary>
-    internal async Task<bool> FenceAsync(GenerationId id)
+    internal async Task<bool> FenceAsync(GenerationId id, string reason = "fenced")
     {
         TenantGeneration fenced;
+        Task<bool> supervision;
         lock (gate)
         {
-            if (!slots.TryGetValue(id.Tenant, out var slot) || slot.Current?.Id != id)
+            if (!slots.TryGetValue(id.Tenant, out var slot))
                 return false;
-            fenced = slot.Current;
-            slot.Current = null;
-            if (slot.Grant?.Grant.Epoch == id.Epoch)
+            if (slot.Current?.Id == id)
+            {
+                fenced = slot.Current;
+                slot.Current = null;
+            }
+            else if (slot.Stopping?.Id == id)
+                fenced = slot.Stopping;
+            else
+                return false;
+            if (slot.Grant == fenced.Handle)
                 slot.Grant = null;
             fenced.Gate.Latch(AdmissionLatch.Fence);
+            // The supervisor's synchronous steps don't block; starting it here makes a second
+            // fence of the same generation join this one.
+            supervision = fenced.Supervision ??= SuperviseAsync(fenced, reason);
         }
-        await fenced.DisposeOnceAsync().ConfigureAwait(false);
-        return true;
+        return await supervision.ConfigureAwait(false);
     }
 
     /// <summary>
     /// The lease of <paramref name="tenant"/> at <paramref name="epoch"/> is definitely lost:
-    /// drops that grant and fences its published generation. An activation still building on
-    /// it is disposed when it finishes. A loss reported for an older epoch changes nothing.
+    /// drops that grant and fences its generation. An activation still building on it is
+    /// fenced too. A loss reported for another epoch changes nothing.
     /// </summary>
     internal async Task FenceGrantAsync(string tenant, long epoch)
     {
-        GenerationId? published;
+        GrantHandle? handle = null;
+        lock (gate)
+            if (slots.TryGetValue(tenant, out var slot))
+                handle = new[] { slot.Grant, slot.Current?.Handle, slot.Stopping?.Handle, slot.Building?.Handle }
+                    .FirstOrDefault(candidate => candidate?.Grant.Epoch == epoch);
+        if (handle is not null)
+        {
+            renewer.Lose(handle, "The tenant lease was lost.");
+            await FenceHandleAsync(handle).ConfigureAwait(false);
+        }
+    }
+
+    // Everything running under a lost grant is fenced: the published or stopping generation,
+    // and a build in progress. Matching is by handle, so epoch e never touches e+1.
+    private async Task FenceHandleAsync(GrantHandle handle)
+    {
+        TenantGeneration? fenced = null;
+        Building? building = null;
+        var reason = handle.Lost.IsCompleted ? await handle.Lost.ConfigureAwait(false) : "fenced";
+        var fences = new List<Task>();
         lock (gate)
         {
-            if (!slots.TryGetValue(tenant, out var slot))
+            if (!slots.TryGetValue(handle.Grant.Tenant, out var slot))
                 return;
-            if (slot.Grant?.Grant.Epoch == epoch)
+            if (slot.Grant == handle)
                 slot.Grant = null;
-            published = slot.Current?.Id.Epoch == epoch ? slot.Current.Id : null;
+            if (slot.Current?.Handle == handle)
+            {
+                fenced = slot.Current;
+                slot.Current = null;
+            }
+            else if (slot.Stopping?.Handle == handle)
+                fenced = slot.Stopping;
+            if (slot.Building?.Handle == handle)
+                building = slot.Building;
+            fenced?.Gate.Latch(AdmissionLatch.Fence);
+            building?.Gate.Latch(AdmissionLatch.Fence);
+            if (fenced is not null)
+                fences.Add(fenced.Supervision ??= SuperviseAsync(fenced, reason));
+            if (building is not null)
+                fences.Add(building.Supervision ??= supervisor.FenceAsync(
+                    $"the start of {building.Id}",
+                    System.Diagnostics.Stopwatch.GetTimestamp(),
+                    () => building.Gate.Latch(AdmissionLatch.Fence),
+                    () => { },
+                    building.Fence,
+                    // The activation disposes what it built once its start returns.
+                    () => building.Done,
+                    () => true
+                ));
         }
-        if (published is not null)
-            await FenceAsync(published).ConfigureAwait(false);
+        await Task.WhenAll(fences).ConfigureAwait(false);
     }
+
+    private Task<bool> SuperviseAsync(TenantGeneration generation, string reason) =>
+        supervisor.FenceAsync(
+            generation.Id.ToString(),
+            System.Diagnostics.Stopwatch.GetTimestamp(),
+            () => generation.Gate.Latch(AdmissionLatch.Fence),
+            () => renewer.Lose(generation.Handle, reason),
+            generation.Fence,
+            generation.DisposeOnceAsync,
+            () => generation.Gate.DrainedAsync().IsCompleted
+        );
 
     /// <summary>
     /// Releases an idle tenant (plan §2.3): latches the gate when nothing is admitted and the
@@ -175,7 +251,7 @@ internal sealed class TenantActivations : IAsyncDisposable
     {
         Slot slot;
         TenantGeneration generation;
-        HeldGrant? held;
+        GrantHandle? held;
         TaskCompletionSource<IdleReleaseOutcome> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (gate)
         {
@@ -187,6 +263,7 @@ internal sealed class TenantActivations : IAsyncDisposable
             if (!generation.Gate.TryLatchIdle(idleAfter, () => generation.Runtime.Idle))
                 return IdleReleaseOutcome.Busy;
             slot.Current = null;
+            slot.Stopping = generation;
             slot.Demand = false;
             slot.Releasing = done.Task;
             held = slot.Grant;
@@ -197,42 +274,75 @@ internal sealed class TenantActivations : IAsyncDisposable
             await generation.Runtime.StopProducersAsync(token).ConfigureAwait(false);
             await generation.Runtime.SettleAsync(token).ConfigureAwait(false);
             var due = await generation.Runtime.NextDueAsync(token).ConfigureAwait(false);
-            await generation.DisposeOnceAsync().ConfigureAwait(false);
+            if (!await DisposeConfirmedAsync(slot, generation).ConfigureAwait(false))
+                return outcome = IdleReleaseOutcome.StopFailed;
             lock (gate)
             {
-                if (held is null || slot.Grant != held)
+                if (held is null || slot.Grant != held || !held.IsCurrent(clock()))
                     outcome = IdleReleaseOutcome.Fenced;
                 else if (slot.Demand || disposed)
                     outcome = IdleReleaseOutcome.Aborted;
                 else
+                {
                     outcome = IdleReleaseOutcome.Released;
+                    slot.Grant = null;
+                }
             }
             if (outcome == IdleReleaseOutcome.Released)
             {
+                renewer.Untrack(held!);
                 var released = await slot.Lease.ReleaseWithWakeupAsync(held!.Grant, due, token)
                     .ConfigureAwait(false);
                 outcome = released ? IdleReleaseOutcome.Released : IdleReleaseOutcome.Fenced;
-                lock (gate)
-                    if (slot.Grant == held)
-                        slot.Grant = null;
             }
             return outcome;
         }
         finally
         {
             // A failed step keeps the grant; the runtime is disposed either way, and the next
-            // activation builds a new generation.
-            await generation.DisposeOnceAsync().ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
+            // activation builds a new generation. A disposal that failed drops the grant.
+            if (outcome != IdleReleaseOutcome.StopFailed)
+                await DisposeConfirmedAsync(slot, generation).ConfigureAwait(false);
             lock (gate)
+            {
                 slot.Releasing = null;
+                if (slot.Stopping == generation)
+                    slot.Stopping = null;
+            }
             done.TrySetResult(outcome);
+        }
+    }
+
+    // Disposes a generation that is stopping gracefully. A disposal that fails leaves its stop
+    // unconfirmed: the databases close, the grant is lost without a release, and when work is
+    // still admitted the supervisor ends the process at the deadline.
+    private async Task<bool> DisposeConfirmedAsync(Slot slot, TenantGeneration generation)
+    {
+        var disposal = generation.DisposeOnceAsync();
+        try
+        {
+            await disposal.ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception)
+        {
+            generation.Fence.Close();
+            lock (gate)
+                if (slot.Grant == generation.Handle)
+                    slot.Grant = null;
+            renewer.Lose(generation.Handle, "The runtime's stop failed; its grant isn't released.");
+            if (!generation.Gate.DrainedAsync().IsCompleted)
+                await supervisor
+                    .JoinAsync(generation.Id.ToString(), System.Diagnostics.Stopwatch.GetTimestamp(), disposal, () => generation.Gate.DrainedAsync().IsCompleted)
+                    .ConfigureAwait(false);
+            return false;
         }
     }
 
     private Slot SlotOf(string tenant)
     {
         if (!slots.TryGetValue(tenant, out var slot))
-            slots[tenant] = slot = new(new TenantLease(database, tenant, readerVersion));
+            slots[tenant] = slot = new(new TenantLease(control, tenant, readerVersion));
         return slot;
     }
 
@@ -241,6 +351,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         // Set when publication cleared the slot's activation under the lock; until then the
         // slot's activation is this one, and no other can start.
         var cleared = false;
+        Building? building = null;
         try
         {
             Task? releasing;
@@ -249,12 +360,17 @@ internal sealed class TenantActivations : IAsyncDisposable
             if (releasing is not null)
                 await releasing.ConfigureAwait(false);
 
-            HeldGrant? held;
+            GrantHandle? held;
             lock (gate)
             {
                 held = slot.Grant;
-                if (held is not null && clock() >= held.ValidUntil)
-                    slot.Grant = held = null;
+                if (held is not null && !held.IsCurrent(clock()))
+                    slot.Grant = null;
+            }
+            if (held is not null && !held.IsCurrent(clock()))
+            {
+                renewer.Lose(held, Expired);
+                held = null;
             }
             if (held is null)
             {
@@ -263,38 +379,55 @@ internal sealed class TenantActivations : IAsyncDisposable
                     await slot.Lease.TryAcquireAsync(replica, timings.Ttl, timings.RenewInterval, stopping.Token)
                         .ConfigureAwait(false)
                     ?? throw new TenantHeldElsewhereException(slot.Lease.Tenant);
-                held = new HeldGrant(acquired, acquired.AcquisitionStart + Ticks(timings.FenceAfter));
+                held = renewer.Track(acquired);
                 lock (gate)
                     slot.Grant = held;
             }
             var grant = held.Grant;
             var wakeup = await slot.Lease.ReadWakeupAsync(grant.TenantId, stopping.Token).ConfigureAwait(false);
             GenerationId id;
-            lock (gate)
-                id = new(grant.TenantId, slot.Lease.Tenant, grant.Epoch, ++slot.Generations);
             var admission = new AdmissionGate(clock);
+            var fence = new GenerationFence();
+            fence.Refused += error => renewer.Lose(held, "A write was refused by the tenant lease fence: " + error.Message);
+            lock (gate)
+            {
+                id = new(grant.TenantId, slot.Lease.Tenant, grant.Epoch, ++slot.Generations);
+                slot.Building = building = new Building(id, held, admission, fence);
+            }
+            // A grant lost from here on fences the build: its databases close and its start is
+            // cancelled, under the supervisor's deadline.
+            if (!held.IsCurrent(clock()))
+                renewer.Lose(held, Expired);
+            using var starting = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token, fence.Lost);
             IGenerationRuntime? runtime = null;
             try
             {
-                runtime = await factory(new(id, grant, admission, wakeup), stopping.Token).ConfigureAwait(false);
-                await runtime.StartAsync(stopping.Token).ConfigureAwait(false);
+                runtime = await factory(new(id, grant, admission, wakeup, fence), starting.Token).ConfigureAwait(false);
+                await runtime.StartAsync(starting.Token).ConfigureAwait(false);
             }
-            catch
+            catch (Exception error)
             {
                 if (runtime is not null)
                     await runtime.DisposeAsync().AsTask().ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
                 await FailedStartAsync(slot, held, wakeup).ConfigureAwait(false);
+                // A start the fence cancelled failed because the grant was lost.
+                if (fence.IsClosed && error is not TenantFencedException)
+                    throw new TenantFencedException(
+                        $"Tenant {id.Tenant} lost its lease at epoch {id.Epoch} during its runtime's start.",
+                        error
+                    );
                 throw;
             }
-            var generation = new TenantGeneration(id, grant, admission, runtime);
+            var generation = new TenantGeneration(id, held, admission, fence, runtime);
             bool published;
             lock (gate)
             {
-                published = !disposed && slot.Grant == held && clock() < held.ValidUntil;
+                published = !disposed && slot.Grant == held && held.IsCurrent(clock()) && !fence.IsClosed;
                 if (published)
                 {
                     slot.Current = generation;
                     slot.Activation = null;
+                    slot.Building = null;
                     cleared = true;
                     slot.Autonomous = false;
                     admission.Open();
@@ -303,7 +436,8 @@ internal sealed class TenantActivations : IAsyncDisposable
             if (!published)
             {
                 admission.Latch(AdmissionLatch.Fence);
-                await generation.DisposeOnceAsync().ConfigureAwait(false);
+                fence.Close();
+                await generation.DisposeOnceAsync().ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
                 throw new TenantFencedException(
                     $"Tenant {id.Tenant} lost its lease at epoch {id.Epoch} before its runtime was published."
                 );
@@ -317,23 +451,28 @@ internal sealed class TenantActivations : IAsyncDisposable
                 {
                     slot.Activation = null;
                     slot.Autonomous = false;
+                    if (slot.Building == building)
+                        slot.Building = null;
                 }
+            building?.Finish();
         }
     }
 
-    // A start that failed: record the backoff, release the grant and let a scan retry.
-    private async Task FailedStartAsync(Slot slot, HeldGrant held, WakeupRow? wakeup)
+    // A start that failed: record the backoff, release the grant and let a scan retry. A grant
+    // that was lost meanwhile (a fence during the start) is never released.
+    private async Task FailedStartAsync(Slot slot, GrantHandle held, WakeupRow? wakeup)
     {
         bool autonomous;
         lock (gate)
         {
             // At shutdown the grant is released plainly by DisposeAsync, without a backoff.
-            if (slot.Grant != held || disposed)
+            if (slot.Grant != held || disposed || !held.IsCurrent(clock()))
                 return;
             slot.Grant = null;
             autonomous = slot.Autonomous;
             slot.Autonomous = false;
         }
+        renewer.Untrack(held);
         try
         {
             await slot.Lease.ReleaseAfterFailedStartAsync(
@@ -350,14 +489,15 @@ internal sealed class TenantActivations : IAsyncDisposable
         }
     }
 
-    private static long Ticks(TimeSpan span) =>
-        (long)(span.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
-
+    /// <summary>
+    /// Graceful shutdown: latches every generation, waits for activations and releases in
+    /// progress, disposes every runtime, then releases each grant whose runtime confirmed its
+    /// stop and is still current. A fence that arrives meanwhile is supervised like any other.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
-        List<TenantGeneration> current = [];
+        List<(Slot Slot, TenantGeneration Generation)> current = [];
         List<Task> pending = [];
-        List<(TenantLease Lease, LeaseGrant Grant)> grants = [];
         lock (gate)
         {
             if (disposed)
@@ -368,8 +508,9 @@ internal sealed class TenantActivations : IAsyncDisposable
                 if (slot.Current is { } generation)
                 {
                     generation.Gate.Latch(AdmissionLatch.Stop);
-                    current.Add(generation);
+                    current.Add((slot, generation));
                     slot.Current = null;
+                    slot.Stopping = generation;
                 }
                 if (slot.Activation is { } activation)
                     pending.Add(activation);
@@ -380,38 +521,60 @@ internal sealed class TenantActivations : IAsyncDisposable
         stopping.Cancel();
         foreach (var task in pending)
             await task.ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
-        foreach (var generation in current)
-            await generation.DisposeOnceAsync().ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
+        // Every tenant drains at once; one slow drain doesn't hold the others.
+        await Task.WhenAll(current.Select(item => DisposeConfirmedAsync(item.Slot, item.Generation))).ConfigureAwait(false);
+        // A fence that overtook a drain is supervised; it decides the process's end.
+        foreach (var (_, generation) in current)
+            if (generation.Supervision is { } supervision)
+                await supervision.ConfigureAwait(false);
+        List<(TenantLease Lease, GrantHandle Handle)> grants = [];
         lock (gate)
             foreach (var slot in slots.Values)
-                if (slot.Grant is { } held)
-                {
-                    grants.Add((slot.Lease, held.Grant));
-                    slot.Grant = null;
-                }
-        foreach (var (lease, grant) in grants)
+            {
+                slot.Stopping = null;
+                if (slot.Grant is { } held && held.IsCurrent(clock()))
+                    grants.Add((slot.Lease, held));
+                slot.Grant = null;
+            }
+        foreach (var (lease, handle) in grants)
+        {
+            renewer.Untrack(handle);
             try
             {
-                await lease.ReleaseAsync(grant, CancellationToken.None).ConfigureAwait(false);
+                await lease.ReleaseAsync(handle.Grant, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception error) when (error is Npgsql.NpgsqlException or TimeoutException) { }
+        }
         stopping.Dispose();
     }
 
-    // The grant this replica holds for a tenant and its local validity deadline (a Stopwatch
-    // timestamp). Renewal moves the deadline; reaching it means the grant is lost.
-    private sealed class HeldGrant(LeaseGrant grant, long validUntil)
+    // An activation between its grant and its publication: what a fence of that grant closes.
+    private sealed class Building(GenerationId id, GrantHandle handle, AdmissionGate gate, GenerationFence fence)
     {
-        internal LeaseGrant Grant { get; } = grant;
-        internal long ValidUntil { get; set; } = validUntil;
+        private readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal GenerationId Id { get; } = id;
+        internal GrantHandle Handle { get; } = handle;
+        internal AdmissionGate Gate { get; } = gate;
+        internal GenerationFence Fence { get; } = fence;
+
+        /// <summary>Completes once the activation returned, having disposed what it didn't publish.</summary>
+        internal Task Done => done.Task;
+
+        internal Task<bool>? Supervision { get; set; }
+
+        internal void Finish() => done.TrySetResult();
     }
 
     private sealed class Slot(TenantLease lease)
     {
         internal TenantLease Lease { get; } = lease;
         internal Task<TenantGeneration>? Activation { get; set; }
+        internal Building? Building { get; set; }
         internal TenantGeneration? Current { get; set; }
-        internal HeldGrant? Grant { get; set; }
+        // A generation that is disposing gracefully (idle release or shutdown).
+        internal TenantGeneration? Stopping { get; set; }
+        internal GrantHandle? Grant { get; set; }
         internal long Generations { get; set; }
         internal Task<IdleReleaseOutcome>? Releasing { get; set; }
         // Work that arrived while an idle release ran; it aborts the release.

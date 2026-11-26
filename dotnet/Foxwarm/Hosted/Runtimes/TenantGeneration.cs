@@ -18,11 +18,16 @@ internal sealed record GenerationId(int TenantId, string Tenant, long Epoch, lon
 /// The tenant's wake-up row when the activation began: the due occurrence the runtime fires
 /// even if it is already past. The row stays until the runtime replaces or clears it.
 /// </param>
+/// <param name="Fence">
+/// The runtime attaches its <c>TenantDb</c> here, so a fence closes it at once and a refused
+/// write fences the generation; its work observes <see cref="GenerationFence.Lost"/>.
+/// </param>
 internal sealed record ActivationContext(
     GenerationId Generation,
     LeaseGrant Grant,
     AdmissionGate Gate,
-    WakeupRow? Wakeup
+    WakeupRow? Wakeup,
+    GenerationFence Fence
 );
 
 /// <summary>
@@ -63,17 +68,32 @@ internal delegate Task<IGenerationRuntime> GenerationFactory(
 /// <summary>A published tenant runtime generation.</summary>
 internal sealed class TenantGeneration
 {
-    internal TenantGeneration(GenerationId id, LeaseGrant grant, AdmissionGate gate, IGenerationRuntime runtime)
+    internal TenantGeneration(
+        GenerationId id,
+        GrantHandle handle,
+        AdmissionGate gate,
+        GenerationFence fence,
+        IGenerationRuntime runtime
+    )
     {
         Id = id;
-        Grant = grant;
+        Handle = handle;
         Gate = gate;
+        Fence = fence;
         Runtime = runtime;
     }
 
     internal GenerationId Id { get; }
 
-    internal LeaseGrant Grant { get; }
+    /// <summary>The grant this generation runs under, as the renewer tracks it.</summary>
+    internal GrantHandle Handle { get; }
+
+    internal LeaseGrant Grant => Handle.Grant;
+
+    internal GenerationFence Fence { get; }
+
+    /// <summary>The supervised fence of this generation, once one began; later fences join it.</summary>
+    internal Task<bool>? Supervision { get; set; }
 
     internal AdmissionGate Gate { get; }
 
@@ -128,4 +148,10 @@ internal enum IdleReleaseOutcome
 
     /// <summary>The grant was no longer current at the release transaction; nothing was written.</summary>
     Fenced,
+
+    /// <summary>
+    /// The runtime's disposal failed, so its stop is unconfirmed: the grant is dropped without
+    /// a release and expires.
+    /// </summary>
+    StopFailed,
 }
