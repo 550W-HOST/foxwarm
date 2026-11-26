@@ -227,11 +227,15 @@ public sealed class SessionIdentityRecoveryTests
         var storage = IdentityTestStorage.Open(data);
         if (mode == "ambiguous")
         {
-            // Seeds a catalog row directly; a hosted catalog needs its own seeding helper.
-            Assert.IsType<SessionCatalog>(storage.Catalog);
-            using var catalog = new SessionCatalog(data);
-            catalog.Initialize();
-            catalog.Upsert([SessionCatalogTests.Row("claimed/main", 0)]);
+            // A catalog row for the rollback target makes the lifetime proof ambiguous.
+            if (storage.Catalog is SessionCatalog)
+            {
+                using var catalog = new SessionCatalog(data);
+                catalog.Initialize();
+                catalog.Upsert([SessionCatalogTests.Row("claimed/main", 0)]);
+            }
+            else
+                storage.Catalog.Upsert([SessionCatalogTests.Row("claimed/main", 0)]);
         }
         var record = new SessionIdentityMoveRecord(
             "rolling-back",

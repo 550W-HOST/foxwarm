@@ -6,10 +6,11 @@ using Foxwarm;
 using Foxwarm.Images;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
-using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
 
+// Runs against the file and the hosted stores (Hosted/Fixtures/HostedTestBackend.cs).
+[Trait("Backend", "neutral")]
 public sealed partial class CompactLifecycleTests
 {
     [Fact]
@@ -500,17 +501,10 @@ public sealed partial class CompactLifecycleTests
         await fixture.Owner.Compactor.DrainAsync();
         await fixture.Owner.DrainForegroundAsync();
 
-        using var db = new SqliteConnection(
-            $"Data Source={Path.Combine(fixture.TaskDataRoot, "state", "tasks.sqlite")}"
-        );
-        db.Open();
-        using var command = db.CreateCommand();
-        command.CommandText = "SELECT reminderLastSeq,reminderMessageCount FROM tasks WHERE id=$id";
-        command.Parameters.AddWithValue("$id", taskId);
-        using var row = command.ExecuteReader();
-        Assert.True(row.Read());
-        Assert.Equal(visible.Max(), row.GetInt64(0));
-        Assert.Equal(visible.Length, row.GetInt32(1));
+        var row = fixture.AuthorizationManager.Storage.Tasks.Run(TaskRowAccess.Read, rows => rows.Read(taskId));
+        Assert.NotNull(row);
+        Assert.Equal(visible.Max(), row["reminderLastSeq"]!.GetValue<long>());
+        Assert.Equal(visible.Length, row["reminderMessageCount"]!.GetValue<long>());
         Assert.DoesNotContain(
             fixture.Owner.Entry.Snapshot().History.Materialize(),
             message => message["__meta"]?["goalReminder"] is not null
@@ -1179,7 +1173,6 @@ public sealed partial class CompactLifecycleTests
         internal readonly SessionOwner Owner;
         internal readonly string MemoryPath;
         internal readonly SessionManager AuthorizationManager;
-        internal readonly string TaskDataRoot;
 
         internal readonly HostModels Models;
 
@@ -1286,7 +1279,6 @@ public sealed partial class CompactLifecycleTests
                 images: Store.Images
             );
             var authorizationData = Path.Combine(temp.Path, "authorization-data");
-            TaskDataRoot = authorizationData;
             var authorizationWork = Path.Combine(temp.Path, "authorization-work");
             Directory.CreateDirectory(authorizationWork);
             AuthorizationManager = new SessionManager(
