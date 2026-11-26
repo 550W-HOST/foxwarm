@@ -88,15 +88,23 @@ internal static class HostedEntry
     )
     {
         var storage = new PostgresStorageContext(context.Database, bootstrap.RequireScratchRoot());
-        if (storage.Missing.Count > 0)
-            throw new HostedStartupException(
-                "This build has no PostgreSQL implementation of the "
-                    + string.Join(", ", storage.Missing)
-                    + " stores; hosted mode can't start."
-            );
-        await storage
-            .OpenBlobsAsync(deployment.Blobs, bootstrap.Tenant, token)
-            .ConfigureAwait(false);
+        try
+        {
+            if (storage.Missing.Count > 0)
+                throw new HostedStartupException(
+                    "This build has no PostgreSQL implementation of the "
+                        + string.Join(", ", storage.Missing)
+                        + " stores; hosted mode can't start."
+                );
+            await storage
+                .OpenBlobsAsync(deployment.Blobs, bootstrap.Tenant, token)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            await storage.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
         return await BuildRuntimeAsync(storage, storage, bootstrap, deployment, context.PublicListener, token)
             .ConfigureAwait(false);
     }
@@ -113,7 +121,31 @@ internal static class HostedEntry
         HostedBootstrap bootstrap,
         DeploymentConfiguration deployment,
         System.Net.Sockets.Socket? publicListener = null,
-        CancellationToken token = default
+        CancellationToken token = default,
+        Runtimes.TenantServer? server = null
+    )
+    {
+        // The runtime owns the tenant context from here; a build that fails releases it.
+        try
+        {
+            return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, publicListener, server, token)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            await tenant.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task<IHostedRuntime> BuildRuntimeCoreAsync(
+        PostgresStorageContext tenant,
+        IStorageContext storage,
+        HostedBootstrap bootstrap,
+        DeploymentConfiguration deployment,
+        System.Net.Sockets.Socket? publicListener,
+        Runtimes.TenantServer? server,
+        CancellationToken token
     )
     {
         ModelConfiguration configuration;
@@ -162,6 +194,8 @@ internal static class HostedEntry
             // The standby's public port, kept open through the takeover.
             ListenSocket = publicListener,
             ShutdownTimeout = HttpShutdownTimeout,
+            // A tenant of a multi-tenant replica: requests come from the replica's front.
+            Server = server,
         };
         // Without HTTP no host adopts it, so connections queued on it are refused now.
         if (!http.HttpEnabled)
@@ -183,12 +217,12 @@ internal static class HostedEntry
             .ConfigureAwait(false);
         // The owner's daily journal retention; it stops when the host disposes the journal.
         tenant.StartJournalRetention(retention);
-        return new MainHostRuntime(host);
+        return new MainHostRuntime(host, tenant);
     }
 }
 
-/// <summary><see cref="MainHost"/> as the runtime of an owner replica.</summary>
-internal sealed class MainHostRuntime(MainHost host) : IHostedRuntime
+/// <summary><see cref="MainHost"/> as the runtime of an owner replica, with the tenant context it owns.</summary>
+internal sealed class MainHostRuntime(MainHost host, PostgresStorageContext tenant) : IHostedRuntime
 {
     private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -202,5 +236,15 @@ internal sealed class MainHostRuntime(MainHost host) : IHostedRuntime
 
     public Task Stopped => started.Task.ContinueWith(_ => host.WaitForShutdownAsync()).Unwrap();
 
-    public ValueTask DisposeAsync() => host.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await host.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            await tenant.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 }

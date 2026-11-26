@@ -161,6 +161,12 @@ public sealed class S3BlobStoreTests
         Assert.Empty(s3.Missing);
         await s3.ArtifactBlobs.CreateAsync("art_c/1.json", new byte[] { 1 }, false, CancellationToken.None);
         Assert.Contains("t/default/artifacts/art_c/1.json", await bucket.KeysAsync());
+        // The context owns the S3 client both stores share: disposing it closes the client.
+        await s3.DisposeAsync();
+        await postgres.DisposeAsync();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            s3.ArtifactBlobs.CreateAsync("art_c/2.json", new byte[] { 1 }, false, CancellationToken.None)
+        );
     }
 
     [Fact]

@@ -220,7 +220,8 @@ internal sealed class MainHost : IAsyncDisposable
                 http.BindAddress,
                 http.Desktop,
                 http.ListenSocket,
-                http.ShutdownTimeout
+                http.ShutdownTimeout,
+                http.Server
             );
             if (server.WebUiEnabled)
             {

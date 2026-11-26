@@ -28,6 +28,7 @@ internal sealed partial class PostgresStorageContext
         var (client, conditional) = await S3Blobs
             .OpenAsync(settings.S3!, tenant, token)
             .ConfigureAwait(false);
+        s3Client = client;
         imageBlobs = new S3BlobStore(client, settings.S3!.Bucket, tenant, ImageBlobsName, conditional);
         artifactBlobs = new S3BlobStore(client, settings.S3!.Bucket, tenant, ArtifactBlobsName, conditional);
         // The authority was built over the PostgreSQL image store; build it again over these.

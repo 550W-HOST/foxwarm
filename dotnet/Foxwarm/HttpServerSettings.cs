@@ -30,6 +30,12 @@ internal sealed record HttpServerSettings(
     /// </summary>
     internal TimeSpan? ShutdownTimeout { get; init; }
 
+    /// <summary>
+    /// The server the host runs on instead of its own listener: a tenant runtime of a replica
+    /// that hosts several tenants receives its requests from the replica's front server.
+    /// </summary>
+    internal Microsoft.AspNetCore.Hosting.Server.IServer? Server { get; init; }
+
     internal static bool Enabled(ModelConfiguration? configuration) =>
         Feature(configuration, "enableWebUI");
 

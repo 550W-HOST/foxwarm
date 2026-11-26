@@ -34,6 +34,9 @@ internal sealed class UsageOverview : IAsyncDisposable
     private bool started;
     private bool rerun;
     private int changePending;
+    // Cancels a pending change notice at disposal, so the delay's timer doesn't keep a retired
+    // runtime reachable or notify its listeners afterwards.
+    private readonly CancellationTokenSource disposing = new();
 
     // Archive history never changes once written, so a found start or Agent stays valid.
     private readonly ConcurrentDictionary<string, (long? Start, string? Agent)> archive = new(
@@ -57,11 +60,22 @@ internal sealed class UsageOverview : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref changePending, 1) == 1)
             return;
-        _ = Task.Delay(ChangeDelay)
+        Task delay;
+        try
+        {
+            delay = Task.Delay(ChangeDelay, disposing.Token);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+        _ = delay
             .ContinueWith(
-                _ =>
+                elapsed =>
                 {
                     Volatile.Write(ref changePending, 0);
+                    if (elapsed.IsCanceled)
+                        return;
                     try
                     {
                         Changed?.Invoke();
@@ -147,7 +161,9 @@ internal sealed class UsageOverview : IAsyncDisposable
     {
         journal.UsageRecorded -= Recorded;
         journal.UsageLedgerFailed -= Repair;
+        disposing.Cancel();
         await BackfillTask.ConfigureAwait(false);
+        disposing.Dispose();
     }
 
     /// <summary>Who a recorded Session's usage belongs to now.</summary>

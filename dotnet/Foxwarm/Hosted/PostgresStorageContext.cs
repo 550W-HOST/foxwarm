@@ -10,9 +10,15 @@ namespace Foxwarm.Hosted;
 /// (<c>PostgresStorageContext.&lt;Store&gt;.cs</c>, owned by that store's track) implementing the
 /// matching <c>Create…</c> partial method; a store without one stays missing, and hosted
 /// startup refuses a context with missing stores (<see cref="Missing"/>).
+/// The context owns what its stores started or opened (the journal's writer loop, the S3
+/// client), so a runtime that fails to build, or is retired, releases them by disposing it.
 /// </summary>
-internal sealed partial class PostgresStorageContext : IStorageContext
+internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDisposable
 {
+    private int disposed;
+    // The S3 client shared by both S3 blob stores; null on the PostgreSQL blob backend.
+    private IDisposable? s3Client;
+
     private ISessionAuthorityBackend? authority;
     private IArchiveStore? archive;
     private IIdentityLedger? identities;
@@ -43,6 +49,26 @@ internal sealed partial class PostgresStorageContext : IStorageContext
     }
 
     internal TenantDb Database { get; }
+
+    /// <summary>
+    /// Stops the journal (its writer loop and retention) and disposes the S3 client. The
+    /// Session runtime disposes the journal too when it was built; disposing twice is harmless.
+    /// The tenant database isn't closed here: the lease owns it.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+            return;
+        try
+        {
+            if (journal is not null)
+                await journal.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            s3Client?.Dispose();
+        }
+    }
 
     /// <summary>The replica's ephemeral local directory (never tenant state).</summary>
     internal string ScratchRoot { get; }

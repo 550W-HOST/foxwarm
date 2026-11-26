@@ -12,8 +12,11 @@ internal sealed partial class TextRedactor
     // A detection service may accept only a few requests at a time and answer 429 beyond that
     // instead of queueing. Requests from every Session share one limit per endpoint
     // (`maxConcurrency`), so they wait for each other here rather than failing each other's
-    // attempts. Changing the limit starts a new queue; calls already admitted finish.
-    private static readonly ConcurrentDictionary<
+    // attempts. Changing the limit starts a new queue; calls already admitted finish. The
+    // queues belong to the installation's redactor (InstanceSecrets.TextRedactor), so hosted
+    // tenants in one process never wait for each other's detection calls, and a retired tenant's
+    // queues go with it.
+    private readonly ConcurrentDictionary<
         (Uri Endpoint, int Limit),
         SemaphoreSlim
     > EndpointQueues = new();

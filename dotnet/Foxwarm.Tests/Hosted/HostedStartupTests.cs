@@ -85,13 +85,11 @@ public sealed partial class HostedStartupTests
 
     private static async Task<IHostedRuntime> MainRuntimeAsync(HostedRuntimeContext context, string dataRoot, int port)
     {
-        var storage = HostedTestBackend.Compose(
-            new PostgresStorageContext(context.Database, dataRoot)
-            {
-                KeyRing = new HostedKeyRing(context.Database, HostedTestBackend.Kek),
-            },
-            dataRoot
-        );
+        var tenant = new PostgresStorageContext(context.Database, dataRoot)
+        {
+            KeyRing = new HostedKeyRing(context.Database, HostedTestBackend.Kek),
+        };
+        var storage = HostedTestBackend.Compose(tenant, dataRoot);
         var configuration = new ModelConfiguration(HostPaths.ForDataRoot(dataRoot));
         var desktop = await HttpServerSettings.CaptureDesktopAsync(dataRoot);
         var http = desktop with
@@ -101,7 +99,7 @@ public sealed partial class HostedStartupTests
             Address = new PublicWebAddress($"http://127.0.0.1:{port}", Microsoft.AspNetCore.Http.PathString.Empty, "/", false),
             ListenSocket = context.PublicListener,
         };
-        return new MainHostRuntime(await MainHost.CreateAsync([], configuration, http, storage: storage));
+        return new MainHostRuntime(await MainHost.CreateAsync([], configuration, http, storage: storage), tenant);
     }
 
     private static HttpClient Client(int port, string dataRoot)

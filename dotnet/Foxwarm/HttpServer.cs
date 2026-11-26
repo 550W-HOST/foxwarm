@@ -44,7 +44,8 @@ internal sealed class HttpServer
         string bindAddress = "127.0.0.1",
         bool desktop = false,
         Socket? listenSocket = null,
-        TimeSpan? shutdownTimeout = null
+        TimeSpan? shutdownTimeout = null,
+        Microsoft.AspNetCore.Hosting.Server.IServer? server = null
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
@@ -109,6 +110,16 @@ internal sealed class HttpServer
             );
         }
         builder.Logging.ClearProviders();
+        if (server is not null)
+        {
+            // A tenant runtime of a multi-tenant replica: no listener of its own, and the
+            // replica alone owns the process signals.
+            builder.Services.AddSingleton(server);
+            builder.Services.AddSingleton<
+                Microsoft.Extensions.Hosting.IHostLifetime,
+                Foxwarm.Hosted.Runtimes.HostControlledLifetime
+            >();
+        }
         if (shutdownTimeout is { } timeout)
             builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(options =>
                 options.ShutdownTimeout = timeout
