@@ -16,6 +16,8 @@ public sealed partial class HostedSourceRulesTests
         "Hosted/Postgres/PgDatabase.cs",
         "Hosted/Postgres/TenantDb.cs",
         "Hosted/Schema/SchemaMigrator.cs",
+        "Hosted/Lease/TenantLease.cs",
+        "Hosted/Lease/ReplicaRegistry.cs",
     ];
 
     [GeneratedRegex(

@@ -4,6 +4,8 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
+// Runs against the file and the hosted stores (Hosted/Fixtures/HostedTestBackend.cs).
+[Trait("Backend", "neutral")]
 public sealed class SessionCreationNodeDefaultTests
 {
     [Fact]
