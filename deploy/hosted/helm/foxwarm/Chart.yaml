@@ -1,0 +1,7 @@
+apiVersion: v2
+name: foxwarm
+description: Foxwarm in hosted mode - stateless replicas of one tenant over PostgreSQL and S3.
+type: application
+version: 0.1.0
+# The chart's default image tag; set image.tag to the image you built.
+appVersion: "hosted-p1"

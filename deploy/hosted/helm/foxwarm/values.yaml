@@ -1,0 +1,89 @@
+# Foxwarm hosted mode. The chart runs the replicas of one tenant; PostgreSQL and the S3 object
+# store are external. See deploy/hosted/README.md.
+
+image:
+  # The `hosted` target of the repository Dockerfile, pushed to a registry you control.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Two replicas: one owns the tenant, the other stands by and forwards to the owner. A rolling
+# update starts one new replica (a standby, which is Ready) before stopping an old one.
+replicaCount: 2
+
+tenant: default
+
+ports:
+  # The public listener (bot.httpPort of the deployment configuration).
+  http: 3001
+  # The health listener (health.port): /livez, /readyz and /status.
+  health: 3002
+
+# Deployment configuration keys besides the listener, health port and blob credentials, which
+# the chart sets: url, bot.enableWebUI, asrService, nodeProviders, journal.retentionDays and
+# blobs (backend and S3 connection). Tenant settings don't belong here; they live in the
+# database and are edited through Setup.
+deployment:
+  # url: https://foxwarm.example.com
+  blobs:
+    backend: s3
+    s3:
+      endpoint: ""
+      region: us-east-1
+      bucket: ""
+      pathStyle: false
+  # journal:
+  #   retentionDays: 90
+
+secrets:
+  # An existing Secret with the keys database-url, kek.json and, for S3 blobs,
+  # s3-access-key-id and s3-secret-access-key (plus kek-previous.json during a KEK rotation).
+  # Without it, the chart creates one from the values below.
+  existingSecret: ""
+  # The runtime role's URL: postgres://foxwarm_app:<password>@<host>:5432/foxwarm
+  databaseUrl: ""
+  # The key-encryption key file ({"version":1,"keyId":"…","key":"…"}). Keep a copy: without it
+  # the tenant's encrypted data can't be opened. The chart never generates one.
+  kek: ""
+  kekPrevious: ""
+  s3AccessKeyId: ""
+  s3SecretAccessKey: ""
+
+migrate:
+  # The schema owner's URL, used only by the pre-install/pre-upgrade migration Job.
+  existingSecret: ""   # key: migrate-database-url
+  databaseUrl: ""
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+
+# The shared Agent folders (FOXWARM_AGENTS_DIR). Every replica mounts the same volume, so it
+# needs ReadWriteMany; the tenant lease, not the filesystem, keeps a single writer.
+agents:
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteMany]
+    size: 10Gi
+
+# The replica's scratch directory: logs, upload staging and temporary files.
+scratch:
+  sizeLimit: 2Gi
+
+# Above the replica's 8 s fencing drain bound and the graceful drain of a stopping owner.
+terminationGracePeriodSeconds: 60
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+service:
+  type: ClusterIP
+  port: 3001
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

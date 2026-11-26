@@ -1,0 +1,50 @@
+# `foxwarm db migrate` before the replicas of a new version start (design §8.3): replicas never
+# migrate, and a replica refuses (exit 78) a schema newer than it reads.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "foxwarm.fullname" . }}-migrate
+  labels:
+    {{- include "foxwarm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "foxwarm.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "foxwarm.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "foxwarm.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["db", "migrate", "--tenant", {{ .Values.tenant | quote }}]
+          env:
+            - name: FOXWARM_MIGRATE_DATABASE_URL_FILE
+              value: /run/secrets/foxwarm-migrate/migrate-database-url
+          securityContext:
+            {{- include "foxwarm.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: migrate-secret
+              mountPath: /run/secrets/foxwarm-migrate
+              readOnly: true
+      volumes:
+        - name: migrate-secret
+          secret:
+            secretName: {{ include "foxwarm.migrateSecret" . }}
+            defaultMode: 0440

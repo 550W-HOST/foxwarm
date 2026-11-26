@@ -1,0 +1,22 @@
+# Render check: S3 blobs, values-created Secrets, a new RWX claim.
+image:
+  repository: registry.example.com/foxwarm
+  tag: hosted-test
+deployment:
+  url: https://foxwarm.example.com
+  blobs:
+    backend: s3
+    s3:
+      endpoint: https://s3.example.com
+      region: eu-west-1
+      bucket: foxwarm
+      pathStyle: true
+  journal:
+    retentionDays: 30
+secrets:
+  databaseUrl: postgres://foxwarm_app:app@db.example.com:5432/foxwarm
+  kek: '{"version":1,"keyId":"0000000000000000","key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+  s3AccessKeyId: test-access
+  s3SecretAccessKey: test-secret
+migrate:
+  databaseUrl: postgres://foxwarm_owner:owner@db.example.com:5432/foxwarm

@@ -1,0 +1,145 @@
+# Foxwarm hosted mode on Docker Compose: PostgreSQL, VersityGW as the S3 blob store, a one-shot
+# schema migration, two replicas of one tenant sharing the Agents volume, and a round-robin TCP
+# proxy in front of them. Either replica can take a connection: the standby forwards it to the
+# owner. See README.md in this directory.
+#
+#   docker build --target hosted -t foxwarm-hosted:local .     # from the repository root
+#   deploy/hosted/generate-secrets.sh deploy/hosted/secrets
+#   docker compose -f deploy/hosted/compose.yaml up -d
+#   docker compose -f deploy/hosted/compose.yaml exec foxwarm-1 /app/Foxwarm hosted token
+name: foxwarm-hosted
+
+x-replica: &replica
+  image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  user: "1000:1000"
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    versitygw:
+      condition: service_started
+  secrets: [database-url, kek, s3-access-key-id, s3-secret-access-key]
+  volumes:
+    - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
+    - agents:/agents
+  # The replica's scratch directory: logs, upload staging and temporary files, never tenant state.
+  tmpfs:
+    - /scratch:uid=1000,gid=1000,mode=0700
+  networks: [frontend, backend]
+  # Above the 8 s drain bound, so a stopped owner drains and releases the lease.
+  stop_grace_period: 30s
+
+x-replica-environment: &replica-environment
+  FOXWARM_DATABASE_URL_FILE: /run/secrets/database-url
+  FOXWARM_KEK_FILE: /run/secrets/kek
+  # During a key-encryption key rotation, mount the previous key as well:
+  # FOXWARM_KEK_PREVIOUS_FILE: /run/secrets/kek-previous
+
+services:
+  postgres:
+    image: postgres:18.7-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+    secrets: [postgres-password, owner-password, app-password]
+    volumes:
+      - postgres:/var/lib/postgresql
+      # Creates the schema owner and runtime roles and the foxwarm database on first start.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    networks: [backend]
+    healthcheck:
+      # TCP: the temporary server of first-start initialization listens only on its socket.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "foxwarm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  versitygw:
+    image: ghcr.io/versity/versitygw:v1.11.0
+    restart: unless-stopped
+    secrets: [s3-access-key-id, s3-secret-access-key]
+    # A POSIX backend: the bucket is a directory of the volume.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /data/foxwarm &&
+        ROOT_ACCESS_KEY_ID="$$(cat /run/secrets/s3-access-key-id)"
+        ROOT_SECRET_ACCESS_KEY="$$(cat /run/secrets/s3-secret-access-key)"
+        exec versitygw --port :7070 posix /data
+    volumes:
+      - objects:/data
+    networks: [backend]
+
+  # Applies the schema migrations with the schema owner's URL, then exits. Run it before
+  # starting replicas of a new version; replicas never migrate.
+  migrate:
+    image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
+    command: ["db", "migrate"]
+    read_only: true
+    user: "1000:1000"
+    environment:
+      FOXWARM_MIGRATE_DATABASE_URL_FILE: /run/secrets/migrate-database-url
+    secrets: [migrate-database-url]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  foxwarm-1:
+    <<: *replica
+    environment:
+      <<: *replica-environment
+      FOXWARM_REPLICA_ID: foxwarm-1
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-1:3001
+
+  foxwarm-2:
+    <<: *replica
+    environment:
+      <<: *replica-environment
+      FOXWARM_REPLICA_ID: foxwarm-2
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-2:3001
+
+  proxy:
+    image: haproxy:3.2.10-alpine
+    restart: unless-stopped
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "${FOXWARM_PUBLISH:-127.0.0.1:3001}:3001"
+    networks: [frontend]
+
+networks:
+  # Replicas reach model providers and remote Nodes through the frontend network.
+  frontend: {}
+  # The database and object store are reachable only from the stack.
+  backend:
+    internal: true
+
+volumes:
+  postgres: {}
+  objects: {}
+  # The shared Agent folders (FOXWARM_AGENTS_DIR); the only state outside the database in P1.
+  agents: {}
+
+secrets:
+  postgres-password:
+    file: ./secrets/postgres-password
+  owner-password:
+    file: ./secrets/owner-password
+  app-password:
+    file: ./secrets/app-password
+  database-url:
+    file: ./secrets/database-url
+  migrate-database-url:
+    file: ./secrets/migrate-database-url
+  kek:
+    file: ./secrets/kek.json
+  s3-access-key-id:
+    file: ./secrets/s3-access-key-id
+  s3-secret-access-key:
+    file: ./secrets/s3-secret-access-key

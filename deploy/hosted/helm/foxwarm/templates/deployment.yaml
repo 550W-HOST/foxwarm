@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "foxwarm.fullname" . }}
+  labels:
+    {{- include "foxwarm.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # A new replica becomes Ready as a standby before an old one stops; the stopping owner drains
+  # and releases the lease, and a standby takes over on the notification.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "foxwarm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "foxwarm.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/deployment-config: {{ include "foxwarm.deploymentConfig" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "foxwarm.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: foxwarm
+          image: {{ include "foxwarm.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: FOXWARM_TENANT
+              value: {{ .Values.tenant | quote }}
+            - name: FOXWARM_REPLICA_ID
+              value: $(POD_NAME)
+            # Where a standby's forwarder reaches this replica when it owns the tenant.
+            - name: FOXWARM_ADVERTISE_ADDRESS
+              value: $(POD_IP):{{ .Values.ports.http }}
+            - name: FOXWARM_DATABASE_URL_FILE
+              value: /run/secrets/foxwarm/database-url
+            - name: FOXWARM_KEK_FILE
+              value: /run/secrets/foxwarm/kek.json
+            {{- if .Values.secrets.kekPrevious }}
+            - name: FOXWARM_KEK_PREVIOUS_FILE
+              value: /run/secrets/foxwarm/kek-previous.json
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.http }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.ports.health }}
+              protocol: TCP
+          # /readyz: a standby, or an owner whose runtime has started. /livez: not fencing.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            {{- include "foxwarm.containerSecurityContext" . | nindent 12 }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: deployment-config
+              mountPath: /etc/foxwarm
+              readOnly: true
+            - name: secrets
+              mountPath: /run/secrets/foxwarm
+              readOnly: true
+            - name: scratch
+              mountPath: /scratch
+            - name: agents
+              mountPath: /agents
+      volumes:
+        - name: deployment-config
+          configMap:
+            name: {{ include "foxwarm.fullname" . }}-deployment
+        - name: secrets
+          secret:
+            secretName: {{ include "foxwarm.runtimeSecret" . }}
+            defaultMode: 0440
+        - name: scratch
+          emptyDir:
+            sizeLimit: {{ .Values.scratch.sizeLimit }}
+        - name: agents
+          {{- if .Values.agents.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.agents.persistence.existingClaim | default (printf "%s-agents" (include "foxwarm.fullname" .)) }}
+          {{- else }}
+          # Without persistence each replica has its own Agent folders: for trials only.
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
