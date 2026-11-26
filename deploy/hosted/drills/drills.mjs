@@ -120,8 +120,22 @@ export function serviceMonitor(api) {
   }
 }
 
+/**
+ * Waits until the public entry answers several requests in a row: a proxy in front of the
+ * replicas takes them into rotation only after their first passing health check.
+ */
+export async function waitEntry(env, timeout = 60000) {
+  let streak = 0
+  await until(async () => {
+    const result = await probe(env.publicUrl + '/', '')
+    streak = result.status ? streak + 1 : 0
+    return streak >= 4
+  }, 'the public entry answers', timeout, 250)
+}
+
 /** Logs in through the public entry with the token `foxwarm hosted token` prints. */
 export async function login(env) {
+  await waitEntry(env)
   const result = await env.token()
   assert(result.code === 0, `hosted token exits 0, not ${result.code}: ${result.stderr}`)
   const token = result.stdout.trim()
@@ -297,6 +311,9 @@ export async function rolling(env, context, { next = 'N+1' } = {}) {
     const surge = free.shift()
     await env.start(surge, { version: next })
     await until(async () => (await env.status(surge))?.ready, `the surge replica ${surge} is ready`, 120000)
+    // As an orchestrator waits for the new endpoint before stopping an old one: the proxy's
+    // health check takes the Ready replica into rotation (Kubernetes adds Ready pods itself).
+    if (env.entrySettleMs) await sleep(env.entrySettleMs)
     assert(env.slots.filter(item => env.running(item)).length <= 3, 'at most one replica above the desired two')
     const wasOwner = (await env.status(slot))?.role === 'owner'
     const held = await lease(env)

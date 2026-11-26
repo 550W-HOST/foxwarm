@@ -42,6 +42,8 @@ services:
       FOXWARM_MODE: file
       FOXWARM_DATA_DIR: /source
       TMPDIR: /source/.temp
+      # The image's user has no home directory.
+      HOME: /source/home
     user: "1000:1000"
     volumes:
       - source:/source

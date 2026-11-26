@@ -68,6 +68,8 @@ export async function composeEnvironment() {
     publicUrl: `http://127.0.0.1:${publicPort}`,
     mockUrl: `http://127.0.0.1:${mockPort}`,
     modelBaseUrl: 'http://mock-llm:8080',
+    // HAProxy's check interval (1 s) plus re-resolution (1 s) and a margin.
+    entrySettleMs: 3000,
     compose,
 
     async setup() {
