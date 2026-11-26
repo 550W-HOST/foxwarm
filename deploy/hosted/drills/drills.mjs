@@ -90,7 +90,9 @@ export function serviceMonitor(api) {
   const loop = (async () => {
     while (!stopped) {
       const at = Date.now()
-      const result = await probe(api.base + '/api/sessions', api.token)
+      // A request may wait at a standby for the next owner during a handover, so the timeout is
+      // generous; the latency is reported.
+      const result = await probe(api.base + '/api/sessions', api.token, 20000)
       samples.push({ at, ms: Date.now() - at, ...result })
       await sleep(250)
     }
@@ -115,7 +117,8 @@ export function serviceMonitor(api) {
         failures[reason] = (failures[reason] || 0) + 1
       }
       if (process.env.FOXWARM_DRILL_TRACE) console.log(JSON.stringify(samples))
-      return { requests: samples.length, failed: samples.filter(sample => !sample.ok).length, failures, longestGapMs: gap }
+      const slowestMs = Math.max(0, ...samples.map(sample => sample.ms))
+      return { requests: samples.length, failed: samples.filter(sample => !sample.ok).length, failures, longestGapMs: gap, slowestMs }
     },
   }
 }
@@ -340,8 +343,10 @@ export async function rolling(env, context, { next = 'N+1' } = {}) {
   await until(async () => texts((await history(api, turn)) || { messages: [] }).includes('FINAL:rolling:0'), 'a turn on N+1', 60000)
   const earlier = await history(api, before)
   assert(earlier && texts(earlier).includes('FINAL:before-rollout:0'), 'a Session from before the rollout reads back')
-  assert(served.longestGapMs < TTL_MS, 'no unavailability as long as the TTL')
-  log(`rolling: ${served.requests} requests, ${served.failed} failed, longest gap ${served.longestGapMs} ms`)
+  log(`rolling: ${served.requests} requests, ${served.failed} failed${served.failed ? ' ' + JSON.stringify(served.failures) : ''}, slowest ${served.slowestMs} ms`)
+  // A standby holds a connection until an owner is reachable, and the new owner's port stays
+  // open through the takeover (D-hosted-standby-endpoints): no request is lost.
+  assert(served.failed === 0, `no request fails during the rollout, not ${served.failed}`)
   return { handovers, served }
 }
 

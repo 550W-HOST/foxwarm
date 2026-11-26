@@ -88,7 +88,8 @@ internal static class HostedEntry
         await storage
             .OpenBlobsAsync(deployment.Blobs, bootstrap.Tenant, CancellationToken.None)
             .ConfigureAwait(false);
-        return await BuildRuntimeAsync(storage, storage, bootstrap, deployment).ConfigureAwait(false);
+        return await BuildRuntimeAsync(storage, storage, bootstrap, deployment, context.PublicListener)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -101,7 +102,8 @@ internal static class HostedEntry
         PostgresStorageContext tenant,
         IStorageContext storage,
         HostedBootstrap bootstrap,
-        DeploymentConfiguration deployment
+        DeploymentConfiguration deployment,
+        System.Net.Sockets.Socket? publicListener = null
     )
     {
         ModelConfiguration configuration;
@@ -140,9 +142,18 @@ internal static class HostedEntry
         {
             throw new HostedStartupException(error.Message);
         }
-        var http = await HttpServerSettings
-            .CaptureAsync(configuration, paths.DataRoot, storage.Credentials)
-            .ConfigureAwait(false);
+        var http = (
+            await HttpServerSettings
+                .CaptureAsync(configuration, paths.DataRoot, storage.Credentials)
+                .ConfigureAwait(false)
+        ) with
+        {
+            // The standby's public port, kept open through the takeover.
+            ListenSocket = publicListener,
+        };
+        // Without HTTP no host adopts it, so connections queued on it are refused now.
+        if (!http.HttpEnabled)
+            publicListener?.Dispose();
         var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
         var host = await MainHost
             .CreateAsync(

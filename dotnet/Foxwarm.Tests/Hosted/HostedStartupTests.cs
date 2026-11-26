@@ -99,6 +99,7 @@ public sealed partial class HostedStartupTests
             Port = port,
             Desktop = false,
             Address = new PublicWebAddress($"http://127.0.0.1:{port}", Microsoft.AspNetCore.Http.PathString.Empty, "/", false),
+            ListenSocket = context.PublicListener,
         };
         return new MainHostRuntime(await MainHost.CreateAsync([], configuration, http, storage: storage));
     }
@@ -113,6 +114,43 @@ public sealed partial class HostedStartupTests
         var token = HttpServerSettings.ReadExistingTokenAsync(dataRoot).GetAwaiter().GetResult();
         client.DefaultRequestHeaders.Authorization = new("Bearer", token);
         return client;
+    }
+
+    // GET api/agents on a new connection every 50 ms until cancelled: the successes, and every
+    // failure with its reason.
+    private static async Task<(int Served, List<string> Failures)> ProbeAsync(int port, string dataRoot, CancellationToken stop)
+    {
+        var token = await HttpServerSettings.ReadExistingTokenAsync(dataRoot);
+        var served = 0;
+        var failures = new List<string>();
+        while (!stop.IsCancellationRequested)
+        {
+            using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false, PooledConnectionLifetime = TimeSpan.Zero })
+            {
+                Timeout = TimeSpan.FromSeconds(20),
+            };
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/api/agents");
+            request.Headers.Authorization = new("Bearer", token);
+            request.Headers.ConnectionClose = true;
+            try
+            {
+                using var response = await client.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                    served++;
+                else
+                    failures.Add("HTTP " + (int)response.StatusCode);
+            }
+            catch (Exception error)
+            {
+                failures.Add(error.GetType().Name + ": " + error.Message);
+            }
+            try
+            {
+                await Task.Delay(50, stop);
+            }
+            catch (OperationCanceledException) { }
+        }
+        return (served, failures);
     }
 
     private static async Task<HttpStatusCode> HealthAsync(HostedReplica replica, string path)
@@ -163,6 +201,11 @@ public sealed partial class HostedStartupTests
         using (var forwarded = Client(b.PublicPort, data))
             Assert.True(await AgentListedAsync(forwarded, "research"));
 
+        // New connections to the standby's port throughout the handover: each is held while no
+        // owner is reachable and served by whichever owner it reaches, so none fails.
+        using var probing = new CancellationTokenSource();
+        var probes = ProbeAsync(b.PublicPort, data, probing.Token);
+        await Task.Delay(300);
         var released = Stopwatch.StartNew();
         a.Stop.Cancel();
         Assert.Equal(HostedExit.Stopped, await a.Run.WaitAsync(TimeSpan.FromSeconds(60)));
@@ -171,6 +214,11 @@ public sealed partial class HostedStartupTests
         Assert.InRange(released.Elapsed, TimeSpan.Zero, Timings.Ttl);
         await WaitUntilAsync(() => b.Inner.Health.RuntimeStarted, TimeSpan.FromSeconds(60), "replica B serves");
         Assert.True(b.Inner.Health.Epoch > 1);
+        await Task.Delay(300);
+        probing.Cancel();
+        var (served, failures) = await probes;
+        Assert.True(failures.Count == 0, string.Join("; ", failures));
+        Assert.True(served > 5, $"only {served} probes ran");
         using (var owner = Client(b.PublicPort, data))
             Assert.True(await AgentListedAsync(owner, "research"));
 

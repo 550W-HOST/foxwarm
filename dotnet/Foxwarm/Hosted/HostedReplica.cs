@@ -34,7 +34,16 @@ internal interface IHostedRuntime : IAsyncDisposable
 }
 
 /// <summary>What a starting owner gives its runtime.</summary>
-internal sealed record HostedRuntimeContext(LeaseGrant Grant, TenantDb Database, LeaseMonitor Monitor);
+/// <param name="PublicListener">
+/// The standby's public listen socket, still open, for the runtime's host to adopt instead of
+/// binding the port anew; null without a forwarder. The replica disposes it after the runtime.
+/// </param>
+internal sealed record HostedRuntimeContext(
+    LeaseGrant Grant,
+    TenantDb Database,
+    LeaseMonitor Monitor,
+    System.Net.Sockets.Socket? PublicListener = null
+);
 
 /// <summary>A fenced run's timings since the start of the last successful renewal.</summary>
 internal sealed record FenceTiming(
@@ -209,17 +218,33 @@ internal sealed class HostedReplica
     {
         LeaseGrant grant;
         health = health with { Role = ReplicaRole.Standby };
+        // A connection waits up to one lease TTL for a reachable owner: a graceful handover
+        // takes a few seconds of it.
+        await using var forwarder = options.PublicEndpoint is { } publicAddress
+            ? new StandbyForwarder(
+                publicAddress,
+                token => registry.OwnerAddressAsync(options.Tenant, token),
+                options.Timings.Ttl,
+                log
+            )
+            : null;
+        ForwarderPort = forwarder?.Port;
+        waiting.TrySetResult();
+        try
         {
-            await using var forwarder = options.PublicEndpoint is { } publicAddress
-                ? new StandbyForwarder(publicAddress, token => registry.OwnerAddressAsync(options.Tenant, token), log)
-                : null;
-            ForwarderPort = forwarder?.Port;
-            waiting.TrySetResult();
             grant = await lease
                 .AcquireAsync(Replica, options.Timings, error => log("[lease] " + error.Message), stop)
                 .ConfigureAwait(false);
-            // The forwarder is disposed here, freeing the public port for the owner's host.
         }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested && forwarder is not null)
+        {
+            // A standby's graceful stop: new connections go elsewhere, forwarded ones finish.
+            await forwarder.DrainAsync(options.DrainBound).ConfigureAwait(false);
+            throw;
+        }
+        // The public port stays open: its socket passes to the owner's host, so connections
+        // queue until the host accepts them, and the ones the forwarder holds reach this owner.
+        using var publicListener = forwarder is null ? null : await forwarder.HandOverAsync().ConfigureAwait(false);
         ForwarderPort = null;
         log($"[hosted] Replica {Replica} owns tenant {options.Tenant} at epoch {grant.Epoch}.");
         await using var current = new LeaseMonitor(lease, grant, options.Timings, log);
@@ -233,7 +258,7 @@ internal sealed class HostedReplica
         try
         {
             using var starting = CancellationTokenSource.CreateLinkedTokenSource(stop, current.Lost);
-            runtime = await createRuntime(new(grant, tenant, current), starting.Token).ConfigureAwait(false);
+            runtime = await createRuntime(new(grant, tenant, current, publicListener), starting.Token).ConfigureAwait(false);
             await runtime.StartAsync().ConfigureAwait(false);
         }
         catch (Exception error) when (current.Fenced.IsCompleted)

@@ -18,6 +18,12 @@ internal sealed record HttpServerSettings(
     bool HttpEnabled = true
 )
 {
+    /// <summary>
+    /// A bound, listening socket the host adopts for its listener on the same port instead of
+    /// binding one: a hosted standby's public port at takeover, so connections queue through it.
+    /// </summary>
+    internal System.Net.Sockets.Socket? ListenSocket { get; init; }
+
     internal static bool Enabled(ModelConfiguration? configuration) =>
         Feature(configuration, "enableWebUI");
 
