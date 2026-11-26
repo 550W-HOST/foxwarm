@@ -208,6 +208,7 @@ test('under a Desktop frame the expanded artifact is a full-window layer whose h
    assert.deepEqual([state.dialog.left,state.dialog.top,state.dialog.right,state.dialog.bottom],[0,0,width,900],`${label}: the expanded view fills the window`)
    assert.deepEqual([state.header.top,state.header.bottom],[0,Math.max(host.top,36)],`${label}: its header is the title row`)
    for(const control of[state.title,...state.buttons])for(const z of zone(host,width))assert.ok(!hit(control,z),`${label}: ${control.name||'title'} is under the window controls`)
+   assert.ok(state.title.left>=(host.left?host.left+6:14),`${label}: the title starts a gap after the controls`)
    assert.ok(state.regions.length>0)
    for(const region of state.regions){
     const [x,y,w,h]=region

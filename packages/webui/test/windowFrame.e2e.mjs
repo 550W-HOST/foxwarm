@@ -1079,6 +1079,7 @@ test('image viewer under a host frame: its header is the title row and the repor
       await page.waitForSelector('[aria-label="Preview revenue-by-plan.png"]')
       await settle(page)
       const before = await inspect(page)
+      const glyph = await page.evaluate(() => document.querySelector('[data-instance-brand] :is(svg, .foxwarm-sidebar-brand-icon)')?.getBoundingClientRect().left ?? null)
       await openImageViewer(page)
       const info = await inspect(page)
       // No reported rectangle covers a viewer control, and no control sits under the window controls.
@@ -1087,7 +1088,8 @@ test('image viewer under a host frame: its header is the title row and the repor
       assert.equal(layout.position, '2 / 2', `${label}: the Session's tool image comes first`)
       assert.equal(layout.header.top, 0)
       assert.equal(layout.header.bottom, Math.max(host.top, 36), `${label}: the header is as tall as the title row`)
-      assert.ok(layout.text.left >= host.left && layout.text.right <= width - host.right, `${label}: the title clears the controls`)
+      assert.ok(layout.text.left >= (host.left ? host.left + 6 : 14) && layout.text.right <= width - host.right, `${label}: the title starts a gap after the controls, or 14 px in`)
+      if (host.left && glyph !== null) assert.equal(layout.text.left, glyph, `${label}: the title starts where the brand row's emoji or logo does`)
       for (const control of layout.controls.filter(control => control.bottom <= layout.header.bottom)) {
         assert.ok(control.left >= host.left && control.right <= width - host.right, `${label}: "${control.name}" clears the controls`)
       }

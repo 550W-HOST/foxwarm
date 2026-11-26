@@ -2747,7 +2747,7 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 html[data-foxwarm-frame] .image-preview-dialog { background: var(--foxwarm-color-canvas-edge); }
 html[data-foxwarm-frame] .image-preview-header {
   gap: 2px; min-height: 0; height: var(--foxwarm-frame-title-height);
-  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 max(14px, var(--foxwarm-frame-left, 0px));
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 var(--foxwarm-frame-layer-start);
   border-bottom: 0; background: transparent;
 }
 html[data-foxwarm-frame] .image-preview-header h2 { font-size: 12.5px; color: var(--foxwarm-color-text-strong); }
@@ -2832,6 +2832,9 @@ html[data-foxwarm-frame] {
   --foxwarm-frame-strip-height: 40px;
   --foxwarm-frame-status-height: 30px;
   --foxwarm-frame-gutter: 8px;
+  /* Where a full-window layer's title starts: 14 px from the window edge or, after controls at the
+   * top left, where the brand row's emoji or logo starts (its menu button's 6 px padding). */
+  --foxwarm-frame-layer-start: max(14px, calc(var(--foxwarm-frame-left, 0px) + 6px));
 }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell {
   padding: 0 var(--foxwarm-frame-gutter) 0 0;

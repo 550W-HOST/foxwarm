@@ -279,7 +279,7 @@ html[data-foxwarm-frame] .artifact-view.artifact-expanded {
 }
 html[data-foxwarm-frame] .artifact-view.artifact-expanded > header {
   flex: none; height: var(--foxwarm-frame-title-height); margin: 0;
-  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 max(14px, var(--foxwarm-frame-left, 0px));
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 var(--foxwarm-frame-layer-start);
 }
 html[data-foxwarm-frame] .artifact-view.artifact-expanded > header h3 { font-size: 12.5px; font-weight: 500; color: var(--foxwarm-color-text-strong); }
 html[data-foxwarm-frame] .artifact-view.artifact-expanded > .artifact-body {

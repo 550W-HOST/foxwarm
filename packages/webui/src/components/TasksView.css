@@ -86,7 +86,7 @@
 html[data-foxwarm-frame] .tasks-detail-panel[data-task-narrow="true"] { padding-top: 0; }
 html[data-foxwarm-frame] .tasks-detail-panel[data-task-narrow="true"] > .tasks-detail-head {
   position: sticky; top: 0; z-index: 1; height: var(--foxwarm-frame-title-height); margin: 0 -20px 16px;
-  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 max(20px, var(--foxwarm-frame-left, 0px));
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 max(20px, var(--foxwarm-frame-layer-start));
   background: var(--foxwarm-color-surface);
 }
 @container tasks (max-width: 950px) {

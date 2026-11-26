@@ -427,6 +427,7 @@ test('under a Desktop frame window-wide details are a full-window layer whose he
       })
       assert.equal(state.layer, true)
       assert.deepEqual([state.head.top, state.head.bottom], [0, Math.max(host.top, 36)], `${label}: the heading row is the title row`)
+      assert.ok(state.heading.left >= (host.left ? host.left + 6 : 20), `${label}: the heading starts a gap after the controls`)
       for (const control of [state.heading, state.close]) assert.ok(control.left >= host.left && control.right <= width - host.right, `${label}: ${JSON.stringify(control)} clears the window controls`)
       assert.ok(state.regions.length > 0)
       for (const [x, y, w, h] of state.regions) {
