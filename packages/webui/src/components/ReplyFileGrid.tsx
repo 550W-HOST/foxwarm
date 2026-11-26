@@ -3,8 +3,28 @@ import { Download, File, Image as ImageIcon } from 'lucide-react'
 import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import type { ReplyFile } from './replyFiles'
 import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
+import type { ImageGalleryEntry } from './imageGallery'
 
 const sizeLabel = (size?: number) => size === undefined ? '' : size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`
+
+/** Key of a delivered image in the Session's image gallery. */
+export const replyFileGalleryKey = (file: ReplyFile) => `reply:${file.deliveryId}`
+
+/** A delivered image as a gallery entry: its preview URL and its own signed path download. */
+export function replyFileGalleryEntry(file: ReplyFile): ImageGalleryEntry | null {
+  if (!isSafeImagePreviewMime(file.mimeType)) return null
+  const url = buildPathDownloadUrl(file.downloadPath, { fileName: file.fileName })
+  return {
+    key: replyFileGalleryKey(file),
+    src: buildPathDownloadUrl(file.downloadPath, { fileName: file.fileName, preview: true }),
+    mimeType: file.mimeType,
+    title: file.fileName,
+    download: async signal => {
+      const signedUrl = await requestPathDownloadUrl(url, signal)
+      if (!signal.aborted) triggerBrowserDownload(signedUrl, file.fileName)
+    },
+  }
+}
 
 function ReplyFileTile({ file }: { file: ReplyFile }) {
   const [preview, setPreview] = useState(false)
@@ -41,7 +61,7 @@ function ReplyFileTile({ file }: { file: ReplyFile }) {
     </button>
     {image ? <button type="button" disabled={pending} className="reply-file-download reply-file-icon-button" aria-label={`Download ${file.fileName}`} onClick={() => { void download() }}><Download size={15} /></button> : <Download size={14} className="pointer-events-none absolute right-2 top-2 text-fw-text-muted" aria-hidden="true" />}
     {error && <div role="alert" className="px-2 pb-2 text-[11px] text-fw-warning">{error}</div>}
-    {preview && <ImagePreviewDialog title={file.fileName} mimeType={file.mimeType} src={previewUrl} downloadError={error} downloadPending={pending} onDownload={() => { void download() }} onClose={() => setPreview(false)} />}
+    {preview && <ImagePreviewDialog title={file.fileName} mimeType={file.mimeType} src={previewUrl} galleryItem={replyFileGalleryKey(file)} downloadError={error} downloadPending={pending} onDownload={() => { void download() }} onClose={() => setPreview(false)} />}
   </div>
 }
 

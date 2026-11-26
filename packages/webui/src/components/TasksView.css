@@ -81,6 +81,14 @@
 .tasks-detail-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--foxwarm-color-border-muted); }
 .tasks-note { padding: 12px 0; border-bottom: 1px solid var(--foxwarm-color-border-muted); }
 .tasks-detail-panel[data-task-narrow="true"] { position: fixed; inset: 0; width: auto; z-index: 40; padding: 20px; }
+/* Under a window frame the window-wide panel is a full-window layer ([D-window-frame]): its heading
+ * row stays on top as the window's title row, clear of the window controls and a drag surface. */
+html[data-foxwarm-frame] .tasks-detail-panel[data-task-narrow="true"] { padding-top: 0; }
+html[data-foxwarm-frame] .tasks-detail-panel[data-task-narrow="true"] > .tasks-detail-head {
+  position: sticky; top: 0; z-index: 1; height: var(--foxwarm-frame-title-height); margin: 0 -20px 16px;
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 max(20px, var(--foxwarm-frame-layer-start));
+  background: var(--foxwarm-color-surface);
+}
 @container tasks (max-width: 950px) {
   .tasks-header { padding-top: 16px; }
   .tasks-content { padding-block: 20px; }

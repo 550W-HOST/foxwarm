@@ -267,3 +267,23 @@
   background:transparent;
   cursor:zoom-in;
 }
+
+/* The body wrapper adds no box, except in the framed expanded view below. */
+.artifact-body { display: contents; }
+/* Under a window frame the expanded view is a full-window layer ([D-window-frame]): the header is
+ * the window's title row on the chrome, clear of the window controls and a drag surface around its
+ * buttons, and the body is one card below it with even gutters, as in popup leaves. */
+html[data-foxwarm-frame] .artifact-view.artifact-expanded {
+  inset: 0; width: 100%; height: 100dvh; margin: 0; padding: 0; border: 0; border-radius: 0;
+  display: flex; flex-direction: column; overflow: hidden; background: var(--foxwarm-color-canvas-edge);
+}
+html[data-foxwarm-frame] .artifact-view.artifact-expanded > header {
+  flex: none; height: var(--foxwarm-frame-title-height); margin: 0;
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 var(--foxwarm-frame-layer-start);
+}
+html[data-foxwarm-frame] .artifact-view.artifact-expanded > header h3 { font-size: 12.5px; font-weight: 500; color: var(--foxwarm-color-text-strong); }
+html[data-foxwarm-frame] .artifact-view.artifact-expanded > .artifact-body {
+  display: block; flex: 1; min-height: 0; overflow: auto; margin: 0 var(--foxwarm-frame-gutter) var(--foxwarm-frame-gutter); padding: 16px;
+  border: 1px solid var(--foxwarm-color-border); border-radius: 10px; background: var(--foxwarm-color-surface);
+}
+@media (forced-colors: active) { html[data-foxwarm-frame] .artifact-view.artifact-expanded > .artifact-body { border-color: CanvasText; } }

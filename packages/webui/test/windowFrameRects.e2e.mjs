@@ -159,3 +159,44 @@ test('the overlay surface colour is the page under the controls, composited and 
     assert.equal(await color({ left: 0, right: 0, top: 30, width: 800 }), null)
   })
 })
+
+test('an open full-window layer replaces the page\'s drag surfaces with its own; the topmost layer wins', async () => {
+  await withFixture(`
+    <div class="shell">
+      <div class="panel" data-frame-row="column" data-frame-in-band style="flex:1;height:40px"><div id="page" data-frame-drag style="height:36px"><button id="pageButton"></button></div></div>
+    </div>
+    <dialog id="viewer" data-frame-layer style="position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0">
+      <header data-frame-row="column" data-frame-in-band data-frame-drag style="display:flex;height:40px"><h2 style="flex:1;margin:0">Title</h2><button id="close"></button></header>
+    </dialog>
+    <div id="artifact" role="dialog" aria-modal="true" data-frame-layer style="display:none;position:fixed;inset:0;background:#fff">
+      <header data-frame-row="column" data-frame-in-band data-frame-drag style="display:flex;height:30px"><h3 style="flex:1;margin:0">Artifact</h3><button id="collapse"></button></header>
+    </div>`, async page => {
+    const regions = () => page.evaluate(() => window.windowFrame.collectFrameDragRects(document))
+    const box = id => page.$eval('#' + id, element => element.getBoundingClientRect().toJSON())
+    const pageRegions = await regions()
+    assert.ok(pageRegions.length > 0)
+    assert.equal(await page.evaluate(() => window.windowFrame.activeFrameLayer(document)), null, 'a closed dialog is not a layer')
+    await page.$eval('#viewer', dialog => dialog.showModal())
+    const viewer = await regions()
+    const close = await box('close')
+    assert.ok(viewer.length > 0)
+    for (const region of viewer) {
+      assert.ok(region[1] + region[3] <= 40, `${region} belongs to the layer's title row`)
+      assert.ok(!intersects(region, close), `${region} covers the layer's control`)
+    }
+    assert.notDeepEqual(viewer, pageRegions)
+    // A layer that is itself a floating layer (role=dialog, aria-modal) keeps its own title row;
+    // the later one in the document is on top.
+    await page.$eval('#artifact', element => { element.style.display = 'block' })
+    const artifact = await regions()
+    const collapse = await box('collapse')
+    assert.ok(artifact.length > 0)
+    for (const region of artifact) {
+      assert.ok(region[1] + region[3] <= 30, `${region} belongs to the topmost layer`)
+      assert.ok(!intersects(region, collapse))
+    }
+    await page.$eval('#artifact', element => { element.style.display = 'none' })
+    await page.$eval('#viewer', dialog => dialog.close())
+    assert.deepEqual(await regions(), pageRegions, 'closing the layer restores the page')
+  })
+})

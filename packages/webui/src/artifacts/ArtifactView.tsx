@@ -59,10 +59,13 @@ export default function ArtifactView({ receipt, reference, sessionId }: Props) {
     try { await (artifactDownloads[artifact.receipt.type as keyof typeof artifactDownloads] || artifactDownloads.chart)(artifact) }
     catch { setDownloadError('Download unavailable') } finally { setDownloading(false) }
   }
-  return <div className="artifact-slot"><dialog ref={root} onCancel={e => { e.preventDefault(); setExpanded(false) }} className={`artifact-view${bare ? ' artifact-bare' : ''}${expanded ? ' artifact-expanded' : ''}`} data-artifact-id={artifactId} data-artifact-revision={revision} role={expanded ? 'dialog' : 'region'} aria-modal={expanded || undefined} aria-label={title}>
-    {!bare && <header><Icon size={17} /><h3>{title}</h3><button disabled={!artifact || downloading} onClick={() => { void download() }} aria-label="Download artifact"><Download size={16} /></button><button ref={opener} onClick={() => setExpanded(v => !v)} aria-label={expanded ? 'Collapse artifact' : 'Expand artifact'}>{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{expanded && <button aria-label="Close artifact" onClick={() => setExpanded(false)}><X size={16} /></button>}</header>}
-    {!bare && artifact?.document.description && <p className="artifact-description">{artifact.document.description}</p>}
-    {downloadError && <p role="alert">{downloadError}</p>}
-    {error ? <p role="alert">{error}</p> : !artifact ? <div className="artifact-loading">Loading preview…</div> : <RenderBoundary><Suspense fallback={<div className="artifact-loading">Loading preview…</div>}>{Renderer ? <Renderer artifact={artifact} /> : <p>Preview not supported. Download the source to open it elsewhere.</p>}</Suspense></RenderBoundary>}
+  return <div className="artifact-slot"><dialog ref={root} onCancel={e => { e.preventDefault(); setExpanded(false) }} className={`artifact-view${bare ? ' artifact-bare' : ''}${expanded ? ' artifact-expanded' : ''}`} data-artifact-id={artifactId} data-artifact-revision={revision} role={expanded ? 'dialog' : 'region'} aria-modal={expanded || undefined} aria-label={title} data-frame-layer={expanded || undefined}>
+    {!bare && <header data-frame-row={expanded ? 'column' : undefined} data-frame-drag={expanded ? '' : undefined}><Icon size={17} /><h3>{title}</h3><button disabled={!artifact || downloading} onClick={() => { void download() }} aria-label="Download artifact"><Download size={16} /></button><button ref={opener} onClick={() => setExpanded(v => !v)} aria-label={expanded ? 'Collapse artifact' : 'Expand artifact'}>{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{expanded && <button aria-label="Close artifact" onClick={() => setExpanded(false)}><X size={16} /></button>}</header>}
+    {/* The body is a card below the title row when expanded under a window frame; otherwise it adds no box. */}
+    <div className="artifact-body">
+      {!bare && artifact?.document.description && <p className="artifact-description">{artifact.document.description}</p>}
+      {downloadError && <p role="alert">{downloadError}</p>}
+      {error ? <p role="alert">{error}</p> : !artifact ? <div className="artifact-loading">Loading preview…</div> : <RenderBoundary><Suspense fallback={<div className="artifact-loading">Loading preview…</div>}>{Renderer ? <Renderer artifact={artifact} /> : <p>Preview not supported. Download the source to open it elsewhere.</p>}</Suspense></RenderBoundary>}
+    </div>
   </dialog></div>
 }
