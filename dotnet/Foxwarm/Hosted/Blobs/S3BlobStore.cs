@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using Amazon.Runtime;
 using Amazon.S3;
@@ -68,7 +70,7 @@ internal sealed class S3BlobStore : IBlobStore
             }
             for (var attempt = 1; ; attempt++)
             {
-                switch (await PutAsync(name, content, conditional: true, token).ConfigureAwait(false))
+                switch (await PutConditionallyAsync(name, content, token).ConfigureAwait(false))
                 {
                     case PutOutcome.Created:
                         return true;
@@ -190,6 +192,35 @@ internal sealed class S3BlobStore : IBlobStore
         bool conditional,
         CancellationToken token
     ) => S3Blobs.PutAsync(client, bucket, name, content, conditional, token);
+
+    /// <summary>
+    /// A conditional <c>PUT</c> of a create. An endpoint may refuse it for an existing key before
+    /// it has read the whole body and close the connection, so the client, still sending, sees a reset
+    /// instead of the 412 (VersityGW does, also after <c>100 Continue</c>). A transport failure
+    /// therefore decides by the key: keys are created once and never removed, so an existing key
+    /// is the 412's outcome. A missing key leaves the failure as it is.
+    /// </summary>
+    private async Task<PutOutcome> PutConditionallyAsync(
+        string name,
+        ReadOnlyMemory<byte> content,
+        CancellationToken token
+    )
+    {
+        ExceptionDispatchInfo interrupted;
+        try
+        {
+            return await PutAsync(name, content, conditional: true, token).ConfigureAwait(false);
+        }
+        catch (Exception error)
+            when (error is IOException or HttpRequestException && !token.IsCancellationRequested)
+        {
+            interrupted = ExceptionDispatchInfo.Capture(error);
+        }
+        if (await ExistsAsync(name, token).ConfigureAwait(false))
+            return PutOutcome.Exists;
+        interrupted.Throw();
+        throw new UnreachableException();
+    }
 
     private async Task<bool> HoldsAsync(string name, ReadOnlyMemory<byte> content, CancellationToken token)
     {

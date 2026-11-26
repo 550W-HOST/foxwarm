@@ -12,7 +12,9 @@ namespace Foxwarm.Tests.Hosted;
 /// Requests pass unchanged, signatures included. A <c>PUT</c> with <c>If-None-Match</c> that the
 /// upstream refuses with 412 is answered 200 (<see cref="ConditionalMode.Ignore"/>: the header
 /// had no effect), or every such <c>PUT</c> is answered 501 without reaching the upstream
-/// (<see cref="ConditionalMode.Reject"/>). Counts the conditional <c>PUT</c>s it sees.
+/// (<see cref="ConditionalMode.Reject"/>), or every such <c>PUT</c> has its connection aborted
+/// without reaching the upstream (<see cref="ConditionalMode.Reset"/>: a transport failure).
+/// Counts the conditional <c>PUT</c>s it sees.
 /// </summary>
 internal sealed class S3ConditionalProxy : IAsyncDisposable
 {
@@ -20,6 +22,7 @@ internal sealed class S3ConditionalProxy : IAsyncDisposable
     {
         Ignore,
         Reject,
+        Reset,
     }
 
     private static readonly HashSet<string> HopHeaders = new(StringComparer.OrdinalIgnoreCase)
@@ -67,6 +70,11 @@ internal sealed class S3ConditionalProxy : IAsyncDisposable
         var conditional = request.Method == "PUT" && request.Headers.ContainsKey("If-None-Match");
         if (conditional)
             Interlocked.Increment(ref conditionalPuts);
+        if (conditional && mode == ConditionalMode.Reset)
+        {
+            context.Abort();
+            return;
+        }
         if (conditional && mode == ConditionalMode.Reject)
         {
             await DrainAsync(request);

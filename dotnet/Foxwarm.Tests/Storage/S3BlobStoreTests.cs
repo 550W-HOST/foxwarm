@@ -39,7 +39,7 @@ public sealed class S3BlobStoreTests
             Assert.Equal(["t/default/" + S3Blobs.ProbeKey], await bucket.KeysAsync());
         }
         var server = await S3Server.SharedAsync();
-        foreach (var mode in Enum.GetValues<S3ConditionalProxy.ConditionalMode>())
+        foreach (var mode in new[] { S3ConditionalProxy.ConditionalMode.Ignore, S3ConditionalProxy.ConditionalMode.Reject })
         {
             await using var proxy = await S3ConditionalProxy.StartAsync(server.Endpoint, mode);
             await using var bucket = await S3TestBucket.CreateAsync(proxy.Endpoint);
@@ -86,6 +86,47 @@ public sealed class S3BlobStoreTests
         // A retried create finds its own bytes and succeeds.
         Assert.True(await owner.CreateAsync("art_a/4.json", "retry"u8.ToArray(), false, CancellationToken.None));
         Assert.True(await owner.CreateAsync("art_a/4.json", "retry"u8.ToArray(), false, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The fixture refuses a conditional <c>PUT</c> of an existing key before it has read the
+    /// whole body and closes the connection, so the client sees a reset rather than the 412. Such a
+    /// create still observes the existing key like a 412: kept, its own earlier bytes, or the
+    /// existing-key failure for other bytes.
+    /// </summary>
+    [Fact]
+    public async Task A_create_refused_before_its_body_is_read_observes_the_existing_key()
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        var store = bucket.Store("images", true);
+        var content = BlobStoreContractTests.Bytes(4 << 20, 1);
+        var other = BlobStoreContractTests.Bytes(4 << 20, 2);
+        Assert.True(await store.CreateAsync("large.png", content, false, CancellationToken.None));
+        for (var round = 0; round < 3; round++)
+        {
+            Assert.False(await store.CreateAsync("large.png", other, true, CancellationToken.None));
+            Assert.True(await store.CreateAsync("large.png", content, false, CancellationToken.None));
+            var error = await Assert.ThrowsAnyAsync<IOException>(() =>
+                store.CreateAsync("large.png", other, false, CancellationToken.None)
+            );
+            Assert.Equal("The blob large.png already exists.", error.Message);
+        }
+        Assert.Equal(content, await store.ReadAllAsync("large.png", CancellationToken.None));
+    }
+
+    /// <summary>A transport failure of a create whose key doesn't exist stays a failure.</summary>
+    [Fact]
+    public async Task A_create_cut_off_without_an_existing_key_fails()
+    {
+        var server = await S3Server.SharedAsync();
+        await using var proxy = await S3ConditionalProxy.StartAsync(server.Endpoint, S3ConditionalProxy.ConditionalMode.Reset);
+        await using var bucket = await S3TestBucket.CreateAsync(proxy.Endpoint);
+        var store = bucket.Store("images", conditional: true);
+        await Assert.ThrowsAnyAsync<IOException>(() =>
+            store.CreateAsync("k.png", BlobStoreContractTests.Bytes(1000, 1), true, CancellationToken.None)
+        );
+        Assert.False(store.Exists("k.png"));
+        Assert.True(proxy.ConditionalPuts > 0);
     }
 
     [Fact]
