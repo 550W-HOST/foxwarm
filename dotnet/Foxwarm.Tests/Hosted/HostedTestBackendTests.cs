@@ -1,3 +1,4 @@
+using Foxwarm.Sessions;
 using Foxwarm.Hosted;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Storage;
@@ -24,6 +25,10 @@ public sealed class HostedTestBackendTests
         Assert.IsType<FileStateDocuments>(new FileStorageContext(temp.Path).Documents);
         // Stores without a PostgreSQL implementation yet are the file ones.
         Assert.IsNotType<PgStateDocuments>(reopened.Archive);
+        // Authority, Archive and Identities always come from the same side.
+        var fileAuthority = reopened.Authority is FileSessionAuthorityBackend;
+        Assert.Equal(fileAuthority, reopened.Archive is SqliteArchiveStore);
+        Assert.Equal(fileAuthority, reopened.Identities is FileIdentityLedger);
 
         using var other = new TempDirectory();
         Assert.Null(HostedTestBackend.Create(other.Path).Documents.Open(StateDocumentName.Agents).ReadText());
@@ -40,8 +45,15 @@ public sealed class HostedTestBackendTests
             Path.GetTempPath()
         );
         Assert.DoesNotContain(nameof(IStorageContext.Documents), context.Missing);
-        Assert.Contains(nameof(IStorageContext.Authority), context.Missing);
-        var error = Assert.Throws<NotSupportedException>(() => context.Archive);
-        Assert.Contains("Archive", error.Message);
+        // Each store still without a PostgreSQL implementation is named and refuses access.
+        foreach (var name in context.Missing)
+        {
+            var property = typeof(IStorageContext).GetProperty(name)!;
+            var error = Assert.Throws<System.Reflection.TargetInvocationException>(() =>
+                property.GetValue(context)
+            );
+            Assert.IsType<NotSupportedException>(error.InnerException);
+            Assert.Contains(name, error.InnerException!.Message);
+        }
     }
 }
