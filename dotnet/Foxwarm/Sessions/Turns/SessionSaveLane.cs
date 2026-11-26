@@ -258,10 +258,7 @@ public sealed partial class SessionSaveLane
             PublishGoalOnly(staged);
         });
 
-    internal Task QueueChildReminderAsync(
-        string parentSessionId,
-        bool handoffConfirmation = false
-    ) =>
+    internal Task QueueChildReminderAsync(string parentSessionId) =>
         AdmitAsync(
             new QueueItem(
                 QueueItemType.Background,
@@ -270,7 +267,6 @@ public sealed partial class SessionSaveLane
                     {
                         ["system"] = SessionBoundary.ChildReminder(
                             parentSessionId,
-                            handoffConfirmation,
                             externalRuntime: entry.WithState(state =>
                                 ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
                             )

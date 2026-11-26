@@ -31,6 +31,8 @@ internal sealed class SqliteArchiveStore(string dataRoot) : IArchiveStore
             {
                 DataSource = archive,
                 Mode = SqliteOpenMode.ReadOnly,
+                // A pool's prune timer would capture this caller's async context.
+                Pooling = false,
             }.ToString()
         );
         await connection.OpenAsync();

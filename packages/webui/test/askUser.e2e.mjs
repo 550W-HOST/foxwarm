@@ -51,7 +51,7 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     } catch (error) { errors.push(error.stack); response.writeHead(500); response.end(String(error)) }
   })
   model.listen(0, '127.0.0.1'); await once(model, 'listening')
-  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: ask-user-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: ask-user-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
   await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, asyncCompact: false, models: ['wire'] } } }))
   const route = id => '/api/sessions/' + encodeURIComponent(id)

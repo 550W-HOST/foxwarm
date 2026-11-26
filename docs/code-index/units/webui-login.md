@@ -28,7 +28,7 @@ An existing same-name/domain/path HttpOnly cookie blocks script replacement. The
 
 ## D-login-presentation
 
-[2026-10-16] Token sign-in uses the existing animated fox and a restrained entry animation, a desktop illustration/form split and a stacked mobile layout. The illustration has no orbit, halo or visible brand wordmark. Copy is limited to the field, action and current state/error. Existing browser theme selection, including independent light/dark families and validated imports, governs colors. Reduced motion renders static artwork and skips decorative transitions; no animation blocks form interaction. Touch controls remain at least 44px and inputs remain 16px; short screens scroll instead of clipping the form.
+[2026-10-16] Token sign-in uses the existing animated fox and a restrained entry animation, a desktop illustration/form split and a stacked mobile layout. The illustration has no orbit, halo or visible brand wordmark. Copy is limited to the field, one hint under it, the action and current state/error. The hint (user, 2026-11-26) says where the token comes from: "Use the sign-in link from the installer, or run `foxwarmctl link` on the Foxwarm computer." It is muted 12px text, referenced by the input's `aria-describedby` before the error. Existing browser theme selection, including independent light/dark families and validated imports, governs colors. Reduced motion renders static artwork and skips decorative transitions; no animation blocks form interaction. Touch controls remain at least 44px and inputs remain 16px; short screens scroll instead of clipping the form.
 
 ## Authentication behavior
 

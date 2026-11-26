@@ -29,7 +29,7 @@ Foxwarm 是一个常驻运行的服务器。对话会持久保存，可以持续
 
 ### 在哪里登录？
 
-在你自己的实例上，使用启动时输出的链接，形如 `http://localhost:3001/#token=...`。如果找不到了，读取数据目录里的 `state/token`，见[打开 WebUI](/zh/docs/installing/#打开-webui)。
+在你自己的实例上，使用启动时输出的链接，形如 `http://127.0.0.1:3001/#token=...`。如果找不到了，在程序目录里运行 `foxwarmctl link`，见[打开 WebUI](/zh/docs/installing/#打开-webui)。
 
 WebUI 令牌、节点配对令牌和外部 MCP 身份令牌是不同的凭据，连接哪个接口就用哪个。
 

@@ -257,7 +257,6 @@ public sealed class SessionIdentityInterleavingTests
             definition["parameters"]!["properties"]!.AsObject().Select(pair => pair.Key)
         );
         Assert.Null(definition["parameters"]!["required"]);
-        Assert.False(HandoffConfirmation.Handoff("move_session"));
         using var temp = new TempDirectory();
         await using var mcp = new Foxwarm.McpClient(temp.Path);
         var registry = SessionToolExecutor.CreateRegistry(

@@ -1,4 +1,4 @@
-# Control a Foxwarm release installation: start, stop, restart, status, run, update, version.
+# Control a Foxwarm release installation: start, stop, restart, status, link, run, update, version.
 # The installer places this script in the installation directory beside runtime\current.
 param(
   [Parameter(Position = 0)][string]$Command = 'help',
@@ -31,6 +31,7 @@ Usage: foxwarmctl COMMAND
   stop                        Stop Foxwarm (forced after 60 seconds)
   restart                     Stop, then start
   status                      Show whether Foxwarm is running
+  link                        Print the WebUI sign-in link
   run                         Run Foxwarm in this console
   update [VERSION]            Install the latest or the given release and restart if running
          [-Package FILE] [-Force]
@@ -162,13 +163,47 @@ function Fail-Foreign($Instance) {
   Fail "The control pipe '$PipeName' is answered by $(Format-ProcessDetail $Instance.Pid), which is not this installation's Foxwarm. Nothing was started or stopped. Close the program that holds the pipe; if it is a stale Foxwarm, end it in Task Manager."
 }
 
-function Get-HttpPort {
+# The scalar value of bot.$Key in config.yaml, the setting Main reads: a key directly under the
+# top-level bot mapping, without quotes or a trailing comment. Keys elsewhere, at the top level
+# or nested deeper, are not Main's setting. The installer reads it the same way.
+function Get-BotSetting($Key) {
   $config = Join-Path $DataRoot 'state\config.yaml'
-  if (Test-Path -LiteralPath $config) {
-    $match = Select-String -LiteralPath $config -Pattern '^\s*httpPort:\s*(\d+)' | Select-Object -First 1
-    if ($match) { return [int]$match.Matches[0].Groups[1].Value }
+  if (-not (Test-Path -LiteralPath $config)) { return $null }
+  $inBot = $false
+  $indent = $null
+  foreach ($line in [System.IO.File]::ReadAllLines($config)) {
+    if ($line -match '^\s*(#|$)') { continue }
+    if ($line -match '^\S') { $inBot = $line -match '^bot:\s*(#.*)?$'; $indent = $null; continue }
+    if (-not $inBot -or $line -notmatch '^( +)(.*)$') { continue }
+    $lead = $Matches[1]
+    $rest = $Matches[2]
+    if ($null -eq $indent) { $indent = $lead }
+    if ($lead -ne $indent) { continue }
+    if ($rest -match ('^' + [regex]::Escape($Key) + ':(?:\s+(.*))?$')) {
+      $value = ($Matches[1] -replace '\s+#.*$', '').Trim()
+      if ($value -match '^"(.*)"$' -or $value -match "^'(.*)'$") { $value = $Matches[1] }
+      return $value
+    }
   }
+  return $null
+}
+
+# Main listens on bot.httpPort from the selected data root's config.yaml, else 3001.
+function Get-HttpPort {
+  $port = Get-BotSetting 'httpPort'
+  if ($port -match '^\d+$') { return [int]$port }
   return 3001
+}
+
+# The sign-in link the installer prints. A specific bot.httpHost is the only address Main
+# answers on; a wildcard listener is reached through localhost.
+function Show-Link {
+  $tokenFile = Join-Path $DataRoot 'state\token'
+  $token = if (Test-Path -LiteralPath $tokenFile) { ([string](Get-Content -LiteralPath $tokenFile -Raw)).Trim() } else { '' }
+  if (-not $token) { Fail "There is no sign-in token in $tokenFile yet. Foxwarm creates it when it first starts: & '$Root\foxwarmctl.cmd' start" }
+  $listen = Get-BotSetting 'httpHost'
+  $hostName = if (-not $listen -or $listen -in '0.0.0.0', '::') { 'localhost' } elseif ($listen.Contains(':')) { "[$listen]" } else { $listen }
+  "http://${hostName}:$(Get-HttpPort)/#token=$token"
 }
 
 function Get-PortHolder($Port) {
@@ -410,6 +445,7 @@ switch ($Command) {
     Start-Foxwarm
   }
   'status' { Show-Status }
+  'link' { Show-Link }
   'run' {
     $release = Get-SelectedRelease
   $launcher = @(Get-Launcher $release)

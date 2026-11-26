@@ -29,7 +29,7 @@ export function mainDll() {
 export async function startMain({ dataRoot, providerUrl, model = 'demo-model', extraConfig = '', log = () => {} }) {
   const port = await openPort()
   await mkdir(join(dataRoot, 'state'), { recursive: true })
-  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${port}, name: Foxwarm}\nvector: false\nvectorMaintenance: false\nhandoffConfirmation: false\nllm: {memoryWarningThresholdPercent: 0.05}\n${extraConfig}`)
+  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${port}, name: Foxwarm}\nvector: false\nvectorMaintenance: false\nllm: {memoryWarningThresholdPercent: 0.05}\n${extraConfig}`)
   await writeFile(join(dataRoot, 'state/token'), demoToken, { mode: 0o600 })
   await writeFile(join(dataRoot, 'state/models.yaml'), JSON.stringify({
     default: `demo/${model}`,

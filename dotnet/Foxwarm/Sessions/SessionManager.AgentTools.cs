@@ -57,8 +57,13 @@ internal sealed partial class SessionManager
                 null,
                 semanticCaller.Value ?? CancellationToken.None
             );
-            HandoffConfirmation.RejectRenamedTurnAction(name, args);
-            HandoffConfirmation.Validate(name, args, HandoffConfirmationEnabled);
+            if (
+                name is "send_to_session" or "create_child_session"
+                && args.ContainsKey("afterSend")
+            )
+                throw new InvalidDataException(
+                    "afterSend was renamed to currentSessionTurnAction. Use continue, end_turn (formerly finish), or wait."
+                );
             switch (name)
             {
                 case "move_session":
@@ -302,7 +307,6 @@ internal sealed partial class SessionManager
                             "agentName",
                             "suffix",
                             "displayName",
-                            "handoffRecall",
                             "message",
                             "currentSessionTurnAction",
                             "runtime",
@@ -311,7 +315,7 @@ internal sealed partial class SessionManager
                             "node",
                             "fork",
                             "taskId",
-                            "handoffConfirmation",
+                            .. RemovedHandoffFields,
                         ],
                         ["suffix"]
                     );
@@ -421,10 +425,9 @@ internal sealed partial class SessionManager
                         args,
                         [
                             "sessionId",
-                            "handoffRecall",
                             "message",
                             "currentSessionTurnAction",
-                            "handoffConfirmation",
+                            .. RemovedHandoffFields,
                         ],
                         ["sessionId", "message"]
                     );
@@ -522,6 +525,10 @@ internal sealed partial class SessionManager
             output["__waitTarget"] = waitTarget;
         return output;
     }
+
+    // Persisted ToolScripts, skills and models with older history still pass the removed handoff
+    // review fields; they are accepted and ignored.
+    private static readonly string[] RemovedHandoffFields = ["handoffRecall", "handoffConfirmation"];
 
     private static void Keys(JsonObject args, string[] allowed, string[] required)
     {

@@ -188,12 +188,11 @@ class DevelopmentWorkflowTests(unittest.TestCase):
         failed = self.main({"phase": "collect", "pending": result, "exitCode": 7})
         self.assertEqual(failed["status"], "failed")
 
-    def test_assignment_uses_actual_task_meaningful_name_and_caller_review(self):
+    def test_assignment_uses_actual_task_meaningful_name_and_caller_fields(self):
         prepared = self.prepare()
         args = {"phase": "assign", "prepared": prepared,
                 "task": {"title": "Parser change", "description": "Bounded implementation"},
-                "child": {"suffix": "parser", "handoffRecall": "caller-written recall",
-                          "handoffConfirmation": "caller-written confirmation"}}
+                "child": {"suffix": "parser", "message": "caller-written note"}}
         self.tools.fail_child = True
         failed = self.main(args)
         self.assertEqual(failed["status"], "failed")
@@ -205,8 +204,7 @@ class DevelopmentWorkflowTests(unittest.TestCase):
         self.assertEqual(child["displayName"], "Parser change")
         self.assertEqual(child["taskId"], "task_fixture")
         self.assertEqual(child["node"], "fixture/build")
-        self.assertEqual(child["handoffRecall"], "caller-written recall")
-        self.assertEqual(list(child)[-1], "handoffConfirmation")
+        self.assertEqual(child["message"], "caller-written note")
         self.assertNotIn("forceModel", child)
         self.assertEqual(len([call for call in self.tools.calls if call["name"] == "task" and call["args"]["action"] == "create"]), 1)
         self.assertIn(str(self.worker), self.tools.task["description"])

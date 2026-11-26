@@ -14,7 +14,6 @@ const PARENT = 'team/exec'
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const exists = id => access(join(fixture.data, 'state/sessions', id + '.json')).then(() => true, () => false)
-const confirm = 'Scripted test handoff. I confirm this handoff should proceed.'
 
 function textsOf(body) {
   const out = []
@@ -40,7 +39,7 @@ const parentTurns = {
   missing: [[consult('Which plan?')], [{ text: 'MISSING-DONE' }]],
   tiny: [[consult('Which plan?', { model: 'tiny' })], [{ text: 'TINY-DONE' }]],
   consult: [[consult('Should the catalog migrate in two phases or one?\nWe tried one phase.')], [{ text: 'CONSULT-DONE' }]],
-  followup: [[{ tool: 'send_to_session', advisor: true, input: { handoffRecall: 'Clarify the same decision.', message: 'FOLLOWUP: what about rollback?', currentSessionTurnAction: 'wait', handoffConfirmation: confirm } }], [{ text: 'FOLLOWUP-DONE' }]],
+  followup: [[{ tool: 'send_to_session', advisor: true, input: { message: 'FOLLOWUP: what about rollback?', currentSessionTurnAction: 'wait' } }], [{ text: 'FOLLOWUP-DONE' }]],
   stop: [[consult('HOLD-ME: is the plan safe?', { model: 'adv' })], [{ text: 'STOP-DONE' }]],
   fail: [[consult('FAIL-ME: anything missing?', { model: 'adv', waitSeconds: 2 })], [{ text: 'FAIL-DONE' }]],
 }
@@ -58,7 +57,7 @@ function advisorStep(rows, id) {
   const tail = JSON.stringify(rows.slice(last + 1))
   if (tail.includes('FAIL-ME')) return 'fail'
   if (!/You are an advisor|FOLLOWUP:/.test(tail)) return [{ text: '[NO_ACTION]' }]
-  return [{ tool: 'send_to_session', input: { sessionId: PARENT, handoffRecall: 'Report advice.', message: 'ADVICE from ' + id + ': proceed in two phases.', currentSessionTurnAction: 'end_turn', handoffConfirmation: confirm } }]
+  return [{ tool: 'send_to_session', input: { sessionId: PARENT, message: 'ADVICE from ' + id + ': proceed in two phases.', currentSessionTurnAction: 'end_turn' } }]
 }
 
 const sse = (response, data) => response.write('data: ' + JSON.stringify(data) + '\n\n')
@@ -110,7 +109,6 @@ const base = `http://127.0.0.1:${peer.address().port}`
 const leaf = (model, extra = {}) => ({ providerType: 'anthropic', baseUrl: base, apiKey: 'local-provider-token', models: [model], maxOutput: 2000, ...extra })
 const models = { default: 'exec', providers: { exec: leaf('claude-exec-4'), adv: leaf('claude-adv-5'), tiny: leaf('claude-tiny-1', { contextLimit: 40 }) } }
 await writeFile(fixture.modelPath, JSON.stringify(models, null, 2))
-await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'handoffConfirmation: true\n')
 
 const parentRequests = () => records.filter(record => record.session === PARENT)
 const toolResult = (state, name) => {

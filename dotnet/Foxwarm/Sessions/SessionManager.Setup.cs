@@ -106,9 +106,10 @@ internal sealed partial class SessionManager
             testModel,
             secrets
         );
+        // A key and model check: the request declares no tools.
         var options = ConfiguredModelRequests.Plan(
             model,
-            clientOptions,
+            clientOptions with { Tools = new JsonArray() },
             model.DefaultEffort ?? "high",
             "",
             "setup-model-test",

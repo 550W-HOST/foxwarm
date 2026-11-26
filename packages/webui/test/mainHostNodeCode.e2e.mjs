@@ -22,7 +22,7 @@ const options = { onPage: page => page.setViewport({ width: 1440, height: 1000 }
 const fixture = await createHostFixture('node-code', options)
 if (normalRuntime) {
   Object.assign(options.env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
-  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: terminal-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: terminal-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
 }
 const home = join(fixture.root, 'home'), runtime = join(fixture.root, 'cli'), repo = join(runtime, 'repository')

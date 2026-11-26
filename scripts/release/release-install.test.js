@@ -44,6 +44,11 @@ echo "Main HTTP listening: http://0.0.0.0:3001"
 while :; do sleep 0.1; done
 `;
 
+const fixtureTemplate = '# Fixture application settings.\nsessionAutoTitle: true\n';
+// What a new installation's config.yaml holds: the release's initial settings and loopback.
+const loopbackConfig = `${fixtureTemplate}\nbot:\n  # 127.0.0.1 accepts only this computer; 0.0.0.0 also accepts other devices.\n  httpHost: 127.0.0.1\n`;
+const loopbackHint = /Only this computer can connect\. To allow other devices, set bot\.httpHost to 0\.0\.0\.0 in '.*\/state\/config\.yaml' and run '.*\/foxwarmctl' restart\./;
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm release '));
   const installations = new Set();
@@ -69,6 +74,8 @@ function fixture(t) {
     let control = fs.readFileSync(path.join(__dirname, 'foxwarmctl'), 'utf8');
     if (stopSeconds) control = control.replace('STOP_SECONDS=60', `STOP_SECONDS=${stopSeconds}`);
     fs.writeFileSync(path.join(payload, 'foxwarmctl'), control, { mode: 0o755 });
+    fs.mkdirSync(path.join(payload, 'templates'), { recursive: true });
+    fs.writeFileSync(path.join(payload, 'templates/config.example.yaml'), fixtureTemplate);
     fs.writeFileSync(path.join(payload, 'release.json'), JSON.stringify({
       version, target: `linux-x64${suffix}`, kind: 'server', rid: 'linux-x64', selfContained: true,
       ...(variant === 'native' ? { native: true } : {}), asset: `foxwarm-linux-x64${suffix}.tar.gz`,
@@ -553,7 +560,8 @@ test('start reports a port conflict and leaves nothing running when Main cannot 
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
   fs.writeFileSync(path.join(dir, 'fake-startup-failure'), bindFailure);
   fs.mkdirSync(path.join(f.root, 'foxwarm-data/state'), { recursive: true });
-  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'bot:\n  httpPort: 3456\n');
+  // Main ignores a top-level httpPort; the conflict is on bot.httpPort.
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'httpPort: 3011\nbot:\n  httpPort: 3456\n');
   const tmux = f.control(dir, 'start');
   assert.equal(tmux.status, 1);
   assert.match(tmux.stderr, /port 3456 is already in use/);
@@ -642,7 +650,9 @@ test('rerunning the installer on a stopped installation prints the sign-in link'
   ok(f.control(path.join(f.root, 'foxwarm'), 'stop'));
   const rerun = ok(f.install(['--package', pkg]));
   assert.match(rerun.stdout, /already installed/);
-  assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  assert.match(rerun.stdout, /WebUI: http:\/\/127\.0\.0\.1:3001\/#token=fixture-token/);
+  assert.doesNotMatch(rerun.stdout, loopbackHint);
+  assert.match(rerun.stdout, /foxwarmctl' status \| stop \| restart \| update \| attach \| link$/m);
   // A specific listen address is the only one Main answers on.
   for (const [host, shown] of [['127.0.0.1', '127.0.0.1'], ["'::1'", '[::1]'], ['0.0.0.0', 'localhost']]) {
     fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), `bot:\n  httpPort: 3005\n  httpHost: ${host}\n`);
@@ -744,4 +754,83 @@ test('a release without the recorded asset fails with that reason and leaves the
   const fresh = f.install(['--no-start', '--dir', 'other', '--version', '0.9.9'], server);
   assert.equal(fresh.status, 1);
   assert.match(fresh.stderr, /Release 0\.9\.9 has no foxwarm-linux-x64-native\.tar\.gz\./);
+});
+
+test('a new installation listens on this computer only and says how to open it to other devices', linux, t => {
+  const f = fixture(t);
+  const pkg = f.makePackage('0.9.0');
+  const dir = path.join(f.root, 'foxwarm');
+  const config = path.join(f.root, 'foxwarm-data/state/config.yaml');
+  const fresh = ok(f.install(['--package', pkg]));
+  assert.match(fresh.stdout, /WebUI: http:\/\/127\.0\.0\.1:3001\/#token=fixture-token/);
+  assert.match(fresh.stdout, loopbackHint);
+  assert.equal(fs.readFileSync(config, 'utf8'), loopbackConfig);
+  assert.equal(ok(f.control(dir, 'link')).stdout, 'http://127.0.0.1:3001/#token=fixture-token\n');
+
+  // Without starting, the hint is shown once too, and link waits for the first start.
+  const later = path.join(f.root, 'later');
+  const unstarted = ok(f.install(['--package', pkg, '--dir', 'later', '--data-dir', 'later-data', '--no-start']));
+  assert.match(unstarted.stdout, loopbackHint);
+  assert.equal(fs.readFileSync(path.join(f.root, 'later-data/state/config.yaml'), 'utf8'), loopbackConfig);
+  const tokenless = f.control(later, 'link');
+  assert.equal(tokenless.status, 1);
+  assert.match(tokenless.stderr, /no sign-in token in .*later-data\/state\/token yet.*foxwarmctl' start/);
+
+  // Data that has a config.yaml, or that Main has already used, keeps its binding.
+  for (const [name, file, text] of [['configured', 'config.yaml', 'bot:\n  httpHost: 0.0.0.0\n'], ['used', 'token', 'used-token']]) {
+    fs.mkdirSync(path.join(f.root, `${name}-data/state`), { recursive: true });
+    fs.writeFileSync(path.join(f.root, `${name}-data/state`, file), text);
+    const result = ok(f.install(['--package', pkg, '--dir', name, '--data-dir', `${name}-data`, '--no-start']));
+    assert.doesNotMatch(result.stdout, loopbackHint);
+    assert.deepEqual(fs.readdirSync(path.join(f.root, `${name}-data/state`)), [file]);
+    assert.equal(fs.readFileSync(path.join(f.root, `${name}-data/state`, file), 'utf8'), text);
+  }
+  assert.equal(ok(f.control(path.join(f.root, 'used'), 'link')).stdout, 'http://localhost:3001/#token=used-token\n');
+});
+
+test('updating an installation never changes its binding or its config.yaml', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  const config = path.join(f.root, 'foxwarm-data/state/config.yaml');
+  // An installation that listens on all addresses, as installers before loopback created.
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  const wildcard = '# kept as written\nbot:\n  httpHost: 0.0.0.0   # every device\n  httpPort: 3001\n';
+  fs.writeFileSync(config, wildcard);
+  ok(f.control(dir, 'start'));
+  const rerun = ok(f.install(['--package', f.makePackage('0.9.1')]));
+  assert.doesNotMatch(rerun.stdout, loopbackHint);
+  assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  ok(f.control(dir, 'update', '--package', f.makePackage('0.9.2')));
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.2');
+  assert.equal(fs.readFileSync(config, 'utf8'), wildcard);
+
+  // An installation without a config.yaml keeps Main's default.
+  fs.rmSync(config);
+  const bare = ok(f.install(['--package', f.makePackage('0.9.3')]));
+  assert.doesNotMatch(bare.stdout, loopbackHint);
+  assert.match(bare.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.3');
+  assert(!fs.existsSync(config));
+  assert.equal(ok(f.control(dir, 'link')).stdout, 'http://localhost:3001/#token=fixture-token\n');
+});
+
+test('the installer and link read bot.httpPort and bot.httpHost as Main does', linux, t => {
+  const f = fixture(t);
+  const pkg = f.makePackage('0.9.0');
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', pkg]));
+  const config = path.join(f.root, 'foxwarm-data/state/config.yaml');
+  for (const [text, link] of [
+    // Main ignores keys outside the top-level bot mapping.
+    ['httpPort: 3011\nhttpHost: 10.0.0.9\n', 'localhost:3001'],
+    ['httpPort: 3011\nbot:\n  httpHost: 127.0.0.1\n', '127.0.0.1:3001'],
+    ['bot:\n  nested:\n    httpPort: 4000\n  httpPort: 3005 # chosen\n  httpHost: "::1"\nother:\n  httpPort: 9\n', '[::1]:3005'],
+    ["# settings\nbot:   # server\r\n    httpHostname: 10.0.0.1\r\n\r\n    httpHost: '10.0.0.5'\r\n    httpPort: 3007\r\n", '10.0.0.5:3007'],
+    ['bot:\n  httpPort:\n  httpHost: 0.0.0.0\n', 'localhost:3001'],
+    ['', 'localhost:3001'],
+  ]) {
+    fs.writeFileSync(config, text);
+    assert.equal(ok(f.control(dir, 'link')).stdout, `http://${link}/#token=fixture-token\n`, text);
+    assert.match(ok(f.install(['--package', pkg])).stdout, new RegExp(`^WebUI: http://${link.replace(/[[\].]/g, '\\$&')}/#token=fixture-token$`, 'm'), text);
+  }
 });

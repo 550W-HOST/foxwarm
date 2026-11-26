@@ -29,7 +29,7 @@ Yes, on Apple Silicon Macs with macOS 15 or later: install the server with the s
 
 ### Where do I sign in?
 
-At your own installation, using the link printed when it starts, such as `http://localhost:3001/#token=...`. If you lost it, read `state/token` in your data directory; see [Open the WebUI](/docs/installing/#open-the-webui).
+At your own installation, using the link printed when it starts, such as `http://127.0.0.1:3001/#token=...`. If you lost it, run `foxwarmctl link` in the program directory; see [Open the WebUI](/docs/installing/#open-the-webui).
 
 The WebUI token, Node pairing tokens and external MCP identity tokens are different credentials. Use the one for the interface you are connecting to.
 

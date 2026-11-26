@@ -63,8 +63,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     internal string MemoryDirectory(string agent) => agents.MemoryDirectory(agent);
 
-    internal bool HandoffConfirmationEnabled { get; }
-
     /// <summary>
     /// Test-only seam: when set, builds the storage context of a manager constructed without
     /// one (and without file-store test hooks), so existing tests can run against another
@@ -110,7 +108,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Storage.ArtifactBlobs
         );
         ToolScript = new(Storage.ToolScriptRuns);
-        HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))
@@ -293,9 +290,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in MainLocalToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in AgentToolDefinitions.Definitions())
-            definitions.Add(
-                HandoffConfirmation.Definition(definition.AsObject(), HandoffConfirmationEnabled)
-            );
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in TimerToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         if (Foxwarm.ToolScript.MontyWorker.IsSupported)

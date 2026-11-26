@@ -287,11 +287,7 @@ internal sealed partial class SessionManager
                             userInitiated || !childMode
                                 ? $"This session was manually forked by the user from session `{parent.Id}`. Your current session ID is `{id}`. The parent relationship records the source of the inherited context; it does not itself assign work or require a completion report. Follow the user's instructions in this session."
                                 : $"You are a child session forked from parent session `{parent.Id}`. Your current session ID is `{id}`. "
-                                    + SessionBoundary.Completion(
-                                        parent.Id,
-                                        HandoffConfirmationEnabled,
-                                        taskId
-                                    )
+                                    + SessionBoundary.Completion(parent.Id, taskId)
                         )
                     );
                     await AppendOwnedRowsAsync(owner, suffixRows);

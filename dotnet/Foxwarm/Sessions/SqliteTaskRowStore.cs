@@ -66,7 +66,17 @@ internal sealed class SqliteTaskRowStore(string root) : ITaskRowStore
         if (connection is null)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            connection = new SqliteConnection($"Data Source={path};Cache=Shared");
+            // The store keeps one connection for its lifetime, so a pool would only
+            // outlive Dispose: its prune timer captures the opening turn's async
+            // context and would keep the Session manager reachable.
+            connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = path,
+                    Cache = SqliteCacheMode.Shared,
+                    Pooling = false,
+                }.ToString()
+            );
             connection.Open();
             Initialize(connection);
         }
