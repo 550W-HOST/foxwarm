@@ -46,7 +46,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         checkLifetime?.Invoke();
     }
 
-    public PersistentSessionAuthorityStore(
+    internal PersistentSessionAuthorityStore(
         string root,
         string sessionId,
         string agent = "main",
@@ -59,14 +59,15 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
             SessionSnapshot,
             IReadOnlyList<ArchiveMessageRecord>,
             IReadOnlyList<ArchiveBlockRecord>
-        >? archiveCommitted = null
+        >? archiveCommitted = null,
+        Foxwarm.Storage.IBlobStore? imageBlobs = null
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
         this.root = root;
-        Images = new(root);
+        Images = new(root, imageBlobs);
         this.authorityStageHook = authorityStageHook;
         this.sessionId = sessionId;
         this.agent = agent;

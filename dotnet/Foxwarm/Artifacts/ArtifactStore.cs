@@ -6,8 +6,13 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Artifacts;
 
 /// <summary>Source-compatible immutable revisions, owned by exact Session identity.</summary>
-internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = null)
+internal sealed class ArtifactStore(
+    string root,
+    ArtifactPreparer? preparer = null,
+    Foxwarm.Storage.IBlobStore? blobs = null
+)
 {
+    private readonly Foxwarm.Storage.IBlobStore blobs = blobs ?? new ArtifactBlobFiles(root);
     internal const int ManifestLimit = 2 * 1024 * 1024;
     internal const int ImageLimit = 12 * 1024 * 1024;
     private readonly ArtifactPreparer prepare = preparer ?? new();
@@ -17,12 +22,14 @@ internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = nu
     private static bool Matches(string? text, string expression) =>
         text is not null && Regex.IsMatch(text, expression, RegexOptions.CultureInvariant);
 
-    private string RevisionFile(string id, long revision)
+    private static string RevisionKey(string id, long revision)
     {
         if (!Matches(id, @"^art_[a-f0-9]{32}$") || revision < 1 || revision > 9007199254740991)
             throw new InvalidDataException("Invalid artifact reference");
-        return Path.Combine(root, id, revision + ".json");
+        return id + "/" + revision + ".json";
     }
+
+    private static string ResourceKey(string id, string digest) => id + "/resources/" + digest;
 
     internal static bool ValidReceipt(JsonNode? value) =>
         value is JsonObject receipt
@@ -44,10 +51,18 @@ internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = nu
         CancellationToken token = default
     )
     {
+        var key = RevisionKey(id, revision);
+        string text;
+        using (
+            var reader = new StreamReader(
+                new MemoryStream(await blobs.ReadAllAsync(key, token)),
+                System.Text.Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true
+            )
+        )
+            text = await reader.ReadToEndAsync(token);
         var record =
-            JsonNode
-                .Parse(await File.ReadAllTextAsync(RevisionFile(id, revision), token))
-                ?.AsObject()
+            JsonNode.Parse(text)?.AsObject()
             ?? throw new InvalidDataException("Artifact unavailable");
         var receipt = record["receipt"];
         if (
@@ -75,10 +90,7 @@ internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = nu
         var digest = SessionWait.Text(descriptor?["sha256"]);
         if (!Matches(digest, @"^[a-f0-9]{64}$"))
             throw new InvalidDataException("Resource unavailable");
-        var bytes = await File.ReadAllBytesAsync(
-            Path.Combine(root, id, "resources", digest!),
-            token
-        );
+        var bytes = await blobs.ReadAllAsync(ResourceKey(id, digest!), token);
         if (
             SessionWait.Number(descriptor?["sizeBytes"]) != bytes.Length
             || Convert.ToHexStringLower(SHA256.HashData(bytes)) != digest
@@ -88,9 +100,8 @@ internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = nu
     }
 
     private long Latest(string id) =>
-        Directory
-            .EnumerateFiles(Path.Combine(root, id))
-            .Select(Path.GetFileName)
+        blobs
+            .List(id)
             .Where(name => Matches(name, @"^\d+\.json$"))
             .Select(name =>
                 long.Parse(name![..^5], System.Globalization.CultureInfo.InvariantCulture)
@@ -119,7 +130,7 @@ internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = nu
         var document = await prepare.ValidateAsync(value, token);
         var id =
             artifactId ?? "art_" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
-        _ = RevisionFile(id, 1);
+        _ = RevisionKey(id, 1);
         Task<JsonObject> job;
         lock (gate)
         {
@@ -217,72 +228,22 @@ internal sealed class ArtifactStore(string root, ArtifactPreparer? preparer = nu
                     },
                 };
             }
-            var target = RevisionFile(id, revision);
-            CreatePrivateDirectory(Path.GetDirectoryName(target)!);
+            var target = RevisionKey(id, revision);
             if (resource is not null)
-            {
-                var directory = Path.Combine(root, id, "resources");
-                CreatePrivateDirectory(directory);
-                await PublishFile(
-                    Path.Combine(directory, digest!),
+                await blobs.CreateAsync(
+                    ResourceKey(id, digest!),
                     resource,
-                    allowExisting: true,
+                    keepExisting: true,
                     token
                 );
-            }
             // Resources are complete before the exclusively-created revision becomes visible.
-            await PublishFile(
+            await blobs.CreateAsync(
                 target,
                 System.Text.Encoding.UTF8.GetBytes(record.ToJsonText()),
-                allowExisting: false,
+                keepExisting: false,
                 token
             );
             return record;
-        }
-    }
-
-    private static void CreatePrivateDirectory(string path)
-    {
-        if (OperatingSystem.IsWindows())
-            Directory.CreateDirectory(path);
-        else
-            Directory.CreateDirectory(
-                path,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
-            );
-    }
-
-    private static async Task PublishFile(
-        string target,
-        byte[] bytes,
-        bool allowExisting,
-        CancellationToken token
-    )
-    {
-        var temporary =
-            target + "." + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)) + ".tmp";
-        try
-        {
-            var options = new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-                Share = FileShare.None,
-                Options = FileOptions.Asynchronous,
-            };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            await using (var stream = new FileStream(temporary, options))
-                await stream.WriteAsync(bytes, token);
-            try
-            {
-                File.Move(temporary, target);
-            }
-            catch (IOException) when (allowExisting && File.Exists(target)) { }
-        }
-        finally
-        {
-            File.Delete(temporary);
         }
     }
 }

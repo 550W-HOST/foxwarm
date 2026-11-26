@@ -20,6 +20,14 @@ internal static class FileAuthorityTestExtensions
         this Foxwarm.Models.ILlmJournalStore journal
     ) => (Foxwarm.Models.LlmRequestJournalStore)journal;
 
+    /// <summary>The file holding an image blob; throws for an invalid blob ID.</summary>
+    internal static string BlobFile(this Foxwarm.Images.ImageBlobStore images, string id) =>
+        images.LocalPath(id)!;
+
+    /// <summary>The image blob directory.</summary>
+    internal static string BlobRoot(this Foxwarm.Images.ImageBlobStore images) =>
+        ((Foxwarm.Images.ImageBlobFiles)images.Blobs).Root;
+
     /// <summary>The run-record files, for write-stage hooks.</summary>
     internal static Foxwarm.ToolScript.ToolScriptRunStore File(
         this Foxwarm.ToolScript.IToolScriptRunStore store

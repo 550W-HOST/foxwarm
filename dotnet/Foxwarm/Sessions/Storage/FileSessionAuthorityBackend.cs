@@ -9,7 +9,8 @@ namespace Foxwarm.Sessions;
 internal sealed class FileSessionAuthorityBackend(
     string dataRoot,
     Action<string, AtomicJsonWriteStage>? authorityStageHook = null,
-    Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null
+    Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null,
+    Foxwarm.Storage.IBlobStore? imageBlobs = null
 ) : ISessionAuthorityBackend
 {
     private readonly string root = Path.GetFullPath(dataRoot);
@@ -39,7 +40,8 @@ internal sealed class FileSessionAuthorityBackend(
             checkLifetime: callbacks.CheckLifetime is null
                 ? null
                 : () => callbacks.CheckLifetime(store.SessionId),
-            archiveCommitted: callbacks.ArchiveCommitted
+            archiveCommitted: callbacks.ArchiveCommitted,
+            imageBlobs: imageBlobs
         );
         return store;
     }

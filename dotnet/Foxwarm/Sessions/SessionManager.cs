@@ -85,8 +85,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 root,
                 new(authorityStageHook, canonicalCommitBarrier)
             );
-        Images = new(root);
-        Artifacts = new(Path.Combine(root, "state", "artifacts"), ArtifactPreparation);
+        Images = new(root, Storage.ImageBlobs);
+        Artifacts = new(
+            Path.Combine(root, "state", "artifacts"),
+            ArtifactPreparation,
+            Storage.ArtifactBlobs
+        );
         ToolScript = new(Storage.ToolScriptRuns);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);

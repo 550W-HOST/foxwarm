@@ -244,7 +244,7 @@ public sealed partial class ModelImageInputTests
             "image/png",
             "missing"
         );
-        File.Delete(blobs.ResolveBlob(reference["blobId"]!.GetValue<string>()));
+        File.Delete(blobs.BlobFile(reference["blobId"]!.GetValue<string>()));
         var history = new[] { Message("user", Uploaded(reference, "missing")) };
         await Assert.ThrowsAsync<ImageInputException>(() =>
             blobs.HydrateAsync(history, "completions")

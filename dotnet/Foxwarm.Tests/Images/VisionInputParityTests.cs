@@ -213,7 +213,7 @@ public sealed class VisionInputParityTests
             await File.ReadAllBytesAsync(Path.Combine(temp.Path, "overBytes.png")),
             await blobs.ReadAsync(original)
         );
-        File.Delete(blobs.ResolveBlob(oracle["refs"]!["overPixels"]!["blobId"]!.ToString()));
+        File.Delete(blobs.BlobFile(oracle["refs"]!["overPixels"]!["blobId"]!.ToString()));
         await Assert.ThrowsAsync<ImageInputException>(() =>
             blobs.HydrateAsync([messages[1]], "responses")
         );

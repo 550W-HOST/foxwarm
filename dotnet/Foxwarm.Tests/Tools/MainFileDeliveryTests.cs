@@ -441,7 +441,7 @@ public sealed class MainFileDeliveryTests
         );
         Assert.False(Directory.Exists(Path.Combine(f.Work, "no")));
         await File.WriteAllTextAsync(
-            f.Manager.Images.ResolveBlob(newer["blobId"]!.ToString()),
+            f.Manager.Images.BlobFile(newer["blobId"]!.ToString()),
             "corrupt"
         );
         args["filePath"] = Path.Combine(f.Work, "corrupt-new", "image");

@@ -131,7 +131,7 @@ public sealed class ImageLegacyLifecycleTests
         await images.ExternalizeMessageAsync(old, false);
         Assert.Equal(exact, old.ToJsonString());
         Assert.Contains("inlineDataUnavailable", ImageTransport.Project(old)!.ToJsonString());
-        Assert.False(Directory.Exists(images.BlobRoot));
+        Assert.False(Directory.Exists(images.BlobRoot()));
         await Assert.ThrowsAsync<ImageInputException>(() =>
             images.HydrateAsync([old], "responses")
         );

@@ -210,7 +210,7 @@ public sealed class GeneratedImageReplayAdmissionTests
         }
 
         // Only the generated blob in this owned fixture is removed; history is not edited.
-        File.Delete(store.Images.ResolveBlob(part["inlineDataRef"]!["blobId"]!.GetValue<string>()));
+        File.Delete(store.Images.BlobFile(part["inlineDataRef"]!["blobId"]!.GetValue<string>()));
         await Turn("b");
         Placeholder();
         await Turn("c");

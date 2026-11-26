@@ -474,7 +474,7 @@ public sealed partial class ProviderFileConsumerTests
                 );
                 Assert.Equal(calls, (await f.Requests()).Length);
             }
-            Assert.False(Directory.Exists(f.Manager.Images.BlobRoot));
+            Assert.False(Directory.Exists(f.Manager.Images.BlobRoot()));
         }
         finally
         {

@@ -28,7 +28,7 @@ internal sealed partial class WebUIChannel
                 await RequireImageReferenceAsync(request, id, blobId, input);
                 try
                 {
-                    if (!File.Exists(sessions.Images.ResolveBlob(blobId)))
+                    if (!sessions.Images.Exists(blobId))
                         return Results.NotFound(
                             new JsonObject { ["error"] = "Image is unavailable." }
                         );

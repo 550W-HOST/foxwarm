@@ -149,8 +149,7 @@ internal sealed partial class WebUIChannel
             {
                 try
                 {
-                    var path = sessions.Images.ResolveBlob(blobId);
-                    if (!File.Exists(path))
+                    if (!sessions.Images.Exists(blobId))
                         return Results.NotFound(
                             new JsonObject { ["error"] = "Image is unavailable." }
                         );
@@ -188,8 +187,7 @@ internal sealed partial class WebUIChannel
     {
         try
         {
-            var path = sessions.Images.ResolveBlob(blobId);
-            if (!File.Exists(path))
+            if (!sessions.Images.Exists(blobId))
                 return Results.NotFound(new JsonObject { ["error"] = "Image is unavailable." });
             var reference = new JsonObject { ["blobId"] = blobId, ["sha256"] = blobId[..64] };
             var bytes = await sessions.Images.ReadAsync(reference, context.RequestAborted);

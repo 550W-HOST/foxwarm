@@ -54,9 +54,9 @@ public sealed class ImagePipelineTests
         Assert.NotEqual(first["imageId"]!.ToString(), second["imageId"]!.ToString());
         Assert.Equal(bytes, await blobs.ReadAsync(first));
         Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(bytes)), first["sha256"]!.ToString());
-        Assert.Throws<ImageInputException>(() => blobs.ResolveBlob("../other"));
+        Assert.Throws<ImageInputException>(() => blobs.BlobFile("../other"));
         await File.WriteAllBytesAsync(
-            blobs.ResolveBlob(first["blobId"]!.ToString()),
+            blobs.BlobFile(first["blobId"]!.ToString()),
             "wrong"u8.ToArray()
         );
         await Assert.ThrowsAsync<ImageInputException>(() => blobs.ReadAsync(first));
@@ -433,10 +433,10 @@ public sealed class ImagePipelineTests
         foreach (var missing in new[] { false, true })
         {
             if (missing)
-                File.Delete(blobs.ResolveBlob(reference["blobId"]!.ToString()));
+                File.Delete(blobs.BlobFile(reference["blobId"]!.ToString()));
             else
                 await File.WriteAllBytesAsync(
-                    blobs.ResolveBlob(reference["blobId"]!.ToString()),
+                    blobs.BlobFile(reference["blobId"]!.ToString()),
                     "corrupt"u8.ToArray()
                 );
             await Assert.ThrowsAsync<ModelPreparationException>(() =>
@@ -657,7 +657,7 @@ public sealed class ImagePipelineTests
         var exact = business.ToJsonString();
         await blobs.ExternalizeTreeAsync(business);
         Assert.Equal(exact, business.ToJsonString());
-        Assert.False(Directory.Exists(blobs.BlobRoot));
+        Assert.False(Directory.Exists(blobs.BlobRoot()));
         var metadata = new JsonObject
         {
             ["wait"] = new JsonObject

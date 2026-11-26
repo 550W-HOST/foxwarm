@@ -391,7 +391,13 @@ internal sealed partial class SessionManager
                 (SessionWait.Text(reference["imageId"]) ?? "image")
                 + "."
                 + ImageBlobStore.Extension(mime);
-            var file = new ChannelFile(Images.ResolveBlob(blob), name, mime, true);
+            var file = new ChannelFile(
+                Images.LocalPath(blob)
+                    ?? throw new InvalidDataException("Generated image has no local file."),
+                name,
+                mime,
+                true
+            );
             foreach (var (_, conversation, channel) in AutomaticTargets(owner.Id))
                 if (channel.SendFile is { } send)
                     try

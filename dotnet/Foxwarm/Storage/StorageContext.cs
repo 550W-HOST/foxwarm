@@ -18,6 +18,12 @@ internal interface IStorageContext
     Foxwarm.ToolScript.IToolScriptRunStore ToolScriptRuns { get; }
     IStateDocuments Documents { get; }
     IInstanceCredentials Credentials { get; }
+
+    /// <summary>Content-addressed image originals.</summary>
+    IBlobStore ImageBlobs { get; }
+
+    /// <summary>Artifact revisions and their resources.</summary>
+    IBlobStore ArtifactBlobs { get; }
 }
 
 /// <summary>Construction seams of the file stores, used only by tests.</summary>
@@ -40,10 +46,15 @@ internal sealed class FileStorageContext : IStorageContext
         ToolScriptRuns = new Foxwarm.ToolScript.ToolScriptRunStore(DataRoot);
         Documents = new FileStateDocuments(DataRoot);
         Credentials = new FileInstanceCredentials(DataRoot);
+        ImageBlobs = new Foxwarm.Images.ImageBlobFiles(DataRoot);
+        ArtifactBlobs = new Foxwarm.Artifacts.ArtifactBlobFiles(
+            Path.Combine(DataRoot, "state", "artifacts")
+        );
         Authority = new FileSessionAuthorityBackend(
             DataRoot,
             options?.AuthorityStageHook,
-            options?.CanonicalCommitBarrier
+            options?.CanonicalCommitBarrier,
+            ImageBlobs
         );
     }
 
@@ -66,4 +77,8 @@ internal sealed class FileStorageContext : IStorageContext
     public IStateDocuments Documents { get; }
 
     public IInstanceCredentials Credentials { get; }
+
+    public IBlobStore ImageBlobs { get; }
+
+    public IBlobStore ArtifactBlobs { get; }
 }

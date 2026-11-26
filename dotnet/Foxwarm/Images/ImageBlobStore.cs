@@ -6,10 +6,18 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Images;
 
-internal sealed partial class ImageBlobStore(string dataRoot)
+internal sealed partial class ImageBlobStore(
+    string dataRoot,
+    Foxwarm.Storage.IBlobStore? blobs = null
+)
 {
     internal string DataRoot { get; } = Path.GetFullPath(dataRoot);
-    internal string BlobRoot => Path.Combine(DataRoot, "state", "image-blobs");
+
+    // Content-addressed originals; the provider variant cache below DataRoot stays a local,
+    // disposable per-process cache.
+    private readonly Foxwarm.Storage.IBlobStore blobs = blobs ?? new ImageBlobFiles(dataRoot);
+
+    internal Foxwarm.Storage.IBlobStore Blobs => blobs;
     private static readonly Regex Id = new(
         "^([a-f0-9]{64})\\.(png|jpg|gif|webp|svg|bin)$",
         RegexOptions.CultureInvariant
@@ -45,17 +53,14 @@ internal sealed partial class ImageBlobStore(string dataRoot)
             _ => null,
         };
 
-    internal string ResolveBlob(string id)
-    {
-        if (!Id.IsMatch(id))
-            throw new ImageInputException("Invalid image blob identifier.");
-        var filename = Path.Combine(BlobRoot, id[..2], id);
-        var actual = AuthorizationPaths.CanonicalPotential(filename);
-        var root = AuthorizationPaths.CanonicalPotential(BlobRoot);
-        if (!actual.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            throw new ImageInputException("Image blob resolves outside its store.");
-        return filename;
-    }
+    private static string RequireId(string id) =>
+        Id.IsMatch(id) ? id : throw new ImageInputException("Invalid image blob identifier.");
+
+    /// <summary>Whether the blob is stored. Throws <see cref="ImageInputException"/> for an invalid ID.</summary>
+    internal bool Exists(string id) => blobs.Exists(RequireId(id));
+
+    /// <summary>The blob's local file for zero-copy sends, or null when blobs aren't local.</summary>
+    internal string? LocalPath(string id) => blobs.LocalPath(RequireId(id));
 
     internal static byte[] InlineBytes(JsonObject inline)
     {
@@ -94,54 +99,10 @@ internal sealed partial class ImageBlobStore(string dataRoot)
             : null;
         var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
         var extension = Extension(mime);
-        var blobId = sha + "." + extension;
-        var filename = ResolveBlob(blobId);
-        Directory.CreateDirectory(Path.GetDirectoryName(filename)!);
-        if (File.Exists(filename))
-        {
-            await VerifyAsync(filename, bytes.Length, sha, token);
-            DirectorySync.Sync(Path.GetDirectoryName(filename)!);
-            DirectorySync.Sync(BlobRoot);
-            DirectorySync.Sync(Path.Combine(DataRoot, "state"));
-        }
-        else
-        {
-            var temp = filename + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                await using (
-                    var file = new FileStream(
-                        temp,
-                        FileMode.CreateNew,
-                        FileAccess.Write,
-                        FileShare.None,
-                        65536,
-                        FileOptions.Asynchronous
-                    )
-                )
-                {
-                    await file.WriteAsync(bytes, token);
-                    await file.FlushAsync(token);
-                    file.Flush(true);
-                }
-                try
-                {
-                    File.Move(temp, filename);
-                }
-                catch (IOException) when (File.Exists(filename))
-                {
-                    await VerifyAsync(filename, bytes.Length, sha, token);
-                }
-                DirectorySync.Sync(Path.GetDirectoryName(filename)!);
-                DirectorySync.Sync(BlobRoot);
-                DirectorySync.Sync(Path.Combine(DataRoot, "state"));
-            }
-            finally
-            {
-                if (File.Exists(temp))
-                    File.Delete(temp);
-            }
-        }
+        var blobId = RequireId(sha + "." + extension);
+        // An existing blob with this name must hold exactly these bytes.
+        if (!await blobs.CreateAsync(blobId, bytes, keepExisting: true, token))
+            await VerifyAsync(blobId, bytes.Length, sha, token);
         return new JsonObject
         {
             ["imageId"] = imageId,
@@ -155,21 +116,14 @@ internal sealed partial class ImageBlobStore(string dataRoot)
         };
     }
 
-    private static async Task VerifyAsync(
-        string filename,
+    private async Task VerifyAsync(
+        string blobId,
         long? length,
         string? sha,
         CancellationToken token
     )
     {
-        await using var file = new FileStream(
-            filename,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            65536,
-            FileOptions.Asynchronous
-        );
+        await using var file = blobs.OpenRead(blobId);
         if (length is not null && file.Length != length)
             throw new ImageInputException("Image blob failed byte-length validation.");
         if (
@@ -183,13 +137,17 @@ internal sealed partial class ImageBlobStore(string dataRoot)
     {
         var id = SessionWait.Text(reference["blobId"]);
         var legacy = SessionWait.Text(reference["path"]);
-        string filename;
+        string? filename = null;
         try
         {
-            filename =
-                id is not null ? ResolveBlob(id)
-                : legacy is not null ? ResolveLegacy(legacy)
-                : throw new ImageInputException("Image reference has no blob location.");
+            if (id is not null)
+                RequireId(id);
+            else
+                // Legacy references name a file below state/; they exist only in file mode.
+                filename =
+                    legacy is not null
+                        ? ResolveLegacy(legacy)
+                        : throw new ImageInputException("Image reference has no blob location.");
         }
         catch (ArgumentException)
         {
@@ -197,7 +155,10 @@ internal sealed partial class ImageBlobStore(string dataRoot)
         }
         try
         {
-            var bytes = await File.ReadAllBytesAsync(filename, token);
+            var bytes =
+                filename is null
+                    ? await blobs.ReadAllAsync(id!, token)
+                    : await File.ReadAllBytesAsync(filename, token);
             if (
                 SessionWait.Number(reference["byteLength"]) is double length
                 && length >= 0
