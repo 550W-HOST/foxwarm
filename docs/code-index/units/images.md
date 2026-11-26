@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/Images/HeifDecoder.cs`, `dotnet/Foxwarm/Images/ImageBlobS
 
 Stores canonical image blobs, probes/decodes raster and HEIF data, converts API transport forms, deduplicates provider payloads, and estimates image tokens.
 
+Storage: originals go through the context's image `IBlobStore` ([storage context](./storage-context.md#blobs)).
+
 ## Stable methods and callers
 
 - `ImageBlobStore` owns canonical blob paths, session references, cleanup/export, and hydration of inline/ref image parts.
