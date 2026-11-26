@@ -363,37 +363,12 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
                 );
             return null;
         }
-        foreach (var message in ((JsonArray)normalized["history"]!).OfType<JsonObject>())
-            await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
-        var loaded = SessionAuthorityCodec.FromAuthority(normalized, sessionId);
-        foreach (var item in loaded.Queue)
-        {
-            if (item.Message is not null)
-                await Images.ExternalizeMessageAsync(
-                    item.Message,
-                    strict: false,
-                    cancellationToken
-                );
-            if (item.Parts is not null)
-            {
-                var wrapper = new JsonObject
-                {
-                    ["parts"] = new JsonArray(
-                        item.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray()
-                    ),
-                };
-                await Images.ExternalizeMessageAsync(wrapper, strict: false, cancellationToken);
-                foreach (var (part, index) in item.Parts.Select((part, index) => (part, index)))
-                    if (wrapper["parts"] is JsonArray parts && parts.Count == item.Parts.Count)
-                    {
-                        part.Clear();
-                        foreach (var pair in parts[index]!.AsObject())
-                            part[pair.Key] = pair.Value?.DeepClone();
-                    }
-            }
-        }
-        await Images.ExternalizeTreeAsync(loaded.Meta, strict: false, cancellationToken);
-        return loaded;
+        return await SessionAuthorityIngress.FromNormalizedAsync(
+            Images,
+            normalized,
+            sessionId,
+            cancellationToken
+        );
     }
 
     private void ValidateBoundSnapshot(SessionSnapshot snapshot)
