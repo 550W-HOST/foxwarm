@@ -52,6 +52,26 @@ function run(command, argv, { allowFailure = false } = {}) {
     })
   })
 }
+/** A long-running kubectl, its stdout collected as timestamped lines. */
+function stream(argv) {
+  const child = spawn('kubectl', ['--context', context, '-n', namespace, ...argv], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const lines = []
+  let partial = ''
+  child.stdout.on('data', chunk => {
+    const parts = (partial + chunk).split('\n')
+    partial = parts.pop()
+    for (const line of parts) lines.push({ at: Date.now(), line })
+  })
+  const done = new Promise(resolve => child.on('close', resolve))
+  return {
+    lines,
+    done,
+    stop() {
+      child.kill()
+      return done
+    },
+  }
+}
 const kubectl = (argv, options) => run('kubectl', ['--context', context, '-n', namespace, ...argv], options)
 const json = async argv => JSON.parse((await kubectl([...argv, '-o', 'json'])).stdout)
 const time = value => (value ? Date.parse(value) : NaN)
@@ -93,14 +113,18 @@ function ownershipMonitor() {
   let lastEpoch = 0
   let stopped = false
   const loop = (async () => {
+    // Pods are read one after another, so the lease is read first (as in the drills): an owner
+    // at an older epoch than it was read after its lease was superseded.
     while (!stopped) {
+      const current = await lease().catch(() => null)
+      if (current && current.epoch < lastEpoch) violations.push({ at: Date.now(), epochWentDown: [lastEpoch, current.epoch] })
+      if (current) lastEpoch = Math.max(lastEpoch, current.epoch)
       const owners = (await statuses().catch(() => [])).filter(row => row.role === 'owner')
       samples++
-      if (owners.length > 1) violations.push({ at: Date.now(), owners })
-      for (const owner of owners) {
-        if (owner.epoch < lastEpoch) violations.push({ at: Date.now(), epochWentDown: [lastEpoch, owner.epoch] })
-        lastEpoch = Math.max(lastEpoch, owner.epoch)
-      }
+      const stale = current ? owners.filter(owner => owner.epoch < current.epoch) : []
+      if (stale.length) violations.push({ at: Date.now(), leaseEpoch: current.epoch, staleOwners: stale })
+      const epochs = owners.map(owner => owner.epoch)
+      if (new Set(epochs).size < epochs.length) violations.push({ at: Date.now(), sameEpochOwners: owners })
       await sleep(250)
     }
   })()
@@ -244,6 +268,23 @@ try {
   assert(token.length > 0, '`hosted token` prints the sign-in token')
   const monitor = ownershipMonitor()
   const probing = serviceProbe(token, 30)
+  // Evidence of the old owner's stop: its log with timestamps, its container's termination, and
+  // the lease row.
+  const ownerLog = stream(['logs', '-f', '--timestamps', roles.owner.pod])
+  const ownerWatch = stream([
+    'get', 'pod', roles.owner.pod, '--watch', '--output-watch-events',
+    '-o', 'jsonpath={.type} {.object.status.containerStatuses[0].state.terminated.exitCode} {.object.status.containerStatuses[0].state.terminated.reason} {.object.status.containerStatuses[0].state.terminated.finishedAt}{"\\n"}',
+  ])
+  const leaseSamples = []
+  let sampling = true
+  const leaseLoop = (async () => {
+    while (sampling) {
+      const row = await lease().catch(() => null)
+      const last = leaseSamples.at(-1)
+      if (row && (!last || last.state !== row.state || last.epoch !== row.epoch)) leaseSamples.push({ at: Date.now(), ...row })
+      await sleep(200)
+    }
+  })()
   await sleep(3000)
   const deletedAt = Date.now()
   await kubectl(['delete', 'pod', roles.owner.pod, '--wait=false'])
@@ -261,11 +302,34 @@ try {
   }, 'the replacement pod stands by', 120000, 500)
   const served = await probing
   await monitor.stop()
+  sampling = false
+  await leaseLoop
+  await Promise.race([ownerLog.done, sleep(5000)])
+  await ownerLog.stop()
+  await ownerWatch.stop()
+  const relative = at => at - deletedAt
+  const stop = {
+    lease: leaseSamples.map(sample => ({ afterDeleteMs: relative(sample.at), state: sample.state, epoch: sample.epoch, owner: sample.owner })),
+    termination: ownerWatch.lines.map(entry => ({ afterDeleteMs: relative(entry.at), event: entry.line.trim() })),
+    log: ownerLog.lines.map(entry => entry.line),
+  }
+  results.ownerStop = stop
+  console.log('--- the deleted owner\'s log\n' + stop.log.join('\n'))
+  log('lease during the stop: ' + JSON.stringify(stop.lease))
+  log('termination of the deleted owner: ' + JSON.stringify(stop.termination))
   const after = await lease()
   assert(after.epoch === next.epoch && after.owner === next.replica && after.state === 'active', 'the lease names the new owner at its epoch')
   assert(monitor.violations.length === 0, 'one owner at a time: ' + JSON.stringify(monitor.violations))
+  // A deleted owner stops gracefully: it drains, releases the lease and exits 0, and the standby
+  // takes the released lease well before the TTL (30 s) could expire it.
+  const terminated = stop.termination.map(entry => entry.event.split(' ')).find(fields => /^\d+$/.test(fields[1] ?? ''))
+  assert(terminated, 'the deleted owner\'s container termination was observed')
+  assert(terminated[1] === '0', `the deleted owner exited 0, not ${terminated[1]} (${terminated[2]})`)
+  const released = stop.lease.find(sample => sample.state === 'released' && sample.epoch === before.epoch)
+  assert(released || stop.log.some(line => line.includes(`released tenant`)), 'the deleted owner released the lease')
+  assert(takeoverMs < 15000, `the standby took over ${takeoverMs} ms after the deletion, not well before the 30 s TTL`)
   results.takeover = { from: roles.owner.pod, to: next.pod, epochs: [before.epoch, after.epoch], takeoverMs, replacement: replacement.pod, ownershipSamples: monitor.samples, served }
-  log(`takeover: ${next.pod} owns at epoch ${after.epoch} ${takeoverMs} ms after the owner pod was deleted; ${replacement.pod} stands by; ${monitor.samples} samples, never two owners`)
+  log(`takeover: ${next.pod} owns at epoch ${after.epoch} ${takeoverMs} ms after the owner pod was deleted; ${replacement.pod} stands by; ${monitor.samples} samples, no owner reported after its lease was superseded`)
   log(`service: ${served.requests} requests during the takeover, ${served.failed} failed${served.failed ? ' ' + JSON.stringify(served.failures) : ''}, slowest ${served.slowestMs} ms`)
 } catch (error) {
   failed = true

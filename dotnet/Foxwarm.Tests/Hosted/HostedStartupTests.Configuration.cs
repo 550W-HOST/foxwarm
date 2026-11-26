@@ -113,6 +113,32 @@ public sealed partial class HostedStartupTests
     }
 
     [Fact]
+    public async Task AStalledRequestHoldsAGracefulStopOnlyForTheHttpShutdownTimeout()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        using var temp = new TempDirectory();
+        var replica = StartHosted(database.OpenApp(), HostedFiles.Create(temp.Path));
+        await WaitUntilAsync(
+            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
+            TimeSpan.FromSeconds(60),
+            "the hosted runtime serves"
+        );
+        // A client that sent part of a request and stalls: the host counts it as in progress.
+        using var stalled = new System.Net.Sockets.TcpClient();
+        await stalled.ConnectAsync(IPAddress.Loopback, replica.PublicPort);
+        await stalled.GetStream().WriteAsync(System.Text.Encoding.ASCII.GetBytes("GET /api/sessions HTTP/1.1\r\nHost: x\r\n"));
+        await Task.Delay(300);
+
+        var stopping = System.Diagnostics.Stopwatch.StartNew();
+        replica.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+        // Not the host default of 30 s, a whole lease TTL in production.
+        Assert.InRange(stopping.Elapsed, TimeSpan.Zero, HostedEntry.HttpShutdownTimeout + TimeSpan.FromSeconds(4));
+        Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));
+    }
+
+    [Fact]
     public async Task ALockedTenantRefusesStartupWithoutGeneratingAKey()
     {
         var server = await PostgresServer.SharedAsync();

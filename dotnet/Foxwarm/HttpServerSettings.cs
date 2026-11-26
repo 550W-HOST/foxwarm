@@ -24,6 +24,12 @@ internal sealed record HttpServerSettings(
     /// </summary>
     internal System.Net.Sockets.Socket? ListenSocket { get; init; }
 
+    /// <summary>
+    /// How long stopping the host waits for requests still in progress before it aborts them;
+    /// null keeps the host default (30 s).
+    /// </summary>
+    internal TimeSpan? ShutdownTimeout { get; init; }
+
     internal static bool Enabled(ModelConfiguration? configuration) =>
         Feature(configuration, "enableWebUI");
 

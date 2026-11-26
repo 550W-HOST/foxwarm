@@ -211,7 +211,8 @@ internal sealed class MainHost : IAsyncDisposable
                 http.WebUiEnabled,
                 http.BindAddress,
                 http.Desktop,
-                http.ListenSocket
+                http.ListenSocket,
+                http.ShutdownTimeout
             );
             if (server.WebUiEnabled)
             {
@@ -260,6 +261,7 @@ internal sealed class MainHost : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        var stopping = System.Diagnostics.Stopwatch.StartNew();
         sessions.BeginShutdown();
         if (sessions.ManagedChannels is { } channels)
             await channels.StopIngressAsync();
@@ -277,11 +279,15 @@ internal sealed class MainHost : IAsyncDisposable
             Environment.FailFast("Accepted Session owners did not settle during shutdown.", error);
             throw;
         }
+        if (log is not null)
+            Console.WriteLine($"Main stopping: Sessions settled after {stopping.ElapsedMilliseconds} ms.");
         if (sessions.ManagedChannels is { } managed)
             await managed.DisposeAsync();
         if (terminals is not null)
             await terminals.DisposeAsync().ConfigureAwait(false);
         await host.StopAsync().ConfigureAwait(false);
+        if (log is not null)
+            Console.WriteLine($"Main stopping: HTTP stopped after {stopping.ElapsedMilliseconds} ms.");
         if (host is IAsyncDisposable asyncHost)
             await asyncHost.DisposeAsync().ConfigureAwait(false);
         else

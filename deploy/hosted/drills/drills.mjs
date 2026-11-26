@@ -58,16 +58,23 @@ export function ownershipMonitor(env) {
   let stopped = false
   let samples = 0
   let lastEpoch = 0
+  // The replicas are read one after another, so two owners in one sample can be a handover
+  // between two reads. The lease is read first: a replica that still reports owner at an older
+  // epoch was read after its lease was superseded, and two owners of one epoch can't both hold it.
   const loop = (async () => {
     while (!stopped) {
+      let current = null
+      try {
+        current = await lease(env)
+        if (current.epoch < lastEpoch) violations.push({ at: Date.now(), epochWentDown: [lastEpoch, current.epoch] })
+        lastEpoch = Math.max(lastEpoch, current.epoch)
+      } catch {}
       const owners = (await statuses(env)).filter(status => status.role === 'owner')
       samples++
-      if (owners.length > 1) violations.push({ at: Date.now(), owners })
-      try {
-        const { epoch } = await lease(env)
-        if (epoch < lastEpoch) violations.push({ at: Date.now(), epochWentDown: [lastEpoch, epoch] })
-        lastEpoch = epoch
-      } catch {}
+      const stale = current ? owners.filter(owner => owner.epoch < current.epoch) : []
+      if (stale.length) violations.push({ at: Date.now(), leaseEpoch: current.epoch, staleOwners: stale })
+      const epochs = owners.map(owner => owner.epoch)
+      if (new Set(epochs).size < epochs.length) violations.push({ at: Date.now(), sameEpochOwners: owners })
       await sleep(200)
     }
   })()

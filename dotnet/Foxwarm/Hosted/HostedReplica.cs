@@ -312,11 +312,14 @@ internal sealed class HostedReplica
         if (finished == current.Fenced || current.Fenced.IsCompleted)
             return await FenceAsync(current, start, started).ConfigureAwait(false);
         health = health with { Role = ReplicaRole.Stopping, RuntimeStarted = false };
+        var stopping = System.Diagnostics.Stopwatch.StartNew();
+        log($"[hosted] Stopping: the runtime drains, then tenant {options.Tenant} is released.");
         await running.DisposeAsync().ConfigureAwait(false);
+        log($"[hosted] The runtime stopped after {stopping.ElapsedMilliseconds} ms.");
         if (current.Fenced.IsCompleted)
             return HostedExit.Fenced;
         await current.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
-        log($"[hosted] Replica {Replica} released tenant {options.Tenant}.");
+        log($"[hosted] Replica {Replica} released tenant {options.Tenant} {stopping.ElapsedMilliseconds} ms after the stop.");
         return HostedExit.Stopped;
     }
 

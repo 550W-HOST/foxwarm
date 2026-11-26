@@ -300,6 +300,65 @@ public sealed partial class HostedStartupTests
     }
 
     [Fact]
+    public async Task AGracefullyStoppingOwnerStopsReportingOwnerAtTheStopAndNeverAfterTheRelease()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        using var temp = new TempDirectory();
+        // The first owner's runtime takes a while to drain, so the stop has a visible window.
+        var a = Start(temp.Path, database.OpenApp(), "replica-a", (_, _) =>
+            Task.FromResult<IHostedRuntime>(new FakeRuntime(dispose: () => Task.Delay(700))));
+        await WaitUntilAsync(() => a.Inner.Health.Ready && a.Inner.Health.Role == ReplicaRole.Owner, TimeSpan.FromSeconds(30), "replica A serves");
+        var b = Start(temp.Path, database.OpenApp(), "replica-b", (_, _) => Task.FromResult<IHostedRuntime>(new FakeRuntime()));
+        await b.Inner.Waiting.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // A's /status over HTTP throughout, each sample with the time its request started; B's
+        // ownership observed in process.
+        var clock = Stopwatch.StartNew();
+        using var http = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(2) };
+        var samples = new List<(TimeSpan Started, string Role, bool Ready)>();
+        TimeSpan? stoppingSeen = null;
+        TimeSpan? bOwnerSeen = null;
+        using var sampling = new CancellationTokenSource();
+        var sampler = Task.Run(async () =>
+        {
+            while (!sampling.IsCancellationRequested)
+            {
+                var started = clock.Elapsed;
+                if (bOwnerSeen is null && b.Inner.Health.Role == ReplicaRole.Owner)
+                    bOwnerSeen = started;
+                if (stoppingSeen is null && a.Inner.Health.Role == ReplicaRole.Stopping)
+                    stoppingSeen = started;
+                try
+                {
+                    var status = System.Text.Json.Nodes.JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{a.Inner.HealthPort}/status"))!;
+                    samples.Add((started, status["role"]!.GetValue<string>(), status["ready"]!.GetValue<bool>()));
+                }
+                catch (Exception) when (a.Run.IsCompleted) { }
+                catch (HttpRequestException) { }
+            }
+        });
+        await Task.Delay(300);
+        var stopAt = clock.Elapsed;
+        a.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await a.Run.WaitAsync(TimeSpan.FromSeconds(10)));
+        await WaitUntilAsync(() => bOwnerSeen is not null, TimeSpan.FromSeconds(10), "replica B owns the tenant");
+        sampling.Cancel();
+        await sampler;
+
+        Assert.NotNull(stoppingSeen);
+        Assert.InRange(stoppingSeen!.Value - stopAt, TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
+        Assert.Contains(samples, sample => sample.Started < stopAt && sample.Role == "owner" && sample.Ready);
+        var duringStop = samples.Where(sample => sample.Started >= stoppingSeen.Value).ToList();
+        Assert.True(duringStop.Count > 5, $"only {duringStop.Count} samples during the stop");
+        // From the stop on: stopping, not ready; never owner, before or after the release.
+        Assert.All(duringStop, sample => Assert.False(sample.Role == "owner" || sample.Ready, $"{sample.Role} ready={sample.Ready} at {sample.Started}"));
+        Assert.All(samples.Where(sample => sample.Started >= bOwnerSeen!.Value), sample => Assert.NotEqual("owner", sample.Role));
+        b.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await b.Run.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
     public async Task ConnectionsHeldAndQueuedThroughAGatedStartReachTheNewOwner()
     {
         var server = await PostgresServer.SharedAsync();

@@ -57,7 +57,7 @@ try {
   await monitor.stop()
   results.ownership = { samples: monitor.samples, violations: monitor.violations }
   assert(monitor.violations.length === 0, 'one owner at a time: ' + JSON.stringify(monitor.violations))
-  log(`ownership: ${monitor.samples} samples, never two owners, epochs never went down`)
+  log(`ownership: ${monitor.samples} samples: no replica reported owner after its lease was superseded, epochs never went down`)
   if (env.containerDiff) {
     results.containerDiff = await env.containerDiff()
     assert(Object.values(results.containerDiff).every(list => list.length === 0), 'replica containers changed nothing outside their mounts: ' + JSON.stringify(results.containerDiff))

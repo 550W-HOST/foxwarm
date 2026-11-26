@@ -72,6 +72,14 @@ internal static class HostedEntry
     /// Builds the tenant runtime. It refuses while this build lacks a PostgreSQL store, so a
     /// hosted replica never runs over files, then puts the blobs on the deployment's backend.
     /// </summary>
+    /// <summary>
+    /// How long a stopping owner's host waits for requests still in progress. The host stops
+    /// after the Sessions have drained, and the lease is released only after it: a client that
+    /// sent part of a request and stalls would otherwise hold the takeover for the host default
+    /// of 30 s, a whole lease TTL. A request cut off here is retried on the new owner.
+    /// </summary>
+    internal static readonly TimeSpan HttpShutdownTimeout = TimeSpan.FromSeconds(2);
+
     internal static async Task<IHostedRuntime> CreateRuntimeAsync(
         HostedRuntimeContext context,
         HostedBootstrap bootstrap,
@@ -153,6 +161,7 @@ internal static class HostedEntry
         {
             // The standby's public port, kept open through the takeover.
             ListenSocket = publicListener,
+            ShutdownTimeout = HttpShutdownTimeout,
         };
         // Without HTTP no host adopts it, so connections queued on it are refused now.
         if (!http.HttpEnabled)

@@ -43,7 +43,8 @@ internal sealed class HttpServer
         bool? webUiEnabled = null,
         string bindAddress = "127.0.0.1",
         bool desktop = false,
-        Socket? listenSocket = null
+        Socket? listenSocket = null,
+        TimeSpan? shutdownTimeout = null
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
@@ -108,6 +109,10 @@ internal sealed class HttpServer
             );
         }
         builder.Logging.ClearProviders();
+        if (shutdownTimeout is { } timeout)
+            builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(options =>
+                options.ShutdownTimeout = timeout
+            );
         builder.WebHost.ConfigureKestrel(server =>
             server.Limits.MaxRequestBodySize = 2 * 1024 * 1024
         );
