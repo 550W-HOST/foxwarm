@@ -89,6 +89,9 @@ internal static class EgressHttp
         {
             if (context.DnsEndPoint.Host != host || context.DnsEndPoint.Port != port)
                 throw changed();
+            if (!policy.Guarded)
+                return await FilePinnedConnectAsync(addresses, port, token).ConfigureAwait(false)
+                    ?? throw failed();
             try
             {
                 return await policy.ConnectAsync(addresses, port, token).ConfigureAwait(false);
@@ -99,6 +102,38 @@ internal static class EgressHttp
             }
         };
         return handler;
+    }
+
+    /// <summary>
+    /// File mode's pinned connect, as OAuth discovery connected before the guard: a socket of
+    /// each resolved address's own family to that address unchanged, default socket options,
+    /// the next address after a failure. Null when none connects.
+    /// </summary>
+    internal static async Task<Stream?> FilePinnedConnectAsync(
+        IReadOnlyList<IPAddress> addresses,
+        int port,
+        CancellationToken token
+    )
+    {
+        foreach (var address in addresses)
+        {
+            var socket = new System.Net.Sockets.Socket(
+                address.AddressFamily,
+                System.Net.Sockets.SocketType.Stream,
+                System.Net.Sockets.ProtocolType.Tcp
+            );
+            try
+            {
+                await socket.ConnectAsync(new IPEndPoint(address, port), token).ConfigureAwait(false);
+                return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+            }
+            catch
+            {
+                socket.Dispose();
+                token.ThrowIfCancellationRequested();
+            }
+        }
+        return null;
     }
 
     internal static HttpClient Client(
