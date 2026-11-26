@@ -69,7 +69,7 @@ internal sealed partial class AgentMemory
                     agentName,
                     "self",
                     path,
-                    ConditionalMemory.FilterConditionalMemorySource(body, modelId, runtime)
+                    ConditionalMemory.FilterConditionalMemorySource(body, modelId, runtime, masterNode)
                 );
         }
     }
