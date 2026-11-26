@@ -33,10 +33,11 @@ CREATE TABLE tenant_leases (
     expires_at timestamptz NOT NULL DEFAULT '-infinity'
 );
 
--- Statement-level guard on every tenant table. Writers lock the lease row FOR KEY SHARE, so a
--- takeover (which takes FOR UPDATE before raising the epoch) waits for them, and no write of an
--- older epoch can commit after it.
-CREATE FUNCTION foxwarm_fence() RETURNS trigger
+-- The transaction's tenant lease is active, unexpired and at the transaction's epoch. Locks the
+-- lease row FOR KEY SHARE, so a takeover (which takes FOR UPDATE before raising the epoch) waits
+-- for every such transaction, and no write of an older epoch can commit after it. The owner's
+-- renewal changes only non-key columns and doesn't conflict with the lock.
+CREATE FUNCTION foxwarm_require_lease() RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path FROM CURRENT AS $$
 BEGIN
     PERFORM 1 FROM tenant_leases
@@ -48,10 +49,31 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'tenant write without the current lease epoch' USING ERRCODE = 'FW001';
     END IF;
+END
+$$;
+REVOKE ALL ON FUNCTION foxwarm_require_lease() FROM PUBLIC;
+
+-- Statement-level guard on every tenant table.
+CREATE FUNCTION foxwarm_fence() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path FROM CURRENT AS $$
+BEGIN
+    PERFORM foxwarm_require_lease();
     RETURN NULL;
 END
 $$;
 REVOKE ALL ON FUNCTION foxwarm_fence() FROM PUBLIC;
+
+-- Raises the transaction tenant's minimum reader version (never lowers it). The state-document
+-- store calls it in the transaction that writes the Installation document.
+CREATE FUNCTION foxwarm_raise_reader_version(level integer) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path FROM CURRENT AS $$
+BEGIN
+    PERFORM foxwarm_require_lease();
+    UPDATE tenants SET min_reader_version = greatest(min_reader_version, level)
+     WHERE tenant_id = current_setting('foxwarm.tenant')::integer;
+END
+$$;
+REVOKE ALL ON FUNCTION foxwarm_raise_reader_version(integer) FROM PUBLIC;
 
 -- Makes target a tenant table: tenant default, forced row-level security, the fence trigger and
 -- the runtime role's privileges. Migrations call it right after CREATE TABLE.
@@ -84,7 +106,7 @@ DECLARE
     app text := current_setting('foxwarm.app_role');
 BEGIN
     EXECUTE format('GRANT SELECT ON tenants TO %I', app);
-    EXECUTE format('GRANT UPDATE (min_reader_version) ON tenants TO %I', app);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION foxwarm_raise_reader_version(integer) TO %I', app);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON replicas TO %I', app);
     EXECUTE format('GRANT SELECT, UPDATE ON tenant_leases TO %I', app);
     EXECUTE format('GRANT SELECT ON schema_migrations TO %I', app);

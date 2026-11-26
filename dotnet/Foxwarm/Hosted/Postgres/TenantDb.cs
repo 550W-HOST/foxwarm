@@ -48,18 +48,33 @@ internal sealed class TenantDb
 
     private readonly PgDatabase database;
     private readonly string statementTimeout;
+    private readonly string idleTimeout;
     private volatile bool closed;
 
-    internal TenantDb(PgDatabase database, int tenantId, long epoch, TimeSpan? statementTimeout = null)
+    /// <param name="statementTimeout">Bound of one statement, default 15 s.</param>
+    /// <param name="idleTimeout">
+    /// Bound of a pause between statements inside a transaction, default 10 s. Together they
+    /// bound how long a partitioned owner's open transaction can hold the lease lock and delay
+    /// a takeover: the server ends it on its own.
+    /// </param>
+    internal TenantDb(
+        PgDatabase database,
+        int tenantId,
+        long epoch,
+        TimeSpan? statementTimeout = null,
+        TimeSpan? idleTimeout = null
+    )
     {
         this.database = database;
         TenantId = tenantId;
         Epoch = epoch;
-        this.statementTimeout =
-            ((long)(statementTimeout ?? TimeSpan.FromSeconds(15)).TotalMilliseconds).ToString(
-                System.Globalization.CultureInfo.InvariantCulture
-            ) + "ms";
+        this.statementTimeout = Milliseconds(statementTimeout ?? TimeSpan.FromSeconds(15));
+        this.idleTimeout = Milliseconds(idleTimeout ?? TimeSpan.FromSeconds(10));
     }
+
+    private static string Milliseconds(TimeSpan value) =>
+        ((long)value.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + "ms";
 
     internal int TenantId { get; }
 
@@ -294,7 +309,8 @@ internal sealed class TenantDb
         var batch = tx.Batch();
         var settings = new NpgsqlBatchCommand(
             "SELECT set_config('foxwarm.tenant', $1, true), set_config('foxwarm.epoch', $2, true),"
-                + " set_config('statement_timeout', $3, true)"
+                + " set_config('statement_timeout', $3, true),"
+                + " set_config('idle_in_transaction_session_timeout', $4, true)"
         );
         settings.Parameters.Add(new NpgsqlParameter<string>
         {
@@ -307,6 +323,7 @@ internal sealed class TenantDb
                 : "",
         });
         settings.Parameters.Add(new NpgsqlParameter<string> { TypedValue = statementTimeout });
+        settings.Parameters.Add(new NpgsqlParameter<string> { TypedValue = idleTimeout });
         if (readOnly)
             batch.BatchCommands.Add(new NpgsqlBatchCommand("SET TRANSACTION READ ONLY"));
         batch.BatchCommands.Add(settings);

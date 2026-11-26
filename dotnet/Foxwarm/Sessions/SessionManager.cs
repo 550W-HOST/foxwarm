@@ -65,6 +65,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     internal bool HandoffConfirmationEnabled { get; }
 
+    /// <summary>
+    /// Test-only seam: when set, builds the storage context of a manager constructed without
+    /// one (and without file-store test hooks), so existing tests can run against another
+    /// backend. Product code never sets it.
+    /// </summary>
+    internal static Func<string, Foxwarm.Storage.IStorageContext>? StorageForTests { get; set; }
+
     public SessionManager(
         string root,
         string workspace,
@@ -81,6 +88,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         // The test hooks belong to the default file context; a supplied context brings its own.
         Storage =
             storage
+            ?? (
+                authorityStageHook is null && canonicalCommitBarrier is null
+                    ? StorageForTests?.Invoke(root)
+                    : null
+            )
             ?? new Foxwarm.Storage.FileStorageContext(
                 root,
                 new(authorityStageHook, canonicalCommitBarrier)
