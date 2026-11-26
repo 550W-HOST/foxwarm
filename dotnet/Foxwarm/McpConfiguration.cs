@@ -27,6 +27,19 @@ internal sealed class McpConfiguration
 
     internal string FilePath => documents.Locator(ConfigDocumentName.Mcp);
 
+    // RuntimeCapabilities.StdioMcp. Without it a stdio server is refused wherever it appears:
+    // an update is a validation error, and a stored one fails the load.
+    internal bool StdioAvailable { get; set; } = true;
+
+    private JsonObject Admitted(string name, JsonObject config)
+    {
+        if (!StdioAvailable && SessionWait.Text(config["transport"]) == "stdio")
+            throw new InvalidDataException(
+                $"MCP server \"{name}\": transport stdio is not available on this server; use streamable-http or sse."
+            );
+        return config;
+    }
+
     private JsonObject Load()
     {
         lock (gate)
@@ -40,10 +53,13 @@ internal sealed class McpConfiguration
             var servers = payload["servers"] as JsonObject ?? new JsonObject();
             var loaded = new JsonObject();
             foreach (var (name, value) in servers)
-                loaded[name] = Normalize(
-                    value as JsonObject
-                        ?? throw new InvalidDataException("Invalid MCP server config."),
-                    managed: false
+                loaded[name] = Admitted(
+                    name,
+                    Normalize(
+                        value as JsonObject
+                            ?? throw new InvalidDataException("Invalid MCP server config."),
+                        managed: false
+                    )
                 );
             live = loaded;
             return live;
@@ -115,7 +131,7 @@ internal sealed class McpConfiguration
             var merged = next[name] as JsonObject ?? new JsonObject();
             foreach (var (key, value) in patch)
                 merged[key] = value?.DeepClone();
-            next[name] = Normalize(merged, managed: true);
+            next[name] = Admitted(name, Normalize(merged, managed: true));
             if (admit is not null)
                 await admit(Snapshot(), (JsonObject)next.DeepClone());
             try

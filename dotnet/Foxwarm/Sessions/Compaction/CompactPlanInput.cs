@@ -111,6 +111,8 @@ internal sealed class CompactPlanFiles(
         );
         JsonObject result;
         if (node == "master")
+            sessions.RequireMasterNode();
+        if (node == "master")
             result = await files.ExecuteAsync(
                 new JsonObject { ["name"] = name, ["args"] = args.DeepClone() },
                 token

@@ -9,7 +9,7 @@ internal sealed partial class NodeProviderRegistry
     {
         JsonObject description = providerId switch
         {
-            "master" => new()
+            "master" when native.MasterNode => new()
             {
                 ["label"] = "master",
                 ["description"] = "The Main server's own execution environment.",
@@ -31,7 +31,10 @@ internal sealed partial class NodeProviderRegistry
     internal async Task<JsonArray> ListProvidersAsync(CancellationToken token)
     {
         var result = new JsonArray();
-        foreach (var id in new[] { "master", "authenticated-remote" }.Concat(providers.Keys))
+        var fixedProviders = native.MasterNode
+            ? new[] { "master", "authenticated-remote" }
+            : ["authenticated-remote"];
+        foreach (var id in fixedProviders.Concat(providers.Keys))
         {
             var description = await InspectProviderAsync(id, token);
             if (result.Count == 100)

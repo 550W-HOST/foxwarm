@@ -38,6 +38,10 @@ internal sealed class ToolRegistry(
     internal Foxwarm.Nodes.NodeProviderRegistry? Providers => providers;
     internal IEnumerable<RegisteredTool> Entries => entries.Values;
 
+    // RuntimeCapabilities.MasterNode: without it, a call whose effect would land on master is
+    // refused at resolution, before authorization or any effect.
+    internal bool MasterNode { get; init; } = true;
+
     // Central known-secret masking for every dispatched result (builtin, MCP, Node,
     // Provider and ToolScript-nested), before the output guard saves or returns it.
     internal Func<JsonNode?, string, JsonNode?>? Redaction { get; set; }
@@ -392,7 +396,8 @@ internal sealed class ToolRegistry(
             : node.Trim();
 
     internal JsonArray NodeDefinitions(string id) =>
-        id == "master"
+        id == "master" && !MasterNode ? throw RuntimeCapabilities.MasterUnavailable()
+        : id == "master"
             ? new JsonArray(
                 entries
                     .Values.Where(entry => entry.Source == "node" && (entry.Available?.Invoke() ?? true))
@@ -442,7 +447,48 @@ internal sealed class ToolRegistry(
         }
         if (nodeCapability && target != "master" && invocation != "ctl")
             await RefreshNodeAsync(target, token);
-        return Resolve(resolvedInvocation, resolvedArgs, currentNode);
+        var resolved = Resolve(resolvedInvocation, resolvedArgs, currentNode);
+        if (!MasterNode && TargetsMaster(resolved))
+            throw RuntimeCapabilities.MasterUnavailable();
+        // A move from configuration needs what reading the value directly would: a master read
+        // of the file holding it. Without master no tool reads the tenant documents.
+        if (!MasterNode && resolved is { Source: "builtin", Name: "add_secret" } && resolved.Args.ContainsKey("fromConfig"))
+            throw new InvalidDataException(
+                "fromConfig is not available on this server: no tool reads its configuration documents. Give the value with value or filePath."
+            );
+        return resolved;
+    }
+
+    // Whether a resolved call reads, writes or runs anything on master: a Node tool there, a
+    // builtin whose Node endpoints include it, a ToolScript file there, or a builtin that reads
+    // or writes a Main-local file it is given.
+    internal static bool TargetsMaster(ResolvedTool resolved)
+    {
+        if (resolved.Source == "node")
+            return resolved.ExecutionNode == "master";
+        if (resolved.Source != "builtin")
+            return false;
+        var args = resolved.Args;
+        if (
+            ToolAuthorizationNodeEffects.Resolve("builtin", resolved.Name, resolved.ExecutionNode, args)
+            is { } endpoints
+            && endpoints.Contains("master")
+        )
+            return true;
+        return resolved.Name switch
+        {
+            "run_script" or "start_toolscript_run" => ToolScriptSourceNode(
+                args,
+                resolved.ExecutionNode
+            ) == "master",
+            // Main-local files: the candidate of set_config and explain, and the new owner-only
+            // token files of node_bootstrap_info and node_create_auth_token.
+            "set_config" or "node_bootstrap_info" or "node_create_auth_token" => args.ContainsKey(
+                "filePath"
+            ),
+            "explain_tool_authorization" => args.ContainsKey("policyFilePath"),
+            _ => false,
+        };
     }
 
     private Task<JsonNode?> ExecuteNodeAsync(

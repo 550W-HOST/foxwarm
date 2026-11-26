@@ -38,7 +38,7 @@ internal sealed class HttpServer
         string apiToken,
         string? distRoot,
         SessionManager sessions,
-        Foxwarm.Terminal.TerminalRegistry terminals,
+        Foxwarm.Terminal.TerminalRegistry? terminals,
         PublicWebAddress? publicAddress = null,
         bool? webUiEnabled = null,
         string bindAddress = "127.0.0.1",
@@ -121,7 +121,9 @@ internal sealed class HttpServer
         builder.Services.AddSingleton<IHostedService>(InboundMcp);
         var app = builder.Build();
         app.Lifetime.ApplicationStopped.Register(access.Dispose);
-        var code = WebUiEnabled
+        // The Code workbench is a Main-local feature: its roots are master paths and its workspaces
+        // are files under the data directory.
+        var code = WebUiEnabled && sessions.Capabilities.MainTerminalsAndCode
             ? new Foxwarm.Code.CodeWorkbench(
                 sessions,
                 address,
@@ -360,7 +362,7 @@ internal sealed class HttpServer
                         )
                     )
             );
-            code!.Register(app);
+            code?.Register(app);
         }
         McpNodeFileDownload.Register(
             app,

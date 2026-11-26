@@ -29,6 +29,11 @@ internal sealed partial class SessionToolExecutor
                     // Capability limits do not remove an otherwise authorized Main spool.
                     node = "master";
             }
+            // Without a master Node there is no Main spool: the result is shortened in place.
+            if (node == "master" && !sessions.Capabilities.MasterNode)
+                throw new InvalidOperationException(
+                    "The complete output was not saved because this Session has no Node with file tools."
+                );
             if (node == "master")
             {
                 try

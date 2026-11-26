@@ -9,6 +9,14 @@ internal sealed partial class SessionManager
     private WorkspaceTools AgentFileWorkspace(SessionOwner owner) =>
         new(AgentDirectory(owner.Agent));
 
+    // Every Main-local file and process effect checks this before it starts; without a master
+    // Node it fails as a call to any unavailable Node does.
+    internal void RequireMasterNode()
+    {
+        if (!Capabilities.MasterNode)
+            throw RuntimeCapabilities.MasterUnavailable();
+    }
+
     // Master endpoints resolve like the invocation's own file tools: the Session working directory
     // when master is the current Node, otherwise the Agent directory.
     private IReadOnlyList<AuthorizationPath> CopyAuthorizationPaths(
@@ -70,6 +78,7 @@ internal sealed partial class SessionManager
     {
         if (node != "master")
             return await NodeProviders.OpenReadAsync(node, raw, owner, false, token, sessionCwd);
+        RequireMasterNode();
         var path = files.Paths.FilePath(raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);
@@ -115,6 +124,7 @@ internal sealed partial class SessionManager
                 progress,
                 sessionCwd
             );
+        RequireMasterNode();
         var path = files.Paths.FilePath(raw);
         if (
             Directory.Exists(path)
@@ -163,6 +173,7 @@ internal sealed partial class SessionManager
                 token,
                 beforeMaterialize
             );
+        RequireMasterNode();
         var path = files.Paths.FilePath(raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);
@@ -214,6 +225,7 @@ internal sealed partial class SessionManager
                 ?? SessionWait.Text(result["filePath"])
                 ?? raw;
         }
+        RequireMasterNode();
         var path = files.Paths.FilePath(raw);
         if (
             Directory.Exists(path)

@@ -72,6 +72,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     /// </summary>
     internal static Func<string, Foxwarm.Storage.IStorageContext>? StorageForTests { get; set; }
 
+    /// <summary>The runtime's capability profile, fixed at construction.</summary>
+    internal RuntimeCapabilities Capabilities { get; }
+
     public SessionManager(
         string root,
         string workspace,
@@ -81,9 +84,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         HostPaths? hostPaths = null,
         Action<string, AtomicJsonWriteStage>? authorityStageHook = null,
         Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null,
-        Foxwarm.Storage.IStorageContext? storage = null
+        Foxwarm.Storage.IStorageContext? storage = null,
+        // The runtime's features; null is file mode's full profile.
+        RuntimeCapabilities? capabilities = null
     )
     {
+        Capabilities = capabilities ?? RuntimeCapabilities.File;
         this.hostPaths = hostPaths;
         // The test hooks belong to the default file context; a supplied context brings its own.
         Storage =
@@ -111,7 +117,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
         RecallTargets = new(this.root);
-        Nodes = new(this.root, Storage.Documents, Storage.Credentials);
+        Nodes = new(this.root, Storage.Documents, Storage.Credentials)
+        {
+            MasterNode = Capabilities.MasterNode,
+        };
         Nodes.Registry.ConfigureLimits(() =>
             (
                 (int)(
@@ -187,14 +196,16 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 skillsRoot
                     ?? hostPaths?.SkillsRoot
                     ?? Path.Combine(AppContext.BaseDirectory, "skills")
-            )
+            ),
+            Capabilities.MasterNode
         );
         memory = new AgentMemory(
             agents,
             skills,
             FrameworkPrompt.TemplatePath(hostPaths?.ResourceRoot ?? AppContext.BaseDirectory),
             models,
-            skillAccess: CatalogSkillAccess
+            skillAccess: CatalogSkillAccess,
+            masterNode: Capabilities.MasterNode
         );
         executor = new LocalExecManager(
             this.root,
@@ -244,6 +255,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 ?? throw new InvalidDataException("Exec Session membership is missing."),
             Storage.Documents
         );
+        executor.MainLocal = Capabilities.MasterNode;
         executor.ResolveProviderBackend = NodeProviders.ResolveExecBackend;
         executor.ResolveProviderStop = NodeProviders.ExecStopBackendAsync;
         executor.Untracked = session => Find(session)?.PublishStateChanged();
@@ -308,12 +320,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Storage.Documents,
             ConfigDocuments
         );
+        mcp.Configuration.StdioAvailable = Capabilities.StdioMcp;
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
             mcp,
             owner => agents.AgentDirectory(owner.Agent),
             Nodes,
-            NodeProviders
+            NodeProviders,
+            Capabilities
         );
         secrets = models.ConfigurationOwner?.Secrets;
         if (secrets is { } owned)
@@ -342,9 +356,15 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Usage = new UsageOverview(this, Journal);
         archiveWriter = Storage.Archive.AcquireWriter();
         Activity = new ActivityIndex(this);
+        // Vector is a derived index of the SQLite Archive under the data root; over another Archive
+        // (hosted mode) it is off whatever the configuration says, as the Activity index is.
         Vector = new(
             this.root,
-            Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration),
+            Foxwarm.Vector.VectorConfiguration.Capture(
+                Storage.Archive is SqliteArchiveStore
+                    ? models.ConfigurationOwner?.AppConfiguration
+                    : null
+            ),
             admissionStop.Token
         );
         if (secrets is { } embeddingSecrets)
@@ -645,7 +665,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         owner.Entry.MutationAdmission = () => BeginOwnerMutation(owner);
         owner.Entry.ExternalTurn = (host, token) =>
-            new ClaudeSessionDriver(this, owner, host).RunAsync(token);
+        {
+            RequireRuntimeAvailable(ClaudeRuntimeState.Kind);
+            return new ClaudeSessionDriver(this, owner, host).RunAsync(token);
+        };
         owner.Entry.RevokeExternalRun = () => RuntimeCredentials.Revoke(owner);
         owner.Entry.ToolProgress = (call, start) => ChannelToolProgress(owner, call, start);
         owner.Entry.StructuredProgress = progress => ChannelStructuredProgress(owner, progress);
@@ -656,6 +679,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
     }
 
     public string DataRoot => root;
+
+    // RuntimeCapabilities.ClaudeRuntime: without it no Session is created on, or runs a turn of,
+    // the external Claude Code runtime.
+    internal void RequireRuntimeAvailable(string runtime)
+    {
+        if (runtime == ClaudeRuntimeState.Kind && !Capabilities.ClaudeRuntime)
+            throw new InvalidDataException("The Claude Code runtime is not available on this server.");
+    }
 
     // The tool authorization policy, MCP servers and WebUI settings of this runtime.
     internal Foxwarm.Storage.IConfigDocumentStore ConfigDocuments { get; }

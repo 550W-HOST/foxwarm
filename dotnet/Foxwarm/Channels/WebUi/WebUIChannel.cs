@@ -12,7 +12,8 @@ internal sealed partial class WebUIChannel(
     SessionManager sessions,
     SessionRuntime runtime,
     MessageRouter router,
-    Foxwarm.Terminal.TerminalRegistry terminals,
+    // Null without Main-local terminals and Code (RuntimeCapabilities.MainTerminalsAndCode).
+    Foxwarm.Terminal.TerminalRegistry? terminals,
     WebUiDownloadSignatures downloads
 )
 {
@@ -20,10 +21,9 @@ internal sealed partial class WebUIChannel(
         MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot)
     );
     private WebUiRealtime realtime = null!;
-    private readonly Foxwarm.Terminal.TerminalRouter terminalRouter = new(
-        terminals,
-        sessions.NodeProviders
-    );
+    private readonly Foxwarm.Terminal.TerminalRouter? terminalRouter = terminals is null
+        ? null
+        : new(terminals, sessions.NodeProviders);
 
     public void Register(WebApplication app)
     {
@@ -43,9 +43,10 @@ internal sealed partial class WebUIChannel(
             sessions.ChannelRegistry.Unregister("webui")
         );
         var models = sessions.Models;
-        app.Lifetime.ApplicationStopped.Register(() =>
-            terminalRouter.DisposeAsync().AsTask().GetAwaiter().GetResult()
-        );
+        if (terminalRouter is { } terminalsRouter)
+            app.Lifetime.ApplicationStopped.Register(() =>
+                terminalsRouter.DisposeAsync().AsTask().GetAwaiter().GetResult()
+            );
         app.Use(
             async (context, next) =>
             {

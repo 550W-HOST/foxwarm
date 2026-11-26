@@ -505,7 +505,10 @@ internal sealed partial class SessionManager
         if (meta.DisplayName is not null)
             status["displayName"] = meta.DisplayName;
         status["agent"] = statusTarget.Agent;
-        status["node"] = new JsonObject
+        // Without a master Node, master (the unset default) is no Node, and the Agent directory
+        // is not a path any tool reaches.
+        var noNode = currentNode == "master" && !Capabilities.MasterNode;
+        status["node"] = noNode ? null : new JsonObject
         {
             ["id"] = currentNode,
             ["connected"] = NodeProviders.Connected(currentNode),
@@ -519,7 +522,8 @@ internal sealed partial class SessionManager
                             ?["type"]
                     ) ?? "unknown",
         };
-        status["agentDirectory"] = agents.AgentDirectory(statusTarget.Agent);
+        if (Capabilities.MasterNode)
+            status["agentDirectory"] = agents.AgentDirectory(statusTarget.Agent);
         // Without a Session cwd, commands start in the Node's default directory.
         if (currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0)
             status["cwd"] = SessionGoal.Trim(cwd);

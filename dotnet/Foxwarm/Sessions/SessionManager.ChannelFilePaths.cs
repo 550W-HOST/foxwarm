@@ -25,6 +25,20 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException("Attachment Session owner is no longer current.");
         if (new FileInfo(source).Length != size)
             throw new IOException("Inbound spool size changed.");
+        if (!Capabilities.MasterNode)
+        {
+            if (image && size > 20 * 1024 * 1024)
+                throw new InvalidDataException("Image exceeds the inline limit.");
+            return await UnkeptChannelFileAsync(
+                image ? await File.ReadAllBytesAsync(source, token) : null,
+                filename,
+                mime,
+                "",
+                image,
+                token,
+                size
+            );
+        }
         var segment = Regex.Replace(platform.Trim(), "[^a-zA-Z0-9._-]+", "_").TrimStart('.');
         var name = ChannelFileNames.StorageName(
             filename,

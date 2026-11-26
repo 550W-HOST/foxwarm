@@ -87,6 +87,7 @@ internal sealed partial class SessionToolExecutor
         byte[] bytes;
         if (node == "master")
         {
+            sessions.RequireMasterNode();
             var actual = AuthorizationPaths.CanonicalPotential(files.Paths.FilePath(file));
             if (!WorkspaceTools.RegularFile(actual))
                 throw new InvalidDataException("Artifact source must be a regular file");

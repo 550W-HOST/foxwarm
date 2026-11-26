@@ -396,6 +396,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
     }
 
+    // RuntimeCapabilities.MasterNode: without it only Provider executions (with a backend) run;
+    // nothing is launched in this process's environment.
+    internal bool MainLocal { get; set; } = true;
+
     internal async Task<JsonObject> ExecuteAsync(
         string sessionId,
         JsonObject? args,
@@ -411,6 +415,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         Action<JsonObject>? observePlacement = null
     )
     {
+        if (backend is null && !MainLocal)
+            return Error(RuntimeCapabilities.MasterUnavailable().Message);
         if (!IsSupported)
             return Error(
                 "Local shell execution is not supported on this platform. Select a supported Node."

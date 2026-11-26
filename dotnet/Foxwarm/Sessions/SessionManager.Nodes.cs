@@ -32,12 +32,29 @@ internal sealed partial class SessionManager
 
     internal string CurrentNode(SessionOwner owner) => ExecutionPlacement(owner).Node;
 
+    // The Node a new Session starts on. Without a master Node, master means none, and a default
+    // (the Agent's or the installation's) applies only when it names a Node this runtime knows
+    // or a Node ID of a configured Provider; otherwise the Session starts without a Node. An
+    // explicit or inherited placement is kept as given. Null leaves currentNode unset.
+    internal string? StartingNode(string placed, bool explicitPlacement)
+    {
+        if (Capabilities.MasterNode)
+            return placed;
+        if (placed == "master")
+            return null;
+        if (explicitPlacement || Nodes.Registry.Forest().Contains(placed))
+            return placed;
+        var slash = placed.IndexOf('/');
+        return slash > 0 && NodeProviders.HasProvider(placed[..slash]) ? placed : null;
+    }
+
     internal JsonArray NodeSummaries(bool hasPty = false)
     {
         var nodes = Nodes.List();
         foreach (var value in nodes.OfType<JsonObject>())
             value["online"] = value["connected"]!.DeepClone();
-        nodes.Insert(0, Foxwarm.Nodes.NodeProviderRegistry.MasterSummary(hasPty));
+        if (Capabilities.MasterNode)
+            nodes.Insert(0, Foxwarm.Nodes.NodeProviderRegistry.MasterSummary(hasPty));
         foreach (var node in NodeProviders.Snapshot())
             nodes.Add(node?.DeepClone());
         return nodes;
@@ -64,7 +81,9 @@ internal sealed partial class SessionManager
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Session owner changed before Node selection.");
         id = id.Trim();
-        if (id != "master")
+        if (id == "master")
+            RequireMasterNode();
+        else
             Foxwarm.Nodes.NodeProviderRegistry.ValidateId(id);
         await NodeProviders.RefreshAsync(id, token);
         if (!NodeProviders.Online(id))
