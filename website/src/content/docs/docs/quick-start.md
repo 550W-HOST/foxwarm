@@ -39,7 +39,7 @@ When the installer finishes, it starts Foxwarm and prints a sign-in link such as
 
 ## 2. Add a model
 
-Open the sign-in link. On a new installation, Foxwarm opens **Setup → Models**. Choose your service, paste your API key, pick a model (**Load models** lists what the service offers) and select **Test connection**. Then save and start chatting.
+Open the sign-in link. A new installation asks you to connect a model first. Choose your service, paste your API key, add a model (**Load models** lists what the service offers) and select **Test connection**. Then select **Save and continue**. You can change models later in **Setup → Models**.
 
 Prefer YAML? Switch the Models view to **YAML** and paste a provider configuration, for example:
 
@@ -58,13 +58,13 @@ providers:
 
 ## 3. Give an agent a task
 
-After the first save, Foxwarm creates the `main` Agent's default Session `main` with a short welcome that explains Agents and Sessions and asks what to call you. Closing Setup takes you there. Reply to it: your answer is also the first live test of the provider connection, and the Agent remembers what you tell it. Then give it something real, in a directory you are happy for it to work in:
+After the first save, Foxwarm creates the `main` Agent's default Session `main` and opens it. It starts with a short welcome that explains Agents and Sessions and asks what to call you. Reply to it: your answer is also the first live test of the provider connection, and the Agent remembers what you tell it. Then give it something real, in a directory you are happy for it to work in:
 
 ```text
 Look at ~/projects/my-app. Run the tests and tell me which ones fail and why. Don't change anything yet.
 ```
 
-You will see the agent's tool calls and results in the conversation. The Session keeps its history, so you can come back later and continue where you left off, even after a restart.
+You will see the agent's tool calls and results in the conversation. Commands run without asking you first. If you want to confirm each command before it runs, ask the agent to add an approval rule; [Access control](/docs/access-control/#confirm-every-command) shows the rule. The Session keeps its history, so you can come back later and continue where you left off, even after a restart.
 
 ## Where to go next
 
