@@ -564,13 +564,14 @@ test('popup windows: under a host frame the title row carries the popup title cl
       assertHostContract(info, label, 4)
       const layout = await page.evaluate(() => {
         const box = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }
-        return { row: box('.foxwarm-popup-title-row'), title: box('.foxwarm-popup-title'), card: box('.foxwarm-popup-card'), text: document.querySelector('.foxwarm-popup-title').textContent, document: document.title }
+        return { row: box('.foxwarm-popup-title-row'), mark: box('.foxwarm-popup-title-row > svg'), title: box('.foxwarm-popup-title'), card: box('.foxwarm-popup-card'), text: document.querySelector('.foxwarm-popup-title').textContent, document: document.title }
       })
       assert.equal(layout.text, kind === 'tasks' ? 'Tasks' : 'proration-v2', label)
       assert.equal(layout.document, `${layout.text} · Foxwarm`)
       assert.equal(layout.row.top, 0)
       assert.equal(layout.row.bottom, Math.max(host.top, 36), `${label}: the title row is as tall as the controls`)
       assert.ok(layout.title.left >= host.left && layout.title.right <= width - host.right, `${label}: the title clears the controls`)
+      assert.equal(layout.mark.left, host.left ? host.left + 6 : 14, `${label}: the logo starts a gap after the controls, or 14 px in`)
       assert.equal(layout.card.top, layout.row.bottom, `${label}: the card starts below the title row`)
       assert.deepEqual([layout.card.left, width - layout.card.right, height - layout.card.bottom], [8, 8, 8], `${label}: even gutters`)
       // The whole title row drags the window.

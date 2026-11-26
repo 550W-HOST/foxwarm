@@ -2992,7 +2992,7 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-status-bar { 
 .foxwarm-popup-title-row {
   display: flex; flex-shrink: 0; align-items: center; gap: 8px;
   height: var(--foxwarm-frame-title-height);
-  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 12px) 0 max(14px, var(--foxwarm-frame-left, 0px));
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 12px) 0 var(--foxwarm-frame-layer-start);
 }
 .foxwarm-popup-title {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
