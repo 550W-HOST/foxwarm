@@ -16,6 +16,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Installation lock](../units/installation-lock.md): one Main process per data directory.
 - [Hosted database access, schema and fencing](../units/hosted-database.md): the hosted build switch, the transaction helper, migrations and the tenant write fence.
 - [Hosted runtime](../units/hosted-runtime.md): tenant lease, self-fencing, standby forwarding, health and the PostgreSQL storage context.
+- [Hosted Archive and identity ledger](../units/hosted-archive.md): the Archive tables, the row insert of the authority commit, and the sequence projection.
 - [Skill resolution and runnable skills](../units/skills.md)
 - [Packed and loose HTTP resources](../units/http-assets.md)
 - [Windows Desktop host](../units/desktop-windows.md)
