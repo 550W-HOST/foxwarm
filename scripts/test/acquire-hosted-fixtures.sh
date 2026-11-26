@@ -14,14 +14,15 @@ pgdg=https://apt-archive.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18
 ubuntu=http://archive.ubuntu.com/ubuntu/pool/main
 # The server's other libraries are those of the runner's preinstalled PostgreSQL 16. PostgreSQL
 # 18 adds liburing2 and libnuma1, which the runner image lacks, so they come from Ubuntu 24.04,
-# with libicu74, so the prefix also runs on hosts without ICU 74.
+# with libicu74, so the prefix also runs on hosts without ICU 74. Only release-pocket versions
+# are pinned: the archive drops superseded -updates files from its pool, never release ones.
 postgres=(
   "$pgdg/postgresql-18_18.7-1.pgdg24.04%2B2_amd64.deb 902e12bad8a7527199712b9f502b5ce14054289a8e138d1df9e85e86cecdaf1e"
   "$pgdg/postgresql-client-18_18.7-1.pgdg24.04%2B2_amd64.deb 2c102e1d6ab4ae0abf5bb1e55240feb2a2b7d81a2d0f78b29614611d88ed746e"
   "$pgdg/libpq5_18.7-1.pgdg24.04%2B2_amd64.deb c982d16d81c3dacba5b85797af37c5e6b34a73e20ddbbf41a61098276db53a3d"
   "$ubuntu/libu/liburing/liburing2_2.5-1build1_amd64.deb c2aef62accee92a06263c3ad4ef46132c13e409b54296c44792a20491830a7b0"
-  "$ubuntu/n/numactl/libnuma1_2.0.18-1ubuntu0.24.04.1_amd64.deb f333b8edf6f0b705c19f2a67008194df66f7aab0fa2350dc98510569a033ff29"
-  "$ubuntu/i/icu/libicu74_74.2-1ubuntu3.1_amd64.deb c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8"
+  "$ubuntu/n/numactl/libnuma1_2.0.18-1build1_amd64.deb 508daa855e99959acaa945e6a89d218e0be6b5727fd28773580942ff37cf5805"
+  "$ubuntu/i/icu/libicu74_74.2-1ubuntu3_amd64.deb d29c97a21a3e3254731cfac186e4d4e611e5e67d2c9a0430f6acfbd9acaefa2e"
 )
 versitygw=(
   "https://github.com/versity/versitygw/releases/download/v1.11.0/versitygw_1.11.0_linux_amd64.deb 93210fa3fb055ef27a9d5910cba97d6eb8b5a409bbe59fb824ecc4a55242e9d3"
