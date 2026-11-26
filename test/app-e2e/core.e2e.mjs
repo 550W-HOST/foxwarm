@@ -39,7 +39,7 @@ async function createSession(name) {
 async function openSession(sessionId) {
   scenarioSessions.add(sessionId)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), sessionId)
-  await page.waitForFunction(id => (document.querySelector('.foxwarm-chat-root')?.textContent || '').includes(`session ${id}`), { timeout: 15_000 }, sessionId)
+  await page.waitForFunction(id => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === id, { timeout: 15_000 }, sessionId)
   await page.waitForSelector('[role="textbox"][aria-label="Message"]', { timeout: 15_000 })
 }
 
