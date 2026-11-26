@@ -1,7 +1,7 @@
 # Unit: Hosted runtime (lease, self-fencing, standby, health)
 
-Files: `dotnet/Foxwarm/Hosted/Lease/TenantLease.cs`, `dotnet/Foxwarm/Hosted/Lease/LeaseMonitor.cs`, `dotnet/Foxwarm/Hosted/Lease/ReplicaRegistry.cs`, `dotnet/Foxwarm/Hosted/HealthEndpoint.cs`, `dotnet/Foxwarm/Hosted/StandbyForwarder.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Documents.cs`, `dotnet/Foxwarm/Hosted/Postgres/StateDocuments/PgStateDocuments.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0002_state_documents.sql`, `dotnet/Foxwarm.Tests/Hosted/TenantLeaseTests.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedEndpointsTests.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedTestBackendTests.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/HostedTestBackend.cs`, `dotnet/Foxwarm.Tests/Storage/StateDocumentsContractTests.cs`
-Secondary files: `dotnet/Foxwarm/Sessions/SessionManager.cs`, `scripts/test/run-tests.mjs`, `.github/workflows/tests.yml`
+Files: `dotnet/Foxwarm/Hosted/HostedEntry.cs`, `dotnet/Foxwarm/Hosted/HostedReplica.cs`, `dotnet/Foxwarm/Hosted/Lease/TenantLease.cs`, `dotnet/Foxwarm/Hosted/Lease/LeaseMonitor.cs`, `dotnet/Foxwarm/Hosted/Lease/ReplicaRegistry.cs`, `dotnet/Foxwarm/Hosted/HealthEndpoint.cs`, `dotnet/Foxwarm/Hosted/StandbyForwarder.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Documents.cs`, `dotnet/Foxwarm/Hosted/Postgres/StateDocuments/PgStateDocuments.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0002_state_documents.sql`, `dotnet/Foxwarm.Tests/Hosted/TenantLeaseTests.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedEndpointsTests.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedTestBackendTests.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedStartupTests.cs`, `dotnet/Foxwarm.Tests/Hosted/Fixtures/HostedTestBackend.cs`, `dotnet/Foxwarm.Tests/Storage/StateDocumentsContractTests.cs`
+Secondary files: `dotnet/Foxwarm/Program.cs`, `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Hosted/HostedBootstrap.cs`, `dotnet/Foxwarm/Sessions/SessionManager.cs`, `scripts/test/run-tests.mjs`, `.github/workflows/tests.yml`
 
 ## Purpose
 
@@ -45,6 +45,24 @@ The hosted entry then shuts the runtime down and exits (hosted startup, batch 3)
 
 **What bounds a takeover.** The server ends a partitioned owner's open transaction on its own, through the transaction-local `statement_timeout` (15 s) and `idle_in_transaction_session_timeout` (10 s) set by `TenantDb`. A takeover after expiry is therefore not blocked by that transaction's lease lock.
 
+## D-hosted-replica-lifecycle
+
+**Derived from the approved plan (§3, §11.3 batch 3, 2026-11-26).**
+
+- **Entry.** `FOXWARM_MODE` selects the shape: unset, empty or `file` is today's entry; `hosted` runs `HostedEntry`; anything else exits 2. A build without hosted mode reports that and exits 2. The hosted entry takes no data directory and no installation lock: the tenant lease is the single-owner guarantee.
+- **Order** (`HostedReplica.RunAsync`):
+  1. schema fence (`RequireCompatibleAsync`);
+  2. tenant lookup and replica registration, then a heartbeat every renew interval;
+  3. standby: health reports `standby`, the forwarder serves the public endpoint, `AcquireAsync` waits;
+  4. the forwarder is disposed before the runtime is built, which frees the public port for the owner's host;
+  5. owner: the `LeaseMonitor` starts with the replica's `TenantDb` attached, then the runtime is created and started; `/readyz` turns 200 only after that.
+- **Takeover is today's startup on the new owner.** Nothing carries over in memory; the runtime reads its state from the tenant's stores.
+- **Graceful stop** (SIGTERM, SIGINT): the runtime drains while this replica still owns the lease, then the lease is released, so a standby is woken by the notification instead of waiting out the TTL.
+- **Fence:** the runtime is disposed, bounded by the drain bound (8 s in production, below TTL minus the fence deadline), and the process exits 75 even if work is still running. The orchestrator restarts it as a standby. A fence during runtime start also exits 75.
+- **Exit codes** (`HostedExit`): 0 stopped; 1 any other failure, including an unreachable database, which a restart may fix; 75 fenced; 78 configuration: bootstrap settings, schema fence, lease refusal for an older reader, refused database credentials, role or database (SQLSTATE class 28, 3D000), and a runtime refusal (`HostedStartupException`). A start failure that isn't a fence releases the lease.
+- **Production runtime today** (`HostedEntry.CreateRuntimeAsync`) refuses with 78 while the build has missing stores, and then because no tenant configuration documents exist yet (KS). It never falls back to files. The runtime it will build is `MainHost` with the hosted context (`MainHostRuntime`); `MainHost.CreateAsync` and `SessionManager` take the context as a parameter, and null keeps the file stores.
+- **Bootstrap additions:** `FOXWARM_REPLICA_ID` (replica name, else the host name), `FOXWARM_ADVERTISE_ADDRESS` (`host:port` the forwarder of a standby connects to), `FOXWARM_HEALTH_PORT` (default 3081), `FOXWARM_SCRATCH_DIR` (ephemeral local directory, default under the temporary directory).
+
 ## D-hosted-standby-endpoints
 
 **Approved plan C3 (2026-11-26).**
@@ -81,8 +99,18 @@ The hosted entry then shuts the runtime down and exits (hosted startup, batch 3)
   - fencing on takeover and on a refused write;
   - a partitioned owner fencing itself before a standby can acquire;
   - a takeover not blocked by a partitioned owner's open transaction.
+- **`HostedStartupTests`** (`Backend=postgres`) runs two in-process replicas of one tenant over one database, the runtime being `MainHost` over the test-only mixed context with the listener passed directly:
+  - a standby forwards HTTP to the owner; after a graceful stop it takes over on the notification, well before the TTL, and serves the state the first owner wrote;
+  - a partitioned owner fences, stops within the drain bound and exits 75, and the standby acquires only after expiry, at a higher epoch;
+  - refusal for an older reader and for a too-new schema (78);
+  - refused credentials exit 78, an unreachable database exits 1;
+  - the production runtime refuses missing stores, releases the lease and leaves the scratch directory empty.
 - **`HostedEndpointsTests`** covers health responses per role and the byte-exact forwarder in both directions. It also checks that a forwarder without an owner closes the connection, and that stopping the forwarder closes connections and frees the port.
 - **`StateDocumentsContractTests`** runs the portable document cases on the file and Postgres stores. The Postgres subclass adds the reader-version mirror and a fenced replacement that leaves the previous text.
 - **The test backend** (`HostedTestBackend`). `FOXWARM_TEST_BACKEND=postgres`, read only in the test assembly, sets the internal `SessionManager.StorageForTests` seam.
   - **What it builds.** Every manager constructed without a context or file-store hooks gets a Postgres context with one database per data root. Stores not yet implemented come from files; only tests ever build such a mixed context.
   - **Which classes run on it.** Classes qualified for both backends carry `[Trait("Backend", "neutral")]`. With a PostgreSQL fixture, `run-tests.mjs managed` runs the selected neutral classes a second time this way (`dotnet-hosted-neutral`). Each store track qualifies its own classes.
+
+## Open Questions
+
+- **Public listener source.** Hosted mode has no product setting for the public port and bind address yet; the production entry runs no forwarder and refuses before it would need a listener. The deployment configuration (KS track) defines where the listener lives and wires it to the owner's host and to `HostedReplicaOptions.PublicEndpoint`. Tests pass both directly.
