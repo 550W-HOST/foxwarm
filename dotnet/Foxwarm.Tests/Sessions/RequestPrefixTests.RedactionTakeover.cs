@@ -4,6 +4,7 @@ using Foxwarm.Hosted;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 using Foxwarm.Tests.Hosted;
 
 namespace Foxwarm.Tests;
@@ -47,15 +48,20 @@ public sealed partial class RequestPrefixTests
             )
             {
                 var epoch = await database.TakeLeaseAsync(tenantId, replica);
-                var hosted = new PostgresStorageContext(
-                    new TenantDb(database.OpenApp(), tenantId, epoch),
-                    Path.Combine(temp.Path, "data")
-                );
+                var db = new TenantDb(database.OpenApp(), tenantId, epoch);
+                // Each owner opens the tenant key ring; the redaction key derives from its DEK.
+                var keys = new HostedKeyRing(db, HostedTestBackend.Kek);
+                keys.OpenOrCreate();
+                var hosted = new PostgresStorageContext(db, Path.Combine(temp.Path, "data"))
+                {
+                    KeyRing = keys,
+                };
                 return await CreateRedactingManager(
                     temp.Path,
                     peer.BaseUri,
                     detector.Endpoint,
                     HostedTestBackend.Compose(hosted, Path.Combine(temp.Path, "data")),
+                    keys,
                     key => hosted.OpenTextRedaction(key)
                 );
             }
@@ -116,6 +122,7 @@ public sealed partial class RequestPrefixTests
         Uri uri,
         Uri detector,
         Foxwarm.Storage.IStorageContext storage,
+        Foxwarm.Secrets.IKeyRing keyRing,
         Func<byte[], ITextRedactionStore?> openTextRedaction
     )
     {
@@ -129,7 +136,7 @@ public sealed partial class RequestPrefixTests
         );
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "config.yaml"),
-            new JsonObject { ["vector"] = false }.ToJsonString()
+            "{}"
         );
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "models.yaml"),
@@ -153,9 +160,22 @@ public sealed partial class RequestPrefixTests
                 },
             }.ToJsonString()
         );
+        var paths = HostPaths.ForDataRoot(data, root, environment: _ => null);
+        // The tenant's redaction cache as the hosted runtime wires it; the other settings stay
+        // the data root's files.
         var configuration = new ModelConfiguration(
-            HostPaths.ForDataRoot(data, root, environment: _ => null),
-            openTextRedaction
+            paths,
+            new ConfigurationSources(
+                new FileConfigDocuments(paths),
+                new JsonObject(),
+                hostPaths => new Foxwarm.Secrets.InstanceSecrets(
+                    hostPaths.DataRoot,
+                    keyRing: keyRing,
+                    documents: storage.Documents,
+                    openTextRedaction: openTextRedaction
+                ),
+                storage.Credentials
+            )
         );
         var options = new ResponsesClientOptions(
             uri,

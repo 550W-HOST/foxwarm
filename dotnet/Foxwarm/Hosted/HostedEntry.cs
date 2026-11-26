@@ -102,8 +102,10 @@ internal static class HostedEntry
     {
         ModelConfiguration configuration;
         HostPaths paths;
+        JournalRetentionOptions retention;
         try
         {
+            retention = JournalRetentionOptions.FromDeployment(deployment.Root["journal"]);
             var (current, previous) = bootstrap.RequireKeks();
             var keys = new HostedKeyRing(tenant.Database, current, previous);
             keys.OpenOrCreate();
@@ -117,13 +119,13 @@ internal static class HostedEntry
                 new ConfigurationSources(
                     tenant.ConfigDocuments(bootstrap.ReplicaName ?? Environment.MachineName),
                     deployment.Root,
-                    // The persistent text-redaction cache comes with its PostgreSQL store (JR);
-                    // until then it stays in memory rather than on the replica's disk.
+                    // The text-redaction cache is the tenant's, under the key the tenant key
+                    // ring derives for it, so a new owner sends the same placeholders.
                     hostPaths => new Foxwarm.Secrets.InstanceSecrets(
                         hostPaths.DataRoot,
                         keyRing: keys,
                         documents: storage.Documents,
-                        openTextRedaction: _ => null
+                        openTextRedaction: key => tenant.OpenTextRedaction(key)
                     ),
                     storage.Credentials
                 )
@@ -138,11 +140,12 @@ internal static class HostedEntry
             .CaptureAsync(configuration, paths.DataRoot, storage.Credentials)
             .ConfigureAwait(false);
         var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
-        return new MainHostRuntime(
-            await MainHost
-                .CreateAsync([], configuration, http, distRoot, captureDiagnostics: true, storage: storage)
-                .ConfigureAwait(false)
-        );
+        var host = await MainHost
+            .CreateAsync([], configuration, http, distRoot, captureDiagnostics: true, storage: storage)
+            .ConfigureAwait(false);
+        // The owner's daily journal retention; it stops when the host disposes the journal.
+        tenant.StartJournalRetention(retention);
+        return new MainHostRuntime(host);
     }
 }
 
