@@ -51,9 +51,7 @@ try:
             "fork": True,
             "displayName": "Advice: " + " ".join(question.split())[:60],
             "forceModel": force,
-            "handoffRecall": "The advisor skill creates an idle fork of this Session for the consultation it was asked to run; the request follows as a message.",
             "currentSessionTurnAction": "continue",
-            "handoffConfirmation": "This Session ran the advisor skill to consult the advisor model on its own question. I confirm this handoff should proceed.",
         },
     ))
 except Exception as error:
@@ -87,10 +85,8 @@ checked(call_tool(
     "send_to_session",
     {
         "sessionId": advisor,
-        "handoffRecall": "The advisor skill sends the consultation request to the advisor fork it just created.",
         "message": REQUEST.replace("{parent}", parent).replace("{question}", question),
         "currentSessionTurnAction": "continue",
-        "handoffConfirmation": "The advisor fork was created for this question and is idle. I confirm this handoff should proceed.",
     },
 ))
 checked(call_tool(

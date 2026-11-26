@@ -64,8 +64,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     internal string MemoryDirectory(string agent) => agents.MemoryDirectory(agent);
 
-    internal bool HandoffConfirmationEnabled { get; }
-
     public SessionManager(
         string root,
         string workspace,
@@ -89,7 +87,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Images = new(root);
         Artifacts = new(Path.Combine(root, "state", "artifacts"), ArtifactPreparation);
         ToolScript = new(root);
-        HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))
@@ -260,9 +257,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in MainLocalToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in AgentToolDefinitions.Definitions())
-            definitions.Add(
-                HandoffConfirmation.Definition(definition.AsObject(), HandoffConfirmationEnabled)
-            );
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in TimerToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         if (Foxwarm.ToolScript.MontyWorker.IsSupported)

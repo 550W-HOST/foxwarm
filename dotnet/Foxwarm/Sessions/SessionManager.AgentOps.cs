@@ -428,7 +428,6 @@ internal sealed partial class SessionManager
                         + "\nYou are a child session (new, empty context). "
                         + SessionBoundary.Completion(
                             parentId,
-                            HandoffConfirmationEnabled,
                             taskId,
                             runtime == ClaudeRuntimeState.Kind
                         );

@@ -31,7 +31,7 @@ public sealed partial class LocalSessionTurnHost
         try
         {
             var parts = await ExecuteToolBatchAsync(
-                    ToolCallControls.Plan([call], RuntimeTools.HandoffConfirmationEnabled),
+                    ToolCallControls.Plan([call]),
                     token
                 )
                 .ConfigureAwait(false);

@@ -11,16 +11,13 @@ public sealed partial class ClaudeRuntimeTests
     [InlineData(false, "send")]
     [InlineData(true, "send")]
     [InlineData(false, "task")]
-    [InlineData(true, "task")]
     [InlineData(false, "no-action")]
     public async Task Empty_EndConversation_requires_the_normal_child_report_and_uses_supported_guidance(
-        bool confirmation,
+        bool removedHandoffFields,
         string completion
     )
     {
-        await using var f = await ClaudeRuntimeFixture.CreateAsync(
-            handoffConfirmation: confirmation
-        );
+        await using var f = await ClaudeRuntimeFixture.CreateAsync();
         string? taskId = null;
         SessionOwner child;
         if (completion == "task")
@@ -76,15 +73,15 @@ public sealed partial class ClaudeRuntimeTests
         if (completion == "send")
         {
             var args = new JsonObject();
-            if (confirmation)
+            // Older callers still pass the removed review fields; they are ignored.
+            if (removedHandoffFields)
                 args["handoffRecall"] = "Report the completed assigned work to its parent.";
             args["sessionId"] = "<parent>";
             args["message"] = "completed once";
             args["currentSessionTurnAction"] = "continue";
-            if (confirmation)
+            if (removedHandoffFields)
                 args["handoffConfirmation"] =
-                    "The assignment is complete and this is the required report. "
-                    + HandoffConfirmation.Suffix;
+                    "The assignment is complete and this is the required report.";
             calls.Add(Call("send_to_session", args));
         }
         if (completion == "task")
@@ -143,8 +140,8 @@ public sealed partial class ClaudeRuntimeTests
         if (completion != "task")
         {
             Assert.Contains("child-reminder", reminder);
-            AssertSupportedGuidance(reminder, confirmation);
-            AssertSupportedGuidance(initial, confirmation);
+            AssertSupportedGuidance(reminder);
+            AssertSupportedGuidance(initial);
         }
         else
         {
@@ -173,14 +170,10 @@ public sealed partial class ClaudeRuntimeTests
         );
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Ordinary_children_keep_their_finish_and_wait_guidance(bool confirmation)
+    [Fact]
+    public async Task Ordinary_children_keep_their_finish_and_wait_guidance()
     {
-        await using var f = await ClaudeRuntimeFixture.CreateAsync(
-            handoffConfirmation: confirmation
-        );
+        await using var f = await ClaudeRuntimeFixture.CreateAsync();
         var child = (
             await f.Main.Manager.CreateChildAsync(f.Main.Target, "ordinary", null, null, null, null)
         ).Child;
@@ -188,7 +181,7 @@ public sealed partial class ClaudeRuntimeTests
         var boundary = child.Entry.Snapshot().History.Materialize()[0]["parts"]![0]![
             "system"
         ]!.GetValue<string>();
-        await child.Entry.SaveLane.QueueChildReminderAsync(f.Main.Target.Id, confirmation);
+        await child.Entry.SaveLane.QueueChildReminderAsync(f.Main.Target.Id);
         var reminder = child.Entry.Snapshot().Queue.Single().Parts![0][
             "system"
         ]!.GetValue<string>();
@@ -203,7 +196,7 @@ public sealed partial class ClaudeRuntimeTests
         }
     }
 
-    private static void AssertSupportedGuidance(string input, bool confirmation)
+    private static void AssertSupportedGuidance(string input)
     {
         var choices = Regex
             .Matches(input, "currentSessionTurnAction: \\\"([^\\\"]+)\\\"")
@@ -211,20 +204,7 @@ public sealed partial class ClaudeRuntimeTests
             .ToArray();
         Assert.NotEmpty(choices);
         Assert.All(choices, value => Assert.Equal("continue", value));
-        if (confirmation)
-        {
-            var start = input.IndexOf("send_to_session({", StringComparison.Ordinal);
-            var end = input.IndexOf("})", start, StringComparison.Ordinal);
-            var fragment = input[start..end];
-            Assert.True(
-                fragment.IndexOf("handoffRecall", StringComparison.Ordinal)
-                    < fragment.IndexOf("message:", StringComparison.Ordinal)
-            );
-            Assert.True(
-                fragment.IndexOf("currentSessionTurnAction:", StringComparison.Ordinal)
-                    < fragment.IndexOf("handoffConfirmation:", StringComparison.Ordinal)
-            );
-            Assert.Contains(HandoffConfirmation.Suffix, fragment);
-        }
+        Assert.DoesNotContain("handoffRecall", input);
+        Assert.DoesNotContain("handoffConfirmation", input);
     }
 }

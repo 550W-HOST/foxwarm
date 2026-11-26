@@ -258,10 +258,7 @@ public sealed partial class LocalSessionTurnHost
                     if (tools is SessionToolExecutor batchTools)
                         batchTools.BeginBatch(appended[^1]);
                     var toolParts = await ExecuteToolBatchAsync(
-                            ToolCallControls.Plan(
-                                calls,
-                                tools is SessionToolExecutor mode && mode.HandoffConfirmationEnabled
-                            ),
+                            ToolCallControls.Plan(calls),
                             registered.Token
                         )
                         .ConfigureAwait(false);
@@ -488,13 +485,7 @@ public sealed partial class LocalSessionTurnHost
                 SessionBoundary.ConsecutiveChildReminders(envelope)
                 < SessionBoundary.MaxConsecutiveChildReminders
             )
-                await entry
-                    .SaveLane.QueueChildReminderAsync(
-                        parent,
-                        tools is SessionToolExecutor toolMode
-                            && toolMode.HandoffConfirmationEnabled
-                    )
-                    .ConfigureAwait(false);
+                await entry.SaveLane.QueueChildReminderAsync(parent).ConfigureAwait(false);
             else if (!SessionBoundary.ChildReminderCapNotified(envelope))
                 await NotifyParentOfMissingReportAsync(parent, parts).ConfigureAwait(false);
         }

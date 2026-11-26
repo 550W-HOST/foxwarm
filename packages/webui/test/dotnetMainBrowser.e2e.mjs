@@ -68,7 +68,7 @@ model.listen(0, '127.0.0.1'); await once(model, 'listening')
 
 const deniedPath = origin + '/denied'
 await writeFile(join(fixture.data, 'state/tool-authorization.yaml'), `version: 1\nrules:\n- action: deny\n  tool: {source: node, name: browser_open}\n  args: {url: [${JSON.stringify(deniedPath)}]}\n`)
-await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: main-browser-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: main-browser-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
 await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, asyncCompact: false, models: ['wire'] } } }))
 

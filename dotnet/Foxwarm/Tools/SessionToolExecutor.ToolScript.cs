@@ -168,7 +168,7 @@ internal sealed partial class SessionToolExecutor
                         ["name"] = resolved.Name,
                         ["args"] = resolved.Args.DeepClone(),
                     };
-                    var planned = ToolCallControls.Plan([concrete], HandoffConfirmationEnabled)[0];
+                    var planned = ToolCallControls.Plan([concrete])[0];
                     if (planned.Preset is not null)
                         return planned.Preset;
                     var request = (JsonObject)wrapper.DeepClone();

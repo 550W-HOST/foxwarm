@@ -789,61 +789,6 @@ public sealed class ToolScriptTimerTests
     }
 
     [Fact]
-    public async Task Script_self_send_retains_configured_handoff_recall_and_confirmation_validation()
-    {
-        await using var f = await ScriptFixture.Create();
-        var ownerId = f.Owner.Id;
-        await f.Manager.ShutdownAsync();
-        await f.Manager.DisposeAsync();
-        var options = new ResponsesClientOptions(
-            new Uri("http://127.0.0.1:1"),
-            "wire",
-            "a",
-            "",
-            "",
-            713
-        );
-        var models = HostModels.Parse(
-            JsonNode
-                .Parse(
-                    """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://127.0.0.1:1","models":["wire"]}}}"""
-                )!
-                .AsObject(),
-            new JsonObject { ["handoffConfirmation"] = true }
-        );
-        f.Manager = new(f.Data, f.Work, options, models);
-        await f.Manager.LoadAsync();
-        f.Owner = await f.Manager.RequiredAsync(ownerId);
-        f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
-        var tools = Dispatcher(f);
-        var code = "return call_tool('send_to_session', args)";
-        var rejected = await Call(
-            tools,
-            "run_script",
-            new JsonObject { ["code"] = code, ["args"] = Send(ownerId) }
-        );
-        Assert.NotNull(rejected["result"]?["error"] ?? rejected["error"]);
-        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
-        var approved = new JsonObject
-        {
-            ["sessionId"] = ownerId,
-            ["handoffRecall"] =
-                "The requested monitor reports an actionable condition to its owner.",
-            ["message"] = "condition reached",
-            ["handoffConfirmation"] =
-                "This notification reports the requested condition, not an acknowledgement.\n"
-                + HandoffConfirmation.Suffix,
-        };
-        var done = await Call(
-            tools,
-            "run_script",
-            new JsonObject { ["code"] = code, ["args"] = approved }
-        );
-        Assert.Equal("completed", SessionWait.Text(done["status"]));
-        Assert.Single(f.Owner.Entry.Snapshot().Queue);
-    }
-
-    [Fact]
     public async Task File_source_and_nested_default_cwd_are_resolved_at_fire_not_registration()
     {
         await using var f = await ScriptFixture.Create();

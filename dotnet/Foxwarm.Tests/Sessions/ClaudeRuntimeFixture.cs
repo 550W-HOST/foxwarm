@@ -15,7 +15,6 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
 
     internal static async Task<ClaudeRuntimeFixture> CreateAsync(
         JsonObject? peer = null,
-        bool handoffConfirmation = false,
         bool startHttpServer = true,
         bool webUiEnabled = false
     )
@@ -53,7 +52,6 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             );
             await f.PeerAsync(peer ?? new JsonObject());
             var app = InboundMcpFixture.App();
-            app["handoffConfirmation"] = handoffConfirmation;
             app["claudeCode"] = new JsonObject
             {
                 ["executable"] = launcher,

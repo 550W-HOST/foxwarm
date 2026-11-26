@@ -147,7 +147,6 @@ internal sealed partial class ModelConfiguration
 
     public HostModels Models { get; }
     internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
-    internal bool HandoffConfirmationEnabled { get; }
     private volatile bool sessionAutoTitle;
     private volatile string? agentDefaultNode;
 
@@ -175,7 +174,6 @@ internal sealed partial class ModelConfiguration
         Access = new(app);
         Secrets = new Foxwarm.Secrets.InstanceSecrets(Paths.DataRoot);
         RegisterSecretSources();
-        HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(app);
         agentDefaultNode = AppConfigurationRules.AgentDefaultNode(app);
         var llm = app["llm"] as JsonObject;

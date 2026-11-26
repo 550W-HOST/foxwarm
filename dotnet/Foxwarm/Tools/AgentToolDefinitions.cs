@@ -332,7 +332,6 @@ internal static class AgentToolDefinitions
                         ["displayName"] = String(
                             "Display name for the new child Session. This does not change its Session ID."
                         ),
-                        ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String(
                             "Optional initial instruction. A forked child reads it from this call and starts work; it can rely on the shared context. With taskId, add only information not already in the Task; a fresh child receives it with the assignment."
                         ),
@@ -347,7 +346,6 @@ internal static class AgentToolDefinitions
                         ),
                         ["model"] = ModelRequest(),
                         ["forceModel"] = ForceModel(),
-                        ["handoffConfirmation"] = String(HandoffConfirmation.Description),
                     },
                     "suffix"
                 )
@@ -361,7 +359,6 @@ internal static class AgentToolDefinitions
                         ["sessionId"] = String(
                             "Target Session ID. <main> selects this Agent's main Session; <parent> selects this Session's direct parent and requires one to exist. Access is subject to Session permissions."
                         ),
-                        ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String("Message to deliver."),
                         ["currentSessionTurnAction"] = Choice(
                             "Controls the current Session's turn after delivery: continue (default) if you still have work to do, end_turn to end this turn without waiting, or wait for a response. Other incoming activity can also resume a waiting Session. If any tool in the same batch returns an error, the current Session continues instead of waiting or ending its turn.",
@@ -369,7 +366,6 @@ internal static class AgentToolDefinitions
                             "end_turn",
                             "wait"
                         ),
-                        ["handoffConfirmation"] = String(HandoffConfirmation.Description),
                     },
                     "sessionId",
                     "message"

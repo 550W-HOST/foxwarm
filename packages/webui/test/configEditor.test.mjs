@@ -60,9 +60,9 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.compactKeepPercent.default, 0.3)
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.compactThresholdPercent.default, 0.85)
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.memoryWarningThresholdPercent.default, 0.15)
-  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.handoffConfirmation.type, 'boolean')
-  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.handoffConfirmation.default, false)
-  assert.match(schemas.APP_CONFIG_SCHEMA.properties.handoffConfirmation.description, /requires restart/i)
+  // The removed handoff review key is no longer offered; existing configs that keep it still validate.
+  assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties, 'handoffConfirmation'), false)
+  assert.equal(validateAppConfigSchema({ handoffConfirmation: true }), true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'compactPercent'), false)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
