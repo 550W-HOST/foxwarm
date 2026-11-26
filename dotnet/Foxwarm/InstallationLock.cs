@@ -63,6 +63,32 @@ internal sealed class InstallationLock : IDisposable
         return new InstallationLock(root, file);
     }
 
+    /// <summary>
+    /// Holds the lock of a data directory without changing it, for tools that read an
+    /// installation while Main must be stopped. Only an existing lock file is opened, read-only,
+    /// so nothing is created or written; null when the file doesn't exist.
+    /// </summary>
+    /// <exception cref="InstallationLockedException">Another process holds it.</exception>
+    internal static InstallationLock? HoldExisting(string dataRoot)
+    {
+        var root = Path.GetFullPath(dataRoot);
+        try
+        {
+            return new InstallationLock(
+                root,
+                new FileStream(PathFor(root), FileMode.Open, FileAccess.Read, FileShare.None)
+            );
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (IOException error) when (IsHeldElsewhere(error))
+        {
+            throw new InstallationLockedException(root, error);
+        }
+    }
+
     private static bool IsHeldElsewhere(IOException error)
     {
         if (error.GetType() != typeof(IOException))

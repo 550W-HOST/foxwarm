@@ -2,6 +2,8 @@
 'use strict';
 
 const path = require('path');
+const { spawn } = require('node:child_process');
+const { coreExecutable } = require('./core-executable');
 
 function printHelp(stream) {
   stream.write(`foxwarm CLI
@@ -11,11 +13,32 @@ Usage: foxwarm <subcommand> [options]
 Subcommands:
   model    Send one prompt through Foxwarm's configured production model stack
   archive  Export SQLite-authoritative archives as compatibility JSONL
+  db       Hosted mode: apply or show the database schema (db migrate, db status)
+  hosted   Hosted mode: import a file-mode installation (hosted import)
 
 Options:
   -v, --version   Print version
   -h, --help      Show this help
 `);
+}
+
+// Hosted-mode operator verbs take their arguments and environment as they are and write their
+// own output, so the managed binary receives the command line unchanged.
+function runPassthrough(argv, streams = {}) {
+  const spawnImpl = streams.spawn || spawn;
+  const executable = (streams.coreExecutable || coreExecutable)();
+  return new Promise(resolve => {
+    const child = spawnImpl(executable.command, [...executable.args, ...argv], {
+      stdio: ['inherit', streams.stdout ? 'pipe' : 'inherit', streams.stderr ? 'pipe' : 'inherit'],
+    });
+    if (streams.stdout) child.stdout.pipe(streams.stdout, { end: false });
+    if (streams.stderr) child.stderr.pipe(streams.stderr, { end: false });
+    child.on('error', error => {
+      (streams.stderr || process.stderr).write(`Error: ${error.message}\n`);
+      resolve(1);
+    });
+    child.on('close', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  });
 }
 
 async function run(argv, streams = {}) {
@@ -31,6 +54,14 @@ async function run(argv, streams = {}) {
     const pkg = require(path.join(path.dirname(__dirname), 'package.json'));
     stdout.write(`${pkg.version || 'unknown'}\n`);
     return 0;
+  }
+  if (subcommand === 'db' || subcommand === 'hosted') {
+    try {
+      return await runPassthrough(argv, streams);
+    } catch (error) {
+      stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
   }
   if (subcommand !== 'model' && subcommand !== 'archive') {
     stderr.write(`Usage error: Unknown subcommand: ${subcommand}\n`);
@@ -53,4 +84,4 @@ if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; });
 }
 
-module.exports = { printHelp, run };
+module.exports = { printHelp, run, runPassthrough };

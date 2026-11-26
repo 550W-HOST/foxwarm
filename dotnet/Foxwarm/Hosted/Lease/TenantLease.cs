@@ -180,6 +180,130 @@ internal sealed class TenantLease
     }
 
     /// <summary>
+    /// Takes the lease for an import (<c>foxwarm hosted import</c>) and marks the tenant
+    /// <c>importing</c>, which no replica acquires (<see cref="EligibleAsync"/>). Creates the
+    /// tenant when <paramref name="expectedEpoch"/> is null; otherwise the tenant must still be
+    /// at that epoch, the one the caller saw when it found the tenant empty, so no owner can have
+    /// written since. Returns null when the tenant changed meanwhile or its lease is held. The
+    /// lease must be free (released or expired), and the tenant <c>active</c> or
+    /// <c>importing</c>. Changing the tenant's state needs the migrating role: this lease must
+    /// be built over the migration connection.
+    /// </summary>
+    internal async Task<LeaseGrant?> TryAcquireForImportAsync(
+        string replica,
+        long? expectedEpoch,
+        TimeSpan ttl,
+        TimeSpan lockTimeout,
+        CancellationToken token
+    )
+    {
+        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        await using (var timeout = new NpgsqlCommand("SELECT set_config('lock_timeout', $1, true)", connection, transaction))
+        {
+            timeout.Parameters.Add(new NpgsqlParameter<string>
+            {
+                TypedValue = ((long)lockTimeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms",
+            });
+            await timeout.ExecuteScalarAsync(token).ConfigureAwait(false);
+        }
+        if (expectedEpoch is null)
+        {
+            await using var create = new NpgsqlCommand(
+                "WITH created AS (INSERT INTO tenants (name, state) VALUES ($1, 'importing')"
+                    + " ON CONFLICT (name) DO NOTHING RETURNING tenant_id)"
+                    + " INSERT INTO tenant_leases (tenant_id) SELECT tenant_id FROM created RETURNING tenant_id",
+                connection,
+                transaction
+            );
+            create.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
+            if (await create.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+                return null;
+        }
+        long epoch;
+        try
+        {
+            await using var current = new NpgsqlCommand(
+                "SELECT l.epoch, (l.state = 'released' OR l.expires_at <= now()), t.state"
+                    + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.name = $1 FOR UPDATE OF l, t",
+                connection,
+                transaction
+            );
+            current.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
+            await using var reader = await current.ExecuteReaderAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false))
+                return null;
+            epoch = reader.GetInt64(0);
+            var free = reader.GetBoolean(1);
+            var state = reader.GetString(2);
+            if (epoch != (expectedEpoch ?? 0) || !free || state is not ("active" or "importing"))
+                return null;
+        }
+        catch (PostgresException error) when (error.SqlState == "55P03")
+        {
+            return null;
+        }
+        await using var update = new NpgsqlCommand(
+            "WITH marked AS (UPDATE tenants SET state = 'importing' WHERE name = $1 RETURNING tenant_id)"
+                + " UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
+                + " acquired_at = now(), expires_at = now() + make_interval(secs => $3)"
+                + " FROM marked WHERE l.tenant_id = marked.tenant_id RETURNING l.tenant_id, l.epoch",
+            connection,
+            transaction
+        );
+        update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
+        update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
+        update.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
+        int tenantId;
+        await using (var reader = await update.ExecuteReaderAsync(token).ConfigureAwait(false))
+        {
+            if (!await reader.ReadAsync(token).ConfigureAwait(false))
+                return null;
+            tenantId = reader.GetInt32(0);
+            epoch = reader.GetInt64(1);
+        }
+        await transaction.CommitAsync(token).ConfigureAwait(false);
+        return new(tenantId, Tenant, replica, epoch);
+    }
+
+    /// <summary>
+    /// Ends an import: marks the tenant <c>active</c> and releases the lease in one transaction,
+    /// waking standbys. Throws <see cref="TenantFencedException"/> when <paramref name="grant"/>
+    /// no longer holds the lease, so an import that lost it never activates the tenant. Needs
+    /// the migrating role, like <see cref="TryAcquireForImportAsync"/>.
+    /// </summary>
+    internal async Task ActivateImportAsync(LeaseGrant grant, CancellationToken token)
+    {
+        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        await using (var held = new NpgsqlCommand(
+            "SELECT 1 FROM tenant_leases WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3"
+                + " AND state = 'active' AND expires_at > now() FOR UPDATE",
+            connection,
+            transaction
+        ))
+        {
+            held.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
+            held.Parameters.Add(new NpgsqlParameter<string> { TypedValue = grant.Replica });
+            held.Parameters.Add(new NpgsqlParameter<long> { TypedValue = grant.Epoch });
+            if (await held.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+                throw new TenantFencedException("The import no longer holds the tenant lease.");
+        }
+        await using var activate = new NpgsqlCommand(
+            "WITH activated AS (UPDATE tenants SET state = 'active' WHERE tenant_id = $1 AND state = 'importing'),"
+                + " released AS (UPDATE tenant_leases SET state = 'released', expires_at = now()"
+                + " WHERE tenant_id = $1 RETURNING tenant_id)"
+                + " SELECT pg_notify($2, tenant_id::text) FROM released",
+            connection,
+            transaction
+        );
+        activate.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
+        activate.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Channel });
+        await activate.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        await transaction.CommitAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Extends the lease. False when it is no longer this grant's: taken over, released or
     /// already expired. Never waits for a lock longer than the token allows.
     /// </summary>

@@ -234,3 +234,29 @@ test('terminating the public frontend stops the one-shot provider process after 
     }
   }
 });
+
+test('db and hosted verbs pass their command line to the managed binary unchanged', async () => {
+  const { EventEmitter } = require('node:events');
+  const calls = [];
+  const fake = (command, args, options) => {
+    calls.push({ command, args, options });
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setImmediate(() => { child.stdout.end('out'); child.emit('close', 78, null); });
+    return child;
+  };
+  const stdout = capture();
+  const stderr = capture();
+  const streams = {
+    stdout: stdout.stream, stderr: stderr.stream, spawn: fake,
+    coreExecutable: () => ({ command: 'core', args: ['--installation-root', '/install'] }),
+  };
+  assert.equal(await run(['hosted', 'import', '--data-root', '/data', '--dry-run'], streams), 78);
+  assert.equal(await run(['db', 'status'], streams), 78);
+  assert.deepEqual(calls.map(call => [call.command, ...call.args]), [
+    ['core', '--installation-root', '/install', 'hosted', 'import', '--data-root', '/data', '--dry-run'],
+    ['core', '--installation-root', '/install', 'db', 'status'],
+  ]);
+  assert.equal(stdout.value(), 'outout');
+});
