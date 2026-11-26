@@ -126,6 +126,13 @@ internal interface IArchiveStore
 
     /// <summary>A reader for cross-Session sequence paging, or null while no Archive exists.</summary>
     IArchiveSequenceReader? OpenSequenceReader();
+
+    /// <summary>
+    /// Appends one direct effect record: an effect that never reaches a Session Archive
+    /// (unattended ToolScript calls, inbound MCP calls). These records are the only trace of
+    /// such effects and can't be rebuilt from Archive rows; an identity rename carries them.
+    /// </summary>
+    Task RecordDirectEffectAsync(ToolEffectRow row, CancellationToken token = default);
 }
 
 internal interface IArchiveIdentityReader : IDisposable

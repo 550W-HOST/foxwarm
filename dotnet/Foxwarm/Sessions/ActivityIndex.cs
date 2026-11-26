@@ -35,7 +35,9 @@ internal sealed class ActivityIndex : IAsyncDisposable
     private const int MaxScopedSessions = 20000;
 
     private readonly SessionManager manager;
-    private readonly string path;
+    // The SQLite Archive the derived index lives in; null for an Archive without one (hosted
+    // mode keeps only the direct records until the index has its own store).
+    private readonly string? path;
     private readonly object gate = new();
     private Task backfill = Task.CompletedTask;
     private CancellationToken stop = CancellationToken.None;
@@ -49,7 +51,9 @@ internal sealed class ActivityIndex : IAsyncDisposable
     internal ActivityIndex(SessionManager manager)
     {
         this.manager = manager;
-        path = Path.GetFullPath(manager.ArchiveDatabase);
+        path = manager.Storage.Archive is SqliteArchiveStore file
+            ? Path.GetFullPath(file.DatabasePath)
+            : null;
         SqliteArchiveMessageStore.ToolEffectsRecorded += Recorded;
         SqliteArchiveMessageStore.ToolEffectsFailed += Failed;
     }
@@ -172,7 +176,7 @@ internal sealed class ActivityIndex : IAsyncDisposable
     )
     {
         var receipt = await SqliteArchiveMessageStore
-            .EnqueueWriteAsync(path, execute, token)
+            .EnqueueWriteAsync(path!, execute, token)
             .ConfigureAwait(false);
         return await receipt.Completion.ConfigureAwait(false);
     }
@@ -631,22 +635,8 @@ internal sealed class ActivityIndex : IAsyncDisposable
                     {
                         try
                         {
-                            await WriteAsync(
-                                    (connection, transaction) =>
-                                    {
-                                        ArchiveToolEffects.InitializeSchema(
-                                            connection,
-                                            transaction
-                                        );
-                                        ArchiveToolEffects.InsertDirect(
-                                            connection,
-                                            transaction,
-                                            row
-                                        );
-                                        return true;
-                                    },
-                                    CancellationToken.None
-                                )
+                            await manager
+                                .Storage.Archive.RecordDirectEffectAsync(row, CancellationToken.None)
                                 .ConfigureAwait(false);
                             NotifyChanged();
                         }
@@ -682,6 +672,8 @@ internal sealed class ActivityIndex : IAsyncDisposable
     /// <summary>Whether every Archive row is indexed, and the oldest indexed time.</summary>
     internal JsonObject Coverage()
     {
+        if (path is null)
+            return new JsonObject { ["complete"] = false, ["earliest"] = null };
         if (!File.Exists(path))
             return new JsonObject { ["complete"] = true, ["earliest"] = null };
         using var connection = OpenRead();

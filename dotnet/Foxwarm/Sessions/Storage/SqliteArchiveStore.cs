@@ -110,6 +110,23 @@ FROM requested LEFT JOIN local_max ON local_max.session_id=requested.session_id 
             ? new SequenceReader(connection, DatabasePath)
             : null;
 
+    public async Task RecordDirectEffectAsync(ToolEffectRow row, CancellationToken token = default)
+    {
+        var receipt = await SqliteArchiveMessageStore
+            .EnqueueWriteAsync(
+                DatabasePath,
+                (connection, transaction) =>
+                {
+                    ArchiveToolEffects.InitializeSchema(connection, transaction);
+                    ArchiveToolEffects.InsertDirect(connection, transaction, row);
+                    return true;
+                },
+                token
+            )
+            .ConfigureAwait(false);
+        await receipt.Completion.ConfigureAwait(false);
+    }
+
     private SqliteConnection OpenReadOnly()
     {
         var db = new SqliteConnection(
