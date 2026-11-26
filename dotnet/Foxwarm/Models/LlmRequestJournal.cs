@@ -31,7 +31,6 @@ internal readonly record struct JournalRequestAdmission(string RequestId, Task C
 public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposable
 {
     internal const string MigrationId = "sqlite-only-large-archives-v1";
-    private const int MaxDeltaDepth = 8;
     private readonly string root;
     private readonly string path;
     private readonly SqliteWriterOwners.Lease owner;
@@ -158,35 +157,13 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                     var toolId = PutObject(connection, transaction, tools);
                     foreach (var message in preparedMessages)
                         PutObject(connection, transaction, message);
-                    string? baseRequest = null;
-                    int? commonPrefix = null;
-                    var deltaDepth = 0;
-                    if (!string.IsNullOrEmpty(sessionId))
-                    {
-                        var prior = ReadLatestRequest(connection, transaction, sessionId!);
-                        if (prior is not null && prior.Value.Depth < MaxDeltaDepth)
-                        {
-                            var priorIds = ReconstructIds(
-                                connection,
-                                transaction,
-                                prior.Value.RequestId
-                            );
-                            var prefix = 0;
-                            while (
-                                prefix < priorIds.Count
-                                && prefix < messageIds.Length
-                                && priorIds[prefix] == messageIds[prefix]
-                            )
-                                prefix++;
-                            baseRequest = prior.Value.RequestId;
-                            commonPrefix = prefix;
-                            deltaDepth = prior.Value.Depth + 1;
-                        }
-                    }
-                    var checkpoint = baseRequest is null ? JsonData.Serialize(messageIds) : null;
-                    var appended = baseRequest is null
-                        ? null
-                        : JsonData.Serialize(messageIds[(commonPrefix ?? 0)..]);
+                    var plan = LlmJournalReconstruction.PlanDelta(
+                        new SqliteRows(connection, transaction),
+                        string.IsNullOrEmpty(sessionId)
+                            ? null
+                            : ReadLatestRequest(connection, transaction, sessionId!),
+                        messageIds
+                    );
                     using var command = connection.CreateCommand();
                     command.Transaction = transaction;
                     command.CommandText = """
@@ -206,11 +183,11 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                     Add(command, "$model", requestedModelKey);
                     Add(command, "$cache", cacheHash);
                     Add(command, "$count", messageIds.Length);
-                    Add(command, "$checkpoint", checkpoint);
-                    Add(command, "$base", baseRequest);
-                    Add(command, "$prefix", commonPrefix);
-                    Add(command, "$appended", appended);
-                    Add(command, "$depth", deltaDepth);
+                    Add(command, "$checkpoint", plan.CheckpointJson);
+                    Add(command, "$base", plan.BaseRequestId);
+                    Add(command, "$prefix", plan.CommonPrefixLength);
+                    Add(command, "$appended", plan.AppendedJson);
+                    Add(command, "$depth", plan.DeltaDepth);
                     command.ExecuteNonQuery();
                     return true;
                 },
@@ -1549,7 +1526,7 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
 
     internal sealed record PreparedObject(string Id, string Kind, string Payload);
 
-    private static PreparedObject PrepareObject(string kind, JsonNode value)
+    internal static PreparedObject PrepareObject(string kind, JsonNode value)
     {
         var payload = Codec.Write(value);
         return new PreparedObject(Sha256(kind + "\0" + payload), kind, payload);
@@ -1592,217 +1569,134 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
         SqliteConnection connection,
         SqliteTransaction? transaction,
         string requestId
-    )
-    {
-        using var command = connection.CreateCommand();
-        if (transaction is not null)
-            command.Transaction = transaction;
-        command.CommandText =
-            "SELECT checkpoint_message_ids_json,base_request_id,common_prefix_length,appended_message_ids_json,delta_depth FROM llm_journal_requests WHERE request_id=$id";
-        Add(command, "$id", requestId);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
-            throw new InvalidDataException("Missing journal request.");
-        var checkpoint = reader.IsDBNull(0)
-            ? null
-            : JsonData.Deserialize<string[]>(reader.GetString(0));
-        var depth = reader.GetInt32(4);
-        if (depth < 0 || depth > MaxDeltaDepth)
-            throw new InvalidDataException("Invalid journal delta depth.");
-        if (checkpoint is not null)
-        {
-            if (depth != 0 || !reader.IsDBNull(1))
-                throw new InvalidDataException("Invalid journal checkpoint manifest.");
-            return checkpoint.ToList();
-        }
-        if (reader.IsDBNull(1) || depth == 0)
-            throw new InvalidDataException("Invalid journal delta manifest.");
-        var baseId = reader.GetString(1);
-        var prefix = reader.IsDBNull(2) ? -1 : reader.GetInt32(2);
-        var appended = reader.IsDBNull(3)
-            ? throw new InvalidDataException("Journal delta is missing appended messages.")
-            : JsonData.Deserialize<string[]>(reader.GetString(3)) ?? [];
-        var baseDepth = ReadScalar(
-            connection,
-            transaction,
-            "SELECT delta_depth FROM llm_journal_requests WHERE request_id=$id",
-            ("$id", baseId)
-        );
-        if (
-            baseDepth is null
-            || Convert.ToInt32(baseDepth, CultureInfo.InvariantCulture) != depth - 1
-        )
-            throw new InvalidDataException("Invalid journal delta ancestry.");
-        var baseIds = ReconstructIds(connection, transaction, baseId);
-        if (prefix < 0 || prefix > baseIds.Count)
-            throw new InvalidDataException("Invalid journal common prefix.");
-        return [.. baseIds.Take(prefix), .. appended];
-    }
+    ) => LlmJournalReconstruction.ReconstructIds(new SqliteRows(connection, transaction), requestId);
 
-    private static JsonObject Reconstruct(SqliteConnection connection, string requestId)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,requested_model_key,prompt_cache_key_hash,message_count FROM llm_journal_requests WHERE request_id=$id";
-        Add(command, "$id", requestId);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
-            return new JsonObject
-            {
-                ["requestId"] = requestId,
-                ["completeness"] = "legacy-partial",
-                ["missing"] = new JsonArray(
-                    "request-manifest",
-                    "system-prompt",
-                    "tool-schema",
-                    "canonical-messages"
-                ),
-            };
-        var session = reader.IsDBNull(0) ? null : reader.GetString(0);
-        var purpose = reader.GetString(1);
-        var iteration = reader.GetInt32(2);
-        var createdAt = reader.GetInt64(3);
-        var promptId = reader.GetString(4);
-        var schemaId = reader.GetString(5);
-        var requested = reader.GetString(6);
-        var cache = reader.GetString(7);
-        var count = reader.GetInt32(8);
-        reader.Close();
-        var ids = ReconstructIds(connection, null, requestId);
-        if (ids.Count != count)
-            throw new InvalidDataException("Journal message count mismatch.");
-        var systemPrompt = Codec.Parse(ReadObject(connection, promptId, "prompt"));
-        var attempts = new JsonArray();
-        var seenAttempts = new HashSet<int>();
-        using (var starts = connection.CreateCommand())
-        {
-            starts.CommandText =
-                "SELECT event_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id FROM llm_journal_attempt_starts WHERE request_id=$id ORDER BY attempt,started_at";
-            Add(starts, "$id", requestId);
-            using var startReader = starts.ExecuteReader();
-            while (startReader.Read())
-            {
-                var attempt = startReader.GetInt32(1);
-                if (attempt < 1 || !seenAttempts.Add(attempt))
-                    throw new InvalidDataException(
-                        "Journal has duplicate or invalid attempt starts."
-                    );
-                using var resultCommand = connection.CreateCommand();
-                resultCommand.CommandText =
-                    "SELECT event_id,outcome,result_json,error_json,completed_at FROM llm_journal_attempt_results WHERE request_id=$id AND attempt=$attempt ORDER BY completed_at DESC LIMIT 1";
-                Add(resultCommand, "$id", requestId);
-                Add(resultCommand, "$attempt", attempt);
-                using var resultReader = resultCommand.ExecuteReader();
-                JsonObject? result = null;
-                if (resultReader.Read())
-                {
-                    var outcome = resultReader.GetString(1);
-                    if (outcome is not ("success" or "failure" or "abort"))
-                        throw new InvalidDataException(
-                            "Journal has an invalid attempt result outcome."
-                        );
-                    if (outcome == "success" && resultReader.IsDBNull(2))
-                        throw new InvalidDataException(
-                            "Journal success result is missing payload."
-                        );
-                    if (outcome != "success" && resultReader.IsDBNull(3))
-                        throw new InvalidDataException("Journal failure result is missing error.");
-                    result = new JsonObject
-                    {
-                        ["v"] = 1,
-                        ["kind"] = "attempt-result",
-                        ["eventId"] = resultReader.GetString(0),
-                        ["requestId"] = requestId,
-                        ["attempt"] = attempt,
-                        ["completedAt"] = resultReader.GetInt64(4),
-                        ["outcome"] = outcome,
-                    };
-                    if (!resultReader.IsDBNull(2))
-                        result["result"] = Codec.Parse(resultReader.GetString(2));
-                    if (!resultReader.IsDBNull(3))
-                        result["error"] = Codec.Parse(resultReader.GetString(3));
-                }
-                var start = new JsonObject
-                {
-                    ["v"] = 1,
-                    ["kind"] = "attempt-start",
-                    ["eventId"] = startReader.GetString(0),
-                    ["requestId"] = requestId,
-                    ["attempt"] = attempt,
-                    ["startedAt"] = startReader.GetInt64(2),
-                    ["concreteModelId"] = startReader.GetString(3),
-                    ["providerType"] = startReader.GetString(5),
-                    ["semanticPayloadSha256"] = startReader.GetString(6),
-                };
-                if (!startReader.IsDBNull(4))
-                    start["virtualModelKey"] = startReader.GetString(4);
-                if (!startReader.IsDBNull(7))
-                    start["promptObjectId"] = startReader.GetString(7);
-                var attemptRecord = new JsonObject
-                {
-                    ["start"] = start,
-                    ["systemPrompt"] = startReader.IsDBNull(7)
-                        ? systemPrompt.DeepClone()
-                        : Codec.Parse(ReadObject(connection, startReader.GetString(7), "prompt")),
-                };
-                if (result is not null)
-                    attemptRecord["result"] = result;
-                attempts.Add(attemptRecord);
-            }
-        }
-        using (var results = connection.CreateCommand())
-        {
-            results.CommandText =
-                "SELECT attempt,outcome FROM llm_journal_attempt_results WHERE request_id=$id";
-            Add(results, "$id", requestId);
-            using var resultReader = results.ExecuteReader();
-            var seenResults = new HashSet<int>();
-            while (resultReader.Read())
-            {
-                var attempt = resultReader.GetInt32(0);
-                if (!seenAttempts.Contains(attempt) || !seenResults.Add(attempt))
-                    throw new InvalidDataException(
-                        "Journal has an orphaned or duplicate attempt result."
-                    );
-                if (resultReader.GetString(1) is not ("success" or "failure" or "abort"))
-                    throw new InvalidDataException(
-                        "Journal has an invalid attempt result outcome."
-                    );
-            }
-        }
-        return new JsonObject
-        {
-            ["requestId"] = requestId,
-            ["completeness"] = "complete",
-            ["sessionId"] = session,
-            ["purpose"] = purpose,
-            ["iteration"] = iteration,
-            ["createdAt"] = createdAt,
-            ["requestedModelKey"] = requested,
-            ["promptCacheKeyHash"] = cache,
-            ["systemPrompt"] = systemPrompt,
-            ["toolDefinitions"] = Codec.Parse(ReadObject(connection, schemaId, "tool-schema")),
-            ["messages"] = new JsonArray(
-                ids.Select(id => Codec.Parse(ReadObject(connection, id, "message"))).ToArray()
-            ),
-            ["messageCount"] = count,
-            ["attempts"] = attempts,
-        };
-    }
+    private static JsonObject Reconstruct(SqliteConnection connection, string requestId) =>
+        LlmJournalReconstruction.Reconstruct(new SqliteRows(connection, null), requestId);
 
-    private static string ReadObject(SqliteConnection connection, string id, string kind)
+    private static string ReadObject(SqliteConnection connection, string id, string kind) =>
+        LlmJournalReconstruction.ReadObject(new SqliteRows(connection, null), id, kind);
+
+    /// <summary>The reconstruction queries over one SQLite connection.</summary>
+    private sealed class SqliteRows(SqliteConnection connection, SqliteTransaction? transaction)
+        : ILlmJournalRows
     {
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT object_kind,payload FROM llm_journal_objects WHERE object_id=$id";
-        Add(command, "$id", id);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read() || reader.GetString(0) != kind)
-            throw new InvalidDataException("Invalid journal object reference.");
-        var payload = reader.GetString(1);
-        if (Sha256(kind + "\0" + payload) != id)
-            throw new InvalidDataException("Journal object hash mismatch.");
-        return payload;
+        private SqliteCommand Command(string sql, params (string Name, object? Value)[] values)
+        {
+            var command = connection.CreateCommand();
+            if (transaction is not null)
+                command.Transaction = transaction;
+            command.CommandText = sql;
+            foreach (var value in values)
+                Add(command, value.Name, value.Value);
+            return command;
+        }
+
+        public LlmJournalManifest? Manifest(string requestId)
+        {
+            using var command = Command(
+                "SELECT checkpoint_message_ids_json,base_request_id,common_prefix_length,appended_message_ids_json,delta_depth FROM llm_journal_requests WHERE request_id=$id",
+                ("$id", requestId)
+            );
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return null;
+            return new(
+                reader.IsDBNull(0) ? null : reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetInt32(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetInt32(4)
+            );
+        }
+
+        public LlmJournalHeader? Header(string requestId)
+        {
+            using var command = Command(
+                "SELECT session_id,purpose,iteration,created_at,prompt_object_id,tool_schema_object_id,requested_model_key,prompt_cache_key_hash,message_count FROM llm_journal_requests WHERE request_id=$id",
+                ("$id", requestId)
+            );
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return null;
+            return new(
+                reader.IsDBNull(0) ? null : reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                reader.GetInt64(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetInt32(8)
+            );
+        }
+
+        public IReadOnlyList<LlmJournalStartRow> Starts(string requestId)
+        {
+            using var command = Command(
+                "SELECT event_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id FROM llm_journal_attempt_starts WHERE request_id=$id ORDER BY attempt,started_at",
+                ("$id", requestId)
+            );
+            using var reader = command.ExecuteReader();
+            var rows = new List<LlmJournalStartRow>();
+            while (reader.Read())
+                rows.Add(
+                    new(
+                        reader.GetString(0),
+                        reader.GetInt32(1),
+                        reader.GetInt64(2),
+                        reader.GetString(3),
+                        reader.IsDBNull(4) ? null : reader.GetString(4),
+                        reader.GetString(5),
+                        reader.GetString(6),
+                        reader.IsDBNull(7) ? null : reader.GetString(7)
+                    )
+                );
+            return rows;
+        }
+
+        public LlmJournalResultRow? LatestResult(string requestId, int attempt)
+        {
+            using var command = Command(
+                "SELECT event_id,outcome,result_json,error_json,completed_at FROM llm_journal_attempt_results WHERE request_id=$id AND attempt=$attempt ORDER BY completed_at DESC LIMIT 1",
+                ("$id", requestId),
+                ("$attempt", attempt)
+            );
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return null;
+            return new(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetInt64(4)
+            );
+        }
+
+        public IReadOnlyList<(int Attempt, string Outcome)> Outcomes(string requestId)
+        {
+            using var command = Command(
+                "SELECT attempt,outcome FROM llm_journal_attempt_results WHERE request_id=$id",
+                ("$id", requestId)
+            );
+            using var reader = command.ExecuteReader();
+            var rows = new List<(int, string)>();
+            while (reader.Read())
+                rows.Add((reader.GetInt32(0), reader.GetString(1)));
+            return rows;
+        }
+
+        public (string Kind, string Payload)? Object(string objectId)
+        {
+            using var command = Command(
+                "SELECT object_kind,payload FROM llm_journal_objects WHERE object_id=$id",
+                ("$id", objectId)
+            );
+            using var reader = command.ExecuteReader();
+            return reader.Read() ? (reader.GetString(0), reader.GetString(1)) : null;
+        }
     }
 
     private static JsonObject RequestJson(SqliteDataReader reader)
@@ -1892,7 +1786,7 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
         return clone;
     }
 
-    private static JsonObject ToSourceResult(ChatResult result)
+    internal static JsonObject ToSourceResult(ChatResult result)
     {
         var assistant = result.AssistantMessage;
         var parts = assistant?["parts"] as JsonArray;
@@ -1951,16 +1845,16 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
         return command.ExecuteScalar();
     }
 
-    private static string HashValue(JsonNode value) => Sha256(Codec.Write(value));
+    internal static string HashValue(JsonNode value) => Sha256(Codec.Write(value));
 
-    private static string Sha256(string text) =>
+    internal static string Sha256(string text) =>
         "sha256:"
         + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
 
     private static void Add(SqliteCommand command, string name, object? value) =>
         command.Parameters.AddWithValue(name, value ?? DBNull.Value);
 
-    private static class Codec
+    internal static class Codec
     {
         internal static string Write(JsonNode? value)
         {

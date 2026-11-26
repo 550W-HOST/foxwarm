@@ -112,7 +112,7 @@ public sealed partial class LlmRequestJournalStore
             ? (long)number
             : null;
 
-    private static UsageRow ToUsageRow(JsonNode? usage, string? providerKey)
+    internal static UsageRow ToUsageRow(JsonNode? usage, string? providerKey)
     {
         var cost = SessionWait.Number(usage?["cost"]);
         return new(
@@ -124,10 +124,10 @@ public sealed partial class LlmRequestJournalStore
         );
     }
 
-    private static UsageRow PrepareUsageRow(ChatResult result, LlmUsageAttribution? attribution) =>
+    internal static UsageRow PrepareUsageRow(ChatResult result, LlmUsageAttribution? attribution) =>
         ToUsageRow(result.Usage, attribution?.ProviderKey);
 
-    private static string ProviderPrefix(string model) =>
+    internal static string ProviderPrefix(string model) =>
         model.IndexOf('/') is var slash and > 0 ? model[..slash] : model;
 
     private static void InsertUsage(
