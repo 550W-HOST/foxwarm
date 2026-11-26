@@ -56,14 +56,31 @@ export function apiClient(base, token) {
  * One GET on a new connection (no keep-alive), as a probe sees the entry: a pooled connection to
  * a replica that has since stopped would measure the client's connection reuse instead.
  */
+// One GET on a new connection. Settles exactly once: on the complete response, on any request
+// or response error (including a 200 that closes mid-body), or at `timeout` after the start.
 export function probe(url, token, timeout = 3000) {
   return new Promise(resolve => {
-    const request = httpGet(url, { agent: false, headers: { authorization: 'Bearer ' + token }, timeout }, response => {
+    let settled = false
+    const settle = result => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      resolve(result)
+    }
+    const request = httpGet(url, { agent: false, headers: { authorization: 'Bearer ' + token } }, response => {
+      response.on('error', error => settle({ ok: false, status: response.statusCode, error: error.code || error.message }))
+      response.on('aborted', () => settle({ ok: false, status: response.statusCode, error: 'response aborted' }))
+      response.on('close', () => {
+        if (!response.complete) settle({ ok: false, status: response.statusCode, error: 'response closed before its end' })
+      })
+      response.on('end', () => settle({ ok: response.statusCode === 200, status: response.statusCode }))
       response.resume()
-      response.on('end', () => resolve({ ok: response.statusCode === 200, status: response.statusCode }))
     })
-    request.on('timeout', () => request.destroy(new Error('timeout')))
-    request.on('error', error => resolve({ ok: false, error: error.code || error.message }))
+    const deadline = setTimeout(() => {
+      settle({ ok: false, error: 'timeout' })
+      request.destroy(new Error('timeout'))
+    }, timeout)
+    request.on('error', error => settle({ ok: false, error: error.code || error.message }))
   })
 }
 

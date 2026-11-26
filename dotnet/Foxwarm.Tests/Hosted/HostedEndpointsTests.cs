@@ -119,50 +119,208 @@ public sealed class HostedEndpointsTests
         await echo.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
-    [Fact]
-    public async Task AConnectionWaitsForAReachableOwnerAndClosesAfterTheHold()
+    // Sends `text` and EOF, then reads until the peer's EOF.
+    private static async Task<string> ExchangeAsync(TcpClient client, string text)
     {
-        // The owner is first unknown, then known but not listening yet (refused), then listening.
+        // The stream first: TcpClient refuses GetStream once the send side is shut down.
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.UTF8.GetBytes(text));
+        client.Client.Shutdown(SocketShutdown.Send);
+        using var received = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        int count;
+        while ((count = await stream.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(10))) > 0)
+            received.Write(buffer, 0, count);
+        return Encoding.UTF8.GetString(received.ToArray());
+    }
+
+    // True once the forwarder ended the connection, by EOF or a reset.
+    private static async Task<bool> EndedAsync(TcpClient client, TimeSpan within)
+    {
+        try
+        {
+            return await client.GetStream().ReadAsync(new byte[1]).AsTask().WaitAsync(within) == 0;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task UntilAsync(Func<bool> condition, string what)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Timed out waiting until " + what);
+            await Task.Delay(20);
+        }
+    }
+
+    [Fact]
+    public async Task SimultaneousWaitersShareOneLookupAndReachTheOwnerOnceItListens()
+    {
+        // The first lookup stalls until released; later ones return the current address.
+        var stalled = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstLookup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         string? address = null;
         var lookups = 0;
         await using var forwarder = new StandbyForwarder(
             AnyLoopback,
             _ =>
             {
-                Interlocked.Increment(ref lookups);
+                if (Interlocked.Increment(ref lookups) == 1)
+                {
+                    firstLookup.SetResult();
+                    return stalled.Task;
+                }
                 return Task.FromResult(address);
             },
             Hold
         );
-        using var held = new TcpClient();
-        await held.ConnectAsync(IPAddress.Loopback, forwarder.Port);
-        var request = Encoding.UTF8.GetBytes("held request");
-        await held.GetStream().WriteAsync(request);
-        var reply = new byte[request.Length];
-        var reading = held.GetStream().ReadAsync(reply).AsTask();
-        await Task.Delay(600);
-        Assert.False(reading.IsCompleted, "the connection was closed without an owner");
+        var clients = new List<TcpClient>();
+        var exchanges = new List<Task<string>>();
+        for (var index = 0; index < 4; index++)
+        {
+            var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, forwarder.Port);
+            clients.Add(client);
+            // The complete request and EOF, before any owner exists.
+            exchanges.Add(ExchangeAsync(client, $"request {index} " + new string('x', 50_000)));
+        }
+        await UntilAsync(() => forwarder.Connections == 4, "all four connections are accepted and held");
+        await firstLookup.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // Longer than the retry interval: nobody starts a second lookup while one is in flight.
+        await Task.Delay(StandbyForwarder.RetryInterval * 3);
+        Assert.Equal(1, Volatile.Read(ref lookups));
+        stalled.SetResult(null);
+
+        // Then known but refusing, then listening.
         var port = FreePort();
         address = $"127.0.0.1:{port}";
-        await Task.Delay(600);
-        Assert.False(reading.IsCompleted, "the connection was closed while the owner refused");
+        await Task.Delay(500);
+        Assert.All(exchanges, exchange => Assert.False(exchange.IsCompleted));
+        Assert.Equal(4, forwarder.Connections);
         using var owner = new Socket(SocketType.Stream, ProtocolType.Tcp);
         owner.Bind(new IPEndPoint(IPAddress.Loopback, port));
         owner.Listen();
         var echo = EchoAsync(owner);
-        var count = await reading.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal("held request"[..count], Encoding.UTF8.GetString(reply, 0, count));
-        // Waiting connections share lookups: a few per retry interval, not one per attempt each.
-        Assert.InRange(lookups, 1, 20);
+        for (var index = 0; index < 4; index++)
+            Assert.Equal($"request {index} " + new string('x', 50_000), await exchanges[index]);
+        // Shared: a few lookups per retry interval for all four, not one per attempt each.
+        Assert.InRange(Volatile.Read(ref lookups), 2, 12);
+        foreach (var client in clients)
+            client.Dispose();
+        owner.Dispose();
+        await echo;
+    }
 
-        // Without any owner, the connection closes once the hold bound passes.
+    [Fact]
+    public async Task TheHoldCountsFromTheAcceptEvenWhileALookupStalls()
+    {
+        using var owner = new Socket(SocketType.Stream, ProtocolType.Tcp);
+        owner.Bind(AnyLoopback);
+        owner.Listen();
+        var address = $"127.0.0.1:{((IPEndPoint)owner.LocalEndPoint!).Port}";
+        // The lookup finds a listening owner, but only after the hold has passed.
+        await using var forwarder = new StandbyForwarder(
+            AnyLoopback,
+            async _ =>
+            {
+                await Task.Delay(650);
+                return address;
+            },
+            TimeSpan.FromMilliseconds(200)
+        );
+        using var client = new TcpClient();
+        var accepted = System.Diagnostics.Stopwatch.StartNew();
+        await client.ConnectAsync(IPAddress.Loopback, forwarder.Port);
+        await client.GetStream().WriteAsync(Encoding.UTF8.GetBytes("late"));
+        Assert.True(await EndedAsync(client, TimeSpan.FromSeconds(5)));
+        Assert.InRange(accepted.Elapsed, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(600));
+        await Task.Delay(700);
+        Assert.False(owner.Poll(0, SelectMode.SelectRead), "the owner got a connection after the hold");
+        await UntilAsync(() => forwarder.OpenSockets == 0, "the forwarder owns no socket");
+
+        // Without any owner, too.
         await using var brief = new StandbyForwarder(AnyLoopback, _ => Task.FromResult<string?>(null), TimeSpan.FromMilliseconds(500));
         using var abandoned = new TcpClient();
         await abandoned.ConnectAsync(IPAddress.Loopback, brief.Port);
-        var buffer = new byte[1];
-        Assert.Equal(0, await abandoned.GetStream().ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
-        owner.Dispose();
+        Assert.True(await EndedAsync(abandoned, TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task DisposalDuringAStalledLookupLeavesNoSocketsWhenItCompletes()
+    {
+        using var owner = new Socket(SocketType.Stream, ProtocolType.Tcp);
+        owner.Bind(AnyLoopback);
+        owner.Listen();
+        var address = $"127.0.0.1:{((IPEndPoint)owner.LocalEndPoint!).Port}";
+        var stalled = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var forwarder = new StandbyForwarder(AnyLoopback, _ => stalled.Task, Hold);
+        var clients = new List<TcpClient>();
+        for (var index = 0; index < 4; index++)
+        {
+            var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, forwarder.Port);
+            clients.Add(client);
+        }
+        await UntilAsync(() => forwarder.Connections == 4, "all four connections are held");
+        var disposing = System.Diagnostics.Stopwatch.StartNew();
+        await forwarder.DisposeAsync();
+        Assert.True(disposing.Elapsed < TimeSpan.FromSeconds(2), "disposal waited for the stalled lookup");
+        Assert.Equal(0, forwarder.Connections);
+        foreach (var client in clients)
+            Assert.True(await EndedAsync(client, TimeSpan.FromSeconds(5)));
+        stalled.SetResult(address);
+        await Task.Delay(500);
+        Assert.Equal(0, forwarder.OpenSockets);
+        Assert.False(owner.Poll(0, SelectMode.SelectRead), "a connection was opened after disposal");
+        foreach (var client in clients)
+            client.Dispose();
+    }
+
+    [Fact]
+    public async Task AStandbyDoesntForwardToItsOwnAddressBeforeTheHandover()
+    {
+        // A restarted replica keeps its address while its old grant is still valid.
+        var port = FreePort();
+        var self = $"127.0.0.1:{port}";
+        var forwarder = new StandbyForwarder(new IPEndPoint(IPAddress.Loopback, port), _ => Task.FromResult<string?>(self), Hold, selfAddress: self);
+        using var held = new TcpClient();
+        await held.ConnectAsync(IPAddress.Loopback, port);
+        var exchange = ExchangeAsync(held, "held");
+        await Task.Delay(800);
+        // Forwarding into its own listener would have accepted a chain of connections.
+        Assert.Equal(1, forwarder.Connections);
+        Assert.False(exchange.IsCompleted);
+        // After the handover the address is this replica's host, and the held connection goes there.
+        var adopted = await forwarder.HandOverAsync();
+        var echo = EchoAsync(adopted);
+        Assert.Equal("held", await exchange);
+        await forwarder.DisposeAsync();
+        adopted.Dispose();
         await echo;
+    }
+
+    [Fact]
+    public async Task ConnectionsBeyondTheLimitAreResetAtOnce()
+    {
+        await using var forwarder = new StandbyForwarder(AnyLoopback, _ => Task.FromResult<string?>(null), Hold, maxConnections: 2);
+        using var first = new TcpClient();
+        using var second = new TcpClient();
+        await first.ConnectAsync(IPAddress.Loopback, forwarder.Port);
+        await second.ConnectAsync(IPAddress.Loopback, forwarder.Port);
+        await UntilAsync(() => forwarder.Connections == 2, "two connections are held");
+        using var excess = new TcpClient();
+        await excess.ConnectAsync(IPAddress.Loopback, forwarder.Port);
+        Assert.True(await EndedAsync(excess, TimeSpan.FromSeconds(2)), "the excess connection wasn't ended");
+        Assert.Equal(2, forwarder.Connections);
+        Assert.False(await EndedAsync(first, TimeSpan.FromMilliseconds(200)));
     }
 
     [Fact]
@@ -171,22 +329,24 @@ public sealed class HostedEndpointsTests
         string? address = null;
         var forwarder = new StandbyForwarder(AnyLoopback, _ => Task.FromResult(address), Hold);
         var port = forwarder.Port;
+        // Held by the forwarder, its request and EOF already sent.
         using var held = new TcpClient();
         await held.ConnectAsync(IPAddress.Loopback, port);
-        await Task.Delay(300);
+        var heldExchange = ExchangeAsync(held, "held " + new string('h', 100_000));
+        await UntilAsync(() => forwarder.Connections == 1, "the connection is held");
         // Takeover: the replica's own host adopts the socket; until it accepts, connections queue.
         var adopted = await forwarder.HandOverAsync();
         using var queued = new TcpClient();
         await queued.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TimeSpan.FromSeconds(5));
-        var queuedReply = RoundTripAsync(queued, "queued");
+        var queuedExchange = ExchangeAsync(queued, "queued " + new string('q', 100_000));
         await Task.Delay(300);
-        Assert.False(queuedReply.IsCompleted);
-        adopted.Listen(512);
+        Assert.False(queuedExchange.IsCompleted);
+        Assert.Equal(1, forwarder.Connections);
         var echo = EchoAsync(adopted);
         // The new owner is this replica: the held connection goes to its host.
         address = $"127.0.0.1:{port}";
-        Assert.Equal("queued", await queuedReply);
-        Assert.Equal("held", await RoundTripAsync(held, "held"));
+        Assert.Equal("queued " + new string('q', 100_000), await queuedExchange);
+        Assert.Equal("held " + new string('h', 100_000), await heldExchange);
         await forwarder.DisposeAsync();
         adopted.Dispose();
         await echo;

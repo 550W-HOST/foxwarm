@@ -39,8 +39,10 @@ internal sealed class LeaseMonitor : IAsyncDisposable
         this.timings = timings;
         this.log = log;
         Grant = grant;
-        // The acquisition itself counts as the first renewal; it started before this point.
-        lastSuccessStart = Stopwatch.GetTimestamp();
+        // The acquisition counts as the first renewal, from before its transaction began: the
+        // expiry counts from the transaction's database time, and the commit, the handover and
+        // whatever else came before this point take from the same budget.
+        lastSuccessStart = grant.AcquisitionStart != 0 ? grant.AcquisitionStart : Stopwatch.GetTimestamp();
     }
 
     internal LeaseGrant Grant { get; }
