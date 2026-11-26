@@ -29,9 +29,14 @@ export function requiredCompactOperations(text, summary) {
 
 export const NEW_SESSION_DIALOG_TRIGGER = 'button[aria-haspopup="dialog"]:is([aria-label="New session"], [aria-label="New session options"])'
 // Setup opens Models in the form view when the form can represent the file; fixtures that write exact YAML switch to the editor.
+// First run shows Models alone on its own surface, without the section rail.
 export async function openModelsYaml(page) {
-  await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
+  await page.waitForSelector('#setup-tab-models, [data-setup-first-run]')
+  if (await page.$('#setup-tab-models')) await page.click('#setup-tab-models')
   await page.waitForSelector('[data-models-view="yaml"]'); await page.click('[data-models-view="yaml"]')
+}
+export async function clickSaveModels(page) {
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models' || button.textContent === 'Save and continue')?.click())
 }
 export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.evaluate(() => { location.hash = 'setup' })
@@ -40,7 +45,7 @@ export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.waitForSelector(editor); await page.focus(editor)
   await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')
   await page.keyboard.sendCharacter(raw.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models')?.click())
+  await clickSaveModels(page)
   await until(async () => (await readFile(modelPath, 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === raw.replaceAll('\r\n', '\n'), 'original Models saved')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)

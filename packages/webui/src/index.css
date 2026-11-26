@@ -2366,7 +2366,9 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 }
 @container foxwarm-setup (max-width: 699px) {
   .foxwarm-setup-navigation { padding: 4px 4px 0; overflow-x: auto; }
-  .foxwarm-setup-section-list [role="tab"] { padding: 10px 12px; font-size: 12px; }
+  /* Labels keep their width and the row scrolls, so a status icon never overlaps the next label. */
+  .foxwarm-setup-section-list { width: max-content; }
+  .foxwarm-setup-section-list [role="tab"] { flex-shrink: 0; gap: 6px; padding: 10px 12px; font-size: 12px; white-space: nowrap; }
 }
 
 /* Text-entry controls and the Select trigger share compact, legible workbench typography. The code

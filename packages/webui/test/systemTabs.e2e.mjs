@@ -256,7 +256,7 @@ test('system tabs remain workbench tabs on a mobile viewport', async () => {
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4'))?.state?.tabsById?.['system:setup']?.type), 'setup')
 })
 
-test('forced OOBE Setup still rejects workbench close requests', async () => {
+test('forced OOBE shows only the first-run Models step over a saved workbench', async () => {
   const forcedPage = await browser.newPage()
   await forcedPage.setViewport({ width: 1440, height: 900 })
   await forcedPage.evaluateOnNewDocument(() => {
@@ -306,15 +306,11 @@ test('forced OOBE Setup still rejects workbench close requests', async () => {
   try {
     await forcedPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
     await waitForWebUiReady(forcedPage)
-    const closeSelector = '[data-tab-id="system:setup"] button[title="Close tab"], [data-workbench-tab-close="system:setup"]'
-    await forcedPage.waitForSelector(closeSelector, { timeout: 15_000 })
-    await forcedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
+    // First run is the Models step alone: the form/YAML switch, and no tab to close or leave for.
+    await forcedPage.waitForSelector('[data-first-run-surface] [data-setup-first-run]', { timeout: 15_000 })
     await forcedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
-    // Forced Setup offers the model form/YAML switch; it still cannot be closed before a valid save.
     assert.ok(await forcedPage.$('[role="group"][aria-label="Model settings view"]'))
-    await forcedPage.click(closeSelector)
-    await new Promise((resolve) => setTimeout(resolve, 150))
-    assert.ok(await forcedPage.$(closeSelector))
+    assert.equal(await forcedPage.$('[data-tab-id], [data-workbench-tab-close="system:setup"]'), null)
   } finally {
     await forcedPage.close()
   }

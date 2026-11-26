@@ -33,8 +33,9 @@ import { getNodeTargetAvailability, MASTER_NODE_TARGET, parseWebUiNodeTargets, t
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 import type { TerminalListOptions } from './components/TerminalList'
 import { parseTerminalRegistry, requestTerminalKill, terminalKillConfirmation, type TerminalRegistryRecord } from './terminalRegistry'
-import { useChatPreferences } from './chatPreferences'
+import { reloadInstallationChatDefaults, useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
+import { FoxwarmMark } from './components/FoxwarmMark'
 import { FoxPaneLoader } from './components/FoxLoaders'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
@@ -715,8 +716,15 @@ function App() {
   }
 
   const setupOobeRef = useRef(false)
-  // First-run Setup creates the default `main` Session with a welcome. Place it next to
-  // Setup so closing Setup lands in the conversation instead of an empty pane.
+  // A first-run save receipt names the welcome Session; it opens once status confirms that setup is done.
+  const firstRunReceiptRef = useRef<{ sessionId: string | null } | null>(null)
+  const [welcomeSessionId, setWelcomeSessionId] = useState<string | null>(null)
+  const handleModelsSaved = useCallback((receipt: { firstSessionId?: unknown }) => {
+    if (!setupOobeRef.current || !('firstSessionId' in receipt)) return
+    firstRunReceiptRef.current = { sessionId: typeof receipt.firstSessionId === 'string' && receipt.firstSessionId ? receipt.firstSessionId : null }
+  }, [])
+  // A first-run save without a welcome Session in its receipt: if `main` exists anyway, place
+  // it next to Setup so closing Setup lands in a conversation instead of an empty pane.
   const openFirstRunSession = async () => {
     try {
       const res = await fetch(`${API_BASE_PATH}/sessions/main/state`)
@@ -738,7 +746,17 @@ function App() {
       const completedFirstRun = setupOobeRef.current && !isOobe
       setupOobeRef.current = isOobe
       setSetupOobe(isOobe)
-      if (completedFirstRun) void openFirstRunSession()
+      if (completedFirstRun) {
+        void reloadInstallationChatDefaults()
+        const welcome = firstRunReceiptRef.current?.sessionId
+        firstRunReceiptRef.current = null
+        if (welcome) setWelcomeSessionId(welcome)
+        else {
+          // No welcome was created: ordinary Setup takes over, still on Models.
+          setFocusModelsRequest((current) => current + 1)
+          void openFirstRunSession()
+        }
+      }
       if (isOobe && route.tabId !== SETUP_TAB_ID) {
         setRoute({ view: 'tab', tabId: SETUP_TAB_ID })
         window.location.hash = SETUP_HASH
@@ -747,6 +765,22 @@ function App() {
       console.error('Failed to fetch setup status:', error)
     }
   }
+
+  // After the first save, the welcome Session replaces Setup: the user lands in the conversation.
+  useEffect(() => {
+    if (setupOobe || !welcomeSessionId) return
+    setWelcomeSessionId(null)
+    const existing = Object.values(useWorkbenchStore.getState().tabsById).find(tab => isChatTab(tab) && tab.sessionId === welcomeSessionId)
+    const tab = existing || makeChatTab(welcomeSessionId, welcomeSessionId)
+    upsertTab(isChatTab(tab) ? { ...tab, preview: false } : tab, { activate: true })
+    if (useWorkbenchStore.getState().tabsById[SETUP_TAB_ID]) {
+      if (currentRouteTabIdRef.current === SETUP_TAB_ID) closingRouteTabIdsRef.current.add(SETUP_TAB_ID)
+      removeTab(SETUP_TAB_ID)
+    }
+    navigateToTab(tab.id)
+    void fetchSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setupOobe, welcomeSessionId])
 
   // Lifecycle refreshes and the background poll can overlap; only the latest request applies.
   const terminalFetchSequence = useRef(0)
@@ -1766,6 +1800,7 @@ function App() {
             forced={setupOobe}
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
+            onModelsSaved={handleModelsSaved}
             focusModelsRequest={focusModelsRequest}
             onFocusModelsRequestHandled={handleFocusModelsRequestHandled}
             webUiSettings={webUiSettings}
@@ -2165,6 +2200,31 @@ function App() {
       </WorkbenchContentProvider>
     </DndContext>
   )
+
+  // First run is a single step: connecting a model. Nothing else of the workbench is shown,
+  // so nothing can be started before the first save creates the welcome Session.
+  if (setupOobe) {
+    const firstRun = (
+      <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
+        <SetupView
+          forced
+          showBrand={!windowFramed}
+          onSetupChanged={() => { void fetchSetupStatus() }}
+          onModelsSaved={handleModelsSaved}
+        />
+      </Suspense>
+    )
+    if (windowFramed) {
+      return <div data-first-run-surface data-foxwarm-popup-framed="" className="foxwarm-fixed-viewport-shell flex h-full min-h-0 flex-col overflow-hidden">
+        <header className="foxwarm-popup-title-row" data-frame-row="column" data-frame-drag>
+          <FoxwarmMark className="h-4 w-4 shrink-0" />
+          <span className="foxwarm-popup-title">Foxwarm</span>
+        </header>
+        <div className="foxwarm-popup-card min-h-0 flex-1 overflow-hidden bg-fw-canvas">{firstRun}</div>
+      </div>
+    }
+    return <div data-first-run-surface className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">{firstRun}</div>
+  }
 
   if (isMobile) {
     const mobilePaneProps = mobilePaneId ? getPaneProps(mobilePaneId) : undefined

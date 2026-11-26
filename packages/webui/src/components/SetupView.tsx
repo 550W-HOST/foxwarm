@@ -5,6 +5,7 @@ import { Bell, Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, Slider
 import { API_BASE_PATH } from '../config'
 import { buildModelSetupYaml, defaultModelsYaml, formFromPreset, readModelSetupForm, validateModelSetupForm, type ModelSetupForm } from '../setupModels'
 import ModelSetupFormPanel from './ModelSetupFormPanel'
+import { FoxwarmMark } from './FoxwarmMark'
 import { refreshModelOptions } from '../modelOptionsLoader'
 import { APP_CONFIG_YAML_MODEL_URI, MODELS_YAML_MODEL_URI } from '../yamlConfigSchemas'
 import ContentHeader from './ContentHeader'
@@ -56,6 +57,10 @@ interface SetupViewProps {
   forced?: boolean
   onClose?: () => void
   onSetupChanged?: () => void
+  /** Receives each successful Models save receipt; a first-run save carries `firstSessionId`. */
+  onModelsSaved?: (receipt: { firstSessionId?: unknown }) => void
+  /** First run only: show the Foxwarm mark above the title (a window frame's title row shows it instead). */
+  showBrand?: boolean
   focusModelsRequest?: number
   onFocusModelsRequestHandled?: (request: number) => void
   webUiSettings?: WebUiBrandingSettingsValue
@@ -127,7 +132,7 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, onModelsSaved, showBrand = true, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   // First-run Setup exists to add a model, so it starts on Models; ordinary Setup starts on Appearance.
   const [activeTab, setActiveTab] = useState<SetupTab>(forced ? 'models' : 'appearance')
@@ -191,8 +196,6 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const modelsReading = useMemo(() => readModelSetupForm(rawModelsYaml), [rawModelsYaml])
 
   const modelConfigured = !!status?.models.exists
-  const channelAvailable = (status?.channels || []).some((channel) => channel.running) || true // WebUI itself is available when this page is open.
-  const canLeave = !forced || (modelConfigured && channelAvailable)
   const channelRows = useMemo(() => status?.channels || [], [status])
   const configTabStatus = useMemo(() => {
     const enabledChannels = channelRows.filter((channel) => channel.enabled)
@@ -337,6 +340,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to save models (${res.status})`)
       refreshModelOptions()
+      onModelsSaved?.(data)
       if (saveGeneration !== modelsSaveGenerationRef.current) return
       const submissionIsCurrent = modelsRevisionRef.current === submittedRevision && rawModelsYamlRef.current === submittedYaml
       if (submissionIsCurrent) {
@@ -386,7 +390,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
         const message = data.notApplied?.length ? 'Saved. Some changes could not be applied.'
           : data.restartRequired?.length ? 'Saved. Restart to apply the remaining changes.'
           : startedChannels ? `Config saved. Active channels refreshed: ${startedChannels}.`
-          : data.reload?.available === false ? 'Configuration saved. Some settings take effect after a server restart.'
+          : data.reload?.available === false ? 'Configuration saved. Some settings take effect after Foxwarm restarts.'
           : 'Config saved.'
         setConfigSaveResult({ kind: 'success', message })
         if (typeof data.rawYaml === 'string') updateConfigYaml(data.rawYaml)
@@ -477,13 +481,107 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
     }
   }
 
+  const modelsBody = (
+    <div className={modelsView === 'yaml' && !forced ? 'foxwarm-setup-editor-section' : 'flex flex-col'}>
+      <div className={`flex shrink-0 flex-wrap items-start gap-3 ${forced ? 'justify-end' : 'justify-between'}`}>
+        {!forced && <div className="min-w-0">
+          <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
+          <p className="mt-1 text-sm text-fw-text">{modelsView === 'form'
+            ? 'Connect the service that runs your models.'
+            : 'Configure model providers, routing, and your default model in YAML.'}</p>
+        </div>}
+        <div role="group" aria-label="Model settings view" className="inline-flex shrink-0 rounded-lg border border-fw-border p-0.5 dark:border-fw-border">
+          {(['form', 'yaml'] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              aria-pressed={modelsView === view}
+              data-models-view={view}
+              onClick={() => {
+                setModelsView(view)
+                setModelsSaveResult(null)
+              }}
+              className={`rounded-md px-3 py-1 text-sm font-medium ${modelsView === view ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface' : 'text-fw-text hover:bg-fw-hover'}`}
+            >
+              {view === 'form' ? 'Form' : 'YAML'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {modelsView === 'form' && (
+        <div className="mt-5" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
+          {modelsReading.ok ? (
+            <ModelSetupFormPanel
+              form={modelsReading.form}
+              focusRequest={modelsFormFocusRequest}
+              onChange={(next: ModelSetupForm) => updateModelsYaml(buildModelSetupYaml(next))}
+            />
+          ) : (
+            <div data-models-form-unavailable className="max-w-2xl rounded-lg border border-fw-border-muted bg-fw-surface-sunken/40 p-4 text-sm text-fw-text">
+              <p>{modelsReading.reason === 'invalid'
+                ? 'The YAML has an error, so the form can’t show it. Fix it in YAML.'
+                : 'This configuration uses settings the form can’t show, such as comments, several providers, aliases, failover or other model options. Edit it in YAML so nothing is lost.'}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" onClick={() => setModelsView('yaml')} className="rounded-lg bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:bg-fw-accent">Edit in YAML</button>
+                {!modelConfigured && (
+                  <button type="button" onClick={() => updateModelsYaml(buildModelSetupYaml(formFromPreset('openai')))} className="rounded-lg border border-fw-border px-3 py-1.5 text-sm font-medium text-fw-text hover:bg-fw-hover">Start over with the form</button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`${modelsView === 'yaml' ? '' : 'hidden'} mt-4 min-h-72 ${forced ? 'h-[60vh]' : 'flex-1'}`} onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
+        <SimpleCodeEditor
+          value={rawModelsYaml}
+          onChange={updateModelsYaml}
+          language="yaml"
+          height="100%"
+          modelUri={MODELS_YAML_MODEL_URI}
+          focusRequest={modelsEditorFocusRequest}
+          ariaLabel="Models YAML editor"
+        />
+      </div>
+
+      <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
+        <button disabled={savingModels || (modelsView === 'form' && !modelsReading.ok)} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : forced ? 'Save and continue' : 'Save models'}</button>
+        <SaveFeedback section="models" result={modelsSaveResult} />
+      </div>
+    </div>
+  )
+
+  // First run: only the Models step, on its own surface without the Setup rail.
+  if (forced) {
+    return (
+      <div ref={setupRootRef} data-setup-first-run className="foxwarm-setup-root flex h-full min-h-0 flex-col overflow-y-auto bg-fw-canvas">
+        <div className="mx-auto flex w-full max-w-2xl flex-col px-4 py-8 sm:px-6 md:py-12">
+          {showBrand && (
+            <div className="flex items-center gap-2 text-lg font-semibold text-fw-text-strong">
+              <FoxwarmMark className="h-7 w-7 shrink-0" />
+              <span>Foxwarm</span>
+            </div>
+          )}
+          <h1 id="setup-first-run-title" className={`${showBrand ? 'mt-6' : ''} text-2xl font-semibold text-fw-text-strong`}>Connect a model</h1>
+          <p className="mt-2 text-sm text-fw-text">Choose a service and add your API key. You can change this later in Setup.</p>
+          {loading && !status && <div className="mt-6 text-sm text-fw-text-muted">Loading…</div>}
+          {error && <div className="mt-4 rounded-xl border border-fw-danger-border bg-fw-danger-surface p-4 text-sm text-fw-danger">{error}</div>}
+          <section ref={modelsSectionRef} id="setup-panel-models" aria-labelledby="setup-first-run-title" data-setup-section="models" className="mt-6 flex flex-col">
+            {modelsBody}
+          </section>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div ref={setupRootRef} className={`foxwarm-setup-root flex h-full min-h-0 flex-col bg-fw-canvas ${mobileHome ? 'mobile-page-root mobile-setup-page' : ''}`}>
       {mobileHome ? <MobilePageHeader title="Settings" actions={<button ref={mobileOptionsRef} type="button" className="mobile-header-circle" aria-label="Settings sections" aria-haspopup="menu" aria-expanded={!!mobileOptions} onClick={() => setMobileOptions(mobileOptionsRef.current!.getBoundingClientRect())}><SlidersHorizontal size={20} /></button>} /> : (
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
-        title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
-        subtitle={forced ? 'Add your model settings to continue.' : 'Manage models, channels, app settings, secrets, appearance, and notifications.'}
+        title="Foxwarm Setup"
+        subtitle="Manage models, channels, app settings, secrets, appearance, and notifications."
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -493,7 +591,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
             >
               <RefreshCw className="h-4 w-4" /> Refresh
             </button>
-            {!tabHeader && !forced && onClose && (
+            {!tabHeader && onClose && (
               <button
                 type="button"
                 onClick={onClose}
@@ -626,75 +724,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
             </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
-              <div className={modelsView === 'yaml' ? 'foxwarm-setup-editor-section' : 'flex flex-col'}>
-                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
-                    <p className="mt-1 text-sm text-fw-text">{modelsView === 'form'
-                      ? 'Connect the service that runs your models.'
-                      : 'Configure model providers, routing, and your default model in YAML.'}</p>
-                  </div>
-                  <div role="group" aria-label="Model settings view" className="inline-flex shrink-0 rounded-lg border border-fw-border p-0.5 dark:border-fw-border">
-                    {(['form', 'yaml'] as const).map((view) => (
-                      <button
-                        key={view}
-                        type="button"
-                        aria-pressed={modelsView === view}
-                        data-models-view={view}
-                        onClick={() => {
-                          setModelsView(view)
-                          setModelsSaveResult(null)
-                        }}
-                        className={`rounded-md px-3 py-1 text-sm font-medium ${modelsView === view ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface' : 'text-fw-text hover:bg-fw-hover'}`}
-                      >
-                        {view === 'form' ? 'Form' : 'YAML'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {modelsView === 'form' && (
-                  <div className="mt-5" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
-                    {modelsReading.ok ? (
-                      <ModelSetupFormPanel
-                        form={modelsReading.form}
-                        focusRequest={modelsFormFocusRequest}
-                        onChange={(next: ModelSetupForm) => updateModelsYaml(buildModelSetupYaml(next))}
-                      />
-                    ) : (
-                      <div data-models-form-unavailable className="max-w-2xl rounded-lg border border-fw-border-muted bg-fw-surface-sunken/40 p-4 text-sm text-fw-text">
-                        <p>{modelsReading.reason === 'invalid'
-                          ? 'The YAML has an error, so the form can’t show it. Fix it in YAML.'
-                          : 'This configuration uses settings the form can’t show, such as comments, several providers, aliases, failover or other model options. Edit it in YAML so nothing is lost.'}</p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button type="button" onClick={() => setModelsView('yaml')} className="rounded-lg bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:bg-fw-accent">Edit in YAML</button>
-                          {!modelConfigured && (
-                            <button type="button" onClick={() => updateModelsYaml(buildModelSetupYaml(formFromPreset('openai')))} className="rounded-lg border border-fw-border px-3 py-1.5 text-sm font-medium text-fw-text hover:bg-fw-hover">Start over with the form</button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className={`${modelsView === 'yaml' ? '' : 'hidden'} mt-4 min-h-72 flex-1`} onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
-                  <SimpleCodeEditor
-                    value={rawModelsYaml}
-                    onChange={updateModelsYaml}
-                    language="yaml"
-                    height="100%"
-                    modelUri={MODELS_YAML_MODEL_URI}
-                    focusRequest={modelsEditorFocusRequest}
-                    ariaLabel="Models YAML editor"
-                  />
-                </div>
-
-                <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                  <button disabled={savingModels || (modelsView === 'form' && !modelsReading.ok)} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
-                  <SaveFeedback section="models" result={modelsSaveResult} />
-                  {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
-                </div>
-              </div>
+              {modelsBody}
             </section>
 
             <section id="setup-panel-secrets" role="tabpanel" aria-labelledby="setup-tab-secrets" data-setup-section="secrets" hidden={activeTab !== 'secrets'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
@@ -745,16 +775,16 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   {status.capabilities.externalChannelMessage || 'External chat channels are unavailable on this server.'}
                 </p>
               )}
-              {status?.capabilities?.managedChannels !== false && <div data-setup-config-last="weixin" className="mt-6 shrink-0 border-t border-fw-border pt-5 dark:border-fw-border-muted">
-                <h3 className="font-medium text-fw-text-strong">Weixin login</h3>
-                <p className="mt-1 text-sm text-fw-text">Connect Weixin by scanning a QR code.</p>
+              {status?.capabilities?.managedChannels !== false && <details data-setup-config-last="weixin" className="mt-6 shrink-0 border-t border-fw-border pt-5 dark:border-fw-border-muted">
+                <summary className="cursor-pointer select-none font-medium text-fw-text-strong">Connect Weixin</summary>
+                <p className="mt-1 text-sm text-fw-text">Scan a QR code with Weixin to sign in.</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
                   <button disabled={weixinBusy || !weixinSessionKey} onClick={() => void waitWeixinLogin()} className="rounded-lg border border-fw-border px-4 py-2 text-sm font-medium text-fw-text hover:bg-fw-hover disabled:opacity-60 dark:border-fw-border dark:text-fw-text-strong dark:hover:bg-fw-hover">Check login</button>
                 </div>
                 {weixinMessage && <div className="mt-3 text-sm text-fw-text">{weixinMessage}</div>}
                 {weixinQrSrc && <img src={weixinQrSrc} alt="Weixin login QR code" className="mt-4 h-56 w-56 rounded-lg border border-fw-border bg-fw-surface object-contain p-2 dark:border-fw-border" />}
-              </div>}
+              </details>}
             </section>
 
           </div>

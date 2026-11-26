@@ -276,8 +276,13 @@ async function attachRequestMocks(targetPage, options = {}) {
         void respondJson(request, { error: saveError }, 400)
       } else {
         mockModelsRawYaml = savedRequest.yaml
+        const firstRun = mockOobe
         mockOobe = false
-        void respondJson(request, { success: true, models: { ...statusPayload.models, rawYaml: savedRequest.yaml } })
+        void respondJson(request, {
+          success: true,
+          models: { ...statusPayload.models, rawYaml: savedRequest.yaml },
+          ...(firstRun && options.firstSessionId !== undefined ? { firstSessionId: options.firstSessionId } : {}),
+        })
       }
       return
     }
@@ -364,7 +369,7 @@ async function attachRequestMocks(targetPage, options = {}) {
       return
     }
     if (url.pathname.endsWith('/api/sessions')) {
-      void respondJson(request, { sessions: [] })
+      void respondJson(request, { sessions: options.sessions ?? [] })
       return
     }
     if (url.pathname.endsWith('/api/session-list/architecture')) {
@@ -693,7 +698,10 @@ test('Setup uses accessible Appearance, Models, Config, Secrets and Notification
     assert.equal(await setupPage.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
     assert.equal(await setupPage.$eval('[data-setup-section="config"]', (panel) => panel.hidden), false)
     assert.equal(await setupPage.$eval('[data-setup-section="config"]', (panel) => panel.lastElementChild?.getAttribute('data-setup-config-last')), 'weixin')
-    assert.ok((await setupPage.$eval('[data-setup-config-last="weixin"]', (element) => element.textContent || '')).includes('Connect Weixin by scanning a QR code.'))
+    // Weixin login is rarely needed, so it waits behind a collapsed disclosure.
+    assert.equal(await setupPage.$eval('[data-setup-config-last="weixin"]', (details) => details.open), false)
+    await setupPage.click('[data-setup-config-last="weixin"] summary')
+    assert.ok((await setupPage.$eval('[data-setup-config-last="weixin"]', (element) => element.textContent || '')).includes('Scan a QR code with Weixin to sign in.'))
     assert.equal((await setupPage.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('sessionKey'), false)
     assert.equal((await setupPage.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('pairing URL'), false)
     await setupPage.click('button::-p-text(Start Weixin login)')
@@ -1024,7 +1032,7 @@ test('Setup later modules do not reduce editor height in the normal workbench pa
     assert.ok(spaceAfterSave >= 0 && spaceAfterSave < geometry.config.save.height,
       'the initial pane budget ends after the visible Save row')
     assert.ok(geometry.config.scrollHeight > geometry.config.clientHeight, 'later modules remain in the panel scroller')
-    await layoutPage.$eval('[data-setup-config-last="weixin"]', element => element.scrollIntoView({ block: 'end' }))
+    await layoutPage.$eval('[data-setup-config-last="weixin"]', element => { element.open = true; element.scrollIntoView({ block: 'end' }) })
     assert.equal(await layoutPage.$eval('button::-p-text(Start Weixin login)', button => {
       const rect = button.getBoundingClientRect()
       return rect.top >= 0 && rect.bottom <= innerHeight
@@ -2018,18 +2026,12 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
   try {
     await degradedPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
     await waitForWebUiReady(degradedPage)
-    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
-    await degradedPage.waitForSelector('[data-setup-tab="models"] [data-setup-tab-status="attention"]')
-    const forcedSetupClose = await degradedPage.waitForSelector('[data-workbench-tab-close="system:setup"]')
-    await degradedPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'system:setup')
-    // Forced first-run Setup opens directly on Models, with the form as the starting view.
-    assert.equal(await degradedPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
+    // First run is the Models step alone, with the form as the starting view and nothing to close.
+    await degradedPage.waitForSelector('[data-first-run-surface] [data-setup-first-run]', { timeout: 15_000 })
+    assert.equal(await degradedPage.$('[data-workbench-tab-close="system:setup"]'), null)
+    assert.equal(await degradedPage.$('[data-setup-tab="models"]'), null)
     await degradedPage.waitForSelector('[data-model-setup-form]', { visible: true })
     await degradedPage.click('[data-models-view="yaml"]')
-    await forcedSetupClose.click()
-    assert.ok(await degradedPage.$('[data-workbench-tab-close="system:setup"]'))
-    assert.equal(await degradedPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
-    assert.equal(await degradedPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId), 'system:setup')
     const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
     assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Advanced editor features are unavailable. You can still edit and save this YAML.'))
     await degradedPage.waitForSelector('#foxwarm-boot[data-state="notice"]', { visible: true })
@@ -2068,7 +2070,9 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
       textarea.focus()
     })
     await pressSaveShortcut(degradedPage, 'Control')
-    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Models saved.'))
+    // Without a welcome Session in the receipt, ordinary Setup takes over on Models.
+    await degradedPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
+    assert.equal(await degradedPage.$('[data-first-run-surface]'), null)
     assert.deepEqual(savedRequest, { yaml })
     assert.deepEqual(modelsSaveRequests, [{ yaml }])
     assert.deepEqual(await degradedPage.evaluate(() => window.__fallbackSaveShortcutEvents), [
@@ -2138,17 +2142,29 @@ test('first-run Setup completes a provider through the model form, list, connect
   try {
     await formPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
     await waitForWebUiReady(formPage)
-    await formPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
-    assert.equal(await formPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
+    await formPage.waitForSelector('[data-setup-first-run]', { timeout: 15_000 })
+    assert.equal(await formPage.$eval('[data-setup-first-run] h1', node => node.textContent), 'Connect a model')
     await formPage.waitForSelector('[data-model-setup-form]', { visible: true })
+    // Presets keep their connection details under a collapsed Advanced disclosure.
+    assert.equal(await formPage.$eval('[data-model-setup-advanced]', details => details.open), false)
+    assert.equal(await formPage.$eval('[data-model-setup-form]', form => /models\.yaml|server/.test(form.textContent)), false)
     assert.equal(await formPage.$eval('[data-models-view="form"]', button => button.getAttribute('aria-pressed')), 'true')
     assert.equal(await formPage.$eval('[data-model-setup-field="service"]', select => select.value), 'openai')
     assert.equal(await formPage.$eval('[data-model-setup-field="apiKey"]', input => input.value), '', 'the template placeholder is not shown as a key')
     await setupScreenshot(formPage, '01-first-run-models-form.png')
 
-    await formPage.click('button::-p-text(Save models)')
+    await formPage.click('button::-p-text(Save and continue)')
     await formPage.waitForSelector('[data-save-feedback="models"][role="alert"]')
-    assert.equal(await formPage.$eval('[data-save-feedback="models"]', node => node.textContent), 'Replace the placeholder API key with your key.')
+    assert.equal(await formPage.$eval('[data-save-feedback="models"]', node => node.textContent), 'Enter your API key.')
+
+    // Other service starts on Chat Completions, and keeps an API type chosen in this form.
+    await chooseSelectOption(formPage, '[data-model-setup-field="service"]', 'custom')
+    assert.equal(await formPage.$eval('[data-model-setup-advanced]', details => details.open), true)
+    assert.equal(await formPage.$eval('[data-model-setup-field="providerType"]', select => select.value), 'openai-completions')
+    await chooseSelectOption(formPage, '[data-model-setup-field="providerType"]', 'openai-responses')
+    await chooseSelectOption(formPage, '[data-model-setup-field="service"]', 'openai')
+    await chooseSelectOption(formPage, '[data-model-setup-field="service"]', 'custom')
+    assert.equal(await formPage.$eval('[data-model-setup-field="providerType"]', select => select.value), 'openai-responses')
     assert.deepEqual(modelsSaveRequests, [], 'an unfinished key is not sent')
 
     await chooseSelectOption(formPage, '[data-model-setup-field="service"]', 'openrouter')
@@ -2157,17 +2173,23 @@ test('first-run Setup completes a provider through the model form, list, connect
     await formPage.click('button::-p-text(Load models)')
     await formPage.waitForFunction(() => document.querySelector('[data-model-setup-feedback="list"]')?.textContent?.includes('2 models available'))
     assert.deepEqual(providerModelListRequests, [{ providerType: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-test' }])
-    assert.deepEqual(await formPage.$$eval('[data-model-setup-form] datalist option', options => options.map(option => option.value)), ['vendor/model-a', 'vendor/model-b'])
-    await formPage.type('[data-model-setup-field="model"]', 'vendor/model-b')
-    await formPage.keyboard.press('Enter')
+    assert.deepEqual(await formPage.$$eval('[data-model-setup-available]', buttons => buttons.map(button => button.getAttribute('data-model-setup-available'))), ['vendor/model-a', 'vendor/model-b'])
+    // Typing filters the listed models; one click adds one, and the first added becomes the default.
+    await formPage.type('[data-model-setup-field="model"]', 'model-b')
+    assert.deepEqual(await formPage.$$eval('[data-model-setup-available]', buttons => buttons.map(button => button.getAttribute('data-model-setup-available'))), ['vendor/model-b'])
+    await formPage.click('[data-model-setup-available="vendor/model-b"]')
     await formPage.waitForSelector('[data-model-setup-model="vendor/model-b"]')
+    await formPage.$eval('[data-model-setup-field="model"]', input => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
     assert.equal(await formPage.$eval('[data-model-setup-model="vendor/model-b"] [data-model-setup-limits]', node => node.textContent), '256K context · 64K output · Images')
     assert.equal(await formPage.$eval('[data-model-setup-field="defaultModel"]', select => select.value), 'vendor/model-b')
 
     // A model listed without image input is saved with imageInput: false.
-    await formPage.type('[data-model-setup-field="model"]', 'vendor/model-a')
-    await formPage.keyboard.press('Enter')
+    await formPage.click('[data-model-setup-available="vendor/model-a"]')
     await formPage.waitForSelector('[data-model-setup-model="vendor/model-a"]')
+    assert.equal(await formPage.$('[data-model-setup-available-list]'), null, 'every listed model is added')
     assert.equal(await formPage.$eval('[data-model-setup-model="vendor/model-a"] [data-model-setup-limits]', node => node.textContent), '32K context · Text only')
     assert.equal(await formPage.$eval('[data-model-setup-field="defaultModel"]', select => select.value), 'vendor/model-b')
 
@@ -2183,19 +2205,64 @@ test('first-run Setup completes a provider through the model form, list, connect
     }])
     await setupScreenshot(formPage, '02-first-run-models-form-tested.png')
 
-    await formPage.click('button::-p-text(Save models)')
-    await formPage.waitForFunction(() => document.querySelector('[data-save-feedback="models"]')?.textContent === 'Models saved.')
+    await formPage.click('button::-p-text(Save and continue)')
+    await formPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     assert.deepEqual(modelsSaveRequests, [{
       yaml: 'default: "openrouter/vendor/model-b"\nproviders:\n  openrouter:\n    providerType: "openai-completions"\n    baseUrl: "https://openrouter.ai/api/v1"\n    apiKey: "sk-or-test"\n    models:\n      - id: "vendor/model-b"\n        contextLimit: 262144\n        maxOutput: 65536\n      - id: "vendor/model-a"\n        contextLimit: 32768\n        imageInput: false\n',
     }])
     await setupScreenshot(formPage, '03-first-run-models-saved.png')
     // The saved file is representable, so the form remains the view after the status refresh.
-    assert.equal(await formPage.$eval('[data-models-view="form"]', button => button.getAttribute('aria-pressed')), 'true')
+    await formPage.waitForSelector('[data-models-view="form"][aria-pressed="true"]')
     assert.equal(await formPage.$eval('[data-model-setup-field="service"]', select => select.value), 'openrouter')
   } finally {
     await formPage.close()
   }
 })
+
+// Regression: the first-run shell offered Start a conversation and New session before the first
+// save, and a Session created there suppressed the welcome. First run now shows only Models.
+for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone', width: 390, height: 844, isMobile: true, hasTouch: true }]) {
+  test(`first run (${viewport.name}) offers only the Models step and then opens the welcome Session`, async () => {
+    const firstRunPage = await browser.newPage()
+    const modelsSaveRequests = []
+    await firstRunPage.setViewport(viewport)
+    await attachRequestMocks(firstRunPage, {
+      oobe: true,
+      modelsSaveRequests,
+      firstSessionId: 'main',
+      // A Session that appears while first run is shown must not be reachable from it.
+      sessions: [{ id: 'stray', agentId: 'main', displayName: 'stray', updatedAt: 1, createdAt: 1 }],
+    })
+    try {
+      await firstRunPage.goto(`${productionBaseUrl}/#tab/${encodeURIComponent('chat:stray')}`, { waitUntil: 'networkidle2' })
+      await firstRunPage.waitForSelector('[data-first-run-surface] [data-setup-first-run]', { timeout: 15_000 })
+      await firstRunPage.waitForSelector('[data-model-setup-form]', { visible: true })
+      assert.deepEqual(await firstRunPage.evaluate(() => ({
+        startConversation: [...document.querySelectorAll('button, a')].some(element => element.textContent?.trim() === 'Start a conversation'),
+        newSession: !!document.querySelector('button[aria-label="New session"], button[aria-label="New session options"]'),
+        sessionRows: document.querySelectorAll('[data-session-id]').length,
+        tabStrip: !!document.querySelector('[data-tab-id]'),
+        setupRail: !!document.querySelector('[data-setup-tab]'),
+        chat: !!document.querySelector('.foxwarm-chat-root'),
+        horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      })), { startConversation: false, newSession: false, sessionRows: 0, tabStrip: false, setupRail: false, chat: false, horizontalOverflow: false })
+      // The route guard still sends any other route back to Setup.
+      await firstRunPage.waitForFunction(() => location.hash === '#setup' || location.hash === '#tab/' + encodeURIComponent('system:setup'))
+      await setupScreenshot(firstRunPage, `05-first-run-${viewport.name}.png`)
+
+      await firstRunPage.type('[data-model-setup-field="apiKey"]', 'sk-test-first-run')
+      await firstRunPage.click('button::-p-text(Save and continue)')
+      // The save receipt names the welcome Session, which replaces Setup.
+      await firstRunPage.waitForFunction(() => location.hash === '#tab/' + encodeURIComponent('chat:main'), { timeout: 15_000 })
+      assert.equal(modelsSaveRequests.length, 1)
+      assert.equal(await firstRunPage.$('[data-first-run-surface]'), null)
+      assert.equal(await firstRunPage.$('[data-tab-id="system:setup"]'), null)
+      assert.equal(await firstRunPage.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).includes('system:setup')), false)
+    } finally {
+      await firstRunPage.close()
+    }
+  })
+}
 
 test('an existing configuration opens in the form only when the form can keep all of it', async () => {
   // One page at a time: a background page does not run animation frames, which WebUI readiness waits for.

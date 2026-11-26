@@ -4,6 +4,7 @@ import { API_BASE_PATH } from '../config'
 import Select from './Select'
 import {
   addModel,
+  CUSTOM_PRESET_ID,
   connectionTestRequest,
   describeModelLimits,
   formFromPreset,
@@ -63,6 +64,9 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
   const preset = presetFor(form)
   const keyRequired = requiresApiKey(form.baseUrl)
   const [showKey, setShowKey] = useState(false)
+  // Other service starts on Chat Completions, which most gateways implement, unless the API type was chosen here.
+  const [apiTypeChosen, setApiTypeChosen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [modelDraft, setModelDraft] = useState('')
   const [availableModels, setAvailableModels] = useState<ListedModel[]>([])
   const [listFeedback, setListFeedback] = useState<Feedback | null>(null)
@@ -95,6 +99,9 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
     onChange({ ...form, ...patch })
   }
 
+  // The template key is hidden as an empty field; once the connection is edited it is dropped, so it can't reach a keyless endpoint.
+  const updateConnection = (patch: Partial<ModelSetupForm>) => update({ ...patch, ...(isPlaceholderApiKey(form.apiKey) ? { apiKey: '' } : {}) })
+
   const loadModels = async () => {
     listAbort.current?.abort()
     const controller = new AbortController()
@@ -106,7 +113,7 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
       const models = readListedModels(data.models)
       setAvailableModels(models)
       setListFeedback(models.length > 0
-        ? { kind: 'success', message: `${models.length} model${models.length === 1 ? '' : 's'} available. Pick one below.` }
+        ? { kind: 'success', message: models.length === 1 ? '1 model available. Click to add it.' : `${models.length} models available. Click one to add it.` }
         : { kind: 'error', message: 'The service returned no models. Enter a model ID instead.' })
     } catch (error) {
       if (controller.signal.aborted) return
@@ -140,6 +147,11 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
 
   const selectedIds = modelIds(form)
   const suggestions = availableModels.filter((model) => !selectedIds.includes(model.id))
+  const draftFilter = modelDraft.trim().toLowerCase()
+  const visibleSuggestions = draftFilter ? suggestions.filter((model) => model.id.toLowerCase().includes(draftFilter)) : suggestions
+  // Presets fill the connection fields; they stay under Advanced. The same element serves Other service,
+  // always open, so editing a field that turns the form into Other service keeps its focus.
+  const isPreset = preset.id !== CUSTOM_PRESET_ID
 
   return (
     <div data-model-setup-form className="w-full max-w-2xl space-y-5">
@@ -152,7 +164,7 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
           value={preset.id}
           onChange={(value) => {
             setShowKey(false)
-            onChange({ ...formFromPreset(value), ...(value === 'custom' ? { providerType: form.providerType } : {}) })
+            onChange({ ...formFromPreset(value), ...(value === CUSTOM_PRESET_ID && apiTypeChosen ? { providerType: form.providerType } : {}) })
           }}
           className={inputClass}
           options={PROVIDER_PRESETS.map((item) => ({ value: item.id, label: item.label }))}
@@ -160,6 +172,14 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
         {preset.id === 'ollama' && <p className={hintClass}>Uses Ollama on the machine where Foxwarm is installed.</p>}
       </div>
 
+      <details
+        data-model-setup-advanced
+        open={!isPreset || advancedOpen}
+        onToggle={(event) => { if (isPreset) setAdvancedOpen(event.currentTarget.open) }}
+        className="group"
+      >
+        <summary className={isPreset ? 'cursor-pointer select-none text-sm font-medium text-fw-text hover:text-fw-text-strong' : 'hidden'}>Advanced</summary>
+        <div className={`space-y-5 ${isPreset ? 'mt-4' : ''}`}>
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
           <label className={labelClass} htmlFor={`${id}-type`}>API type</label>
@@ -167,7 +187,10 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
             id={`${id}-type`}
             data-model-setup-field="providerType"
             value={form.providerType}
-            onChange={(value) => update({ providerType: value as ModelProviderType })}
+            onChange={(value) => {
+              setApiTypeChosen(true)
+              updateConnection({ providerType: value as ModelProviderType })
+            }}
             className={inputClass}
             options={MODEL_PROVIDER_TYPES}
           />
@@ -197,10 +220,12 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
           value={form.baseUrl}
           placeholder="https://api.example.com/v1"
           spellCheck={false}
-          onChange={(event) => update({ baseUrl: event.target.value })}
+          onChange={(event) => updateConnection({ baseUrl: event.target.value })}
           className={inputClass}
         />
       </div>
+        </div>
+      </details>
 
       <div>
         <label className={labelClass} htmlFor={`${id}-key`}>API key</label>
@@ -220,7 +245,7 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
             {showKey ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
           </button>
         </div>
-        <p className={hintClass}>{keyRequired ? 'Required for this service. It is stored in your models.yaml on the server.' : 'Leave empty if your server doesn’t need one.'}</p>
+        <p className={hintClass}>{keyRequired ? 'Required for this service.' : 'Leave empty if the service doesn’t need one.'}</p>
       </div>
 
       <fieldset>
@@ -250,7 +275,6 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
               id={`${id}-model`}
               data-model-setup-field="model"
               type="text"
-              list={`${id}-available`}
               value={modelDraft}
               placeholder={suggestions.length > 0 ? 'Search or enter a model ID' : 'Model ID'}
               spellCheck={false}
@@ -262,14 +286,32 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
               }}
               className={`${inputClass} !mt-0`}
             />
-            <datalist id={`${id}-available`}>
-              {suggestions.map((model) => <option key={model.id} value={model.id} label={describeModelLimits(model) || undefined} />)}
-            </datalist>
           </div>
           <button type="button" disabled={!modelDraft.trim()} onClick={commitModelDraft} className={secondaryButtonClass}><Plus className="h-4 w-4" aria-hidden="true" />Add</button>
           <button type="button" disabled={!form.baseUrl.trim() || listFeedback?.kind === 'progress'} onClick={() => void loadModels()} className={secondaryButtonClass}><Download className="h-4 w-4" aria-hidden="true" />Load models</button>
         </div>
         <FeedbackLine feedback={listFeedback} name="list" />
+        {visibleSuggestions.length > 0 && (
+          <ul aria-label="Available models" data-model-setup-available-list className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-fw-border-muted">
+            {visibleSuggestions.map((model) => {
+              const limits = describeModelLimits(model)
+              return (
+                <li key={model.id} className="border-t border-fw-border-muted first:border-t-0">
+                  <button
+                    type="button"
+                    data-model-setup-available={model.id}
+                    onClick={() => update(addModel(form, model.id, availableModels))}
+                    className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-sm text-fw-text-strong hover:bg-fw-hover"
+                  >
+                    <Plus className="h-4 w-4 shrink-0 text-fw-text-muted" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{model.id}</span>
+                    {limits && <span className="shrink-0 text-xs text-fw-text-muted">{limits}</span>}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </fieldset>
 
       <div>
