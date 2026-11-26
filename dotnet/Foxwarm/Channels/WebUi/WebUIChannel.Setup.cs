@@ -127,7 +127,7 @@ internal sealed partial class WebUIChannel
                     var locale = input.Remove("locale", out var localeNode)
                         ? SessionWait.Text(localeNode)
                         : null;
-                    var firstRun = !File.Exists(configuration.ActivePath);
+                    var firstRun = !configuration.ModelsInstalled;
                     var installation = await configuration.SaveAsync(input);
                     installation["success"] = true;
                     installation["models"] = configuration.Diagnostics();

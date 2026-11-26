@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 
 namespace Foxwarm.Tools;
 
@@ -133,29 +134,51 @@ internal sealed class ToolApprovalOutcomeException(
     }
 }
 
-internal sealed class ToolAuthorizationAuthority(
-    string dataRoot,
-    Func<long>? clock = null,
-    Func<CancellationToken, Task>? retryDelay = null
-)
+internal sealed class ToolAuthorizationAuthority
 {
-    private readonly string path = Path.Combine(
-        Path.GetFullPath(dataRoot),
-        "state",
-        "tool-authorization.yaml"
-    );
+    private readonly IConfigDocumentStore documents;
+    private readonly Func<long>? clock;
+    private readonly Func<CancellationToken, Task>? retryDelay;
     private readonly object cacheGate = new();
     private ToolAuthorizationPolicy? cached;
     private long loadedAt;
+
+    // The policy file <data root>/state/tool-authorization.yaml.
+    internal ToolAuthorizationAuthority(
+        string dataRoot,
+        Func<long>? clock = null,
+        Func<CancellationToken, Task>? retryDelay = null
+    )
+        : this(new FileConfigDocuments(dataRoot), clock, retryDelay) { }
+
+    internal ToolAuthorizationAuthority(
+        IConfigDocumentStore documents,
+        Func<long>? clock = null,
+        Func<CancellationToken, Task>? retryDelay = null
+    )
+    {
+        this.documents = documents;
+        this.clock = clock;
+        this.retryDelay = retryDelay;
+    }
+
     private long Now => clock?.Invoke() ?? Environment.TickCount64;
     internal Action<string>? InstallBoundary { get; set; }
-    internal string PolicyPath => path;
 
+    // The policy file Agent tools must not read; null when the policy isn't a file.
+    internal string? PolicyPath => documents.PhysicalPath(ConfigDocumentName.ToolAuthorization);
+
+    internal string PolicyLocator => documents.Locator(ConfigDocumentName.ToolAuthorization);
+
+    // A hand-edited file is read again after 10 s; a policy that changes only through
+    // installation stays cached until the installation invalidates it.
     private ToolAuthorizationPolicy? Hit()
     {
         var now = Now;
         lock (cacheGate)
-            return cached is not null && now - loadedAt < 10_000 ? cached : null;
+            return cached is not null && (!documents.DirectEdits || now - loadedAt < 10_000)
+                ? cached
+                : null;
     }
 
     private ToolAuthorizationPolicy Cache(ToolAuthorizationPolicy value)
@@ -175,45 +198,18 @@ internal sealed class ToolAuthorizationAuthority(
             cached = null;
     }
 
+    // An absent policy is the compatibility policy; anything that can't be read as one bounded
+    // value throws, and two failures in a row deny (ToolAuthorizationUnavailableException).
     private ToolAuthorizationPolicy Read()
     {
-        try
-        {
-            if (!WorkspaceTools.PolicyFileKind(path, out var missing))
-            {
-                if (missing)
-                    return ToolAuthorizationPolicy.Compatibility();
-                throw new InvalidDataException("Policy must be a readable regular file.");
-            }
-            using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete
-            );
-            if (stream.Length > ToolAuthorizationPolicy.MaxBytes)
-                throw new InvalidDataException("Tool policy exceeds its byte limit.");
-            using var output = new MemoryStream();
-            var buffer = new byte[8192];
-            int count;
-            while ((count = stream.Read(buffer)) > 0)
-            {
-                if (output.Length + count > ToolAuthorizationPolicy.MaxBytes)
-                    throw new InvalidDataException("Tool policy exceeds its byte limit.");
-                output.Write(buffer, 0, count);
-            }
-            var policy = ToolAuthorizationYaml.Parse(output.ToArray());
-            ToolAuthorizationPolicy.Report("policy", policy);
-            return policy;
-        }
-        catch (Exception error)
-            when ((error is FileNotFoundException or DirectoryNotFoundException)
-                && !WorkspaceTools.PolicyFileKind(path, out var absent)
-                && absent
-            )
-        {
+        if (
+            documents.ReadBounded(ConfigDocumentName.ToolAuthorization, ToolAuthorizationPolicy.MaxBytes)
+            is not { } bytes
+        )
             return ToolAuthorizationPolicy.Compatibility();
-        }
+        var policy = ToolAuthorizationYaml.Parse(bytes);
+        ToolAuthorizationPolicy.Report("policy", policy);
+        return policy;
     }
 
     internal ToolAuthorizationPolicy Load()
@@ -271,21 +267,20 @@ internal sealed class ToolAuthorizationAuthority(
     internal async Task InstallAsync(byte[] bytes, CancellationToken token)
     {
         _ = ToolAuthorizationYaml.Parse(bytes);
-        var file = new AtomicJsonFile(
-            Path.GetDirectoryName(path)!,
-            Path.GetFileName(path),
-            stage =>
-            {
-                if (stage == AtomicJsonWriteStage.BeforeTempWrite)
-                    InstallBoundary?.Invoke("captured");
-                else if (stage == AtomicJsonWriteStage.BeforeRename)
-                    InstallBoundary?.Invoke("before-rename");
-            },
-            privateFile: true
-        );
         try
         {
-            await file.WriteStreamPayloadAsync(stream => stream.Write(bytes), null, token);
+            await documents.ReplaceAsync(
+                ConfigDocumentName.ToolAuthorization,
+                bytes,
+                token,
+                stage =>
+                {
+                    if (stage == AtomicJsonWriteStage.BeforeTempWrite)
+                        InstallBoundary?.Invoke("captured");
+                    else if (stage == AtomicJsonWriteStage.BeforeRename)
+                        InstallBoundary?.Invoke("before-rename");
+                }
+            );
         }
         catch (AuthorityCommittedException error)
         {

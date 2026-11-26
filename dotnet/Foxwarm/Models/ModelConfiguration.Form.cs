@@ -8,8 +8,8 @@ internal sealed partial class ModelConfiguration
 {
     private string BuildForm(JsonObject input)
     {
-        var existing = File.Exists(ActivePath)
-            ? ConfigurationYaml.Parse(File.ReadAllText(ActivePath), "models config")
+        var existing = ReadInstalledModelsText() is { } text
+            ? ConfigurationYaml.Parse(text, "models config")
             : new JsonObject();
         var rootKey =
             existing["providers"] is not null ? "providers"

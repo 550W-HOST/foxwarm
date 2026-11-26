@@ -54,7 +54,7 @@ internal sealed partial class SessionManager
                 "explain_tool_authorization",
                 "node",
                 "read",
-                new JsonObject { ["filePath"] = authorization.PolicyPath }
+                new JsonObject { ["filePath"] = authorization.PolicyLocator }
             ),
             files,
             token

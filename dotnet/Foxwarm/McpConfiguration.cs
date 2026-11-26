@@ -1,12 +1,21 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 using Foxwarm.Tools;
 
 namespace Foxwarm;
 
-internal sealed class McpConfiguration(string root, string? configPath = null)
+internal sealed class McpConfiguration
 {
+    private readonly IConfigDocumentStore documents;
+
+    // The file <root>/state/mcp.json, or the configured path.
+    internal McpConfiguration(string root, string? configPath = null)
+        : this(new FileConfigDocuments(root, configPath)) { }
+
+    internal McpConfiguration(IConfigDocumentStore documents) => this.documents = documents;
+
     private readonly SemaphoreSlim mutation = new(1, 1);
     private readonly object gate = new();
     private JsonObject? live;
@@ -16,7 +25,7 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
     // Snapshot and summaries keep the reference text.
     internal Func<string, string?>? SecretLookup { get; set; }
 
-    internal string FilePath => configPath ?? Path.Combine(root, "state", "mcp.json");
+    internal string FilePath => documents.Locator(ConfigDocumentName.Mcp);
 
     private JsonObject Load()
     {
@@ -24,9 +33,8 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
         {
             if (live is not null)
                 return live;
-            var file = configPath ?? Path.Combine(root, "state", "mcp.json");
-            var payload = File.Exists(file)
-                ? JsonNode.Parse(File.ReadAllText(file)) as JsonObject
+            var payload = documents.Read(ConfigDocumentName.Mcp) is { } bytes
+                ? JsonNode.Parse(ConfigDocumentText.Decode(bytes)) as JsonObject
                     ?? throw new InvalidDataException("Invalid MCP config payload.")
                 : new JsonObject();
             var servers = payload["servers"] as JsonObject ?? new JsonObject();
@@ -112,7 +120,7 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
                 await admit(Snapshot(), (JsonObject)next.DeepClone());
             try
             {
-                Persist(next);
+                await PersistAsync(next);
             }
             catch (AuthorityCommittedException)
             {
@@ -131,14 +139,14 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
         }
     }
 
-    private void Persist(JsonObject servers)
-    {
-        new AtomicJsonFile(
-            Path.GetDirectoryName(configPath ?? Path.Combine(root, "state", "mcp.json"))!,
-            Path.GetFileName(configPath ?? "mcp.json"),
-            privateFile: true
-        ).WritePayload(new JsonObject { ["servers"] = servers.DeepClone() });
-    }
+    private Task PersistAsync(JsonObject servers) =>
+        documents.ReplaceAsync(
+            ConfigDocumentName.Mcp,
+            new UTF8Encoding(false).GetBytes(
+                new JsonObject { ["servers"] = servers.DeepClone() }.ToJsonText()
+            ),
+            CancellationToken.None
+        );
 
     internal void Close()
     {
