@@ -283,11 +283,15 @@ internal sealed class TenantDb
         }
     }
 
+    // Synchronous callers run the setup one command at a time: Npgsql sends a batch of several
+    // commands from a thread-pool task even when the call is synchronous, so a starved pool
+    // (callers blocked on a lock around a write) would leave this thread waiting for its own
+    // send until the command timeout.
     private void Begin(PgTx tx, bool write, bool readOnly)
     {
         using var batch = Setup(tx, write, readOnly);
-        using var reader = batch.ExecuteReader();
-        Settle(reader, write);
+        if (tx.ExecuteInline(batch).Value is null && write)
+            throw FenceFailure(null);
     }
 
     private async Task BeginAsync(PgTx tx, bool write, bool readOnly, CancellationToken token)
@@ -335,15 +339,6 @@ internal sealed class TenantDb
             batch.BatchCommands.Add(check);
         }
         return batch;
-    }
-
-    private void Settle(NpgsqlDataReader reader, bool write)
-    {
-        while (reader.Read()) { }
-        if (!write)
-            return;
-        if (!reader.NextResult() || !reader.Read())
-            throw FenceFailure(null);
     }
 
     private TenantFencedException FenceFailure(Exception? inner)
@@ -451,6 +446,31 @@ internal sealed class PgTx
     }
 
     internal NpgsqlBatch Batch() => new(connection, transaction);
+
+    /// <summary>
+    /// Runs <paramref name="batch"/>'s commands in order on the calling thread and returns the
+    /// last command's first value (null without a row) and its affected-row count. Synchronous
+    /// code uses this instead of executing the batch: Npgsql sends a multi-command batch from a
+    /// thread-pool task even in a synchronous call.
+    /// </summary>
+    internal (object? Value, int RecordsAffected) ExecuteInline(NpgsqlBatch batch)
+    {
+        (object? Value, int RecordsAffected) last = (null, 0);
+        foreach (var step in batch.BatchCommands)
+        {
+            using var command = new NpgsqlCommand(step.CommandText, connection, transaction);
+            foreach (NpgsqlParameter parameter in step.Parameters)
+                command.Parameters.Add(parameter.Clone());
+            using var reader = command.ExecuteReader();
+            object? value = null;
+            if (reader.Read() && !reader.IsDBNull(0))
+                value = reader.GetValue(0);
+            while (reader.Read()) { }
+            reader.Close();
+            last = (value, reader.RecordsAffected);
+        }
+        return last;
+    }
 
     internal int Execute(string sql, params object?[] parameters)
     {

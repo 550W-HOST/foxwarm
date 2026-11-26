@@ -234,7 +234,7 @@ internal static class PgSessionRows
                 pending += piece.Records.Length;
                 if (pending >= BatchBytes)
                 {
-                    await ExecuteAsync(batch, async, token).ConfigureAwait(false);
+                    await ExecuteAsync(tx, batch, async, token).ConfigureAwait(false);
                     await batch.DisposeAsync().ConfigureAwait(false);
                     batch = tx.Batch();
                     pending = 0;
@@ -270,7 +270,7 @@ internal static class PgSessionRows
                 );
             var ids = layout.Select(segment => segment.Id).ToArray();
             var counts = layout.Select(segment => segment.Count).ToArray();
-            var head = current is null
+            _ = current is null
                 ? Add(
                     batch,
                     "INSERT INTO session_heads (session_id, lifetime_id, doc_version, commit_id, envelope, parts,"
@@ -297,8 +297,8 @@ internal static class PgSessionRows
                     ids,
                     counts
                 );
-            await ExecuteAsync(batch, async, token).ConfigureAwait(false);
-            if (head.RecordsAffected != 1)
+            // The head is the batch's last command.
+            if (await ExecuteAsync(tx, batch, async, token).ConfigureAwait(false) != 1)
                 throw new SessionHeadChangedException();
             return new(
                 lifetime,
@@ -334,7 +334,7 @@ internal static class PgSessionRows
         await using var batch = tx.Batch();
         Add(batch, "DELETE FROM session_segments WHERE lifetime_id = $1", lifetime);
         Add(batch, "DELETE FROM session_envelope_parts WHERE lifetime_id = $1", lifetime);
-        await ExecuteAsync(batch, async, token).ConfigureAwait(false);
+        await ExecuteAsync(tx, batch, async, token).ConfigureAwait(false);
         return lifetime;
     }
 
@@ -351,14 +351,16 @@ internal static class PgSessionRows
         return command;
     }
 
-    private static async ValueTask ExecuteAsync(NpgsqlBatch batch, bool async, CancellationToken token)
+    // Returns the affected-row count of the batch's last command.
+    private static async ValueTask<int> ExecuteAsync(PgTx tx, NpgsqlBatch batch, bool async, CancellationToken token)
     {
         if (batch.BatchCommands.Count == 0)
-            return;
-        if (async)
-            await batch.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-        else
-            batch.ExecuteNonQuery();
+            return 0;
+        if (!async)
+            // A synchronous batch would be sent from a thread-pool task (PgTx.ExecuteInline).
+            return tx.ExecuteInline(batch).RecordsAffected;
+        await batch.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        return batch.BatchCommands[^1].RecordsAffected;
     }
 
     private static NpgsqlParameter Hashes(IEnumerable<string> hashes) =>

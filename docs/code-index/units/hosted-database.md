@@ -40,6 +40,7 @@ Npgsql is pinned to 10.0.4. Npgsql 11 requires `Microsoft.Extensions.*` 11, whic
 - **Every tenant write transaction sets the GUCs `foxwarm.tenant` and `foxwarm.epoch`.**
   - `TenantDb.Write`/`WriteAsync` sets them with `set_config(…, true)`, which makes them transaction-local.
   - In the same round trip, it checks that the lease row is `active`, unexpired and at this epoch, locking it `FOR KEY SHARE`. That check gives a clean `TenantFencedException` before any work.
+  - The synchronous `Write`/`Read` run these setup statements one command at a time (`PgTx.ExecuteInline`) instead of as a batch. Npgsql sends a multi-command batch from a thread-pool task even in a synchronous call, so callers blocked on a lock around synchronous writes can starve the pool and leave the sending thread waiting for its own send until the command timeout. Synchronous store code with several statements uses `ExecuteInline` for the same reason.
 - **Every tenant table has the statement-level `BEFORE INSERT OR UPDATE OR DELETE` trigger `foxwarm_fence()`.**
   - It repeats the check with the same lock (`foxwarm_require_lease()`) and raises SQLSTATE `FW001`.
   - The only cluster-table write of the runtime role, `foxwarm_raise_reader_version`, runs the same check.
