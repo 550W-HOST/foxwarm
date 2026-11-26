@@ -14,6 +14,7 @@ using SkiaSharp;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class WebUiResourceBoundaryTests
 {
     [Theory]

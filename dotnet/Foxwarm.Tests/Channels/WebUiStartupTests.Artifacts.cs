@@ -11,6 +11,7 @@ using SkiaSharp;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed partial class WebUiStartupTests
 {
     [Fact]

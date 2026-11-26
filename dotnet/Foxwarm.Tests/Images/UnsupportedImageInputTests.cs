@@ -5,6 +5,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class UnsupportedImageInputTests
 {
     private const string Svg =

@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Http;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class WebUiDownloadTests
 {
     internal sealed class Fixture : IAsyncDisposable

@@ -5,6 +5,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class SeparateImageGenerationTests
 {
     private const string Png =
