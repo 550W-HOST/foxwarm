@@ -164,11 +164,12 @@ public sealed class TenantServerTests
         await using var alpha = await StartTenantAsync(front, "alpha");
         using var client = front.Client("alpha.test");
         var large = new ByteArrayContent(new byte[3 * 1024 * 1024]);
-        // The front's request size limit holds, and a tenant route can raise it.
-        Assert.Equal(
-            HttpStatusCode.RequestEntityTooLarge,
-            (await client.PostAsync("small", new ByteArrayContent(new byte[3 * 1024 * 1024]))).StatusCode
-        );
+        // The front's request size limit holds: a body declared over it is refused with 413
+        // before any of it is read, and the connection closes. A client that streams the body
+        // without waiting may see the close (a broken pipe) instead of the response, so this
+        // exchange sends only the headers, as a client waiting on 100-continue does.
+        Assert.StartsWith("HTTP/1.1 413 ", await HeadersOnlyAsync(front.BaseUri, "alpha.test", "/small", 3 * 1024 * 1024));
+        // A tenant route can raise the limit.
         Assert.Equal((3 * 1024 * 1024).ToString(), await (await client.PostAsync("upload", large)).Content.ReadAsStringAsync());
 
         // Server-sent events arrive as written, not at the end of the response.
@@ -236,6 +237,22 @@ public sealed class TenantServerTests
         await alpha.Aborted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await Assert.ThrowsAnyAsync<HttpRequestException>(() => slow);
         Assert.Equal("beta HTTP: GET /who 0", await betaClient.GetStringAsync("who"));
+    }
+
+    // Sends a request's headers with Expect: 100-continue and no body; returns the response head.
+    private static async Task<string> HeadersOnlyAsync(Uri baseUri, string host, string path, long length)
+    {
+        using var connection = new System.Net.Sockets.TcpClient();
+        await connection.ConnectAsync(baseUri.Host, baseUri.Port);
+        var stream = connection.GetStream();
+        var request = $"POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {length}\r\nExpect: 100-continue\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(request));
+        using var reader = new StreamReader(stream, Encoding.ASCII);
+        var head = new StringBuilder();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (await reader.ReadLineAsync(timeout.Token) is { Length: > 0 } line)
+            head.Append(line).Append('\n');
+        return head.ToString();
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
