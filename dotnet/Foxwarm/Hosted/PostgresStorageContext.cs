@@ -30,6 +30,7 @@ internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDi
     private IInstanceCredentials? credentials;
     private IBlobStore? imageBlobs;
     private IBlobStore? artifactBlobs;
+    private IAgentFileStore? agentFiles;
 
     internal PostgresStorageContext(TenantDb database, string scratchRoot)
     {
@@ -45,6 +46,7 @@ internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDi
         CreateCredentials(ref credentials);
         CreateImageBlobs(ref imageBlobs);
         CreateArtifactBlobs(ref artifactBlobs);
+        CreateAgentFiles(ref agentFiles);
         CreateAuthority(ref authority);
     }
 
@@ -88,6 +90,7 @@ internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDi
             (nameof(Credentials), credentials),
             (nameof(ImageBlobs), imageBlobs),
             (nameof(ArtifactBlobs), artifactBlobs),
+            (nameof(AgentFiles), agentFiles),
         }
             .Where(item => item.Store is null)
             .Select(item => item.Name)
@@ -115,6 +118,8 @@ internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDi
 
     public IBlobStore ArtifactBlobs => Require(artifactBlobs);
 
+    public IAgentFileStore AgentFiles => Require(agentFiles);
+
     // Store tracks implement these in PostgresStorageContext.<Store>.cs. The authority is built
     // last, so it can use the Archive and blob stores.
     partial void CreateAuthority(ref ISessionAuthorityBackend? store);
@@ -138,6 +143,8 @@ internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDi
     partial void CreateImageBlobs(ref IBlobStore? store);
 
     partial void CreateArtifactBlobs(ref IBlobStore? store);
+
+    partial void CreateAgentFiles(ref IAgentFileStore? store);
 
     private static T Require<T>(T? store, [System.Runtime.CompilerServices.CallerMemberName] string name = "")
         where T : class =>
