@@ -50,7 +50,7 @@ internal static class HostedEntry
                 AgentCatalog.ReaderVersion
             ),
             database,
-            (context, token) => CreateRuntimeAsync(context, bootstrap, deployment),
+            (context, token) => CreateRuntimeAsync(context, bootstrap, deployment, token),
             line => Console.Error.WriteLine(line)
         );
         var code = await replica.RunAsync(stop.Token).ConfigureAwait(false);
@@ -75,7 +75,8 @@ internal static class HostedEntry
     internal static async Task<IHostedRuntime> CreateRuntimeAsync(
         HostedRuntimeContext context,
         HostedBootstrap bootstrap,
-        DeploymentConfiguration deployment
+        DeploymentConfiguration deployment,
+        CancellationToken token = default
     )
     {
         var storage = new PostgresStorageContext(context.Database, bootstrap.RequireScratchRoot());
@@ -86,9 +87,10 @@ internal static class HostedEntry
                     + " stores; hosted mode can't start."
             );
         await storage
-            .OpenBlobsAsync(deployment.Blobs, bootstrap.Tenant, CancellationToken.None)
+            .OpenBlobsAsync(deployment.Blobs, bootstrap.Tenant, token)
             .ConfigureAwait(false);
-        return await BuildRuntimeAsync(storage, storage, bootstrap, deployment).ConfigureAwait(false);
+        return await BuildRuntimeAsync(storage, storage, bootstrap, deployment, context.PublicListener, token)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -101,7 +103,9 @@ internal static class HostedEntry
         PostgresStorageContext tenant,
         IStorageContext storage,
         HostedBootstrap bootstrap,
-        DeploymentConfiguration deployment
+        DeploymentConfiguration deployment,
+        System.Net.Sockets.Socket? publicListener = null,
+        CancellationToken token = default
     )
     {
         ModelConfiguration configuration;
@@ -140,9 +144,20 @@ internal static class HostedEntry
         {
             throw new HostedStartupException(error.Message);
         }
-        var http = await HttpServerSettings
-            .CaptureAsync(configuration, paths.DataRoot, storage.Credentials)
-            .ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        var http = (
+            await HttpServerSettings
+                .CaptureAsync(configuration, paths.DataRoot, storage.Credentials)
+                .ConfigureAwait(false)
+        ) with
+        {
+            // The standby's public port, kept open through the takeover.
+            ListenSocket = publicListener,
+        };
+        // Without HTTP no host adopts it, so connections queued on it are refused now.
+        if (!http.HttpEnabled)
+            publicListener?.Dispose();
+        token.ThrowIfCancellationRequested();
         var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
         var host = await MainHost
             .CreateAsync(

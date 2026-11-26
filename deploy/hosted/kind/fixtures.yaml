@@ -1,0 +1,137 @@
+# Fixtures of the chart check on kind (check.mjs): PostgreSQL and VersityGW as in the Compose
+# stack, and the Agents volume. check.mjs creates the `fixture-secrets` Secret (from
+# generate-secrets.sh) and the `postgres-init` ConfigMap (from ../postgres-init) first.
+#
+# The Agents volume: kind's default storage class provisions ReadWriteOnce volumes only, so this
+# is a static hostPath PersistentVolume on the single kind node that declares ReadWriteMany. The
+# chart's claim (accessModes [ReadWriteMany], this storage class) binds to it, and both replicas
+# mount the same directory, as they would mount an NFS or CephFS volume.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: foxwarm-ci-agents
+spec:
+  storageClassName: foxwarm-agents-rwx
+  accessModes: [ReadWriteMany]
+  capacity:
+    storage: 1Gi
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    # Created on the node, owned by uid 1000, by check.mjs.
+    path: /var/local/foxwarm-agents
+    type: Directory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      # The Secret is mounted at /run/secrets, where the images read it; no API token is mounted
+      # beneath it.
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: postgres:18.7-trixie
+          env:
+            - name: POSTGRES_PASSWORD_FILE
+              value: /run/secrets/postgres-password
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            # TCP: the temporary server of first-start initialization listens only on its socket.
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, postgres, -d, foxwarm]
+            periodSeconds: 2
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/postgresql
+      volumes:
+        - name: secrets
+          secret:
+            secretName: fixture-secrets
+            items:
+              - {key: postgres-password, path: postgres-password}
+              - {key: owner-password, path: owner-password}
+              - {key: app-password, path: app-password}
+        - name: init
+          configMap:
+            name: postgres-init
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: {app: postgres}
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: versitygw
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: versitygw}
+  template:
+    metadata:
+      labels: {app: versitygw}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: versitygw
+          image: ghcr.io/versity/versitygw:v1.11.0
+          # A POSIX backend: the bucket is a directory of the volume.
+          command: [/bin/sh, -c]
+          args:
+            - >-
+              mkdir -p /data/foxwarm &&
+              ROOT_ACCESS_KEY_ID="$(cat /run/secrets/s3-access-key-id)"
+              ROOT_SECRET_ACCESS_KEY="$(cat /run/secrets/s3-secret-access-key)"
+              exec versitygw --port :7070 posix /data
+          ports:
+            - containerPort: 7070
+          readinessProbe:
+            tcpSocket:
+              port: 7070
+            periodSeconds: 2
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: secrets
+          secret:
+            secretName: fixture-secrets
+            items:
+              - {key: s3-access-key-id, path: s3-access-key-id}
+              - {key: s3-secret-access-key, path: s3-secret-access-key}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: versitygw
+spec:
+  selector: {app: versitygw}
+  ports:
+    - port: 7070

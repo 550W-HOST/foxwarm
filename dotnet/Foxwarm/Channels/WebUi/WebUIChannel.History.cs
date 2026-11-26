@@ -179,6 +179,7 @@ internal sealed partial class WebUIChannel
                     hosted.ExecutionNode(snapshot.AuthorityEnvelope),
                     hosted.RuntimeSnapshot()
                 );
+                result["session"]!["currentNode"] = hosted.PresentedNode(snapshot.AuthorityEnvelope);
                 result["session"]!["childPolicyChain"] = hosted
                     .BuildDto()["childPolicyChain"]
                     ?.DeepClone();

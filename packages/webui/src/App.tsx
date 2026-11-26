@@ -1230,7 +1230,7 @@ function App() {
     ? focusedActiveTab
     : focusedActiveTab?.type === 'vscode'
       ? { nodeId: focusedActiveTab.nodeId, cwd: focusedActiveTab.path }
-      : { nodeId: currentContextSessionRecord?.currentNode, cwd: currentContextSessionRecord?.cwd || '/' })
+      : { nodeId: currentContextSessionRecord?.currentNode ?? undefined, cwd: currentContextSessionRecord?.cwd || '/' })
   const statusTerminalBelow = focusedPaneId ? findPaneBelow(root, focusedPaneId) : null
   const statusTerminalTab = focusedActiveTab?.type === 'terminal' ? focusedActiveTab
     : (statusTerminalBelow ? getTerminalTabInPane(statusTerminalBelow.id, { nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd }) : null)

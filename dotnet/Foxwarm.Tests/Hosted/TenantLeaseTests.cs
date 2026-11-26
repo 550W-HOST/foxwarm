@@ -197,6 +197,35 @@ public sealed class TenantLeaseTests
     }
 
     [Fact]
+    public async Task TheFenceClockStartsBeforeTheAcquisitionWhenNoRenewalEverSucceeds()
+    {
+        await using var database = await PrepareAsync();
+        await using var proxy = PgTcpProxy.For(database.AppConnectionString);
+        var routed = new NpgsqlConnectionStringBuilder(proxy.Route(database.AppConnectionString))
+        {
+            Timeout = 2,
+            CommandTimeout = 2,
+            CancellationTimeout = 500,
+        }.ConnectionString;
+        var ownerLease = Lease(database.OpenApp(routed));
+        var beforeAcquisition = Stopwatch.GetTimestamp();
+        var grant = (await TryAcquire(ownerLease, "owner", Fast))!;
+        Assert.InRange(grant.AcquisitionStart, beforeAcquisition, Stopwatch.GetTimestamp());
+        // Cut off at once, and the monitor starts late (a slow handover): its first renewal
+        // never completes, and the deadline counts from the acquisition, not from the monitor.
+        proxy.Partition();
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        await using var monitor = new LeaseMonitor(ownerLease, grant, Fast);
+        Assert.Equal(grant.AcquisitionStart, monitor.RenewalStart);
+        monitor.Start();
+        Assert.Contains("No lease renewal succeeded", await monitor.Fenced.WaitAsync(TimeSpan.FromSeconds(10)));
+        var atFence = Stopwatch.GetElapsedTime(grant.AcquisitionStart);
+        Assert.InRange(atFence, Fast.FenceAfter, Fast.FenceAfter + TimeSpan.FromMilliseconds(500));
+        Assert.True(atFence < Fast.Ttl, "the owner fenced only after its lease could expire");
+        proxy.Heal();
+    }
+
+    [Fact]
     public async Task ATakeoverIsNotBlockedForeverByAPartitionedOwnersOpenTransaction()
     {
         await using var database = await PrepareAsync();

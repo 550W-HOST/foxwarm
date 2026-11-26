@@ -42,7 +42,8 @@ internal sealed class HttpServer
         PublicWebAddress? publicAddress = null,
         bool? webUiEnabled = null,
         string bindAddress = "127.0.0.1",
-        bool desktop = false
+        bool desktop = false,
+        Socket? listenSocket = null
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
@@ -92,6 +93,20 @@ internal sealed class HttpServer
                     }
                 }
             );
+        else if (listenSocket is not null)
+        {
+            var adopted = listenSocket;
+            builder.WebHost.UseSockets(options =>
+                options.CreateBoundListenSocket = endpoint =>
+                    endpoint is IPEndPoint requested
+                    && adopted?.LocalEndPoint is IPEndPoint bound
+                    && requested.Port == bound.Port
+                        // Adopted once; Kestrel calls Listen on it again, which keeps its queue.
+                        ? Interlocked.Exchange(ref adopted, null)
+                            ?? SocketTransportOptions.CreateDefaultBoundListenSocket(endpoint)
+                        : SocketTransportOptions.CreateDefaultBoundListenSocket(endpoint)
+            );
+        }
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(server =>
             server.Limits.MaxRequestBodySize = 2 * 1024 * 1024

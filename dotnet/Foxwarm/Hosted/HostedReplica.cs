@@ -34,7 +34,16 @@ internal interface IHostedRuntime : IAsyncDisposable
 }
 
 /// <summary>What a starting owner gives its runtime.</summary>
-internal sealed record HostedRuntimeContext(LeaseGrant Grant, TenantDb Database, LeaseMonitor Monitor);
+/// <param name="PublicListener">
+/// The standby's public listen socket, still open, for the runtime's host to adopt instead of
+/// binding the port anew; null without a forwarder. The replica disposes it after the runtime.
+/// </param>
+internal sealed record HostedRuntimeContext(
+    LeaseGrant Grant,
+    TenantDb Database,
+    LeaseMonitor Monitor,
+    System.Net.Sockets.Socket? PublicListener = null
+);
 
 /// <summary>A fenced run's timings since the start of the last successful renewal.</summary>
 internal sealed record FenceTiming(
@@ -108,9 +117,12 @@ internal sealed class HostedReplica
 
     internal string Replica { get; }
 
+    // A fenced owner reports fencing from the fence on, before the run gets to it.
     internal HealthState Health =>
         monitor is { } current && health.Role == ReplicaRole.Owner
-            ? health with { SinceRenewal = current.SinceRenewal }
+            ? current.Fenced.IsCompleted
+                ? health with { Role = ReplicaRole.Fencing, RuntimeStarted = false }
+                : health with { SinceRenewal = current.SinceRenewal }
             : health;
 
     /// <summary>The health endpoint's port once listening (tests use an ephemeral port).</summary>
@@ -209,72 +221,148 @@ internal sealed class HostedReplica
     {
         LeaseGrant grant;
         health = health with { Role = ReplicaRole.Standby };
+        // A connection waits up to one lease TTL for a reachable owner: a graceful handover
+        // takes a few seconds of it.
+        await using var forwarder = options.PublicEndpoint is { } publicAddress
+            ? new StandbyForwarder(
+                publicAddress,
+                token => registry.OwnerAddressAsync(options.Tenant, token),
+                options.Timings.Ttl,
+                log,
+                selfAddress: options.AdvertiseAddress
+            )
+            : null;
+        ForwarderPort = forwarder?.Port;
+        waiting.TrySetResult();
+        try
         {
-            await using var forwarder = options.PublicEndpoint is { } publicAddress
-                ? new StandbyForwarder(publicAddress, token => registry.OwnerAddressAsync(options.Tenant, token), log)
-                : null;
-            ForwarderPort = forwarder?.Port;
-            waiting.TrySetResult();
             grant = await lease
                 .AcquireAsync(Replica, options.Timings, error => log("[lease] " + error.Message), stop)
                 .ConfigureAwait(false);
-            // The forwarder is disposed here, freeing the public port for the owner's host.
         }
-        ForwarderPort = null;
-        log($"[hosted] Replica {Replica} owns tenant {options.Tenant} at epoch {grant.Epoch}.");
+        catch (OperationCanceledException) when (stop.IsCancellationRequested && forwarder is not null)
+        {
+            // A standby's graceful stop: not ready before the port closes, so new connections go
+            // elsewhere; forwarded ones finish.
+            health = health with { Role = ReplicaRole.Stopping };
+            await forwarder.DrainAsync(options.DrainBound).ConfigureAwait(false);
+            throw;
+        }
+        // The monitor first: its fence clock starts at the acquisition, and a fence or a stop
+        // from here on ends the run within the drain bound.
         await using var current = new LeaseMonitor(lease, grant, options.Timings, log);
         monitor = current;
         var tenant = new TenantDb(database, grant.TenantId, grant.Epoch);
         current.Attach(tenant);
         current.Start();
         health = health with { Role = ReplicaRole.Owner, Epoch = grant.Epoch };
+        // The public port stays open: its socket passes to the owner's host, so connections
+        // queue until the host accepts them, and the ones the forwarder holds reach this owner.
+        using var publicListener = forwarder is null ? null : await forwarder.HandOverAsync().ConfigureAwait(false);
+        ForwarderPort = null;
+        log($"[hosted] Replica {Replica} owns tenant {options.Tenant} at epoch {grant.Epoch}.");
 
-        IHostedRuntime runtime;
-        try
+        // The start runs supervised: a fence or a stop doesn't wait for a factory or a start
+        // that ignores cancellation.
+        var start = new RuntimeStart();
+        using var starting = CancellationTokenSource.CreateLinkedTokenSource(stop, current.Lost);
+        var started = Task.Run(async () =>
         {
-            using var starting = CancellationTokenSource.CreateLinkedTokenSource(stop, current.Lost);
-            runtime = await createRuntime(new(grant, tenant, current), starting.Token).ConfigureAwait(false);
+            var runtime = await createRuntime(new(grant, tenant, current, publicListener), starting.Token).ConfigureAwait(false);
+            start.Runtime = runtime;
+            // A runtime built after a fence or a stop is disposed, not started.
+            starting.Token.ThrowIfCancellationRequested();
             await runtime.StartAsync().ConfigureAwait(false);
-        }
-        catch (Exception error) when (current.Fenced.IsCompleted)
+        });
+        _ = started.ContinueWith(
+            task => _ = task.Exception,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously
+        );
+        var stopRequested = Task.Delay(Timeout.Infinite, stop);
+        await Task.WhenAny(started, current.Fenced, stopRequested).ConfigureAwait(false);
+        if (current.Fenced.IsCompleted)
+            return await FenceAsync(current, start, started).ConfigureAwait(false);
+        if (!started.IsCompletedSuccessfully)
         {
-            log("[hosted] Runtime start ended by fencing: " + error.Message);
-            return HostedExit.Fenced;
-        }
-        catch (Exception error)
-        {
-            log("[hosted] Runtime start failed: " + error.Message);
+            if (stop.IsCancellationRequested)
+            {
+                // A requested stop during the start: not a failure.
+                health = health with { Role = ReplicaRole.Stopping };
+                log("[hosted] Stopped during the runtime start.");
+                await EndStartAsync(start, started).ConfigureAwait(false);
+                if (current.Fenced.IsCompleted)
+                    return HostedExit.Fenced;
+                await current.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                return HostedExit.Stopped;
+            }
+            var error = started.Exception?.GetBaseException();
+            log("[hosted] Runtime start failed: " + error?.Message);
+            health = health with { Role = ReplicaRole.Stopping };
+            // A partly started runtime is disposed before ownership is given up.
+            await EndStartAsync(start, started).ConfigureAwait(false);
+            if (current.Fenced.IsCompleted)
+                return HostedExit.Fenced;
             await current.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
             return error is HostedStartupException ? HostedExit.Configuration : HostedExit.Failed;
         }
+        var running = start.Runtime!;
         health = health with { RuntimeStarted = true };
 
-        var stopRequested = Task.Delay(Timeout.Infinite, stop);
-        var finished = await Task.WhenAny(stopRequested, current.Fenced, runtime.Stopped).ConfigureAwait(false);
-        if (finished == current.Fenced)
-        {
-            var atFence = current.FencedSinceRenewal;
-            health = health with { Role = ReplicaRole.Fencing, RuntimeStarted = false };
-            log($"[hosted] Stopping the runtime within {options.DrainBound.TotalSeconds:0.#} s after fencing.");
-            var disposal = runtime.DisposeAsync().AsTask();
-            var stopped = await Task.WhenAny(disposal, Task.Delay(options.DrainBound)).ConfigureAwait(false) == disposal;
-            if (!stopped)
-                log("[hosted] The runtime didn't stop within the drain bound; exiting anyway.");
-            FenceTimes = new(
-                await current.Fenced.ConfigureAwait(false),
-                current.RenewalStart,
-                atFence!.Value,
-                stopped ? current.SinceRenewal : null
-            );
-            return HostedExit.Fenced;
-        }
+        var finished = await Task.WhenAny(stopRequested, current.Fenced, running.Stopped).ConfigureAwait(false);
+        if (finished == current.Fenced || current.Fenced.IsCompleted)
+            return await FenceAsync(current, start, started).ConfigureAwait(false);
         health = health with { Role = ReplicaRole.Stopping, RuntimeStarted = false };
-        await runtime.DisposeAsync().ConfigureAwait(false);
+        await running.DisposeAsync().ConfigureAwait(false);
         if (current.Fenced.IsCompleted)
             return HostedExit.Fenced;
         await current.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
         log($"[hosted] Replica {Replica} released tenant {options.Tenant}.");
         return HostedExit.Stopped;
+    }
+
+    /// <summary>The runtime of the start, once the factory returned it.</summary>
+    private sealed class RuntimeStart
+    {
+        internal volatile IHostedRuntime? Runtime;
+    }
+
+    // After a fence, at whatever point of the start or run: not ready at once, then the start is
+    // given up and the runtime disposed, all within the drain bound; the run returns 75 whether
+    // or not they finished.
+    private async Task<int> FenceAsync(LeaseMonitor current, RuntimeStart start, Task started)
+    {
+        var atFence = current.FencedSinceRenewal;
+        health = health with { Role = ReplicaRole.Fencing, RuntimeStarted = false };
+        log($"[hosted] Stopping the runtime within {options.DrainBound.TotalSeconds:0.#} s after fencing.");
+        var stopped = await EndStartAsync(start, started).ConfigureAwait(false);
+        if (!stopped)
+            log("[hosted] The runtime didn't stop within the drain bound; exiting anyway.");
+        FenceTimes = new(
+            await current.Fenced.ConfigureAwait(false),
+            current.RenewalStart,
+            atFence!.Value,
+            stopped ? current.SinceRenewal : null
+        );
+        return HostedExit.Fenced;
+    }
+
+    // Waits for the start to end (its token is cancelled by a stop or a fence) and disposes the
+    // runtime if the factory returned one, together bounded by the drain bound. True when both
+    // finished in time.
+    private async Task<bool> EndStartAsync(RuntimeStart start, Task started)
+    {
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan Remaining() => options.DrainBound - deadline.Elapsed is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        if (await Task.WhenAny(started, Task.Delay(Remaining())).ConfigureAwait(false) != started)
+            return false;
+        if (start.Runtime is not { } runtime)
+            return true;
+        var disposal = runtime.DisposeAsync().AsTask();
+        _ = disposal.ContinueWith(
+            task => _ = task.Exception,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously
+        );
+        return await Task.WhenAny(disposal, Task.Delay(Remaining())).ConfigureAwait(false) == disposal;
     }
 
     // Refused credentials, role or database won't change on a restart; anything else may.

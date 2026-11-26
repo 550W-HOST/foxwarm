@@ -7,7 +7,7 @@ export interface ArchitectureSessionLike {
   id: string
   displayName?: string
   agent?: string
-  currentNode?: string
+  currentNode?: string | null
   model?: string | null
   modelKey?: string
   defaultModelKey?: string

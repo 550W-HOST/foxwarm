@@ -347,7 +347,9 @@ internal sealed partial class SessionManager
                 if (row["_runningExecs"] is JsonNode runningExecs)
                     dto["runningExecs"] = runningExecs.DeepClone();
                 dto["aliases"] = row["aliases"]?.DeepClone() ?? new JsonArray();
-                dto["currentNode"] = row["currentNode"]?.DeepClone();
+                dto["currentNode"] = Capabilities.MasterNode
+                    ? row["currentNode"]?.DeepClone()
+                    : PresentedNode(SessionCatalog.Text(row["currentNode"]) ?? "master", false);
                 dto["cwd"] = row["cwd"]?.DeepClone();
                 if (scopes.TryGetValue(id, out var scope))
                 {

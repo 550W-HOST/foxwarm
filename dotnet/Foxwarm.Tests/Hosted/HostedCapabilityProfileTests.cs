@@ -364,6 +364,84 @@ public sealed class HostedCapabilityProfileTests
     }
 
     [Fact]
+    public async Task Session_presentation_reports_no_current_Node_until_one_is_selected()
+    {
+        await using var f = await Fixture.Create(RuntimeCapabilities.Hosted);
+        var id = f.Owner.Id;
+        static void NoNode(JsonObject session)
+        {
+            Assert.True(session.ContainsKey("currentNode"), session.ToJsonString());
+            Assert.Null(session["currentNode"]);
+        }
+        NoNode(f.Owner.BuildDto());
+        var runtime = new SessionRuntime(f.Manager);
+        NoNode(runtime.GetSession(id)!);
+        NoNode(
+            Foxwarm.Channels.WebUi.WebUiContract.Event(
+                new SessionRuntimeEvent(id, SessionEventKind.StateChanged, null),
+                runtime
+            )["session"]!.AsObject()
+        );
+        NoNode(f.Manager.ListPresentations().Single(row => SessionWait.Text(row["id"]) == id));
+        NoNode(f.Manager.CatalogPresentations([id], includeLocal: false).Single());
+        NoNode(f.Manager.CatalogPresentations([id], includeLocal: true).Single());
+
+        var status = await f.Manager.ObserveAsync(
+            f.Owner,
+            "session",
+            new JsonObject { ["action"] = "status" },
+            administrator: true
+        );
+        Assert.Null(status["node"]);
+        var text = SessionStatus.Text(status);
+        Assert.Contains("- current node: none\n", text);
+        Assert.Contains("- current cwd: not set\n", text);
+        Assert.DoesNotContain("master", text);
+        var (_, page) = f.Manager.AdministratorSessionList(null, 0, 10, null);
+        NoNode(page.Single(row => SessionWait.Text(row["id"]) == id));
+
+        // A selected Node is reported as it is.
+        Succeeded(await f.Ctl($"node select {Fixture.Provider}/target"));
+        Assert.Equal(Fixture.Provider + "/target", SessionWait.Text(f.Owner.BuildDto()["currentNode"]));
+        Assert.Equal(
+            Fixture.Provider + "/target",
+            SessionWait.Text(
+                f.Manager.CatalogPresentations([id], includeLocal: true).Single()["currentNode"]
+            )
+        );
+        status = await f.Manager.ObserveAsync(
+            f.Owner,
+            "session",
+            new JsonObject { ["action"] = "status" },
+            administrator: true
+        );
+        text = SessionStatus.Text(status);
+        Assert.Contains($"- current node: `{Fixture.Provider}/target`", text);
+        Assert.DoesNotContain("agent directory", text);
+
+        // File mode keeps master for an unset Node.
+        await using var file = await Fixture.Create(RuntimeCapabilities.File);
+        Assert.Equal("master", SessionWait.Text(file.Owner.BuildDto()["currentNode"]));
+        Assert.Equal(
+            "master",
+            SessionWait.Text(
+                file.Manager.CatalogPresentations([file.Owner.Id], includeLocal: true)
+                    .Single()["currentNode"]
+            )
+        );
+        var fileText = SessionStatus.Text(
+            await file.Manager.ObserveAsync(
+                file.Owner,
+                "session",
+                new JsonObject { ["action"] = "status" },
+                administrator: true
+            )
+        );
+        Assert.Contains("- current node: `master`", fileText);
+        Assert.Contains("- agent directory: `", fileText);
+    }
+
+    [Fact]
     public async Task Default_tool_declarations_are_byte_identical_across_profiles()
     {
         await using var file = await Fixture.Create(RuntimeCapabilities.File);

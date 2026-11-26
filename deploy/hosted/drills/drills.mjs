@@ -90,7 +90,9 @@ export function serviceMonitor(api) {
   const loop = (async () => {
     while (!stopped) {
       const at = Date.now()
-      const result = await probe(api.base + '/api/sessions', api.token)
+      // A request may wait at a standby for the next owner during a handover, so the timeout is
+      // generous; the latency is reported.
+      const result = await probe(api.base + '/api/sessions', api.token, 20000)
       samples.push({ at, ms: Date.now() - at, ...result })
       await sleep(250)
     }
@@ -115,7 +117,26 @@ export function serviceMonitor(api) {
         failures[reason] = (failures[reason] || 0) + 1
       }
       if (process.env.FOXWARM_DRILL_TRACE) console.log(JSON.stringify(samples))
-      return { requests: samples.length, failed: samples.filter(sample => !sample.ok).length, failures, longestGapMs: gap }
+      const slowestMs = Math.max(0, ...samples.map(sample => sample.ms))
+      return { requests: samples.length, failed: samples.filter(sample => !sample.ok).length, failures, longestGapMs: gap, slowestMs }
+    },
+  }
+}
+
+/**
+ * New connections to the entry every `everyMs`, each sent without waiting for the previous one,
+ * so requests start throughout a handover and not only after a held one returns.
+ */
+export function burst(api, everyMs = 100) {
+  const pending = []
+  const timer = setInterval(() => {
+    const at = Date.now()
+    pending.push(probe(api.base + '/api/sessions', api.token, 20000).then(result => ({ at, ms: Date.now() - at, ...result })))
+  }, everyMs)
+  return {
+    async stop() {
+      clearInterval(timer)
+      return await Promise.all(pending)
     },
   }
 }
@@ -317,16 +338,51 @@ export async function rolling(env, context, { next = 'N+1' } = {}) {
     assert(env.slots.filter(item => env.running(item)).length <= 3, 'at most one replica above the desired two')
     const wasOwner = (await env.status(slot))?.role === 'owner'
     const held = await lease(env)
+    const probes = wasOwner ? burst(api) : null
     const stoppedAt = Date.now()
     await env.terminate(slot)
+    if (wasOwner) {
+      // The last poll, by its start, that found no ready owner above the old epoch: up to then
+      // the new owner's runtime wasn't serving.
+      let notReadyAt = stoppedAt
+      const owner = await until(
+        async () => {
+          const polled = Date.now()
+          const owners = (await statuses(env)).filter(status => status.role === 'owner' && status.ready && status.epoch > held.epoch)
+          if (owners.length === 1) return owners[0]
+          notReadyAt = polled
+          return null
+        },
+        `one ready owner above epoch ${held.epoch}`,
+        60000,
+        50
+      )
+      const after = await lease(env)
+      const samples = await probes.stop()
+      // Requests that started after the old owner released the lease (its host had stopped)
+      // and before the new owner served: each waited at a standby or in the new owner's queue.
+      const inWindow = samples.filter(sample => sample.at >= after.acquiredAt && sample.at <= notReadyAt)
+      const handover = {
+        from: slot,
+        to: owner.slot,
+        stopToAcquiredMs: after.acquiredAt - stoppedAt,
+        epoch: after.epoch,
+        windowMs: notReadyAt - after.acquiredAt,
+        requests: samples.length,
+        failed: samples.filter(sample => !sample.ok).length,
+        heldRequests: inWindow.length,
+        medianHeldMs: inWindow.map(sample => sample.ms).sort((x, y) => x - y)[Math.floor(inWindow.length / 2)] ?? 0,
+        slowestHeldMs: Math.max(0, ...inWindow.map(sample => sample.ms)),
+      }
+      handovers.push(handover)
+      log(`rolling: handover ${JSON.stringify(handover)}`)
+      assert(after.acquiredAt - stoppedAt < TTL_MS, 'the handover took the released lease, not an expired one')
+      assert(handover.failed === 0, `no request fails across the handover: ${JSON.stringify(samples.filter(sample => !sample.ok).slice(0, 5))}`)
+      // heldRequests is reported, not required: a fast takeover can leave no sample in the
+      // window. HostedStartupTests checks the mechanism with a gated start.
+    }
     const exit = await env.waitExit(slot, 60000)
     assert(exit.code === 0, `a replica stopped for the rollout exits 0, not ${exit.code}`)
-    if (wasOwner) {
-      const owner = await waitOwner(env, { minEpoch: held.epoch, timeout: 60000 })
-      const after = await lease(env)
-      handovers.push({ from: slot, to: owner.slot, stopToAcquiredMs: after.acquiredAt - stoppedAt, epoch: after.epoch })
-      assert(after.acquiredAt - stoppedAt < TTL_MS, 'the handover took the released lease, not an expired one')
-    }
     free.push(slot)
     log(`rolling: replaced ${slot} by ${surge} (${next})${wasOwner ? ', ownership handed over' : ''}`)
   }
@@ -340,8 +396,10 @@ export async function rolling(env, context, { next = 'N+1' } = {}) {
   await until(async () => texts((await history(api, turn)) || { messages: [] }).includes('FINAL:rolling:0'), 'a turn on N+1', 60000)
   const earlier = await history(api, before)
   assert(earlier && texts(earlier).includes('FINAL:before-rollout:0'), 'a Session from before the rollout reads back')
-  assert(served.longestGapMs < TTL_MS, 'no unavailability as long as the TTL')
-  log(`rolling: ${served.requests} requests, ${served.failed} failed, longest gap ${served.longestGapMs} ms`)
+  log(`rolling: ${served.requests} requests, ${served.failed} failed${served.failed ? ' ' + JSON.stringify(served.failures) : ''}, slowest ${served.slowestMs} ms`)
+  // A standby holds a connection until an owner is reachable, and the new owner's port stays
+  // open through the takeover (D-hosted-standby-endpoints): no request is lost.
+  assert(served.failed === 0, `no request fails during the rollout, not ${served.failed}`)
   return { handovers, served }
 }
 

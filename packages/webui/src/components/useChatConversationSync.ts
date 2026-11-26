@@ -52,7 +52,7 @@ type ChatSessionRecord = {
   externalRuntime?: { status?: string; model?: string; canContinue?: boolean; lastResult?: { total_cost_usd?: number } }
   displayName?: string | null
   archived?: boolean
-  currentNode?: string
+  currentNode?: string | null
   cwd?: string | null
   model?: string | null
   modelKey?: string

@@ -516,6 +516,9 @@ internal sealed partial class WebUIChannel
                     SessionCatalog.Text(node["displayName"]) is { Length: > 0 } name ? name : id,
                     SessionCatalog.Flag(node["online"])
                 );
+        // Without a master Node, the master group holds the Sessions that have no Node.
+        if (!sessions.Capabilities.MasterNode)
+            nodes["master"] = new("No node", false);
         return nodes;
     }
 

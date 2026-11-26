@@ -29,7 +29,15 @@ internal sealed record LeaseTimings(TimeSpan Ttl, TimeSpan RenewInterval, TimeSp
 }
 
 /// <summary>The lease this replica holds: its tenant and the epoch of its writes.</summary>
-internal sealed record LeaseGrant(int TenantId, string Tenant, string Replica, long Epoch);
+internal sealed record LeaseGrant(int TenantId, string Tenant, string Replica, long Epoch)
+{
+    /// <summary>
+    /// A <see cref="System.Diagnostics.Stopwatch"/> timestamp taken before the acquiring
+    /// transaction began, so no later than the database time its expiry counts from; 0 when
+    /// unknown. The lease monitor's fence clock starts here.
+    /// </summary>
+    internal long AcquisitionStart { get; init; }
+}
 
 /// <summary>Why a replica may not take a tenant at all (as opposed to "held by another").</summary>
 internal sealed class LeaseRefusedException(string message) : Exception(message);
@@ -90,6 +98,7 @@ internal sealed class TenantLease
         // Look first without a lock: a waiting FOR UPDATE would queue the owner's writers.
         if (!await EligibleAsync(connection, null, replica, token).ConfigureAwait(false))
             return null;
+        var acquisitionStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
         await using (var timeout = new NpgsqlCommand(
             "SELECT set_config('lock_timeout', $1, true)",
@@ -142,7 +151,7 @@ internal sealed class TenantLease
             epoch = reader.GetInt64(1);
         }
         await transaction.CommitAsync(token).ConfigureAwait(false);
-        return new(tenantId, Tenant, replica, epoch);
+        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart };
     }
 
     // The lease can be taken: the tenant is active, readable by this binary, and its lease is
@@ -198,6 +207,7 @@ internal sealed class TenantLease
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
+        var acquisitionStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
         await using (var timeout = new NpgsqlCommand("SELECT set_config('lock_timeout', $1, true)", connection, transaction))
         {
@@ -263,7 +273,7 @@ internal sealed class TenantLease
             epoch = reader.GetInt64(1);
         }
         await transaction.CommitAsync(token).ConfigureAwait(false);
-        return new(tenantId, Tenant, replica, epoch);
+        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart };
     }
 
     /// <summary>

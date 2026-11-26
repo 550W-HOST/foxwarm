@@ -59,7 +59,7 @@ interface ChatComposerProps {
   sessionMessageMode?: boolean
   sessionMessageAttachments?: boolean
   webUiIdentityMode?: boolean
-  currentNode?: string
+  currentNode?: string | null
   onChangeNode?: (nodeId: string, signal: AbortSignal) => Promise<void>
   sessionMissing: boolean
   loading: boolean

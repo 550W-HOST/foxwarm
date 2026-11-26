@@ -55,7 +55,7 @@ public sealed partial class HostedStartupTests
                 var tenant = new PostgresStorageContext(context.Database, files.Scratch);
                 var storage = HostedTestBackend.Compose(tenant, fileStores ?? files.Scratch);
                 built?.Invoke(storage);
-                var runtime = await HostedEntry.BuildRuntimeAsync(tenant, storage, files.Bootstrap, deployment);
+                var runtime = await HostedEntry.BuildRuntimeAsync(tenant, storage, files.Bootstrap, deployment, context.PublicListener);
                 replica.Runtimes.Add(runtime);
                 return runtime;
             }

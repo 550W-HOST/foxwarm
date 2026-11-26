@@ -1,7 +1,7 @@
 import type { SessionRuntimeState } from './sessionRuntimeState'
 
 export interface SessionNodeLike {
-  currentNode?: string
+  currentNode?: string | null
   runtimeState?: Pick<SessionRuntimeState, 'tool'> | null
 }
 
