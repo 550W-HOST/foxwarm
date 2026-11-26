@@ -8,6 +8,7 @@ Secondary/integration references: `package.json`, `package-lock.json`, `README.m
 The installable `foxwarm` bin is a thin JavaScript frontend over existing C# configuration/model/journal/Archive owners. It does not load TypeScript backend libraries or run Main. Independent Multica remains a JavaScript client.
 
 - `run(argv, streams?)` is the root dispatcher. No arguments/help show usage; version reads the root package version; unknown commands return usage exit 2.
+- `db` and `hosted` (hosted-mode operator verbs, [hosted import](./hosted-import.md)) go to `runPassthrough`, which starts the managed binary with the command line unchanged and returns its exit code.
 - `runModelCli(argv, options?)` parses options, handles help without Core/configuration, and forwards parsed metadata plus optional raw prompt stdin through `runCoreCli`. `main` maps usage errors to 2 and operational launch failures to 1.
 - Model `parseArgs` retains strict long/short model/prompt/system/list/json/timeout/help options, list aliases and positive finite seconds-to-milliseconds conversion. Missing values, unknown flags and positional arguments fail before backend launch.
 - Archive `parseArgs` requires `export-jsonl --output/-o DIR` and resolves output from caller cwd. `runArchiveCli` validates first, then forwards one archive operation. `ArchiveCliUsageError` preserves root-dispatch exit 2.

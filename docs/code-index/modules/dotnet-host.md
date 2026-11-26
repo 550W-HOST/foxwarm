@@ -22,6 +22,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Hosted journal](../units/hosted-journal.md): the tenant's LLM journal and usage ledger, the text-redaction cache and journal retention.
 - [Hosted blobs](../units/hosted-blobs.md): image and artifact blobs on S3 or PostgreSQL, the backend selection and streamed channel image sends.
 - [Hosted Session authority](../units/hosted-session-authority.md): heads, immutable segments and envelope parts, the one-transaction commit with its Archive rows, and the segment policy.
+- [Hosted import](../units/hosted-import.md): `foxwarm hosted import`, copying a stopped file installation into an `importing` tenant, verifying it and activating it.
 - [Skill resolution and runnable skills](../units/skills.md)
 - [Packed and loose HTTP resources](../units/http-assets.md)
 - [Windows Desktop host](../units/desktop-windows.md)

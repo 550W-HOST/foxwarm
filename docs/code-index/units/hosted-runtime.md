@@ -20,6 +20,7 @@ The write fence that makes a lost lease harmless is in [hosted database](./hoste
   - All times are database times.
 - **Renew** (`RenewAsync`) is a plain update of `expires_at`. It matches only this owner and epoch, `active` and still unexpired. Zero rows means the lease is lost.
 - **Release** (`ReleaseAsync`) sets `released` and `expires_at = now()`, then sends `NOTIFY foxwarm_lease`. An old grant changes nothing.
+- **Import** (`TryAcquireForImportAsync`, `ActivateImportAsync`) is the migrating role's lease for [hosted import](./hosted-import.md#d-hosted-import): it creates an `importing` tenant or takes an empty one with a free lease, raising the epoch, and activation sets the tenant `active` and releases the lease in one transaction.
 - **Standby.** `AcquireAsync` keeps a `LISTEN foxwarm_lease` connection. It retries every renew interval and right after a notification, so a graceful handover takes about a second instead of waiting out the TTL.
 - **Replica IDs** (`ReplicaRegistry.NewReplicaId`) are the configured name (`FOXWARM_REPLICA_ID`, else the host name) plus a random suffix per process start. A restarted process therefore never resumes an earlier grant.
 - **Replica rows.** `replicas` rows record the advertised address, binary schema level and reader level. They're routing and diagnostic data only; ownership is decided by the lease alone.
