@@ -1,0 +1,108 @@
+# Drill overrides of the Compose stack (deploy/hosted/drills/run.mjs --env compose). The drill
+# runner acts as the orchestrator: replicas don't restart on their own, a third replica slot
+# exists for the rolling update's surge, and the mock model, a file-mode source installation, an
+# importer and a replica of the imported tenant are added. Paths are relative to deploy/hosted.
+services:
+  foxwarm-1:
+    image: ${FOXWARM_DRILL_IMAGE_1:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
+    restart: "no"
+  foxwarm-2:
+    image: ${FOXWARM_DRILL_IMAGE_2:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
+    restart: "no"
+  foxwarm-3:
+    extends:
+      file: compose.yaml
+      service: foxwarm-1
+    image: ${FOXWARM_DRILL_IMAGE_3:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
+    restart: "no"
+    environment:
+      FOXWARM_REPLICA_ID: foxwarm-3
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-3:3001
+    profiles: [drill]
+
+  proxy:
+    volumes: !override
+      - ./drills/haproxy.drill.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports: !override
+      - "127.0.0.1:${FOXWARM_DRILL_PUBLIC_PORT:-13001}:3001"
+
+  mock-llm:
+    image: node:24.22.2-trixie-slim
+    command: ["node", "/drill/mock-llm.mjs", "--port", "8080"]
+    volumes:
+      - ./drills:/drill:ro
+    ports:
+      - "127.0.0.1:${FOXWARM_DRILL_MOCK_PORT:-18080}:8080"
+    networks: [frontend]
+
+  # A file-mode installation of the same image, the source of the import drill.
+  file-source:
+    image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
+    environment:
+      FOXWARM_MODE: file
+      FOXWARM_DATA_DIR: /source
+      TMPDIR: /source/.temp
+    user: "1000:1000"
+    volumes:
+      - source:/source
+    networks: [frontend]
+    healthcheck:
+      disable: true
+    profiles: [drill]
+
+  importer:
+    image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
+    command: ["hosted", "import", "--data-root", "/source", "--tenant", "imported", "--report", "/scratch/import-report.json", "--deployment-config", "/etc/foxwarm/deployment.yaml"]
+    read_only: true
+    user: "1000:1000"
+    environment:
+      FOXWARM_DATABASE_URL_FILE: /run/secrets/database-url
+      FOXWARM_MIGRATE_DATABASE_URL_FILE: /run/secrets/migrate-database-url
+      FOXWARM_KEK_FILE: /run/secrets/kek
+    secrets: [database-url, migrate-database-url, kek, s3-access-key-id, s3-secret-access-key]
+    volumes:
+      - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
+      - source:/source
+    tmpfs:
+      - /scratch:uid=1000,gid=1000,mode=0700
+    networks: [backend]
+    healthcheck:
+      disable: true
+    profiles: [drill]
+
+  # One replica of the imported tenant; its Agents volume is the source's copied Agent folders.
+  foxwarm-imported:
+    extends:
+      file: compose.yaml
+      service: foxwarm-1
+    restart: "no"
+    environment:
+      FOXWARM_TENANT: imported
+      FOXWARM_REPLICA_ID: foxwarm-imported
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-imported:3001
+    volumes: !override
+      - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
+      - imported-agents:/agents
+    profiles: [drill]
+
+volumes:
+  source: {}
+  imported-agents: {}
+
+secrets:
+  postgres-password:
+    file: ${FOXWARM_DRILL_SECRETS:?}/postgres-password
+  owner-password:
+    file: ${FOXWARM_DRILL_SECRETS:?}/owner-password
+  app-password:
+    file: ${FOXWARM_DRILL_SECRETS:?}/app-password
+  database-url:
+    file: ${FOXWARM_DRILL_SECRETS:?}/database-url
+  migrate-database-url:
+    file: ${FOXWARM_DRILL_SECRETS:?}/migrate-database-url
+  kek:
+    file: ${FOXWARM_DRILL_SECRETS:?}/kek.json
+  s3-access-key-id:
+    file: ${FOXWARM_DRILL_SECRETS:?}/s3-access-key-id
+  s3-secret-access-key:
+    file: ${FOXWARM_DRILL_SECRETS:?}/s3-secret-access-key
