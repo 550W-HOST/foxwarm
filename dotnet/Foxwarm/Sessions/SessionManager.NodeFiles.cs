@@ -10,11 +10,12 @@ internal sealed partial class SessionManager
         new(AgentDirectory(owner.Agent));
 
     // Every Main-local file and process effect checks this before it starts; without a master
-    // Node it fails as a call to any unavailable Node does.
-    internal void RequireMasterNode()
+    // Node it fails as a call to any unavailable Node does. `current`: master is only the
+    // Session's current Node, which without a master Node means it has none.
+    internal void RequireMasterNode(bool current = false)
     {
         if (!Capabilities.MasterNode)
-            throw RuntimeCapabilities.MasterUnavailable();
+            throw current ? RuntimeCapabilities.NoCurrentNode() : RuntimeCapabilities.MasterUnavailable();
     }
 
     // Master endpoints resolve like the invocation's own file tools: the Session working directory

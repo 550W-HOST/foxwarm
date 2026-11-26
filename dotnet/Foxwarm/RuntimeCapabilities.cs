@@ -31,4 +31,13 @@ internal sealed record RuntimeCapabilities(
     /// <summary>The error a call targeting the absent <c>master</c> Node fails with.</summary>
     internal static InvalidDataException MasterUnavailable() =>
         new("Node is not available: master");
+
+    /// <summary>
+    /// The error a call fails with when it would run on the current Node of a Session that has
+    /// none. Without a master Node, an unset current Node still reads as <c>master</c>.
+    /// </summary>
+    internal static InvalidDataException NoCurrentNode() =>
+        new(
+            "This Session has no Node. Select one with `ctl node select <node-id>`; `ctl node list` shows the available Nodes."
+        );
 }
