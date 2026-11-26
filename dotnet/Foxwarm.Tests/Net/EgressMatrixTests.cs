@@ -338,6 +338,27 @@ public sealed class EgressMatrixTests
     }
 
     [Fact]
+    public void TheDeploymentConfigurationCarriesTheRules()
+    {
+        const string required = "health: {port: 3081}\nblobs: {backend: postgres}\n";
+        var deployment = Foxwarm.Hosted.DeploymentConfiguration.Parse(
+            required + "egress: {deny: [10.96.0.0/12], allow: {hosted: [llm.internal]}}\n"
+        );
+        Assert.Equal([IPNetwork.Parse("10.96.0.0/12")], deployment.Egress.Deny);
+        Assert.Contains("llm.internal", deployment.Egress.HostedAllow.Hosts);
+        Assert.Same(
+            EgressRules.None,
+            Foxwarm.Hosted.DeploymentConfiguration.Parse(required).Egress
+        );
+        Assert.Equal(
+            "Deployment configuration: `egress.deny[0]` must be an IP address or CIDR.",
+            Assert.Throws<Foxwarm.Hosted.HostedBootstrapException>(() =>
+                Foxwarm.Hosted.DeploymentConfiguration.Parse(required + "egress: {deny: [mesh]}\n")
+            ).Message
+        );
+    }
+
+    [Fact]
     public void TheDefaultDenySetCoversEveryRangeOfThePlan()
     {
         foreach (var host in Literals)
