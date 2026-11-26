@@ -28,10 +28,18 @@ internal sealed record RuntimeCapabilities(
     bool LogsView
 )
 {
+    /// <summary>
+    /// Outbound connections of the runtime (<see cref="Net.EgressHttp"/>): unguarded in file mode,
+    /// internal destinations denied for hosted tenants. The hosted entry adds the deployment's
+    /// <c>egress</c> rules.
+    /// </summary>
+    internal Net.EgressPolicy Egress { get; init; } = Net.EgressPolicy.Unguarded;
+
     internal static RuntimeCapabilities File { get; } = new(true, true, true, true, true, true);
 
     /// <summary>Hosted: only the deployment's executable Providers; no Logs view (U16(b)).</summary>
-    internal static RuntimeCapabilities Hosted { get; } = new(false, false, false, false, true, false);
+    internal static RuntimeCapabilities Hosted { get; } =
+        new(false, false, false, false, true, false) { Egress = Net.EgressPolicy.Hosted() };
 
     /// <summary>The error a call targeting the absent <c>master</c> Node fails with.</summary>
     internal static InvalidDataException MasterUnavailable() =>

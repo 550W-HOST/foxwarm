@@ -42,6 +42,9 @@ internal sealed partial class McpOAuthService
         internal bool Active = true;
     }
 
+    /// <summary>The runtime's egress policy for discovery, token and resource requests.</summary>
+    internal Foxwarm.Net.EgressPolicy Egress { get; }
+
     internal McpOAuthService(
         string root,
         string? publicBaseUrl,
@@ -50,9 +53,11 @@ internal sealed partial class McpOAuthService
         Action<string> closeConnections,
         CancellationToken shutdown,
         Action<AtomicJsonWriteStage>? writeStage = null,
-        Foxwarm.Storage.IStateDocuments? documents = null
+        Foxwarm.Storage.IStateDocuments? documents = null,
+        Foxwarm.Net.EgressPolicy? egress = null
     )
     {
+        Egress = egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
         store = (documents ?? new Foxwarm.Storage.FileStateDocuments(root)).Open(
             Foxwarm.Storage.StateDocumentName.McpOAuth,
             new(writeStage)

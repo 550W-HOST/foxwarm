@@ -315,6 +315,7 @@ public sealed partial class McpOAuthTests
                     HttpMethod.Get,
                     null,
                     null,
+                    Foxwarm.Net.EgressPolicy.Unguarded,
                     default
                 )
             );

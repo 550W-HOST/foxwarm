@@ -14,7 +14,7 @@ internal sealed partial class McpOAuthService
     private static bool Advertises(JsonObject metadata, string key, string value) =>
         metadata[key] is JsonArray array && array.Any(item => Text(item) == value);
 
-    private static async Task<JsonObject?> MetadataAsync(
+    private async Task<JsonObject?> MetadataAsync(
         string resource,
         string endpoint,
         CancellationToken token
@@ -26,6 +26,7 @@ internal sealed partial class McpOAuthService
             HttpMethod.Get,
             null,
             null,
+            Egress,
             token
         );
         return (int)reply.Status is >= 200 and < 300 ? reply.Body : null;
@@ -158,6 +159,7 @@ internal sealed partial class McpOAuthService
             HttpMethod.Post,
             new StringContent(clientMetadata.ToJsonText(), Encoding.UTF8, "application/json"),
             null,
+            Egress,
             token
         );
         if (
@@ -203,7 +205,11 @@ internal sealed partial class McpOAuthService
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, shutdown);
         try
         {
-            var challenge = await McpOAuthHttp.ProbeAsync(Text(config["url"])!, lifetime.Token);
+            var challenge = await McpOAuthHttp.ProbeAsync(
+                Text(config["url"])!,
+                Egress,
+                lifetime.Token
+            );
             var discovery = await DiscoverAsync(
                 config,
                 McpOAuthHttp.Challenge(challenge, "resource_metadata"),
@@ -420,6 +426,7 @@ internal sealed partial class McpOAuthService
             HttpMethod.Post,
             new FormUrlEncodedContent(fields),
             authorization,
+            Egress,
             token
         );
         if ((int)reply.Status is < 200 or >= 300)

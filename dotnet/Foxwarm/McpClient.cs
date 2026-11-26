@@ -24,7 +24,8 @@ internal sealed partial class McpClient : IAsyncDisposable
         string? publicBaseUrl = null,
         string? configPath = null,
         Foxwarm.Storage.IStateDocuments? documents = null,
-        Foxwarm.Storage.IConfigDocumentStore? configDocuments = null
+        Foxwarm.Storage.IConfigDocumentStore? configDocuments = null,
+        Foxwarm.Net.EgressPolicy? egress = null
     )
     {
         configuration = configDocuments is null ? new(root, configPath) : new(configDocuments);
@@ -35,7 +36,8 @@ internal sealed partial class McpClient : IAsyncDisposable
             name => configuration.Snapshot()[name] as JsonObject,
             FenceServer,
             shutdown.Token,
-            documents: documents
+            documents: documents,
+            egress: egress
         );
     }
 
