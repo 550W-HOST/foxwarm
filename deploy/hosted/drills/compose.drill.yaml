@@ -6,15 +6,24 @@ services:
   foxwarm-1:
     image: ${FOXWARM_DRILL_IMAGE_1:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
     restart: "no"
+    volumes: !override
+      - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
+      - agents:/agents
   foxwarm-2:
     image: ${FOXWARM_DRILL_IMAGE_2:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
     restart: "no"
+    volumes: !override
+      - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
+      - agents:/agents
   foxwarm-3:
     extends:
       file: compose.yaml
       service: foxwarm-1
     image: ${FOXWARM_DRILL_IMAGE_3:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
     restart: "no"
+    volumes: !override
+      - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
+      - agents:/agents
     environment:
       FOXWARM_REPLICA_ID: foxwarm-3
       FOXWARM_ADVERTISE_ADDRESS: foxwarm-3:3001
@@ -63,7 +72,7 @@ services:
       FOXWARM_KEK_FILE: /run/secrets/kek
     secrets: [database-url, migrate-database-url, kek, s3-access-key-id, s3-secret-access-key]
     volumes:
-      - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
+      - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
       - source:/source
     tmpfs:
       - /scratch:uid=1000,gid=1000,mode=0700
@@ -83,7 +92,7 @@ services:
       FOXWARM_REPLICA_ID: foxwarm-imported
       FOXWARM_ADVERTISE_ADDRESS: foxwarm-imported:3001
     volumes: !override
-      - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
+      - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
       - imported-agents:/agents
     profiles: [drill]
 

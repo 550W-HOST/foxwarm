@@ -40,6 +40,7 @@ parse() { # $1: a deployment configuration file
   esac
 }
 parse "$here/deployment.yaml"
+parse "$here/drills/deployment.drill.yaml"
 
 chart="$here/helm/foxwarm"
 for values in "$chart"/ci/*-values.yaml; do

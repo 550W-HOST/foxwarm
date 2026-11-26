@@ -123,6 +123,10 @@ export async function processEnvironment(options = {}) {
         '    pathStyle: true',
         `    accessKeyIdFile: ${join(root, 's3-access')}`,
         `    secretAccessKeyFile: ${join(root, 's3-secret')}`,
+        // The mock model listens on loopback, which hosted tenants can't reach by default.
+        'egress:',
+        '  allow:',
+        "    hosted: ['127.0.0.1']",
         '',
       ].join('\n'))
       return path

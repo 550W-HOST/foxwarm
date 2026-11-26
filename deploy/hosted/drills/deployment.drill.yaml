@@ -1,0 +1,34 @@
+# Deployment configuration of the drills on the Compose stack (compose.drill.yaml): the stack's
+# deployment.yaml plus the one egress exception the drills need. Keep the rest equal to it.
+
+# The public address users open (the proxy's published port).
+url: http://localhost:3001
+
+bot:
+  # The public listener of each replica; the proxy connects to it.
+  httpHost: 0.0.0.0
+  httpPort: 3001
+
+health:
+  # /livez, /readyz and /status; the proxy's health checks use this port.
+  port: 3002
+
+blobs:
+  backend: s3
+  s3:
+    endpoint: http://versitygw:7070
+    region: us-east-1
+    bucket: foxwarm
+    pathStyle: true
+    accessKeyIdFile: /run/secrets/s3-access-key-id
+    secretAccessKeyFile: /run/secrets/s3-secret-access-key
+
+# Optional: days of LLM journal content to keep; unset keeps everything.
+# journal:
+#   retentionDays: 90
+
+# The drills' mock model runs on the Compose network at a private address, which hosted
+# tenants can't reach by default.
+egress:
+  allow:
+    hosted: [mock-llm]

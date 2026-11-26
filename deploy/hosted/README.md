@@ -57,7 +57,20 @@ A replica exits with 0 when stopped, 75 when it lost the tenant (restart it; it 
 
 ## Deployment configuration
 
-The mounted YAML holds only deployment settings: `url`, `bot.httpHost`, `bot.httpPort`, `bot.enableWebUI`, `health.port` (required), `blobs` (required: `backend: s3` with its connection, or `backend: postgres`), `asrService`, `nodeProviders` and `journal.retentionDays`. Everything else is a tenant setting, stored in the database and edited through Setup in the WebUI. A replica refuses a tenant setting in this file, naming it. The file is read at start, so a change takes effect through a rolling restart. The keys and the split are described in [hosted configuration](../../docs/code-index/units/hosted-config.md).
+The mounted YAML holds only deployment settings: `url`, `bot.httpHost`, `bot.httpPort`, `bot.enableWebUI`, `health.port` (required), `blobs` (required: `backend: s3` with its connection, or `backend: postgres`), `asrService`, `nodeProviders`, `journal.retentionDays` and `egress`. Everything else is a tenant setting, stored in the database and edited through Setup in the WebUI. A replica refuses a tenant setting in this file, naming it. The file is read at start, so a change takes effect through a rolling restart. The keys and the split are described in [hosted configuration](../../docs/code-index/units/hosted-config.md).
+
+### Outbound connections
+
+A hosted tenant's outbound connections (model providers, MCP servers, OAuth, channels) can't reach loopback, private, link-local, metadata and other internal addresses, checked on every connection, redirects included. To let tenants use a model server or MCP server inside your network, list its exact host name, address or CIDR under `egress.allow.hosted`; add the addresses of your own infrastructure (database, object storage, cluster pod and service ranges) under `egress.deny`, which applies to every tenant:
+
+```yaml
+egress:
+  deny: [10.96.0.0/12, 10.244.0.0/16]
+  allow:
+    hosted: [llm.models.svc.cluster.local]
+```
+
+A host name exception skips the address check for that name only; prefer it to a CIDR. HTTPS servers must send their full certificate chain: missing intermediate certificates aren't downloaded.
 
 ## Docker Compose
 
