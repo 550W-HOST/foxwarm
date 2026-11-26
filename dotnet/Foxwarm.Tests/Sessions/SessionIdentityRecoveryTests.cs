@@ -101,6 +101,7 @@ public sealed class SessionIdentityRecoveryTests
     }
 
     [Fact]
+    [Trait("Backend", "neutral")]
     public async Task First_ordinary_startup_preserves_pending_rollback_with_an_existing_exact_catalog_binding()
     {
         using var temp = new TempDirectory();
@@ -112,11 +113,9 @@ public sealed class SessionIdentityRecoveryTests
             var owner = await seed.CreateNamedAsync("main", "old", null, null);
             await ForkClearLifecycleTests.AppendAsync(owner, Text("Pending rollback audit"));
         }
-        var journal = new SessionIdentityMoveJournal(data);
-        var database = Path.Combine(data, "state/archive-store.sqlite");
-        journal.MoveArtifacts("old", "new");
-        SqliteArchiveIdentityMove.Rename(database, "old", "new");
-        journal.Write(new("rolling-back", "old", "new", "main", [], false, null, 1000));
+        IdentityTestStorage.MoveStoredIdentity(data, "old", "new");
+        IdentityTestStorage.Open(data)
+            .Identities.WritePendingMove(new("rolling-back", "old", "new", "main", [], false, null, 1000));
         await using var recovered = Manager(data, work);
         await recovered.LoadMainHostAsync();
         var ownerAfter = await recovered.RequiredAsync("old");
@@ -128,11 +127,12 @@ public sealed class SessionIdentityRecoveryTests
                 "text"
             ]!.GetValue<string>()
         );
-        Assert.Null(new SqliteArchiveMessageStore(database, "new").ReadBranch());
-        Assert.False(File.Exists(journal.FilePath));
+        Assert.Null(IdentityTestStorage.Archive(data, "new").ReadBranch());
+        Assert.False(IdentityTestStorage.PendingMove(data));
     }
 
     [Theory]
+    [Trait("Backend", "neutral")]
     [InlineData("rolling-back", false)]
     [InlineData("rolling-back", true)]
     [InlineData("finishing", false)]
@@ -151,24 +151,21 @@ public sealed class SessionIdentityRecoveryTests
             var owner = await seed.CreateNamedAsync("main", "old", null, null);
             await ForkClearLifecycleTests.AppendAsync(owner, Text("Late catalog audit"));
         }
-        var journal = new SessionIdentityMoveJournal(data);
-        var database = Path.Combine(data, "state/archive-store.sqlite");
-        journal.Write(new("rolling-back", "old", "new", "main", [], false, null, 1000));
+        var storage = IdentityTestStorage.Open(data);
+        storage.Identities.WritePendingMove(new("rolling-back", "old", "new", "main", [], false, null, 1000));
         // ExecuteIdentityMoveAsync publishes these outputs before changing the
         // journal to finishing and committing the old-to-new alias.
-        journal.MoveArtifacts("old", "new");
-        SqliteArchiveIdentityMove.Rename(database, "old", "new");
-        var raw = JsonNode
-            .Parse(await File.ReadAllTextAsync(journal.AuthorityPath("new")))!
-            .AsObject();
+        IdentityTestStorage.MoveStoredIdentity(data, "old", "new");
+        var raw = await IdentityTestStorage.RawAuthority(data, "new");
         raw["id"] = "new";
         raw["agent"] = "main";
         raw["aliases"] = new JsonArray("old");
-        new AtomicJsonFile(data, "state/sessions/new.json").WritePayload(raw);
-        using (var catalog = new SessionCatalog(data))
-            catalog.RewriteIdentity("old", "new", "main", ["old"]);
+        storage.Authority.ReplaceRaw("new", raw);
+        storage.Catalog.RewriteIdentity("old", "new", "main", ["old"]);
+        if (storage.Catalog is IDisposable disposable)
+            disposable.Dispose();
         if (phase == "finishing")
-            journal.Write(new(phase, "old", "new", "main", [], false, null, 1000));
+            storage.Identities.WritePendingMove(new(phase, "old", "new", "main", [], false, null, 1000));
 
         await using var recovered = Manager(data, work);
         if (ordinaryStartup)
@@ -181,13 +178,14 @@ public sealed class SessionIdentityRecoveryTests
         var audit = Assert.Single(ownerAfter.Archive.ReadMessages());
         Assert.Equal(expected, audit.SessionId);
         Assert.Equal("Late catalog audit", audit.Message["parts"]![0]!["text"]!.GetValue<string>());
-        Assert.Equal(expected, new SqliteArchiveMessageStore(database, "old").CanonicalSessionId);
+        Assert.Equal(expected, IdentityTestStorage.Archive(data, "old").CanonicalSessionId);
         if (phase == "rolling-back")
-            Assert.Null(new SqliteArchiveMessageStore(database, "new").ReadBranch());
-        Assert.False(File.Exists(journal.FilePath));
+            Assert.Null(IdentityTestStorage.Archive(data, "new").ReadBranch());
+        Assert.False(IdentityTestStorage.PendingMove(data));
     }
 
     [Theory]
+    [Trait("Backend", "neutral")]
     [InlineData("owned-name")]
     [InlineData("old-agent")]
     [InlineData("symlink")]
@@ -200,28 +198,21 @@ public sealed class SessionIdentityRecoveryTests
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
-        string catalogPath;
+        string? catalogPath;
         await using (var seed = Manager(data, work))
         {
             await seed.LoadAsync();
             var owner = await seed.CreateNamedAsync("main", "old", null, null);
             await ForkClearLifecycleTests.AppendAsync(owner, Text("Retained byte proof"));
-            catalogPath = seed.Catalog.File().FilePath;
+            catalogPath = (seed.Storage.Catalog as SessionCatalog)?.FilePath;
             if (mode == "other-lifetime")
             {
                 await seed.CreateAgentAsync("claimed", false, null);
                 await seed.CreateNamedAsync("claimed", "foreign", null, null);
             }
         }
-        var journal = new SessionIdentityMoveJournal(data);
-        var original = await File.ReadAllBytesAsync(journal.AuthorityPath("old"));
-        var audit = new SqliteArchiveMessageStore(
-            Path.Combine(data, "state", "archive-store.sqlite"),
-            "old"
-        )
-            .ReadMessages()
-            .Single()
-            .MessageJson;
+        var original = await IdentityTestStorage.AuthorityText(data, "old");
+        var audit = IdentityTestStorage.Archive(data, "old").ReadMessages().Single().MessageJson;
         var outside = Path.Combine(temp.Path, "outside");
         Directory.CreateDirectory(outside);
         await File.WriteAllTextAsync(
@@ -233,8 +224,11 @@ public sealed class SessionIdentityRecoveryTests
             Directory.CreateSymbolicLink(claimed, outside);
         else if (!Directory.Exists(claimed))
             Directory.CreateDirectory(claimed);
+        var storage = IdentityTestStorage.Open(data);
         if (mode == "ambiguous")
         {
+            // Seeds a catalog row directly; a hosted catalog needs its own seeding helper.
+            Assert.IsType<SessionCatalog>(storage.Catalog);
             using var catalog = new SessionCatalog(data);
             catalog.Initialize();
             catalog.Upsert([SessionCatalogTests.Row("claimed/main", 0)]);
@@ -249,26 +243,22 @@ public sealed class SessionIdentityRecoveryTests
             mode == "owned-name" ? "unrelated" : "claimed",
             1000
         );
-        journal.Write(record);
-        var metadata = await File.ReadAllBytesAsync(catalogPath);
+        storage.Identities.WritePendingMove(record);
+        // The catalog file's bytes in file mode; the catalog rows otherwise.
+        async Task<string> Metadata() =>
+            catalogPath is null
+                ? new JsonArray(storage.Catalog.List().Select(row => (JsonNode)row.DeepClone()).ToArray()).ToJsonString()
+                : Convert.ToBase64String(await File.ReadAllBytesAsync(catalogPath));
+        var metadata = await Metadata();
         await Assert.ThrowsAnyAsync<InvalidDataException>(async () =>
         {
             await using var rejected = Manager(data, work);
             await rejected.LoadAsync();
         });
-        Assert.Equal(original, await File.ReadAllBytesAsync(journal.AuthorityPath("old")));
-        Assert.Equal(metadata, await File.ReadAllBytesAsync(catalogPath));
-        Assert.Equal(
-            audit,
-            new SqliteArchiveMessageStore(
-                Path.Combine(data, "state", "archive-store.sqlite"),
-                "old"
-            )
-                .ReadMessages()
-                .Single()
-                .MessageJson
-        );
-        Assert.True(File.Exists(journal.FilePath));
+        Assert.Equal(original, await IdentityTestStorage.AuthorityText(data, "old"));
+        Assert.Equal(metadata, await Metadata());
+        Assert.Equal(audit, IdentityTestStorage.Archive(data, "old").ReadMessages().Single().MessageJson);
+        Assert.True(IdentityTestStorage.PendingMove(data));
         Assert.True(Directory.Exists(claimed));
         Assert.Equal(
             "Other directory byte proof",

@@ -63,6 +63,12 @@ internal static class HostedTestBackend
         );
     }
 
+    /// <summary>The owner access to the database behind <paramref name="root"/>, once one exists; for fault injection.</summary>
+    internal static HostedTestDatabase? Database(string root) =>
+        tenants.TryGetValue(Path.GetFullPath(root), out var tenant) && tenant.IsValueCreated
+            ? tenant.Value.Owner
+            : null;
+
     /// <summary>The hosted stores that exist and file stores under <paramref name="root"/> for the rest.</summary>
     internal static IStorageContext Compose(PostgresStorageContext hosted, string root) =>
         hosted.Missing.Count == 0 ? hosted : new MixedStorageContext(hosted, new FileStorageContext(root));

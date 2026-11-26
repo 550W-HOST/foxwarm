@@ -1,10 +1,10 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
-using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class SessionIdentityMoveTests
 {
     private static ResponsesClientOptions Options =>
@@ -15,22 +15,6 @@ public sealed class SessionIdentityMoveTests
 
     private static JsonObject Text(string text) =>
         new() { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }) };
-
-    private static void Sql(string data, string sql)
-    {
-        using var db = new SqliteConnection(
-            new SqliteConnectionStringBuilder
-            {
-                DataSource = Path.Combine(data, "state", "archive-store.sqlite"),
-                Mode = SqliteOpenMode.ReadWrite,
-                Pooling = false,
-            }.ToString()
-        );
-        db.Open();
-        using var command = db.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
 
     [Fact]
     public async Task Same_canonical_target_is_reserved_not_a_noop_and_cannot_apply_a_parent_override()
@@ -43,9 +27,7 @@ public sealed class SessionIdentityMoveTests
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "same", null, null);
         var parent = await manager.CreateNamedAsync("main", "parent", null, null);
-        var before = await File.ReadAllTextAsync(
-            Path.Combine(data, "state", "sessions", "same.json")
-        );
+        var before = await IdentityTestStorage.AuthorityText(data, "same");
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             manager.MoveIdentityAsync(
                 owner,
@@ -53,11 +35,8 @@ public sealed class SessionIdentityMoveTests
             )
         );
         Assert.Null(owner.Metadata().ParentSessionId);
-        Assert.Equal(
-            before,
-            await File.ReadAllTextAsync(Path.Combine(data, "state", "sessions", "same.json"))
-        );
-        Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
+        Assert.Equal(before, await IdentityTestStorage.AuthorityText(data, "same"));
+        Assert.False(IdentityTestStorage.PendingMove(data));
     }
 
     [Fact]
@@ -102,15 +81,12 @@ public sealed class SessionIdentityMoveTests
         );
         Assert.Equal("Display", owner.Metadata().DisplayName);
         await ForkClearLifecycleTests.AppendAsync(owner, Text("New Agent attribution."));
-        var rows = new SqliteArchiveMessageStore(
-            Path.Combine(data, "state", "archive-store.sqlite"),
-            "old"
-        ).ReadMessages();
+        var rows = IdentityTestStorage.Archive(data, "old").ReadMessages();
         Assert.Equal(audit.MessageJson, rows[0].MessageJson);
         Assert.Equal("main", rows[0].Agent);
         Assert.Equal("destination", rows[1].Agent);
-        Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "old.json")));
-        Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "middle.json")));
+        Assert.False(IdentityTestStorage.AuthorityExists(data, "old"));
+        Assert.False(IdentityTestStorage.AuthorityExists(data, "middle"));
         foreach (var id in new[] { "old", "middle" })
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 manager.CreateNamedAsync("main", id, null, null)
@@ -139,7 +115,7 @@ public sealed class SessionIdentityMoveTests
         Assert.Equal("source", owner.Id);
         Assert.Same(owner, await manager.GetExistingAsync("source"));
         Assert.Null(await manager.GetExistingAsync("target"));
-        Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
+        Assert.False(IdentityTestStorage.PendingMove(data));
         manager.BeforeIdentityStage = null;
         await ForkClearLifecycleTests.AppendAsync(owner, Text("Allowed after complete rollback."));
         var replacement = await manager.CreateNamedAsync("main", "target", null, null);
@@ -159,15 +135,12 @@ public sealed class SessionIdentityMoveTests
         var target = await manager.CreateNamedAsync("main", "old", null, null);
         var independent = await manager.CreateNamedAsync("main", "caller", null, null);
         await ForkClearLifecycleTests.AppendAsync(target, Text("Target original."));
-        manager.BeforeIdentityStage = (_, stage) =>
+        manager.BeforeIdentityStage = async (_, stage) =>
         {
             if (stage != "after-target-persistence")
-                return Task.CompletedTask;
-            Sql(
-                data,
-                "CREATE TRIGGER fail_reverse BEFORE UPDATE OF session_id ON archive_branches WHEN OLD.session_id='new' AND NEW.session_id='old' BEGIN SELECT RAISE(ABORT,'Reverse fault'); END"
-            );
-            return Task.FromException(new IOException("Forward target-persistence fault."));
+                return;
+            await IdentityTestStorage.FailReverseBranchRename(data, true);
+            throw new IOException("Forward target-persistence fault.");
         };
         var error = await Assert.ThrowsAsync<SessionIdentityMoveException>(() =>
             manager.MoveIdentityAsync(
@@ -198,19 +171,9 @@ public sealed class SessionIdentityMoveTests
             independent,
             Text("Independent caller can persist its partial result.")
         );
-        Assert.Null(
-            new SqliteArchiveMessageStore(
-                Path.Combine(data, "state", "archive-store.sqlite"),
-                "old"
-            ).ReadBranch()
-        );
-        Assert.Single(
-            new SqliteArchiveMessageStore(
-                Path.Combine(data, "state", "archive-store.sqlite"),
-                "new"
-            ).ReadMessages()
-        );
-        Sql(data, "DROP TRIGGER fail_reverse");
+        Assert.Null(IdentityTestStorage.Archive(data, "old").ReadBranch());
+        Assert.Single(IdentityTestStorage.Archive(data, "new").ReadMessages());
+        await IdentityTestStorage.FailReverseBranchRename(data, false);
         try
         {
             await manager.DisposeAsync();
@@ -218,7 +181,7 @@ public sealed class SessionIdentityMoveTests
         catch (SessionIdentityUnavailableException) { }
         await using var restarted = Manager(data, work);
         await restarted.LoadAsync();
-        Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
+        Assert.False(IdentityTestStorage.PendingMove(data));
         var restored = await restarted.GetExistingAsync("old");
         Assert.NotNull(restored);
         Assert.Single(restored!.Archive.ReadMessages());

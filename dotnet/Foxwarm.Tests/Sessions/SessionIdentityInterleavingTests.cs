@@ -25,6 +25,7 @@ public sealed class SessionIdentityInterleavingTests
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     [Fact]
+    [Trait("Backend", "neutral")]
     public async Task Concurrent_parent_updates_reconcile_hot_authority_with_catalog()
     {
         using var temp = new TempDirectory();
@@ -85,11 +86,12 @@ public sealed class SessionIdentityInterleavingTests
             owner.Archive.ReadMessages().Select(row => row.SessionId)
         );
         Assert.Equal(2, owner.Entry.Snapshot().History.Count);
-        Assert.False(File.Exists(Path.Combine(temp.Path, "data", "state", "sessions", "old.json")));
+        Assert.False(IdentityTestStorage.AuthorityExists(Path.Combine(temp.Path, "data"), "old"));
         Assert.Same(owner, await manager.RequiredAsync("old"));
     }
 
     [Fact]
+    [Trait("Backend", "neutral")]
     public async Task Partial_delete_retry_keeps_original_source_lifetime_after_move_and_does_not_touch_completed_survivor()
     {
         using var temp = new TempDirectory();

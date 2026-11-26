@@ -121,7 +121,7 @@ public sealed class SessionIdentityBoundaryTests
             )
         );
         Assert.False(File.Exists(path));
-        Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
+        Assert.False(IdentityTestStorage.PendingMove(data));
     }
 
     [Fact]
@@ -167,6 +167,7 @@ public sealed class SessionIdentityBoundaryTests
     }
 
     [Fact]
+    [Trait("Backend", "neutral")]
     public async Task Old_and_target_calls_join_actual_move_and_caller_cancellation_never_cancels_mutation_or_publishes_another_owner()
     {
         using var temp = new TempDirectory();
@@ -303,7 +304,7 @@ public sealed class SessionIdentityBoundaryTests
         Assert.Null(result["parentSessionId"]);
         Assert.Equal("parent", result["requestedParentSessionId"]!.GetValue<string>());
         Assert.Same(owner, await manager.GetExistingAsync("old"));
-        Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
+        Assert.False(IdentityTestStorage.PendingMove(data));
     }
 
     [Fact]
@@ -333,7 +334,7 @@ public sealed class SessionIdentityBoundaryTests
         Assert.Contains("Session-worker", error.Message);
         Assert.Equal("old", owner.Id);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(file));
-        Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
+        Assert.False(IdentityTestStorage.PendingMove(data));
         Assert.Null(manager.Catalog.Get("new"));
     }
 }

@@ -5,6 +5,7 @@ using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
 
+[Trait("Backend", "neutral")]
 public sealed class SessionSequencePagingTests
 {
     private const long Minute = 60_000;
