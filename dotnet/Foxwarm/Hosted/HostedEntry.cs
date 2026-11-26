@@ -181,6 +181,8 @@ internal static class HostedEntry
                 )
                 {
                     OperatorCeiling = new OperatorCeilingDocuments(tenant.Database, profile),
+                    // The paths the tenant's config document may hold.
+                    Profile = profile,
                 }
             );
         }
