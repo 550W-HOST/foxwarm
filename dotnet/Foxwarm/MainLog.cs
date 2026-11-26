@@ -31,8 +31,40 @@ internal sealed class MainLog : IDisposable
             Console.Error.WriteLine(line);
     }
 
-    internal static void Fatal(string stage, Exception error) =>
-        Console.Error.WriteLine($"Main fatal startup failure at {stage}: {SafeFailure(error)}");
+    internal const string StartupFailureLogVariable = "FOXWARM_STARTUP_FAILURE_LOG";
+    private static string? startupFailureLog;
+
+    // A launcher whose console can lose the last output of a Main that exits at once (tmux
+    // discards what it has not read from an exited pane) names a file for the fatal line.
+    // Removed from the environment at entry, so no process Main starts inherits it.
+    internal static void TakeStartupFailureLog()
+    {
+        var path = Environment.GetEnvironmentVariable(StartupFailureLogVariable);
+        Environment.SetEnvironmentVariable(StartupFailureLogVariable, null);
+        startupFailureLog = string.IsNullOrWhiteSpace(path) ? null : path;
+    }
+
+    internal static void Fatal(string stage, Exception error)
+    {
+        var line = $"Main fatal startup failure at {stage}: {SafeFailure(error)}";
+        Console.Error.WriteLine(line);
+        if (startupFailureLog is not { } path)
+            return;
+        try
+        {
+            File.AppendAllText(path, (Volatile.Read(ref active)?.Redact(line) ?? line) + "\n");
+        }
+        catch (Exception ex)
+            when (ex
+                    is IOException
+                        or UnauthorizedAccessException
+                        or ArgumentException
+                        or NotSupportedException
+            )
+        {
+            Console.Error.WriteLine("Main could not record the startup failure: " + ex.Message);
+        }
+    }
 
     // Do not echo configuration values, credential-bearing URLs or vendor response bodies.
     internal static string SafeFailure(Exception error)
