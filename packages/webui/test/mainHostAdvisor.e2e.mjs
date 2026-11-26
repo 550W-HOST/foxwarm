@@ -98,7 +98,10 @@ const peer = createServer(async (request, response) => {
       response.writeHead(400, { 'content-type': 'application/json' })
       return response.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'scripted advisor failure' } }))
     }
-    if (JSON.stringify(body.messages.at(-1)).includes('HOLD-ME')) await new Promise(release => held.set(session, release))
+    // HOLD-ME, and the first consultation until the test has seen the parent waiting: an
+    // unheld advisor can report before the parent's wait is ever observable.
+    const last = JSON.stringify(body.messages.at(-1))
+    if (last.includes('HOLD-ME') || (last.includes('You are an advisor') && last.includes('two phases or one'))) await new Promise(release => held.set(session, release))
     reply(response, blocks, body.model)
   } catch (error) { errors.push(error.stack); response.destroy(error) }
 })
@@ -151,6 +154,7 @@ try {
   await fixture.save(models)
   assert.equal((await fixture.api('POST', route(PARENT) + '/child-model', { model: 'exec' })).status, 200)
   await turn('consult')
+  const consulted = await until(() => [...held.keys()][0], 'advisor request held', 30000)
   const waiting = await until(async () => { const state = await saved(PARENT); return state.meta?.wait && !state.busy ? state : false }, 'parent waits on the advisor', 30000)
   const result = toolResult(waiting, 'ctl')
   advisorId = result.result.advisor
@@ -161,7 +165,8 @@ try {
   assert.equal(waiting.meta.wait.timeoutSeconds, 3600, JSON.stringify(waiting.meta.wait))
   const consultRequest = parentRequests().at(-1)
   assert.equal(consultRequest.turn, 'consult#0')
-  await until(async () => JSON.stringify((await saved(PARENT)).history.slice(-2)).includes('CONSULT-DONE'), 'advice wakes the parent', 30000)
+  held.get(consulted)(); held.clear()
+  await until(async () => { const state = await saved(PARENT); return JSON.stringify(state.history.slice(-2)).includes('CONSULT-DONE') && !state.busy }, 'advice wakes the parent', 30000)
   const advisor = await saved(advisorId)
   assert.equal(advisor.authority?.model ?? advisor.model ?? advisor.envelope?.model, 'advisor', JSON.stringify(Object.keys(advisor)))
   const listed = JSON.stringify(await row(advisorId))
@@ -205,6 +210,8 @@ try {
   console.log(JSON.stringify({ result: 'ok', requests: records.length }))
 } catch (error) {
   console.error('HOST_OUTPUT', fixture.output?.slice(-6000)); console.error('PEER_ERRORS', errors)
+  const parent = await saved(PARENT).catch(() => null)
+  if (parent) console.error('PARENT_STATE', JSON.stringify({ busy: parent.busy, stopping: parent.stopping, wait: parent.meta?.wait ?? null, queue: parent.queue?.length, tail: parent.history.slice(-2).map(row => row.role) }))
   console.error('RECORDS', JSON.stringify(records.map(({ body, ...rest }) => rest)))
   throw error
 } finally { await fixture.cleanup(); peer.closeAllConnections(); await new Promise(done => peer.close(done)) }
