@@ -133,8 +133,7 @@ internal sealed partial class MainTimers
         }
         // Neither registration's model turn nor its mutation/authorization scopes
         // belong to an independently scheduled invocation.
-        using (ExecutionContext.SuppressFlow())
-            _ = Task.Run(() => RunClockAsync(record, completion, first));
+        MainLog.Detached(() => _ = Task.Run(() => RunClockAsync(record, completion, first)));
     }
 
     private async Task RunClockAsync(

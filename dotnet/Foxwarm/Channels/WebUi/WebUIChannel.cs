@@ -17,9 +17,11 @@ internal sealed partial class WebUIChannel(
     WebUiDownloadSignatures downloads
 )
 {
-    private readonly WebUiLogFile logs = new(
-        MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot)
-    );
+    // Null without the Logs view (RuntimeCapabilities.LogsView): a hosted replica's log mixes
+    // its tenants, so neither the history route nor the realtime topic exists there.
+    private readonly WebUiLogFile? logs = sessions.Capabilities.LogsView
+        ? new(MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot))
+        : null;
     private WebUiRealtime realtime = null!;
     private readonly Foxwarm.Terminal.TerminalRouter? terminalRouter = terminals is null
         ? null
@@ -28,8 +30,11 @@ internal sealed partial class WebUIChannel(
     public void Register(WebApplication app)
     {
         realtime = new WebUiRealtime(runtime, logs);
-        app.Lifetime.ApplicationStopped.Register(logs.Dispose);
-        RegisterLogRoutes(app);
+        if (logs is not null)
+        {
+            app.Lifetime.ApplicationStopped.Register(logs.Dispose);
+            RegisterLogRoutes(logs, app);
+        }
         sessions.ChannelRegistry.Register(
             "webui",
             (conversation, message, token) =>

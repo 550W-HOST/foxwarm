@@ -35,7 +35,7 @@ What each surface does when `MasterNode` is false.
 - **Claude Code runtime.** Creating a Session with it, and an external turn on it, are refused.
 - **Vector** is off whenever the Archive isn't the SQLite store; the Activity index already keeps only direct records off SQLite.
 - **Weixin.** Status and login output omit the configuration file path line.
-- **Logs.** `MainLog` also writes every recorded line to stdout as one JSON line (`level`, `time`, `pid`, `hostname`, `msg`) instead of forwarding raw console output. The file log under the scratch directory stays, and is what the WebUI Logs view reads.
+- **Logs.** `MainLog` also writes every recorded line to stdout as one JSON line (`level`, `time`, `pid`, `hostname`, `tenant`, `msg`) instead of forwarding raw console output. The file log under the scratch directory stays for the operator. There is no WebUI Logs view (`RuntimeCapabilities.LogsView`): a replica's log is the operator's, not a tenant's ([logs](./dotnet-webui-logs.md)).
 
 ## D-capability-scratch-guard
 

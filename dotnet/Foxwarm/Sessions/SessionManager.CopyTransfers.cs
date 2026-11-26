@@ -100,8 +100,9 @@ internal sealed partial class SessionManager
         lock (copyGate)
         {
             copies.Add(transfer.Id, transfer);
-            using (ExecutionContext.SuppressFlow())
-                transfer.Work = Task.Run(() => CopyTransferCoreAsync(transfer, copiedArgs));
+            MainLog.Detached(() =>
+                transfer.Work = Task.Run(() => CopyTransferCoreAsync(transfer, copiedArgs))
+            );
             transfer.Observer = ObserveCopyTransferAsync(transfer);
         }
         using var delayStop = new CancellationTokenSource();

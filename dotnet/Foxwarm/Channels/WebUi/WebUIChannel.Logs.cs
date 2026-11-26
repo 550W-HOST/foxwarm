@@ -5,7 +5,7 @@ namespace Foxwarm.Channels.WebUi;
 
 internal sealed partial class WebUIChannel
 {
-    private void RegisterLogRoutes(WebApplication app)
+    private static void RegisterLogRoutes(WebUiLogFile logs, WebApplication app)
     {
         app.MapGet(
             "/api/webui/logs",

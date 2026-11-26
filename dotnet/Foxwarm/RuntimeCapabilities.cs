@@ -15,18 +15,23 @@ namespace Foxwarm;
 /// <param name="StdioMcp">Outbound MCP servers launched as local commands.</param>
 /// <param name="ClaudeRuntime">The external Claude Code runtime for Sessions.</param>
 /// <param name="ExecutableProviders">Executable Node Providers from configuration.</param>
+/// <param name="LogsView">
+/// The WebUI Logs view (its history route and realtime topic) over this runtime's log file. A
+/// hosted replica's log is the operator's: it records every tenant the replica serves.
+/// </param>
 internal sealed record RuntimeCapabilities(
     bool MasterNode,
     bool MainTerminalsAndCode,
     bool StdioMcp,
     bool ClaudeRuntime,
-    bool ExecutableProviders
+    bool ExecutableProviders,
+    bool LogsView
 )
 {
-    internal static RuntimeCapabilities File { get; } = new(true, true, true, true, true);
+    internal static RuntimeCapabilities File { get; } = new(true, true, true, true, true, true);
 
-    /// <summary>Hosted P1: only the deployment's executable Providers.</summary>
-    internal static RuntimeCapabilities Hosted { get; } = new(false, false, false, false, true);
+    /// <summary>Hosted: only the deployment's executable Providers; no Logs view (U16(b)).</summary>
+    internal static RuntimeCapabilities Hosted { get; } = new(false, false, false, false, true, false);
 
     /// <summary>The error a call targeting the absent <c>master</c> Node fails with.</summary>
     internal static InvalidDataException MasterUnavailable() =>

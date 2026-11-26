@@ -40,10 +40,11 @@ internal sealed partial class SessionManager
             if (!Accepting || IsDeletionClaimed(owner.Id) || owner.Entry.Retired)
                 return;
             var lifetime = TrackCreation();
-            using (ExecutionContext.SuppressFlow())
+            MainLog.Detached(() =>
                 state.Pending = Task.Run(() =>
                     RunAutoTitleAsync(snapshot, selection.Exchange!, lifetime)
-                );
+                )
+            );
         }
         catch (Exception error)
         {

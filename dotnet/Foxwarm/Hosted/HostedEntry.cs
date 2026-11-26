@@ -177,7 +177,8 @@ internal static class HostedEntry
                 captureDiagnostics: true,
                 storage: storage,
                 capabilities: RuntimeCapabilities.Hosted,
-                jsonStdoutLog: true
+                jsonStdoutLog: true,
+                logTenant: bootstrap.Tenant
             )
             .ConfigureAwait(false);
         // The owner's daily journal retention; it stops when the host disposes the journal.

@@ -41,6 +41,7 @@ internal sealed class MainHost : IAsyncDisposable
 
     private async Task StartCoreAsync()
     {
+        log?.UseFor();
         await host.StartAsync();
         if (sessions.ManagedChannels is { } channels)
         {
@@ -97,7 +98,9 @@ internal sealed class MainHost : IAsyncDisposable
         Foxwarm.Storage.IStorageContext? storage = null,
         RuntimeCapabilities? capabilities = null,
         // Hosted mode: log lines also go to stdout as JSON lines (MainLog).
-        bool jsonStdoutLog = false
+        bool jsonStdoutLog = false,
+        // Hosted mode: the tenant this runtime's log lines carry.
+        string? logTenant = null
     ) =>
         CreateAsync(
             args,
@@ -110,7 +113,8 @@ internal sealed class MainHost : IAsyncDisposable
             captureDiagnostics: captureDiagnostics,
             storage: storage,
             capabilities: capabilities,
-            jsonStdoutLog: jsonStdoutLog
+            jsonStdoutLog: jsonStdoutLog,
+            logTenant: logTenant
         );
 
     internal static async Task<MainHost> CreateAsync(
@@ -127,7 +131,8 @@ internal sealed class MainHost : IAsyncDisposable
         Foxwarm.Storage.IStorageContext? storage = null,
         // The runtime's features; null is file mode's full profile.
         RuntimeCapabilities? capabilities = null,
-        bool jsonStdoutLog = false
+        bool jsonStdoutLog = false,
+        string? logTenant = null
     )
     {
         capabilities ??= RuntimeCapabilities.File;
@@ -142,7 +147,10 @@ internal sealed class MainHost : IAsyncDisposable
             "",
             configuration.MaxOutput
         );
-        var log = captureDiagnostics ? new MainLog(configuration, jsonStdoutLog) : null;
+        // The process has one Console capture; this runtime's log is a sink of it, and work
+        // started from here records into this sink.
+        var log = captureDiagnostics ? new MainLog(configuration, jsonStdoutLog, logTenant) : null;
+        log?.UseFor();
         SessionManager sessions;
         try
         {
@@ -261,6 +269,7 @@ internal sealed class MainHost : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        log?.UseFor();
         var stopping = System.Diagnostics.Stopwatch.StartNew();
         sessions.BeginShutdown();
         if (sessions.ManagedChannels is { } channels)

@@ -164,11 +164,7 @@ internal sealed partial class SessionCompactor
                 Timeout.InfiniteTimeSpan
             );
         // A timer must not retain the finished turn's invocation or mutation scopes.
-        if (ExecutionContext.IsFlowSuppressed())
-            idleTimer = Create();
-        else
-            using (ExecutionContext.SuppressFlow())
-                idleTimer = Create();
+        MainLog.Detached(() => idleTimer = Create());
     }
 
     private async Task FireIdleAsync(TaskCompletionSource settled)

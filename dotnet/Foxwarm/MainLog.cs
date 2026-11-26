@@ -8,22 +8,27 @@ namespace Foxwarm;
 // Only the real Main entries capture Console. One-shot CLI, native helpers and
 // Vector children return before this owner is created; embedded test hosts do not
 // replace process writers. Keep diagnostics out of their data/protocol streams.
+//
+// The Console capture is one per process: the first MainLog installs it and the last one to
+// be disposed removes it. Each MainLog is a sink (a log file, the secrets that mask its lines
+// and, in hosted mode, its tenant). A line goes to the sink of the current logical flow
+// (UseFor), else to the oldest open sink. Several runtimes in one process therefore share
+// one capture instead of wrapping each other's.
 internal sealed class MainLog : IDisposable
 {
-    private readonly TextWriter stdout = Console.Out;
-    private readonly TextWriter stderr = Console.Error;
-    private readonly object gate;
     private readonly StreamWriter file;
-    private readonly Capture output;
-    private readonly Capture error;
     private readonly bool json = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG") == "1";
+    private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
+    private readonly ProcessCapture capture;
+    // Hosted mode: the tenant this sink records for; its stdout JSON lines carry it.
+    private readonly string? tenant;
     private bool failed;
     private bool disposed;
-    private static MainLog? active;
-    private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
-    // Hosted mode: every recorded line is also one JSON line on stdout, for the container's log
-    // collector, instead of the console's raw forwarding.
-    private readonly bool jsonStdout;
+    private static ProcessCapture? active;
+    private static readonly object processGate = new();
+    private static readonly AsyncLocal<MainLog?> current = new();
+
+    internal string? Tenant => tenant;
 
     // Typed lifecycle diagnostics are INFO only inside Main's capture. Outside Main, stderr
     // remains the diagnostic stream so CLI and private helper stdout framing stays intact.
@@ -56,7 +61,7 @@ internal sealed class MainLog : IDisposable
             return;
         try
         {
-            File.AppendAllText(path, (Volatile.Read(ref active)?.Redact(line) ?? line) + "\n");
+            File.AppendAllText(path, (Volatile.Read(ref active)?.RedactLocked(line) ?? line) + "\n");
         }
         catch (Exception ex)
             when (ex
@@ -110,73 +115,129 @@ internal sealed class MainLog : IDisposable
         );
     }
 
-    internal MainLog(ModelConfiguration configuration, bool jsonStdout = false)
+    internal MainLog(ModelConfiguration configuration, bool jsonStdout = false, string? tenant = null)
+        : this(Destination(configuration), configuration.Secrets, jsonStdout, tenant) { }
+
+    /// <summary>
+    /// Opens a sink writing to <paramref name="destination"/>. The first open sink of the process
+    /// installs the Console capture, and later sinks join it; they must agree on
+    /// <paramref name="jsonStdout"/>, which decides what the process console receives.
+    /// </summary>
+    internal MainLog(
+        string destination,
+        Foxwarm.Secrets.InstanceSecrets? secrets,
+        bool jsonStdout = false,
+        string? tenant = null
+    )
     {
-        this.jsonStdout = jsonStdout;
-        secrets = configuration.Secrets;
-        var path = Destination(configuration);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        file = new StreamWriter(Foxwarm.Tools.AppendLogFile.Open(path), new UTF8Encoding(false))
+        this.secrets = secrets;
+        this.tenant = tenant;
+        detached = DetachedContext(this);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        file = new StreamWriter(
+            Foxwarm.Tools.AppendLogFile.Open(destination),
+            new UTF8Encoding(false)
+        )
         {
             AutoFlush = true,
         };
-        var suppress =
-            json
-            || jsonStdout
-            || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FOXWARM_NO_CONSOLE_LOG"));
-        var console = !string.IsNullOrEmpty(
-            Environment.GetEnvironmentVariable("FOXWARM_LOG_STDERR")
-        )
-            ? stderr
-            : stdout;
-        output = new Capture(this, suppress ? null : console, false);
-        error = new Capture(this, suppress ? null : stderr, true);
-        // Unix console writes reacquire Console.Out. Use its published monitor for
-        // capture, forwarding, flush and failure fallback before any saved writer.
-        var synchronizedOutput = TextWriter.Synchronized(output);
-        gate = synchronizedOutput;
-        Console.SetOut(synchronizedOutput);
-        Console.SetError(error);
-        Volatile.Write(ref active, this);
+        lock (processGate)
+        {
+            var existing = Volatile.Read(ref active);
+            if (existing is not null && existing.JsonStdout != jsonStdout)
+            {
+                file.Dispose();
+                throw new InvalidOperationException(
+                    "A Main log with a different console format is already capturing this process."
+                );
+            }
+            capture = existing ?? new ProcessCapture(json, jsonStdout);
+            lock (capture.Gate)
+                capture.Add(this);
+            Volatile.Write(ref active, capture);
+        }
+    }
+
+    /// <summary>
+    /// Makes this sink the destination of the Console lines that the current logical flow, and
+    /// the work it starts, writes from now on. Without one, a line goes to the oldest open sink,
+    /// and it's masked with the secrets of every open sink.
+    /// </summary>
+    internal void UseFor() => current.Value = this;
+
+    /// <summary>
+    /// Makes the current logical flow the process's own: its lines go to the process's sink (the
+    /// oldest open sink with no tenant), not to a tenant's.
+    /// </summary>
+    internal static void UseProcess() => current.Value = null;
+
+    // A context holding only this sink's scope, for work started without the caller's flow.
+    private readonly ExecutionContext? detached;
+
+    /// <summary>
+    /// Runs <paramref name="start"/> so that the work it starts doesn't inherit the caller's
+    /// execution context (its invocation, mutation and authorization scopes), but still logs to
+    /// the caller's sink. Replaces <c>using (ExecutionContext.SuppressFlow())</c> at the places
+    /// that start independent work.
+    /// </summary>
+    internal static void Detached(Action start)
+    {
+        if (current.Value?.detached is { } context)
+            ExecutionContext.Run(context, static state => ((Action)state!)(), start);
+        else if (ExecutionContext.IsFlowSuppressed())
+            start();
+        else
+            using (ExecutionContext.SuppressFlow())
+                start();
+    }
+
+    private static ExecutionContext? DetachedContext(MainLog sink)
+    {
+        // A thread-pool item queued without the caller's context runs in the default one, and
+        // unlike a task it is never inlined into the waiting caller's context.
+        ExecutionContext? context = null;
+        using var done = new ManualResetEventSlim();
+        ThreadPool.UnsafeQueueUserWorkItem(
+            _ =>
+            {
+                current.Value = sink;
+                context = ExecutionContext.Capture();
+                done.Set();
+            },
+            null
+        );
+        done.Wait();
+        return context;
     }
 
     // Known secret values are masked in each write before the console sees it and again in
     // each complete file line.
-    private string Redact(string line) => secrets?.LastBuilt.Redact(line) ?? line;
+    private string RedactOwn(string line) => secrets?.LastBuilt.Redact(line) ?? line;
 
-    private void Record(string line, bool isError)
+    private static string JsonLine(DateTimeOffset now, string line, bool isError, string? tenant)
     {
-        if (disposed || failed && !jsonStdout)
-            return;
-        var now = DateTimeOffset.Now;
-        string JsonLine() =>
-            JsonData.Serialize(
-                new System.Text.Json.Nodes.JsonObject
-                {
-                    ["level"] = isError ? 50 : 30,
-                    ["time"] = now.ToUnixTimeMilliseconds(),
-                    ["pid"] = Environment.ProcessId,
-                    ["hostname"] = Environment.MachineName,
-                    ["msg"] = line,
-                }
-            );
-        if (jsonStdout)
-            try
-            {
-                stdout.WriteLine(JsonLine());
-                stdout.Flush();
-            }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
-            {
-                // A closed stdout leaves the file record.
-            }
+        var record = new System.Text.Json.Nodes.JsonObject
+        {
+            ["level"] = isError ? 50 : 30,
+            ["time"] = now.ToUnixTimeMilliseconds(),
+            ["pid"] = Environment.ProcessId,
+            ["hostname"] = Environment.MachineName,
+        };
+        if (tenant is not null)
+            record["tenant"] = tenant;
+        record["msg"] = line;
+        return JsonData.Serialize(record);
+    }
+
+    private void Append(DateTimeOffset now, string line, bool isError, TextWriter stderr)
+    {
         if (failed)
             return;
         try
         {
             file.WriteLine(
                 json
-                    ? JsonLine()
+                    ? JsonLine(now, line, isError, tenant)
                     : "["
                         + now.ToString("yyyy-MM-dd HH:mm:ss.fff ", CultureInfo.InvariantCulture)
                         + now.ToString("zzz", CultureInfo.InvariantCulture).Replace(":", "")
@@ -196,88 +257,230 @@ internal sealed class MainLog : IDisposable
 
     public void Dispose()
     {
-        lock (gate)
+        var last = false;
+        lock (processGate)
         {
-            output.Finish();
-            error.Finish();
-            // Channel ingress can finish a diagnostic concurrently with shutdown.
-            // A writer reference already obtained by that callback must stay harmless.
-            failed = true;
-            disposed = true;
-            Interlocked.CompareExchange(ref active, null, this);
-            Console.SetOut(stdout);
-            Console.SetError(stderr);
-            try
+            lock (capture.Gate)
             {
-                file.Dispose();
+                if (disposed)
+                    return;
+                last = capture.OpenSinks == 1;
+                // The last sink takes the partial lines still pending and closes the capture.
+                if (last)
+                    capture.Close();
+                else
+                    capture.Finish(this);
+                // Channel ingress can finish a diagnostic concurrently with shutdown.
+                // A writer reference already obtained by that callback must stay harmless.
+                failed = true;
+                disposed = true;
+                capture.Remove(this);
+                try
+                {
+                    file.Dispose();
+                }
+                catch (IOException ex)
+                {
+                    capture.Stderr.WriteLine("Main file logging failed: " + ex.Message);
+                }
             }
-            catch (IOException ex)
-            {
-                stderr.WriteLine("Main file logging failed: " + ex.Message);
-            }
+            if (last)
+                Interlocked.CompareExchange(ref active, null, capture);
         }
     }
 
-    private sealed class Capture(MainLog owner, TextWriter? console, bool isError) : TextWriter
+    /// <summary>The process's Console capture, shared by every open <see cref="MainLog"/>.</summary>
+    private sealed class ProcessCapture
     {
-        private readonly StringBuilder pending = new();
-        public override Encoding Encoding => Encoding.UTF8;
+        private readonly TextWriter stdout = Console.Out;
+        private readonly TextWriter stderr = Console.Error;
+        private readonly Capture output;
+        private readonly Capture error;
+        private readonly List<MainLog> sinks = [];
+        private bool closed;
 
-        public override void Write(char value)
+        internal ProcessCapture(bool json, bool jsonStdout)
         {
-            lock (owner.gate)
-            {
-                console?.Write(value);
-                Append(value);
-            }
+            JsonStdout = jsonStdout;
+            var suppress =
+                json
+                || jsonStdout
+                || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FOXWARM_NO_CONSOLE_LOG"));
+            var console = !string.IsNullOrEmpty(
+                Environment.GetEnvironmentVariable("FOXWARM_LOG_STDERR")
+            )
+                ? stderr
+                : stdout;
+            output = new Capture(this, suppress ? null : console, false);
+            error = new Capture(this, suppress ? null : stderr, true);
+            // Unix console writes reacquire Console.Out. Use its published monitor for
+            // capture, forwarding, flush and failure fallback before any saved writer.
+            var synchronizedOutput = TextWriter.Synchronized(output);
+            Gate = synchronizedOutput;
+            Console.SetOut(synchronizedOutput);
+            Console.SetError(error);
         }
 
-        // Each write is masked as a whole before the console sees it, so console output
-        // keeps its timing and a multi-line value written at once is still masked. The
-        // file receives complete lines, masked again for values split across writes.
-        public override void Write(string? value)
+        // Hosted mode: every recorded line is also one JSON line on stdout, for the container's
+        // log collector, instead of the console's raw forwarding.
+        internal bool JsonStdout { get; }
+        internal object Gate { get; }
+        internal TextWriter Stderr => stderr;
+        internal int OpenSinks => sinks.Count;
+
+        internal void Add(MainLog sink) => sinks.Add(sink);
+
+        internal void Remove(MainLog sink) => sinks.Remove(sink);
+
+        // The current flow's sink, if it is one of this capture's open sinks.
+        // The process's own sink: the oldest open sink without a tenant, else the oldest one.
+        private MainLog? Process() =>
+            sinks.FirstOrDefault(sink => sink.tenant is null) ?? (sinks.Count > 0 ? sinks[0] : null);
+
+        internal MainLog? Scoped() =>
+            current.Value is { disposed: false } sink && ReferenceEquals(sink.capture, this)
+                ? sink
+                : null;
+
+        // A line of a known sink is masked with that sink's secrets; a line of no known sink with
+        // the secrets of every open sink, so a value is never left unmasked for want of a scope.
+        internal string RedactLocked(string line)
         {
-            if (string.IsNullOrEmpty(value))
+            lock (Gate)
+                return Redact(line);
+        }
+
+        internal string Redact(string line) => Redact(line, Scoped());
+
+        internal string Redact(string line, MainLog? source)
+        {
+            if (source is { disposed: false } scoped)
+                return scoped.RedactOwn(line);
+            foreach (var sink in sinks)
+                line = sink.RedactOwn(line);
+            return line;
+        }
+
+        // A line goes to the sink that wrote it, else (no known sink, or that sink has closed)
+        // to the oldest open sink: the replica's own log in hosted mode.
+        internal void Record(string line, bool isError, MainLog? source)
+        {
+            if (closed)
                 return;
-            lock (owner.gate)
-            {
-                var masked = owner.Redact(value);
-                console?.Write(masked);
-                foreach (var character in masked)
-                    Append(character);
-            }
+            var sink = source is { disposed: false } ? source : Process();
+            var now = DateTimeOffset.Now;
+            if (JsonStdout)
+                try
+                {
+                    stdout.WriteLine(JsonLine(now, line, isError, sink?.tenant));
+                    stdout.Flush();
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                {
+                    // A closed stdout leaves the file record.
+                }
+            sink?.Append(now, line, isError, stderr);
         }
 
-        public override void Write(char[] buffer, int index, int count) =>
-            Write(new string(buffer, index, count));
-
-        public override void Write(ReadOnlySpan<char> buffer) => Write(new string(buffer));
-
-        private void Append(char value)
+        // Called with the gate held by a sink that is closing: its partial lines are its own.
+        internal void Finish(MainLog sink)
         {
-            if (value == '\n')
-            {
-                owner.Record(owner.Redact(pending.ToString().TrimEnd('\r')), isError);
-                pending.Clear();
-            }
-            else
-                pending.Append(value);
+            output.Finish(sink);
+            error.Finish(sink);
         }
 
-        public override void Flush()
+        // Called with the gate held by the last open sink, before it's removed.
+        internal void Close()
         {
-            lock (owner.gate)
+            output.Finish();
+            error.Finish();
+            closed = true;
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+        }
+
+        private sealed class Capture(ProcessCapture owner, TextWriter? console, bool isError)
+            : TextWriter
+        {
+            // Partial lines are assembled per source, so runtimes writing at the same time never
+            // join each other's text into one line, or mask it with the wrong secrets.
+            private readonly Dictionary<object, (MainLog? Source, StringBuilder Text)> pending = new(
+                ReferenceEqualityComparer.Instance
+            );
+            private static readonly object Unscoped = new();
+            public override Encoding Encoding => Encoding.UTF8;
+
+            private StringBuilder Pending(MainLog? source)
+            {
+                var key = (object?)source ?? Unscoped;
+                if (!pending.TryGetValue(key, out var entry))
+                    pending[key] = entry = (source, new StringBuilder());
+                return entry.Text;
+            }
+
+            public override void Write(char value)
+            {
+                lock (owner.Gate)
+                {
+                    console?.Write(value);
+                    var source = owner.Scoped();
+                    Append(Pending(source), source, value);
+                }
+            }
+
+            // Each write is masked as a whole before the console sees it, so console output
+            // keeps its timing and a multi-line value written at once is still masked. The
+            // file receives complete lines, masked again for values split across writes.
+            public override void Write(string? value)
+            {
+                if (string.IsNullOrEmpty(value))
+                    return;
+                lock (owner.Gate)
+                {
+                    var source = owner.Scoped();
+                    var masked = owner.Redact(value, source);
+                    console?.Write(masked);
+                    var text = Pending(source);
+                    foreach (var character in masked)
+                        Append(text, source, character);
+                }
+            }
+
+            public override void Write(char[] buffer, int index, int count) =>
+                Write(new string(buffer, index, count));
+
+            public override void Write(ReadOnlySpan<char> buffer) => Write(new string(buffer));
+
+            private void Append(StringBuilder text, MainLog? source, char value)
+            {
+                if (value == '\n')
+                {
+                    owner.Record(owner.Redact(text.ToString().TrimEnd('\r'), source), isError, source);
+                    text.Clear();
+                }
+                else
+                    text.Append(value);
+            }
+
+            public override void Flush()
+            {
+                lock (owner.Gate)
+                    console?.Flush();
+            }
+
+            // Records one source's partial line, or every source's when the capture closes.
+            internal void Finish(MainLog? only = null)
+            {
+                foreach (var (key, (source, text)) in pending.ToArray())
+                {
+                    if (only is not null && !ReferenceEquals(source, only))
+                        continue;
+                    if (text.Length > 0)
+                        owner.Record(owner.Redact(text.ToString(), source), isError, source);
+                    pending.Remove(key);
+                }
                 console?.Flush();
-        }
-
-        internal void Finish()
-        {
-            if (pending.Length > 0)
-            {
-                owner.Record(owner.Redact(pending.ToString()), isError);
-                pending.Clear();
             }
-            console?.Flush();
         }
     }
 }
