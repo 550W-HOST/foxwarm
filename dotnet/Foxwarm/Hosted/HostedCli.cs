@@ -15,6 +15,15 @@ internal static class HostedCli
     /// <summary>Configuration or schema refused (EX_CONFIG).</summary>
     internal const int ConfigurationError = 78;
 
+    /// <summary>The probe of the replica's own health listener: no proxy, 3 s.</summary>
+    internal static HttpClient HealthClient() =>
+        Foxwarm.Net.EgressHttp.Client(
+            Foxwarm.Net.EgressPolicy.Unguarded,
+            Foxwarm.Net.EgressPurpose.Deployment,
+            new Foxwarm.Net.EgressHandlerOptions { UseProxy = false },
+            timeout: TimeSpan.FromSeconds(3)
+        );
+
     internal static async Task<int> RunAsync(
         string[] args,
         TextWriter output,
@@ -146,10 +155,8 @@ internal static class HostedCli
                 : endpoint.Address.Equals(System.Net.IPAddress.IPv6Any)
                     ? System.Net.IPAddress.IPv6Loopback
                     : endpoint.Address;
-            using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
-            {
-                Timeout = TimeSpan.FromSeconds(3),
-            };
+            // The replica's own health listener: a local probe, not tenant egress.
+            using var http = HealthClient();
             using var response = await http.GetAsync(
                 new UriBuilder("http", address.ToString(), endpoint.Port, path).Uri
             );

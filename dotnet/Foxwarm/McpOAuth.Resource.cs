@@ -181,6 +181,14 @@ internal sealed partial class McpOAuthService
         catch { }
     }
 
+    /// <summary>The transport under resource requests: no redirects, no cookies.</summary>
+    internal static HttpMessageHandler ResourceTransport(Foxwarm.Net.EgressPolicy egress) =>
+        Foxwarm.Net.EgressHttp.Handler(
+            egress,
+            Foxwarm.Net.EgressPurpose.Mcp,
+            new Foxwarm.Net.EgressHandlerOptions { AllowAutoRedirect = false, UseCookies = false }
+        );
+
     internal HttpClient ResourceClient(
         string name,
         JsonObject config,
@@ -194,10 +202,7 @@ internal sealed partial class McpOAuthService
             Current(name, config, epoch);
         }
         HttpMessageHandler handler = new ResourceHandler(this, name, Copy(config), epoch);
-        return new HttpClient(wrap is null ? handler : wrap(handler))
-        {
-            Timeout = Timeout.InfiniteTimeSpan,
-        };
+        return Foxwarm.Net.EgressHttp.Client(wrap is null ? handler : wrap(handler));
     }
 
     private sealed class ResourceHandler(
@@ -205,7 +210,7 @@ internal sealed partial class McpOAuthService
         string name,
         JsonObject config,
         long epoch
-    ) : DelegatingHandler(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false })
+    ) : DelegatingHandler(ResourceTransport(service.Egress))
     {
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,

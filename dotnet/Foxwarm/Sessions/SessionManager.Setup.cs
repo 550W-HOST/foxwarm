@@ -162,7 +162,8 @@ internal sealed partial class SessionManager
             model,
             options,
             "setup-model-test",
-            scope: ModelRequestScope.LowLevel
+            scope: ModelRequestScope.LowLevel,
+            egress: Capabilities.Egress
         );
         try
         {

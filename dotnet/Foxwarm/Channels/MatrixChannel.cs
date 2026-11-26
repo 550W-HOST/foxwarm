@@ -17,7 +17,6 @@ internal sealed class MatrixApiException(int status, JsonObject? body, TimeSpan?
 // The unencrypted subset used by MatrixChannel with matrix-js-sdk 41.0.0-rc.0.
 internal sealed partial class MatrixChannel : IManagedChannel
 {
-    private static readonly HttpClient DefaultHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly string id;
     private readonly Uri homeserver;
     private readonly string accessToken;
@@ -25,6 +24,7 @@ internal sealed partial class MatrixChannel : IManagedChannel
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
+    private readonly Foxwarm.Net.EgressPolicy egress;
     private readonly ChannelHealth health;
     private const string SyncPath = "Matrix sync";
     private const string SendingPath = "Matrix sending";
@@ -44,7 +44,9 @@ internal sealed partial class MatrixChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        ChannelHealth health
+        ChannelHealth health,
+        // The runtime's shared client of this channel type (ManagedChannels).
+        HttpClient? shared = null
     )
     {
         this.id = id;
@@ -59,7 +61,9 @@ internal sealed partial class MatrixChannel : IManagedChannel
                 "Matrix homeserver/accessToken/botUserId are required for channel " + id
             );
         homeserver = new Uri(server.TrimEnd('/') + "/");
-        http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
+        // Adapter tests may build an adapter without a runtime.
+        egress = sessions?.Capabilities.Egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+        http = dependencies?.CreateHttp?.Invoke() ?? (shared ??= ChannelHttpClients.Single(egress));
         delay = dependencies?.Delay ?? Task.Delay;
     }
 

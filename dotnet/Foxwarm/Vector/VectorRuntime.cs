@@ -20,7 +20,19 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
     private readonly string archivePath;
     private readonly string databaseRoot;
     private readonly VectorConfiguration config;
-    private readonly HttpClient embeddings = new() { Timeout = TimeSpan.FromSeconds(60) };
+    // Vector runs only in file mode (hosted mode has no Vector), so this client is unguarded.
+    private readonly HttpClient embeddings = EmbeddingsClient();
+
+    internal static HttpClient EmbeddingsClient() =>
+        Foxwarm.Net.EgressHttp.Client(
+            Foxwarm.Net.EgressPolicy.Unguarded,
+            Foxwarm.Net.EgressPurpose.Model,
+            new Foxwarm.Net.EgressHandlerOptions
+            {
+                FileHandler = Foxwarm.Net.EgressFileHandler.Client,
+            },
+            timeout: TimeSpan.FromSeconds(60)
+        );
     internal Func<string, string>? EmbeddingRedaction { get; init; }
     private readonly VectorOperationGate operations = new();
     private readonly object scheduling = new();

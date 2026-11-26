@@ -25,7 +25,20 @@ internal sealed class ManagedChannels(
     ChannelTransportDependencies? dependencies = null
 ) : IAsyncDisposable
 {
-    internal WeixinApi Weixin { get; } = new(dependencies);
+    // The runtime's shared channel clients, one per channel type.
+    private readonly ChannelHttpClients http = new(sessions.Capabilities.Egress);
+
+    private readonly object weixinGate = new();
+    private WeixinApi? weixin;
+
+    internal WeixinApi Weixin
+    {
+        get
+        {
+            lock (weixinGate)
+                return weixin ??= new(dependencies, () => http.For("weixin"));
+        }
+    }
 
     private static bool Implemented(string type) =>
         type is "telegram" or "matrix" or "weixin" or "wework" or "qqbot";
@@ -335,10 +348,34 @@ internal sealed class ManagedChannels(
         var health = Health(id);
         IManagedChannel channel = Type(id, config) switch
         {
-            "telegram" => new TelegramChannel(id, config, sessions, router, dependencies, health),
-            "matrix" => new MatrixChannel(id, config, sessions, router, dependencies, health),
+            "telegram" => new TelegramChannel(
+                id,
+                config,
+                sessions,
+                router,
+                dependencies,
+                health,
+                http.For("telegram")
+            ),
+            "matrix" => new MatrixChannel(
+                id,
+                config,
+                sessions,
+                router,
+                dependencies,
+                health,
+                http.For("matrix")
+            ),
             "qqbot" => new QQBotChannel(id, config, sessions, router, dependencies, health),
-            "wework" => new WeWorkChannel(id, config, sessions, router, dependencies, health),
+            "wework" => new WeWorkChannel(
+                id,
+                config,
+                sessions,
+                router,
+                dependencies,
+                health,
+                http.For("wework")
+            ),
             "weixin" => new WeixinChannel(id, config, router, Weixin, health),
             _ => throw new ChannelRequestException(
                 "Adapter is not implemented on this server: " + id
@@ -586,5 +623,6 @@ internal sealed class ManagedChannels(
         foreach (var id in ids)
             await StopCoreAsync(id);
         sessions.ChannelProgress.Reset();
+        http.Dispose();
     }
 }

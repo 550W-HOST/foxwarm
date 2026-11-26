@@ -6,11 +6,18 @@ namespace Foxwarm.Models;
 
 internal static class ProviderHttpRequest
 {
-    internal static HttpClient CreateClient() =>
-        new(new ProviderResponseDecodingHandler(new HttpClientHandler { UseCookies = false }))
-        {
-            Timeout = System.Threading.Timeout.InfiniteTimeSpan,
-        };
+    // Product code passes the runtime's policy (source rule); tests may omit it.
+    internal static HttpClient CreateClient(Foxwarm.Net.EgressPolicy? egress = null) =>
+        Foxwarm.Net.EgressHttp.Client(
+            egress ?? Foxwarm.Net.EgressPolicy.Unguarded,
+            Foxwarm.Net.EgressPurpose.Model,
+            new Foxwarm.Net.EgressHandlerOptions
+            {
+                UseCookies = false,
+                FileHandler = Foxwarm.Net.EgressFileHandler.Client,
+            },
+            inner => new ProviderResponseDecodingHandler(inner)
+        );
 
     internal static JsonObject ResponseHeaders(HttpResponseMessage response)
     {

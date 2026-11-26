@@ -433,6 +433,24 @@ internal sealed partial class McpClient
         }
     }
 
+    /// <summary>
+    /// The HTTP client of a server without OAuth: the default handler type and settings,
+    /// redirects and cookies included, observed by the receive transport.
+    /// </summary>
+    internal static HttpClient PlainHttp(
+        Foxwarm.Net.EgressPolicy egress,
+        Func<HttpMessageHandler, HttpMessageHandler> observe
+    ) =>
+        Foxwarm.Net.EgressHttp.Client(
+            egress,
+            Foxwarm.Net.EgressPurpose.Mcp,
+            new Foxwarm.Net.EgressHandlerOptions
+            {
+                FileHandler = Foxwarm.Net.EgressFileHandler.Client,
+            },
+            observe
+        );
+
     private async Task<Connection> ConnectAsync(
         string server,
         JsonObject config,
@@ -506,10 +524,7 @@ internal sealed partial class McpClient
                 );
             var http = config["oauth"] is not null
                 ? OAuth.ResourceClient(server, config, Observe)
-                : new HttpClient(Observe(new HttpClientHandler()))
-                {
-                    Timeout = Timeout.InfiniteTimeSpan,
-                };
+                : PlainHttp(OAuth.Egress, Observe);
             transport = new HttpClientTransport(options, http, ownsHttpClient: true);
         }
         try

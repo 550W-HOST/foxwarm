@@ -147,7 +147,9 @@ internal static class ConfiguredModelRequests
         string cacheKey,
         Action<string, ResponsesStreamProgress>? progress = null,
         ResponsesWsTransport? websockets = null,
-        ModelRequestScope scope = ModelRequestScope.LowLevel
+        ModelRequestScope scope = ModelRequestScope.LowLevel,
+        // The policy of a request-owned WebSocket transport when the caller passes none.
+        Foxwarm.Net.EgressPolicy? egress = null
     )
     {
         if (options.TextRedaction is { } redaction)
@@ -174,7 +176,8 @@ internal static class ConfiguredModelRequests
                         cacheKey,
                         restoredProgress,
                         websockets,
-                        scope
+                        scope,
+                        egress
                     )
             );
         }
@@ -198,7 +201,7 @@ internal static class ConfiguredModelRequests
             : model.ProviderType == "openai-ws"
                 ? new ResponsesWsChatService(
                     options,
-                    websockets ?? new ResponsesWsTransport(),
+                    websockets ?? new ResponsesWsTransport(egress: egress),
                     scope,
                     websockets is null,
                     cacheKey,

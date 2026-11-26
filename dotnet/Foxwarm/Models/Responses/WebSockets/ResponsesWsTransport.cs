@@ -8,9 +8,12 @@ namespace Foxwarm.Models;
 internal sealed class ResponsesWsTransport(
     TimeProvider? clock = null,
     Func<ClientWebSocket>? socketFactory = null,
-    Action<JsonObject>? diagnostics = null
+    Action<JsonObject>? diagnostics = null,
+    Foxwarm.Net.EgressPolicy? egress = null
 ) : IAsyncDisposable
 {
+    private readonly Foxwarm.Net.EgressPolicy egress = egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+
     internal TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     internal const int IdleLimit = 5;
     internal const int IdleTimeoutMs = 600000;
@@ -285,13 +288,13 @@ internal sealed class ResponsesWsTransport(
         {
             if (resource is null)
             {
-                var socket = socketFactory?.Invoke() ?? new ClientWebSocket();
+                var socket = socketFactory?.Invoke() ?? Foxwarm.Net.EgressHttp.WebSocket();
                 socket.Options.KeepAliveInterval = Timeout.InfiniteTimeSpan;
                 socket.Options.DangerousDeflateOptions = new WebSocketDeflateOptions();
                 socket.Options.CollectHttpResponseDetails = true;
                 foreach (var (name, value) in headers)
                     socket.Options.SetRequestHeader(name, value);
-                var invoker = new HttpMessageInvoker(new WsHandshakeHeaders(headers));
+                var invoker = new HttpMessageInvoker(WsHandshakeHeaders.Create(headers, egress));
                 resource = new ResponsesWsResource(
                     this,
                     socket,
@@ -312,7 +315,16 @@ internal sealed class ResponsesWsTransport(
                 }
                 try
                 {
-                    await socket.ConnectAsync(uri, invoker, deadline.Token).ConfigureAwait(false);
+                    await Foxwarm.Net.EgressHttp
+                        .ConnectWebSocketAsync(
+                            egress,
+                            Foxwarm.Net.EgressPurpose.Model,
+                            socket,
+                            uri,
+                            invoker,
+                            deadline.Token
+                        )
+                        .ConfigureAwait(false);
                 }
                 catch (Exception error)
                     when (!caller.IsCancellationRequested && !deadline.IsCancellationRequested)
@@ -485,9 +497,24 @@ internal sealed record WsPendingCompletion(
     Action<IReadOnlyList<JsonNode?>?> Finalize
 );
 
-internal sealed class WsHandshakeHeaders(IReadOnlyDictionary<string, string> headers)
-    : DelegatingHandler(new SocketsHttpHandler { UseCookies = false })
+internal sealed class WsHandshakeHeaders(
+    IReadOnlyDictionary<string, string> headers,
+    HttpMessageHandler inner
+) : DelegatingHandler(inner)
 {
+    internal static WsHandshakeHeaders Create(
+        IReadOnlyDictionary<string, string> headers,
+        Foxwarm.Net.EgressPolicy egress
+    ) =>
+        new(
+            headers,
+            Foxwarm.Net.EgressHttp.Handler(
+                egress,
+                Foxwarm.Net.EgressPurpose.Model,
+                new Foxwarm.Net.EgressHandlerOptions { UseCookies = false }
+            )
+        );
+
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken token

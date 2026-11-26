@@ -9,7 +9,7 @@ internal sealed partial class QQBotChannel
     private sealed class Connection(long generation)
     {
         internal readonly long Generation = generation;
-        internal readonly ClientWebSocket Socket = new();
+        internal readonly ClientWebSocket Socket = Foxwarm.Net.EgressHttp.WebSocket();
         internal readonly SemaphoreSlim Send = new(1);
         internal readonly CancellationTokenSource Ended = new();
         internal CancellationTokenSource Heartbeat = new();
@@ -114,8 +114,12 @@ internal sealed partial class QQBotChannel
                 lock (stateGate)
                     socket = connection;
                 stage = "QQ Bot gateway connection";
-                await connection.Socket.ConnectAsync(
+                await Foxwarm.Net.EgressHttp.ConnectWebSocketAsync(
+                    egress,
+                    Foxwarm.Net.EgressPurpose.Channel,
+                    connection.Socket,
                     new Uri(Required(gateway["url"], "gateway URL")),
+                    null,
                     token
                 );
                 RequireCurrent(current);

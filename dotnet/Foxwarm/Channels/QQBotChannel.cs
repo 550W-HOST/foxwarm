@@ -23,6 +23,7 @@ internal sealed partial class QQBotChannel : IManagedChannel
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
+    private readonly Foxwarm.Net.EgressPolicy egress;
     private readonly ChannelHealth health;
     private const string GatewayPath = "QQ Bot gateway";
     private const string SendingPath = "QQ Bot sending";
@@ -44,6 +45,14 @@ internal sealed partial class QQBotChannel : IManagedChannel
     );
     private static readonly object sequenceGate = new();
 
+    // No redirects or cookies, and no client timeout.
+    internal static HttpClient CreateHttp(Foxwarm.Net.EgressPolicy egress) =>
+        Foxwarm.Net.EgressHttp.Client(
+            egress,
+            Foxwarm.Net.EgressPurpose.Channel,
+            new Foxwarm.Net.EgressHandlerOptions { AllowAutoRedirect = false, UseCookies = false }
+        );
+
     internal QQBotChannel(
         string id,
         JsonObject config,
@@ -58,14 +67,13 @@ internal sealed partial class QQBotChannel : IManagedChannel
         this.sessions = sessions;
         this.router = router;
         this.health = health;
+        egress = sessions?.Capabilities.Egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
         partTimeout = dependencies?.QQBotPartTimeout;
         now = dependencies?.Now ?? (() => DateTimeOffset.UtcNow);
         delay = dependencies?.Delay ?? Task.Delay;
         http =
             dependencies?.CreateQQBotHttp?.Invoke()
-            ?? new HttpClient(
-                new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
-            );
+            ?? CreateHttp(egress);
         // API/token calls have no Source application deadline. Media and part uploads
         // retain their own cancellation budgets on this same transport.
         http.Timeout = Timeout.InfiniteTimeSpan;

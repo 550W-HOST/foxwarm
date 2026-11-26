@@ -76,7 +76,8 @@ internal static class CliCommands
         var root = configuration.Paths.DataRoot;
         await using var journal = new LlmRequestJournalStore(root);
         await SqliteOnlyArchivesMigration.RunAsync(root, journal);
-        using var http = ProviderHttpRequest.CreateClient();
+        // The local `foxwarm model` command is file mode.
+        using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         await using var websockets = new ResponsesWsTransport();
         var defaults = new ResponsesClientOptions(
             new Uri("http://localhost"),

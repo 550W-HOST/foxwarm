@@ -21,11 +21,11 @@ internal sealed class TelegramApiException(int code, string description, double?
 
 internal sealed class TelegramChannel : IManagedChannel
 {
-    private static readonly HttpClient DefaultHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly string id;
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
+    private readonly Foxwarm.Net.EgressPolicy egress;
     private readonly TimeSpan apiTimeout;
     private readonly Uri api;
     private readonly Uri files;
@@ -44,7 +44,9 @@ internal sealed class TelegramChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        ChannelHealth health
+        ChannelHealth health,
+        // The runtime's shared client of this channel type (ManagedChannels).
+        HttpClient? shared = null
     )
     {
         this.id = id;
@@ -54,8 +56,10 @@ internal sealed class TelegramChannel : IManagedChannel
         var token = SessionWait.Text(config["botToken"])?.Trim();
         if (string.IsNullOrEmpty(token))
             throw new InvalidDataException("Telegram botToken is missing for channel " + id);
-        http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
-        if (!ReferenceEquals(http, DefaultHttp))
+        // Adapter tests may build an adapter without a runtime.
+        egress = sessions?.Capabilities.Egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+        http = dependencies?.CreateHttp?.Invoke() ?? (shared ??= ChannelHttpClients.Single(egress));
+        if (!ReferenceEquals(http, shared))
             http.Timeout = Timeout.InfiniteTimeSpan;
         apiTimeout = dependencies?.TelegramApiTimeout ?? TimeSpan.FromSeconds(500);
         api =

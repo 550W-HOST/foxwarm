@@ -28,7 +28,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal IEnumerable<string> ExecLogRoots() => agents.ExecLogRoots();
 
     private readonly SessionDeletionChannels deletionChannels;
-    private readonly HttpClient http = ProviderHttpRequest.CreateClient();
+    private readonly HttpClient http;
     private readonly Foxwarm.McpClient mcp;
     private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
     internal Foxwarm.Secrets.InstanceSecrets? Secrets => secrets;
@@ -51,7 +51,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.Vector.VectorService Vector { get; }
     private readonly IAsyncDisposable archiveWriter;
     internal TaskService Tasks { get; }
-    private readonly ResponsesWsTransport websockets = new();
+    private readonly ResponsesWsTransport websockets;
     private readonly ToolRegistry tools;
     internal ToolRegistry ToolRegistry => tools;
     internal Foxwarm.ToolScript.MainToolScript ToolScript { get; }
@@ -88,6 +88,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
     )
     {
         Capabilities = capabilities ?? RuntimeCapabilities.File;
+        // The model client and Responses WebSockets are the tenant's: the egress guard is on
+        // their handlers, and no connection is shared with another runtime.
+        http = ProviderHttpRequest.CreateClient(Capabilities.Egress);
+        websockets = new(egress: Capabilities.Egress);
         this.hostPaths = hostPaths;
         // The test hooks belong to the default file context; a supplied context brings its own.
         Storage =
@@ -313,7 +317,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"]),
             hostPaths?.McpConfigPath,
             Storage.Documents,
-            ConfigDocuments
+            ConfigDocuments,
+            Capabilities.Egress
         );
         mcp.Configuration.StdioAvailable = Capabilities.StdioMcp;
         tools = SessionToolExecutor.CreateRegistry(

@@ -8,12 +8,12 @@ namespace Foxwarm.Channels;
 
 internal sealed partial class WeWorkChannel : IManagedChannel
 {
-    private static readonly HttpClient DefaultHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly string id;
     private readonly JsonObject config;
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
+    private readonly Foxwarm.Net.EgressPolicy egress;
     private readonly ChannelHealth health;
     private const string SocketPath = "WeWork WebSocket";
     private const string SendingPath = "WeWork sending";
@@ -41,7 +41,9 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        ChannelHealth health
+        ChannelHealth health,
+        // The runtime's shared client of this channel type (ManagedChannels).
+        HttpClient? shared = null
     )
     {
         this.id = id;
@@ -49,7 +51,9 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         this.sessions = sessions;
         this.router = router;
         this.health = health;
-        http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
+        // Adapter tests may build an adapter without a runtime.
+        egress = sessions?.Capabilities.Egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+        http = dependencies?.CreateHttp?.Invoke() ?? (shared ??= ChannelHttpClients.Single(egress));
         delay = dependencies?.Delay ?? Task.Delay;
         now = dependencies?.Now ?? (() => DateTimeOffset.UtcNow);
         callbackAddress = dependencies?.CallbackAddress ?? IPAddress.IPv6Any;

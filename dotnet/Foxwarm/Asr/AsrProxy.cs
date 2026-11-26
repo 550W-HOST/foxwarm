@@ -16,17 +16,29 @@ internal sealed partial class AsrProxy : IDisposable
     private readonly Uri? service;
     private readonly string? key;
     private readonly string? configurationError;
-    private readonly HttpClient http = new(
-        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false }
-    )
-    {
-        Timeout = Timeout.InfiniteTimeSpan,
-    };
+    private readonly HttpClient http;
+    private readonly Foxwarm.Net.EgressPolicy egress;
     private readonly CancellationToken stopped;
     internal bool Configured => service is not null;
 
-    internal AsrProxy(ModelConfiguration? configuration, CancellationToken stopped)
+    internal AsrProxy(
+        ModelConfiguration? configuration,
+        CancellationToken stopped,
+        Foxwarm.Net.EgressPolicy? egress = null
+    )
     {
+        // The ASR service is a deployment setting, not the tenant's: the operator purpose.
+        this.egress = egress ?? Foxwarm.Net.EgressPolicy.Unguarded;
+        http = Foxwarm.Net.EgressHttp.Client(
+            this.egress,
+            Foxwarm.Net.EgressPurpose.Deployment,
+            new Foxwarm.Net.EgressHandlerOptions
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                FileHandler = Foxwarm.Net.EgressFileHandler.Client,
+            }
+        );
         this.stopped = stopped;
         try
         {

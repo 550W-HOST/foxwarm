@@ -9,7 +9,7 @@ internal sealed partial class WeWorkChannel
 {
     private sealed class Connection
     {
-        internal readonly ClientWebSocket Socket = new();
+        internal readonly ClientWebSocket Socket = Foxwarm.Net.EgressHttp.WebSocket();
 
         // A successor never shares an old connection's blocked writer.
         internal readonly SemaphoreSlim WireSend = new(1);
@@ -89,12 +89,16 @@ internal sealed partial class WeWorkChannel
             var connected = false;
             try
             {
-                await current.ConnectAsync(
+                await Foxwarm.Net.EgressHttp.ConnectWebSocketAsync(
+                    egress,
+                    Foxwarm.Net.EgressPurpose.Channel,
+                    current,
                     new Uri(
                         Nonempty(Text(websocketConfig["url"]))
                             ? Text(websocketConfig["url"])
                             : "wss://openws.work.weixin.qq.com"
                     ),
+                    null,
                     lifetime.Token
                 );
                 connected = true;

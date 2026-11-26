@@ -27,7 +27,7 @@ internal sealed partial class AsrProxy
             );
             return;
         }
-        using var upstream = new ClientWebSocket();
+        using var upstream = Foxwarm.Net.EgressHttp.WebSocket();
         if (!string.IsNullOrEmpty(key))
             upstream.Options.SetRequestHeader("Authorization", "Bearer " + key);
         var endpoint = new UriBuilder(Endpoint("/ws/stream"))
@@ -65,7 +65,14 @@ internal sealed partial class AsrProxy
             }
         }
         var fromClient = ReceiveClient();
-        var connected = upstream.ConnectAsync(endpoint.Uri, http, lifetime.Token);
+        var connected = Foxwarm.Net.EgressHttp.ConnectWebSocketAsync(
+            egress,
+            Foxwarm.Net.EgressPurpose.Deployment,
+            upstream,
+            endpoint.Uri,
+            http,
+            lifetime.Token
+        );
         async Task SendToService()
         {
             await connected;

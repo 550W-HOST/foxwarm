@@ -18,7 +18,6 @@ internal sealed partial class WeixinApi
 {
     internal const string DefaultBaseUrl = "https://ilinkai.weixin.qq.com";
     internal const string DefaultBotType = "3";
-    private static readonly HttpClient DefaultHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private static readonly JsonSerializerOptions WireJson = new()
     {
         Encoder = JsonText.Encoder,
@@ -32,9 +31,15 @@ internal sealed partial class WeixinApi
         StringComparer.Ordinal
     );
 
-    internal WeixinApi(ChannelTransportDependencies? dependencies)
+    internal WeixinApi(
+        ChannelTransportDependencies? dependencies,
+        Func<HttpClient>? shared = null
+    )
     {
-        http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
+        http =
+            dependencies?.CreateHttp?.Invoke()
+            ?? shared?.Invoke()
+            ?? ChannelHttpClients.Single(Foxwarm.Net.EgressPolicy.Unguarded);
         delay = dependencies?.Delay ?? Task.Delay;
         now = dependencies?.Now ?? (() => DateTimeOffset.UtcNow);
     }
