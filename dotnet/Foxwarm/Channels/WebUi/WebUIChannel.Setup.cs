@@ -133,10 +133,13 @@ internal sealed partial class WebUIChannel
                     installation["models"] = configuration.Diagnostics();
                     installation["payload"] = WebUiContract.Models(sessions.Models);
                     if (firstRun)
+                    {
                         installation["firstSessionId"] = await EnsureFirstRunSessionAsync(
                             locale,
                             request.Headers.AcceptLanguage.ToString()
                         );
+                        await RecordFirstRunWebUiDefaultsAsync();
+                    }
                     return Results.Ok(JsonData.WebNode(installation));
                 }
                 catch (Exception error)

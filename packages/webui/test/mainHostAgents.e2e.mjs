@@ -419,7 +419,7 @@ try {
     && document.querySelectorAll('[data-session-id]').length === 1, parentId), 'original metadata search sidebar')
   await page.click('button[aria-label="Clear session search"]')
   const branding = await request('POST', '/api/webui/settings', { instanceName: '  Original\n App  ', tabIcon: ' 🦊 ' })
-  assert.equal(branding.status, 200); assert.deepEqual(branding.body.settings, { instanceName: 'Original App', tabIcon: '🦊' })
+  assert.equal(branding.status, 200); assert.deepEqual(branding.body.settings, { instanceName: 'Original App', tabIcon: '🦊', sendKeyDefault: 'modEnter' })
   assert.deepEqual((await request('GET', '/api/webui/settings')).body.settings, branding.body.settings)
   const requestsBeforeRestart = requests.length
 
