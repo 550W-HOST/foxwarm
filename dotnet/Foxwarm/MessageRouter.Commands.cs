@@ -82,6 +82,10 @@ internal sealed partial class MessageRouter
         }
         if (message.ControlRequestId is { } requestId && ControlAction(command, parsed) is { } action)
             return await HandleControlAsync(owner, parsed, requestId, action);
+        // Generic command dispatch resolves the Session it acts on; the selected source only
+        // supplies its canonical identity. Controls, moves and deletion above need their owner.
+        var selectedId = owner.Id;
+        use?.Dispose();
         var source = new ExternalChannelContext(
             context.Platform,
             context.Platform,
@@ -94,7 +98,7 @@ internal sealed partial class MessageRouter
                 return Task.CompletedTask;
             }
         );
-        await HandleExternalCommandAsync(source, command, rawArgs, owner);
+        await HandleExternalCommandAsync(source, command, rawArgs, selectedId);
         return new(200, new JsonObject { ["success"] = true });
     }
 }

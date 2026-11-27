@@ -142,6 +142,29 @@ public sealed class TenantLimitHttpTests
     }
 
     [Fact]
+    public async Task WebCommandCanReleaseItsSourceToLoadAnExplicitTarget()
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { HotOwnerBytes = 450000 });
+        f.Manager.PressureGraceForTest = TimeSpan.Zero;
+        var target = await f.Manager.CreateNamedAsync("main", "target", null, null);
+        var source = (await f.Manager.GetExistingAsync("uploads"))!;
+        Assert.True(target.Entry.Retired);
+        var reply = new TaskCompletionSource<SessionRuntimeEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Manager.Changed += value =>
+        {
+            if (value.Kind == SessionEventKind.CommandReply) reply.TrySetResult(value);
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var response = await f.Client.PostAsJsonAsync("api/sessions/uploads/message", new { text = "/session status target" }, deadline.Token);
+        response.EnsureSuccessStatusCode();
+        var result = await reply.Task.WaitAsync(deadline.Token);
+        Assert.Equal("uploads", result.SessionId);
+        Assert.Contains("target", result.Data!["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.True(source.Entry.Retired);
+        Assert.Equal("target", Assert.Single(f.Manager.Owners()).Id);
+    }
+
+    [Fact]
     public async Task CwdChangeResolvesTheOwnerAfterReadingItsBody()
     {
         await using var f = await Fixture.Create(TenantLimits.Defaults);

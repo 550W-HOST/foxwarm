@@ -16,10 +16,10 @@ internal sealed partial class MessageRouter
         SessionRuntime runtime,
         ExternalChannelContext source,
         CtlUser call,
-        SessionOwner? selected
+        string? selectedId
     ) : IDisposable
     {
-        private SessionOwner? current = selected;
+        private SessionOwner? current;
         private readonly List<SessionManager.OwnerUse> uses = [];
         public void Dispose()
         {
@@ -53,13 +53,8 @@ internal sealed partial class MessageRouter
             if (!resolved)
             {
                 resolved = true;
-                if (current is not null && runtime.Manager.TryUseOwner(current) is { } use)
-                    uses.Add(use);
-                else
-                {
-                    var id = current?.Id ?? SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["sessionId"]);
-                    current = id is null ? null : await ResolveAsync(id);
-                }
+                var id = CurrentId;
+                current = id is null ? null : await ResolveAsync(id);
             }
             return current;
         }
@@ -69,6 +64,7 @@ internal sealed partial class MessageRouter
 
         internal string? CurrentId =>
             current?.Id
+            ?? selectedId
             ?? SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["sessionId"]);
 
         // The Session named by the option, or the conversation's Session.
@@ -136,7 +132,7 @@ internal sealed partial class MessageRouter
         ExternalChannelContext source,
         string command,
         string? rawArgs,
-        SessionOwner? selectedOwner = null
+        string? selectedId = null
     )
     {
         if (!runtime.Manager.Accepting)
@@ -152,7 +148,7 @@ internal sealed partial class MessageRouter
             return true;
         }
         var auth = runtime.Manager.ChannelAuthorization?.Inspect(source);
-        if (selectedOwner is null && auth is null)
+        if (selectedId is null && auth is null)
             throw new InvalidOperationException("External channel ingress is not initialized.");
         if (auth is { Authorized: false })
         {
@@ -173,7 +169,7 @@ internal sealed partial class MessageRouter
                     await source.Reply("❌ " + CtlHelp.Error(error, _ => true, UserCommands.Ingress));
                     break;
                 case CtlUser call:
-                    using (var userCommand = new UserCommand(runtime, source, call, selectedOwner))
+                    using (var userCommand = new UserCommand(runtime, source, call, selectedId))
                         await RunUserCommandAsync(userCommand);
                     break;
             }

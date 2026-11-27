@@ -94,7 +94,7 @@ public sealed class SessionExecutionNodeProjectionTests
             source,
             "/status",
             null,
-            owner
+            owner.Id
         );
         Assert.Contains($"current node: `{expected}`", replies.Single());
         Assert.Contains("connected=" + (expected == "master" ? "true" : "false"), replies.Single());

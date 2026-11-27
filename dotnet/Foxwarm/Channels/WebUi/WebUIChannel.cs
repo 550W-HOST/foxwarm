@@ -432,6 +432,10 @@ internal sealed partial class WebUIChannel(
                     sessions.AttachWebUi(canonical!, ingressOwner);
                     if (ingressOwner is not null)
                         canonical = ingressOwner.Id;
+                    // Ordinary commands have no materialized input tied to the source. Target
+                    // resolution can need the source's memory; the router pins its actual operand.
+                    if (!hasUploads && scoped is null && MessageRouter.IsKnownCommand(text))
+                        ingressUse?.Dispose();
                     var result = await router.HandleMessageAsync(
                         new ChannelContext(canonical, "webui"),
                         new ChannelMessage(

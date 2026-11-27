@@ -14,6 +14,27 @@ public sealed partial class TenantLimitAdmissionTests
     private static long OneOwner => HotOwnerBudget.Estimate(0) * 3 / 2;
 
     [Fact]
+    public async Task ACommandReplyPinsTheResidentEmitterWithoutHydratingAColdOwner()
+    {
+        await using var f = await Fixture.Create(null);
+        var owner = await f.Manager.CreateNamedAsync("main", "reply", null, null);
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        var releaseDuringEmission = -1;
+        owner.Changed += value =>
+        {
+            if (value.Kind == SessionEventKind.CommandReply) releaseDuringEmission = f.Manager.ReleaseIdleOwners();
+        };
+        var replies = new List<SessionRuntimeEvent>();
+        f.Manager.Changed += value => { if (value.Kind == SessionEventKind.CommandReply) replies.Add(value); };
+        f.Manager.ReplyToCommand(owner.Id, "first");
+        Assert.Equal(0, releaseDuringEmission);
+        Assert.Equal(1, f.Manager.ReleaseIdleOwners());
+        f.Manager.ReplyToCommand(owner.Id, "second");
+        Assert.Empty(f.Manager.Owners());
+        Assert.Equal(new[] { "first", "second" }, replies.Select(value => value.Data!["parts"]![0]!["text"]!.GetValue<string>()));
+    }
+
+    [Fact]
     public async Task AnAcceptedCreationPublishingAfterBudgetClosureReturnsItsCharge()
     {
         var replica = new ReplicaLimits(long.MaxValue);

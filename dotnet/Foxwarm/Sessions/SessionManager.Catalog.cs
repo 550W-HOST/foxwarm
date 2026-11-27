@@ -518,8 +518,9 @@ internal sealed partial class SessionManager
                 ["isCommandResponse"] = true,
             },
         };
-        if (Find(id) is { } owner)
-            owner.Emit(SessionEventKind.CommandReply, data);
+        using var use = Find(id) is { } owner ? TryUseOwner(owner) : null;
+        if (use is not null)
+            use.Owner.Emit(SessionEventKind.CommandReply, data);
         else
             Changed?.Invoke(new(id, SessionEventKind.CommandReply, data));
     }
