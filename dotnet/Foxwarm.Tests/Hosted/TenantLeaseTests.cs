@@ -334,6 +334,7 @@ public sealed class TenantLeaseTests
 
         // An import serves nothing: its grant has no role and renews on the lease alone.
         await lease.ReleaseAsync(grant, CancellationToken.None);
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'hosted'");
         var importing = new TenantLease(database.OpenOwner(), PostgresServer.Tenant, 2);
         var import = (await importing.TryAcquireForImportAsync("import:1", grant.Epoch, Slow.Ttl, TimeSpan.FromSeconds(5), CancellationToken.None))!;
         Assert.Null(import.Role);

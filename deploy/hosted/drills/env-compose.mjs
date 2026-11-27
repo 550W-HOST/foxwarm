@@ -186,8 +186,6 @@ export async function composeEnvironment() {
     },
 
     async startTenantReplica() {
-      // The tenant's Agent folders are the source's, copied to its own volume (import doesn't move them).
-      await must(['run', '--rm', '--no-deps', '--user', '0', '--entrypoint', 'sh', '-v', `${project}_source:/source:ro`, 'foxwarm-imported', '-c', 'cp -a /source/agents/. /agents/ && chown -R 1000:1000 /agents'])
       await must(['up', '-d', '--no-deps', 'foxwarm-imported'])
       const host = await address('foxwarm-imported')
       return {

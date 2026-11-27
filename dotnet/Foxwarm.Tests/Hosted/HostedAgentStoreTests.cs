@@ -38,7 +38,8 @@ public sealed partial class HostedAgentStoreTests
             bool installedLayout = false,
             // The Agent metadata document before startup.
             string? agents = null,
-            Func<HostPaths, ModelConfiguration>? configuration = null
+            Func<HostPaths, ModelConfiguration>? configuration = null,
+            RuntimeCapabilities? capabilities = null
         )
         {
             var fixture = new StoreFixture();
@@ -62,7 +63,7 @@ public sealed partial class HostedAgentStoreTests
                 };
             }
             fixture.Inner = await HostedCapabilityProfileTests.Fixture.Create(
-                RuntimeCapabilities.Hosted,
+                capabilities ?? RuntimeCapabilities.Hosted,
                 extraApp: extraApp,
                 storage: storage,
                 installedLayout: installedLayout,
@@ -202,7 +203,7 @@ public sealed partial class HostedAgentStoreTests
 
     // Writes an Agent file (agent null: the installation's prompt files) where the fixture
     // keeps Agent files.
-    private static async Task WriteAgentFileAsync(StoreFixture fixture, string? agent, string path, string text)
+    internal static async Task WriteAgentFileAsync(StoreFixture fixture, string? agent, string path, string text)
     {
         if (fixture.Manager.AgentStore is { } store)
         {

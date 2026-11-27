@@ -24,6 +24,8 @@ internal sealed record HostedImportOptions(
             Path.GetFileNameWithoutExtension(ReportPath) + ".deployment.yaml"
         );
 
+    internal string? AgentsDirectory { get; init; }
+
     internal LeaseTimings Timings { get; init; } = LeaseTimings.Default;
 
     /// <summary>
@@ -137,11 +139,6 @@ internal sealed partial class ImportRun : IAsyncDisposable
     private SessionCatalog? sourceCatalog;
     private ConfigSplitResult? config;
     private InstanceKeys? sourceKeys;
-    private LeaseMonitor? monitor;
-    private LeaseGrant? grant;
-    private TenantLease? lease;
-    private CancellationTokenSource? cancel;
-
     internal ImportRun(
         HostedImportOptions options,
         ImportDatabases databases,
@@ -157,6 +154,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
         this.work = work;
         this.report = report;
         this.stop = stop;
+        Token = stop;
     }
 
     /// <summary>The tenant's rows, written by the runtime role at the import's epoch.</summary>
@@ -167,7 +165,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
 
     internal PostgresStorageContext Hosted { get; private set; } = null!;
 
-    private CancellationToken Token => cancel?.Token ?? stop;
+    private CancellationToken Token { get; set; }
 
     internal async Task<int> RunAsync()
     {
@@ -180,7 +178,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             return copies.Count;
         }, count => count);
         CheckSourceContent();
-        report.Phase("configuration split", () => config = SplitConfiguration(), _ => config!.Blocks.Count);
+        report.Phase("configuration split", () => config = SplitConfiguration(), _ => config?.Blocks.Count ?? 0);
         var plan = report.Phase("plan", Plan, items => items.Count);
         report.Root["plan"] = plan;
         var target = await InspectTargetAsync().ConfigureAwait(false);
@@ -198,79 +196,17 @@ internal sealed partial class ImportRun : IAsyncDisposable
         return await ImportAsync(target).ConfigureAwait(false);
     }
 
-    private async Task<int> ImportAsync(long? expectedEpoch)
-    {
-        lease = new TenantLease(databases.Owner, options.Tenant, AgentCatalog.ReaderVersion);
-        var replica = "import:" + Guid.NewGuid().ToString("D");
-        grant = await lease
-            .TryAcquireForImportAsync(replica, expectedEpoch, options.Timings.Ttl, options.Timings.RenewInterval, stop)
-            .ConfigureAwait(false);
-        if (grant is null)
+    private Task<int> ImportAsync(long? expectedEpoch) => LeasedImport.RunAsync(
+        databases.App, databases.Owner, options.Tenant, expectedEpoch, ImportKind.Full, options.Timings,
+        options.Blobs, work, report, async (storage, owner, token) =>
         {
-            report.Refuse($"Tenant {options.Tenant} changed while the import was checking it, or its lease is held; run the import again.");
-            report.Outcome = "refused";
-            return HostedImport.Refused;
-        }
-        report.Root["tenant"]!["id"] = grant.TenantId;
-        report.Root["tenant"]!["epoch"] = grant.Epoch;
-        report.Root["tenant"]!["leaseOwner"] = replica;
-        Db = new TenantDb(databases.App, grant.TenantId, grant.Epoch);
-        Owner = new TenantDb(databases.Owner, grant.TenantId, grant.Epoch);
-        monitor = new LeaseMonitor(lease, grant, options.Timings);
-        monitor.Attach(Db);
-        monitor.Attach(Owner);
-        monitor.Start();
-        cancel = CancellationTokenSource.CreateLinkedTokenSource(stop, monitor.Lost);
-        Hosted = new PostgresStorageContext(Db, Path.Combine(work, "scratch"));
-        await Hosted.OpenBlobsAsync(options.Blobs ?? new Foxwarm.Hosted.Blobs.BlobSettings(Foxwarm.Hosted.Blobs.BlobBackend.Postgres, null), options.Tenant, stop).ConfigureAwait(false);
-        var activated = false;
-        try
-        {
-            await WriteAsync().ConfigureAwait(false);
-            await VerifyAsync().ConfigureAwait(false);
-            if (report.Failures.Count > 0)
-            {
-                report.Outcome = "verification-failed";
-                report.Root["tenant"]!["state"] = "importing";
-                return HostedImport.Failed;
-            }
-            Token.ThrowIfCancellationRequested();
-            await lease.ActivateImportAsync(grant, stop).ConfigureAwait(false);
-            activated = true;
-            report.Root["tenant"]!["state"] = "active";
-            report.Outcome = "imported";
-            return HostedImport.Imported;
-        }
-        catch (Exception error) when (Fence(error))
-        {
-            report.Outcome = "fenced";
-            report.Root["tenant"]!["state"] = "importing";
-            report.Root["error"] = "The import lost the tenant lease and stopped writing: " + error.Message;
-            return HostedImport.Fenced;
-        }
-        catch (Exception error) when (error is not OperationCanceledException || !stop.IsCancellationRequested)
-        {
-            report.Outcome = "failed";
-            report.Root["tenant"]!["state"] = "importing";
-            report.Root["error"] = error.GetType().Name + ": " + error.Message;
-            return HostedImport.Failed;
-        }
-        finally
-        {
-            await monitor.DisposeAsync().ConfigureAwait(false);
-            if (!activated)
-                try
-                {
-                    await lease.ReleaseAsync(grant, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception) { }
-        }
-    }
-
-    private bool Fence(Exception error) =>
-        error is TenantFencedException
-        || monitor?.Lost.IsCancellationRequested == true && error is OperationCanceledException or InvalidOperationException
-        || error.InnerException is { } inner && Fence(inner);
+            Hosted = storage;
+            Db = storage.Database;
+            Owner = owner;
+            Token = token;
+            await WriteAsync();
+            await VerifyAsync();
+        }, stop);
 
     // ---- Preflight (design §8.1 step 1) ----
 
@@ -327,7 +263,6 @@ internal sealed partial class ImportRun : IAsyncDisposable
             report.Refuse(
                 "keys/secrets.key is missing. The installation's key becomes the tenant data key (it decrypts the secrets, OAuth grants and the text-redaction cache), so the import needs it; restore it from the backup."
             );
-        report.Root["source"]!["agentsDirectory"] = Path.Combine(source.Root, "agents");
     }
 
     // Checks that need the SQLite copies: the catalog schema, the documents of its members,
@@ -476,15 +411,16 @@ internal sealed partial class ImportRun : IAsyncDisposable
         }
         report.Root["tenant"]!["existed"] = true;
         var tenant = new TenantDb(databases.App, id.Value, 0);
-        var (state, epoch, free, owner, tables) = tenant.Read(
+        var (state, epoch, free, owner, tables, profile) = tenant.Read(
             tx =>
             {
                 string tenantState;
+                string profile;
                 long leaseEpoch;
                 bool leaseFree;
                 string? leaseOwner;
                 using (var command = tx.Command(
-                    "SELECT t.state, l.epoch, (l.state = 'released' OR l.expires_at <= now()), l.owner_replica"
+                    "SELECT t.state, l.epoch, (l.state = 'released' OR l.expires_at <= now()), l.owner_replica, t.profile"
                         + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.tenant_id = $1",
                     id.Value
                 ))
@@ -495,6 +431,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
                     leaseEpoch = reader.GetInt64(1);
                     leaseFree = reader.GetBoolean(2);
                     leaseOwner = reader.IsDBNull(3) ? null : reader.GetString(3);
+                    profile = reader.GetString(4);
                 }
                 var names = new List<string>();
                 using (var command = tx.Command(
@@ -507,12 +444,14 @@ internal sealed partial class ImportRun : IAsyncDisposable
                 var filled = names
                     .Where(name => tx.Scalar($"SELECT 1 FROM {ImportTables.Quote(name)} LIMIT 1") is not null)
                     .ToList();
-                return (tenantState, leaseEpoch, leaseFree, leaseOwner, filled);
+                return (tenantState, leaseEpoch, leaseFree, leaseOwner, filled, profile);
             },
             snapshot: true
         );
         report.Root["tenant"]!["previousState"] = state;
-        if (tables.Count > 0)
+        if (profile != "hosted")
+            report.Refuse("The tenant keeps its Agent files on master: " + options.Tenant);
+        else if (tables.Count > 0)
             report.Refuse(
                 $"Tenant {options.Tenant} ({state}) already holds data in {string.Join(", ", tables)}. An import only writes into an empty tenant."
                     + (state == "importing"
@@ -531,7 +470,6 @@ internal sealed partial class ImportRun : IAsyncDisposable
         sourceCatalog?.Dispose();
         foreach (var connection in copies.Values)
             await connection.DisposeAsync().ConfigureAwait(false);
-        cancel?.Dispose();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
     }
 }

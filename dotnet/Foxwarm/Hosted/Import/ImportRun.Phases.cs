@@ -45,6 +45,8 @@ internal sealed partial class ImportRun
 
     private Microsoft.Data.Sqlite.SqliteConnection? Copy(string file) => copies.GetValueOrDefault(file);
 
+    private AgentFolderImport? agentFolders;
+
     // ---- Plan ----
 
     private JsonObject Plan()
@@ -52,8 +54,12 @@ internal sealed partial class ImportRun
         long Rows(string file, ImportTable table) => Copy(file) is { } connection ? ImportTables.CountRows(connection, table) : 0;
         var documents = source.SessionDocuments().Count();
         var (frontier, other) = source.SessionDirectoryLeftovers();
+        var (root, required) = AgentFolderImport.SourceRoot(source.Root, config?.Source, options.AgentsDirectory);
+        report.Root["source"]!["agentsDirectory"] = root;
+        agentFolders = AgentFolderImport.Scan(root, AgentStoreLimits.Default.FileBytes, report, required);
         var plan = new JsonObject
         {
+            ["agentFiles"] = agentFolders.FileCount,
             ["catalogRows"] = sourceCatalog?.List().Length ?? 0,
             ["sessionDocuments"] = documents,
             ["archiveMessages"] = Rows("archive-store.sqlite", ArchiveMessages),
@@ -81,11 +87,6 @@ internal sealed partial class ImportRun
     private void NotImportedInventory(int frontier, int other)
     {
         var state = source.State;
-        report.NotImported(
-            "Agent folders (" + Path.Combine(source.Root, "agents") + ")",
-            Directory.Exists(Path.Combine(source.Root, "agents")) ? Directory.GetDirectories(Path.Combine(source.Root, "agents")).Length : 0,
-            "Q1: copy them to the FOXWARM_AGENTS_DIR volume before the first replica starts; every Agent the catalog names must exist there."
-        );
         if (source.ReadJson("state/running-exec.json") is { } exec)
             report.NotImported(
                 "exec registry (state/running-exec.json)",
@@ -193,6 +194,7 @@ internal sealed partial class ImportRun
             return 1;
         });
         await StepAsync("agent metadata", () => AgentDocuments.Sum(document => CopyDocument(document.Name, document.File)));
+        await StepAsync("agent files", () => agentFolders!.WriteAsync(Hosted.AgentFiles, Token));
         await StepAsync("catalog", ImportCatalog);
         await StepAsync("session documents", ImportSessionDocuments);
         await StepAsync("archive", ImportArchive);

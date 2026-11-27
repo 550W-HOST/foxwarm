@@ -19,7 +19,10 @@ internal sealed record ExternalChannelContext(
 internal sealed record ExternalChannelMessage(
     IReadOnlyList<JsonObject> Parts,
     IReadOnlyList<JsonObject>? IngressMetadataParts = null,
-    Func<SessionOwner, Task<IReadOnlyList<JsonObject>>>? MaterializeParts = null
+    Func<SessionOwner, Task<IReadOnlyList<JsonObject>>>? MaterializeParts = null,
+    // Already received bounded files: the routing instance determines the receiving owner,
+    // including a newly provisioned guest. This callback does not fetch remote media.
+    Func<SessionOwner, Task<IReadOnlyList<JsonObject>>>? BindReceivedFiles = null
 )
 {
     internal string Text =>

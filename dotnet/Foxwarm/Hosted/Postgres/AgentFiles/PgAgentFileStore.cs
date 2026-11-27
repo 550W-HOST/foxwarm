@@ -931,10 +931,15 @@ internal sealed class PgAgentFileStore : IAgentStore
 
     private static void RequireKeyBytes(string key, string path)
     {
+        if (KeySizeProblem(key, path) is { } error)
+            throw error;
+    }
+
+    internal static AgentFilePathTooLongException? KeySizeProblem(string key, string path)
+    {
         var limit = KeyBytes - Encoding.UTF8.GetByteCount(key);
         var bytes = Encoding.UTF8.GetByteCount(path);
-        if (bytes > limit)
-            throw AgentFileErrors.PathTooLong(bytes, limit);
+        return bytes > limit ? AgentFileErrors.PathTooLong(bytes, limit) : null;
     }
 
     // A tree moved or copied from `from` to `to`: its longest resulting path must fit as well.

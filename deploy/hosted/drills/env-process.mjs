@@ -86,7 +86,6 @@ export async function processEnvironment(options = {}) {
       })
       // The key-encryption key, in the instance key file format.
       writeFileSync(join(root, 'kek.json'), JSON.stringify({ version: 1, keyId: randomBytes(8).toString('hex'), key: randomBytes(32).toString('base64') }))
-      mkdirSync(join(root, 'agents'))
       mockPort = await freePort()
       background('mock-llm', process.execPath, [join(here, 'mock-llm.mjs'), '--port', String(mockPort), '--host', '127.0.0.1'], process.env)
       await until(() => getJson(environment.mockUrl + '/__drill/requests').catch(() => null), 'the mock model listens', 10000)
@@ -144,7 +143,6 @@ export async function processEnvironment(options = {}) {
         FOXWARM_DATABASE_URL: `postgres://foxwarm_app:${appPassword}@127.0.0.1:${databasePort}/foxwarm`,
         FOXWARM_MIGRATE_DATABASE_URL: `postgres://foxwarm_owner:${ownerPassword}@127.0.0.1:${pgPort}/foxwarm`,
         FOXWARM_KEK_FILE: join(root, 'kek.json'),
-        FOXWARM_AGENTS_DIR: join(root, 'agents'),
         FOXWARM_SCRATCH_DIR: scratch,
         FOXWARM_DEPLOYMENT_CONFIG: environment.deployment(slot),
         FOXWARM_REPLICA_ID: slot,
@@ -202,11 +200,9 @@ export async function processEnvironment(options = {}) {
       return { ...result, reportPath: join(root, `import-${tenant}.json`) }
     },
 
-    /** One replica of another tenant, outside the round-robin entry, with its own Agents copy. */
-    async startTenantReplica(tenant, source) {
-      const agents = join(root, `agents-${tenant}`)
-      spawnSync('cp', ['-a', join(source.dataRoot, 'agents'), agents])
-      const env = { ...environment.replicaEnv('r1'), FOXWARM_TENANT: tenant, FOXWARM_AGENTS_DIR: agents, FOXWARM_REPLICA_ID: 'tenant-' + tenant }
+    /** One replica of another tenant, outside the round-robin entry, over the imported Agent store. */
+    async startTenantReplica(tenant) {
+      const env = { ...environment.replicaEnv('r1'), FOXWARM_TENANT: tenant, FOXWARM_REPLICA_ID: 'tenant-' + tenant }
       const host = '127.0.0.30'
       env.FOXWARM_DEPLOYMENT_CONFIG = environment.deployment('r1').replace('deployment-r1', 'deployment-' + tenant)
       writeFileSync(env.FOXWARM_DEPLOYMENT_CONFIG, readFileSync(environment.deployment('r1'), 'utf8').replace(address('r1'), host))

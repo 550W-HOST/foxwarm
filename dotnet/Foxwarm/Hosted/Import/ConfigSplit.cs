@@ -11,6 +11,7 @@ internal sealed record ConfigBlock(string Key, int FirstLine, int LastLine, stri
 
 /// <summary>The two documents a file-mode <c>config.yaml</c> becomes, and what neither keeps.</summary>
 internal sealed record ConfigSplitResult(
+    JsonObject Source,
     string TenantText,
     string DeploymentText,
     JsonObject Tenant,
@@ -181,7 +182,7 @@ internal static class ConfigSplit
             throw new ImportRefusedException(
                 $"{sourceName} can't be split by whole blocks: the parsed parts don't add up to the original (an anchor or alias may cross a cut block). Split it by hand."
             );
-        return new ConfigSplitResult(tenantText, deploymentText, tenant, deployment, cut.Select(item => item.Block).ToList(), dropped);
+        return new ConfigSplitResult(original, tenantText, deploymentText, tenant, deployment, cut.Select(item => item.Block).ToList(), dropped);
     }
 
     /// <summary>

@@ -233,7 +233,8 @@ internal static partial class ImportFixture
         await new Foxwarm.Images.ImageBlobFiles(data).CreateAsync(imageKey, ImageContent, keepExisting: false, CancellationToken.None);
         const string artifactKey = "art_fixture/1.json";
         await new Foxwarm.Artifacts.ArtifactBlobFiles(Path.Combine(data, "state", "artifacts")).CreateAsync(artifactKey, ArtifactContent, keepExisting: false, CancellationToken.None);
-        Directory.CreateDirectory(Path.Combine(data, "agents", "main"));
+        var docs = Directory.CreateDirectory(Path.Combine(data, "agents", "main", "docs"));
+        await File.WriteAllTextAsync(Path.Combine(docs.FullName, "notes.md"), "Notes from the source installation.\n");
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "running-exec.json"),
             new JsonObject { ["execs"] = new JsonArray(new JsonObject { ["execId"] = "fixture-exec" }) }.ToJsonString()

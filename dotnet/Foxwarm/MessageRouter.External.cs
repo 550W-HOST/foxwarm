@@ -51,7 +51,7 @@ internal sealed partial class MessageRouter
             await source.Reply(error.Message);
             return;
         }
-        IReadOnlyList<JsonObject> parts = message.Parts;
+        IReadOnlyList<JsonObject> parts = message.BindReceivedFiles is { } bind ? await bind(owner) : message.Parts;
         if (authorizedAtIngress && message.MaterializeParts is { } materialize)
             try
             {
