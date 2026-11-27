@@ -752,6 +752,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
     return []
   }), [msg.parts])
 
+  const isSyntheticSnapshot = msg.__meta?.synthetic === 'persistentMemorySnapshot'
   const messageKind = useMemo(() => getSystemMessagePreviewDescriptor(msg), [msg])
   const renderedText = messageKind.bodyText ?? allLines.join('\n')
   const renderedLines = useMemo(() => renderedText.split(/\r\n|\r|\n/), [renderedText])
@@ -761,13 +762,16 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
       : ''
   ), [allLines, messageKind.kind, messageKind.previewSessionId])
   const preview = useMemo(() => {
-    const bodyLine = allLines.find((line) => line.trim() && !isSystemLikeText(line))
-    const body = messageKind.bodyText?.split(/\r\n|\r|\n/)[0]?.trim()
-      || bodyLine?.trim()
+    const bodyLine = isSyntheticSnapshot
+      ? renderedLines.find((line) => line.trim())
+      : allLines.find((line) => line.trim() && !isSystemLikeText(line))
+    const body = (isSyntheticSnapshot
+      ? bodyLine?.trim()
+      : messageKind.bodyText?.split(/\r\n|\r|\n/)[0]?.trim() || bodyLine?.trim())
       || renderedText.trim()
       || messageKind.kind
     return `${messageKind.previewPrefix}${body}`
-  }, [allLines, messageKind.bodyText, messageKind.kind, messageKind.previewPrefix, renderedText])
+  }, [allLines, isSyntheticSnapshot, messageKind.bodyText, messageKind.kind, messageKind.previewPrefix, renderedLines, renderedText])
   const completionEvent = messageKind.kind === 'event' && msg.parts.some(part => part.system?.includes('type="background-process-finished"'))
   const completionLine = completionEvent ? renderedLines.findIndex(line => line.trim() && !isSystemLikeText(line)) : -1
   const surfaceClass = 'bg-fw-system-surface/55 dark:bg-fw-system-surface/10 text-fw-system-text'
@@ -811,7 +815,9 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
         )}
         {expanded && (
           <pre data-search-surface="system" className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
-            {renderedLines.map((line, lineIdx, lines) => {
+            {isSyntheticSnapshot ? (
+              <span style={{ opacity: 0.92 }}>{renderedText}</span>
+            ) : renderedLines.map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
               const nextIsPrefix = lineIdx < lines.length - 1 && isSystemLikeText(lines[lineIdx + 1])
               return (

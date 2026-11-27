@@ -269,10 +269,22 @@ test('LLM error classification requires retry metadata and a single text-only mo
   }
 })
 
+test('synthetic persistent memory snapshots classify without a synthetic marker and preserve literal tags', () => {
+  const raw = '<foxwarm-current-model model-id="a/b" />\n\n<foxwarm-system kind="event" type="literal">\nQuoted body\n</foxwarm-system>'
+  const snapshot = { role: 'tool', parts: [{ text: raw }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
+  assert.deepEqual(getSystemMessagePreviewDescriptor(snapshot), {
+    kind: 'snapshot',
+    source: 'foxwarm-system',
+    previewPrefix: '',
+    bodyText: raw,
+  })
+  assert.equal(isInternalTimelineMessage(snapshot), true)
+})
+
 test('internal runtime rows are recognized for timeline omission', () => {
   const settings = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-settings-changed" reason="effective-selection" modelId="a/b" oldModel="a/a" newModel="a/b" seq="4" />' }] }
   const firstRun = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="first-run" currentSessionId="main" currentNode="master" seq="1" />\nFoxwarm setup has just finished.' }] }
-  const snapshot = { role: 'tool', parts: [{ text: '<foxwarm-system kind="snapshot" hint="snapshot" />\n<foxwarm-current-model model-id="a/b" />' }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
+  const snapshot = { role: 'tool', parts: [{ text: '<foxwarm-current-model model-id="a/b" />' }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
   const withTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }, settings.parts[0]] }
   const taskReminder = { role: 'user', parts: [{ system: '<foxwarm-system kind="task-reminder" seq="9">Continue the active tasks:\ntask_0123456789ab — Ship it (active)</foxwarm-system>' }], __meta: { taskReminder: true, seq: 9 } }
   for (const message of [settings, firstRun, snapshot, withTime, taskReminder]) assert.equal(isInternalTimelineMessage(message), true)

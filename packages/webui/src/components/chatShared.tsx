@@ -606,6 +606,15 @@ export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessa
     }
   }
 
+  if (message.__meta?.synthetic === 'persistentMemorySnapshot') {
+    return {
+      kind: 'snapshot',
+      source: 'foxwarm-system',
+      previewPrefix: '',
+      bodyText: message.parts.map(part => part.text ?? '').join(''),
+    }
+  }
+
   // Its body follows the opening tag on the same line, so the line-based scan below cannot classify it.
   if (isTaskReminderMessage(message)) {
     const system = message.parts[0].system!

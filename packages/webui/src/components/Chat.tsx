@@ -1050,15 +1050,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   useLayoutEffect(() => keepAttachedBottom())
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = webUiIdentityMode || historyMode === 'continuous' ? '' : persistentMemorySnapshot.trim()
-
-    if (!snapshotText) {
+    if (webUiIdentityMode || historyMode === 'continuous' || !persistentMemorySnapshot.trim()) {
       return null
     }
 
     return {
       role: 'tool',
-      parts: [{ text: `<foxwarm-system kind="snapshot" hint="snapshot" />\n${snapshotText}` }],
+      parts: [{ text: persistentMemorySnapshot }],
       __meta: {
         timestamp: -1,
         synthetic: 'persistentMemorySnapshot',
