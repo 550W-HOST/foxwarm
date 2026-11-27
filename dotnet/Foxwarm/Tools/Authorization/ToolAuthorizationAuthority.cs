@@ -146,6 +146,8 @@ internal sealed class ToolAuthorizationAuthority(
     );
     private readonly object cacheGate = new();
     private ToolAuthorizationPolicy? cached;
+    private ToolAuthorizationPolicy? compiledPolicy;
+    private string? compiledRevision;
     private long loadedAt;
     private long Now => clock?.Invoke() ?? Environment.TickCount64;
     internal Action<string>? InstallBoundary { get; set; }
@@ -158,12 +160,22 @@ internal sealed class ToolAuthorizationAuthority(
             return cached is not null && now - loadedAt < 10_000 ? cached : null;
     }
 
-    private ToolAuthorizationPolicy Cache(ToolAuthorizationPolicy value)
+    private ToolAuthorizationPolicy? CompiledHit(string revision)
+    {
+        lock (cacheGate)
+            return compiledPolicy is not null && compiledRevision == revision
+                ? compiledPolicy
+                : null;
+    }
+
+    private ToolAuthorizationPolicy Cache(ToolAuthorizationPolicy value, string revision)
     {
         var now = Now;
         lock (cacheGate)
         {
             cached = value;
+            compiledPolicy = value;
+            compiledRevision = revision;
             loadedAt = now;
             return value;
         }
@@ -172,17 +184,35 @@ internal sealed class ToolAuthorizationAuthority(
     internal void Invalidate()
     {
         lock (cacheGate)
+        {
             cached = null;
+            compiledPolicy = null;
+            compiledRevision = null;
+        }
     }
 
-    private ToolAuthorizationPolicy Read()
+    internal async Task<ToolAuthorizationPolicy> ParseOrCachedAsync(
+        byte[] bytes,
+        string revision,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (CompiledHit(revision) is { } existing)
+            return existing;
+        return await ToolAuthorizationYaml.ParseAsync(bytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal ToolAuthorizationPolicy? CachedForBytes(byte[] bytes) =>
+        CompiledHit(Revision(bytes));
+
+    private byte[]? ReadRawBytes()
     {
         try
         {
             if (!WorkspaceTools.PolicyFileKind(path, out var missing))
             {
                 if (missing)
-                    return ToolAuthorizationPolicy.Compatibility();
+                    return null;
                 throw new InvalidDataException("Policy must be a readable regular file.");
             }
             using var stream = new FileStream(
@@ -202,9 +232,7 @@ internal sealed class ToolAuthorizationAuthority(
                     throw new InvalidDataException("Tool policy exceeds its byte limit.");
                 output.Write(buffer, 0, count);
             }
-            var policy = ToolAuthorizationYaml.Parse(output.ToArray());
-            ToolAuthorizationPolicy.Report("policy", policy);
-            return policy;
+            return output.ToArray();
         }
         catch (Exception error)
             when ((error is FileNotFoundException or DirectoryNotFoundException)
@@ -212,8 +240,79 @@ internal sealed class ToolAuthorizationAuthority(
                 && absent
             )
         {
-            return ToolAuthorizationPolicy.Compatibility();
+            return null;
         }
+    }
+
+    private async Task<byte[]?> ReadRawBytesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!WorkspaceTools.PolicyFileKind(path, out var missing))
+            {
+                if (missing)
+                    return null;
+                throw new InvalidDataException("Policy must be a readable regular file.");
+            }
+            await using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                8192,
+                FileOptions.Asynchronous
+            );
+            if (stream.Length > ToolAuthorizationPolicy.MaxBytes)
+                throw new InvalidDataException("Tool policy exceeds its byte limit.");
+            using var output = new MemoryStream();
+            var buffer = new byte[8192];
+            int count;
+            while ((count = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                if (output.Length + count > ToolAuthorizationPolicy.MaxBytes)
+                    throw new InvalidDataException("Tool policy exceeds its byte limit.");
+                output.Write(buffer, 0, count);
+            }
+            return output.ToArray();
+        }
+        catch (Exception error)
+            when ((error is FileNotFoundException or DirectoryNotFoundException)
+                && !WorkspaceTools.PolicyFileKind(path, out var absent)
+                && absent
+            )
+        {
+            return null;
+        }
+    }
+
+    private (ToolAuthorizationPolicy Policy, string Revision) Read()
+    {
+        var bytes = ReadRawBytes();
+        var revision = Revision(bytes);
+        if (CompiledHit(revision) is { } existing)
+            return (existing, revision);
+        var policy = bytes is null
+            ? ToolAuthorizationPolicy.Compatibility()
+            : ToolAuthorizationYaml.Parse(bytes);
+        if (bytes is not null)
+            ToolAuthorizationPolicy.Report("policy", policy);
+        return (policy, revision);
+    }
+
+    private async Task<(ToolAuthorizationPolicy Policy, string Revision)> ReadAsync(
+        CancellationToken cancellationToken
+    )
+    {
+        var bytes = await ReadRawBytesAsync(cancellationToken).ConfigureAwait(false);
+        var revision = Revision(bytes);
+        if (CompiledHit(revision) is { } existing)
+            return (existing, revision);
+        var policy = bytes is null
+            ? ToolAuthorizationPolicy.Compatibility()
+            : await ToolAuthorizationYaml.ParseAsync(bytes, cancellationToken).ConfigureAwait(false);
+        if (bytes is not null)
+            ToolAuthorizationPolicy.Report("policy", policy);
+        return (policy, revision);
     }
 
     internal ToolAuthorizationPolicy Load()
@@ -223,13 +322,15 @@ internal sealed class ToolAuthorizationAuthority(
             return value;
         try
         {
-            return Cache(Read());
+            var (policy, revision) = Read();
+            return Cache(policy, revision);
         }
         catch
         {
             try
             {
-                return Cache(Read());
+                var (policy, revision) = Read();
+                return Cache(policy, revision);
             }
             catch
             {
@@ -248,18 +349,28 @@ internal sealed class ToolAuthorizationAuthority(
             return value;
         try
         {
-            return Cache(Read());
+            var (policy, revision) = await ReadAsync(cancellationToken).ConfigureAwait(false);
+            return Cache(policy, revision);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
             if (retryDelay is null)
-                await Task.Delay(100, cancellationToken);
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
             else
-                await retryDelay(cancellationToken);
+                await retryDelay(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return Cache(Read());
+                var (policy, revision) = await ReadAsync(cancellationToken).ConfigureAwait(false);
+                return Cache(policy, revision);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {
@@ -307,7 +418,8 @@ internal sealed class ToolAuthorizationAuthority(
 
     internal async Task InstallAsync(byte[] bytes, CancellationToken token)
     {
-        _ = ToolAuthorizationYaml.Parse(bytes);
+        var policy = await ToolAuthorizationYaml.ParseAsync(bytes, token).ConfigureAwait(false);
+        var revision = Revision(bytes);
         var file = new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
             Path.GetFileName(path),
@@ -332,7 +444,8 @@ internal sealed class ToolAuthorizationAuthority(
                 error.InnerException!
             );
         }
-        Invalidate();
+        ToolAuthorizationPolicy.Report("policy", policy);
+        Cache(policy, revision);
     }
 }
 

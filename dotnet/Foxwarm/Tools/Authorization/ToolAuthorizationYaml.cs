@@ -36,24 +36,66 @@ internal static class ToolAuthorizationYaml
         Approval,
         ScalarList,
         ScalarOrList,
+        Data,
     }
 
+    private const int MaxDataDepth = 32;
+    private const int MaxDataNodes = 4096;
+
     internal static ToolAuthorizationPolicy Parse(byte[] bytes)
+    {
+        var root = ParseRoot(bytes);
+        if (!root.ContainsKey("script"))
+        {
+            if (root.ContainsKey("data"))
+                throw new InvalidDataException("Tool policy `data` requires `script`.");
+            return ToolAuthorizationPolicy.Normalize(root);
+        }
+        var (script, data, normalizedRoot) = PrepareScriptRoot(root);
+        normalizedRoot["rules"] = PolicyScriptRunner.EvaluateRules(
+            script,
+            data,
+            "tool-authorization.yaml"
+        );
+        return ToolAuthorizationPolicy.Normalize(normalizedRoot, fromScript: true);
+    }
+
+    internal static async Task<ToolAuthorizationPolicy> ParseAsync(
+        byte[] bytes,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var root = ParseRoot(bytes);
+        if (!root.ContainsKey("script"))
+        {
+            if (root.ContainsKey("data"))
+                throw new InvalidDataException("Tool policy `data` requires `script`.");
+            return ToolAuthorizationPolicy.Normalize(root);
+        }
+        var (script, data, normalizedRoot) = PrepareScriptRoot(root);
+        normalizedRoot["rules"] = await PolicyScriptRunner
+            .EvaluateRulesAsync(script, data, "tool-authorization.yaml", cancellationToken)
+            .ConfigureAwait(false);
+        return ToolAuthorizationPolicy.Normalize(normalizedRoot, fromScript: true);
+    }
+
+    private static JsonObject ParseRoot(byte[] bytes)
     {
         if (bytes.Length > ToolAuthorizationPolicy.MaxBytes)
             throw new InvalidDataException("Tool policy exceeds its byte limit.");
         try
         {
             var graph = ToolAuthorizationYamlGraph.Parse(Encoding.UTF8.GetString(bytes));
+            var dataNodes = 0;
             var root = Convert(
                 graph,
                 Shape.Root,
-                new HashSet<PolicyYamlNode>(ReferenceEqualityComparer.Instance)
+                new HashSet<PolicyYamlNode>(ReferenceEqualityComparer.Instance),
+                ref dataNodes,
+                0
             );
-            return ToolAuthorizationPolicy.Normalize(
-                root as JsonObject
-                    ?? throw new InvalidDataException("Tool policy requires a YAML object.")
-            );
+            return root as JsonObject
+                ?? throw new InvalidDataException("Tool policy requires a YAML object.");
         }
         catch (YamlException error)
         {
@@ -63,16 +105,86 @@ internal static class ToolAuthorizationYaml
         }
     }
 
+    private static (string Script, JsonNode? Data, JsonObject NormalizedRoot) PrepareScriptRoot(
+        JsonObject root
+    )
+    {
+        if (root.ContainsKey("rules"))
+            throw new InvalidDataException(
+                "Tool policy cannot specify both `rules` and `script`."
+            );
+        var defaultAction = ToolAuthorizationPolicy.ValidateHeader(root);
+        var script = root["script"] is JsonValue value && value.TryGetValue<string>(out var text)
+            ? text
+            : throw new InvalidDataException("Tool policy `script` must be a string.");
+        if (string.IsNullOrWhiteSpace(script))
+            throw new InvalidDataException("Tool policy `script` must be a non-empty string.");
+        var normalizedRoot = new JsonObject
+        {
+            ["version"] = 1,
+            ["defaultAction"] = defaultAction,
+        };
+        return (script, root["data"], normalizedRoot);
+    }
+
     private static JsonNode? Convert(
         PolicyYamlNode node,
         Shape shape,
-        HashSet<PolicyYamlNode> active
+        HashSet<PolicyYamlNode> active,
+        ref int dataNodes,
+        int depth
     )
     {
         if (!active.Add(node))
             throw new InvalidDataException("Cyclic tool policy YAML alias.");
         try
         {
+            if (shape == Shape.Data)
+            {
+                if (depth > MaxDataDepth)
+                    throw new InvalidDataException(
+                        "Tool policy `data` exceeds nesting depth limit."
+                    );
+                if (++dataNodes > MaxDataNodes)
+                    throw new InvalidDataException(
+                        "Tool policy `data` exceeds node count limit."
+                    );
+                if (node.Scalar is { } dataScalar)
+                {
+                    var value = ToolAuthorizationYamlGraph.ScalarValue(dataScalar);
+                    return value is null
+                        ? null
+                        : value as JsonNode
+                            ?? throw new InvalidDataException(
+                                "Tool policy `data` requires finite scalar values."
+                            );
+                }
+                if (node.List is { } dataList)
+                {
+                    var array = new JsonArray();
+                    foreach (var item in dataList)
+                        array.Add(Convert(item, Shape.Data, active, ref dataNodes, depth + 1));
+                    return array;
+                }
+                if (node.Map is { } dataMap)
+                {
+                    var obj = new JsonObject();
+                    foreach (var pair in dataMap)
+                    {
+                        if (obj.ContainsKey(pair.Key))
+                            throw new InvalidDataException("Duplicate YAML policy key.");
+                        obj[pair.Key] = Convert(
+                            pair.Value,
+                            Shape.Data,
+                            active,
+                            ref dataNodes,
+                            depth + 1
+                        );
+                    }
+                    return obj;
+                }
+                throw new InvalidDataException("Invalid tool policy `data` value.");
+            }
             if (node.Scalar is { } scalar)
             {
                 var value = ToolAuthorizationYamlGraph.ScalarValue(scalar);
@@ -102,9 +214,10 @@ internal static class ToolAuthorizationYaml
                 if (sequence.Count > maximum)
                     throw new InvalidDataException("Policy sequence exceeds its item limit.");
                 var child = shape == Shape.Rules ? Shape.Rule : Shape.Scalar;
-                return new JsonArray(
-                    sequence.Select(item => Convert(item, child, active)).ToArray()
-                );
+                var list = new JsonArray();
+                foreach (var item in sequence)
+                    list.Add(Convert(item, child, active, ref dataNodes, depth + 1));
+                return list;
             }
             if (
                 node.Map is not { } map
@@ -117,7 +230,7 @@ internal static class ToolAuthorizationYaml
                 shape = Shape.OperationRule;
             var allowed = shape switch
             {
-                Shape.Root => new[] { "version", "defaultAction", "rules" },
+                Shape.Root => new[] { "version", "defaultAction", "rules", "script", "data" },
                 Shape.Rule =>
                 [
                     "id",
@@ -187,6 +300,7 @@ internal static class ToolAuthorizationYaml
                 var child = shape switch
                 {
                     Shape.Root when pair.Key == "rules" => Shape.Rules,
+                    Shape.Root when pair.Key == "data" => Shape.Data,
                     Shape.OperationRule => pair.Key switch
                     {
                         "op" or "session" or "channel" or "nodeTool" or "model" =>
@@ -234,7 +348,7 @@ internal static class ToolAuthorizationYaml
                     Shape.Session when pair.Key == "relation" => Shape.ScalarOrList,
                     _ => Shape.Scalar,
                 };
-                var value = Convert(pair.Value, child, active);
+                var value = Convert(pair.Value, child, active, ref dataNodes, depth + 1);
                 if (result.ContainsKey(pair.Key))
                     throw new InvalidDataException("Duplicate YAML policy key.");
                 result[pair.Key] = value;

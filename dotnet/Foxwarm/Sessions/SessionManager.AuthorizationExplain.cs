@@ -76,7 +76,7 @@ internal sealed partial class SessionManager
             var bytes = await files.CaptureConfigCandidateAsync(candidatePath, true, token);
             try
             {
-                candidate = ToolAuthorizationYaml.Parse(bytes);
+                candidate = await ToolAuthorizationYaml.ParseAsync(bytes, token);
             }
             catch (Exception error) when (error is InvalidDataException or DecoderFallbackException)
             {

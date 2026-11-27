@@ -951,13 +951,17 @@ internal sealed partial class SessionManager
         }
         catch (Exception error) when (error is InvalidDataException or DecoderFallbackException)
         {
-            throw new InvalidDataException(
-                $"Invalid {target} YAML candidate. The active file was not changed."
-            );
+            var detail =
+                target == "tool-rules" && !string.IsNullOrWhiteSpace(error.Message)
+                    ? $"Invalid {target} YAML candidate: {error.Message} The active file was not changed."
+                    : $"Invalid {target} YAML candidate. The active file was not changed.";
+            throw new InvalidDataException(detail);
         }
         if (target == "tool-rules")
         {
-            var policy = ToolAuthorizationYaml.Parse(bytes);
+            var policy =
+                authorization.CachedForBytes(bytes)
+                ?? await ToolAuthorizationYaml.ParseAsync(bytes, token);
             if (policy.Warnings.Count > 0)
                 installed["warnings"] = new JsonArray(
                     policy.Warnings.Select(warning => (JsonNode?)warning).ToArray()

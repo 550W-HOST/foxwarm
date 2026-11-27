@@ -520,13 +520,13 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         }
     }
 
-    internal static ToolAuthorizationPolicy Normalize(JsonObject root)
+    internal static ToolAuthorizationPolicy Normalize(JsonObject root, bool fromScript = false)
     {
         var previous = warnings;
         warnings = [];
         try
         {
-            var policy = NormalizeCore(root);
+            var policy = NormalizeCore(root, fromScript);
             return warnings.Count == 0
                 ? policy
                 : policy with
@@ -538,6 +538,18 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         {
             warnings = previous;
         }
+    }
+
+    internal static string ValidateHeader(JsonObject root)
+    {
+        if (Number(root["version"]) != 1)
+            throw new InvalidDataException("Tool policy version must be 1.");
+        var action = root.ContainsKey("defaultAction")
+            ? SessionWait.Text(root["defaultAction"])
+            : "allow";
+        if (action is not ("allow" or "ask" or "deny"))
+            throw new InvalidDataException("Invalid policy defaultAction.");
+        return action;
     }
 
     // The approval options and reason of a rule of either kind.
@@ -584,16 +596,10 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return normalized;
     }
 
-    private static ToolAuthorizationPolicy NormalizeCore(JsonObject root)
+    private static ToolAuthorizationPolicy NormalizeCore(JsonObject root, bool fromScript)
     {
         Fields(root, "version", "defaultAction", "rules");
-        if (Number(root["version"]) != 1)
-            throw new InvalidDataException("Tool policy version must be 1.");
-        var action = root.ContainsKey("defaultAction")
-            ? SessionWait.Text(root["defaultAction"])
-            : "allow";
-        if (action is not ("allow" or "ask" or "deny"))
-            throw new InvalidDataException("Invalid policy defaultAction.");
+        var action = ValidateHeader(root);
         var raw = root.ContainsKey("rules")
             ? root["rules"] as JsonArray
                 ?? throw new InvalidDataException("Policy rules must be an array.")
@@ -604,6 +610,9 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var node in raw)
         {
+            var index = rules.Count;
+            try
+            {
             if (node is not JsonObject rule)
                 throw new InvalidDataException("Policy rule must be an object.");
             if (rule.ContainsKey("op"))
@@ -801,6 +810,18 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
             };
             Options(rule, normalized);
             rules.Add(normalized);
+            }
+            catch (InvalidDataException error) when (fromScript)
+            {
+                var label =
+                    node is JsonObject obj && SessionWait.Text(obj["id"]) is { Length: > 0 } ruleId
+                        ? $" (id `{ruleId}`)"
+                        : "";
+                throw new InvalidDataException(
+                    $"Policy script output rule[{index}]{label}: {error.Message}",
+                    error
+                );
+            }
         }
         return new(
             new JsonObject
