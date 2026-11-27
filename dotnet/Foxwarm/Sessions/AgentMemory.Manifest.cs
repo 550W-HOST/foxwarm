@@ -162,7 +162,7 @@ internal sealed partial class SessionManager
                     owned.Active,
                     owned.Queued,
                     agents.CreatedBy(name),
-                    (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
+                    agents.ExpandedRuleCount(name),
                     agents.DefaultNode(name),
                     agents.DefaultCwd(name)
                 );
@@ -271,15 +271,15 @@ internal sealed partial class SessionManager
                         ["createdBy"] = agents.CreatedBy(name),
                         ["creatorChain"] = CreatorChainOrNull(name),
                         ["rules"] =
-                            (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.DeepClone()
+                            agents.MetadataSnapshot()[name]?["rules"]?.DeepClone()
                             ?? new JsonArray(),
-                        ["ruleCount"] =
-                            (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
+                        ["ruleCount"] = agents.ExpandedRuleCount(name),
                         ["defaultNode"] = agents.DefaultNode(name),
                         ["defaultCwd"] = agents.DefaultCwd(name),
                         ["inheritable"] = agents.Inheritable(name),
                         ["restricted"] = RestrictedLayer(
-                            agents.MetadataSnapshot()[name]?["rules"] as JsonArray
+                            name,
+                            agents.MetadataSnapshot()[name]?["rules"]
                         ),
                         ["isolationMigration"] = IsolationMigrationSummary(name),
                         ["sessionCount"] = owned.Total,
@@ -302,11 +302,19 @@ internal sealed partial class SessionManager
 
 
     // A layer that does not parse fails every call of the Agent, so it is restricted too.
-    private static bool RestrictedLayer(JsonArray? rules)
+    private bool RestrictedLayer(string name, JsonNode? rules)
     {
+        if (rules is null)
+            return false;
         try
         {
-            return IsolationMigrationRules.EndsInDeny(rules);
+            var policy = agents.ResolveCachedRuleLayer(name, rules);
+            var normalized = policy.Value["rules"] as JsonArray;
+            return normalized?.LastOrDefault() is JsonObject last
+                && !OperationRules.IsOperationRule(last)
+                && last["enabled"]?.GetValue<bool>() == true
+                && last["action"]?.GetValue<string>() == "deny"
+                && last["match"] is JsonObject { Count: 0 };
         }
         catch (InvalidDataException)
         {

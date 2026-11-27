@@ -709,6 +709,9 @@ internal sealed partial class SessionManager
     }
 
     internal Task SetAgentRulesAsync(string agent, JsonArray rules, SessionOwner? caller = null) =>
+        SetAgentRulesAsync(agent, (JsonNode)rules, caller);
+
+    internal Task SetAgentRulesAsync(string agent, JsonNode rules, SessionOwner? caller = null) =>
         agents.SetRulesAsync(
             agent,
             rules,
@@ -728,6 +731,8 @@ internal sealed partial class SessionManager
                         semanticCaller.Value ?? CancellationToken.None
                     )
         );
+
+    internal int AgentRuleCount(string agent) => agents.ExpandedRuleCount(agent);
 
     internal Task SetAgentInheritableAsync(string agent, bool inheritable) =>
         agents.SetInheritableAsync(agent, inheritable);

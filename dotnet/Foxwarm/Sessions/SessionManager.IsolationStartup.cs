@@ -39,11 +39,11 @@ internal sealed partial class SessionManager
         // A layer that does not parse fails only its own Agent's calls, as before; report it.
         foreach (var (name, value) in agents.MetadataSnapshot())
         {
-            if (value?["rules"] is not JsonArray rules)
+            if (value?["rules"] is not (JsonArray or JsonObject))
                 continue;
             try
             {
-                _ = AgentRulePolicy.Parse(rules);
+                _ = AgentRulePolicy.Parse(value["rules"]);
             }
             catch (InvalidDataException error)
             {
@@ -90,7 +90,7 @@ internal sealed partial class SessionManager
     {
         // A layer that does not parse already fails every call of the Agent. Leave the row
         // unchanged; the scan after the write reports it.
-        if (row["rules"] is JsonArray stored && !Parses(stored))
+        if (row["rules"] is JsonArray or JsonObject && !Parses(row["rules"]!))
             return null;
         var isolation = IsolatedToolCompatibility.Metadata(row);
         if (!isolation.Isolated)
@@ -107,7 +107,7 @@ internal sealed partial class SessionManager
             };
         }
         var fence = IsolationMigrationRules.FenceDigest(row);
-        var original = (row["rules"] as JsonArray)?.DeepClone().AsArray();
+        var original = row["rules"] is JsonArray or JsonObject ? row["rules"]!.DeepClone() : null;
         var digest = original is null ? null : IsolationMigrationRules.Digest(original);
         var generated = digest is not null && digest == SessionWait.Text(marker["rulesDigest"]);
         var confirmed =
@@ -184,7 +184,7 @@ internal sealed partial class SessionManager
         // own that still ends in an enabled, unconditional deny is the administrator's; one
         // that does not is not trusted while the legacy fence still says isolated.
         var upgraded = failClosed ? null : UpgradeMigratedLayer(name, row, marker);
-        if (!OwnLayerRestricts(row["rules"] as JsonArray))
+        if (!OwnLayerRestricts(row["rules"]))
             return FailClosedMigratedRow(
                 name,
                 row,
@@ -195,7 +195,7 @@ internal sealed partial class SessionManager
                 fence,
                 original
             );
-        marker["confirmedDigest"] = IsolationMigrationRules.Digest(row["rules"]!.AsArray());
+        marker["confirmedDigest"] = IsolationMigrationRules.Digest(row["rules"]!);
         marker["fenceDigest"] = fence;
         return upgraded
             ?? new JsonObject
@@ -224,8 +224,8 @@ internal sealed partial class SessionManager
         foreach (var creator in chain)
             if (
                 creator != name
-                && snapshot[creator]?["rules"] is JsonArray rules
-                && !Parses(rules)
+                && snapshot[creator]?["rules"] is JsonArray or JsonObject
+                && !Parses(snapshot[creator]!["rules"]!)
             )
                 return new JsonObject
                 {
@@ -237,7 +237,7 @@ internal sealed partial class SessionManager
         return null;
     }
 
-    private static bool Parses(JsonArray rules)
+    private static bool Parses(JsonNode rules)
     {
         try
         {
@@ -252,7 +252,7 @@ internal sealed partial class SessionManager
 
     // Whether the Agent's own layer ends in an enabled deny without selectors. A creator's
     // layer does not count: its allows can still reach the Agent.
-    private static bool OwnLayerRestricts(JsonArray? rules)
+    private static bool OwnLayerRestricts(JsonNode? rules)
     {
         try
         {
@@ -290,18 +290,18 @@ internal sealed partial class SessionManager
         string? markerNode,
         AgentIsolation isolation,
         string fence,
-        JsonArray? previous = null
+        JsonNode? previous = null
     )
     {
-        previous ??= row["rules"] as JsonArray;
+        previous ??= row["rules"] is JsonArray or JsonObject ? row["rules"] : null;
         marker["fenceDigest"] = fence;
         var rules = IsolationMigrationRules.FailClosedRules();
         var digest = IsolationMigrationRules.Digest(rules);
         if (
-            previous is { Count: > 0 }
-            && IsolationMigrationRules.Digest(previous) != digest
+            AgentRulePolicy.HasLocalLayer(previous)
+            && IsolationMigrationRules.Digest(previous!) != digest
         )
-            marker["previousRules"] = previous.DeepClone();
+            marker["previousRules"] = previous!.DeepClone();
         row["rules"] = rules;
         if (isolation.RecordedNode != markerNode)
             RebindMarker(row, marker, markerNode, isolation.RecordedNode);
@@ -340,7 +340,7 @@ internal sealed partial class SessionManager
     private JsonObject MigrateIsolatedRow(string name, JsonObject row, JsonObject snapshot, long now)
     {
         if (
-            row["rules"] is not JsonArray { Count: > 0 }
+            !AgentRulePolicy.HasLocalLayer(row["rules"])
             && UnreadableCreatorLayer(name, snapshot) is { } unreadable
         )
             return unreadable;
@@ -348,7 +348,7 @@ internal sealed partial class SessionManager
         var entry = new JsonObject { ["agent"] = name, ["node"] = isolation.RecordedNode };
         string? failure = null;
         IsolationMigrationPlan? plan = null;
-        if (row["rules"] is JsonArray { Count: > 0 })
+        if (AgentRulePolicy.HasLocalLayer(row["rules"]))
             failure = "The Agent already had local rules; they are kept in the migration marker for a manual merge.";
         else
             (plan, failure) = PlanFor(name, isolation);
@@ -366,8 +366,8 @@ internal sealed partial class SessionManager
         if (failure is not null)
         {
             marker["failClosed"] = failure;
-            if (row["rules"] is JsonArray { Count: > 0 } previous)
-                marker["previousRules"] = previous.DeepClone();
+            if (AgentRulePolicy.HasLocalLayer(row["rules"]))
+                marker["previousRules"] = row["rules"]!.DeepClone();
         }
         row["rules"] = rules.DeepClone();
         var inheritors = agents.Inheritors(name);

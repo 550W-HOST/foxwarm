@@ -139,7 +139,7 @@ internal sealed partial class SessionManager
         report["isolated"] = isolation.Isolated;
         report["node"] = node;
         report["toolRuleCount"] = isolation.Rules.Count;
-        report["localRuleCount"] = (row["rules"] as JsonArray)?.Count ?? 0;
+        report["localRuleCount"] = agents.ExpandedRuleCount(name);
         report["createdBy"] = row["createdBy"]?.DeepClone();
         report["defaultNode"] = row["defaultNode"]?.DeepClone();
         report["inheritable"] = AgentCatalog.Inheritable(row);
@@ -200,7 +200,7 @@ internal sealed partial class SessionManager
         var blockers = new List<string>();
         if (row.ContainsKey("legacyIsolation"))
             blockers.Add("Agent isolation is already migrated.");
-        if (row["rules"] is JsonArray { Count: > 0 })
+        if (AgentRulePolicy.HasLocalLayer(row["rules"]))
             blockers.Add("Agent already has local rules; merge the generated layer manually.");
         if (agents.Inheritors(name) is { Length: > 0 } inheritors)
             blockers.Add(

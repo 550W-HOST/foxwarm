@@ -39,7 +39,7 @@ internal sealed partial class SessionManager
         bool inheritMemory = false,
         string? sourceSessionId = null,
         SessionOwner? creator = null,
-        JsonArray? rules = null,
+        JsonNode? rules = null,
         string? defaultNode = null,
         string? defaultCwd = null,
         string? guestTemplate = null

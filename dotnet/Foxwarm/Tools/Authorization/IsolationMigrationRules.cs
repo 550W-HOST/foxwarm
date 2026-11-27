@@ -59,7 +59,7 @@ internal static class IsolationMigrationRules
     /// <summary>
     /// SHA-256 of a layer's JSON, used to tell a stored layer from the one migration wrote.
     /// </summary>
-    internal static string Digest(JsonArray rules) =>
+    internal static string Digest(JsonNode rules) =>
         Convert
             .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rules.ToJsonString(DigestJson))))
             .ToLowerInvariant();
@@ -100,7 +100,7 @@ internal static class IsolationMigrationRules
     /// selectors, so it allows only what it lists. Throws <see cref="InvalidDataException"/>
     /// when the layer does not parse.
     /// </summary>
-    internal static bool EndsInDeny(JsonArray? rules)
+    internal static bool EndsInDeny(JsonNode? rules)
     {
         if (rules is null)
             return false;

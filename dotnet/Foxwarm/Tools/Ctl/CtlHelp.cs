@@ -309,13 +309,13 @@ internal static class CtlHelp
                     part switch
                     {
                         "enum" => string.Join('|', values!),
-                        "object" => "<json>",
-                        "json" => "<json>",
+                        "array" or "object" or "json" => "<json>",
                         "integer" or "number" => "<number>",
                         "boolean" => "true|false",
                         _ => "<text>",
                     }
                 )
+                .Distinct(StringComparer.Ordinal)
         );
 
     // `skill run <name> --help`: the command's help, then what running that skill does and the

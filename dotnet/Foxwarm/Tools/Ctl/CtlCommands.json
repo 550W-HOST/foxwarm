@@ -1601,8 +1601,7 @@
         },
         {
           "name": "rules",
-          "type": "array",
-          "items": "object",
+          "type": "array|object",
           "kind": "flag",
           "help": "Initial local authorization rules for the new Agent, evaluated in order; pass a JSON array, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply.",
           "ingress": [
@@ -1659,8 +1658,7 @@
         },
         {
           "name": "rules",
-          "type": "array",
-          "items": "object",
+          "type": "array|object",
           "kind": "flag",
           "required": true,
           "help": "Complete replacement rule list, evaluated in order; pass a JSON array, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. An empty list removes this layer's rules. Caller selectors are not accepted."

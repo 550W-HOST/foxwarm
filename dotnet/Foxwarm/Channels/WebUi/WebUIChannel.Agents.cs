@@ -137,12 +137,14 @@ internal sealed partial class WebUIChannel
                                     $"Agent '{inherit}' is not inheritable and cannot be used as an inherit source.",
                             }
                         );
-                    if (body.ContainsKey("rules") && body["rules"] is not JsonArray)
-                        throw new InvalidDataException("rules must be an array.");
+                    if (body.ContainsKey("rules") && body["rules"] is not (JsonArray or JsonObject))
+                        throw new InvalidDataException(
+                            "rules must be an array or a { script, data? } object."
+                        );
                     var created = await sessions.CreateAgentAsync(
                         name.Trim(),
                         inherit: string.IsNullOrEmpty(inherit) ? null : inherit,
-                        rules: body["rules"] as JsonArray,
+                        rules: body["rules"],
                         defaultNode: body["defaultNode"]?.GetValue<string>(),
                         defaultCwd: body["defaultCwd"]?.GetValue<string>()
                     );
@@ -402,11 +404,14 @@ internal sealed partial class WebUIChannel
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new JsonObject { ["error"] = "Agent not found." });
                     if (body.ContainsKey("rules"))
-                        await sessions.SetAgentRulesAsync(
-                            agentId,
-                            body["rules"] as JsonArray
-                                ?? throw new InvalidDataException("rules must be an array.")
-                        );
+                    {
+                        var replacement = body["rules"];
+                        if (replacement is not (JsonArray or JsonObject))
+                            throw new InvalidDataException(
+                                "rules must be an array or a { script, data? } object."
+                            );
+                        await sessions.SetAgentRulesAsync(agentId, replacement);
+                    }
                     if (body.ContainsKey("defaultNode") || body.ContainsKey("defaultCwd"))
                         await sessions.SetAgentDefaultPlacementAsync(
                             agentId,

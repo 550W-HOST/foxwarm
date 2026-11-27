@@ -32,6 +32,52 @@ internal static class PolicyScriptRunner
     internal static readonly TimeSpan StartupWallClockLimit = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan WallClockLimit = TimeSpan.FromSeconds(2);
     internal const long MaxDataBudgetBytes = 4 * 1024 * 1024;
+    internal const int MaxDataDepth = 32;
+    internal const int MaxDataNodes = 4096;
+
+    internal static void ValidateStaticData(JsonNode? node)
+    {
+        if (node is null)
+            return;
+        var count = 0;
+        Walk(node, 0, ref count);
+        if (Encoding.UTF8.GetByteCount(node.ToJsonString()) > ToolAuthorizationPolicy.MaxBytes)
+            throw new InvalidDataException(
+                $"Policy `data` exceeds the {ToolAuthorizationPolicy.MaxBytes}-byte limit."
+            );
+
+        static void Walk(JsonNode? current, int depth, ref int nodes)
+        {
+            if (depth > MaxDataDepth)
+                throw new InvalidDataException("Policy `data` exceeds nesting depth limit.");
+            if (++nodes > MaxDataNodes)
+                throw new InvalidDataException("Policy `data` exceeds maximum node count.");
+            switch (current)
+            {
+                case null:
+                    return;
+                case JsonArray array:
+                    foreach (var item in array)
+                        Walk(item, depth + 1, ref nodes);
+                    return;
+                case JsonObject map:
+                    foreach (var pair in map)
+                        Walk(pair.Value, depth + 1, ref nodes);
+                    return;
+                case JsonValue value:
+                    if (
+                        value.TryGetValue<double>(out var number)
+                        && !double.IsFinite(number)
+                    )
+                        throw new InvalidDataException(
+                            "Policy `data` contains a non-finite number."
+                        );
+                    return;
+                default:
+                    throw new InvalidDataException("Policy `data` must contain JSON values only.");
+            }
+        }
+    }
 
     private static readonly SemaphoreSlim Concurrency = new(2, 2);
     private static long compilationCount;

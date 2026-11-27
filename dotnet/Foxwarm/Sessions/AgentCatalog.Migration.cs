@@ -8,11 +8,12 @@ internal sealed partial class AgentCatalog
     /// <summary>
     /// Installation reader level this binary understands. Level 1 adds the
     /// <c>inheritable: false</c> flag and legacy-isolation migration markers; level 2 adds
-    /// operation rules (rules with <c>op</c>) in Agent-local layers. Binaries that predate the
+    /// operation rules (rules with <c>op</c>) in Agent-local layers; level 3 adds scripted
+    /// Agent-local rule layers (<c>{ data?, script }</c> objects). Binaries that predate the
     /// marker ignore it, so it only protects downgrades between binaries that read it; older
-    /// parsers also reject <c>op</c> itself.
+    /// parsers also reject <c>op</c> and non-array local rules themselves.
     /// </summary>
-    internal const int ReaderVersion = 2;
+    internal const int ReaderVersion = 3;
 
     internal const string InstallationFileName = "installation.json";
 
@@ -50,6 +51,10 @@ internal sealed partial class AgentCatalog
     // binaries and raise nothing.
     internal static int RequiredReaderLevel(JsonObject metadata) =>
         metadata.Any(pair =>
+            pair.Value is JsonObject row && AgentRulePolicy.IsScriptLayer(row["rules"])
+        )
+            ? 3
+        : metadata.Any(pair =>
             pair.Value is JsonObject row && OperationRules.ContainsOperationRule(row["rules"])
         )
             ? 2
@@ -108,7 +113,7 @@ internal sealed partial class AgentCatalog
                 );
             if (row.ContainsKey("legacyIsolation"))
                 throw new InvalidDataException("Agent isolation is already migrated.");
-            if (row["rules"] is JsonArray { Count: > 0 })
+            if (AgentRulePolicy.HasLocalLayer(row["rules"]))
                 throw new InvalidDataException(
                     "Agent already has local rules; merge the generated layer manually."
                 );
@@ -179,8 +184,8 @@ internal sealed partial class AgentCatalog
                 if (JsonNode.DeepEquals(before[name], value))
                     continue;
                 _ = IsolatedToolCompatibility.Metadata(value);
-                if (value is JsonObject row && row["rules"] is JsonArray rules)
-                    _ = AgentRulePolicy.Parse(rules);
+                if (value is JsonObject row && row["rules"] is JsonArray or JsonObject)
+                    _ = AgentRulePolicy.Parse(row["rules"]);
             }
             EnsureReaderVersion(next);
             try

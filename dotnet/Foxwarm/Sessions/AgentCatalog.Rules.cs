@@ -121,20 +121,52 @@ internal sealed partial class AgentCatalog
                 .ToArray();
         }
         return chain
-            .Select(entry =>
-            {
-                var digest = RuleLayerDigest(entry.RawRules);
-                if (
-                    ruleLayerCache.TryGetValue(entry.Agent, out var cached)
-                    && cached.Digest == digest
-                )
-                    return (entry.Agent, cached.Policy);
-                var policy = AgentRulePolicy.Parse(entry.RawRules ?? new JsonArray());
-                ToolAuthorizationPolicy.Report("rules of Agent " + entry.Agent, policy);
-                ruleLayerCache[entry.Agent] = (digest, policy);
-                return (entry.Agent, policy);
-            })
+            .Select(entry => (entry.Agent, ResolveCachedRuleLayer(entry.Agent, entry.RawRules)))
             .ToArray();
+    }
+
+    internal ToolAuthorizationPolicy ResolveCachedRuleLayer(string agent, JsonNode? rawRules)
+    {
+        var digest = RuleLayerDigest(rawRules);
+        if (ruleLayerCache.TryGetValue(agent, out var cached) && cached.Digest == digest)
+            return cached.Policy;
+        if (ruleLayerErrorCache.TryGetValue(agent, out var failed) && failed.Digest == digest)
+            throw new InvalidDataException(failed.Error);
+        try
+        {
+            var policy = AgentRulePolicy.Parse(rawRules ?? new JsonArray());
+            ToolAuthorizationPolicy.Report("rules of Agent " + agent, policy);
+            ruleLayerCache[agent] = (digest, policy);
+            ruleLayerErrorCache.TryRemove(agent, out _);
+            return policy;
+        }
+        catch (InvalidDataException error) when (!PolicyScriptRunner.IsTransient(error))
+        {
+            ruleLayerErrorCache[agent] = (digest, error.Message);
+            throw;
+        }
+    }
+
+    internal int ExpandedRuleCount(string agent)
+    {
+        JsonNode? raw;
+        lock (stateGate)
+            raw = metadata[agent] is JsonObject row && row.ContainsKey("rules")
+                ? row["rules"]?.DeepClone()
+                : null;
+        if (raw is null)
+            return 0;
+        if (raw is JsonArray array)
+            return array.Count;
+        try
+        {
+            var policy = ResolveCachedRuleLayer(agent, raw);
+            return (policy.Value["rules"] as JsonArray)?.Count ?? 0;
+        }
+        catch (InvalidDataException)
+        {
+            return 0;
+        }
     }
 
     internal void RequireSessionTarget(string caller, string target)
@@ -234,12 +266,12 @@ internal sealed partial class AgentCatalog
 
     internal async Task SetRulesAsync(
         string name,
-        JsonArray rules,
+        JsonNode rules,
         Func<string>? caller = null,
         Func<Task>? authorize = null
     )
     {
-        var parsed = AgentRulePolicy.Parse(rules);
+        var parsed = await AgentRulePolicy.ParseAsync(rules);
         await createGate.WaitAsync();
         try
         {
@@ -275,12 +307,14 @@ internal sealed partial class AgentCatalog
                 lock (stateGate)
                     metadata = next;
                 ruleLayerCache[name] = (digest, parsed);
+                ruleLayerErrorCache.TryRemove(name, out _);
                 throw;
             }
             lock (stateGate)
                 metadata = next;
             ToolAuthorizationPolicy.Report("rules of Agent " + name, parsed);
             ruleLayerCache[name] = (digest, parsed);
+            ruleLayerErrorCache.TryRemove(name, out _);
         }
         finally
         {

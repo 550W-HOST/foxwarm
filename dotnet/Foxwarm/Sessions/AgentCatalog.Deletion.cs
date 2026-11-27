@@ -52,6 +52,7 @@ internal sealed partial class AgentCatalog
                     metadata = next;
                 }
                 ruleLayerCache.TryRemove(name, out _);
+            ruleLayerErrorCache.TryRemove(name, out _);
             }
             try
             {
@@ -93,6 +94,7 @@ internal sealed partial class AgentCatalog
                     metadata = next;
                 }
                 ruleLayerCache.TryRemove(name, out _);
+            ruleLayerErrorCache.TryRemove(name, out _);
             }
             try
             {

@@ -372,11 +372,10 @@ internal sealed partial class SessionManager
         }
         if (!agents.Exists(template))
             throw new InvalidDataException("Guest template Agent does not exist: " + template);
-        var metadata = agents.MetadataSnapshot();
         if (
             !agents
-                .CreatorChainOf(template)
-                .Any(name => metadata[name]?["rules"] is JsonArray { Count: > 0 })
+                .NamedRuleLayers(template)
+                .Any(layer => (layer.Policy.Value["rules"] as JsonArray)?.Count > 0)
         )
             throw new InvalidDataException("Guest template Agent has no rules: " + template);
         if (!inherited)
