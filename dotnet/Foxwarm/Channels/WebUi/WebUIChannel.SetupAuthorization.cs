@@ -36,7 +36,7 @@ internal sealed partial class WebUIChannel
                     if (bytes is not null)
                         try
                         {
-                            var policy = ToolAuthorizationYaml.Parse(bytes);
+                            var policy = await authority.ParseOrCachedAsync(bytes, revision, token);
                             if (policy.Warnings.Count > 0)
                                 result["warnings"] = Warnings(policy);
                         }
@@ -91,10 +91,11 @@ internal sealed partial class WebUIChannel
                         },
                         token
                     );
-                    var state = PolicyState(bytes, ToolAuthorizationAuthority.Revision(bytes));
+                    var savedRevision = ToolAuthorizationAuthority.Revision(bytes);
+                    var state = PolicyState(bytes, savedRevision);
                     foreach (var (key, field) in state)
                         installed[key] = field?.DeepClone();
-                    var policy = ToolAuthorizationYaml.Parse(bytes);
+                    var policy = await authority.ParseOrCachedAsync(bytes, savedRevision, token);
                     if (policy.Warnings.Count > 0)
                         installed["warnings"] = Warnings(policy);
                     return Results.Ok(installed);

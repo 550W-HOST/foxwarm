@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Tools;
 
@@ -93,24 +95,46 @@ internal sealed partial class AgentCatalog
     internal ToolAuthorizationPolicy[] RuleLayers(string name) =>
         NamedRuleLayers(name).Select(layer => layer.Policy).ToArray();
 
+    private static string RuleLayerDigest(JsonNode? raw)
+    {
+        if (raw is null || raw is JsonArray { Count: 0 })
+            return "empty";
+        var json = raw.ToJsonString();
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+    }
+
     internal (string Agent, ToolAuthorizationPolicy Policy)[] NamedRuleLayers(string name)
     {
+        (string Agent, JsonNode? RawRules)[] chain;
         lock (stateGate)
         {
             var snapshot = MetadataSnapshot();
-            return CreatorChain(name, snapshot)
+            chain = CreatorChain(name, snapshot)
                 .Select(agent =>
-                {
-                    var policy = AgentRulePolicy.Parse(
+                    (
+                        agent,
                         snapshot[agent] is JsonObject row && row.ContainsKey("rules")
-                            ? row["rules"]
-                            : new JsonArray()
-                    );
-                    ToolAuthorizationPolicy.Report("rules of Agent " + agent, policy);
-                    return (agent, policy);
-                })
+                            ? row["rules"]?.DeepClone()
+                            : null
+                    )
+                )
                 .ToArray();
         }
+        return chain
+            .Select(entry =>
+            {
+                var digest = RuleLayerDigest(entry.RawRules);
+                if (
+                    ruleLayerCache.TryGetValue(entry.Agent, out var cached)
+                    && cached.Digest == digest
+                )
+                    return (entry.Agent, cached.Policy);
+                var policy = AgentRulePolicy.Parse(entry.RawRules ?? new JsonArray());
+                ToolAuthorizationPolicy.Report("rules of Agent " + entry.Agent, policy);
+                ruleLayerCache[entry.Agent] = (digest, policy);
+                return (entry.Agent, policy);
+            })
+            .ToArray();
     }
 
     internal void RequireSessionTarget(string caller, string target)
@@ -215,7 +239,7 @@ internal sealed partial class AgentCatalog
         Func<Task>? authorize = null
     )
     {
-        _ = AgentRulePolicy.Parse(rules);
+        var parsed = AgentRulePolicy.Parse(rules);
         await createGate.WaitAsync();
         try
         {
@@ -238,6 +262,7 @@ internal sealed partial class AgentCatalog
                 marker["confirmedDigest"] = IsolationMigrationRules.Digest(rules);
                 marker["fenceDigest"] = IsolationMigrationRules.FenceDigest(row);
             }
+            var digest = RuleLayerDigest(rules);
             try
             {
                 AtomicIndexWrite(
@@ -249,10 +274,13 @@ internal sealed partial class AgentCatalog
             {
                 lock (stateGate)
                     metadata = next;
+                ruleLayerCache[name] = (digest, parsed);
                 throw;
             }
             lock (stateGate)
                 metadata = next;
+            ToolAuthorizationPolicy.Report("rules of Agent " + name, parsed);
+            ruleLayerCache[name] = (digest, parsed);
         }
         finally
         {
