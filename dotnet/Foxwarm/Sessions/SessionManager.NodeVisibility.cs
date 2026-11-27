@@ -151,6 +151,9 @@ internal sealed partial class SessionManager
                     ? context.CurrentNode
                     : "master"
             );
+        // The Agent folder's tools are master's on master, as dispatch sees them.
+        if (source == "node" && targetNode == AgentStorePaths.Endpoint && Capabilities.MasterNode)
+            targetNode = "master";
         var unknownNodeTargets =
             source == "builtin"
             && name

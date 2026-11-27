@@ -416,15 +416,24 @@ public sealed partial class WorkspaceTools
                 ?? throw new InvalidDataException("apply_patch requires input.");
             return WorkspacePatch
                 .Parse(input)
-                .Select(operation => new AuthorizationPath(
-                    "apply_patch",
-                    operation.Path,
-                    AuthorizationPaths.CanonicalPotential(ResolvePatchPath(operation.Path, true))
-                ))
+                .Select(operation =>
+                    AgentFolder is { } scope
+                        ? scope.Fact("apply_patch", operation.Path, ResolvePatchPath(operation.Path, true))
+                        : new AuthorizationPath(
+                            "apply_patch",
+                            operation.Path,
+                            AuthorizationPaths.CanonicalPotential(ResolvePatchPath(operation.Path, true))
+                        )
+                )
                 .ToArray();
         }
         if (name is "send_file" or "run_script" or "start_toolscript_run" && raw is not null)
             raw = SessionGoal.Trim(raw);
+        // An Agent-folder path, the empty one included, names a folder entry (the root for "").
+        if (AgentFolder is { } folder && raw is not null)
+            return name is "read" or "write" or "edit" or "set_config"
+                ? [folder.Fact("filePath", raw, folder.Resolve(raw))]
+                : throw new InvalidDataException("No Agent-folder path resolver for this capability.");
         if (raw is null || raw.Length == 0)
             return [];
         var resolved = name switch
@@ -447,12 +456,24 @@ public sealed partial class WorkspaceTools
         ];
     }
 
+    // A candidate in the Agent folder: the same checks, over one committed version of the file,
+    // read at once; that one buffer is the candidate.
+    private async Task<byte[]> CaptureStoredCandidateAsync(string path, bool policy, CancellationToken token)
+    {
+        if (targetFiles is not AgentStoreFileOperations folder)
+            throw new InvalidDataException("Configuration candidate must be a regular file.");
+        return await folder.ReadCandidateAsync(path, policy ? ToolAuthorizationPolicy.MaxBytes : null, token)
+            ?? throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
+    }
+
     internal async Task<byte[]> CaptureConfigCandidateAsync(
         string raw,
         bool policy,
         CancellationToken token
     )
     {
+        if (AgentFolder is { } folder)
+            return await CaptureStoredCandidateAsync(folder.Resolve(raw), policy, token);
         var path = ResolveReadWrite(raw, true);
         if (!RegularFile(path))
             throw new InvalidDataException("Configuration candidate must be a regular file.");

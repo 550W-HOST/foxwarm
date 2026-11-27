@@ -299,7 +299,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return result;
     }
 
-    private static JsonNode IdentityPattern(JsonNode? node)
+    // endpoint: the Agent-folder endpoint `@agent` is also accepted, as a whole value.
+    private static JsonNode IdentityPattern(JsonNode? node, bool endpoint = false)
     {
         var values = node is JsonArray list ? list.ToArray() : [node];
         if (values.Length is < 1 or > 64)
@@ -307,7 +308,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         var patterns = values.Select(value => String(value)).ToArray();
         if (
             patterns.Any(value =>
-                !Regex.IsMatch(value, @"^[A-Za-z0-9._:/*-]+$", RegexOptions.CultureInvariant)
+                !(endpoint && value == AgentStorePaths.Endpoint)
+                && !Regex.IsMatch(value, @"^[A-Za-z0-9._:/*-]+$", RegexOptions.CultureInvariant)
             )
         )
             throw new InvalidDataException(
@@ -329,7 +331,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
             );
         if (map.ContainsKey("exact"))
         {
-            var exact = IdentityPattern(map["exact"]);
+            var exact = IdentityPattern(map["exact"], endpoint: true);
             var identities = exact is JsonArray exactValues ? exactValues.ToArray() : [exact];
             if (identities.Any(value => String(value).Contains('*')))
                 throw new InvalidDataException("Node exact matcher requires literal Node IDs.");
@@ -341,7 +343,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 throw new InvalidDataException("Node current matcher must be true.");
             return new JsonObject { ["current"] = true };
         }
-        var provider = IdentityPattern(map["provider"]);
+        var provider = IdentityPattern(map["provider"], endpoint: true);
         var values = provider is JsonArray list ? list.ToArray() : [provider];
         if (values.Any(value => String(value).Contains('*') || String(value).Contains('/')))
             throw new InvalidDataException("Node provider matcher requires exact Provider IDs.");

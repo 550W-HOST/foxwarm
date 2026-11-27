@@ -51,6 +51,30 @@ internal sealed partial class SessionManager
             source == "builtin" && name == "node"
                 ? NodeProviders.AuthorizationTargets(args)
                 : ToolAuthorizationNodeEffects.Resolve(source, name, effectNode ?? node, args);
+        // On master, the Agent folder is a master folder, and its calls are master's.
+        if (Capabilities.MasterNode && targets is not null && targets.Contains(AgentStorePaths.Endpoint))
+            targets = targets.Select(target => target == AgentStorePaths.Endpoint ? "master" : target).ToArray();
+        // Clearing the Node selection targets what an unset Node is: master in file mode, with
+        // the Node named as a selection names it; no Node otherwise.
+        string? targetNode = node;
+        if (Foxwarm.Nodes.NodeProviderRegistry.ClearsSelection(source, name, args))
+        {
+            targets = Capabilities.MasterNode ? ["master"] : [];
+            targetNode = Capabilities.MasterNode ? "master" : null;
+            if (Capabilities.MasterNode)
+            {
+                args = (JsonObject)args.DeepClone();
+                args["nodeId"] = "master";
+            }
+        }
+        // So are a copy's endpoint arguments, as policy facts; the call keeps its own.
+        if (Capabilities.MasterNode && source == "builtin" && name == "copy_between_nodes")
+            foreach (var key in new[] { "sourceNode", "targetNode" })
+                if (SessionWait.Text(args[key])?.Trim() == AgentStorePaths.Endpoint)
+                {
+                    args = (JsonObject)args.DeepClone();
+                    args[key] = "master";
+                }
         return new(
             source,
             name,
@@ -59,7 +83,7 @@ internal sealed partial class SessionManager
             paths,
             owner.Agent,
             owner.Id,
-            node,
+            targetNode,
             toolWorkspace,
             agents.AuthorizationAgentRoot(owner.Agent),
             agents.AuthorizationMemoryRoot(owner.Agent),
@@ -294,6 +318,7 @@ internal sealed partial class SessionManager
             );
         var remote =
             resolved.ExecutionNode != "master"
+            && !resolved.AgentFolder
             && (
                 resolved.Source == "node"
                 || resolved.Source == "builtin"
@@ -504,7 +529,7 @@ internal sealed partial class SessionManager
             return null;
         try
         {
-            var readTool = CandidateRead(path);
+            var readTool = CandidateRead(path, files);
             var read = await AssessToolAsync(
                 owner,
                 readTool,
@@ -863,9 +888,19 @@ internal sealed partial class SessionManager
         return paths;
     }
 
-    // The protected input of set_config: its candidate, read on master as the caller.
-    internal static ResolvedTool CandidateRead(string path) =>
-        new("set_config", "node", "read", new JsonObject { ["filePath"] = path });
+    // The protected input of set_config: its candidate, read as the caller on master, or in
+    // the Agent store's folder where there is no master.
+    internal static ResolvedTool CandidateRead(string path, WorkspaceTools? files) =>
+        new(
+            "set_config",
+            "node",
+            "read",
+            new JsonObject { ["filePath"] = path },
+            ExecutionNode: files?.AgentFolder is { Store: true } ? AgentStorePaths.Endpoint : "master"
+        )
+        {
+            AgentFolder = files?.AgentFolder is not null,
+        };
 
     internal static string CandidateInput(string path) => "set_config:" + path;
 
@@ -903,7 +938,7 @@ internal sealed partial class SessionManager
                 current,
                 secrets: secrets
             );
-            await AuthorizeToolAsync(owner, CandidateRead(path), files, current);
+            await AuthorizeToolAsync(owner, CandidateRead(path, files), files, current);
         }
         await Authorize(token);
         // The candidate the plan was derived from, when it was admitted before planning;

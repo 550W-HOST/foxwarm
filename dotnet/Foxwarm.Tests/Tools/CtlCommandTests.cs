@@ -845,7 +845,7 @@ public sealed class CtlCommandTests
         Assert.Contains("\ntask (declared tool) — ", all);
         // A multi-command builtin lists the commands that match.
         var select = SessionWait.Text((await Run(tools, "ctl", Args("tool search select node --source builtin"))).Response!["output"])!;
-        Assert.StartsWith("node select <node-id> — ", select.Split('\n')[2]);
+        Assert.StartsWith("node select [<node-id>] [options] — ", select.Split('\n')[2]);
         var copy = SessionWait.Text((await Run(tools, "ctl", Args("tool search \"copy file between nodes\""))).Response!["output"])!;
         Assert.StartsWith("node copy ", copy.Split('\n')[2]);
         var exa = SessionWait.Text((await Run(tools, "ctl", Args("tool search exa"))).Response!["output"])!;
@@ -864,7 +864,7 @@ public sealed class CtlCommandTests
         Assert.DoesNotContain("(declared tool)", other);
         // `tool call builtin:<name> --help` names the commands instead of the tool ID.
         var help = SessionWait.Text((await Run(tools, "ctl", Args("tool call builtin:node --help"))).Response!["output"])!;
-        Assert.Contains("\nnode select <node-id> — ", help);
+        Assert.Contains("\nnode select [<node-id>] [options] — ", help);
         Assert.DoesNotContain("builtin:", help);
         Assert.Contains("declared tool", SessionWait.Text((await Run(tools, "ctl", Args("tool call builtin:task --help"))).Response!["output"])!);
     }

@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Hosted;
 using Foxwarm.Hosted.Postgres;
+using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Foxwarm.Storage;
 using Foxwarm.Tools;
@@ -36,7 +37,8 @@ public sealed partial class HostedAgentStoreTests
             JsonObject? extraApp = null,
             bool installedLayout = false,
             // The Agent metadata document before startup.
-            string? agents = null
+            string? agents = null,
+            Func<HostPaths, ModelConfiguration>? configuration = null
         )
         {
             var fixture = new StoreFixture();
@@ -63,7 +65,8 @@ public sealed partial class HostedAgentStoreTests
                 RuntimeCapabilities.Hosted,
                 extraApp: extraApp,
                 storage: storage,
-                installedLayout: installedLayout
+                installedLayout: installedLayout,
+                configuration: configuration
             );
             return fixture;
         }

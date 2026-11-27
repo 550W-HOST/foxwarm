@@ -111,10 +111,15 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
     }
 
     internal MainNativePaths Paths { get; private set; } = null!;
+
+    // Set for the Agent-folder file tools: paths are inside this Agent's folder only.
+    internal AgentFolderScope? AgentFolder { get; init; }
     internal Action<JsonArray>? ResolvedPaths { get; set; }
 
+    // Master files, and an Agent folder's files: its master files over folders, its own paths
+    // on `@agent` over a store.
     private void ReportPaths(params (string Raw, string Path)[] paths) =>
-        (targetFiles is null ? ResolvedPaths : null)?.Invoke(
+        (targetFiles is null || AgentFolder is not null ? ResolvedPaths : null)?.Invoke(
             new JsonArray(
                 paths
                     .Select(pair =>
@@ -122,8 +127,12 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                             new JsonObject
                             {
                                 ["raw"] = pair.Raw,
-                                ["resolved"] = pair.Path,
-                                ["nodeId"] = "master",
+                                ["resolved"] = AgentFolder is { } folder
+                                    ? folder.Store
+                                        ? AgentFolderPaths.Variable + (pair.Path.Length == 0 ? "" : "/" + pair.Path)
+                                        : folder.Physical(pair.Path)
+                                    : pair.Path,
+                                ["nodeId"] = AgentFolder is { Store: true } ? AgentStorePaths.Endpoint : "master",
                             }
                     )
                     .ToArray()
@@ -401,6 +410,8 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
 
     private string ResolveReadWrite(string path, bool read)
     {
+        if (AgentFolder is { } folder)
+            return folder.Resolve(path);
         if (targetFiles is null)
             return Paths.FilePath(path);
         TargetFileContent.RequirePath(path);

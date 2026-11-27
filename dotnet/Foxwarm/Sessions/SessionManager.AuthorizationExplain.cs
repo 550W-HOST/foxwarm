@@ -19,9 +19,12 @@ internal sealed partial class SessionManager
         SessionOwner caller,
         WorkspaceTools files,
         JsonObject args,
-        CancellationToken token
+        CancellationToken token,
+        WorkspaceTools? candidateFiles = null
     )
     {
+        // The candidate is a file of the Agent's folder where there is no master.
+        candidateFiles ??= files;
         ToolRegistry.Keys(args, ["probes", "policyFilePath", "compare", "compact"]);
         if (
             args["probes"] is not JsonArray probes
@@ -68,12 +71,16 @@ internal sealed partial class SessionManager
                     "explain_tool_authorization",
                     "node",
                     "read",
-                    new JsonObject { ["filePath"] = candidatePath }
-                ),
-                files,
+                    new JsonObject { ["filePath"] = candidatePath },
+                    ExecutionNode: candidateFiles.AgentFolder is { Store: true } ? AgentStorePaths.Endpoint : "master"
+                )
+                {
+                    AgentFolder = candidateFiles.AgentFolder is not null,
+                },
+                candidateFiles,
                 token
             );
-            var bytes = await files.CaptureConfigCandidateAsync(candidatePath, true, token);
+            var bytes = await candidateFiles.CaptureConfigCandidateAsync(candidatePath, true, token);
             try
             {
                 candidate = ToolAuthorizationYaml.Parse(bytes);
@@ -190,14 +197,16 @@ internal sealed partial class SessionManager
                     );
                 if (CtlParser.Parse(call) is CtlError error)
                     throw new InvalidDataException(error.Message);
-                resolved = tools.Resolve("ctl", call, CurrentNode(target));
+                resolved = tools.Route(tools.Resolve("ctl", call, CurrentNode(target)), CurrentNode(target), "ctl", call);
+                tools.RequireAvailable(resolved, CurrentNode(target), "ctl", call);
             }
             else
             {
                 // Resolve exactly as `tool call` would for this caller's current Node.
                 if (!call.ContainsKey("args") && !call.ContainsKey("argsJson"))
                     call["args"] = new JsonObject();
-                resolved = tools.Resolve("call_tool", call, CurrentNode(target));
+                resolved = tools.Route(tools.Resolve("call_tool", call, CurrentNode(target)), CurrentNode(target), "call_tool", call);
+                tools.RequireAvailable(resolved, CurrentNode(target), "call_tool", call);
             }
             if (SessionToolExecutor.IsCtlFrontEnd(resolved))
                 throw new InvalidDataException(
@@ -216,7 +225,8 @@ internal sealed partial class SessionManager
             var invocation = resolved.Command is { } command
                 ? "ctl " + command
                 : "ctl tool call";
-            var files = IdentityWorkspace(target);
+            // As dispatch does: an Agent-folder call's facts are the Agent folder's.
+            var files = resolved.AgentFolder ? AgentFolderWorkspace(target) : IdentityWorkspace(target);
             var explained = new List<(string Name, ExplainedVariant Variant)>();
             // The probe's own assessment inspects master paths as it always has; the record keeps
             // what it inspected, and the additions below may use only that.

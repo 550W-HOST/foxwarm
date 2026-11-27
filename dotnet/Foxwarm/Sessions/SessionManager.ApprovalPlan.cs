@@ -224,7 +224,7 @@ internal sealed partial class SessionManager
     // Stage A inputs: protected reads whose content decides facts of the call.
     private IReadOnlyList<PlannedCheck> InputChecks(ResolvedTool resolved, WorkspaceTools? files) =>
         CandidateInputPath(resolved, files) is { } path
-            ? [new("candidate-read", CandidateRead(path), files)]
+            ? [new("candidate-read", CandidateRead(path, files), files)]
             : [];
 
     // The set_config candidate of config or models, whose secret facts come from its content.
@@ -313,12 +313,19 @@ internal sealed partial class SessionManager
                 checks.Add(new(obligation.Id, request, files, DenyStops: false));
                 continue;
             }
-            checks.Add(new(obligation.Id, request, files, obligation.Optional));
+            checks.Add(new(obligation.Id, request, ObligationFiles(owner, request, files), obligation.Optional));
         }
         checks.AddRange(PromptFileChecks(owner, resolved));
         checks.AddRange(ConfigReadChecks(owner, resolved));
         return checks;
     }
+
+    // Each obligation is checked with the files of its own resource: an Agent-folder read with
+    // the folder's, a master read with the Session's, whatever the primary call uses.
+    private WorkspaceTools? ObligationFiles(SessionOwner owner, ResolvedTool request, WorkspaceTools? files) =>
+        request.AgentFolder ? AgentFolderWorkspace(owner)
+        : files?.AgentFolder is not null ? IdentityWorkspace(owner)
+        : files;
 
     private string? ProbedSession(string? reference)
     {

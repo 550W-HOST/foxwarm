@@ -11,11 +11,11 @@ internal static class FileDeliveryDefinitions
                 "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. If the copy outlasts timeout, it continues in the background and returns a transferId; a later event reports completion. Stop or Run queued ends the wait without cancelling the copy; use cancel_transfer to stop it.",
                 new JsonObject
                 {
-                    ["sourceNode"] = String("Node containing the source file."),
+                    ["sourceNode"] = String("Node containing the source file. `@agent` names this Agent's own folder, with paths relative to it."),
                     ["sourcePath"] = String(
                         "Source file path on sourceNode. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected."
                     ),
-                    ["targetNode"] = String("Node that will receive the file."),
+                    ["targetNode"] = String("Node that will receive the file. `@agent` names this Agent's own folder, with paths relative to it."),
                     ["targetPath"] = String(
                         "Destination file path on targetNode. Relative paths follow the same rule as sourcePath."
                     ),

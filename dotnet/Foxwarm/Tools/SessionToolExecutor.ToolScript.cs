@@ -23,8 +23,10 @@ internal sealed partial class SessionToolExecutor
         var descriptor = new JsonObject { ["source"] = resolved.Source, ["name"] = resolved.Name };
         if (resolved.Source == "mcp")
             descriptor["server"] = resolved.Server;
+        // An Agent-folder tool stays the endpoint's, on master too, where its ExecutionNode is
+        // master's.
         else if (resolved.Source == "node")
-            descriptor["nodeId"] = resolved.ExecutionNode;
+            descriptor["nodeId"] = resolved.AgentFolder ? AgentStorePaths.Endpoint : resolved.ExecutionNode;
         return descriptor;
     }
     internal bool Programmatic => scriptScope.Value is not null;

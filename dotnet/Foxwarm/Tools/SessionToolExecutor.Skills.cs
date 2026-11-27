@@ -41,6 +41,9 @@ internal sealed partial class SessionToolExecutor
         var node = named ? ToolRegistry.Text(args, "node")!.Trim() : ExecutionNode;
         if (node == "master")
             sessions.RequireMasterNode(current: !named);
+        // The Agent folder endpoint is copy's alone.
+        if (node == AgentStorePaths.Endpoint)
+            Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
         var overwrite = args["overwrite"] switch
         {
             null => false,

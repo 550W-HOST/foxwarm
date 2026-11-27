@@ -2050,7 +2050,7 @@
      }
     ],
     "incomplete": [
-     "node.select: node is not resolved (node-target)"
+     "node.select: node is not resolved (select-node)"
     ],
     "normalized": {
      "action": "select",
@@ -2135,6 +2135,77 @@
     "normalized": {
      "action": "select",
      "nodeId": "dev/box"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "node select --none on master",
+   "command": "node select --none",
+   "facts": {
+    "nodeTargets": [
+     "master"
+    ]
+   },
+   "context": {
+    "defaultCwdProbe": []
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "select",
+    "operations": [
+     {
+      "op": "node.select",
+      "resources": {
+       "node": "master"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "select",
+     "none": true
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "node select --none without master",
+   "command": "node select --none",
+   "facts": {
+    "nodeTargets": []
+   },
+   "context": {
+    "defaultCwdProbe": []
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "select",
+    "operations": [
+     {
+      "op": "node.select"
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "select",
+     "none": true
     },
     "evaluated": {
      "primary": "primary"

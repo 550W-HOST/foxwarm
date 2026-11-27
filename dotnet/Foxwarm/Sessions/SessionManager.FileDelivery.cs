@@ -41,6 +41,9 @@ internal sealed partial class SessionManager
             ToolRegistry.Text(args, "node"),
             selectedNode ?? CurrentNode(owner)
         );
+        // The Agent folder endpoint is copy's alone.
+        if (node == AgentStorePaths.Endpoint)
+            Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
             throw new InvalidDataException("send_file requires filePath.");

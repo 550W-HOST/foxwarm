@@ -28,10 +28,11 @@ public sealed partial class WorkspaceTools
             ? File.Exists(path)
             : (await TargetStatAsync(path, token)) is { Kind: not "directory" };
 
+    // An Agent folder reports other kinds; its regular files are files.
     private async Task<bool> RegularFileAsync(string path, CancellationToken token) =>
-        targetFiles is null
-            ? RegularFile(path)
-            : (await TargetStatAsync(path, token)) is { Kind: not "directory" };
+        targetFiles is null ? RegularFile(path)
+        : AgentFolder is not null ? (await TargetStatAsync(path, token)) is { Kind: "file" }
+        : (await TargetStatAsync(path, token)) is { Kind: not "directory" };
 
     private async Task<long> SizeAsync(string path, CancellationToken token) =>
         targetFiles is null
@@ -110,7 +111,9 @@ public sealed partial class WorkspaceTools
                 token
             );
         }
-        catch (NodeProviderException error) when (!overwrite && error.Code == "EEXIST")
+        // An existing directory refuses the write either way, as a physical writer does.
+        catch (NodeProviderException error)
+            when (error.Code == "EEXIST" && (!overwrite || AgentFolder is not null && error.Message.StartsWith("File already exists", StringComparison.Ordinal)))
         {
             return Error(
                 $"File already exists: {display}. Use overwrite=true to overwrite, or use edit to modify it."
@@ -121,13 +124,17 @@ public sealed partial class WorkspaceTools
             when (!createDirs && error.Code is "ENOENT" or "ENOTDIR")
         {
             var stat = await TargetStatAsync(parent, token);
+            // An Agent store's paths are shown as the Agent folder's.
+            var shown = AgentFolder is not null
+                ? AgentFolderPaths.Variable + (parent.Length == 0 ? "" : "/" + parent)
+                : parent;
             if (stat is null)
                 return Error(
-                    $"Parent directory does not exist: {parent}. write does not create parent directories by default. Retry with createDirs=true."
+                    $"Parent directory does not exist: {shown}. write does not create parent directories by default. Retry with createDirs=true."
                         + hint(true)
                 );
             if (stat.Kind != "directory")
-                return Error($"Parent path is not a directory: {parent}.");
+                return Error($"Parent path is not a directory: {shown}.");
             throw;
         }
         return null;

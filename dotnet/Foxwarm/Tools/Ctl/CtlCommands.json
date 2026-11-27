@@ -1799,7 +1799,7 @@
     },
     {
       "path": "node select",
-      "summary": "Select this Session's execution Node.",
+      "summary": "Select this Session's execution Node, or clear the selection with --none.",
       "ingress": [
         "model",
         "external",
@@ -1817,8 +1817,16 @@
           "name": "nodeId",
           "type": "string",
           "kind": "positional",
-          "help": "Node to select.",
-          "required": true
+          "help": "Node to select."
+        },
+        {
+          "name": "none",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Clear this Session's Node selection instead of naming a Node.",
+          "ingress": [
+            "model"
+          ]
         }
       ],
       "copy": {
@@ -2002,7 +2010,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Node containing the source file."
+          "help": "Node containing the source file. `@@agent` names this Agent's own folder, with paths relative to it."
         },
         {
           "name": "sourcePath",
@@ -2016,7 +2024,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Node that will receive the file."
+          "help": "Node that will receive the file. `@@agent` names this Agent's own folder, with paths relative to it."
         },
         {
           "name": "targetPath",
@@ -2307,7 +2315,7 @@
     {
       "path": "memory read",
       "summary": "Read a memory file.",
-      "help": "The file is in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Use memory-relative paths such as MEMORY.md or notes/project.md.",
+      "help": "The file is in this Agent's memory directory, or in the memory directory of the Agent named by `--agent`. Use memory-relative paths such as MEMORY.md or notes/project.md.",
       "ingress": [
         "model"
       ],
@@ -2347,7 +2355,7 @@
     {
       "path": "memory write",
       "summary": "Create a memory file.",
-      "help": "Creates the file in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Existing files are not overwritten; use `ctl memory edit` to modify one. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
+      "help": "Creates the file in this Agent's memory directory, or in the memory directory of the Agent named by `--agent`. Existing files are not overwritten; use `ctl memory edit` to modify one. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
       "ingress": [
         "model"
       ],
@@ -2382,7 +2390,7 @@
     {
       "path": "memory edit",
       "summary": "Replace one exact occurrence of text in a memory file.",
-      "help": "Edits the file in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
+      "help": "Edits the file in this Agent's memory directory, or in the memory directory of the Agent named by `--agent`. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
       "ingress": [
         "model"
       ],
@@ -2424,7 +2432,7 @@
     {
       "path": "memory delete",
       "summary": "Delete a memory file.",
-      "help": "Deletes the file from this Agent's memory directory on master, or from the memory directory of the Agent named by `--agent`.",
+      "help": "Deletes the file from this Agent's memory directory, or from the memory directory of the Agent named by `--agent`.",
       "ingress": [
         "model"
       ],
@@ -2452,7 +2460,7 @@
     {
       "path": "memory patch",
       "summary": "Change memory files with an apply_patch patch.",
-      "help": "Adds, modifies or deletes files in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
+      "help": "Adds, modifies or deletes files in this Agent's memory directory, or in the memory directory of the Agent named by `--agent`. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
       "ingress": [
         "model"
       ],
@@ -3770,7 +3778,7 @@
     },
     {
       "path": "config set",
-      "summary": "Install a complete YAML configuration from a file on master.",
+      "summary": "Install a complete YAML configuration from a file.",
       "help": "The candidate is validated before replacing the active file. The result identifies applied changes and settings that require a restart. Your current permissions must allow both this operation and reading the candidate file.",
       "ingress": [
         "model"
@@ -3797,14 +3805,14 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Path on master to the complete candidate YAML file. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected."
+          "help": "Path to the complete candidate YAML file. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected. `$fw_tmp` isn't available where there is no master."
         }
       ]
     },
     {
       "path": "config explain-auth",
       "summary": "Explain how tool authorization would decide a call, without running it.",
-      "help": "Each probe names the caller Session and either a command or a tool, as for `ctl tool call`. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. It also lists the operations the call would perform and the authorization checks it must pass, with each check's decision; parts decided only when the call runs are marked incomplete. Checks made inside the tool itself are not included. With --policy-file-path, a candidate file replaces the global policy; add --compare to evaluate both and list changed rule IDs. Add --compact for one short row per probe, which suits large batches. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
+      "help": "Each probe names the caller Session and either a command or a tool, as for `ctl tool call`. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. It also lists the operations the call would perform and the authorization checks it must pass, with each check's decision; parts decided only when the call runs are marked incomplete. Checks made inside the tool itself are not included. With --policy-file-path, a candidate file replaces the global policy; add --compare to evaluate both and list changed rule IDs. Add --compact for one short row per probe, which suits large batches. Requires permission to read the active policy and any candidate file; probing another Session also requires permission to view it.",
       "ingress": [
         "model"
       ],
@@ -3825,7 +3833,7 @@
           "name": "policyFilePath",
           "type": "string",
           "kind": "flag",
-          "help": "Path on master to a complete candidate tool-rules YAML that replaces the active global policy. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master."
+          "help": "Path to a complete candidate tool-rules YAML that replaces the active global policy. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. `$fw_tmp` isn't available where there is no master."
         },
         {
           "name": "compare",

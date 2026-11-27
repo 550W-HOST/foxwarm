@@ -378,7 +378,10 @@ internal sealed partial class MessageRouter
     private async Task NodeSelectAsync(UserCommand command)
     {
         var owner = await command.TargetAsync();
-        var selected = await runtime.Manager.SelectNodeAsync(owner, command.Text("nodeId")!);
+        var selected = await runtime.Manager.SelectNodeAsync(
+            owner,
+            command.Text("nodeId") ?? throw new UserCommandException("❌ Name a Node: /node <node-id>")
+        );
         await command.Reply(
             $"✅ Switched to node `{selected["nodeId"]}`\n\nAll file/exec/browser tools will now execute on this node."
         );

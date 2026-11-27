@@ -95,7 +95,18 @@ internal sealed partial class SessionManager
         }
         if (action == "select")
         {
-            ToolRegistry.Keys(args, ["action", "nodeId"]);
+            ToolRegistry.Keys(args, ["action", "nodeId", "none"]);
+            if (args["none"] is { } none)
+            {
+                if (none is not JsonValue value || !value.TryGetValue<bool>(out var clear))
+                    throw new InvalidDataException("none must be a boolean.");
+                if (clear)
+                {
+                    if (args.ContainsKey("nodeId"))
+                        throw new InvalidDataException("select takes either nodeId or none, not both.");
+                    return await ClearNodeSelectionAsync(owner, token);
+                }
+            }
             var id = RequiredNodeArgument(args, "nodeId", 193).Trim();
             return await SelectNodeAsync(owner, id, token);
         }

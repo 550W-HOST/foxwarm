@@ -44,7 +44,9 @@ internal static class TargetFileContent
         bool boundRequests = false
     )
     {
-        RequirePath(path);
+        // An Agent folder's paths are store keys, validated already; `$` is a literal there.
+        if (operations is not AgentStoreFileOperations)
+            RequirePath(path);
         var stat = await operations.StatAsync(path, token);
         if (stat.Kind == "directory" || requireRegular && stat.Kind != "file")
             throw new IOException("Source path is not a regular file.");
@@ -79,7 +81,9 @@ internal static class TargetFileContent
         CancellationToken token
     )
     {
-        RequirePath(path);
+        // An Agent folder's paths are store keys, validated already; `$` is a literal there.
+        if (operations is not AgentStoreFileOperations)
+            RequirePath(path);
         try
         {
             _ = await operations.StatAsync(path, token);
@@ -90,6 +94,11 @@ internal static class TargetFileContent
         }
         catch (Foxwarm.Nodes.NodeProviderException error) when (error.Code == "ENOENT") { }
         await operations.MakeDirectoryAsync(await operations.ParentAsync(path, token), token);
+        if (operations is IWholeTargetFileWrites whole)
+        {
+            await whole.WriteWholeAsync(path, bytes, overwrite, token);
+            return;
+        }
         // Empty files still have one initial create/replace operation. Later errors retain the prefix.
         await operations.WriteAsync(
             path,

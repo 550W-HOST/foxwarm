@@ -10,7 +10,7 @@ internal static class ToolAuthorizationToolDefinition
             ["type"] = "function",
             ["name"] = "set_config",
             ["description"] =
-                "Install a complete YAML configuration from a file on master. Choose config, models, or tool-rules. The candidate is validated before replacing the active file. The result identifies applied changes and settings that require a restart. Your current permissions must allow both this operation and reading the candidate file.",
+                "Install a complete YAML configuration from a file. Choose config, models, or tool-rules. The candidate is validated before replacing the active file. The result identifies applied changes and settings that require a restart. Your current permissions must allow both this operation and reading the candidate file.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -28,7 +28,7 @@ internal static class ToolAuthorizationToolDefinition
                     {
                         ["type"] = "string",
                         ["description"] =
-                            "Path on master to the complete candidate YAML file. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected.",
+                            "Path to the complete candidate YAML file. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected. `$fw_tmp` isn't available where there is no master.",
                     },
                 },
                 ["required"] = new JsonArray("target", "filePath"),
@@ -47,7 +47,7 @@ internal static class ToolAuthorizationToolDefinition
                 {
                   "type": "function",
                   "name": "explain_tool_authorization",
-                  "description": "Explain how tool authorization would decide a call by an existing Session, without running it. Each probe names the caller Session and either a ctl command or a tool, as for ctl tool call. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. It also lists the operations the call would perform and the authorization checks it must pass, with each check's decision; parts that are decided only when the call runs are marked incomplete. Checks made inside the tool itself are not included. With policyFilePath, a candidate file replaces the global policy; set compare to evaluate both and list changed rule ids. Set compact for one short row per probe, which suits large batches. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
+                  "description": "Explain how tool authorization would decide a call by an existing Session, without running it. Each probe names the caller Session and either a ctl command or a tool, as for ctl tool call. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. It also lists the operations the call would perform and the authorization checks it must pass, with each check's decision; parts that are decided only when the call runs are marked incomplete. Checks made inside the tool itself are not included. With policyFilePath, a candidate file replaces the global policy; set compare to evaluate both and list changed rule ids. Set compact for one short row per probe, which suits large batches. Requires permission to read the active policy and any candidate file; probing another Session also requires permission to view it.",
                   "parameters": {
                     "type": "object",
                     "additionalProperties": false,
@@ -79,7 +79,7 @@ internal static class ToolAuthorizationToolDefinition
                       },
                       "policyFilePath": {
                         "type": "string",
-                        "description": "Path on master to a complete candidate tool-rules YAML that replaces the active global policy. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master."
+                        "description": "Path to a complete candidate tool-rules YAML that replaces the active global policy. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. `$fw_tmp` isn't available where there is no master."
                       },
                       "compare": {
                         "type": "boolean",

@@ -56,6 +56,7 @@ internal sealed partial class SessionToolExecutor(
             : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
                 ? ArtifactFiles(resolved.ExecutionNode)
             : resolved.Name == "exec" ? ExecFiles
+            : resolved.AgentFolder ? AgentFolderFiles
             : Files;
         // This is the dispatch gate of the invocation's own call: only here may an ask outcome
         // become an approval request, for the call's inputs (stage A) and then for its whole
@@ -793,9 +794,13 @@ internal sealed partial class SessionToolExecutor(
                         current.Cwd,
                         current.Node
                     );
+                    current.AgentFolderFiles = sessions.AgentFolderWorkspace(hosted);
                 }
-                if (invocation.Value?.Files is { } files)
+                // The invocation's file tools, the Agent folder's included, carry its controls.
+                foreach (var files in new[] { invocation.Value?.Files, invocation.Value?.AgentFolderFiles })
                 {
+                    if (files is null)
+                        continue;
                     files.Programmatic = Programmatic;
                     files.ScriptBudget = ScriptBudget;
                     files.ResolvedPaths = paths =>
@@ -1098,6 +1103,26 @@ internal sealed partial class SessionToolExecutor(
             )
         )!.AsObject();
 
+    // This Session's Agent-folder file tools (`node:@agent/<tool>`).
+    private WorkspaceTools AgentFolderFiles =>
+        invocation.Value?.AgentFolderFiles ?? sessions.AgentFolderWorkspace(hosted);
+
+    // Where a configuration candidate is read: the Session's files on master, the Agent's folder
+    // where there is no master.
+    internal WorkspaceTools? CandidateFiles => sessions.Capabilities.MasterNode ? Files : AgentFolderFiles;
+
+    internal async Task<JsonObject> ExecuteAgentFolderAsync(
+        string name,
+        JsonObject args,
+        CancellationToken token
+    ) =>
+        (
+            await AgentFolderFiles.ExecuteAsync(
+                new JsonObject { ["name"] = name, ["args"] = args.DeepClone() },
+                token
+            )
+        ).AsObject();
+
     private async Task<JsonObject> ExecuteAgentAsync(
         string name,
         JsonObject args,
@@ -1380,7 +1405,7 @@ internal sealed partial class SessionToolExecutor(
         handlers["set_config"] = (owner, args, token) =>
             owner.Manager.InstallConfigAsync(
                 owner.Hosted,
-                owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
+                owner.CandidateFiles ?? throw new NotSupportedException("This executor has no file reader."),
                 args,
                 token
             );
@@ -1419,7 +1444,8 @@ internal sealed partial class SessionToolExecutor(
                 owner.Hosted,
                 owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
                 args,
-                token
+                token,
+                owner.CandidateFiles
             );
         handlers["node"] = (owner, args, token) =>
             owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
@@ -1525,6 +1551,7 @@ internal sealed class TurnToolInvocation(string callId)
     internal string? Cwd { get; set; }
     internal WorkspaceTools? Files { get; set; }
     internal WorkspaceTools? ExecFiles { get; set; }
+    internal WorkspaceTools? AgentFolderFiles { get; set; }
     internal ToolScriptSourcePlacement? ScriptSource { get; set; }
     internal JsonObject? Timing { get; set; }
     internal JsonArray? ResolvedPaths { get; set; }

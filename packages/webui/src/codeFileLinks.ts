@@ -84,6 +84,9 @@ export function resolveFileLink(href: string, base: CodeLinkBase | undefined): C
 
 type DisplayMeta = NonNullable<FunctionResponse['__meta']>
 
+/** `@agent` is the Agent's own folder as a file endpoint: no Node to open in Code or link from. */
+export const isAgentFolderNode = (nodeId: unknown): boolean => nodeId === '@agent'
+
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value : undefined
 
 /** An older native file call's own cwd: its resolved path minus its plain relative input. */
@@ -105,7 +108,8 @@ export function linkBaseAfter(response: FunctionResponse): CodeLinkBase | undefi
   const meta = response.__meta
   if (!meta) return undefined
   const target = meta.target
-  const targetNode = target?.source === 'node' ? text(target.node) : undefined
+  const named = target?.source === 'node' ? text(target.node) : undefined
+  const targetNode = isAgentFolderNode(named) ? undefined : named
   const placement = meta.placementAfter
   const placementNode = text(placement?.node)
   if (placementNode) {
@@ -116,11 +120,12 @@ export function linkBaseAfter(response: FunctionResponse): CodeLinkBase | undefi
   // Older history has no placement record; only Node-targeted calls name their Node, and
   // only the call's own metadata may supply a cwd.
   const exec = meta.exec
-  const nodeId = targetNode || text(exec?.nodeId) || text(meta.resolvedPaths?.[0]?.nodeId)
+  const receipts = meta.resolvedPaths?.filter(entry => !isAgentFolderNode(entry?.nodeId))
+  const nodeId = targetNode || text(exec?.nodeId) || text(receipts?.[0]?.nodeId)
   if (!nodeId) return undefined
   const cwd = exec && text(exec.nodeId) === nodeId
     ? text(exec.finalCwd) || text(exec.sessionCwd)
-    : resolvedPathCwd(meta.resolvedPaths?.filter(entry => entry?.nodeId === nodeId))
+    : resolvedPathCwd(receipts?.filter(entry => entry?.nodeId === nodeId))
   return { nodeId, ...(cwd ? { cwd } : {}) }
 }
 

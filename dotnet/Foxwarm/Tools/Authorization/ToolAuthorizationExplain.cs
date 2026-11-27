@@ -56,7 +56,7 @@ internal static class ToolAuthorizationExplain
         if (assessment.Self is { } self)
             result["self"] = self;
         result["layers"] = new JsonArray(
-            assessment.Layers.Select(layer => (JsonNode?)Layer(layer)).ToArray()
+            assessment.Layers.Select(layer => (JsonNode?)Layer(layer, assessment.Request)).ToArray()
         );
         result["facts"] = Facts(assessment.Request);
         return result;
@@ -163,7 +163,7 @@ internal static class ToolAuthorizationExplain
 
     // decision is the layer's outcome. rule (or default) is the call's own first match; with
     // secret facts, secrets shows how they were decided and decision is the stricter of the two.
-    internal static JsonObject Layer(AuthorizationLayerDecision layer)
+    internal static JsonObject Layer(AuthorizationLayerDecision layer, ToolAuthorizationRequest? request = null)
     {
         var result = new JsonObject
         {
@@ -172,6 +172,8 @@ internal static class ToolAuthorizationExplain
             ["allowed"] = layer.Decision.Allowed,
         };
         Matched(result, layer.Policy, (layer.Decision.Call ?? layer.Decision).Rule);
+        if (ThroughMasterAlias((layer.Decision.Call ?? layer.Decision).Rule, request))
+            result["masterAlias"] = true;
         if (layer.Decision.Secrets is { } secrets)
         {
             var detail = new JsonObject
@@ -199,7 +201,7 @@ internal static class ToolAuthorizationExplain
         }
         if (layer.Decision.Operations is { } operations)
             result["operations"] = new JsonArray(
-                operations.Select(item => (JsonNode?)Operation(layer.Policy, item)).ToArray()
+                operations.Select(item => (JsonNode?)Operation(layer.Policy, item, request)).ToArray()
             );
         if (layer.Decision.SecretNames is { } names)
             result["secretNames"] = new JsonArray(
@@ -220,12 +222,16 @@ internal static class ToolAuthorizationExplain
     // How one operation was decided in a layer with operation rules: its first matching rule
     // (or the default), the later rules that also match it, and whether it could not be
     // resolved.
-    private static JsonObject Operation(ToolAuthorizationPolicy policy, OperationDecision item)
+    private static JsonObject Operation(ToolAuthorizationPolicy policy, OperationDecision item, ToolAuthorizationRequest? request)
     {
         var result = item.Operation.ToJson();
         result["decision"] = AuthorizationDecision.Name(item.Effect);
         if (item.Rule is { } rule)
+        {
             result["rule"] = RuleRef(policy, rule);
+            if (request is not null && OperationThroughMasterAlias(rule, item.Operation, request))
+                result["masterAlias"] = true;
+        }
         else
         {
             result["rule"] = null;
@@ -258,6 +264,39 @@ internal static class ToolAuthorizationExplain
                 ["rule"] = fallback.Rule is { } exec ? RuleRef(policy, exec) : null,
             };
         return result;
+    }
+
+    // Whether a whole-call rule matched an `@agent` endpoint through the master alias: it
+    // matches the request, but not with the alias off.
+    internal static bool ThroughMasterAlias(JsonObject? rule, ToolAuthorizationRequest? request)
+    {
+        if (rule is null || request is null || OperationRules.IsOperationRule(rule))
+            return false;
+        var endpoint = AgentStorePaths.Endpoint;
+        if (
+            request.TargetNode != endpoint
+            && request.NodeTargets?.Contains(endpoint) != true
+            && !request.Paths.Any(path => path.Node == endpoint)
+        )
+            return false;
+        return ToolAuthorizationEvaluation.LegacyRuleMatches(rule, request)
+            && !ToolAuthorizationEvaluation.WithoutMasterAlias(() => ToolAuthorizationEvaluation.LegacyRuleMatches(rule, request));
+    }
+
+    // Whether an operation's winning rule matched it through the master alias: re-evaluated by
+    // the rule's own evaluator (operation or whole-call), it matches with the alias and doesn't
+    // without it. An undecidable match is never marked: it isn't a match the alias made.
+    internal static bool OperationThroughMasterAlias(JsonObject rule, AuthorizationOperation operation, ToolAuthorizationRequest request)
+    {
+        if (!OperationRules.IsOperationRule(rule))
+            return ToolAuthorizationEvaluation.MatchesCall(rule, request)
+                && !ToolAuthorizationEvaluation.WithoutMasterAlias(() => ToolAuthorizationEvaluation.MatchesCall(rule, request));
+        if (SessionWait.Text(operation.Resources["node"]) != AgentStorePaths.Endpoint)
+            return false;
+        var restrictive = SessionWait.Text(rule["action"]) is "deny" or "ask";
+        return OperationRules.Match(rule, operation, request, restrictive) == OperationMatch.Yes
+            && ToolAuthorizationEvaluation.WithoutMasterAlias(() => OperationRules.Match(rule, operation, request, restrictive))
+                == OperationMatch.No;
     }
 
     private static void Matched(JsonObject result, ToolAuthorizationPolicy policy, JsonObject? rule)

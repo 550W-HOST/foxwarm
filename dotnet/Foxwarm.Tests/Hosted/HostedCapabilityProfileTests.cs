@@ -34,7 +34,9 @@ public sealed class HostedCapabilityProfileTests
             Func<string, Foxwarm.Storage.IStorageContext>? storage = null,
             // The installed layout (Agent folders under the data root, main among them), as a
             // host's paths give it; otherwise the retained layout with main as the workspace.
-            bool installedLayout = false
+            bool installedLayout = false,
+            // The configuration owner over the host's paths; null is the files'.
+            Func<HostPaths, ModelConfiguration>? configuration = null
         )
         {
             var f = new Fixture();
@@ -72,7 +74,7 @@ public sealed class HostedCapabilityProfileTests
                 "default: local/wire\nproviders:\n  local:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    models: [wire]\n"
             );
             var paths = HostPaths.ForDataRoot(f.Data, f.Temp.Path, environment: _ => null);
-            var configuration = new ModelConfiguration(paths);
+            var models = configuration?.Invoke(paths) ?? new ModelConfiguration(paths);
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
                 "wire",
@@ -85,7 +87,7 @@ public sealed class HostedCapabilityProfileTests
                 f.Data,
                 f.Work,
                 options,
-                new HostModels(configuration),
+                new HostModels(models),
                 f.Skills,
                 storage: storage?.Invoke(f.Data),
                 capabilities: capabilities,
@@ -233,13 +235,17 @@ public sealed class HostedCapabilityProfileTests
             ("send_file", new() { ["node"] = "master", ["filePath"] = f.Marker }),
             ("node_bootstrap_info", new() { ["filePath"] = outside }),
             ("node_create_auth_token", new() { ["nodeId"] = "paired", ["filePath"] = outside }),
-            ("set_config", new() { ["target"] = "config", ["filePath"] = f.Marker }),
         };
         foreach (var (name, args) in calls)
         {
             var error = Error(await f.Call(name, args));
             Assert.True(error == "Node is not available: master", $"{name} {args.ToJsonString()}: {error}");
         }
+        // A configuration candidate is a file of the Agent folder there, never a master path.
+        Assert.Equal(
+            $"`@agent` reaches only this Agent's own folder: {f.Marker}.",
+            Error(await f.Call("set_config", new() { ["target"] = "config", ["filePath"] = f.Marker }))
+        );
         // A move from configuration has nothing that could authorize it.
         var move = await f.Call(
             "add_secret",

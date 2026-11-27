@@ -19,6 +19,9 @@ internal sealed record AgentFileEntry(
 /// content for conditional writes and is 0 for directories; a file's generation changes
 /// whenever its content does.
 /// </summary>
+/// <summary>An entry's kind (file, directory, or other), length and time, without its generation.</summary>
+internal sealed record AgentFileKind(string Kind, long Length, DateTime LastWriteUtc);
+
 internal sealed record AgentFileStat(
     string Path,
     bool IsDirectory,
@@ -63,7 +66,21 @@ internal interface IAgentFileStore
     /// <summary>The file or directory at <paramref name="path"/>, or null when there is none.</summary>
     AgentFileStat? Stat(string? agent, string path);
 
+    /// <summary>
+    /// The kind, length and time of the entry at <paramref name="path"/>, or null when there is
+    /// none, without reading its content: what a listing, an existence check or a read's
+    /// preflight needs.
+    /// </summary>
+    AgentFileKind? Kind(string? agent, string path) =>
+        Stat(agent, path) is { } stat ? new(stat.IsDirectory ? "directory" : "file", stat.Length, stat.LastWriteUtc) : null;
+
     Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token);
+
+    /// <summary>
+    /// One version of a file, or null when that version is larger than
+    /// <paramref name="maxBytes"/>; a larger version is never materialized.
+    /// </summary>
+    Task<AgentFileContent?> ReadBoundedAsync(string? agent, string path, long maxBytes, CancellationToken token);
 
     /// <summary>
     /// Up to <paramref name="count"/> bytes of a file from <paramref name="offset"/>, without
@@ -313,7 +330,8 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
                     entry is DirectoryInfo,
                     link,
                     file?.Length,
-                    file?.LastWriteTimeUtc
+                    // A link's own time, as a listing shows it.
+                    link ? entry.LastWriteTimeUtc : file?.LastWriteTimeUtc
                 );
             })
             .OrderBy(entry => entry.Name, StringComparer.Ordinal)
@@ -329,6 +347,8 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
         if (!File.Exists(full))
             return null;
         var info = new FileInfo(full);
+        if (!Foxwarm.Tools.WorkspaceTools.RegularFile(full))
+            throw new IOException("Not a regular file: " + path);
         return new(
             path,
             false,
@@ -338,7 +358,21 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
         );
     }
 
-    public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token)
+    // Kind and length from the file system's metadata; content is never read.
+    public AgentFileKind? Kind(string? agent, string path)
+    {
+        AgentFilePaths.Require(path, allowRoot: true);
+        var full = Resolve(agent, path, lookup: true);
+        if (System.IO.Directory.Exists(full))
+            return new("directory", 0, System.IO.Directory.GetLastWriteTimeUtc(full));
+        if (!File.Exists(full))
+            return null;
+        var info = new FileInfo(full);
+        return new(Foxwarm.Tools.WorkspaceTools.RegularFile(full) ? "file" : "other", info.Length, info.LastWriteTimeUtc);
+    }
+
+    // An open regular file: content is read from the opened file only.
+    private FileStream OpenRegular(string? agent, string path)
     {
         AgentFilePaths.Require(path);
         var full = Resolve(agent, path, lookup: true);
@@ -346,19 +380,41 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
             throw AgentFileErrors.IsDirectory(path);
         if (!File.Exists(full))
             throw AgentFileErrors.NotFound(path);
-        var bytes = await File.ReadAllBytesAsync(full, token).ConfigureAwait(false);
+        if (!Foxwarm.Tools.WorkspaceTools.RegularFile(full))
+            throw new IOException("Not a regular file: " + path);
+        var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.Asynchronous);
+        if (!Foxwarm.Tools.WorkspaceTools.RegularFileHandle(stream, full))
+        {
+            stream.Dispose();
+            throw new IOException("Not a regular file: " + path);
+        }
+        return stream;
+    }
+
+    public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token) =>
+        (await ReadBoundedAsync(agent, path, long.MaxValue, token).ConfigureAwait(false))!;
+
+    public async Task<AgentFileContent?> ReadBoundedAsync(string? agent, string path, long maxBytes, CancellationToken token)
+    {
+        await using var stream = OpenRegular(agent, path);
+        if (stream.Length > maxBytes)
+            return null;
+        using var buffer = new MemoryStream();
+        var chunk = new byte[65536];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, token).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > maxBytes)
+                return null;
+            buffer.Write(chunk, 0, read);
+        }
+        var bytes = buffer.ToArray();
         return new(bytes, AgentFileErrors.ContentGeneration(bytes));
     }
 
     public async Task<byte[]> ReadRangeAsync(string? agent, string path, long offset, int count, CancellationToken token)
     {
-        AgentFilePaths.Require(path);
-        var full = Resolve(agent, path, lookup: true);
-        if (System.IO.Directory.Exists(full))
-            throw AgentFileErrors.IsDirectory(path);
-        if (!File.Exists(full))
-            throw AgentFileErrors.NotFound(path);
-        await using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        await using var stream = OpenRegular(agent, path);
         return await AgentFileErrors.ReadRangeAsync(stream, offset, count, token).ConfigureAwait(false);
     }
 
@@ -504,6 +560,12 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
         );
     }
 
+    /// <summary>
+    /// The physical path of a store path of an Agent, under the same confinement as every
+    /// write here: no existing component below the Agent's directory may be a link.
+    /// </summary>
+    internal string ConfinedPath(string agent, string path) => Resolve(agent, AgentFilePaths.Require(path, allowRoot: true));
+
     // The physical path of a store path. The Agent's directory must exist, and no existing
     // component below it may be a symbolic link, so a write can't leave the directory.
     private string Resolve(string? agent, string path, bool lookup = false)
@@ -567,6 +629,8 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
         }
         if (expected == 0)
             throw AgentFileErrors.Exists(path);
+        if (!Foxwarm.Tools.WorkspaceTools.RegularFile(full))
+            throw AgentFileErrors.Changed(path);
         var current = AgentFileErrors.ContentGeneration(
             await File.ReadAllBytesAsync(full, token).ConfigureAwait(false)
         );

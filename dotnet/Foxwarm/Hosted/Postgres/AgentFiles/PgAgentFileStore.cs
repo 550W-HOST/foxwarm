@@ -186,9 +186,15 @@ internal sealed class PgAgentFileStore : IAgentStore
         return bytes;
     }
 
-    public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token)
+    public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token) =>
+        (await ReadBoundedAsync(agent, path, long.MaxValue, token).ConfigureAwait(false))!;
+
+    // One row: its content is fetched only when its size is within the bound.
+    public async Task<AgentFileContent?> ReadBoundedAsync(string? agent, string path, long maxBytes, CancellationToken token)
     {
-        var row = await LookupAsync(agent, path, token).ConfigureAwait(false);
+        var row = await LookupAsync(agent, path, token, maxBytes).ConfigureAwait(false);
+        if (row.Size > maxBytes)
+            return null;
         var bytes = row.Inline ?? await blobs.ReadAllAsync(row.BlobKey!, token).ConfigureAwait(false);
         if (bytes.Length != row.Size || !SHA256.HashData(bytes).AsSpan().SequenceEqual(row.Sha256))
             throw new IOException("Stored content of " + path + " doesn't match its digest.");
@@ -196,7 +202,7 @@ internal sealed class PgAgentFileStore : IAgentStore
     }
 
     // The file row at a path; a directory or a missing path fails as a file read does.
-    private async Task<Row> LookupAsync(string? agent, string path, CancellationToken token)
+    private async Task<Row> LookupAsync(string? agent, string path, CancellationToken token, long maxBytes = long.MaxValue)
     {
         AgentFilePaths.Require(path);
         var key = Key(agent);
@@ -205,10 +211,11 @@ internal sealed class PgAgentFileStore : IAgentStore
                 async (tx, cancel) =>
                 {
                     await using var command = tx.Command(
-                        "SELECT kind, generation, size, sha256, inline, blob_key FROM agent_files"
+                        "SELECT kind, generation, size, sha256, CASE WHEN size <= $3 THEN inline END, blob_key FROM agent_files"
                             + " WHERE agent = $1 AND path = $2",
                         key,
-                        path
+                        path,
+                        maxBytes
                     );
                     await using var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false);
                     if (!await reader.ReadAsync(cancel).ConfigureAwait(false))
