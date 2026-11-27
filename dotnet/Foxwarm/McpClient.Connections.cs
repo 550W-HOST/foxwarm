@@ -188,15 +188,16 @@ internal sealed partial class McpClient
         {
             cancelled = true;
             // A connection that failed to open invalidates its entry too; its own failure is
-            // the reason, whichever the wait observed first.
+            // the reason, whichever the wait observed first. An initialization cancelled because
+            // the entry was invalidated is the invalidation, reported below.
             if (
                 entry.Token.IsCancellationRequested
                 && !token.IsCancellationRequested
                 && entry.Connected.Task is { IsFaulted: true } failed
+                && failed.Exception!.InnerException is { } fault
+                && fault is not OperationCanceledException
             )
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(
-                    failed.Exception!.InnerException!
-                );
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(fault);
             if (entry.Token.IsCancellationRequested && !token.IsCancellationRequested)
                 throw new InvalidOperationException(
                     "MCP connection was invalidated; started effects may have occurred and were not reversed."

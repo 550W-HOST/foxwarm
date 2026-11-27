@@ -219,7 +219,10 @@ public sealed class OutboundMcpLifecycleTests
         await peer.WaitAsync("blocked-initialize");
         await f.ConfigureAsync(peer.Url + "/mcp");
         await peer.ReleaseAsync("initialize");
-        Assert.NotNull((await initializing.WaitAsync(TimeSpan.FromSeconds(10)))!["error"]);
+        // The initializer was cancelled by the invalidation, which is what the caller learns.
+        var error = (await initializing.WaitAsync(TimeSpan.FromSeconds(10)))!["error"];
+        Assert.NotNull(error);
+        Assert.Contains("MCP connection was invalidated", error!.ToJsonString());
         var current = Id(await f.CallAsync(f.First, "probe"));
         Assert.Equal(current, Id(await f.CallAsync(f.First, "probe")));
         Assert.Single(
