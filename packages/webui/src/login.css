@@ -46,3 +46,9 @@ body[data-state=success] .login-shell { opacity: 0; transition: opacity 180ms ea
 @media (max-height: 480px) and (min-width: 701px) { .login-shell { padding: 0; } .login-art { width: 180px; height: 180px; } .login-art > svg { width: 152px; height: 152px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (forced-colors: active) { .login-ambient { display: none; } .login-token-field { border-color: ButtonText; background: Field; color: FieldText; } .login-submit { background: Highlight; color: HighlightText; border: 1px solid ButtonText; } .login-art .fw-fox { --fw-fox-ink: LinkText; } }
+
+#saveToken { display: grid; gap: 1rem; }
+#saveToken[hidden], #loginForm[hidden] { display: none; }
+#issuedToken { min-width: 0; width: 100%; min-height: 44px; padding: .5rem; color: var(--foxwarm-color-text-strong); background: var(--foxwarm-color-surface); border: 1px solid var(--foxwarm-color-border); border-radius: 7px; }
+#saveToken button { min-height: 44px; padding: .6rem 1rem; border-radius: 7px; }
+#saveToken h2, #saveToken p, #saveToken label { margin: 0; }

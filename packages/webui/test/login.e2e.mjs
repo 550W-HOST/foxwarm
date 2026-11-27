@@ -34,7 +34,7 @@ before(async () => {
       if (held) await held
       if (disconnect) { res.destroy(); return }
       res.writeHead(status, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ role: 'admin' })); return
+      res.end(JSON.stringify(JSON.parse(body).token === 'setup-test-token' ? { success: true, instanceToken: 'returned-tenant-token' } : { role: 'admin' })); return
     }
     if (req.url.split('?')[0].endsWith('/login.html')) { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(html); return }
     if (req.url === '/nested/') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<h1>Signed in</h1>'); return }
@@ -81,7 +81,7 @@ test('standalone login has real fox artwork, inherited light/dark themes and usa
       assert.equal(await page.$eval('html', root => root.dataset.foxwarmThemeMode), options.mode || 'light')
       assert.equal(await page.$eval('input', input => getComputedStyle(input).fontSize), '16px')
       const geometry = await page.evaluate(() => {
-        const controls = [...document.querySelectorAll('input,button')].map(el => el.getBoundingClientRect())
+        const controls = [...document.querySelectorAll('#loginForm input,#loginForm button')].map(el => el.getBoundingClientRect())
         const h = document.querySelector('h1').getBoundingClientRect(), body = document.body.getBoundingClientRect()
         return { overflow: document.documentElement.scrollWidth > innerWidth, controls: controls.every(r => r.width >= 44 && r.height >= 44 && r.left >= 0 && r.right <= innerWidth), top: h.top >= 0 && body.top >= 0 }
       })
@@ -136,6 +136,25 @@ test('pending authentication prevents duplicate submits, persists the scoped tok
     assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), 'demo-admin-token')
     assert.ok((await context.cookies()).some(cookie => cookie.name === 'foxwarm_token' && cookie.path === '/nested/' && cookie.sameSite === 'Lax'))
   } finally { release(); held = null; await context.close() }
+})
+
+test('a redeemed setup token is replaced and the access token is shown before navigation', async () => {
+  const { context, page } = await pageFor()
+  try {
+    await context.overridePermissions(origin, ['clipboard-read', 'clipboard-write'])
+    await page.goto(`${origin}/nested/login.html`)
+    await page.type('#token', 'setup-test-token')
+    await page.click('#submit')
+    await page.waitForSelector('#saveToken:not([hidden])')
+    assert.equal(await page.$eval('.login-shell', el => getComputedStyle(el).opacity), '1')
+    assert.equal(await page.$eval('#issuedToken', el => el.value), 'returned-tenant-token')
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), 'returned-tenant-token')
+    assert.equal((await context.cookies()).find(c => c.name === 'foxwarm_token').value, 'returned-tenant-token')
+    await page.click('#copyToken')
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'returned-tenant-token')
+    await page.click('#continue')
+    await page.waitForFunction(() => location.pathname === '/nested/')
+  } finally { await context.close() }
 })
 
 test('hash login clears credentials from history and malformed fragments leave the form usable', async () => {
