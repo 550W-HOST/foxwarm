@@ -191,7 +191,7 @@ public sealed class HostedResponsesWsImageTests
         var catalog = HostModels.Parse(document, new JsonObject());
         using var http = new HttpClient();
         var images = new ImageBlobStore(temp.Path);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(peer.Uri, "wire", "unused", "", "", 1000),
             new ModelRouting(),

@@ -8,6 +8,9 @@ internal sealed class ModelRequestOwner(
     HttpClient http,
     ResponsesClientOptions defaults,
     ModelRouting routing,
+    // The runtime's egress policy for HTTP model requests; file mode passes
+    // EgressPolicy.Unguarded. The WebSocket transport carries the same runtime's policy.
+    Foxwarm.Net.EgressPolicy egress,
     Func<int, CancellationToken, Task>? delay = null,
     ResponsesWsTransport? websockets = null,
     Foxwarm.Images.ImageBlobStore? images = null,
@@ -483,9 +486,7 @@ internal sealed class ModelRequestOwner(
                     leaf,
                     options,
                     providerCache,
-                    // Every product owner passes its runtime's transport; an owner built
-                    // without one (unit tests) is file mode's.
-                    websockets?.Egress ?? Foxwarm.Net.EgressPolicy.Unguarded,
+                    egress,
                     progress,
                     websockets,
                     scope

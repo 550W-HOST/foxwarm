@@ -138,7 +138,7 @@ public sealed class HttpErrorClassificationTests
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var retries = new List<ModelRetryEvent>();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 713),
             new ModelRouting(),

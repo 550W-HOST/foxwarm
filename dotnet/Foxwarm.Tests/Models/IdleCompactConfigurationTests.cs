@@ -103,7 +103,7 @@ public sealed class IdleCompactConfigurationTests
         var catalog = HostModels.Parse(root, new JsonObject());
         var routing = new ModelRouting(() => 0);
         using var http = new HttpClient();
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             new(new Uri("http://localhost"), "wire", "a", "", "", 1000),
             routing
@@ -142,7 +142,7 @@ public sealed class IdleCompactConfigurationTests
         var request = routing.Begin("route", catalog.Resolve("route"));
         routing.Failed(request, routing.Select(request, "cache"));
         using var http = new HttpClient();
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             new(new Uri("http://localhost"), "wire", "a", "", "", 1000),
             routing

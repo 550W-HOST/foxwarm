@@ -168,7 +168,7 @@ public abstract class TextRedactionStoreContractTests
         InstanceSecrets secrets,
         params JsonObject[] history
     ) =>
-        new ModelRequestOwner(
+        TestModelOwners.Create(
             http,
             new(provider, "m", "p/m", "", "", 100),
             new(),

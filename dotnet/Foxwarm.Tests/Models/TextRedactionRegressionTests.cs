@@ -162,7 +162,7 @@ public sealed class TextRedactionRegressionTests
             },
             new()
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(peer.BaseUri, "m", "p/m", "", "", 100),
             new(),
@@ -579,7 +579,7 @@ public sealed class TextRedactionRegressionTests
             );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(failing.BaseUri, "m", "p", "", "", 100),
             new(),
@@ -659,7 +659,7 @@ public sealed class TextRedactionRegressionTests
             new()
         );
         Task<ChatResult> Request(string purpose) =>
-            new ModelRequestOwner(
+            TestModelOwners.Create(
                 http,
                 new(peer.BaseUri, "m", "p/m", "", "", 100),
                 new(),

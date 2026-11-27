@@ -1272,7 +1272,7 @@ public sealed partial class CompactLifecycleTests
             var skills = new Skills(agents, Path.Combine(temp.Path, "skills"));
             var memory = new AgentMemory(agents, skills);
             Owner = new SessionOwner("s", "main", models) { Archive = Store.Archive };
-            var requests = new ModelRequestOwner(
+            var requests = TestModelOwners.Create(
                 http,
                 options,
                 new ModelRouting(),

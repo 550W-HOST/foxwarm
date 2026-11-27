@@ -104,7 +104,7 @@ public sealed class ModelBehaviorOptionsTests
         if (providerType != "anthropic")
             document["providers"]!["p"]!.AsObject().Remove("extraFields");
         await configuration.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() });
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             new(peer.Uri, "fallback", "fallback", "", "", 1000),
             new ModelRouting(),
@@ -186,7 +186,7 @@ public sealed class ModelBehaviorOptionsTests
                 .AsObject(),
             new JsonObject()
         );
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             new(new Uri("http://localhost"), "fallback", "fallback", "", "", 1000),
             new ModelRouting(),

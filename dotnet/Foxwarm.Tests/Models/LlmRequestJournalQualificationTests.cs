@@ -34,7 +34,7 @@ public sealed class LlmRequestJournalQualificationTests
                 "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"
             )
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             new ResponsesClientOptions(
                 new Uri("http://localhost"),
@@ -78,7 +78,7 @@ public sealed class LlmRequestJournalQualificationTests
         {
             using var journal = new LlmRequestJournalStore(root);
             using var client = new HttpClient(new CountingHandler(() => calls++));
-            var owner = new ModelRequestOwner(
+            var owner = TestModelOwners.Create(
                 client,
                 new ResponsesClientOptions(
                     new Uri("http://localhost"),
@@ -128,7 +128,7 @@ public sealed class LlmRequestJournalQualificationTests
             using var journal = new LlmRequestJournalStore(root);
             var recorder = new RecordingHandler();
             using var client = new HttpClient(recorder);
-            var owner = new ModelRequestOwner(
+            var owner = TestModelOwners.Create(
                 client,
                 new ResponsesClientOptions(
                     new Uri("http://localhost"),
@@ -199,7 +199,7 @@ public sealed class LlmRequestJournalQualificationTests
         using var journal = new LlmRequestJournalStore(temp.Path);
         var recorder = new RecordingHandler();
         using var client = new HttpClient(recorder);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             new ResponsesClientOptions(
                 new Uri("http://localhost"),
@@ -307,7 +307,7 @@ public sealed class LlmRequestJournalQualificationTests
                     "{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}"
                 )
             );
-            var owner = new ModelRequestOwner(
+            var owner = TestModelOwners.Create(
                 client,
                 new ResponsesClientOptions(
                     new Uri("http://localhost"),
@@ -388,7 +388,7 @@ public sealed class LlmRequestJournalQualificationTests
             RetryHandler.Calls = 0;
             using var journal = new LlmRequestJournalStore(root);
             using var client = new HttpClient(new RetryHandler());
-            var owner = new ModelRequestOwner(
+            var owner = TestModelOwners.Create(
                 client,
                 new ResponsesClientOptions(
                     new Uri("http://localhost"),
@@ -469,7 +469,7 @@ public sealed class LlmRequestJournalQualificationTests
             using var client = new HttpClient(
                 new DisposeJournalHandler(() => calls++, journal.Dispose)
             );
-            var owner = new ModelRequestOwner(
+            var owner = TestModelOwners.Create(
                 client,
                 new ResponsesClientOptions(
                     new Uri("http://localhost"),

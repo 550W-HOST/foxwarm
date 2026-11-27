@@ -489,7 +489,7 @@ public sealed class HostedResponsesToolsTests
                 .AsObject(),
             new JsonObject()
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(new Uri("http://localhost"), "m", "a/m", "", "", 1000),
             new ModelRouting(),

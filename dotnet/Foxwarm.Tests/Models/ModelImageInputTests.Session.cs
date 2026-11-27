@@ -131,7 +131,7 @@ public sealed partial class ModelImageInputTests
         var agents = new AgentCatalog(temp.Path, temp.Path);
         var defaults = new ResponsesClientOptions(uri, "m", "text/m", "synthetic", "", 1000);
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             defaults,
             new ModelRouting(),

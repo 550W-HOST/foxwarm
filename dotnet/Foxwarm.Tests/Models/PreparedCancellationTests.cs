@@ -398,7 +398,7 @@ public sealed class PreparedCancellationTests(Xunit.Abstractions.ITestOutputHelp
         new(new Uri("http://localhost"), "m", "a/m", "", "", 50);
 
     private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) =>
-        new(http, Defaults(), new ModelRouting(), (_, _) => Task.CompletedTask, journal: journal);
+        TestModelOwners.Create(http, Defaults(), new ModelRouting(), (_, _) => Task.CompletedTask, journal: journal);
 
     private static IReadOnlyList<JsonObject> History() =>
         [

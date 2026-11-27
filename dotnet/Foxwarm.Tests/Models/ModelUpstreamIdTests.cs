@@ -192,7 +192,7 @@ public sealed class ModelUpstreamIdTests
         using var http = new HttpClient();
         using var journal = new LlmRequestJournalStore(temp.Path);
         var catalog = HostModels.Parse(Document(uri, protocol, compatible), new JsonObject());
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             new(uri, "fallback", "fallback", "", "", 1000),
             new ModelRouting(),
@@ -312,7 +312,7 @@ public sealed class ModelUpstreamIdTests
         second.Remove("imageGeneration");
         second["maxOutput"] = 111;
         var catalog = HostModels.Parse(document, new JsonObject());
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             new(peer.Uri, "unused", "unused", "", "", 1000),
             new ModelRouting(),

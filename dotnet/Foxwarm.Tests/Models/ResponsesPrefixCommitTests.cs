@@ -675,7 +675,7 @@ public sealed partial class ResponsesPrefixCommitTests
             Secrets = new(Path.Combine(temp.Path, "instance"));
             Hosted = new("s", "main", catalog);
             var agents = new AgentCatalog(temp.Path, Path.Combine(temp.Path, "work"));
-            var requests = new ModelRequestOwner(
+            var requests = TestModelOwners.Create(
                 http,
                 defaults,
                 new ModelRouting(),

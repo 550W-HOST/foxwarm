@@ -50,7 +50,7 @@ public sealed class RequestSizeDiagnosticsTests
                 ["parts"] = new JsonArray(new JsonObject { ["text"] = "current request" }),
             },
         };
-        var owner = new ModelRequestOwner(http, options, new ModelRouting());
+        var owner = TestModelOwners.Create(http, options, new ModelRouting());
         ModelRetryEvent? notice = null;
         var error = await Assert.ThrowsAsync<ModelRequestException>(() =>
             owner.RequestAsync(

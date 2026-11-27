@@ -210,7 +210,7 @@ public sealed partial class TextRedactionTests
         using var journal = new LlmRequestJournalStore(temp.Path);
         using var keys = new TextRedactionKeys();
         string? requestId = null;
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100),
             routing,
@@ -277,7 +277,7 @@ public sealed partial class TextRedactionTests
         using var stop = new CancellationTokenSource();
         var catalog = Catalog(detector.Endpoint, new("http://127.0.0.1:1"));
         using var keys = new TextRedactionKeys();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100),
             new(),

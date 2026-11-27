@@ -429,7 +429,7 @@ public sealed class EffectiveSelectionTests
         );
         using var http = new HttpClient();
         var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a", "", "", 713);
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             options,
             new ModelRouting(),

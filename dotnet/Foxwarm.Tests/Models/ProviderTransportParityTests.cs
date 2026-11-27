@@ -82,7 +82,7 @@ public sealed class ProviderTransportParityTests
                 )
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
-        var owner = new ModelRequestOwner(http, Options(peer.BaseUri), new ModelRouting());
+        var owner = TestModelOwners.Create(http, Options(peer.BaseUri), new ModelRouting());
         var catalog = Catalog(peer.BaseUri);
         await Request(owner, catalog, "a/wire");
         await Request(owner, catalog, "b/wire");

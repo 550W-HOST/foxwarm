@@ -364,7 +364,7 @@ public sealed partial class LlmFailureStateTests
             Models = HostModels.ForTest(options);
             Owner = new SessionOwner("s", "main", Models) { Archive = Store.Archive };
             http = new HttpClient(new Peer(this));
-            Requests = new ModelRequestOwner(
+            Requests = TestModelOwners.Create(
                 http,
                 options,
                 new ModelRouting(),

@@ -271,7 +271,7 @@ public sealed class ModelDefaultsTests
                 };
             })
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(new Uri("http://localhost"), "m", "a/m", "", "", 999),
             new ModelRouting(),

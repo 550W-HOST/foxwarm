@@ -130,7 +130,7 @@ public sealed class TextRedactionKnownLabelsTests
             }
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(provider.BaseUri, "m", "p/m", "", "", 100),
             new(),

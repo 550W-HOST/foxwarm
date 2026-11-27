@@ -227,7 +227,7 @@ public sealed class TextRedactionProtocolsTests
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(peer.BaseUri, "m", "p/m", "", "", 100, tools),
             new(),

@@ -53,7 +53,7 @@ public sealed class ResponsesWsTests
             new JsonObject()
         );
         using var http = new HttpClient();
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             Options(peer.Uri),
             new ModelRouting(),

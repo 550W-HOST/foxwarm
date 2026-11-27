@@ -59,7 +59,7 @@ public sealed class ResponsesParityTests
         );
         using var handler = new Handler(SummaryStream());
         using var http = new HttpClient(handler);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new ResponsesClientOptions(new Uri("http://127.0.0.1:1/v1"), "m", "p/m", "", "", 100),
             new ModelRouting()

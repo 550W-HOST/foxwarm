@@ -197,7 +197,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         var catalog = Route(p.BaseUri, q.BaseUri, detector.Endpoint, null, 1);
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(p.BaseUri, "m", "p", "", "", 100),
             new(),
@@ -255,7 +255,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         using var keys = new TextRedactionKeys(allLabels: true);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(p.BaseUri, "m", "p", "", "", 100),
             new(),
@@ -648,7 +648,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             },
             new()
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(p.BaseUri, "m", "p/m", "", "", 100),
             new(),

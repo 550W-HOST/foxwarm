@@ -429,7 +429,7 @@ public sealed partial class RuntimePresentationTests
                     onResponse?.Invoke();
                 })
             );
-            var requests = new ModelRequestOwner(
+            var requests = TestModelOwners.Create(
                 http,
                 options,
                 new ModelRouting(),

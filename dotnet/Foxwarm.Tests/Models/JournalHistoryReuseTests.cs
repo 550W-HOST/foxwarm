@@ -287,7 +287,7 @@ public sealed class JournalHistoryReuseTests
         new(new Uri("http://localhost"), "m", "a/m", "token", "", 50);
 
     private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) =>
-        new(http, Defaults(), new ModelRouting(), (_, _) => Task.CompletedTask, journal: journal);
+        TestModelOwners.Create(http, Defaults(), new ModelRouting(), (_, _) => Task.CompletedTask, journal: journal);
 
     private static HostModels Catalog() =>
         HostModels.Parse(

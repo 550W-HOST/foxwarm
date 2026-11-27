@@ -730,6 +730,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             http,
             clientOptions,
             modelRouting,
+            Capabilities.Egress,
             websockets: websockets,
             images: Images,
             journal: Journal,

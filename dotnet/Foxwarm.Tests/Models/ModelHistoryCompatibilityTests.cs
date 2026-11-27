@@ -236,7 +236,7 @@ public sealed class ModelHistoryCompatibilityTests
             if (provider["targets"] is null)
                 provider["baseUrl"] = peer.BaseUri.ToString();
         var catalog = HostModels.Parse(document, new JsonObject());
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             new(peer.BaseUri, "unused", "unused", "", "", 1000),
             new ModelRouting()
@@ -299,7 +299,7 @@ public sealed class ModelHistoryCompatibilityTests
         document["providers"]!["b"]!["baseUrl"] = peer.BaseUri.ToString();
         await configuration.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() });
         using var http = new HttpClient();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(peer.BaseUri, "unused", "unused", "", "", 1000),
             new ModelRouting(),

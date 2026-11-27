@@ -35,7 +35,7 @@ public sealed partial class TextRedactionTests
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var catalog = Catalog(detector.Endpoint, peer.BaseUri);
         using var keys = new TextRedactionKeys();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(peer.BaseUri, "m", "p/m", "", "", 100, new()),
             new(),
@@ -89,7 +89,7 @@ public sealed partial class TextRedactionTests
         var provider = new Uri("http://127.0.0.1:1");
         var catalog = Catalog(detector.Endpoint, provider);
         using var keys = new TextRedactionKeys();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             new(provider, "m", "p/m", "", "", 100) { HardTimeoutMs = 200 },
             new(),

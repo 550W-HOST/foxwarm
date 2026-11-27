@@ -82,7 +82,7 @@ public sealed class ModelInteractionDiagnosticsTests
         var error = await Record.ExceptionAsync(async () =>
         {
             result = await Request(
-                new(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
+                TestModelOwners.Create(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
                 HostModels.Parse(config, new JsonObject())
             );
         });
@@ -297,7 +297,7 @@ public sealed class ModelInteractionDiagnosticsTests
             }
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             Options(peer.BaseUri),
             new ModelRouting(),
@@ -343,7 +343,7 @@ public sealed class ModelInteractionDiagnosticsTests
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         await Request(
-            new(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
+            TestModelOwners.Create(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
             HostModels.Parse(Catalog(peer.BaseUri), new JsonObject())
         );
         var response = JsonNode.Parse(
@@ -401,7 +401,7 @@ public sealed class ModelInteractionDiagnosticsTests
         );
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         var result = await Request(
-            new(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
+            TestModelOwners.Create(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
             HostModels.Parse(Catalog(peer.BaseUri), new JsonObject())
         );
         Assert.Contains("answer", result.AssistantMessage!.ToJsonString());
@@ -418,7 +418,7 @@ public sealed class ModelInteractionDiagnosticsTests
         Directory.CreateDirectory(Path.Combine(Recent(temp.Path), "nested"));
         File.WriteAllText(Path.Combine(Recent(temp.Path), "nested", "owned"), "untouched");
         using var http = new HttpClient(new SuccessHandler());
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             Options(new Uri("http://localhost")),
             new ModelRouting(),
@@ -460,7 +460,7 @@ public sealed class ModelInteractionDiagnosticsTests
         var catalogJson = Catalog(peer.Uri, "openai-ws");
         catalogJson["providers"]!["a"]!["imageGeneration"] = new JsonObject { ["enabled"] = true };
         await Request(
-            new(
+            TestModelOwners.Create(
                 http,
                 Options(peer.Uri),
                 new ModelRouting(),
@@ -502,7 +502,7 @@ public sealed class ModelInteractionDiagnosticsTests
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         await using var transport = new ResponsesWsTransport(Foxwarm.Net.EgressPolicy.Unguarded, diagnostics: _ => { });
         await Request(
-            new(
+            TestModelOwners.Create(
                 http,
                 Options(peer.Uri),
                 new ModelRouting(),
@@ -537,7 +537,7 @@ public sealed class ModelInteractionDiagnosticsTests
         using var http = ProviderHttpRequest.CreateClient(Foxwarm.Net.EgressPolicy.Unguarded);
         await Assert.ThrowsAsync<ModelRequestException>(() =>
             Request(
-                new(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
+                TestModelOwners.Create(http, Options(peer.BaseUri), new ModelRouting(), diagnostics: new(temp.Path)),
                 HostModels.Parse(Catalog(peer.BaseUri), new JsonObject())
             )
         );
@@ -578,7 +578,7 @@ public sealed class ModelInteractionDiagnosticsTests
         var uri = new Uri("http://unused.invalid");
         var error = await Assert.ThrowsAsync<ModelRequestException>(() =>
             Request(
-                new(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
+                TestModelOwners.Create(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
                 HostModels.Parse(Catalog(uri, protocol), new JsonObject())
             )
         );
@@ -639,7 +639,7 @@ public sealed class ModelInteractionDiagnosticsTests
         var uri = new Uri("http://unused.invalid");
         await Assert.ThrowsAsync<ModelRequestException>(() =>
             Request(
-                new(
+                TestModelOwners.Create(
                     http,
                     Options(uri),
                     new ModelRouting(),
@@ -682,7 +682,7 @@ public sealed class ModelInteractionDiagnosticsTests
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
         var call = Request(
-            new(
+            TestModelOwners.Create(
                 http,
                 Options(uri),
                 new ModelRouting(),
@@ -752,7 +752,7 @@ public sealed class ModelInteractionDiagnosticsTests
         );
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             Options(uri),
             new ModelRouting(),
@@ -801,7 +801,7 @@ public sealed class ModelInteractionDiagnosticsTests
         );
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             Options(uri),
             new ModelRouting(),
@@ -890,7 +890,7 @@ public sealed class ModelInteractionDiagnosticsTests
             ["targets"] = new JsonArray("a/m", "b/m"),
             ["failureThreshold"] = 1,
         };
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             Options(uri),
             new ModelRouting(),
@@ -947,7 +947,7 @@ public sealed class ModelInteractionDiagnosticsTests
         var uri = new Uri("http://unused.invalid");
         var config = Catalog(uri);
         config["providers"]!["a"]!["imageGeneration"] = new JsonObject { ["enabled"] = true };
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             http,
             Options(uri),
             new ModelRouting(),

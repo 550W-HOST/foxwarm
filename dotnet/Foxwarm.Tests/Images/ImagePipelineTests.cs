@@ -422,7 +422,7 @@ public sealed class ImagePipelineTests
                 }
             )
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             new(new Uri("http://localhost"), "m", "a/m", "", "", 100),
             routing,

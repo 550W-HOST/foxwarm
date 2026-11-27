@@ -58,7 +58,7 @@ public sealed class ModelConfigurationFailureTests
                 }
             )
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             new(new Uri("http://localhost"), "m", "a/m", "", "", 50),
             routing,

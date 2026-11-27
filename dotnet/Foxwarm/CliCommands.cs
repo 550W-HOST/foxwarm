@@ -95,6 +95,7 @@ internal static class CliCommands
             http,
             defaults,
             new ModelRouting(),
+            Foxwarm.Net.EgressPolicy.Unguarded,
             websockets: websockets,
             journal: journal,
             diagnostics: new ModelInteractionDiagnostics(root),

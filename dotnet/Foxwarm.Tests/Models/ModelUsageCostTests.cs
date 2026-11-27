@@ -403,7 +403,7 @@ public sealed partial class ModelUsageCostTests
         var options = new ResponsesClientOptions(peer.BaseUri, "wire", "priced/wire", "", "", 713);
         using var http = new HttpClient();
         using var journal = new LlmRequestJournalStore(temp.Path);
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             http,
             options,
             new ModelRouting(),

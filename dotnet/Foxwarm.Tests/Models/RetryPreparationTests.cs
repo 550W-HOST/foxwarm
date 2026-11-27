@@ -111,7 +111,7 @@ public sealed class RetryPreparationTests
         using var http = new HttpClient();
         var routing = new ModelRouting();
         var catalog = Catalog(peer.BaseUri);
-        var requests = new ModelRequestOwner(http, Defaults(peer.BaseUri), routing);
+        var requests = TestModelOwners.Create(http, Defaults(peer.BaseUri), routing);
         var preparation = 0;
         var preparedAt = 0L;
         var prompts = new List<string>();
@@ -198,7 +198,7 @@ public sealed class RetryPreparationTests
         );
         var options = Defaults(peer.BaseUri);
         using var http = new HttpClient();
-        var requests = new ModelRequestOwner(http, options, new ModelRouting());
+        var requests = TestModelOwners.Create(http, options, new ModelRouting());
         var preparations = 0;
         await requests.RequestAsync(
             "owner",
@@ -255,7 +255,7 @@ public sealed class RetryPreparationTests
         };
         var interruption = User("<foxwarm-system kind=\"event\" />");
         using var http = new HttpClient();
-        var requests = new ModelRequestOwner(http, Defaults(peer.BaseUri), new ModelRouting());
+        var requests = TestModelOwners.Create(http, Defaults(peer.BaseUri), new ModelRouting());
         await requests.RequestAsync(
             "owner",
             HostModels.ForTest(Defaults(peer.BaseUri)),
@@ -291,7 +291,7 @@ public sealed class RetryPreparationTests
             using var http = new HttpClient();
             var routing = new ModelRouting();
             var preparations = 0;
-            var requests = new ModelRequestOwner(http, options, routing);
+            var requests = TestModelOwners.Create(http, options, routing);
             var captured = requests.Capture(HostModels.ForTest(options), "a", null);
             var task = requests.RequestAsync(
                 "owner",

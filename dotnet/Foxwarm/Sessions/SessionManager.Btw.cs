@@ -38,6 +38,7 @@ internal sealed partial class SessionManager
                 http,
                 clientOptions,
                 modelRouting,
+                Capabilities.Egress,
                 websockets: websockets,
                 images: Images,
                 journal: Journal,

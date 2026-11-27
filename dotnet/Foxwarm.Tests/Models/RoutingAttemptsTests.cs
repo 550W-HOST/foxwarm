@@ -151,7 +151,7 @@ public sealed class RoutingAttemptsTests
                 }
             )
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             Defaults(),
             new ModelRouting(),
@@ -230,7 +230,7 @@ public sealed class RoutingAttemptsTests
         );
         var catalog = Catalog(2);
         var routing = new ModelRouting();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             Defaults(),
             routing,
@@ -287,7 +287,7 @@ public sealed class RoutingAttemptsTests
         );
         var catalog = Catalog(1);
         var routing = new ModelRouting();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             Defaults(),
             routing,
@@ -357,7 +357,7 @@ public sealed class RoutingAttemptsTests
         );
         var catalog = Catalog(2, retryIntervalsMs: retryIntervalsMs);
         var routing = new ModelRouting();
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             Defaults(),
             routing,
@@ -430,7 +430,7 @@ public sealed class RoutingAttemptsTests
                 }
             )
         );
-        var owner = new ModelRequestOwner(
+        var owner = TestModelOwners.Create(
             client,
             Defaults(),
             routing,
@@ -513,7 +513,7 @@ public sealed class RoutingAttemptsTests
                     }
                 )
             );
-            var requests = new ModelRequestOwner(
+            var requests = TestModelOwners.Create(
                 client,
                 Defaults(),
                 routing,
@@ -620,7 +620,7 @@ public sealed class RoutingAttemptsTests
                 }
             )
         );
-        var requests = new ModelRequestOwner(
+        var requests = TestModelOwners.Create(
             client,
             Defaults(),
             new ModelRouting(),

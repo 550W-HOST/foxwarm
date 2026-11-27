@@ -96,7 +96,7 @@ public sealed partial class TextRedactionObservabilityTests
         internal required HostModels Catalog { get; init; }
 
         internal Task<ChatResult> RequestAsync(params JsonObject[] history) =>
-            new ModelRequestOwner(
+            TestModelOwners.Create(
                 Http,
                 new(Provider.BaseUri, "m", "p/m", "", "", 100),
                 new(),
@@ -253,7 +253,7 @@ public sealed partial class TextRedactionObservabilityTests
         };
         string? requestId = null;
         var error = await Assert.ThrowsAsync<ModelRequestException>(() =>
-            new ModelRequestOwner(
+            TestModelOwners.Create(
                 harness.Http,
                 new(harness.Provider.BaseUri, "m", "p/m", "", "", 100),
                 new(),

@@ -255,7 +255,7 @@ public abstract partial class LlmJournalContractTests
     }
 
     private static ModelRequestOwner Owner(HttpClient http, ILlmJournalStore journal) =>
-        new(
+        TestModelOwners.Create(
             http,
             new ResponsesClientOptions(
                 new Uri("http://localhost"),

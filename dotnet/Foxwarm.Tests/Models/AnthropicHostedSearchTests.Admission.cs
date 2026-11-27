@@ -317,7 +317,7 @@ public sealed partial class AnthropicHostedSearchTests
                 agents,
                 new Skills(agents, Path.Combine(temp.Path, "skills"))
             );
-            var requests = new ModelRequestOwner(
+            var requests = TestModelOwners.Create(
                 http,
                 options,
                 new ModelRouting(),

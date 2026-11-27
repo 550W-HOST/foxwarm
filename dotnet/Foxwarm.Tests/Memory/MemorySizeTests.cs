@@ -121,7 +121,7 @@ public sealed class MemorySizeTests
             "base",
             100
         );
-        var requests = new ModelRequestOwner(http, options, new ModelRouting());
+        var requests = TestModelOwners.Create(http, options, new ModelRouting());
         var owner = new SessionOwner("s", "main", models);
         var chat = new SessionChatService(requests, options, owner, models, memory, (_, _) => { });
         owner.Registry = new SessionRegistry(new InMemorySessionAuthorityStore(), chat);
