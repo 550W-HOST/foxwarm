@@ -33,10 +33,11 @@ public sealed class McpNodeFileDownloadTests
         InboundMcpFixture f,
         string type = "cli-node",
         int version = 3,
-        bool read = true
+        bool read = true,
+        string? parent = null
     )
     {
-        var credential = f.Manager.Nodes.Registry.Create("download-node");
+        var credential = f.Manager.Nodes.Registry.Create("download-node", parent);
         var socket = new ClientWebSocket();
         await socket.ConnectAsync(
             new Uri(
@@ -254,6 +255,51 @@ public sealed class McpNodeFileDownloadTests
         );
         await Send(socket, new() { ["type"] = "ping" });
         Assert.Equal("pong", (await Read(socket))["type"]!.GetValue<string>());
+        socket.Abort();
+    }
+
+    // A rule naming an ancestor Node applies to the download as it does to an ordinary MCP read
+    // of the same file: both evaluate the Node forest.
+    [Fact]
+    public async Task Download_applies_ancestor_Node_rules_like_the_ordinary_read()
+    {
+        await using var f = await InboundMcpFixture.CreateAsync();
+        f.Manager.Nodes.Registry.Create("root");
+        using var socket = await Connect(f, parent: "root");
+        await f.PolicyAsync(
+            "version: 1\nrules:\n- {id: no-root-reads, tool: {source: node, name: read}, node: root, action: deny}\n- id: read\n  action: allow\n  match: {externalId: alpha, tool: {source: node, name: read}, targetNode: download-node}\n"
+        );
+        Assert.Equal("root", f.Manager.Nodes.Registry.Forest().Parent("download-node"));
+        await using (var client = await f.ClientAsync())
+        {
+            var ordinary = await InboundMcpFixture.ConcreteAsync(
+                client,
+                "node:download-node/read",
+                new JsonObject { ["filePath"] = "/exports/raw.bin" }
+            );
+            Assert.True(ordinary["isError"]?.GetValue<bool>());
+        }
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await Download(f, Query("/exports/raw.bin"))).StatusCode
+        );
+        // Neither read reached the Node.
+        await Send(socket, new() { ["type"] = "ping" });
+        Assert.Equal("pong", (await Read(socket))["type"]!.GetValue<string>());
+
+        // An ancestor rule that starts to apply while the read is outstanding stops the bytes.
+        await f.PolicyAsync(
+            "version: 1\nrules:\n- id: read\n  action: allow\n  match: {externalId: alpha, tool: {source: node, name: read}, targetNode: download-node}\n"
+        );
+        var pending = Download(f, Query("/exports/raw.bin"));
+        var request = await Read(socket);
+        await f.PolicyAsync(
+            "version: 1\nrules:\n- {id: no-root-reads, tool: {source: node, name: read}, node: root, action: deny}\n- id: read\n  action: allow\n  match: {externalId: alpha, tool: {source: node, name: read}, targetNode: download-node}\n"
+        );
+        await Reply(socket, request, new() { ["contentBase64"] = "AP+A" });
+        using var refused = await pending;
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.DoesNotContain("AP+A", await refused.Content.ReadAsStringAsync());
         socket.Abort();
     }
 }
