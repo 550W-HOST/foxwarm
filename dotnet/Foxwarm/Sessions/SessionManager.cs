@@ -627,11 +627,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         foreach (var id in lostWaits)
         {
-            SessionOwner? owner;
+            OwnerUse? acquired;
             try
             {
-                using (Admission is null ? null : HotOwnerBudget.WithoutWaiting())
-                    owner = await GetExistingAsync(id);
+                acquired = await UseRecoveryOwnerAsync(id);
             }
             catch (TenantLimitException error) when (error.Limit == "hotOwnerBytes")
             {
@@ -639,8 +638,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     deferred.Add(id);
                 continue;
             }
-            if (owner is not null)
-                await owner.Entry.SaveLane.ClearLostBackgroundWaitsAsync();
+            using var use = acquired;
+            if (use is not null)
+                await use.Owner.Entry.SaveLane.ClearLostBackgroundWaitsAsync();
         }
         if (startMainServices)
             Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
@@ -659,7 +659,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await executor.ReconcileNowAsync();
         StartIdleRelease();
         foreach (var owner in sessions.Values)
-            StartRecoveredProcessing(owner);
+        {
+            using var use = TryUseOwner(owner);
+            if (use is not null)
+                StartRecoveredProcessing(use.Owner);
+        }
         // A completed exec owned by a deferred Session may itself need space. Deliver after
         // activation, independently of the runnable-owner pass and its progress.
         if (deferred.Count != 0)
@@ -693,6 +697,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
             _ = owner.StartProcessing();
     }
 
+    private async Task<OwnerUse?> UseRecoveryOwnerAsync(string id, CancellationToken token = default)
+    {
+        using var immediate = Admission is null ? null : HotOwnerBudget.WithoutWaiting();
+        return await UseExistingAsync(id, token);
+    }
+
     // Try each outstanding owner once per pass. A smaller owner that fits behind a larger
     // blocked owner can start immediately, without spinning on the blocked owner.
     private async Task RecoverDeferredAsync(List<string> pending, HashSet<string> lostWaits, bool startMainServices)
@@ -700,28 +710,33 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var budget = Admission!.HotOwners;
         while (pending.Count > 0 && accepting)
         {
-            var changed = budget.CapacitySignals();
+            long smallest = long.MaxValue;
             foreach (var id in pending.ToArray())
             {
                 if (!accepting)
                     return;
                 try
                 {
-                    SessionOwner? owner;
-                    using (HotOwnerBudget.WithoutWaiting())
-                        owner = await GetExistingAsync(id, admissionStop.Token);
-                    if (owner is not null)
+                    OwnerUse? acquired;
+                    try
                     {
+                        acquired = await UseRecoveryOwnerAsync(id, admissionStop.Token);
+                    }
+                    catch (TenantLimitException error) when (error.Limit == "hotOwnerBytes")
+                    {
+                        smallest = Math.Min(smallest, error.RequestedBytes);
+                        continue;
+                    }
+                    using var use = acquired;
+                    if (use is not null)
+                    {
+                        var owner = use.Owner;
                         if (lostWaits.Contains(id))
                             await owner.Entry.SaveLane.ClearLostBackgroundWaitsAsync();
                         if (startMainServices)
                             await ReconcileTimerWaitsAsync(owner);
                         StartRecoveredProcessing(owner);
                     }
-                }
-                catch (TenantLimitException error) when (error.Limit == "hotOwnerBytes")
-                {
-                    continue;
                 }
                 catch (Exception) when (!accepting || admissionStop.IsCancellationRequested)
                 {
@@ -736,7 +751,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
             if (pending.Count > 0)
                 try
                 {
-                    await HotOwnerBudget.WaitForCapacityAsync(changed, admissionStop.Token);
+                    await budget.WaitForCapacityAsync(
+                        smallest,
+                        () => pending.Any(sessions.ContainsKey),
+                        admissionStop.Token
+                    );
                 }
                 catch (OperationCanceledException) when (admissionStop.IsCancellationRequested)
                 {
