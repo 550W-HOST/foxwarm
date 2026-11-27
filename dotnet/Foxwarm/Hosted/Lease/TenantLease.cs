@@ -90,7 +90,7 @@ internal static class ReplicaRoles
     internal static bool MayServe(string role, TenantProfile profile, string? pinnedRole) =>
         role switch
         {
-            MasterHost => profile == TenantProfile.Operator,
+            MasterHost => profile == TenantProfile.Operator && pinnedRole == MasterHost,
             General => profile == TenantProfile.Hosted && pinnedRole is null,
             _ => false,
         };

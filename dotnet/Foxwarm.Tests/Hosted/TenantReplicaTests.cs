@@ -351,7 +351,7 @@ public sealed class TenantReplicaTests
         await f.WhoAmIAsync("alpha");
         var beta = await f.WhoAmIAsync("beta");
         var alpha = f.Live("alpha").Single();
-        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator' WHERE name = 'alpha'");
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator', pinned_role = 'master-host' WHERE name = 'alpha'");
         await alpha.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await UntilAsync(async () => await f.OwnerAsync("alpha") is null, "alpha's lease was released");
         using (var refused = await f.GetAsync("alpha"))
