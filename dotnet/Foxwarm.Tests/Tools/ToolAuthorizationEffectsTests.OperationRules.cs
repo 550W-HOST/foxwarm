@@ -208,6 +208,12 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.DoesNotContain("node select", help);
         Assert.Contains("node list", help);
         Assert.True(manager.ToolVisible(owner, "builtin", "node"));
+        // Command search lists the same commands as help.
+        var search = SessionWait.Text(
+            (await Call(execution.Tools, "ctl", Obj("""{"command":"tool search node --limit 50"}""")))["output"]
+        )!;
+        Assert.Contains("node list", search);
+        Assert.DoesNotContain("node select", search);
 
         // The script file read asks once, at stage A, and the script runs after approval.
         var script = Call(execution.Tools, "run_script", Obj("""{"filePath":"job.py"}"""));
