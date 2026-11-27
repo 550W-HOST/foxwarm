@@ -133,12 +133,10 @@ public sealed class TenantLimitHttpTests
         await using var f = await Fixture.Create(TenantLimits.Defaults with { UploadBytes = 1024 * 1024 });
         using var refused = await f.Client.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 + 1));
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, refused.StatusCode);
+        // The declared length is refused before the body is read, with the limit's text.
         var body = (await refused.Content.ReadFromJsonAsync<JsonObject>())!;
-        Assert.True(
-            body["maxBytes"]?.GetValue<long>() == 1024 * 1024
-                || body["error"]!.GetValue<string>() == "This file is larger than the 1 MiB upload limit.",
-            body.ToJsonString()
-        );
+        Assert.Equal("This file is larger than the 1 MiB upload limit.", body["error"]!.GetValue<string>());
+        Assert.Equal(1024 * 1024, body["maxBytes"]!.GetValue<long>());
         using var accepted = await f.Client.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 - 4096));
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
     }
@@ -169,6 +167,10 @@ public sealed class TenantLimitHttpTests
         content.Headers.ContentType = multipart.Headers.ContentType;
         using var refused = await f.Client.PostAsync("api/upload?sessionId=uploads", content);
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, refused.StatusCode);
+        Assert.Equal(
+            "This file is larger than the 64 KiB upload limit.",
+            (await refused.Content.ReadFromJsonAsync<JsonObject>())!["error"]!.GetValue<string>()
+        );
         var small = Upload(1024);
         var smallContent = new Chunked(small);
         smallContent.Headers.ContentType = small.Headers.ContentType;

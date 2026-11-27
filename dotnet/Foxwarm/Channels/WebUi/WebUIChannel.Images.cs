@@ -47,7 +47,7 @@ internal sealed partial class WebUIChannel
                     return Results.Json(
                         new JsonObject
                         {
-                            ["error"] = "Upload too large",
+                            ["error"] = UploadLimitError,
                             ["maxBytes"] = uploadLimit,
                         },
                         statusCode: 413
