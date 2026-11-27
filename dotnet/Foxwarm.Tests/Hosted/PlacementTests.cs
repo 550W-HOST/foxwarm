@@ -55,6 +55,8 @@ public sealed class PlacementRankTests
             Row("master/0001", ReplicaRoles.MasterHost),
             Row("operator/0001", ReplicaRoles.Operator),
         };
+        // Per-tenant epoch observations are diagnostics, not a placement input.
+        live[0].Capacity["tenants"] = new JsonObject { ["alpha"] = new JsonObject { ["epoch"] = 3, ["hot"] = 400, ["busy"] = 30 } };
         var hosted = Placement.Candidates("alpha", TenantProfile.Hosted, null, live);
         Assert.Equal(
             Placement.Rank("alpha", ["replica-a", "replica-c"]),

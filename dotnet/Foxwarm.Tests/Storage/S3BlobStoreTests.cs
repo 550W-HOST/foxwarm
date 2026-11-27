@@ -210,7 +210,7 @@ public sealed class S3BlobStoreTests
             AccessKeyIdFile = Path.Combine(temp.Path, "id"),
             SecretAccessKeyFile = Path.Combine(temp.Path, "secret"),
         };
-        await s3.OpenBlobsAsync(new BlobSettings(BlobBackend.S3, settings), "default", CancellationToken.None);
+        await s3.UseS3BlobsAsync(settings, "41-20261101T120000Z", CancellationToken.None);
         var images = Assert.IsType<S3BlobStore>(s3.ImageBlobs);
         Assert.True(images.ConditionalWrites);
         Assert.IsType<S3BlobStore>(s3.ArtifactBlobs);
@@ -225,9 +225,9 @@ public sealed class S3BlobStoreTests
         );
         Assert.Empty(s3.Missing);
         await s3.AgentFileBlobs.CreateAsync("alpha/00", new byte[] { 1 }, false, CancellationToken.None);
-        Assert.Contains("t/default/agent-files/alpha/00", await bucket.KeysAsync());
+        Assert.Contains("t/41-20261101T120000Z/agent-files/alpha/00", await bucket.KeysAsync());
         await s3.ArtifactBlobs.CreateAsync("art_c/1.json", new byte[] { 1 }, false, CancellationToken.None);
-        Assert.Contains("t/default/artifacts/art_c/1.json", await bucket.KeysAsync());
+        Assert.Contains("t/41-20261101T120000Z/artifacts/art_c/1.json", await bucket.KeysAsync());
         // The context owns the S3 client both stores share: disposing it closes the client.
         await s3.DisposeAsync();
         await postgres.DisposeAsync();

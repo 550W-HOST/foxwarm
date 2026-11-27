@@ -26,6 +26,7 @@ public sealed class TenantReplicaTests
         internal string Tenant => tenant;
         internal long Epoch => epoch;
         internal int OperatorChanges;
+        internal int StatementLimit;
         internal readonly TaskCompletionSource Disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task StartAsync()
@@ -141,7 +142,9 @@ public sealed class TenantReplicaTests
         );
     }
 
-    private static async Task<Fixture> StartAsync(params string[] tenants)
+    private static Task<Fixture> StartAsync(params string[] tenants) => StartAsync(Fast, tenants);
+
+    private static async Task<Fixture> StartAsync(LeaseTimings timings, params string[] tenants)
     {
         var server = await PostgresServer.SharedAsync();
         var database = await server.CreateDatabaseAsync();
@@ -155,7 +158,7 @@ public sealed class TenantReplicaTests
                 null,
                 new IPEndPoint(IPAddress.Loopback, 0),
                 slug => $"http://{slug}.test",
-                Fast,
+                timings,
                 Drain,
                 ReaderVersion: 2
             )
@@ -177,7 +180,7 @@ public sealed class TenantReplicaTests
                 var grant = context.Activation.Grant;
                 app.MapGet("/whoami", () => $"{grant.Tenant}:{grant.Epoch}");
                 context.Activation.Fence.Lost.Register(() => fixture.Event($"{grant.Tenant}:fenced"));
-                var runtime = new Runtime(app, grant.Tenant, grant.Epoch, fixture);
+                var runtime = new Runtime(app, grant.Tenant, grant.Epoch, fixture) { StatementLimit = context.Database.MaxInFlight };
                 lock (fixture.Runtimes)
                     fixture.Runtimes.Add(runtime);
                 await Task.Yield();
@@ -499,6 +502,38 @@ public sealed class TenantReplicaTests
         Assert.Equal("while-away", f.ObservedDocuments);
         Assert.Equal(1, Volatile.Read(ref runtime.OperatorChanges));
         Assert.StartsWith("alpha:", await f.WhoAmIAsync("alpha"));
+    }
+
+    [Theory]
+    [InlineData("notify")]
+    [InlineData("reconnect")]
+    [InlineData("renewal")]
+    public async Task SettingsRevisionDrainsOnlyTheChangedGeneration(string path)
+    {
+        // In the two signal cases, no renewal could have observed the change yet.
+        var timings = path == "renewal" ? Fast : new LeaseTimings(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60));
+        await using var f = await StartAsync(timings, "alpha", "beta");
+        await InitialSubscriptionAsync(f);
+        await f.WhoAmIAsync("alpha");
+        var beta = await f.WhoAmIAsync("beta");
+        var alpha = Assert.Single(f.Live("alpha"));
+        const string update = "UPDATE tenants SET limits='{\"dbStatements\":3}' WHERE name='alpha'";
+        if (path == "renewal")
+            await f.Database.ExecuteOwnerAsync("ALTER TABLE tenants DISABLE TRIGGER foxwarm_notify_tenants; " + update);
+        else if (path == "reconnect")
+        {
+            var count = await f.Database.ScalarAsync("WITH ended AS (SELECT pg_terminate_backend(pid) done FROM pg_stat_activity "
+                + "WHERE application_name='foxwarm-listen' AND datname=current_database()), edited AS (" + update
+                + " RETURNING 1) SELECT count(*) FROM ended WHERE done");
+            Assert.Equal(1L, count);
+        }
+        else await f.Database.ExecuteOwnerAsync(update);
+        await UntilAsync(async () => await f.OwnerAsync("alpha") is null, "settings revision retired and released the old grant", TimeSpan.FromSeconds(5));
+        Assert.True(alpha.Disposed.Task.IsCompleted);
+        Assert.DoesNotContain("alpha:fenced", f.EventList());
+        Assert.Equal(beta, await f.WhoAmIAsync("beta"));
+        Assert.NotEqual("alpha:" + alpha.Epoch, await f.WhoAmIAsync("alpha"));
+        Assert.Equal(3, Assert.Single(f.Live("alpha")).StatementLimit);
     }
 
     // Review 4c #2: a runtime that stops promptly isn't enough; a release that can't take the

@@ -43,7 +43,7 @@ The empty path is the Agent's own directory: it can be listed and statted, never
 
 ## D-agent-store-limits
 
-**Plan §7.2, defaults accepted by the coordinator (Q4).** `AgentStoreLimits(TotalBytes, Files, FileBytes)`, default 2 GiB, 20,000 and 64 MiB, is an input of the hosted store (`PostgresStorageContext.AgentStoreLimits`, read at every admission); per-tenant settings replace it later.
+**Plan §7.2, defaults accepted by the coordinator (Q4).** `AgentStoreLimits(TotalBytes, Files, FileBytes)`, default 2 GiB, 20,000 and 64 MiB, is an input of the hosted store (`PostgresStorageContext.AgentStoreLimits`, read at every admission); the hosted entry applies the [operator-provided tenant limits](./hosted-operator.md#settings-and-placement) at runtime construction.
 
 - `agent_file_usage(bytes, entries)` is maintained in each write transaction. `entries` counts files and empty-directory rows; root rows aren't counted.
 - A file above `FileBytes` is refused before anything is written, its blob included. A write is refused with `AgentStoreQuotaException` (`Limit` = `fileBytes`, `totalBytes` or `files`) when it would grow a measured value past its limit. A write that doesn't grow the value is admitted, so a tenant over a lowered limit can still delete, shrink and rename.

@@ -39,6 +39,24 @@ public sealed class TenantKeysTests
     private static byte[] Derived(InstanceKeys keys) => keys.Derive(InstanceKeys.SecretStorePurpose);
 
     [Fact]
+    public async Task FencedRedemptionLeavesTheSetupTokenForTheNewOwner()
+    {
+        var (database, tenant) = await OpenAsync();
+        await using var _ = database;
+        var keys = new HostedKeyRing(tenant, NewKek("kek-a")).OpenOrCreate();
+        const string setup = "fwsetup_synthetic";
+        await database.OpenOwner().ClusterAsync((tx, ct) => tx.ExecuteAsync(
+            "UPDATE tenants SET credential_version=1, setup_hash=$1, setup_expires_at=now()+interval '1 hour' WHERE tenant_id=$2",
+            ct, Foxwarm.Hosted.Operator.OperatorStore.Hash(setup), tenant.TenantId), default);
+        var old = new PgInstanceCredentials(tenant, () => keys);
+        var token = old.Read(InstanceCredentialName.HttpToken)!;
+        var epoch = await database.TakeLeaseAsync(tenant.TenantId, "successor");
+        await Assert.ThrowsAsync<TenantFencedException>(() => old.RedeemAsync(setup, token, default));
+        var successor = new PgInstanceCredentials(new TenantDb(database.OpenApp(), tenant.TenantId, epoch), () => keys);
+        Assert.Equal("redeemed", await successor.RedeemAsync(setup, token, default));
+    }
+
+    [Fact]
     public async Task The_data_key_is_created_once_and_every_open_derives_the_same_keys()
     {
         var (database, tenant) = await OpenAsync();

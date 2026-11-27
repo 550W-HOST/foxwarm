@@ -99,6 +99,18 @@ public sealed class TenantRuntimeConstructionTests
         }
     }
 
+    [Fact]
+    public async Task TheRuntimeUsesTheTenantsAgentFileLimits()
+    {
+        await using var harness = await CreateAsync();
+        var lease = await harness.AddTenantAsync("alpha");
+        await harness.Database.ExecuteOwnerAsync("UPDATE tenants SET limits='{\"agentStoreBytes\":8000000,\"agentStoreFiles\":200,\"agentFileBytes\":300000,\"uploadBytes\":400000}' WHERE name='alpha'");
+        await using var runtime = await harness.BuildAsync("alpha", lease, Deployment(null));
+        var sessions = ((MainHostRuntime)runtime).Host.Sessions;
+        Assert.Equal(new AgentStoreLimits(8000000, 200, 300000), sessions.Storage.AgentFiles!.Limits);
+        Assert.Equal(400000, sessions.Capabilities.Limits!.UploadBytes);
+    }
+
     // Review 4b #8: directories are named by the numeric tenant ID, never by the stored name.
     [Fact]
     public async Task ATenantsDirectoriesAreNamedByItsNumericId()
