@@ -768,6 +768,117 @@ public sealed class TenantActivationsTests
         Assert.Equal("active", await f.LeaseStateAsync());
     }
 
+    // ---- Placement proof and release outcomes (review 4c) ----
+
+    private static async Task UntilAsync(Func<bool> condition, TimeSpan limit, string what)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition())
+        {
+            Assert.True(watch.Elapsed < limit, what);
+            await Task.Delay(20);
+        }
+    }
+
+    // An edit committed while the factory runs, which no check sees: the published generation
+    // stops renewing and is fenced within the TTL.
+    [Fact]
+    public async Task AnEditDuringAColdStartEndsRenewalAndFencesTheGenerationItBuilt()
+    {
+        await using var f = await CreateAsync(Bound, leaseTimings: Short, renewing: true);
+        f.For(Tenant).FactoryGate = Fixture.Closed();
+        var activation = f.Activations.ActivateAsync(Tenant);
+        await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator' WHERE name = '{Tenant}'");
+        f.For(Tenant).FactoryGate.SetResult();
+        TenantGeneration? generation = null;
+        try
+        {
+            generation = await activation.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TenantFencedException) { }
+        var runtime = f.RuntimeOf(Tenant);
+        await UntilAsync(() => runtime.Disposed.Task.IsCompleted, Short.Ttl, "the old-profile runtime outlived its grant");
+        Assert.True(generation?.IsFenced ?? true);
+    }
+
+    // A placement change with no notification at all (none is listened to here): renewal alone
+    // ends the published generation.
+    [Fact]
+    public async Task APinChangeNoOneIsToldAboutEndsRenewalOfAPublishedGeneration()
+    {
+        await using var f = await CreateAsync(Bound, leaseTimings: Short, renewing: true);
+        var generation = await f.Activations.ActivateAsync(Tenant);
+        await Task.Delay(Short.RenewInterval * 2);
+        Assert.False(generation.IsFenced);
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET pinned_role = 'master-host' WHERE name = '{Tenant}'");
+        await UntilAsync(() => generation.IsFenced, Short.Ttl, "the generation kept renewing under a pin its role doesn't allow");
+    }
+
+    // A grant without a generation at shutdown is released at once, and the shutdown is clean.
+    [Fact]
+    public async Task AGrantWithoutAGenerationAtShutdownIsReleasedAndTheShutdownIsClean()
+    {
+        await using var f = await CreateAsync(shutdownBound: TimeSpan.FromSeconds(5));
+        var stored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proceed = Fixture.Closed();
+        f.Activations.BeforeRegister = async () =>
+        {
+            stored.TrySetResult();
+            await proceed.Task;
+        };
+        var activation = f.Activations.ActivateAsync(Tenant);
+        await stored.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var shutdown = f.Activations.ShutdownAsync();
+        // Released while the activation still waits to register.
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (await f.LeaseStateAsync() != "released")
+        {
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), "the grant wasn't released during the shutdown");
+            await Task.Delay(20);
+        }
+        proceed.SetResult();
+        await Assert.ThrowsAnyAsync<Exception>(() => activation.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.True(await shutdown.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0, f.Builds);
+    }
+
+    // A grant without a generation at shutdown is handed back under the one deadline: when its
+    // release can't take the row lock, the shutdown isn't clean and ends at the bound, not after
+    // a further lock wait.
+    [Fact]
+    public async Task AGrantWithoutAGenerationAtShutdownIsReleasedUnderTheOneDeadline()
+    {
+        await using var f = await CreateAsync(shutdownBound: TimeSpan.FromSeconds(1));
+        var stored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proceed = Fixture.Closed();
+        f.Activations.BeforeRegister = async () =>
+        {
+            stored.TrySetResult();
+            await proceed.Task;
+        };
+        var activation = f.Activations.ActivateAsync(Tenant);
+        await stored.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var tenant = await f.Database.TenantIdAsync();
+        await using var holder = new Npgsql.NpgsqlConnection(f.Database.OwnerConnectionString);
+        await holder.OpenAsync();
+        await using var holding = await holder.BeginTransactionAsync();
+        await using (var locking = new Npgsql.NpgsqlCommand($"SELECT 1 FROM tenant_leases WHERE tenant_id = {tenant} FOR UPDATE", holder, holding))
+            await locking.ExecuteScalarAsync();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        // The release's lock timeout is the renew interval (5 s), past the 1 s bound.
+        Assert.False(await f.Activations.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(20)), "a shutdown with an unreleased grant counted as clean");
+        Assert.InRange(watch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2.5));
+        // At the decision the row is still this replica's. The cancelled release's outcome is
+        // unknown (it may still apply once the lock frees), which is why the shutdown is unclean.
+        await using (var row = new Npgsql.NpgsqlCommand($"SELECT state FROM tenant_leases WHERE tenant_id = {tenant}", holder, holding))
+            Assert.Equal("active", await row.ExecuteScalarAsync());
+        proceed.SetResult();
+        await Assert.ThrowsAnyAsync<Exception>(() => activation.WaitAsync(TimeSpan.FromSeconds(10)));
+        await holding.RollbackAsync();
+        Assert.Equal(0, f.Builds);
+    }
+
     // ---- Placement at acquisition (batch 4) ----
 
     [Fact]

@@ -478,6 +478,28 @@ public sealed class TenantReplicaTests
         Assert.StartsWith("alpha:", await f.WhoAmIAsync("alpha"));
     }
 
+    // Review 4c #2: a runtime that stops promptly isn't enough; a release that can't take the
+    // lease row lock leaves ownership unresolved, and the replica doesn't exit as stopped.
+    [Fact]
+    public async Task AStopWhoseReleaseCantLockTheLeaseRowExitsFencedAndTheLeaseStays()
+    {
+        await using var f = await StartAsync("alpha");
+        await f.WhoAmIAsync("alpha");
+        var runtime = f.Live("alpha").Single();
+        var tenant = await f.Database.TenantIdAsync("alpha");
+        await using var holder = new Npgsql.NpgsqlConnection(f.Database.OwnerConnectionString);
+        await holder.OpenAsync();
+        await using var holding = await holder.BeginTransactionAsync();
+        await using (var locking = new Npgsql.NpgsqlCommand($"SELECT 1 FROM tenant_leases WHERE tenant_id = {tenant} FOR UPDATE", holder, holding))
+            await locking.ExecuteScalarAsync();
+        f.Stop.Cancel();
+        Assert.Equal(HostedExit.Fenced, await f.Run.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.True(runtime.Disposed.Task.IsCompleted);
+        await holding.RollbackAsync();
+        Assert.Equal("active", await f.Database.ScalarAsync("SELECT state FROM tenant_leases WHERE tenant_id = $1", tenant));
+        Assert.StartsWith("replica-a", (string)(await f.Database.ScalarAsync("SELECT owner_replica FROM tenant_leases WHERE tenant_id = $1", tenant))!);
+    }
+
     [Fact]
     public async Task AGracefulStopReleasesEveryTenantAndExitsCleanly()
     {

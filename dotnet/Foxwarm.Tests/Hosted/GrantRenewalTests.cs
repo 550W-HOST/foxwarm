@@ -75,7 +75,7 @@ public sealed class GrantRenewalTests
         var outcomes = await TenantLease.RenewBatchAsync(
             control,
             Replica,
-            [.. grants.Select(grant => (grant.TenantId, grant.Epoch))],
+            [.. grants],
             LeaseTimings.Default.Ttl,
             TimeSpan.FromSeconds(1),
             skipLocked: true,
@@ -124,6 +124,8 @@ public sealed class GrantRenewalTests
         renew.Parameters.Add(new NpgsqlParameter<long[]> { TypedValue = [grant.Epoch] });
         renew.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Replica });
         renew.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
+        renew.Parameters.Add(new NpgsqlParameter<string[]> { TypedValue = [TenantProfiles.Name(grant.Profile)] });
+        renew.Parameters.Add(new NpgsqlParameter<string?[]> { TypedValue = [grant.Role] });
         await using var reader = await renew.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         return (reader.GetBoolean(0), reader.GetBoolean(1));
@@ -175,7 +177,7 @@ public sealed class GrantRenewalTests
         await using (hold)
         {
             // The retry lane's form: it waits for the lock, here past the row's expiry.
-            var renewal = TenantLease.RenewBatchAsync(control, Replica, [(grant.TenantId, grant.Epoch)], LeaseTimings.Default.Ttl, TimeSpan.FromSeconds(10), skipLocked: false, CancellationToken.None);
+            var renewal = TenantLease.RenewBatchAsync(control, Replica, [grant], LeaseTimings.Default.Ttl, TimeSpan.FromSeconds(10), skipLocked: false, CancellationToken.None);
             await Task.Delay(1200);
             Assert.False(renewal.IsCompleted);
             await hold.RollbackAsync();
@@ -197,7 +199,7 @@ public sealed class GrantRenewalTests
         {
             await Task.Delay(1500);
             // A newer renewal commits first.
-            var outcomes = await TenantLease.RenewBatchAsync(control, Replica, [(grant.TenantId, grant.Epoch)], LeaseTimings.Default.Ttl, TimeSpan.FromSeconds(1), skipLocked: true, CancellationToken.None);
+            var outcomes = await TenantLease.RenewBatchAsync(control, Replica, [grant], LeaseTimings.Default.Ttl, TimeSpan.FromSeconds(1), skipLocked: true, CancellationToken.None);
             Assert.Equal([RenewalOutcome.Renewed], outcomes);
             var newer = await ExpiresAsync(database, grant.TenantId);
             // Then the older transaction renews. Its statement runs later, so only a shorter

@@ -43,6 +43,13 @@ internal sealed record LeaseGrant(int TenantId, string Tenant, string Replica, l
     /// transaction, so the runtime is built for the profile the acquisition checked.
     /// </summary>
     internal TenantProfile Profile { get; init; } = TenantProfile.Hosted;
+
+    /// <summary>
+    /// The placement role it was acquired under; renewal proves the tenant still has
+    /// <see cref="Profile"/> and a pin that allows this role. Null for an import, which serves
+    /// nothing and is renewed on the lease alone.
+    /// </summary>
+    internal string? Role { get; init; }
 }
 
 /// <summary>The slug rule of tenant names (migration 0003's DNS label check).</summary>
@@ -104,7 +111,10 @@ internal enum RenewalOutcome
     /// <summary>Still this grant's, but locked by another transaction and skipped: proves nothing.</summary>
     Unproved,
 
-    /// <summary>Taken over, released, expired, or its tenant isn't active: the grant is lost.</summary>
+    /// <summary>
+    /// Taken over, released, expired, its tenant isn't active, or its placement no longer
+    /// matches the grant (profile changed, or a pin its role doesn't allow): the grant is lost.
+    /// </summary>
     Lost,
 }
 
@@ -242,13 +252,13 @@ internal sealed class TenantLease
             epoch = reader.GetInt64(1);
         }
         await transaction.CommitAsync(token).ConfigureAwait(false);
-        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart, Profile = profile };
+        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart, Profile = profile, Role = Role };
     }
 
     // The tenant's profile when the lease can be taken: the tenant is active, readable by this
     // binary, servable by this replica's role, and its lease is released, expired or this
-    // replica's; null otherwise. Throws when the tenant refuses this binary or this role; both
-    // checks run again under the row lock.
+    // replica's; null otherwise. Throws when the tenant refuses this binary, and, under the
+    // row lock only, when it refuses this role.
     private async Task<TenantProfile?> EligibleAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -278,6 +288,11 @@ internal sealed class TenantLease
             );
         var profile = TenantProfiles.Parse(reader.GetString(3));
         var pinned = reader.IsDBNull(4) ? null : reader.GetString(4);
+        // Without the lock a mismatch is provisional: an edit toward eligibility may be in
+        // flight. A free lease goes on to the locked check, which decides; a held one is
+        // retried at the next poll.
+        if (!ReplicaRoles.MayServe(Role, profile, pinned) && transaction is null)
+            return state == "active" && reader.GetBoolean(2) ? profile : null;
         if (!ReplicaRoles.MayServe(Role, profile, pinned))
             throw new TenantNotEligibleException(
                 $"Tenant {Tenant} (profile {TenantProfiles.Name(profile)}{(pinned is null ? "" : ", pinned to " + pinned)}) isn't served by a {Role} replica."
@@ -332,9 +347,22 @@ internal sealed class TenantLease
         long epoch;
         try
         {
+            // Tenant row first, then the lease: the order a placement edit takes them (its
+            // trigger locks the lease under the tenant row), so the two never wait on each other
+            // in a cycle.
+            await using (var tenantRow = new NpgsqlCommand(
+                "SELECT state FROM tenants WHERE name = $1 FOR UPDATE",
+                connection,
+                transaction
+            ))
+            {
+                tenantRow.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
+                if (await tenantRow.ExecuteScalarAsync(token).ConfigureAwait(false) is not ("active" or "importing"))
+                    return null;
+            }
             await using var current = new NpgsqlCommand(
-                "SELECT l.epoch, (l.state = 'released' OR l.expires_at <= now()), t.state"
-                    + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.name = $1 FOR UPDATE OF l, t",
+                "SELECT l.epoch, (l.state = 'released' OR l.expires_at <= now())"
+                    + " FROM tenant_leases l JOIN tenants t USING (tenant_id) WHERE t.name = $1 FOR UPDATE OF l",
                 connection,
                 transaction
             );
@@ -344,8 +372,7 @@ internal sealed class TenantLease
                 return null;
             epoch = reader.GetInt64(0);
             var free = reader.GetBoolean(1);
-            var state = reader.GetString(2);
-            if (epoch != (expectedEpoch ?? 0) || !free || state is not ("active" or "importing"))
+            if (epoch != (expectedEpoch ?? 0) || !free)
                 return null;
         }
         catch (PostgresException error) when (error.SqlState == "55P03")
@@ -385,6 +412,16 @@ internal sealed class TenantLease
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        // Tenant row first, then the lease, as in a placement edit (no lock cycle).
+        await using (var tenantRow = new NpgsqlCommand(
+            "SELECT 1 FROM tenants WHERE tenant_id = $1 FOR NO KEY UPDATE",
+            connection,
+            transaction
+        ))
+        {
+            tenantRow.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
+            await tenantRow.ExecuteScalarAsync(token).ConfigureAwait(false);
+        }
         await using (var held = new NpgsqlCommand(
             "SELECT 1 FROM tenant_leases WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3"
                 + " AND state = 'active' AND expires_at > now() FOR UPDATE",
@@ -414,27 +451,47 @@ internal sealed class TenantLease
 
     /// <summary>
     /// Extends the lease. False when it is no longer this grant's: taken over, released or
-    /// already expired. Never waits for a lock longer than the token allows.
+    /// already expired, or its placement no longer matches it (<see cref="PlacementHolds"/>).
+    /// Never waits for a lock longer than the token allows.
     /// </summary>
     internal async Task<bool> RenewAsync(LeaseGrant grant, TimeSpan ttl, CancellationToken token)
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "UPDATE tenant_leases SET expires_at = now() + make_interval(secs => $4)"
-                + " WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3"
-                + " AND state = 'active' AND expires_at > now()",
+            "UPDATE tenant_leases l SET expires_at = now() + make_interval(secs => $4)"
+                + " FROM tenants t"
+                + " WHERE l.tenant_id = $1 AND l.owner_replica = $2 AND l.epoch = $3"
+                + " AND l.state = 'active' AND l.expires_at > now() AND t.tenant_id = l.tenant_id"
+                + " AND " + PlacementHolds("t", "$5", "$6"),
             connection
         );
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = grant.Replica });
         command.Parameters.Add(new NpgsqlParameter<long> { TypedValue = grant.Epoch });
         command.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
+        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = TenantProfiles.Name(grant.Profile) });
+        command.Parameters.Add(new NpgsqlParameter
+        {
+            NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text,
+            Value = (object?)grant.Role ?? DBNull.Value,
+        });
         return await command.ExecuteNonQueryAsync(token).ConfigureAwait(false) == 1;
     }
 
     /// <summary>
+    /// The renewal's placement proof over tenant row <paramref name="tenant"/>: the stored
+    /// profile is still the grant's (<paramref name="profile"/>) and the pin allows the grant's
+    /// role (<paramref name="role"/>). With the profile the acquisition checked unchanged, this
+    /// is <see cref="ReplicaRoles.MayServe"/> for the role.
+    /// </summary>
+    internal static string PlacementHolds(string tenant, string profile, string role) =>
+        $"({role} IS NULL OR ({tenant}.profile = {profile}"
+        + $" AND ({tenant}.pinned_role IS NULL OR {tenant}.pinned_role = {role})))";
+
+    /// <summary>
     /// The batch renewal statement: $1 tenant IDs, $2 epochs, $3 the replica, $4 the TTL in
-    /// seconds. One row per input, in input order: renewed, and whether the row still matched.
+    /// seconds, $5 the grants' profiles, $6 their roles. One row per input, in input order:
+    /// renewed, and whether the row still matched (its placement included).
     /// Every time check uses <c>clock_timestamp()</c>, the actual time when the check runs, not
     /// the transaction's start, and the expiry is checked again on the row the update locked,
     /// so a row that expired while the statement waited (to be sent, or for the lock) is never
@@ -442,11 +499,12 @@ internal sealed class TenantLease
     /// a newer one can't undo it.
     /// </summary>
     internal static string RenewBatchSql(bool skipLocked) =>
-        "WITH batch AS (SELECT * FROM unnest($1::integer[], $2::bigint[]) WITH ORDINALITY AS b (tenant_id, epoch, ord)),"
+        "WITH batch AS (SELECT * FROM unnest($1::integer[], $2::bigint[], $5::text[], $6::text[]) WITH ORDINALITY AS b (tenant_id, epoch, profile, role, ord)),"
             + " candidates AS (SELECT l.tenant_id FROM tenant_leases l"
             + " JOIN batch b ON b.tenant_id = l.tenant_id AND b.epoch = l.epoch"
             + " JOIN tenants t ON t.tenant_id = l.tenant_id"
             + " WHERE l.owner_replica = $3 AND l.state = 'active' AND l.expires_at > clock_timestamp() AND t.state = 'active'"
+            + " AND " + PlacementHolds("t", "b.profile", "b.role")
             + (skipLocked ? " FOR NO KEY UPDATE OF l SKIP LOCKED)," : " FOR NO KEY UPDATE OF l),")
             // The expiry is checked again in the target list, which runs for the locked row
             // after any lock wait (a WHERE clause may be evaluated before the wait).
@@ -456,10 +514,12 @@ internal sealed class TenantLease
             + " FROM candidates c, batch b, tenants t"
             + " WHERE l.tenant_id = c.tenant_id AND b.tenant_id = l.tenant_id AND t.tenant_id = l.tenant_id"
             + " AND l.owner_replica = $3 AND l.epoch = b.epoch AND l.state = 'active' AND t.state = 'active'"
+            + " AND " + PlacementHolds("t", "b.profile", "b.role")
             + " RETURNING l.tenant_id, l.epoch, l.expires_at > clock_timestamp() AS extended)"
             + " SELECT coalesce(r.extended, false),"
             + " coalesce(l.owner_replica = $3 AND l.epoch = b.epoch AND l.state = 'active'"
-            + " AND l.expires_at > clock_timestamp() AND t.state = 'active', false)"
+            + " AND l.expires_at > clock_timestamp() AND t.state = 'active'"
+            + " AND " + PlacementHolds("t", "b.profile", "b.role") + ", false)"
             + " FROM batch b LEFT JOIN renewed r ON r.tenant_id = b.tenant_id AND r.epoch = b.epoch"
             + " LEFT JOIN tenant_leases l ON l.tenant_id = b.tenant_id"
             + " LEFT JOIN tenants t ON t.tenant_id = b.tenant_id ORDER BY b.ord";
@@ -476,7 +536,7 @@ internal sealed class TenantLease
     internal static async Task<RenewalOutcome[]> RenewBatchAsync(
         PgDatabase control,
         string replica,
-        IReadOnlyList<(int TenantId, long Epoch)> rows,
+        IReadOnlyList<LeaseGrant> rows,
         TimeSpan ttl,
         TimeSpan lockTimeout,
         bool skipLocked,
@@ -498,6 +558,8 @@ internal sealed class TenantLease
         renew.Parameters.Add(new NpgsqlParameter<long[]> { TypedValue = [.. rows.Select(row => row.Epoch)] });
         renew.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
         renew.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
+        renew.Parameters.Add(new NpgsqlParameter<string[]> { TypedValue = [.. rows.Select(row => TenantProfiles.Name(row.Profile))] });
+        renew.Parameters.Add(new NpgsqlParameter<string?[]> { TypedValue = [.. rows.Select(row => row.Role)] });
         batch.BatchCommands.Add(renew);
         var outcomes = new RenewalOutcome[rows.Count];
         await using (var reader = await batch.ExecuteReaderAsync(token).ConfigureAwait(false))

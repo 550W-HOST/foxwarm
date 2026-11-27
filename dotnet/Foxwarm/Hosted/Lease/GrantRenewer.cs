@@ -288,7 +288,7 @@ internal sealed class GrantRenewer : IAsyncDisposable
                 .RenewBatchAsync(
                     batches,
                     replica,
-                    [.. batch.Select(handle => (handle.Grant.TenantId, handle.Grant.Epoch))],
+                    [.. batch.Select(handle => handle.Grant)],
                     timings.Ttl,
                     timings.RenewInterval / 2,
                     skipLocked: true,
@@ -379,7 +379,7 @@ internal sealed class GrantRenewer : IAsyncDisposable
                 .RenewBatchAsync(
                     control,
                     replica,
-                    [(handle.Grant.TenantId, handle.Grant.Epoch)],
+                    [handle.Grant],
                     timings.Ttl,
                     wait,
                     skipLocked: false,
