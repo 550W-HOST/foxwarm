@@ -229,6 +229,11 @@ public sealed class TenantReplicaTests
         }
     }
 
+    // The initial LISTEN transaction has committed and the replica has taken its snapshot of
+    // live runtimes. A runtime activated after this point will see only subsequent changes.
+    private static Task InitialSubscriptionAsync(Fixture f) =>
+        UntilAsync(() => f.Replica.OperatorVersion > 0, "the initial subscription invalidated operator documents");
+
     private static int IndexOf(string[] events, string what)
     {
         var index = Array.IndexOf(events, what);
@@ -407,6 +412,7 @@ public sealed class TenantReplicaTests
     public async Task AnOperatorDocumentChangeDuringAStartIsAppliedWhenTheStartEnds()
     {
         await using var f = await StartAsync("alpha");
+        await InitialSubscriptionAsync(f);
         f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var request = f.GetAsync("alpha");
         await UntilAsync(() => f.EventList().Contains("alpha:start-waits"), "the start began");
@@ -428,10 +434,9 @@ public sealed class TenantReplicaTests
     public async Task RetirementWaitsForARunningCallbackAndNoneRunsAfterIt()
     {
         await using var f = await StartAsync("alpha");
+        await InitialSubscriptionAsync(f);
         await f.WhoAmIAsync("alpha");
         var runtime = f.Live("alpha").Single();
-        // Settled: any catch-up callback from the start has run.
-        await Task.Delay(300);
         var before = Volatile.Read(ref runtime.OperatorChanges);
         f.CallbackEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         f.CallbackGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -455,14 +460,12 @@ public sealed class TenantReplicaTests
     public async Task AChangeCommittedWhileTheListenerIsDisconnectedReachesTheRuntimeAfterReconnect()
     {
         await using var f = await StartAsync("alpha");
+        await InitialSubscriptionAsync(f);
         await f.WhoAmIAsync("alpha");
         var runtime = f.Live("alpha").Single();
         const string Listeners = "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'foxwarm-listen' AND datname = current_database()";
         await UntilAsync(async () => (long)(await f.Database.ScalarAsync(Listeners))! == 1, "the listener subscribed");
-        // Quiet: nothing queued from the start.
-        var changes = Volatile.Read(ref runtime.OperatorChanges);
-        await Task.Delay(300);
-        Assert.Equal(changes, Volatile.Read(ref runtime.OperatorChanges));
+        Assert.Equal(0, Volatile.Read(ref runtime.OperatorChanges));
         var version = f.Replica.OperatorVersion;
         // One transaction ends this database's listener backend and commits the change, before
         // the listener's reconnect backoff has passed.
@@ -474,7 +477,9 @@ public sealed class TenantReplicaTests
         );
         Assert.Equal(1L, ended);
         await UntilAsync(async () => (long)(await f.Database.ScalarAsync(Listeners))! == 1 && f.Replica.OperatorVersion > version, "the listener resubscribed");
-        await UntilAsync(() => f.ObservedDocuments == "while-away", "the runtime saw the change made while the listener was away");
+        await UntilAsync(() => Volatile.Read(ref runtime.OperatorChanges) > 0, "the runtime applied the reconnect refresh");
+        Assert.Equal("while-away", f.ObservedDocuments);
+        Assert.Equal(1, Volatile.Read(ref runtime.OperatorChanges));
         Assert.StartsWith("alpha:", await f.WhoAmIAsync("alpha"));
     }
 
