@@ -106,6 +106,8 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
+        if (!Recording)
+            return AdmitUnrecorded(sessionId, purpose);
         var requestId = Guid.NewGuid().ToString();
         // Consume request-owned JSON before admission; only immutable encoded values cross the queue.
         var prompt = LlmRequestJournalStore.PrepareObject("prompt", JsonValue.Create(systemPrompt)!);
@@ -252,6 +254,8 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
+        if (StartUnrecorded(requestId, attempt, concreteModelId, virtualModelKey, providerType))
+            return new(Task.FromResult(true));
         var prompt = LlmRequestJournalStore.PrepareObject("prompt", JsonValue.Create(effectivePrompt)!);
         var payloadHash = LlmRequestJournalStore.HashValue(semanticPayload);
         return await Writer
@@ -330,6 +334,12 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
+        if (
+            await CompleteUnrecordedAsync(requestId, attempt, outcome, ledger, redaction, token)
+                .ConfigureAwait(false)
+            is { } unrecordedReceipt
+        )
+            return unrecordedReceipt;
         var resultJson = result is null ? null : LlmRequestJournalStore.Codec.Write(result);
         var errorJson = error is null ? null : LlmRequestJournalStore.Codec.Write(error);
         return await Writer
@@ -416,13 +426,20 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     )
     {
         CheckOpen();
+        if (NotRecordedAnswer(requestId, known: true) is { } unrecordedAnswer)
+            return unrecordedAnswer;
         await Writer.BarrierAsync(token).ConfigureAwait(false);
         try
         {
-            return database.Read(
+            var reconstructed = database.Read(
                 tx => LlmJournalReconstruction.Reconstruct(new PgRows(tx), requestId),
                 snapshot: true
             );
+            // No row knows the request: while the journal is off, it wasn't recorded.
+            return reconstructed["completeness"]?.GetValue<string>() == "legacy-partial"
+                && NotRecordedAnswer(requestId, known: false) is { } offAnswer
+                ? offAnswer
+                : reconstructed;
         }
         // As in the file journal, an inconsistent request is reported rather than thrown; an
         // unavailable database still fails the call.

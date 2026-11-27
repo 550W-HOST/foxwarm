@@ -17,6 +17,13 @@ internal sealed partial class PostgresStorageContext
         ((PgLlmJournalStore)Journal).StartRetention(options);
 
     /// <summary>
+    /// Applies the tenant's journal switch (<see cref="TenantSettings.JournalEnabled"/>): off
+    /// writes no request content, only the usage-ledger and redaction rows.
+    /// </summary>
+    internal void ApplyJournalSettings(TenantSettings settings) =>
+        ((PgLlmJournalStore)Journal).Recording = settings.JournalEnabled;
+
+    /// <summary>
     /// Opens the tenant's text-redaction cache with its derived store key, the opener
     /// <c>InstanceSecrets</c> takes; null leaves redaction memory-only.
     /// </summary>
