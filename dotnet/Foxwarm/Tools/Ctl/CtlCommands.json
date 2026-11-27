@@ -1603,7 +1603,7 @@
           "name": "rules",
           "type": "array|object",
           "kind": "flag",
-          "help": "Initial local authorization rules for the new Agent, evaluated in order; pass a JSON array or {script, data?} object, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply.",
+          "help": "Initial local authorization rules for the new Agent, evaluated in order; pass a JSON array, or a {script, data?} object whose ToolScript returns the list, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply.",
           "ingress": [
             "model"
           ]
@@ -1661,7 +1661,7 @@
           "type": "array|object",
           "kind": "flag",
           "required": true,
-          "help": "Complete replacement rules, evaluated in order; pass a JSON array or {script, data?} object, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. An empty list removes this layer's rules. Caller selectors are not accepted."
+          "help": "Complete replacement rules, evaluated in order; pass a JSON array, or a {script, data?} object whose ToolScript returns the list, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. An empty list removes this layer's rules. Caller selectors are not accepted."
         }
       ]
     },

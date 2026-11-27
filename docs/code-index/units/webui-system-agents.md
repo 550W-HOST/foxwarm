@@ -1,7 +1,7 @@
 # Unit: webui-system-agents
 
 Files: packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemAgentLayers.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/shared/src/agentRulesSchema.ts
-Secondary files: packages/webui/src/components/SystemView.tsx, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/components/JsonInspectorDialog.tsx, packages/webui/src/components/SetupView.tsx, packages/webui/src/App.tsx, packages/webui/test/configEditor.test.mjs, packages/webui/test/mainHostKnowledge.e2e.mjs, packages/webui/test/mainHostSystemLayout.e2e.mjs
+Secondary files: packages/webui/src/components/SystemView.tsx, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/components/JsonInspectorDialog.tsx, packages/webui/src/components/SetupView.tsx, packages/webui/src/App.tsx, packages/webui/test/configEditor.test.mjs, packages/webui/test/mainHostKnowledge.e2e.mjs, packages/webui/test/mainHostSystemLayout.e2e.mjs, packages/webui/test/mainHostPolicyScriptPreview.e2e.mjs
 
 ## Purpose
 

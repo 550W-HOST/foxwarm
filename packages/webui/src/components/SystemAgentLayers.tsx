@@ -317,7 +317,7 @@ function OwnLayerEditor({ agent, onSave }: { agent: AgentRegistryEntry; onSave: 
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        setPreview({ rules: [], error: data.error || `Preview failed (${response.status})` })
+        setPreview({ rules: [], error: data.error || "Couldn't preview the rules." })
       } else {
         setPreview({ rules: Array.isArray(data.expandedRules) ? data.expandedRules : [] })
       }
