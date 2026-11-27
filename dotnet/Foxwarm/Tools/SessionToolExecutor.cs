@@ -152,7 +152,7 @@ internal sealed partial class SessionToolExecutor(
                     (JsonNode?)
                         new JsonObject
                         {
-                            ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+                            ["layer"] = OperatorCeiling.Label(layer.Layer),
                             ["id"] =
                                 SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction",
                             ["effect"] = AuthorizationDecision.Name(layer.Decision.Effect),

@@ -183,4 +183,113 @@ public sealed class DeploymentConfigurationTests
             Assert.Throws<HostedBootstrapException>(() => settings.ReadCredentials()).Message
         );
     }
+
+    private static string TenantRefusal(string text, TenantProfile profile) =>
+        Assert.Throws<InvalidDataException>(() =>
+            AppConfigurationSplit.RequireTenantDocument(ConfigurationYaml.Parse(text, "app config"), profile)
+        ).Message;
+
+    // P2 plan §6.1: the tenant document holds only its profile's paths, and a refusal names the
+    // key in the shape P1 uses for unavailable features.
+    [Fact]
+    public void A_tenant_document_holds_only_its_profiles_paths_and_a_refusal_names_the_key()
+    {
+        const string Tenant =
+            "access: {identities: {}}\nagentTree: {maxDepth: 3}\nnodeTree: {maxChildren: 8}\n"
+            + "agentDefaultNode: devbox\nsessionAutoTitle: true\nchannels: {}\n"
+            + "llm: {memoryWarningThresholdPercent: 0.2}\nbot: {name: Fox}\n";
+        foreach (var profile in new[] { TenantProfile.Hosted, TenantProfile.Operator })
+        {
+            AppConfigurationSplit.RequireTenantDocument(ConfigurationYaml.Parse(Tenant, "app config"), profile);
+            foreach (var (text, message) in new[]
+            {
+                // Unknown keys, top-level and under `bot`.
+                ("handoff: true\n", "app config `handoff` isn't a tenant setting."),
+                ("bot: {color: red}\n", "app config `bot.color` isn't a tenant setting."),
+                // Operator settings: a tenant of either profile can't configure a Provider.
+                ("nodeProviders: {extra: {type: executable, command: /bin/true}}\n",
+                    "app config `nodeProviders` is a deployment setting; set it in the deployment configuration."),
+                ("url: https://fox.example\n",
+                    "app config `url` is a deployment setting; set it in the deployment configuration."),
+                ("vector: false\n", "app config `vector` isn't available in hosted mode."),
+                ("paths: {agentsDir: /srv}\n", "app config `paths` isn't available in hosted mode."),
+            })
+                Assert.Equal(message, TenantRefusal(text, profile));
+        }
+        // The Claude runtime's settings belong to the operator profile only.
+        Assert.Equal(
+            "app config `claudeCode` isn't available in hosted mode.",
+            TenantRefusal("claudeCode: {executable: claude}\n", TenantProfile.Hosted)
+        );
+        AppConfigurationSplit.RequireTenantDocument(
+            ConfigurationYaml.Parse("claudeCode: {executable: claude}\n", "app config"),
+            TenantProfile.Operator
+        );
+        // The allowlists never overlap the deployment's paths.
+        foreach (var profile in new[] { TenantProfile.Hosted, TenantProfile.Operator })
+            Assert.Empty(AppConfigurationSplit.TenantPaths(profile).Intersect(AppConfigurationSplit.DeploymentPaths));
+    }
+
+    [Fact]
+    public void Import_refuses_a_WeWork_callback_listener()
+    {
+        var refused = Assert.Throws<Foxwarm.Hosted.Import.ImportRefusedException>(() =>
+            Foxwarm.Hosted.Import.ConfigSplit.Split(
+                "channels:\n  wework:\n    token: synthetic\n    encodingAESKey: synthetic\n    listenPort: 18731\n    listenPath: /wework\n"
+            )
+        );
+        Assert.Equal(
+            "config.yaml: WeWork callback mode isn't available in this deployment; use WebSocket mode.",
+            refused.Message
+        );
+        Foxwarm.Hosted.Import.ConfigSplit.Split(
+            "channels:\n  wework:\n    aibot:\n      websocket: {enabled: true, botId: synthetic, secret: synthetic}\n"
+        );
+    }
+
+    // Paths are key segments: a literal top-level key containing a dot is one unknown key, never
+    // the nested setting it spells.
+    [Fact]
+    public void A_literal_dotted_key_is_not_the_nested_setting_it_spells()
+    {
+        var literal = Foxwarm.ConfigurationYaml.Parse("\"bot.name\": Fox\n", "app config");
+        Assert.Equal(
+            "app config `bot.name` isn't a tenant setting.",
+            Assert.Throws<InvalidDataException>(() => AppConfigurationSplit.RequireTenantDocument(literal)).Message
+        );
+        var loaded = AppConfigurationSplit.LoadTenantDocument(
+            Foxwarm.ConfigurationYaml.Parse("\"bot.name\": Fox\nbot:\n  name: Real\n", "app config"),
+            TenantProfile.Hosted,
+            out var ignored
+        );
+        Assert.Equal(["bot.name"], ignored);
+        Assert.False(loaded.ContainsKey("bot.name"));
+        Assert.Equal("Real", loaded["bot"]!["name"]!.GetValue<string>());
+        // A literal `url.x` isn't a deployment setting either.
+        Assert.Equal(
+            "app config `url.x` isn't a tenant setting.",
+            Assert.Throws<InvalidDataException>(() =>
+                AppConfigurationSplit.RequireTenantDocument(Foxwarm.ConfigurationYaml.Parse("\"url.x\": 1\n", "app config"))
+            ).Message
+        );
+    }
+
+    [Fact]
+    public void Import_drops_a_literal_dotted_key_and_splits_journal_at_its_deployment_child()
+    {
+        var split = Foxwarm.Hosted.Import.ConfigSplit.Split(
+            "sessionAutoTitle: true\n\"bot.name\": Literal\nbot:\n  name: Fox\njournal:\n  retentionDays: 7\n  compress: true\n"
+        );
+        Assert.Equal(
+            ["bot.name", "journal.compress"],
+            split.Dropped.Select(item => item.Key).Order(StringComparer.Ordinal).ToArray()
+        );
+        Assert.Equal("Literal", split.Dropped.Single(item => item.Key == "bot.name").Value!.GetValue<string>());
+        Assert.True(split.Dropped.Single(item => item.Key == "journal.compress").Value!.GetValue<bool>());
+        Assert.Equal("Fox", split.Tenant["bot"]!["name"]!.GetValue<string>());
+        Assert.False(split.Tenant.ContainsKey("bot.name"));
+        Assert.False(split.Tenant.ContainsKey("journal"));
+        Assert.Equal(7, split.Deployment["journal"]!["retentionDays"]!.GetValue<double>());
+        Assert.False(split.Deployment["journal"]!.AsObject().ContainsKey("compress"));
+    }
 }

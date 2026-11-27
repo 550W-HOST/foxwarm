@@ -95,7 +95,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null,
         Foxwarm.Storage.IStorageContext? storage = null,
         // The runtime's features; null is file mode's full profile.
-        RuntimeCapabilities? capabilities = null
+        RuntimeCapabilities? capabilities = null,
+        // The hosted tenant profile prompts are built for (AgentMemory); null in file mode.
+        string? memoryProfile = null
     )
     {
         Capabilities = capabilities ?? RuntimeCapabilities.File;
@@ -162,7 +164,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             and not Foxwarm.Storage.FileConfigDocuments
                 ? configured
                 : new Foxwarm.Storage.FileConfigDocuments(this.root, hostPaths?.McpConfigPath);
-        authorization = new ToolAuthorizationAuthority(ConfigDocuments);
+        authorization = new ToolAuthorizationAuthority(ConfigDocuments)
+        {
+            CeilingSource = models.ConfigurationOwner?.OperatorCeiling,
+        };
         Storage.Identities.ValidateStartupEvidence(allowPendingIdentityRecovery: true);
         Directory.CreateDirectory(this.root);
         deletionChannels = new(this.root, documents: Storage.Documents);
@@ -220,7 +225,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             models,
             skillAccess: CatalogSkillAccess,
             files: AgentStore,
-            masterNode: Capabilities.MasterNode
+            masterNode: Capabilities.MasterNode,
+            profile: memoryProfile
         );
         executor = new LocalExecManager(
             this.root,

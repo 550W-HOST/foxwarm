@@ -43,6 +43,22 @@ public static class ConditionalMemory
         string modelId,
         string runtime = FoxwarmRuntime,
         bool masterNode = true
+    ) => Filter(source, modelId, runtime, masterNode, masterNodeOnly: false);
+
+    /// <summary>
+    /// Filters only the <c>master-node</c> wrappers of <paramref name="source"/>: a text that has
+    /// no model identity of its own, such as a bundled skill document read as a tool result.
+    /// A wrapper with any other attribute stays literal.
+    /// </summary>
+    public static string FilterMasterNodeSource(string source, bool masterNode) =>
+        Filter(source, "", FoxwarmRuntime, masterNode, masterNodeOnly: true);
+
+    private static string Filter(
+        string source,
+        string modelId,
+        string runtime,
+        bool masterNode,
+        bool masterNodeOnly
     )
     {
         if (
@@ -52,6 +68,10 @@ public static class ConditionalMemory
             return source;
         var lines = SplitSourceLines(source);
         var ranges = FindConditionalRanges(lines, FindFencedLines(lines));
+        if (masterNodeOnly)
+            ranges = ranges
+                .Where(range => range.Conditions.Keys.All(key => key == "master-node"))
+                .ToList();
         if (ranges.Count == 0)
             return source;
 

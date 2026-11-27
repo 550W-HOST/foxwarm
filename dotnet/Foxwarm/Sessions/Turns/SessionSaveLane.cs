@@ -189,19 +189,26 @@ public sealed partial class SessionSaveLane
     }
 
     /// <summary>Persist one owner snapshot before a model request; no request is sent on failure.</summary>
-    public Task CommitMemorySnapshotAsync(string snapshot) =>
+    // `profile` is the hosted profile the snapshot was built under (AgentMemory.Profile); file
+    // mode passes none and records none.
+    public Task CommitMemorySnapshotAsync(string snapshot, string? profile = null) =>
         EnqueueOperationAsync(async () =>
         {
+            void Record(JsonObject envelope)
+            {
+                envelope["persistentMemorySnapshot"] = snapshot;
+                if (profile is not null)
+                    envelope[AgentMemory.ProfileKey] = profile;
+            }
             var staged = entry.WithState(state =>
             {
                 var next = state.Snapshot();
                 var envelope = (JsonObject)next.AuthorityEnvelope.DeepClone();
-                envelope["persistentMemorySnapshot"] = snapshot;
+                Record(envelope);
                 return next with { AuthorityEnvelope = envelope };
             });
             staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
-            void Publish(SessionState state) =>
-                state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshot;
+            void Publish(SessionState state) => Record(state.AuthorityEnvelope);
             try
             {
                 await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false);

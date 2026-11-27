@@ -17,11 +17,16 @@ Foxwarm is a lightweight, extensible AI assistant runtime for development workfl
 
 An **agent** is a long-lived workspace and memory container.
 
+<foxwarm-if master-node="true">
 An agent stores durable instructions and notes under:
 
 ```text
 agents/<agent>/memory/
 ```
+</foxwarm-if>
+<foxwarm-if master-node="false">
+An agent keeps durable instructions and notes in its memory files. Read and change them with `ctl memory` (see `ctl memory --help`).
+</foxwarm-if>
 
 Use agents when different long-term roles, projects, memories, or tool restrictions should stay separate.
 
@@ -51,19 +56,39 @@ Generic tool policy can restrict internal Agents/Sessions and external MCP ident
 
 A **node** is an execution host for tools.
 
+<foxwarm-if master-node="true">
 - `master` is the default local node where the Foxwarm server runs.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+- This deployment has no `master` Node. Commands run on a Node the Session selects with `ctl node select`. With no Node selected, file tools reach only this Agent's own folder, through `$fw_agentdir`.
+</foxwarm-if>
 - Remote nodes can run on another machine, in Docker, in a terminal approval UI, in a browser extension, or in a sandbox.
+<foxwarm-if master-node="true">
 - Native Nodes are paired with `master` and approved; Provider Nodes are listed or created by a configured Provider.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+- Native Nodes are paired with this Foxwarm server and approved; Provider Nodes are listed or created by a Provider the operator has made available.
+</foxwarm-if>
 
+<foxwarm-if master-node="true">
 Use nodes when tools should run somewhere other than the master process, for example on another machine, inside a sandbox, or inside a browser.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Use nodes for work with files or commands outside this Agent's folder, for example on another machine, inside a sandbox, or inside a browser.
+</foxwarm-if>
 
 ### Skill
 
+<foxwarm-if master-node="true">
 A **skill** is a reusable instruction/documentation pack. Skills are usually stored under:
 
 ```text
 skills/<skill>/SKILL.md
 ```
+</foxwarm-if>
+<foxwarm-if master-node="false">
+A **skill** is a reusable instruction/documentation pack. Bundled skills come with Foxwarm; an Agent's own skills live in its folder under `skills/<skill>/SKILL.md`.
+</foxwarm-if>
 
 The prompt contains a catalog of available skills; full skill documents are loaded on demand.
 
@@ -71,16 +96,22 @@ The prompt contains a catalog of available skills; full skill documents are load
 
 A **channel** is a user-facing message interface such as WebUI, Telegram, Matrix, WeChat Work, or Weixin.
 
+<foxwarm-if master-node="true">
 Channels are configured in:
 
 ```text
 state/config.yaml
 ```
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Channels are configured in WebUI Setup, on the Config tab.
+</foxwarm-if>
 
 In current Foxwarm versions, channel edits from WebUI Setup are hot-reloaded: managed channels are stopped and started again without restarting the Foxwarm process.
 
 ### Models
 
+<foxwarm-if master-node="true">
 Model provider configuration lives in:
 
 ```text
@@ -88,6 +119,10 @@ state/models.yaml
 ```
 
 The WebUI OOBE/Setup page can create this file. Foxwarm enters first-time OOBE when `state/models.yaml` is missing.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Model providers are configured in WebUI Setup, on the Models tab. Until a model is configured, the WebUI opens the model setup first.
+</foxwarm-if>
 
 ### Memory
 

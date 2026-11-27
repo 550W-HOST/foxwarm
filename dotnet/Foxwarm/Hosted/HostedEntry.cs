@@ -151,6 +151,8 @@ internal static class HostedEntry
         ModelConfiguration configuration;
         HostPaths paths;
         JournalRetentionOptions retention;
+        // The tenant's stored profile, fixed for this runtime: a change is a move to a new one.
+        var profile = await TenantProfileStore.ReadAsync(tenant.Database, token).ConfigureAwait(false);
         try
         {
             retention = JournalRetentionOptions.FromDeployment(deployment.Root["journal"]);
@@ -177,6 +179,11 @@ internal static class HostedEntry
                     ),
                     storage.Credentials
                 )
+                {
+                    OperatorCeiling = new OperatorCeilingDocuments(tenant.Database, profile),
+                    // The paths the tenant's config document may hold.
+                    Profile = profile,
+                }
             );
         }
         catch (Exception error)
@@ -210,10 +217,7 @@ internal static class HostedEntry
                 distRoot,
                 captureDiagnostics: true,
                 storage: storage,
-                capabilities: RuntimeCapabilities.Hosted with
-                {
-                    Egress = Foxwarm.Net.EgressPolicy.Hosted(deployment.Egress),
-                },
+                capabilities: RuntimeCapabilities.For(profile, deployment.Egress),
                 jsonStdoutLog: true,
                 logTenant: bootstrap.Tenant
             )
@@ -230,6 +234,14 @@ internal sealed class MainHostRuntime(MainHost host, PostgresStorageContext tena
     private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal MainHost Host => host;
+
+    /// <summary>
+    /// The operator changed <c>operator_documents</c> (<c>NOTIFY foxwarm_operator</c>): the
+    /// tenant's next authorization check reads its ceiling again. The runtimes host's listener
+    /// calls this for every runtime it serves; a missed signal leaves the previous ceiling in
+    /// force until the next one or a new runtime.
+    /// </summary>
+    internal void OperatorDocumentsChanged() => host.Sessions.Authorization.OperatorCeilingChanged();
 
     public async Task StartAsync()
     {

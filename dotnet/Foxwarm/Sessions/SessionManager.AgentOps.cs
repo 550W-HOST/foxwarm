@@ -626,7 +626,7 @@ internal sealed partial class SessionManager
                 selection: AgentMemory.Selection(snapshot.AuthorityEnvelope),
                 externalRuntime: true
             );
-            await session.Entry.SaveLane.CommitMemorySnapshotAsync(externalMemory);
+            await session.Entry.SaveLane.CommitMemorySnapshotAsync(externalMemory, memory.Profile);
             return ClaudeRuntimeState.Kind;
         }
         var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(
@@ -648,7 +648,7 @@ internal sealed partial class SessionManager
             modelId,
             selection: AgentMemory.Selection(snapshot.AuthorityEnvelope)
         );
-        await session.Entry.SaveLane.CommitMemorySnapshotAsync(value);
+        await session.Entry.SaveLane.CommitMemorySnapshotAsync(value, memory.Profile);
         return modelId;
     }
 
@@ -763,6 +763,8 @@ internal sealed partial class SessionManager
                     if (childDefaults?.Effort is string childEffort)
                         state.AuthorityEnvelope["childEffortDefault"] = childEffort;
                     state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshotText;
+                    if (memory.Profile is { } profile)
+                        state.AuthorityEnvelope[AgentMemory.ProfileKey] = profile;
                     if (selectedFiles is not null)
                         state.AuthorityEnvelope["systemPromptFiles"] = new JsonArray(
                             selectedFiles

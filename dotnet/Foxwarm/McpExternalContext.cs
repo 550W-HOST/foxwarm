@@ -172,13 +172,20 @@ internal sealed class McpExternalAuthorization(
     )
     {
         context.Require();
-        if (!ToolAuthorizationEvaluation.Evaluate(policy ?? authority.Load(), request).Allowed)
+        // The operator ceiling applies to inbound principals too, before the global policy.
+        if (
+            !authority
+                .GlobalLayers(policy ?? authority.Load())
+                .All(layer => ToolAuthorizationEvaluation.Evaluate(layer, request).Allowed)
+        )
             throw new McpInboundSafeException("Tool action is not permitted.");
     }
 
     internal bool Visible(McpExternalContext context, ToolAuthorizationRequest request)
     {
         context.Require();
-        return ToolAuthorizationEvaluation.Visible(authority.Load(), request);
+        return authority
+            .GlobalLayers(authority.Load())
+            .All(layer => ToolAuthorizationEvaluation.Visible(layer, request));
     }
 }

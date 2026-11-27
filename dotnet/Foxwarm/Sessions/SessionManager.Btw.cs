@@ -67,10 +67,13 @@ internal sealed partial class SessionManager
             var persistent =
                 SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
             string? attemptedModel = null;
+            var profileCurrent = memory.ProfileCurrent(snapshot.AuthorityEnvelope);
             async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
             {
                 attemptedModel = leaf.Key;
-                if (ConditionalMemory.ReadCurrentModelSnapshotId(persistent) != leaf.Key)
+                if (!profileCurrent || ConditionalMemory.ReadCurrentModelSnapshotId(persistent) != leaf.Key)
+                {
+                    profileCurrent = true;
                     persistent = await memory.BuildAsync(
                         snapshot.AuthorityEnvelope["agent"]?.GetValue<string>() ?? source.Agent,
                         snapshot.Id,
@@ -78,6 +81,7 @@ internal sealed partial class SessionManager
                         token,
                         AgentMemory.Selection(snapshot.AuthorityEnvelope)
                     );
+                }
                 return clientOptions.Instructions.Length == 0
                     ? persistent
                     : clientOptions.Instructions + "\n\n" + persistent;

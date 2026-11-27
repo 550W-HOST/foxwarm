@@ -97,7 +97,9 @@ internal static class OperationAttribution
     }
 
     internal static string LayerName(string? layer) =>
-        layer is null ? "the global policy" : $"the rules of Agent `{layer}`";
+        layer is null ? "the global policy"
+        : layer == OperatorCeiling.Layer ? "the operator ceiling"
+        : $"the rules of Agent `{layer}`";
 
     // Sentence-initial by default; `lower` for use in the middle of a sentence.
     private static string RuleName(ToolAuthorizationPolicy policy, JsonObject rule, bool lower = false)
@@ -289,7 +291,7 @@ internal static class OperationAttribution
     {
         var result = new JsonObject
         {
-            ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+            ["layer"] = OperatorCeiling.Label(layer.Layer),
             ["decision"] = AuthorizationDecision.Name(layer.Decision.Effect),
         };
         RuleReference(result, layer.Policy, layer.Decision.Rule);
@@ -307,7 +309,7 @@ internal static class OperationAttribution
     {
         var result = new JsonObject
         {
-            ["layer"] = layer is null ? "global" : "agent:" + layer,
+            ["layer"] = OperatorCeiling.Label(layer),
             ["decision"] = outcome.Decision.ToString().ToLowerInvariant(),
         };
         var (causes, conservative) = CreationCauses(outcome);

@@ -9,7 +9,11 @@ Use this skill to explain, bootstrap, troubleshoot, or coordinate development wo
 
 ## Choose a workflow
 
+<foxwarm-if master-node="true">
 - **Delegated development work:** read [the development workflow](references/development-workflow.md) and its runnable [ToolScript example](examples/development_workflow.py): provisioning a fresh Node, source/material transfer, Task assignment, committed or evidence-only delivery, review and explicit release.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 - **Disposable environments:** read [the container Provider guide](examples/container/README.md). It creates one Docker or Podman container per Node from administrator-defined profiles, without network access. Registration is administrator opt-in.
 - **Existing Linux machines:** read [the Linux SSH adapter guide](examples/linux-ssh/README.md). It includes opt-in registration for existing hosts; it is neither a default backend nor an OS/network sandbox. Python 3 and OpenSSH are administrator prerequisites.
 - **Pairing and bootstrap:** use the sections below. Policy syntax belongs to `access-control`; Agent lifecycle, local rules and restricted-worker templates belong to `agent-management`.
@@ -63,6 +67,7 @@ There is also a structured builtin tool for agent workflows:
 
 - `node_bootstrap_info`
 
+<foxwarm-if master-node="true">
 Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
 It requires `filePath`: an absolute path on master for a new owner-only file that receives
 the pairing token. The returned commands contain the placeholder `PAIRING_TOKEN` (for example
@@ -72,10 +77,21 @@ running the command on the new Node. Choose a new path each time; an existing fi
 replaced.
 The pairing and agent-management helpers are `ctl node` commands; `ctl node --help`
 lists them.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text. In this deployment it can't write the pairing token to a file, so ask the user to pair a new Node in the WebUI, under System → Nodes → New nodes.
+</foxwarm-if>
 
+<foxwarm-if master-node="true">
 When this skill shows `/node ...` examples below, read them as **commands for the user to run on the master side** unless the surrounding text explicitly says otherwise.
 
 This skill matches the current bootstrap surfaces exposed by a running master:
+</foxwarm-if>
+<foxwarm-if master-node="false">
+When this skill shows `/node ...` examples below, read them as **commands for the user to send in a Foxwarm chat**, not on the Node's machine, unless the surrounding text explicitly says otherwise.
+
+This skill matches the current bootstrap surfaces of this Foxwarm server:
+</foxwarm-if>
 
 - `/node/run.sh`
 - `/node/run-docker.sh`
@@ -107,6 +123,7 @@ Run untrusted or risky work, such as code from an unreviewed repository or an Ag
 - for a long-lived assistant, one reserved Node (an `ensure`d container, VM or dedicated machine) set as its Agent's `defaultNode`;
 - in both cases, an Agent-local allowlist that keeps the Agent's tools on its current Node. `agent-management` has restricted-worker and channel-assistant templates.
 
+<foxwarm-if master-node="true">
 ## Base URL principle
 
 Foxwarm cannot infer one globally correct external base URL for every node bootstrap unless the operator supplies a public URL in top-level config:
@@ -116,7 +133,14 @@ url: https://foxwarm.example.invalid/foxwarm
 ```
 
 The configured URL supplies `/node bootstrap-info` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, each example contains a replaceable `YOUR_MASTER` address and can be copied independently.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+## Base URL
 
+Bootstrap examples use this deployment's public URL, which its operator configures.
+</foxwarm-if>
+
+<foxwarm-if master-node="true">
 Depending on where the node runs, the reachable master URL might be:
 
 - `http://localhost:3001`
@@ -125,6 +149,9 @@ Depending on where the node runs, the reachable master URL might be:
 - a public reverse-proxy domain
 - something else environment-specific
 
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 What Foxwarm **can** do is:
 
 - when serving `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1`
@@ -135,7 +162,11 @@ Tool note:
 
 - the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
 - it returns complete configured addresses when available; otherwise replace `YOUR_MASTER` in the command you copy
+<foxwarm-if master-node="true">
 - it writes the pairing token to its `filePath` and shows `PAIRING_TOKEN` in the commands; substitute the file's contents
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 - commands are independently copyable; check that the address is reachable from the new Node
 - a configured public URL is not a guarantee that every node can reach it
 
@@ -157,6 +188,7 @@ Two supported paths are available. For a Node created before the remote client r
 
 It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use `ctl node remove` below.
 
+<foxwarm-if master-node="true">
 For an agent-managed setup, run `ctl node token <node-id> --file-path <path>`
 (`node_create_auth_token`). This is separate from `ctl node create`: the
 latter runs a configured provider lifecycle,
@@ -187,6 +219,10 @@ put the token in a command argument, environment interpolation visible to the
 tool call, script output, or a captured `cat`; avoid shell tracing such as
 `set -x`. The protected file may remain on master until the operator moves or
 deletes it.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Agents can't create per-Node credentials in this deployment, because the credential would have to be written to a file. Ask the user to create the Node in the WebUI and use the setup command shown there, or to send `/node token <node-id>` in a Foxwarm chat.
+</foxwarm-if>
 
 For the existing request/approve path, start the Node with the shared pairing token:
 
@@ -453,7 +489,12 @@ After startup and approval:
 
 1. use `ctl node list` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
 2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
+<foxwarm-if master-node="true">
 3. confirm tool execution happens on the expected Node, not accidentally on `master`
+</foxwarm-if>
+<foxwarm-if master-node="false">
+3. confirm tool execution happens on the expected Node
+</foxwarm-if>
 4. for restricted Agents, check representative allowed and denied calls with `explain_tool_authorization`
 
 ## Common troubleshooting
@@ -480,10 +521,14 @@ rm -f /opt/foxwarm-node/data/state/node_credentials.json
 ```
 
 Then restart and re-approve.
+<foxwarm-if master-node="true">
 
 ### The Main server in a container shows unexpected Agents or state
 
 Check the `FOXWARM_DATA_DIR` its compose file sets; a different data directory is a different installation state.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 
 ## Related skills
 

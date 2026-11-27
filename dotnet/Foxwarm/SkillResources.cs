@@ -38,6 +38,7 @@ internal sealed partial class Skills
         if (path is null)
         {
             var (files, more) = Resources(info.Source, info.Directory);
+            files = files.Where(file => !info.Withheld.Contains(file)).ToArray();
             truncated = more;
             items = [("SKILL.md", Under(targetPath, "SKILL.md")), .. files.Select(file => (file, Under(targetPath, file)))];
         }
@@ -81,11 +82,12 @@ internal sealed partial class Skills
                 full = null;
             full ??= Contained(info.Source, info.Directory, segments, directoryLast: true, skipNames: true);
         }
-        if (full is null)
+        if (full is null || info.Withheld.Contains(relative))
             throw NotAResource(info.Name, path);
         if (!info.Source.DirectoryExists(full))
             return new SkillResource(info, relative, full, false, [], false);
         var (files, truncated) = Resources(info.Source, info.Directory, full);
+        files = files.Where(file => !info.Withheld.Contains(file)).ToArray();
         // A directory without listable resources (empty, or only links and skipped names) is
         // not one either.
         if (files.Length == 0)

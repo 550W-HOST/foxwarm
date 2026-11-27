@@ -22,6 +22,10 @@ internal sealed record SkillInfo(
 {
     internal ISkillFiles Source => Files ?? PhysicalSkillFiles.Instance;
 
+    // Resources this runtime doesn't offer (Skills.MasterNodeResources): not listed, read,
+    // copied or run.
+    internal IReadOnlySet<string> Withheld { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
     internal string SourceLabel =>
         SourceType == "global" ? "global"
         : SourceType == "agent-local" ? $"agent:{SourceAgent}"
@@ -40,15 +44,55 @@ internal enum SkillAccess
 // Knowledge discovery only: entry documents are loaded on demand, never executable tool registration.
 internal sealed partial class Skills(AgentCatalog agents, string globalRoot, bool masterNode = true)
 {
-    // Global skills about operating a Main server on its own machine (updates, restarts, data
-    // layout). Without a master Node (RuntimeCapabilities.MasterNode) they are neither listed nor
+    // Global skills about operating a Main server or a service beside it on its own machine
+    // (updates, restarts, data layout, the speech service). Without a master Node (RuntimeCapabilities.MasterNode) they are neither listed nor
     // loadable nor runnable: a hosted installation is upgraded by image rollouts outside Foxwarm.
     private static readonly IReadOnlySet<string> MasterNodeSkills = new HashSet<string>(
         StringComparer.Ordinal
     )
     {
         "foxwarm-maintenance",
+        // Runs a speech service beside the Main server and sets the deployment's `asrService`.
+        "asr-service",
     };
+
+    /// <summary>
+    /// The text of a skill document as this runtime reads it. Bundled (global) Markdown documents
+    /// may hold <c>master-node</c> wrappers (<see cref="ConditionalMemory"/>), filtered for
+    /// whether this runtime has a master Node; with one, the result is the document without its
+    /// wrappers and hosted blocks, the same bytes the document had before it was conditioned.
+    /// Agent skills are their Agent's own text and are never filtered.
+    /// </summary>
+    internal string Text(SkillInfo info, string path, string text) =>
+        Conditioned(info, path) ? ConditionalMemory.FilterMasterNodeSource(text, masterNode) : text;
+
+    /// <summary>The bytes of a skill file as this runtime reads it (<see cref="Text"/>).</summary>
+    internal byte[] Bytes(SkillInfo info, string path, byte[] bytes)
+    {
+        if (!Conditioned(info, path))
+            return bytes;
+        var text = System.Text.Encoding.UTF8.GetString(bytes);
+        var filtered = ConditionalMemory.FilterMasterNodeSource(text, masterNode);
+        return ReferenceEquals(filtered, text) ? bytes : System.Text.Encoding.UTF8.GetBytes(filtered);
+    }
+
+    internal static bool Conditioned(SkillInfo info, string path) =>
+        info.SourceType == "global" && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+
+    // Resources of global skills that describe work only a master Node can do: without one they
+    // are withheld from the skill's listing, reads, copies and script runs.
+    private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> MasterNodeResources =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            ["node-setup"] = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "references/development-workflow.md",
+                "examples/development_workflow.py",
+            },
+        };
+
+    private IReadOnlySet<string>? WithheldResources(string name, string rootType) =>
+        !masterNode && rootType == "global" ? MasterNodeResources.GetValueOrDefault(name) : null;
 
     private bool Unavailable(string name, string rootType) =>
         !masterNode && rootType == "global" && MasterNodeSkills.Contains(name);
@@ -110,7 +154,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
                 continue;
             try
             {
-                result[name] = await BuildAsync(name, root, false);
+                result[name] = await BuildAsync(name, root, false, WithheldResources(name, root.Type));
             }
             catch (Exception error)
                 when (error
@@ -133,7 +177,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             name,
             agent,
             true,
-            async info => (info, await info.Source.ReadAllTextAsync(info.MetadataPath))
+            async info => (info, Text(info, "SKILL.md", await info.Source.ReadAllTextAsync(info.MetadataPath)))
         );
 
     // Resolution shared by load and run: Agent-local, inherited, then global; the first valid
@@ -156,7 +200,9 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
                 continue;
             try
             {
-                return await read(await BuildAsync(name, root, resources));
+                return await read(
+                    await BuildAsync(name, root, resources, WithheldResources(name, root.Type))
+                );
             }
             catch (Exception error)
                 when (error
@@ -199,7 +245,8 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
     private static async Task<SkillInfo> BuildAsync(
         string name,
         (string Directory, string Type, string? Agent, ISkillFiles Files) root,
-        bool resources
+        bool resources,
+        IReadOnlySet<string>? withheld = null
     )
     {
         var files = root.Files;
@@ -221,6 +268,8 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
         var description = Description(content);
         var (run, runError) = Run(content, dir, files);
         var (listed, truncated) = resources ? Resources(files, dir) : (Array.Empty<string>(), false);
+        if (withheld is not null)
+            listed = listed.Where(file => !withheld.Contains(file)).ToArray();
         return new SkillInfo(
             name,
             description,
@@ -233,7 +282,10 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             run,
             runError,
             files
-        );
+        )
+        {
+            Withheld = withheld ?? new HashSet<string>(StringComparer.Ordinal),
+        };
     }
 
     // The skill `name` resolves to, as load and run resolve it; the caller reads inside it.

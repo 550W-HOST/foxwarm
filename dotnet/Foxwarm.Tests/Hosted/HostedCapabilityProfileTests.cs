@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Hosted;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
@@ -320,6 +321,28 @@ public sealed class HostedCapabilityProfileTests
         Assert.NotNull(new McpConfiguration(temp.Path).Snapshot()["local"]);
     }
 
+    // Plan §11 "capability absence" per profile: the hosted profile has no master, stdio MCP or
+    // Claude runtime; the operator profile has file mode's. A tenant of either profile can't
+    // configure a Provider itself (DeploymentConfigurationTests: `nodeProviders` is the
+    // operator's), and grants to hosted tenants are track CH's.
+    [Fact]
+    public async Task Capability_absence_follows_the_stored_profile()
+    {
+        foreach (var (profile, present) in new[] { (TenantProfile.Hosted, false), (TenantProfile.Operator, true) })
+        {
+            await using var f = await Fixture.Create(RuntimeCapabilities.For(profile));
+            Assert.Equal(present, f.Manager.OutboundMcp.Configuration.StdioAvailable);
+            var listed = await f.Ctl("node list");
+            Succeeded(listed);
+            Assert.Equal(present, listed.ToJsonString().Contains("\"master\"", StringComparison.Ordinal));
+            var exec = await f.Call("exec", new JsonObject { ["command"] = "true" });
+            Assert.Equal(present, Error(exec) is null);
+            Assert.Equal(present, f.Manager.Capabilities.ClaudeRuntime);
+            // The deployment's Provider is available to both.
+            Assert.True(f.Manager.NodeProviders.HasProvider(Fixture.Provider));
+        }
+    }
+
     [Fact]
     public async Task New_Sessions_start_on_a_real_default_Node_or_Provider_Node_and_otherwise_without_one()
     {
@@ -451,18 +474,79 @@ public sealed class HostedCapabilityProfileTests
     public async Task Default_tool_declarations_are_byte_identical_across_profiles()
     {
         await using var file = await Fixture.Create(RuntimeCapabilities.File);
-        await using var hosted = await Fixture.Create(RuntimeCapabilities.Hosted);
         var declarations = file.Manager.ModelDefinitions(file.Owner).ToJsonString();
         Assert.Contains("\"exec\"", declarations);
-        Assert.Equal(declarations, hosted.Manager.ModelDefinitions(hosted.Owner).ToJsonString());
-        Assert.Equal(
-            file.Manager.RuntimeModelDefinitions(file.Owner).ToJsonString(),
-            hosted.Manager.RuntimeModelDefinitions(hosted.Owner).ToJsonString()
+        foreach (var profile in new[] { TenantProfile.Hosted, TenantProfile.Operator })
+        {
+            await using var tenant = await Fixture.Create(RuntimeCapabilities.For(profile));
+            Assert.Equal(declarations, tenant.Manager.ModelDefinitions(tenant.Owner).ToJsonString());
+            Assert.Equal(
+                file.Manager.RuntimeModelDefinitions(file.Owner).ToJsonString(),
+                tenant.Manager.RuntimeModelDefinitions(tenant.Owner).ToJsonString()
+            );
+            Assert.Equal(
+                file.Manager.ToolRegistry.ModelDefinitions().ToJsonString(),
+                tenant.Manager.ToolRegistry.ModelDefinitions().ToJsonString()
+            );
+        }
+    }
+
+    [Fact]
+    public void A_stored_profile_selects_its_capabilities()
+    {
+        static object Features(RuntimeCapabilities set) =>
+            (set.MasterNode, set.MainTerminalsAndCode, set.StdioMcp, set.ClaudeRuntime, set.ExecutableProviders, set.LogsView);
+        // The deployment's egress rules go into each profile's own egress policy.
+        var rules = Foxwarm.Net.EgressRules.Parse(
+            System.Text.Json.Nodes.JsonNode.Parse("""{"deny": ["10.0.0.0/8"], "allow": {"hosted": ["10.0.0.4"], "operator": ["10.0.0.5"]}}""")
         );
-        Assert.Equal(
-            file.Manager.ToolRegistry.ModelDefinitions().ToJsonString(),
-            hosted.Manager.ToolRegistry.ModelDefinitions().ToJsonString()
-        );
+        var hosted = RuntimeCapabilities.For(TenantProfiles.Parse("hosted"), rules);
+        var @operator = RuntimeCapabilities.For(TenantProfiles.Parse("operator"), rules);
+        Assert.Equal(Features(RuntimeCapabilities.Hosted), Features(hosted));
+        Assert.Equal(Features(RuntimeCapabilities.Operator), Features(@operator));
+        Assert.Equal(Foxwarm.Net.EgressProfile.Hosted, hosted.Egress.Profile);
+        Assert.Equal(Foxwarm.Net.EgressProfile.Operator, @operator.Egress.Profile);
+        Assert.False(hosted.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.4")));
+        Assert.True(hosted.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.5")));
+        Assert.False(@operator.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.5")));
+        Assert.True(@operator.Egress.Denies(System.Net.IPAddress.Parse("10.0.0.4")));
+        Assert.Equal(Foxwarm.Net.EgressProfile.Operator, RuntimeCapabilities.Operator.Egress.Profile);
+        // The operator profile has file mode's features; only its stores and egress differ.
+        Assert.Equal(Features(RuntimeCapabilities.File), Features(RuntimeCapabilities.Operator));
+        Assert.Throws<InvalidDataException>(() => TenantProfiles.Parse("file"));
+        Assert.Throws<InvalidDataException>(() => TenantProfiles.Parse(null));
+    }
+
+    // A bundled skill's master-node wrappers are filtered for the runtime in `skill load` and its
+    // resource reads; file mode reads the document without wrappers or hosted text.
+    [Fact]
+    public async Task Bundled_skill_documents_and_resources_read_for_the_profile()
+    {
+        const string Conditioned =
+            "before\n<foxwarm-if master-node=\"true\">\nFILE-ONLY\n</foxwarm-if>\n<foxwarm-if master-node=\"false\">\nHOSTED-ONLY\n</foxwarm-if>\nafter\n";
+        foreach (var capabilities in new[] { RuntimeCapabilities.File, RuntimeCapabilities.Hosted })
+        {
+            await using var f = await Fixture.Create(capabilities);
+            await File.AppendAllTextAsync(Path.Combine(f.Skills, "demo", "SKILL.md"), Conditioned);
+            await File.WriteAllTextAsync(Path.Combine(f.Skills, "demo", "guide.md"), Conditioned);
+            var expected = capabilities.MasterNode ? "before\nFILE-ONLY\nafter\n" : "before\nHOSTED-ONLY\nafter\n";
+            var load = await f.Ctl("skill load demo");
+            Succeeded(load);
+            var text = load["output"]!.GetValue<string>();
+            Assert.EndsWith(expected + "\n", text);
+            Assert.DoesNotContain("foxwarm-if", text);
+            var resource = await f.Ctl("skill load demo guide.md");
+            Succeeded(resource);
+            var read = resource["output"]!.GetValue<string>();
+            Assert.Contains(capabilities.MasterNode ? "FILE-ONLY" : "HOSTED-ONLY", read);
+            Assert.DoesNotContain(capabilities.MasterNode ? "HOSTED-ONLY" : "FILE-ONLY", read);
+            Assert.DoesNotContain("foxwarm-if", read);
+            // Line ranges count the runtime's text.
+            var second = await f.Ctl("skill load demo guide.md --start-line 2 --end-line 2");
+            Succeeded(second);
+            Assert.Contains(capabilities.MasterNode ? "FILE-ONLY" : "HOSTED-ONLY", second["output"]!.GetValue<string>());
+            Assert.DoesNotContain("before", second["output"]!.GetValue<string>());
+        }
     }
 
     [Fact]

@@ -37,10 +37,16 @@ internal sealed partial class SessionCompactor
         var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
         var turnId = Guid.NewGuid().ToString();
         CompactPlanRepairFile? repairFile = null;
+        var promptProfileCurrent = memory.ProfileCurrent(snapshot.AuthorityEnvelope);
         async Task<string> ResolvePrompt(ConcreteHostModel leaf, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != leaf.Key)
+            if (
+                !promptProfileCurrent
+                || ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != leaf.Key
+            )
+            {
+                promptProfileCurrent = true;
                 promptSnapshot = await memory.BuildAsync(
                     hosted.Agent,
                     hosted.Id,
@@ -48,6 +54,7 @@ internal sealed partial class SessionCompactor
                     token,
                     AgentMemory.Selection(snapshot.AuthorityEnvelope)
                 );
+            }
             return baseOptions.Instructions.Length == 0
                 ? promptSnapshot
                 : baseOptions.Instructions + "\n\n" + promptSnapshot;

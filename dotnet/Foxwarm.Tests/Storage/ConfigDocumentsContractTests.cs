@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Foxwarm.Hosted;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Models;
+using Foxwarm.Sessions;
 using Foxwarm.Storage;
 using Foxwarm.Tests.Hosted;
 using Foxwarm.Tools;
@@ -281,7 +282,11 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
 
     // The hosted configuration owner before the key ring exists: secrets and credentials stay
     // in the scratch directory.
-    internal static ModelConfiguration Hosted(IConfigDocumentStore documents, string scratch) =>
+    internal static ModelConfiguration Hosted(
+        IConfigDocumentStore documents,
+        string scratch,
+        TenantProfile profile = TenantProfile.Hosted
+    ) =>
         new(
             HostPaths.ForDataRoot(scratch),
             new ConfigurationSources(
@@ -290,6 +295,9 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
                 paths => new Foxwarm.Secrets.InstanceSecrets(paths.DataRoot),
                 new FileInstanceCredentials(scratch)
             )
+            {
+                Profile = profile,
+            }
         );
 
     private protected override async Task<Backend> CreateAsync()
@@ -326,6 +334,9 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
                 ("vector: {enabled: false}\n", "vector"),
                 ("bot:\n  enableTrigger: true\n", "bot.enableTrigger"),
                 ("paths:\n  agentsDir: /x\n", "paths"),
+                // Not a tenant setting of any profile.
+                ("handoff: true\n", "handoff"),
+                ("bot:\n  color: red\n", "bot.color"),
             }
         )
         {
@@ -337,6 +348,21 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
         }
         // Tenant settings under `bot` stay tenant settings.
         await configuration.SaveAppAsync("bot:\n  name: Fox\n");
+        Assert.Equal(
+            "app config `handoff` isn't a tenant setting.",
+            (await Assert.ThrowsAsync<InvalidDataException>(() => configuration.SaveAppAsync("handoff: true\n"))).Message
+        );
+
+        // The operator profile also has the Claude runtime's settings, and nothing else more.
+        var operatorProfile = Hosted(backend.Documents, backend.Root, TenantProfile.Operator);
+        await operatorProfile.SaveAppAsync("claudeCode: {credentialLifetimeSeconds: 600}\n");
+        await Assert.ThrowsAsync<InvalidDataException>(() => operatorProfile.SaveAppAsync("url: https://other.example\n"));
+        await Assert.ThrowsAsync<InvalidDataException>(() => operatorProfile.SaveAppAsync("handoff: true\n"));
+        // That stored document refuses a hosted runtime's startup, naming the key.
+        Assert.Contains(
+            "`claudeCode`",
+            Assert.Throws<InvalidDataException>(() => Hosted(backend.Documents, backend.Root)).Message
+        );
     }
 
     [Fact]
@@ -371,6 +397,83 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
         );
         var error = Assert.Throws<InvalidDataException>(() => backend.Open());
         Assert.Contains("`url`", error.Message);
+    }
+
+    // A P1 tenant document may hold a setting that isn't a tenant setting under P2's allowlist,
+    // such as the removed `handoffConfirmation`: the tenant starts without applying it, and
+    // installing it again is refused.
+    [Fact]
+    public async Task A_stored_tenant_document_with_a_non_tenant_key_starts_without_applying_it()
+    {
+        await using var backend = await CreateAsync();
+        const string Stored = "sessionAutoTitle: true\nhandoffConfirmation: true\nbot:\n  name: Fox\n  color: red\n";
+        await backend.Documents.ReplaceAsync(
+            ConfigDocumentName.Config,
+            Encoding.UTF8.GetBytes(Stored),
+            CancellationToken.None
+        );
+        var configuration = backend.Open();
+        Assert.Equal(["handoffConfirmation", "bot.color"], configuration.IgnoredAppPaths);
+        var app = configuration.AppConfiguration;
+        Assert.False(app.ContainsKey("handoffConfirmation"));
+        Assert.False(app["bot"]!.AsObject().ContainsKey("color"));
+        Assert.Equal("Fox", app["bot"]!["name"]!.GetValue<string>());
+        Assert.True(configuration.SessionAutoTitleEnabled);
+        // The stored text is kept as it is; saving it again names the key.
+        Assert.Equal(Stored, configuration.ReadCurrentAppRaw());
+        Assert.Contains(
+            "`handoffConfirmation`",
+            (await Assert.ThrowsAsync<InvalidDataException>(() => configuration.SaveAppAsync(Stored))).Message
+        );
+        // A clean document loads with nothing ignored.
+        await configuration.SaveAppAsync("sessionAutoTitle: true\n");
+        Assert.Empty(backend.Open().IgnoredAppPaths);
+    }
+
+    // A WeWork callback listener would bind a replica port outside the tenant's request
+    // routing: installation refuses it, and a stored one never starts. Webhook (send-only) and
+    // WebSocket modes stay available.
+    [Fact]
+    public async Task A_WeWork_callback_listener_is_refused_and_never_started()
+    {
+        await using var backend = await CreateAsync();
+        const string Callback =
+            "channels:\n  office:\n    type: wework\n    token: synthetic\n    encodingAESKey: synthetic\n    listenPort: 18731\n    listenPath: /wework\n";
+        await backend.Documents.ReplaceAsync(ConfigDocumentName.Models, Encoding.UTF8.GetBytes(LocalModels), CancellationToken.None);
+        await backend.Documents.ReplaceAsync(ConfigDocumentName.Config, Encoding.UTF8.GetBytes(Callback), CancellationToken.None);
+        var configuration = backend.Open();
+        Assert.True(configuration.Hosted);
+        foreach (var raw in new[]
+        {
+            Callback,
+            "channels:\n  wework:\n    listenPath: /cb\n",
+            "channels:\n  wework:\n    listenPort: 18731\n",
+        })
+            Assert.Equal(
+                "WeWork callback mode isn't available in this deployment; use WebSocket mode.",
+                (await Assert.ThrowsAsync<InvalidDataException>(() => configuration.SaveAppAsync(raw))).Message
+            );
+
+        // The stored document predates the check: its adapter refuses to start.
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        Directory.CreateDirectory(work);
+        await using var manager = new SessionManager(
+            data,
+            work,
+            new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "local/wire", "synthetic", "", 713),
+            configuration.Models
+        );
+        manager.InitializeChannels(new MessageRouter(new SessionRuntime(manager)), configuration);
+        var refused = await Assert.ThrowsAnyAsync<Exception>(() => manager.ManagedChannels!.ChangeAsync("start", "office"));
+        Assert.Equal("WeWork callback mode isn't available in this deployment; use WebSocket mode.", refused.Message);
+
+        // Send-only and WebSocket modes install.
+        await configuration.SaveAppAsync(
+            "channels:\n  office:\n    type: wework\n    webhookUrl: https://example.invalid/hook\n    aibot:\n      websocket: {enabled: true, botId: synthetic, secret: synthetic}\n"
+        );
     }
 
     [Fact]

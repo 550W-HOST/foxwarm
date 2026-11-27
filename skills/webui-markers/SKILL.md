@@ -19,8 +19,14 @@ provenance:
 
 Use this skill when a response in Foxwarm WebUI should contain a supported interactive marker. Markers are optional presentation hints embedded in otherwise ordinary model text.
 
+<foxwarm-if master-node="true">
 Commit cards and prepared artifact references are supported. Use only the implemented protocols below; markers do not grant access to resources.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Prepared artifact references are supported. Use only the implemented protocol below; markers do not grant access to resources.
+</foxwarm-if>
 
+<foxwarm-if master-node="true">
 ## Commit marker
 
 After a Git commit has **actually been created**, you may include this marker so WebUI renders an **Open in Code** commit card:
@@ -60,6 +66,10 @@ The marker is not a tool call and does not execute automatically. WebUI validate
 Malformed markers are inert. A valid historical marker may later fail if its node is offline, its path moved, or the commit was removed/garbage-collected. In those cases, preserve the truthful text response and let the UI report the lookup error; never replace the id with a guess.
 
 Outside Foxwarm WebUI, channels may display the marker as plain text. Use it only when the active user interaction is through WebUI or the user explicitly requests the marker syntax.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Commit cards aren't available in this deployment. Report a commit as ordinary text.
+</foxwarm-if>
 
 ## Artifact marker
 

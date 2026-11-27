@@ -5,6 +5,7 @@ namespace Foxwarm;
 /// replica runs in a container with no local execution environment for Agents, so it has no
 /// <c>master</c> Node, no Main-local terminals or Code, no stdio MCP servers and no Claude
 /// runtime; its executable Providers are the deployment configuration's <c>nodeProviders</c>.
+/// A hosted runtime's set comes from its tenant's stored profile (<see cref="For"/>).
 /// Model-facing tool declarations never depend on this profile (request-prefix stability).
 /// </summary>
 /// <param name="MasterNode">
@@ -40,6 +41,26 @@ internal sealed record RuntimeCapabilities(
     /// <summary>Hosted: only the deployment's executable Providers; no Logs view (U16(b)).</summary>
     internal static RuntimeCapabilities Hosted { get; } =
         new(false, false, false, false, true, false) { Egress = Net.EgressPolicy.Hosted() };
+
+    /// <summary>
+    /// The operator's own tenant: file mode's full set over hosted stores, on a master-host
+    /// replica (master, terminals and Code, stdio MCP, the Claude runtime, every deployment
+    /// Provider and the Logs view of its own runtime).
+    /// </summary>
+    internal static RuntimeCapabilities Operator { get; } =
+        new(true, true, true, true, true, true) { Egress = Net.EgressPolicy.Operator() };
+
+    /// <summary>
+    /// The capabilities of a hosted tenant's stored profile, with the deployment's
+    /// <c>egress</c> rules in the profile's egress policy.
+    /// </summary>
+    internal static RuntimeCapabilities For(TenantProfile profile, Net.EgressRules? egress = null) =>
+        profile switch
+        {
+            TenantProfile.Hosted => Hosted with { Egress = Net.EgressPolicy.Hosted(egress) },
+            TenantProfile.Operator => Operator with { Egress = Net.EgressPolicy.Operator(egress) },
+            _ => throw new ArgumentOutOfRangeException(nameof(profile)),
+        };
 
     /// <summary>The error a call targeting the absent <c>master</c> Node fails with.</summary>
     internal static InvalidDataException MasterUnavailable() =>

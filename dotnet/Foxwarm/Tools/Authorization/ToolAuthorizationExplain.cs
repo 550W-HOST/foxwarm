@@ -98,7 +98,7 @@ internal static class ToolAuthorizationExplain
                 continue;
             var entry = new JsonObject
             {
-                ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+                ["layer"] = OperatorCeiling.Label(layer.Layer),
                 ["rule"] = rule is null ? null : RuleId(rule),
                 ["decision"] = AuthorizationDecision.Name(decision.Effect),
             };
@@ -167,7 +167,7 @@ internal static class ToolAuthorizationExplain
     {
         var result = new JsonObject
         {
-            ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+            ["layer"] = OperatorCeiling.Label(layer.Layer),
             ["decision"] = AuthorizationDecision.Name(layer.Decision.Effect),
             ["allowed"] = layer.Decision.Allowed,
         };

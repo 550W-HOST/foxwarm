@@ -16,12 +16,20 @@ internal sealed record ConfigurationSources(
     JsonObject Deployment,
     Func<HostPaths, Foxwarm.Secrets.InstanceSecrets> Secrets,
     IInstanceCredentials Credentials
-);
+)
+{
+    /// <summary>The tenant's operator ceiling (hosted mode); null means none.</summary>
+    internal Foxwarm.Tools.IOperatorCeilingSource? OperatorCeiling { get; init; }
+
+    /// <summary>The tenant's profile, which selects the paths its <c>config</c> document may hold.</summary>
+    internal TenantProfile Profile { get; init; }
+}
 
 internal sealed partial class ModelConfiguration
 {
     private readonly object gate = new();
     private readonly JsonObject? deployment;
+    private readonly TenantProfile profile;
     private readonly IInstanceCredentials? credentials;
     private readonly SemaphoreSlim mutation = new(1);
     private readonly SemaphoreSlim appPersistence = new(1);
@@ -37,6 +45,14 @@ internal sealed partial class ModelConfiguration
 
     // Where the app, models and other configuration documents live.
     internal IConfigDocumentStore Documents { get; }
+
+    // Paths of the stored tenant app document that the load left out because they aren't
+    // tenant settings (hosted mode); logged once at load.
+    internal IReadOnlyList<string> IgnoredAppPaths { get; private set; } = [];
+
+    // The operator ceiling the tool authorization evaluates before the tenant policy; null in
+    // file mode.
+    internal Foxwarm.Tools.IOperatorCeilingSource? OperatorCeiling { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
     internal string AppTemplatePath { get; }
@@ -186,6 +202,8 @@ internal sealed partial class ModelConfiguration
     {
         deployment = sources?.Deployment;
         credentials = sources?.Credentials;
+        OperatorCeiling = sources?.OperatorCeiling;
+        profile = sources?.Profile ?? TenantProfile.Hosted;
         // The app file's location is captured before it is read; its `paths` section can move
         // only the other documents.
         var captured = sources?.Documents ?? new FileConfigDocuments(paths);
@@ -196,7 +214,7 @@ internal sealed partial class ModelConfiguration
         AppRaw = captured.Read(ConfigDocumentName.Config) is { } appBytes
             ? ConfigDocumentText.Decode(appBytes)
             : "";
-        app = Effective(ConfigurationYaml.Parse(AppRaw, "app config"), tenantDocument: true);
+        app = Effective(ConfigurationYaml.Parse(AppRaw, "app config"), load: true);
         AppConfigurationRules.Validate(app);
         Paths = sources is null ? paths.WithConfiguration(app) : paths;
         Documents = sources?.Documents ?? new FileConfigDocuments(Paths);
@@ -332,15 +350,38 @@ internal sealed partial class ModelConfiguration
     // The operator's deployment settings in hosted mode; null in file mode.
     internal JsonObject? Deployment => (JsonObject?)deployment?.DeepClone();
 
+    // Hosted mode: the app configuration is a tenant document over a deployment configuration.
+    internal bool Hosted => deployment is not null;
+
+    // The profile name a hosted runtime records with its prompt snapshots; null in file mode.
+    internal string? PromptProfile => Hosted ? TenantProfiles.Name(profile) : null;
+
     // The effective app configuration of an app document: the document itself in file mode,
     // otherwise the tenant document with the deployment settings laid over it. A tenant document
     // being installed or read at startup may hold no deployment or unavailable settings.
-    private JsonObject Effective(JsonObject document, bool tenantDocument = false)
+    // The effective app configuration over a tenant document. `tenantDocument` validates a
+    // document being installed; `load` validates the stored one at startup, which leaves out
+    // and logs paths that aren't tenant settings instead of refusing to start.
+    private JsonObject Effective(JsonObject document, bool tenantDocument = false, bool load = false)
     {
         if (deployment is null)
             return document;
-        if (tenantDocument)
-            AppConfigurationSplit.RequireTenantDocument(document);
+        if (load)
+        {
+            document = AppConfigurationSplit.LoadTenantDocument(document, profile, out var ignored);
+            IgnoredAppPaths = ignored;
+            if (ignored.Count > 0)
+                Console.Error.WriteLine(
+                    "Tenant app config: ignoring "
+                        + string.Join(", ", ignored.Select(path => $"`{path}`"))
+                        + (ignored.Count == 1 ? ", which isn't a tenant setting." : ", which aren't tenant settings.")
+                );
+        }
+        else if (tenantDocument)
+        {
+            AppConfigurationSplit.RequireTenantDocument(document, profile);
+            AppConfigurationSplit.RequireHostedChannels(document);
+        }
         return AppConfigurationSplit.Merge(deployment, document);
     }
 

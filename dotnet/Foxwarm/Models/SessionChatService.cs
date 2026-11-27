@@ -78,11 +78,13 @@ internal sealed class SessionChatService(
         async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            var value =
-                hosted.Entry.WithState(state =>
-                    SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"])
-                ) ?? "";
-            if (ConditionalMemory.ReadCurrentModelSnapshotId(value) != leaf.Key)
+            var (value, current) = hosted.Entry.WithState(state =>
+                (
+                    SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "",
+                    memory.SnapshotCurrent(state.AuthorityEnvelope, leaf.Key)
+                )
+            );
+            if (!current)
             {
                 value = await memory.BuildAsync(
                     hosted.Agent,
@@ -91,7 +93,7 @@ internal sealed class SessionChatService(
                     token,
                     hosted.Entry.WithState(state => AgentMemory.Selection(state.AuthorityEnvelope))
                 );
-                await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(value);
+                await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(value, memory.Profile);
             }
             return baseOptions.Instructions.Length == 0
                 ? value

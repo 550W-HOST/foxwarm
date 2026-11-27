@@ -19,6 +19,10 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     // discovery builtin. They never make a policy unavailable.
     internal IReadOnlyList<string> Warnings { get; init; } = [];
 
+    // A layer whose unmatched calls pass for every principal, external ones included: the
+    // operator ceiling. Other policies deny an unmatched external call whatever their default.
+    internal bool PassesByDefault { get; init; }
+
     // Builtin names that are not concrete capabilities. search_tools only gated discovery,
     // which is now filtered by each target's own policy; ctl and the former call_tool are
     // permission-neutral front ends. A rule naming one is accepted and has no effect.

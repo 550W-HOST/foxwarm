@@ -32,6 +32,7 @@ mcp set example --transport streamable-http --url https://mcp.example.invalid/mc
   values: {"token": "<secret supplied at runtime>"}
 ```
 
+<foxwarm-if master-node="true">
 Stdio example:
 
 ```text
@@ -39,6 +40,9 @@ mcp set example-local --transport stdio --command example-mcp-server --args=--st
   values: {"env": {"EXAMPLE_API_KEY": "<secret supplied at runtime>"}}
 ```
 
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 Pass `--env` and `--headers` as `@name` values or one JSON object text; repeat `--args` for each server argument.
 
 ### Tool-call timeout
@@ -67,7 +71,12 @@ Use `ctl mcp set <name> --enable` to re-enable an existing server. List safe sum
 
 - `streamable-http`: preferred standard HTTP transport; normally use the server's `/mcp` endpoint.
 - `sse`: use only when the server exposes the legacy-compatible MCP SSE endpoint expected by its documentation.
+<foxwarm-if master-node="true">
 - `stdio`: launches a local command. Specify `command`; optional fields include `args`, `env`, `cwd`, and `stderr`.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+- `stdio`: isn't available in this deployment; use HTTP or SSE.
+</foxwarm-if>
 - `auto`: HTTP mode that lets the client negotiate the supported standard HTTP behavior for the configured URL.
 
 ### HTTP connection ownership

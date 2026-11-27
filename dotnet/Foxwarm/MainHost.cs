@@ -162,7 +162,8 @@ internal sealed class MainHost : IAsyncDisposable
                 paths?.SkillsRoot,
                 paths,
                 storage: storage,
-                capabilities: capabilities
+                capabilities: capabilities,
+                memoryProfile: configuration.PromptProfile
             );
         }
         catch (Exception error)

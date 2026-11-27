@@ -18,7 +18,7 @@ import { SessionQuestionsContext } from ${JSON.stringify(stateEntry)}
 
 const pending = (id, extra) => ({ id, status: 'pending', createdAt: 1, origin: 'turn', tool: { source: 'node', name: 'exec', executionNode: 'build-box' }, summary: 'rm -rf build', rules: [{ layer: 'global', id: 'confirm-exec', reason: 'Commands on shared hosts' }], approvers: [], ...extra })
 const approvals = [
-  pending('ap-large', { canDecide: true, workingDirectory: '/srv/app', argsTruncated: true, argsPreview: '{"command":"rm -rf build', expiresAt: Date.now() + 4 * 60_000, facts: { paths: [{ raw: 'build', resolved: '/w/build', node: 'build-box' }] } }),
+  pending('ap-large', { canDecide: true, rules: [{ layer: 'global', id: 'confirm-exec', reason: 'Commands on shared hosts' }, { layer: 'ceiling', id: 'operator-exec', reason: 'Operator review of commands' }], workingDirectory: '/srv/app', argsTruncated: true, argsPreview: '{"command":"rm -rf build', expiresAt: Date.now() + 4 * 60_000, facts: { paths: [{ raw: 'build', resolved: '/w/build', node: 'build-box' }] } }),
   pending('ap-other', { canDecide: false, tool: { source: 'mcp', server: 'tracker', name: 'close_issue' }, summary: 'close #12', args: { issue: 12 } }),
   pending('ap-input', { canDecide: true, stage: 'input', tool: { source: 'builtin', name: 'set_config', executionNode: 'master' }, summary: 'models models.yaml', args: { target: 'models', filePath: 'models.yaml' }, rules: [{ layer: 'global', id: 'confirm-read' }], checks: [{ id: 'candidate-read', tool: { source: 'node', name: 'read', executionNode: 'master' }, facts: { paths: [{ raw: 'models.yaml', resolved: '/w/models.yaml', node: 'master' }] } }] }),
 ]
@@ -94,6 +94,7 @@ test('pending approvals open the dock first and decide with the note', async () 
   assert.match(form, /rm -rf build/)
   assert.match(form, /build-box:\/w\/build/)
   assert.match(form, /Rule confirm-exec — Commands on shared hosts/)
+  assert.match(form, /Rule operator-exec · operator restriction — Operator review of commands/)
   assert.match(await page.$eval('[data-approval-deadline]', el => el.textContent), /^4m left$/)
 
   await page.click('[data-approval-form="ap-large"] button[aria-expanded]')

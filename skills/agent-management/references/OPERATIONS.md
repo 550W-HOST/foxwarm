@@ -47,9 +47,14 @@ Judge by relevance and reading cost, not line count. Session history, its summar
 
 ### Framework prompt files
 
+<foxwarm-if master-node="true">
 - The bundled `templates/agents/00_SYSTEM.md` is the base and changes with Foxwarm updates. Do not edit it for one installation.
 - `agents/00_SYSTEM.local.md` is appended for all Agents of the installation. Put installation-wide instructions there.
 - An edited legacy `agents/00_SYSTEM.md` (or `agents/main/memory/00_SYSTEM.md`) replaces the bundled base, so the installation stops receiving framework prompt updates. Unedited copies are removed at startup. To migrate, move the installation-specific parts to `00_SYSTEM.local.md` and delete the legacy file.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+- The framework prompt comes with Foxwarm and this deployment's operator. Agents and administrators of this installation can't edit it. Put shared instructions in an Agent's memory instead.
+</foxwarm-if>
 
 A `memory/00_SYSTEM.md` inside an ordinary Agent has no special effect. Use `MEMORY.md`, `SOUL.md`, `USER.md` or other clearly named files.
 
@@ -97,10 +102,19 @@ ctl agent create worker --no-create-main-session --rules @rules
 Then write the matching memory template to the worker Agent's `memory/MEMORY.md` by its absolute path, as described above. The rules in the templates were reviewed for these hazards; keep them when adapting:
 
 - **Scope environment allowances with `tool: {source: node}`.** A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and file-transfer endpoints. Without the tool scope, a worker could inspect or destroy its own environment.
+<foxwarm-if master-node="true">
 - **Deny `master` first.** `node: {current: true}` matches `master` for a Session placed there.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 - **Never reuse Node IDs.** `current` compares IDs, so a finished Session that still selects a reused ID would reach the next environment. Provision each assignment with `create` and a fresh ID (it refuses an ID that still exists), and delete finished worker Sessions.
 - **Deny memory writes.** All Sessions of an Agent share its memory, so one compromised Session could change every later Session's instructions.
+<foxwarm-if master-node="true">
 - **No `ask_user` and no MCP for workers.** Workers ask their parent through a parent-owned Task. MCP servers run on `master`.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+- **No `ask_user` and no MCP for workers.** Workers ask their parent through a parent-owned Task. MCP connections are made by the Foxwarm server, not on the worker's Node.
+</foxwarm-if>
 - **The global policy must let the intended calls through.** A local allow only passes its own layer.
 - **Copying out goes through the coordinator.** A worker's copy with a `master` endpoint is denied, so the coordinator collects results.
 - **Agent rules govern Foxwarm tools only.** Web search or image generation built into a model are controlled by the model configuration, so give restricted Agents a model without them.
@@ -129,7 +143,12 @@ A channel's `guestAgent` configuration gives unknown users their own guest Agent
 
 ## Placement
 
+<foxwarm-if master-node="true">
 A new Session's Node is, in order: the explicit `node` given at creation; for `create_child_session` in the same Agent, the parent's current Node; the Agent's `defaultNode`; the installation's `agentDefaultNode`; then `master`. `defaultCwd` applies only when the Session starts on that default Node.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+A new Session's Node is, in order: the explicit `node` given at creation; for `create_child_session` in the same Agent, the parent's current Node; the Agent's `defaultNode`; the installation's `agentDefaultNode`; then no Node. `defaultCwd` applies only when the Session starts on that default Node.
+</foxwarm-if>
 
 Set defaults with `create_agent` or in the WebUI's Agent settings. Changing them does not move existing Sessions, and a default Node need not be online. Placement grants nothing: what a Session can do on a Node is decided by policy.
 
@@ -178,6 +197,7 @@ It deletes all of the Agent's Sessions, its directory and memory. It is refused 
 3. tell surviving Sessions about the change.
 
 A multi-step setup that fails partway is not rolled back. Report exactly which Agents, Sessions and Nodes exist, and clean up with the commands above rather than by removing directories.
+<foxwarm-if master-node="true">
 
 ## Legacy isolated Agents
 
@@ -192,3 +212,6 @@ The System view and the Main log list each migrated Agent. A blocked Agent stays
 Inbound channel files now always land on `master` in the Agent's directory, and channel sends from migrated Agents are denied. Channel guests take their rules from `guestAgent.template`.
 
 The retained `isolated`, `isolatedNode` and `toolRules` fields are no longer used except to keep older releases enforcing isolation after a downgrade. Foxwarm 0.9.4 enforces both those fields and the converted rules; earlier releases can't read the converted rules and refuse every call by these Agents and the Agents they created. Saved scripts or ToolScripts that call `set_agent_isolated` or pass `isolatedNode`/`toolRules` must switch to `set_agent_rules` plus `defaultNode`.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>

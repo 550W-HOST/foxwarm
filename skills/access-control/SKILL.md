@@ -33,4 +33,9 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 - Tool rules are not an operating-system or network sandbox. A permitted `exec` can use the chosen environment's commands, files, credentials, and network; path rules do not constrain arbitrary shell effects.
 - Tool rules govern Foxwarm tools only. Web search or image generation built into a model are controlled by the model configuration, so give restricted Agents a model without them.
 
+<foxwarm-if master-node="true">
 Do not write live credentials into chat, public examples, or commits. Setup Config saves and `set_config` apply supported identity changes without restarting; other app settings can still require restart. Policy updates retain their per-process cache lifecycle. Loading this skill does not authorize an update or a restart.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Do not write live credentials into chat, public examples, or commits. Saves in WebUI Setup's Config tab apply supported identity changes without a restart. Loading this skill does not authorize an update.
+</foxwarm-if>
