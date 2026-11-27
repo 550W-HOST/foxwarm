@@ -62,6 +62,60 @@ public sealed class WeixinLifecycleTests
     }
 
     [Fact]
+    public async Task A_refused_reply_is_a_send_failure_and_polling_continues()
+    {
+        await using var peer = await ExternalProtocolPeer.StartAsync();
+        var polls = 0;
+        var polledAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        peer.Respond = call =>
+        {
+            if (call.Path.EndsWith("/getupdates", StringComparison.Ordinal))
+            {
+                var count = Interlocked.Increment(ref polls);
+                if (count == 1)
+                    return Task.FromResult<IResult?>(
+                        Results.Json(
+                            new JsonObject
+                            {
+                                ["ret"] = 0,
+                                ["get_updates_buf"] = "cursor-1",
+                                // An unknown sender gets an awaited reply.
+                                ["msgs"] = new JsonArray(ExternalProtocolPeer.WeixinText("stranger", "hello")),
+                            }
+                        )
+                    );
+                if (count >= 3)
+                    polledAgain.TrySetResult();
+                return Task.FromResult<IResult?>(Results.Json(new JsonObject { ["ret"] = 0, ["msgs"] = new JsonArray() }));
+            }
+            // The reply endpoint redirects to an address the policy refuses.
+            return Task.FromResult<IResult?>(Results.Redirect("http://127.0.0.2:1/send"));
+        };
+        // The peer's loopback address is the one exception.
+        var egress = Foxwarm.Net.EgressPolicy.Hosted(
+            Foxwarm.Net.EgressRules.Parse(ConfigurationYaml.Parse("allow: {hosted: [127.0.0.1/32]}", "egress"))
+        );
+        var config = new JsonObject { ["weixin"] = peer.Weixin() };
+        config["weixin"]!["longPollTimeoutMs"] = 80;
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            config,
+            dependencies: new Foxwarm.Channels.ChannelTransportDependencies(
+                CreateHttp: () => Foxwarm.Channels.ChannelHttpClients.Single(egress),
+                Delay: (_, token) => Task.Delay(10, token)
+            )
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        await polledAgain.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains(peer.Calls, call => !call.Path.EndsWith("/getupdates", StringComparison.Ordinal));
+        var status = f.Configuration.ManagedChannels!.Statuses()
+            .OfType<JsonObject>()
+            .Single(row => row["channelId"]!.ToString() == "weixin")
+            .ToJsonString();
+        Assert.Contains("blocked by this deployment", status);
+        Assert.Contains("sending", status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Command_confirmation_uses_the_same_config_owner_without_waiting_for_Setup_to_join_its_Weixin_handler()
     {
         await using var peer = await ExternalProtocolPeer.StartAsync();
