@@ -246,4 +246,50 @@ public sealed class DeploymentConfigurationTests
             "channels:\n  wework:\n    aibot:\n      websocket: {enabled: true, botId: synthetic, secret: synthetic}\n"
         );
     }
+
+    // Paths are key segments: a literal top-level key containing a dot is one unknown key, never
+    // the nested setting it spells.
+    [Fact]
+    public void A_literal_dotted_key_is_not_the_nested_setting_it_spells()
+    {
+        var literal = Foxwarm.ConfigurationYaml.Parse("\"bot.name\": Fox\n", "app config");
+        Assert.Equal(
+            "app config `bot.name` isn't a tenant setting.",
+            Assert.Throws<InvalidDataException>(() => AppConfigurationSplit.RequireTenantDocument(literal)).Message
+        );
+        var loaded = AppConfigurationSplit.LoadTenantDocument(
+            Foxwarm.ConfigurationYaml.Parse("\"bot.name\": Fox\nbot:\n  name: Real\n", "app config"),
+            TenantProfile.Hosted,
+            out var ignored
+        );
+        Assert.Equal(["bot.name"], ignored);
+        Assert.False(loaded.ContainsKey("bot.name"));
+        Assert.Equal("Real", loaded["bot"]!["name"]!.GetValue<string>());
+        // A literal `url.x` isn't a deployment setting either.
+        Assert.Equal(
+            "app config `url.x` isn't a tenant setting.",
+            Assert.Throws<InvalidDataException>(() =>
+                AppConfigurationSplit.RequireTenantDocument(Foxwarm.ConfigurationYaml.Parse("\"url.x\": 1\n", "app config"))
+            ).Message
+        );
+    }
+
+    [Fact]
+    public void Import_drops_a_literal_dotted_key_and_splits_journal_at_its_deployment_child()
+    {
+        var split = Foxwarm.Hosted.Import.ConfigSplit.Split(
+            "sessionAutoTitle: true\n\"bot.name\": Literal\nbot:\n  name: Fox\njournal:\n  retentionDays: 7\n  compress: true\n"
+        );
+        Assert.Equal(
+            ["bot.name", "journal.compress"],
+            split.Dropped.Select(item => item.Key).Order(StringComparer.Ordinal).ToArray()
+        );
+        Assert.Equal("Literal", split.Dropped.Single(item => item.Key == "bot.name").Value!.GetValue<string>());
+        Assert.True(split.Dropped.Single(item => item.Key == "journal.compress").Value!.GetValue<bool>());
+        Assert.Equal("Fox", split.Tenant["bot"]!["name"]!.GetValue<string>());
+        Assert.False(split.Tenant.ContainsKey("bot.name"));
+        Assert.False(split.Tenant.ContainsKey("journal"));
+        Assert.Equal(7, split.Deployment["journal"]!["retentionDays"]!.GetValue<double>());
+        Assert.False(split.Deployment["journal"]!.AsObject().ContainsKey("compress"));
+    }
 }

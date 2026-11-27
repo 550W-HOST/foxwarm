@@ -34,6 +34,7 @@ internal sealed record ConfigSplitResult(
 internal static class ConfigSplit
 {
     private const string Bot = "bot";
+    private const string Journal = "journal";
 
     internal static ConfigSplitResult Split(string text, string sourceName = "config.yaml", string? blobsBlock = null)
     {
@@ -54,15 +55,17 @@ internal static class ConfigSplit
                 $"{sourceName} isn't valid YAML at line {error.Start.Line}: fix it in file mode first."
             );
         }
-        var cut = new List<(ConfigBlock Block, int Start, int End)>();
+        var cut = new List<(ConfigBlock Block, ConfigPath Path, int Start, int End)>();
         var keep = new bool[lines.Length];
         Array.Fill(keep, true);
         if (root is not null)
         {
             var entries = root.Children.Select(pair => (Name: Scalar(pair.Key), Key: pair.Key, Value: pair.Value)).ToList();
             var needsCut = entries.Any(entry =>
-                Classify(entry.Name) is not "tenant"
-                || entry.Name == Bot && entry.Value is YamlMappingNode bot && bot.Children.Any(child => Classify(Bot + "." + Scalar(child.Key)) is not "tenant")
+                Classify(new(entry.Name)) is not "tenant"
+                || AppConfigurationSplit.Sectioned(entry.Name)
+                    && entry.Value is YamlMappingNode section
+                    && section.Children.Any(child => Classify(new(entry.Name, Scalar(child.Key))) is not "tenant")
             );
             if (needsCut && root.Style == MappingStyle.Flow)
                 throw new ImportRefusedException(
@@ -76,41 +79,44 @@ internal static class ConfigSplit
             {
                 var (name, _, value) = entries[index];
                 var (start, end) = ranges[index];
-                var part = Classify(name);
+                var part = Classify(new(name));
                 if (part is not "tenant")
                 {
-                    cut.Add((new ConfigBlock(name, start + 1, end + 1, part), start, end));
+                    cut.Add((new ConfigBlock(name, start + 1, end + 1, part), new(name), start, end));
                     for (var line = start; line <= end; line++)
                         keep[line] = false;
                     continue;
                 }
-                if (name != Bot || value is not YamlMappingNode botMap || botMap.Children.Count == 0)
+                // `bot` and `journal` are split by child: `bot` mixes tenant and deployment
+                // settings, `journal` holds a deployment setting beside unknown ones.
+                if (!AppConfigurationSplit.Sectioned(name) || value is not YamlMappingNode botMap || botMap.Children.Count == 0)
                     continue;
-                var children = botMap.Children.Select(pair => (Name: Bot + "." + Scalar(pair.Key), Key: pair.Key)).ToList();
-                if (children.All(child => Classify(child.Name) is "tenant"))
+                var children = botMap.Children.Select(pair => (Path: new ConfigPath(name, Scalar(pair.Key)), Key: pair.Key)).ToList();
+                if (children.All(child => Classify(child.Path) is "tenant"))
                     continue;
                 if (botMap.Style == MappingStyle.Flow)
                     throw new ImportRefusedException(
-                        $"{sourceName} writes `bot` as a flow mapping, which can't be split by lines: rewrite it as a block mapping first."
+                        $"{sourceName} writes `{name}` as a flow mapping, which can't be split by lines: rewrite it as a block mapping first."
                     );
                 var childRanges = Ranges(lines, children.Select(child => (int)child.Key.Start.Line - 1).ToList(), end, start + 1);
                 var header = (start, Math.Max(start, childRanges[0].Start - 1));
                 var kept = 0;
                 for (var child = 0; child < children.Count; child++)
                 {
-                    var childPart = Classify(children[child].Name);
+                    var childPath = children[child].Path;
+                    var childPart = Classify(childPath);
                     var (childStart, childEnd) = childRanges[child];
                     if (childPart is "tenant")
                     {
                         kept++;
                         continue;
                     }
-                    cut.Add((new ConfigBlock(children[child].Name, childStart + 1, childEnd + 1, childPart), childStart, childEnd));
+                    cut.Add((new ConfigBlock(childPath.ToString(), childStart + 1, childEnd + 1, childPart), childPath, childStart, childEnd));
                     for (var line = childStart; line <= childEnd; line++)
                         keep[line] = false;
                 }
-                // A bot mapping left without children would read as `bot: null`, a deployment
-                // path in the tenant document, so its header line goes too.
+                // A section left without children would read as `bot: null` or `journal: null`, a
+                // deployment path in the tenant document, so its header line goes too.
                 if (kept == 0)
                     for (var line = header.Item1; line <= header.Item2; line++)
                         keep[line] = false;
@@ -122,13 +128,12 @@ internal static class ConfigSplit
             "# Deployment configuration drafted by `foxwarm hosted import` from " + sourceName + ".",
             "# Review it, set the required settings below, and mount it as FOXWARM_DEPLOYMENT_CONFIG.",
         };
-        var botChildren = cut.Where(item => item.Block.Part == "deployment" && item.Block.Key.StartsWith(Bot + ".", StringComparison.Ordinal)).ToList();
-        foreach (var item in cut.Where(item => item.Block.Part == "deployment" && !item.Block.Key.StartsWith(Bot + ".", StringComparison.Ordinal)))
+        foreach (var item in cut.Where(item => item.Block.Part == "deployment" && item.Path.Child is null))
             deploymentLines.AddRange(TrimTrailingBlank(lines[item.Start..(item.End + 1)]));
-        if (botChildren.Count > 0)
+        foreach (var section in cut.Where(item => item.Block.Part == "deployment" && item.Path.Child is not null).GroupBy(item => item.Path.Key))
         {
-            deploymentLines.Add(Bot + ":");
-            foreach (var item in botChildren)
+            deploymentLines.Add(section.Key + ":");
+            foreach (var item in section)
                 deploymentLines.AddRange(TrimTrailingBlank(lines[item.Start..(item.End + 1)]));
         }
         if (!cut.Any(item => item.Block.Key == "health"))
@@ -142,15 +147,16 @@ internal static class ConfigSplit
         var deploymentText = string.Join('\n', deploymentLines) + "\n";
 
         var dropped = cut.Where(item => item.Block.Part == "dropped")
-            .Select(item => (item.Block.Key, Value(original, item.Block.Key)))
+            .Select(item => (item.Block.Key, Value(original, item.Path)))
             .ToList();
         var tenant = Parse(tenantText.TrimStart('\uFEFF'), "the tenant part of " + sourceName);
         var deployment = Parse(deploymentText, "the deployment part of " + sourceName);
         var expected = (JsonObject)original.DeepClone();
-        foreach (var (key, _) in dropped)
-            Remove(expected, key);
-        if (expected[Bot] is JsonObject { Count: 0 } && tenant[Bot] is null && deployment[Bot] is null)
-            expected.Remove(Bot);
+        foreach (var item in cut.Where(item => item.Block.Part == "dropped"))
+            Remove(expected, item.Path);
+        foreach (var section in new[] { Bot, Journal })
+            if (expected[section] is JsonObject { Count: 0 } && tenant[section] is null && deployment[section] is null)
+                expected.Remove(section);
         try
         {
             AppConfigurationSplit.RequireHostedChannels(tenant);
@@ -178,17 +184,23 @@ internal static class ConfigSplit
         return new ConfigSplitResult(tenantText, deploymentText, tenant, deployment, cut.Select(item => item.Block).ToList(), dropped);
     }
 
-    /// <summary>"tenant", "deployment" or "dropped" for a top-level key or a <c>bot.child</c> path.</summary>
-    internal static string Classify(string path)
+    /// <summary>
+    /// "tenant", "deployment" or "dropped" for a top-level key or a child of <c>bot</c> or
+    /// <c>journal</c>. Those two mappings themselves are split by child; a <c>journal</c> that
+    /// isn't a mapping is a deployment setting.
+    /// </summary>
+    internal static string Classify(ConfigPath path)
     {
-        if (AppConfigurationSplit.UnavailablePaths.Contains(path))
+        if (AppConfigurationSplit.Contains(AppConfigurationSplit.UnavailablePaths, path))
             return "dropped";
-        if (path == Bot)
+        if (path == new ConfigPath(Bot) || path == new ConfigPath(Journal))
             return "tenant";
-        if (path == "journal" || AppConfigurationSplit.DeploymentPaths.Contains(path))
+        if (AppConfigurationSplit.Contains(AppConfigurationSplit.DeploymentPaths, path))
             return "deployment";
         // What a hosted tenant's document may hold; anything else is reported, not kept.
-        return AppConfigurationSplit.TenantPaths(TenantProfile.Hosted).Contains(path) ? "tenant" : "dropped";
+        return AppConfigurationSplit.Contains(AppConfigurationSplit.TenantPaths(TenantProfile.Hosted), path)
+            ? "tenant"
+            : "dropped";
     }
 
     // The line range of each key: from its line, or from the comment lines directly above it at
@@ -241,19 +253,17 @@ internal static class ConfigSplit
         }
     }
 
-    private static JsonNode? Value(JsonObject document, string path)
+    private static JsonNode? Value(JsonObject document, ConfigPath path)
     {
-        var parts = path.Split('.', 2);
-        var value = document[parts[0]];
-        return (parts.Length == 2 ? (value as JsonObject)?[parts[1]] : value)?.DeepClone();
+        var value = document[path.Key];
+        return (path.Child is null ? value : (value as JsonObject)?[path.Child])?.DeepClone();
     }
 
-    private static void Remove(JsonObject document, string path)
+    private static void Remove(JsonObject document, ConfigPath path)
     {
-        var parts = path.Split('.', 2);
-        if (parts.Length == 1)
-            document.Remove(path);
-        else if (document[parts[0]] is JsonObject section)
-            section.Remove(parts[1]);
+        if (path.Child is null)
+            document.Remove(path.Key);
+        else if (document[path.Key] is JsonObject section)
+            section.Remove(path.Child);
     }
 }

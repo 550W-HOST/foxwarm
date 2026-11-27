@@ -10,8 +10,37 @@ namespace Foxwarm.Models;
 /// of features hosted mode doesn't have are accepted by neither side. File mode reads one app
 /// file and never uses this split.
 /// </summary>
+/// <summary>
+/// A path of the app configuration as its actual key segments: a top-level key, or a child of
+/// <c>bot</c> or <c>journal</c>. A literal top-level key that contains a dot is one segment, so it
+/// never reads as a nested path. Shown as <c>key</c> or <c>key.child</c>.
+/// </summary>
+internal readonly record struct ConfigPath(string Key, string? Child = null)
+{
+    // A declared path of this file's lists, written `key` or `key.child`.
+    internal static ConfigPath Declared(string path) =>
+        path.IndexOf('.') is var dot and >= 0 ? new(path[..dot], path[(dot + 1)..]) : new(path);
+
+    public override string ToString() => Child is null ? Key : Key + "." + Child;
+}
+
 internal static class AppConfigurationSplit
 {
+    // Whether `path` is one of the declared paths of `list`.
+    internal static bool Contains(IReadOnlyList<string> list, ConfigPath path) =>
+        list.Any(item => ConfigPath.Declared(item) == path);
+
+    // Whether `path` is a deployment path, or a top-level key that holds deployment children
+    // (`bot`, `journal`).
+    private static bool Deployment(ConfigPath path) =>
+        DeploymentPaths.Any(item =>
+            ConfigPath.Declared(item) is var declared
+            && (declared == path || path.Child is null && declared.Key == path.Key)
+        );
+
+    // The keys whose children are classified one by one; every other key is a whole setting.
+    internal static bool Sectioned(string key) => key is "bot" or "journal";
+
     /// <summary>The paths the deployment configuration holds, as <c>key</c> or <c>key.child</c>.</summary>
     internal static readonly IReadOnlyList<string> DeploymentPaths =
     [
@@ -82,17 +111,13 @@ internal static class AppConfigurationSplit
         var allowed = TenantPaths(profile);
         foreach (var path in Present(tenant, deployment: false))
         {
-            if (allowed.Contains(path))
+            if (Contains(allowed, path))
                 continue;
-            if (
-                DeploymentPaths.Any(item =>
-                    item == path || item.StartsWith(path + ".", StringComparison.Ordinal)
-                )
-            )
+            if (Deployment(path))
                 throw new InvalidDataException(
                     $"app config `{path}` is a deployment setting; set it in the deployment configuration."
                 );
-            if (UnavailablePaths.Contains(path) || OperatorTenantPaths.Contains(path))
+            if (Contains(UnavailablePaths, path) || Contains(OperatorTenantPaths, path))
                 throw new InvalidDataException($"app config `{path}` isn't available in hosted mode.");
             throw new InvalidDataException($"app config `{path}` isn't a tenant setting.");
         }
@@ -114,15 +139,13 @@ internal static class AppConfigurationSplit
         var allowed = TenantPaths(profile);
         var unknown = Present(tenant, deployment: false)
             .Where(path =>
-                !allowed.Contains(path)
-                && !DeploymentPaths.Any(item =>
-                    item == path || item.StartsWith(path + ".", StringComparison.Ordinal)
-                )
-                && !UnavailablePaths.Contains(path)
-                && !OperatorTenantPaths.Contains(path)
+                !Contains(allowed, path)
+                && !Deployment(path)
+                && !Contains(UnavailablePaths, path)
+                && !Contains(OperatorTenantPaths, path)
             )
             .ToArray();
-        ignored = unknown;
+        ignored = unknown.Select(path => path.ToString()).ToArray();
         if (unknown.Length == 0)
         {
             RequireTenantDocument(tenant, profile);
@@ -131,11 +154,10 @@ internal static class AppConfigurationSplit
         var kept = (JsonObject)tenant.DeepClone();
         foreach (var path in unknown)
         {
-            var dot = path.IndexOf('.');
-            if (dot < 0)
-                kept.Remove(path);
+            if (path.Child is null)
+                kept.Remove(path.Key);
             else
-                (kept[path[..dot]] as JsonObject)?.Remove(path[(dot + 1)..]);
+                (kept[path.Key] as JsonObject)?.Remove(path.Child);
         }
         RequireTenantDocument(kept, profile);
         return kept;
@@ -172,9 +194,9 @@ internal static class AppConfigurationSplit
     internal static void RequireDeploymentDocument(JsonObject deployment)
     {
         foreach (var path in Present(deployment, deployment: true))
-            if (!DeploymentPaths.Contains(path))
+            if (!Contains(DeploymentPaths, path))
                 throw new InvalidDataException(
-                    UnavailablePaths.Contains(path)
+                    Contains(UnavailablePaths, path)
                         ? $"deployment configuration `{path}` isn't available in hosted mode."
                         : $"deployment configuration `{path}` isn't a deployment setting; tenant settings belong in the tenant configuration."
                 );
@@ -208,15 +230,15 @@ internal static class AppConfigurationSplit
     // The top-level keys of a document, with `bot` listed by its children: `bot` mixes tenant
     // (`bot.name`) and deployment (`bot.httpPort`) settings. The deployment side also lists
     // `journal` by its children, which only some are settings of.
-    private static IEnumerable<string> Present(JsonObject document, bool deployment)
+    private static IEnumerable<ConfigPath> Present(JsonObject document, bool deployment)
     {
         foreach (var (key, value) in document)
         {
             if ((key == "bot" || deployment && key == "journal") && value is JsonObject section)
                 foreach (var (child, _) in section)
-                    yield return key + "." + child;
+                    yield return new(key, child);
             else
-                yield return key;
+                yield return new(key);
         }
     }
 }
