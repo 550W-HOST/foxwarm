@@ -1095,4 +1095,75 @@ public sealed class CodeRoutesTests
             );
         }
     }
+
+    [Fact]
+    public async Task Workbench_and_unavailable_pages_emit_initial_theme_from_foxwarm_canvas_cookie()
+    {
+        await using var f = await Fixture.Create(separateInstallation: true);
+
+        using (var unavailReq = new HttpRequestMessage(HttpMethod.Get, "/vscode-web"))
+        {
+            unavailReq.Headers.Add("Cookie", "foxwarm_canvas=111827");
+            using var unavailResp = await f.Client.SendAsync(unavailReq);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailResp.StatusCode);
+            Assert.Contains("Cookie", unavailResp.Headers.Vary);
+            var unavailHtml = await unavailResp.Content.ReadAsStringAsync();
+            Assert.Contains("data-theme=\"dark\"", unavailHtml);
+            Assert.Contains("--fw-bg:#111827", unavailHtml);
+            Assert.DoesNotContain("<script>", unavailHtml);
+        }
+
+        using (var unavailFallbackResp = await f.Client.GetAsync("/vscode-web"))
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailFallbackResp.StatusCode);
+            var fallbackHtml = await unavailFallbackResp.Content.ReadAsStringAsync();
+            Assert.Contains("<html lang=\"en\">", fallbackHtml);
+            Assert.Contains("@media (prefers-color-scheme: dark)", fallbackHtml);
+        }
+
+        foreach (
+            var file in new[]
+            {
+                "out/nls.messages.js",
+                "out/vs/workbench/workbench.web.main.internal.css",
+                "out/vs/workbench/workbench.web.main.internal.js",
+            }
+        )
+        {
+            var path = Path.Combine(f.Assets, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, "metadata fixture");
+        }
+
+        // Valid dark foxwarm_canvas cookie produces matching dark initialShellColors.
+        using (var darkReq = new HttpRequestMessage(HttpMethod.Get, "/vscode-web/"))
+        {
+            darkReq.Headers.Add("Cookie", "foxwarm_canvas=1e1e2e");
+            using var darkResp = await f.Client.SendAsync(darkReq);
+            Assert.Equal(HttpStatusCode.OK, darkResp.StatusCode);
+            Assert.Contains("Cookie", darkResp.Headers.Vary);
+            var html = await darkResp.Content.ReadAsStringAsync();
+            Assert.Contains("class=\"initialShellColors\"", html);
+            Assert.Contains("color-scheme:dark;background-color:#1e1e2e", html);
+        }
+
+        // Valid light foxwarm_canvas cookie produces matching light initialShellColors.
+        using (var lightReq = new HttpRequestMessage(HttpMethod.Get, "/vscode-web/"))
+        {
+            lightReq.Headers.Add("Cookie", "foxwarm_canvas=f6f3ef");
+            using var lightResp = await f.Client.SendAsync(lightReq);
+            var html = await lightResp.Content.ReadAsStringAsync();
+            Assert.Contains("color-scheme:light;background-color:#f6f3ef", html);
+        }
+
+        // Invalid or missing cookie falls back safely without injecting raw cookie text.
+        using (var badReq = new HttpRequestMessage(HttpMethod.Get, "/vscode-web/"))
+        {
+            badReq.Headers.Add("Cookie", "foxwarm_canvas=red}</style><script>alert(1)</script>");
+            using var badResp = await f.Client.SendAsync(badReq);
+            var html = await badResp.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("alert(1)", html);
+            Assert.Contains("color-scheme:light dark;background-color:#f3f4f6", html);
+        }
+    }
 }

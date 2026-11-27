@@ -1,5 +1,6 @@
 import { createRef, useEffect, useRef } from 'react'
 import { useDndContext } from '@dnd-kit/core'
+import { useTheme } from '../theme'
 import { CODE_BRIDGE_CHANNEL, CODE_BRIDGE_VERSION, type CodeOpenRequest } from '../vscodeWeb'
 
 type PendingRequest = {
@@ -96,15 +97,16 @@ export function useCodeFrames(open: (request: CodeOpenRequest) => void) {
 
 export default function VscodeWebFrameHost({ frame, nodeId }: { frame: CodeFrame; nodeId: string }) {
   const { active } = useDndContext()
+  const { effectiveMode } = useTheme()
   return (
     <iframe
       ref={frame.iframeRef}
       src={frame.src}
       title={`Code · ${nodeId}`}
       allow="clipboard-read; clipboard-write"
-      className="relative h-full w-full border-0 bg-fw-canvas-edge"
-      style={{ zIndex: 35, pointerEvents: active ? 'none' : undefined }}
-      onLoad={frame.onLoad}
+      className="relative h-full w-full border-0 bg-fw-canvas"
+      style={{ zIndex: 35, colorScheme: effectiveMode, pointerEvents: active ? 'none' : undefined }}
+      onLoad={() => frame.onLoad()}
       data-foxwarm-vscode-web-frame="true"
       data-code-node={nodeId}
     />

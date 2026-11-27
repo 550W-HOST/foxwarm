@@ -300,6 +300,7 @@ internal sealed partial class CodeWorkbench
         foreach (var setting in PrivacyDefaults)
             configuration["configurationDefaults"]![setting.Key] = setting.Value!.DeepClone();
         return WorkbenchTemplate
+            .Replace("@@INITIALTHEME@@", InitialThemeStyle(context))
             .Replace("@@CONFIGURATION@@", WebUtility.HtmlEncode(configuration.ToJsonText()))
             .Replace(
                 "@@ASSETBASE@@",
@@ -310,6 +311,26 @@ internal sealed partial class CodeWorkbench
             .Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToHtmlJson())
             .Replace("@@HASYAML@@", HasYaml ? "true" : "false")
             .Replace("@@HASPTY@@", hasPty ? "true" : "false");
+    }
+
+    private static (string? Color, bool Dark) InitialThemeFromCookie(HttpContext context)
+    {
+        var raw = context.Request.Cookies["foxwarm_canvas"];
+        if (raw is null || (raw.Length != 6 && raw.Length != 8) || !raw.All(Uri.IsHexDigit))
+            return (null, false);
+        var r = Convert.ToInt32(raw[..2], 16);
+        var g = Convert.ToInt32(raw[2..4], 16);
+        var b = Convert.ToInt32(raw[4..6], 16);
+        var dark = (0.2126 * r + 0.7152 * g + 0.0722 * b) < 128;
+        return ("#" + raw.ToLowerInvariant(), dark);
+    }
+
+    private static string InitialThemeStyle(HttpContext context)
+    {
+        var (color, dark) = InitialThemeFromCookie(context);
+        if (color is not null)
+            return $"<style id=\"foxwarm-code-initial-theme\" class=\"initialShellColors\">:root,body{{color-scheme:{(dark ? "dark" : "light")};background-color:{color}}}</style>";
+        return "<style id=\"foxwarm-code-initial-theme\" class=\"initialShellColors\">:root,body{color-scheme:light dark;background-color:#f3f4f6}@media (prefers-color-scheme:dark){:root,body{background-color:#111827}}</style>";
     }
 
     private static readonly string WorkbenchTemplate = ReadResource("workbench.html")

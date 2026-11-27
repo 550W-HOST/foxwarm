@@ -28,18 +28,25 @@ internal sealed partial class CodeWorkbench
                 """
             : "";
 
-    private string UnavailableHtml() =>
-        $$"""
+    private string UnavailableHtml(HttpContext context)
+    {
+        var (cookieColor, cookieDark) = InitialThemeFromCookie(context);
+        var htmlAttrs = cookieColor is not null
+            ? $" data-theme=\"{(cookieDark ? "dark" : "light")}\" style=\"--fw-bg:{cookieColor}\""
+            : "";
+        return $$"""
             <!doctype html>
-            <html lang="en">
+            <html lang="en"{{htmlAttrs}}>
             <head>
               <meta charset="utf-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
               <title>Code is not installed · Foxwarm</title>
               <style>
                 :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+                :root[data-theme="light"] { color-scheme: light; }
+                :root[data-theme="dark"] { color-scheme: dark; }
                 * { box-sizing: border-box; }
-                body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #f3f4f6; color: #111827; padding: 24px; }
+                body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: var(--fw-bg, #f3f4f6); color: #111827; padding: 24px; }
                 main { width: min(720px, 100%); border: 1px solid #d1d5db; border-radius: 16px; background: white; padding: clamp(24px, 5vw, 44px); box-shadow: 0 16px 50px rgba(15, 23, 42, .09); }
                 .eyebrow { margin: 0 0 10px; color: #2563eb; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
                 h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: -.03em; }
@@ -49,12 +56,19 @@ internal sealed partial class CodeWorkbench
                 code { display: block; overflow-x: auto; border-radius: 8px; background: #111827; color: #f9fafb; padding: 12px 14px; white-space: pre; }
                 .hint { margin-top: 20px; font-size: 13px; color: #6b7280; }
                 .path { overflow-wrap: anywhere; }
+                :root[data-theme="dark"] body { background: var(--fw-bg, #111827); color: #f9fafb; }
+                :root[data-theme="dark"] main { border-color: #374151; background: #1f2937; box-shadow: none; }
+                :root[data-theme="dark"] .eyebrow { color: #60a5fa; }
+                :root[data-theme="dark"] p, :root[data-theme="dark"] .hint { color: #9ca3af; }
+                :root[data-theme="dark"] .option { border-color: #374151; }
+                :root[data-theme="dark"] code { background: #030712; }
                 @media (prefers-color-scheme: dark) {
-                  body { background: #030712; color: #f9fafb; }
-                  main { border-color: #374151; background: #111827; box-shadow: none; }
-                  p, .hint { color: #9ca3af; }
-                  .option { border-color: #374151; }
-                  code { background: #030712; }
+                  :root:not([data-theme="light"]) body { background: var(--fw-bg, #111827); color: #f9fafb; }
+                  :root:not([data-theme="light"]) main { border-color: #374151; background: #1f2937; box-shadow: none; }
+                  :root:not([data-theme="light"]) .eyebrow { color: #60a5fa; }
+                  :root:not([data-theme="light"]) p, :root:not([data-theme="light"]) .hint { color: #9ca3af; }
+                  :root:not([data-theme="light"]) .option { border-color: #374151; }
+                  :root:not([data-theme="light"]) code { background: #030712; }
                 }
               </style>
             </head>
@@ -80,6 +94,7 @@ internal sealed partial class CodeWorkbench
             </body>
             </html>
             """;
+    }
 
     internal bool IsCapabilityRequest(HttpContext context) =>
         context.Request.Method == "GET" && PreFile(context.Request.Path, out _);
@@ -543,12 +558,13 @@ internal sealed partial class CodeWorkbench
                     async () =>
                     {
                         context.Response.Headers.CacheControl = "no-store";
+                        context.Response.Headers.Vary = "Cookie";
                         context.Response.ContentType = "text/html; charset=utf-8";
                         if (!Prepared)
                         {
                             context.Response.StatusCode = 503;
                             await context.Response.WriteAsync(
-                                UnavailableHtml(),
+                                UnavailableHtml(context),
                                 context.RequestAborted
                             );
                         }
