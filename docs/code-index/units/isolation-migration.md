@@ -125,11 +125,13 @@ Archive reads of cleared and deleted Sessions stay within the layer's same-Agent
 
 ## Installation reader level
 
-`state/installation.json` may carry `minimumReaderVersion`. `AgentCatalog` refuses to load when that value exceeds its `ReaderVersion`, which is currently 1.
+`state/installation.json` may carry `minimumReaderVersion`. `AgentCatalog` refuses to load when that value exceeds its `ReaderVersion`, which is currently 3.
 
 The marker is computed per level: each level counts only data that earlier readers would ignore.
 - Level 1 is required by `legacyIsolation` markers and `inheritable: false`.
-- Creator links and local rules do not raise it, because earlier binaries already enforce them.
+- Level 2 is required by Agent-local rules containing operation (`op`) rules ([reader marker](./tool-operation-rules.md#reader-marker)).
+- Level 3 is required by Agent-local rules stored in the scripted `{ script, data? }` object form ([policy scripts](./tool-authorization.md#policy-scripts)).
+- Creator links and plain version-1 rule arrays do not raise it, because earlier binaries already enforce them.
 - Node ancestry is not covered.
 
 A catalog write raises the marker to the level its metadata requires before writing that metadata, and never lowers it. The R2 startup migration writes metadata through the same check. Binaries older than the marker ignore it, so it protects only later downgrades. Agents relying solely on local rules are not downgrade-supported.

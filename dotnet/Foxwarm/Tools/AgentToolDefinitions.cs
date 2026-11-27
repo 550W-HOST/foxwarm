@@ -254,7 +254,7 @@ internal static class AgentToolDefinitions
                             "Convert an existing session into this agent's main session. Requires createMainSession=true."
                         ),
                         ["rules"] = LocalRules(
-                            "Initial local authorization rules for the new Agent, evaluated in order. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply."
+                            "Initial local authorization rules for the new Agent, evaluated in order: a rule list or a {script, data?} generator returning that list. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply."
                         ),
                         ["defaultNode"] = String(
                             "Default execution Node for new Sessions in this Agent; omitted uses the installation default when configured. This chooses initial placement and does not grant access."
@@ -274,7 +274,7 @@ internal static class AgentToolDefinitions
                     {
                         ["agentName"] = String("Agent whose local rules to replace."),
                         ["rules"] = LocalRules(
-                            "Complete replacement rule list, evaluated in order. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. An empty list removes this layer's rules. Caller selectors are not accepted."
+                            "Complete replacement rules, evaluated in order: a rule list or a {script, data?} generator returning that list. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. An empty list removes this layer's rules. Caller selectors are not accepted."
                         ),
                     },
                     "agentName",

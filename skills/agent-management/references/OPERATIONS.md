@@ -84,7 +84,7 @@ There is no tool to write another Agent's memory. After creating an Agent, write
 
 Restriction has two independent parts:
 
-1. **A local rule layer** decides which tools the Agent's Sessions can use. The global policy decides first, then every layer from the top of the creator chain down to the Agent's own must pass. A call that matches no rule passes a layer, so a layer that ends with `{"action":"deny"}` is an allowlist. Syntax and evaluation: "Agent-local layers" in the `access-control` skill (`ctl skill load access-control references/tool-policy.md`).
+1. **A local rule layer** decides which tools the Agent's Sessions can use. The global policy decides first, then every layer from the top of the creator chain down to the Agent's own must pass. A call that matches no rule passes a layer, so a layer that ends with `{"action":"deny"}` is an allowlist. A layer can be a plain JSON rule array or a `{ "script": "...", "data": ... }` deterministic generator object directly in `rules`, instead of keeping an external generator script beside the Agent. Syntax, scripts and evaluation: "Agent-local layers" and "Policy scripts" in the `access-control` skill (`ctl skill load access-control references/tool-policy.md`).
 2. **A Node** decides where its file and exec tools run. Containment, network access and resource limits come from that environment, for example a container from the `node-setup` skill's container Provider (`ctl skill load node-setup examples/container/README.md`), a VM or a dedicated machine.
 
 Create a restricted Agent with its rules in one call, so no Session runs without them:

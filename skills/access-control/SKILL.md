@@ -12,6 +12,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 | --- | --- |
 | Add or change a WebUI/MCP identity, scope browser chat, or diagnose login | [Entry identities and WebUI scope](references/identities.md) |
 | Write ordered rules for internal Agents/Sessions or external MCP callers | [Tool policy syntax and examples](references/tool-policy.md) |
+| Generate repetitive rules directly inside a policy instead of an external script | [Policy scripts](references/tool-policy.md#policy-scripts) |
 | Allow or deny what calls do (read a path, select a Node, send to a Session) whichever tool does it | [Operation rules](references/tool-policy.md#operation-rules) |
 | Restrict one Agent and the Agents created from it | [Agent-local layers](references/tool-policy.md#agent-local-layers) and the agent-management templates (`ctl skill load agent-management references/memory-templates/`) |
 | Read and merge the existing policy, install a candidate, and confirm behavior | [Safe updates and troubleshooting](references/policy-updates.md) |
