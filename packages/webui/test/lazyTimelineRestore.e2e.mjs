@@ -85,7 +85,31 @@ async function openFixture(shape) {
     return root?.dataset.chatSessionId === sessionId
   }, { timeout: 15_000 }, fixtureSessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
+  await mountRecentSlice(page, shape)
   return { browser, page }
+}
+
+// The timeline mounts the newest rows of the recent slice first and more as the reader
+// approaches them. These cases start once the slice's first row is mounted, so the next
+// read near the top expands the full history.
+async function mountRecentSlice(page, shape) {
+  const firstRowMounted = shape => {
+    const timeline = document.querySelector('[data-chat-timeline="committed"]')
+    return shape === 'tool-boundary'
+      ? !!timeline?.querySelector('[data-chat-message-anchor-key="seq-local-21"]')
+      : !!timeline?.textContent.includes('message 20')
+  }
+  for (let piece = 0; piece < 20 && !await page.evaluate(firstRowMounted, shape); piece++) {
+    const rows = await page.$$eval('[data-chat-timeline="committed"] [data-search-row]', nodes => nodes.length)
+    await page.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      container.scrollTop = 0
+      container.dispatchEvent(new Event('scroll'))
+    })
+    await page.waitForFunction(rows => document.querySelectorAll('[data-chat-timeline="committed"] [data-search-row]').length > rows, { timeout: 15_000 }, rows)
+  }
+  assert.ok(await page.evaluate(firstRowMounted, shape), 'the recent slice is mounted')
+  assert.ok(await page.evaluate(() => document.body.textContent?.includes('Scroll upward to load')), 'mounting the slice does not expand history')
 }
 
 async function triggerLazyExpansion(page, duringHostResize = false) {

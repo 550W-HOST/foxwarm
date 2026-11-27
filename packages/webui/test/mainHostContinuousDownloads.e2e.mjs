@@ -79,7 +79,12 @@ try {
   await page.evaluate(() => { const scroller = document.querySelector('.foxwarm-chat-messages'); scroller.scrollTop = 0; scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, bubbles: true })); scroller.dispatchEvent(new Event('scroll')) })
   await until(() => pages.some(value => new URL(value.url).searchParams.has('beforeSeq')), 'bounded earlier request from original App')
   assert(pages.every(value => value.body.messages.length <= 100))
-  await page.waitForSelector('img[src*="/api/blobs/"]')
+  // The timeline mounts loaded rows as the reader approaches them; keep reading at the top.
+  await until(async () => {
+    await page.evaluate(() => { const scroller = document.querySelector('.foxwarm-chat-messages'); scroller.scrollTop = 0; scroller.dispatchEvent(new Event('scroll')) })
+    return !!(await page.$('img[src*="/api/blobs/"]'))
+  }, 'reading up mounts the archived image row')
+  await page.$eval('img[src*="/api/blobs/"]', img => img.scrollIntoView({ block: 'center' }))
   await page.waitForFunction(() => [...document.querySelectorAll('img[src*="/api/blobs/"]')].some(img => img.naturalWidth === 3))
   // The original is still available behind the compacted active context, including its image.
   const imagePage = (await host.api('GET', route(seed.parent) + '/history/continuous?afterSeq=149')).body

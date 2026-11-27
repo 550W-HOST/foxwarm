@@ -2,7 +2,7 @@
 
 See [artifact rendering](./webui-artifacts.md) for revision-pinned content projected outside Activity.
 
-Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/webSearchCitations.e2e.mjs, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/imageGenerationTimeline.e2e.mjs
+Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/chatTimelineWindow.e2e.mjs, packages/webui/test/webSearchCitations.e2e.mjs, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/imageGenerationTimeline.e2e.mjs
 Secondary files: packages/webui/test/conversationPresentationPreview.e2e.mjs, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/index.css
 
 ## Purpose
@@ -97,6 +97,18 @@ Conversation activities retain their mounted identity through overlapping techni
 When the Session's model redacts text, message actions include `Sent version` (`SentVersionDialog`), which shows the replaced ranges from the detection cache ([observability](./model-text-redaction-observability.md)).
 
 ## Design Decisions
+
+### D-webui-timeline-render-window
+
+[2026-11-27] The top-level committed timeline mounts a DOM window over its derived items, not over source messages: an item is one rendered row, counted tool group or Conversation Activity, so a long folded tool run is one item. Rows, groups, Activity, usage, time separators, reply-file and artifact projection, the gallery and code-link bases are still derived from every loaded message; only the mounted range is limited, so a mounted row renders exactly as in the complete timeline. Nested timelines and opened Activity details are never windowed.
+
+`renderWindow` names an anchor (`null` for the end, `TIMELINE_WINDOW_START` for the first item, otherwise a stable or viewport key of a loaded message) and how many items to mount before it and, optionally, after it. Without `after` the window runs through the last item, and only then are the queued footer and the trailing reply-file/artifact projections mounted; the leading projections mount only with the first item. A key no loaded message carries mounts every item, and the selected Search target's item is always mounted. After each commit the timeline reports the hidden counts and the first mounted source key through `renderWindowState`; Chat owns every window decision, so opening a Session mounts only the rows its viewport needs. It applies the window over the already-selected source window (newest 100 active messages, the full active history, or the continuous window); history selection, paging and Search corpus are unchanged.
+
+- Opening, and switching Sessions or history modes, mounts the newest 24 items. The window state is keyed by Session and history mode, so the first render of a switch already uses the new window and a saved-position restore never reads rows of the previous one. A saved anchor mounts 12 items before it through 24 after it; an anchor whose offset cannot be reached in that range mounts another piece and restores again. While the window ends before the latest row, the live draft and queued previews stay unmounted, and rejoining the bottom mounts the newest items.
+- The window grows by 16 items when the reader comes within the 500px buffer of a hidden edge, from native scroll and, after mount and size changes, at most one piece per frame. Each piece above the reader is a prepend taken through `HistoryCommit`, so the reading row keeps its offset; pins and pieces below are not. In continuous mode an earlier Archive page is still requested inside that buffer; while it is pending no piece is added, and on arrival the moved window mounts whole, from the protected reading range when that is earlier. In active mode, a read near the top once every row of the newest-100 slice is mounted reveals the full history and mounts one piece of it in the same commit, so the reading row keeps an offset that needs rows above it.
+- A detached reader pins its first mounted item, so later rows never remove rows above it; following readers keep the newest items.
+- Search and exec-link jumps mount from 12 items before the target through the latest row and never unmount rows a previous jump mounted, as the complete timeline did. Context-overview navigation mounts every item, so its measured thumb maps onto real geometry; Scroll to top mounts the first 24 items.
+- `keepAttachedBottom` decides whether a bottom pin can apply before reading `scrollHeight`, so commits while detached, restoring or dragging read no geometry.
 
 ### D-webui-assistant-markdown-tables
 

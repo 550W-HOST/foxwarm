@@ -111,7 +111,34 @@ interface ChatTimelineProps {
   nestedDepth?: number
   searchTarget?: SessionSearchMatch | null
   renderMessageFooter?: (alignment: 'left' | 'right') => ReactNode
+  /** Top-level only: mount this window of the derived rows. Omitted mounts every row. */
+  renderWindow?: TimelineRenderWindow
+  /** Receives the mounted window after each commit. */
+  renderWindowState?: { current: TimelineRenderWindowState }
 }
+
+/**
+ * A DOM window over the derived top-level items (rows, counted groups and Activities).
+ * `key` names a source message by stable or viewport-anchor key; null is the position after
+ * the last item and TIMELINE_WINDOW_START the first item, including a prompt snapshot. The
+ * window mounts `before` items before the keyed item through `after` items after it, or
+ * through the last item when `after` is omitted. A key that no loaded message carries mounts
+ * every item.
+ */
+export const TIMELINE_WINDOW_START = ''
+
+export type TimelineRenderWindow = { readonly key: string | null; readonly before: number; readonly after?: number }
+
+export type TimelineRenderWindowState = {
+  /** Derived items above and below the mounted window. */
+  hiddenBefore: number
+  hiddenAfter: number
+  mounted: number
+  /** Stable key of the first source message owned by the first mounted item. */
+  firstKey: string | null
+}
+
+export const EMPTY_TIMELINE_RENDER_WINDOW_STATE: Readonly<TimelineRenderWindowState> = { hiddenBefore: 0, hiddenAfter: 0, mounted: 0, firstKey: null }
 
 const getUsageTotalTokens = (usage: NormalizedTokenUsage) => (
   usage.cachedTokens + usage.inputTokens + usage.outputTokens
@@ -1401,7 +1428,7 @@ function buildTimelineImageGallery(messages: readonly Message[], groupedRows: re
   return { entries, keys }
 }
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, liveTiming = true, renderMessageFooter }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, liveTiming = true, renderMessageFooter, renderWindow, renderWindowState }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
@@ -1568,13 +1595,71 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   const lastRow = lastGroup?.rows[lastGroup.rows.length - 1]
   const footerAlignment = lastRow?.msg.role === 'user' && !lastRow.systemLikeMessage && !lastRow.activity && !lastGroup.group ? 'right' : 'left'
 
+  // Only the DOM is windowed: rows, groups, Activity, usage and reply files above are derived
+  // from every loaded message, so a mounted row renders exactly as in the complete timeline.
+  const windowed = !!renderWindow && nestedDepth === 0 && !activityDetails
+  const itemSources = useMemo(() => {
+    if (!windowed) return null
+    const indices = new Map(messages.map((message, index) => [message, index]))
+    const keys = new Map<string, number>()
+    messages.forEach((message, index) => {
+      const stable = getMessageStableKey(message, 0)
+      if (!keys.has(stable)) keys.set(stable, index)
+      const anchor = getMessageViewportAnchorKey(message)
+      if (anchor && !keys.has(anchor)) keys.set(anchor, index)
+    })
+    const ranges = groupedRows.map(item => {
+      let first = Infinity
+      let last = -1
+      for (const row of item.rows) {
+        for (const message of [row.msg, ...(row.activity?.sources || []), ...(row.pairedToolResponse ? [row.pairedToolResponse] : [])]) {
+          const index = indices.get(message)
+          if (index === undefined) continue
+          first = Math.min(first, index)
+          last = Math.max(last, index)
+        }
+      }
+      return { first, last }
+    })
+    return { keys, ranges }
+  }, [windowed, messages, groupedRows])
+  let windowStart = 0
+  let windowEnd = groupedRows.length - 1
+  if (windowed && itemSources && renderWindow && groupedRows.length) {
+    const { key, before, after } = renderWindow
+    const sourceIndex = key === null ? messages.length : key === TIMELINE_WINDOW_START ? 0 : itemSources.keys.get(key)
+    if (sourceIndex !== undefined) {
+      let item = key === null ? groupedRows.length : key === TIMELINE_WINDOW_START ? 0 : itemSources.ranges.findIndex(range => range.last >= sourceIndex)
+      if (item < 0) item = groupedRows.length - 1
+      windowStart = Math.max(0, item - Math.max(0, before))
+      windowEnd = key === null || after === undefined ? groupedRows.length - 1 : Math.min(groupedRows.length - 1, item + Math.max(0, after))
+    }
+    // A selected Search or exec target is always mounted.
+    const targetItem = searchTarget ? groupedRows.findIndex(candidate => candidate.rows.some(row => row.key === searchTarget.rowKey)) : -1
+    if (targetItem >= 0) {
+      windowStart = Math.min(windowStart, targetItem)
+      windowEnd = Math.max(windowEnd, targetItem)
+    }
+  }
+  const firstSource = itemSources?.ranges[windowStart]?.first
+  const windowFirstKey = firstSource !== undefined && Number.isFinite(firstSource) ? getMessageStableKey(messages[firstSource], 0) : null
+  useLayoutEffect(() => {
+    if (!renderWindowState) return
+    renderWindowState.current = {
+      hiddenBefore: groupedRows.length ? windowStart : 0,
+      hiddenAfter: groupedRows.length ? groupedRows.length - 1 - windowEnd : 0,
+      mounted: groupedRows.length ? windowEnd - windowStart + 1 : 0,
+      firstKey: windowFirstKey,
+    }
+  })
+
   const rowProps = { hideMetrics, conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   const timeline = (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
-      {renderReplyFiles(-1)}
-      {renderArtifacts(-1)}
-      {groupedRows.flatMap((item, index) => [
+      {windowStart === 0 && renderReplyFiles(-1)}
+      {windowStart === 0 && renderArtifacts(-1)}
+      {groupedRows.flatMap((item, index) => index < windowStart || index > windowEnd ? [] : [
         ...(item.rows[0].timeMarker ? [<TimelineTimeSeparator key={`${item.key}-time`} marker={item.rows[0].timeMarker} />] : []),
         item.rows[0].activity
           ? <TimelineActivity key={activityKeys.get(item.key) || item.key} identityKey={activityKeys.get(item.key) || item.key} row={item.rows[0]} rowProps={rowProps} expanded={expandedToolGroups.has(activityKeys.get(item.key) || item.key)} onToggle={handleGroupToggle} />
@@ -1584,7 +1669,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
         ...renderReplyFiles(index),
         ...renderArtifacts(index),
       ])}
-      {renderMessageFooter?.(footerAlignment)}
+      {windowEnd === groupedRows.length - 1 && renderMessageFooter?.(footerAlignment)}
     </div>
   )
   const content = ownsImageGallery ? <ImageGalleryContext.Provider value={imageGalleryStore}>{timeline}</ImageGalleryContext.Provider> : timeline

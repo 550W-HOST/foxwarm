@@ -2823,7 +2823,7 @@ async function openIdleViewportChat({ reading = false, popup = false } = {}) {
     tabs: [system, chat('e2e-a', false)],
     hash: popup ? '?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=e2e-a' : '#tab/chat:e2e-a',
   })
-  await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-55"]')
   await settleIdleViewport(page)
   await wheelIdleViewport(page, -700)
   await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
@@ -3112,7 +3112,7 @@ test('Imported V3 theme independently binds workbench chrome and accent foregrou
 async function openConversationScrollFixture(phase) {
   const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages,
     timelineView: 'conversation', height: 1100, hash: '#tab/chat:e2e-a', tabs: [chat('e2e-a', false)] })
-  await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-55"]')
   await page.evaluate(phase => {
     let sequence = 0
     let paragraphs = 160
@@ -3236,7 +3236,7 @@ for (const deltaY of [-160, -3]) {
         { id: 'pane-other', kind: 'pane', tabIds: [system.id], activeTabId: system.id },
       ] } })
     try {
-      await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+      await page.waitForSelector('[data-chat-message-anchor-key="seq-local-55"]')
       await waitForIdleBottom(page)
       const bounds = await (await page.$('.foxwarm-chat-messages')).boundingBox()
       await page.mouse.move(bounds.x + 100, bounds.y + 120)

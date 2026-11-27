@@ -169,20 +169,20 @@ test('standalone Chat captures Ctrl/Cmd+F but leaves extended find combinations 
 test('Ctrl/Cmd+F captures text and composer selections, and search history navigates without recording prefixes',async()=>{
   await page.evaluate(()=>localStorage.clear())
   await page.evaluate(() => {
-    const target = [...document.querySelectorAll('[data-search-surface="model"]')].find(element => element.textContent?.includes('Earlier ordinary message 4'))
+    const target = [...document.querySelectorAll('[data-search-surface="model"]')].find(element => element.textContent?.includes('Earlier ordinary message 107'))
     if (!target) throw new Error('selection target not found')
     const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT)
     let node
-    while ((node = walker.nextNode()) && !node.textContent?.includes('Earlier ordinary message 4')) {}
+    while ((node = walker.nextNode()) && !node.textContent?.includes('Earlier ordinary message 107')) {}
     if (!node) throw new Error('selection text not found')
     const text = node.textContent
-    const start = text.indexOf('Earlier ordinary message 4')
-    const range = document.createRange();range.setStart(node, start);range.setEnd(node, start + 'Earlier ordinary message 4'.length)
+    const start = text.indexOf('Earlier ordinary message 107')
+    const range = document.createRange();range.setStart(node, start);range.setEnd(node, start + 'Earlier ordinary message 107'.length)
     const selection = window.getSelection();selection.removeAllRanges();selection.addRange(range)
   })
   await page.keyboard.down('Control');await page.keyboard.press('f');await page.keyboard.up('Control')
   await page.waitForSelector('[data-chat-search] input[aria-label="Search messages"]')
-  assert.equal(await page.$eval('[data-chat-search] input',input=>input.value),'Earlier ordinary message 4')
+  assert.equal(await page.$eval('[data-chat-search] input',input=>input.value),'Earlier ordinary message 107')
   await page.click('[aria-label="Close search"]')
 
   const editor = '[contenteditable="true"]'

@@ -45,7 +45,9 @@ test('continuous Chat loads one recent page, retries earlier pages, bounds mount
   try {
     assert.equal(await chatPage.evaluate(() => window.fixtureArchiveRequests.length), 1)
     assert.equal(await chatPage.evaluate(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('Generated summary')), false)
-    assert.equal(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length), 100)
+    // The opening mounts a bounded window of the newest rows, not every loaded row.
+    const opening = await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length)
+    assert.ok(opening > 0 && opening < 100, `opening rows: ${opening}`)
     await chatPage.evaluate(() => { window.fixtureFailArchive = true })
     await loadContinuousEarlier(chatPage)
     await chatPage.waitForFunction(() => document.querySelector('[data-continuous-history]')?.textContent.includes('could not be loaded'))
@@ -163,6 +165,8 @@ test('continuous Chat ignores a pending page viewport correction after switching
     await chatPage.evaluate(() => { window.fixtureDelayArchive = true })
     await loadContinuousEarlier(chatPage)
     await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 2)
+    // The row at the top of the mounted window, where the continuous reader stopped.
+    const continuousReading = await readingAnchor(chatPage)
     await chatPage.evaluate(() => { window.fixtureTimelineView = 'detailed'; window.fixtureHistoryMode = 'active'; window.renderFixtureChats() })
     await chatPage.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('Generated summary'))
     const before = await readingAnchor(chatPage)
@@ -173,7 +177,7 @@ test('continuous Chat ignores a pending page viewport correction after switching
     assert.ok(Math.abs(after.offset - before.offset) < 3)
     assert.equal(await chatPage.$('[data-continuous-history]'), null)
     await chatPage.evaluate(() => { window.fixtureTimelineView = 'conversation'; window.fixtureHistoryMode = 'continuous'; window.renderFixtureChats() })
-    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-501"]')
+    await chatPage.waitForSelector(`[data-chat-message-anchor-key="${continuousReading.key}"]`)
   } finally { await chatPage.close() }
 })
 
@@ -493,13 +497,14 @@ test('continuous Chat remount mounts its saved window even when a live burst out
     await chatPage.evaluate(() => {
       const container = document.querySelector('.foxwarm-chat-messages')
       container.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, bubbles: true }))
-      const anchor = container.querySelector('[data-chat-message-anchor-key="seq-local-550"]')
+      // A row inside the opening window that the later burst pushes out of the recent tail.
+      const anchor = container.querySelector('[data-chat-message-anchor-key="seq-local-590"]')
       container.scrollTop += anchor.getBoundingClientRect().top - container.getBoundingClientRect().top + 29.5
       container.dispatchEvent(new Event('scroll'))
     })
     await chatPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     const before = await readingAnchor(chatPage)
-    assert.equal(before.key, 'seq-local-550')
+    assert.equal(before.key, 'seq-local-590')
     await chatPage.evaluate(() => { window.fixtureDelayArchive = true; window.renderFixtureChats(1, 1) })
     await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2 && window.fixtureArchiveRequests.length === 3)
     await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Generated summary' }], __meta: { contextBlock: { id: 1, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 594 } } }, ...window.fixtureArchive.slice(-6)], 1, { latestSeq: 600 }))
