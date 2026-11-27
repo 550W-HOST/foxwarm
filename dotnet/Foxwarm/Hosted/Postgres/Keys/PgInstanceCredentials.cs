@@ -15,6 +15,10 @@ namespace Foxwarm.Hosted.Postgres;
 internal sealed class PgInstanceCredentials(TenantDb database, Func<InstanceKeys> keys)
     : IInstanceCredentials
 {
+    private readonly CancellationTokenSource revoked = new();
+    internal CancellationToken Revoked => revoked.Token;
+    internal void RevokeStreams() => _ = revoked.CancelAsync();
+
     internal const string Purpose = "instance-credentials";
     private const int NonceBytes = 12;
     private const int TagBytes = 16;
@@ -30,6 +34,26 @@ internal sealed class PgInstanceCredentials(TenantDb database, Func<InstanceKeys
         };
 
     public string? Read(InstanceCredentialName name)
+    {
+        if (name == InstanceCredentialName.HttpToken)
+        {
+            var version = database.Read(tx => (long)tx.Scalar("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId)!);
+            if (version > 0)
+                return VersionToken(version);
+        }
+        return ReadStored(name);
+    }
+
+    // The P1 operator command may read a legacy stored token only. Never derive or print
+    // the reusable access token issued by a tenant's one-time exchange.
+    internal string? ReadLegacyHttpToken()
+    {
+        if (database.Read(tx => tx.Scalar("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId)) is not 0L)
+            throw new HostedBootstrapException("Use operator tenant rotate to issue a new setup token for this tenant.");
+        return ReadStored(InstanceCredentialName.HttpToken);
+    }
+
+    private string? ReadStored(InstanceCredentialName name)
     {
         var key = Key(name);
         var row = database.Read(tx =>
@@ -67,6 +91,22 @@ internal sealed class PgInstanceCredentials(TenantDb database, Func<InstanceKeys
         return Read(name)
             ?? throw new InvalidOperationException("The instance credential could not be read back.");
     }
+
+    // A distinct secret under the DEK for each rotation. Knowing an earlier HTTP token
+    // gives no information about its successor. Version zero keeps existing installations.
+    private string VersionToken(long version) => Convert.ToHexStringLower(keys().Derive(
+        "http-token/" + version.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    internal Task<string> RedeemAsync(string submitted, string runtimeToken, CancellationToken token) =>
+        database.WriteAsync(async (tx, ct) =>
+        {
+            await using var revision = tx.Command("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId);
+            var version = (long)(await revision.ExecuteScalarAsync(ct))!;
+            if (version == 0 || VersionToken(version) != runtimeToken)
+                return "invalid";
+            await using var redeem = tx.Command("SELECT foxwarm_redeem_setup($1,$2)", Operator.OperatorStore.Hash(submitted), version);
+            return (string)(await redeem.ExecuteScalarAsync(ct))!;
+        }, token: token);
 
     private byte[] Encrypt(string name, byte[] nonce, string text)
     {

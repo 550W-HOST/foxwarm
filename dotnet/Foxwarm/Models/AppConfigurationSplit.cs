@@ -54,6 +54,7 @@ internal static class AppConfigurationSplit
         "journal.retentionDays",
         "health",
         "egress",
+        "operator",
     ];
 
     /// <summary>

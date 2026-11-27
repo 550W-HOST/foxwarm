@@ -207,6 +207,13 @@ internal sealed class HttpServer
         app.Use(
             async (context, next) =>
             {
+#if FOXWARM_HOSTED
+                if (sessions.Storage is Hosted.PostgresStorageContext && context.Request.Path.StartsWithSegments(Hosted.Operator.OperatorServer.Path))
+                {
+                    context.Response.StatusCode = 404;
+                    return;
+                }
+#endif
                 if (
                     context.Request.Path == "/runtime/mcp"
                     || context.Request.Path == "/mcp"
@@ -244,6 +251,19 @@ internal sealed class HttpServer
                     return;
                 }
                 var admin = Authorized(context.Request, apiToken, browserCookie);
+#if FOXWARM_HOSTED
+                if (admin && sessions.Storage.Credentials is Hosted.Postgres.PgInstanceCredentials adminCredential)
+                {
+                    // A rotation cuts existing authenticated streams as soon as it is observed.
+                    // Ordinary requests retain the runtime's normal bounded shutdown grace.
+                    context.Response.OnStarting(() =>
+                    {
+                        if (context.WebSockets.IsWebSocketRequest || context.Response.ContentType?.StartsWith("text/event-stream", StringComparison.OrdinalIgnoreCase) == true)
+                            context.Response.RegisterForDispose(adminCredential.Revoked.Register(context.Abort));
+                        return Task.CompletedTask;
+                    });
+                }
+#endif
                 var scoped = !admin && WebUiEnabled ? access.Authenticate(context) : null;
                 var valid = admin || scoped is not null;
                 var staticEntry =
@@ -374,11 +394,20 @@ internal sealed class HttpServer
                         || body.Count != 1
                         || body["token"] is not JsonValue value
                         || !value.TryGetValue<string>(out var submitted)
-                        || (
-                            !Equal(submitted, apiToken)
-                            && accessConfiguration.Authenticate(submitted) is null
-                        )
-                    )
+                    ) return Results.Unauthorized();
+#if FOXWARM_HOSTED
+                    if (submitted.StartsWith(Hosted.Operator.OperatorStore.SetupPrefix, StringComparison.Ordinal)
+                        && !Equal(submitted, apiToken) && accessConfiguration.Authenticate(submitted) is null
+                        && sessions.Storage.Credentials is Hosted.Postgres.PgInstanceCredentials credentials)
+                    {
+                        context.Response.Headers.CacheControl = "no-store";
+                        var outcome = await credentials.RedeemAsync(submitted, apiToken, context.RequestAborted);
+                        return outcome == "redeemed"
+                            ? Results.Ok(new JsonObject { ["success"] = true, ["instanceToken"] = apiToken })
+                            : Results.Json(new JsonObject { ["code"] = "setup_" + outcome }, JsonData.WebOptions, statusCode: 401);
+                    }
+#endif
+                    if (!Equal(submitted, apiToken) && accessConfiguration.Authenticate(submitted) is null)
                         return Results.Unauthorized();
                     return Results.Ok(new JsonObject { ["success"] = true });
                 }

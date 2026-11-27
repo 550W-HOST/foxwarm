@@ -52,6 +52,10 @@ internal sealed record TenantLimits
 
     internal int Webhooks { get; init; } = 16;
 
+    internal Sessions.AgentStoreLimits AgentStore { get; init; } = Sessions.AgentStoreLimits.Default;
+
+    internal int DbStatements { get; init; } = 8;
+
     internal static TenantLimits Defaults { get; } = new();
 
     /// <summary>
@@ -77,6 +81,10 @@ internal sealed record TenantLimits
     // The column's keys, each with its range and setter.
     private static readonly Dictionary<string, (long Max, Apply Set)> Keys = new(StringComparer.Ordinal)
     {
+        ["agentStoreBytes"] = (long.MaxValue, (l, v) => l with { AgentStore = l.AgentStore with { TotalBytes = v } }),
+        ["agentStoreFiles"] = (long.MaxValue, (l, v) => l with { AgentStore = l.AgentStore with { Files = v } }),
+        ["agentFileBytes"] = (long.MaxValue, (l, v) => l with { AgentStore = l.AgentStore with { FileBytes = v } }),
+        ["dbStatements"] = (int.MaxValue, (l, v) => l with { DbStatements = (int)v }),
         ["hotOwnerBytes"] = (long.MaxValue, (l, v) => l with { HotOwnerBytes = v }),
         ["busyTurns"] = (int.MaxValue, (l, v) => l with { BusyTurns = (int)v }),
         ["toolScriptRuns"] = (int.MaxValue, (l, v) => l with { ToolScriptRuns = (int)v }),
@@ -98,6 +106,14 @@ internal sealed record TenantLimits
     /// Other limits in the column belong to other owners (the Agent store's, the database
     /// statement cap) and are left to them; a malformed known key is refused, naming it.
     /// </summary>
+    internal static void RequireKnown(JsonObject column)
+    {
+        foreach (var (key, _) in column)
+            if (!Keys.ContainsKey(key))
+                throw new InvalidDataException($"Unknown tenant limit: {key}.");
+        Parse(column);
+    }
+
     internal static TenantLimits Parse(JsonObject? column)
     {
         var limits = Defaults;

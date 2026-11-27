@@ -111,9 +111,7 @@ internal static class HostedCli
         try
         {
             token = new HostedKeyRing(tenantDb, current, previous).OpenExisting() is { } keys
-                ? new PgInstanceCredentials(tenantDb, () => keys).Read(
-                    Storage.InstanceCredentialName.HttpToken
-                )
+                ? new PgInstanceCredentials(tenantDb, () => keys).ReadLegacyHttpToken()
                 : null;
         }
         catch (TenantKeysLockedException locked)
