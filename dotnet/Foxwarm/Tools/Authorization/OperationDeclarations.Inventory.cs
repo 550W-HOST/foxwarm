@@ -298,6 +298,11 @@ internal static partial class OperationDeclarations
         (Auth, "AssessToolAsync", "the shared assessment of every internal request"),
         (Auth, "EffectiveDecision", "the combined decision of the effective layers"),
         ("McpExternalContext.cs", "Require", "the inbound check of one external request"),
+        (
+            "Sessions/SessionManager.Approvals.cs",
+            "CurrentApproversAsync",
+            "who may decide a pending approval under the effective layers in effect now"
+        ),
     ];
 
     // Sites that are the gate or the plumbing of the calls above, not obligations of their own.
