@@ -44,6 +44,16 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
                 is not null
         );
 
+    public Task<bool> ExistsAsync(string key, CancellationToken token) =>
+        database.ReadAsync(
+            async (tx, cancel) =>
+                await tx.Command("SELECT 1 FROM blob_objects WHERE store = $1 AND key = $2", store, key)
+                    .ExecuteScalarAsync(cancel)
+                    .ConfigureAwait(false)
+                    is not null,
+            token: token
+        );
+
     public async Task<bool> CreateAsync(
         string key,
         ReadOnlyMemory<byte> content,

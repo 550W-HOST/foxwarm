@@ -950,7 +950,8 @@ internal sealed partial class SessionManager
                                 "Session authority lifetime has retired."
                             );
                 },
-                ArchiveCommitted: OnArchiveCommitted
+                ArchiveCommitted: OnArchiveCommitted,
+                ImageBlobs: limitedImageBlobs
             )
         );
     }

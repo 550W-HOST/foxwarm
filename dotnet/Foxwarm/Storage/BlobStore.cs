@@ -9,6 +9,9 @@ internal interface IBlobStore
 {
     bool Exists(string key);
 
+    /// <summary>Whether the key exists, without blocking a thread on remote storage.</summary>
+    Task<bool> ExistsAsync(string key, CancellationToken token) => Task.FromResult(Exists(key));
+
     /// <summary>
     /// Writes the content completely before the key becomes visible. Returns false when the
     /// key already existed, including when a concurrent writer published it first, and

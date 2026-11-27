@@ -30,6 +30,9 @@ internal sealed partial class SessionManager
     /// <summary>The tenant's blob limit on new images and artifacts, or null without limits.</summary>
     internal BlobQuota? BlobQuota { get; }
 
+    // The image blob store with the tenant's limit, shared by every image writer; null without.
+    private readonly Foxwarm.Storage.IBlobStore? limitedImageBlobs;
+
     /// <summary>The replica's budgets this runtime shares; tests give each runtime its own.</summary>
     internal ReplicaLimits ReplicaLimits { get; init; } = ReplicaLimits.Process;
 

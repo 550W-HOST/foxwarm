@@ -7,7 +7,7 @@ namespace Foxwarm.Tests.Limits;
 
 // Each tenant limit at its admission point (plan P2 §7.2), over file storage with the limits
 // a hosted runtime has. File mode, without limits, admits as before.
-public sealed class TenantLimitAdmissionTests
+public sealed partial class TenantLimitAdmissionTests
 {
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);

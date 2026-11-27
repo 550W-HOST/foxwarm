@@ -16,6 +16,8 @@ internal static class SessionAuthorityIngress
         CancellationToken cancellationToken
     )
     {
+        // Migrating content that is already durable is admitted over the blob limit, and counted.
+        using var migration = Foxwarm.Limits.BlobQuota.AllowOverLimit();
         foreach (var message in ((JsonArray)normalized["history"]!).OfType<JsonObject>())
             await images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
         var loaded = SessionAuthorityCodec.FromAuthority(normalized, sessionId);

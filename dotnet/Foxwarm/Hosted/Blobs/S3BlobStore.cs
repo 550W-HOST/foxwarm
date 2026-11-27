@@ -47,7 +47,9 @@ internal sealed class S3BlobStore : IBlobStore
     /// <summary>Whether creates use <c>If-None-Match: *</c>; otherwise <c>HEAD</c> then <c>PUT</c>.</summary>
     internal bool ConditionalWrites { get; }
 
-    public bool Exists(string key) => Wait(() => ExistsAsync(root + key, CancellationToken.None));
+    public bool Exists(string key) => Wait(() => HeadExistsAsync(root + key, CancellationToken.None));
+
+    public Task<bool> ExistsAsync(string key, CancellationToken token) => HeadExistsAsync(root + key, token);
 
     public async Task<bool> CreateAsync(
         string key,
@@ -63,7 +65,7 @@ internal sealed class S3BlobStore : IBlobStore
             {
                 // Safe without the condition: keys are immutable, and the owning store's lane
                 // serializes the creates of one key in the single owner.
-                if (await ExistsAsync(name, token).ConfigureAwait(false))
+                if (await HeadExistsAsync(name, token).ConfigureAwait(false))
                     return Existing(key, keepExisting);
                 await PutAsync(name, content, conditional: false, token).ConfigureAwait(false);
                 return true;
@@ -223,7 +225,7 @@ internal sealed class S3BlobStore : IBlobStore
     private static bool Existing(string key, bool keepExisting) =>
         keepExisting ? false : throw new IOException($"The blob {key} already exists.");
 
-    private async Task<bool> ExistsAsync(string name, CancellationToken token)
+    private async Task<bool> HeadExistsAsync(string name, CancellationToken token)
     {
         try
         {
@@ -271,7 +273,7 @@ internal sealed class S3BlobStore : IBlobStore
         {
             interrupted = ExceptionDispatchInfo.Capture(error);
         }
-        if (await ExistsAsync(name, token).ConfigureAwait(false))
+        if (await HeadExistsAsync(name, token).ConfigureAwait(false))
             return PutOutcome.Exists;
         interrupted.Throw();
         throw new UnreachableException();

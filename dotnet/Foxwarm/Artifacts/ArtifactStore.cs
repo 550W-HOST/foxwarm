@@ -229,6 +229,12 @@ internal sealed class ArtifactStore(
                 };
             }
             var target = RevisionKey(id, revision);
+            var manifest = System.Text.Encoding.UTF8.GetBytes(record.ToJsonText());
+            // The tenant's blob limit admits or refuses the resource and the revision together.
+            using var reservation = blobs is Foxwarm.Limits.BlobQuota.Store limited
+                ? await limited.Quota.ReserveAsync((resource?.Length ?? 0) + manifest.Length, token)
+                : null;
+            using var prepaid = reservation is null ? null : Foxwarm.Limits.BlobQuota.UsePrepaid(reservation);
             if (resource is not null)
                 await blobs.CreateAsync(
                     ResourceKey(id, digest!),
@@ -237,12 +243,7 @@ internal sealed class ArtifactStore(
                     token
                 );
             // Resources are complete before the exclusively-created revision becomes visible.
-            await blobs.CreateAsync(
-                target,
-                System.Text.Encoding.UTF8.GetBytes(record.ToJsonText()),
-                keepExisting: false,
-                token
-            );
+            await blobs.CreateAsync(target, manifest, keepExisting: false, token);
             return record;
         }
     }

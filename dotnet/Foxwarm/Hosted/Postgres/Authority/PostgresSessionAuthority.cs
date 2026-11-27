@@ -46,7 +46,7 @@ internal sealed class PostgresSessionAuthority : ISessionAuthority
         this.sessionId = sessionId;
         this.agent = agent;
         this.callbacks = callbacks;
-        Images = new(backend.ScratchRoot, backend.ImageBlobs);
+        Images = new(backend.ScratchRoot, callbacks.ImageBlobs ?? backend.ImageBlobs);
     }
 
     public string SessionId => sessionId;

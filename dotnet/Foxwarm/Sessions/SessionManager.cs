@@ -126,7 +126,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             )
             : null;
         BlobQuota = blobQuota;
-        Images = new(root, blobQuota?.Apply(Storage.ImageBlobs) ?? Storage.ImageBlobs);
+        limitedImageBlobs = blobQuota?.Apply(Storage.ImageBlobs);
+        Images = new(root, limitedImageBlobs ?? Storage.ImageBlobs);
         Artifacts = new(
             Path.Combine(root, "state", "artifacts"),
             ArtifactPreparation,
