@@ -152,6 +152,15 @@ internal sealed partial class AgentCatalog
             );
     }
 
+    /// <summary>The longest name a new Agent may have; existing longer names stay readable.</summary>
+    internal const int MaxNewNameLength = 128;
+
+    internal static void ValidateNewName(string name)
+    {
+        if (name.Length > MaxNewNameLength)
+            throw new InvalidDataException($"Agent name must be at most {MaxNewNameLength} characters.");
+    }
+
     public bool Exists(string name)
     {
         lock (stateGate)
@@ -199,9 +208,15 @@ internal sealed partial class AgentCatalog
 
     public string AgentDirectory(string name)
     {
+        RequireMember(name);
+        return SourceDirectory(name);
+    }
+
+    /// <summary>Refuses a name that isn't an Agent now, in either layout.</summary>
+    internal void RequireMember(string name)
+    {
         if (!Exists(name))
             throw new InvalidDataException($"Agent '{name}' does not exist.");
-        return SourceDirectory(name);
     }
 
     public string MemoryDirectory(string name) => Path.Combine(AgentDirectory(name), "memory");
@@ -230,6 +245,8 @@ internal sealed partial class AgentCatalog
     )
     {
         ValidateName(name);
+        if (!restoreRetained)
+            ValidateNewName(name);
         if (name == "main" && (!restoreRetained || !canonicalLayout))
             throw new InvalidDataException("The main Agent already exists.");
         var directory = store is null ? SourceDirectory(name) : store.Locator(name, "");
@@ -296,6 +313,7 @@ internal sealed partial class AgentCatalog
                 );
             ValidateCreatorAdmission(createdBy, MetadataSnapshot(), unlimitedChildren);
             _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
+            RequireStoreRoots(name, rules);
             ValidateDefaultNode(defaultNode ?? DefaultNode(name));
             ValidateDefaultCwd(defaultCwd ?? DefaultCwd(name));
             ValidateInheritance(name, inherit);
@@ -341,6 +359,9 @@ internal sealed partial class AgentCatalog
             var nextMetadata = MetadataSnapshot();
             if (initialMetadata.Count > 0)
                 nextMetadata[name] = initialMetadata.DeepClone();
+            // A creation the store would refuse now (its limits) is refused before anything
+            // about it is committed, so it leaves no authority record behind.
+            store?.AdmitCreation(name, ["memory"], StoreInitialFiles(initialMemory, initialSoul, preparationName));
             var payload = Payload(next, nextMetadata);
             AuthorityCommittedException? durabilityFailure = null;
             try
@@ -356,8 +377,13 @@ internal sealed partial class AgentCatalog
                 Directory.Move(prepared, directory);
             else
             {
+                // Readers see the committed metadata (creator, rules, defaults) before the
+                // root makes the Agent a member; until then it isn't one.
+                if (initialMetadata is { Count: > 0 })
+                    metadata[name] = initialMetadata.DeepClone();
                 Monitor.Exit(stateGate);
                 holdState = false;
+                BeforeStoreCreation?.Invoke(name);
                 // The root, the memory directory, the initial memory and the identity proof
                 // appear together, after the metadata, as the published directory does.
                 await store.CreateAgentAsync(
@@ -433,6 +459,9 @@ internal sealed partial class AgentCatalog
         }
     }
 
+    // Test seam: runs between the metadata's publication and the store creation of an Agent.
+    internal Action<string>? BeforeStoreCreation { get; set; }
+
     internal static void ValidatePreparationName(string name)
     {
         if (
@@ -467,6 +496,6 @@ internal sealed partial class AgentCatalog
         }
     }
 
-    [GeneratedRegex("^[a-zA-Z0-9_-]+$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[a-zA-Z0-9_-]+\z", RegexOptions.CultureInvariant)]
     private static partial Regex AgentName();
 }

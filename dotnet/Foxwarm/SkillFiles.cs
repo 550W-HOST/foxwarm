@@ -20,12 +20,19 @@ internal interface ISkillFiles
     IReadOnlyList<SkillFileEntry> Entries(string path);
     long Length(string path);
     Task<byte[]> ReadAllBytesAsync(string path, CancellationToken token = default);
+    Task<byte[]> ReadRangeAsync(string path, long offset, int count, CancellationToken token = default);
     Task<string> ReadAllTextAsync(string path);
 }
 
 internal sealed class PhysicalSkillFiles : ISkillFiles
 {
     internal static readonly PhysicalSkillFiles Instance = new();
+
+    public async Task<byte[]> ReadRangeAsync(string path, long offset, int count, CancellationToken token = default)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return await AgentFileErrors.ReadRangeAsync(stream, offset, count, token);
+    }
 
     public bool DirectoryExists(string path) => Directory.Exists(path);
 
@@ -87,6 +94,9 @@ internal sealed class StoreSkillFiles(IAgentStore store, string agent) : ISkillF
 
     public long Length(string path) =>
         Stat(path) is { IsDirectory: false } stat ? stat.Length : throw new FileNotFoundException("No such file: " + path);
+
+    public Task<byte[]> ReadRangeAsync(string path, long offset, int count, CancellationToken token = default) =>
+        store.ReadRangeAsync(agent, Relative(path) ?? throw new FileNotFoundException("No such file: " + path), offset, count, token);
 
     public async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken token = default) =>
         (await store.ReadAsync(agent, Relative(path) ?? throw new FileNotFoundException("No such file: " + path), token))

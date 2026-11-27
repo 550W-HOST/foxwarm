@@ -199,11 +199,18 @@ internal sealed partial class SessionToolExecutor
         CancellationToken token
     )
     {
-        var bytes = await resource.Info.Source.ReadAllBytesAsync(resource.FullPath, token);
+        // The size and a header first, then the charge, then content: as a Main `read` does.
+        var source = resource.Info.Source;
+        var size = source.Length(resource.FullPath);
         var mime = Foxwarm.Images.RasterImageMime.Detect(
-            bytes.AsSpan(0, (int)Math.Min(Foxwarm.Images.RasterImageMime.HeaderBytes, bytes.Length))
+            await source.ReadRangeAsync(
+                resource.FullPath,
+                0,
+                (int)Math.Min(Foxwarm.Images.RasterImageMime.HeaderBytes, size),
+                token
+            )
         );
-        ScriptBudget?.Charge(mime is not null ? checked(12L * bytes.Length) : 32L * 1024 * 1024);
+        ScriptBudget?.Charge(mime is not null ? checked(12L * size) : 32L * 1024 * 1024);
         if (mime is not null)
             return new JsonObject
             {
@@ -212,21 +219,17 @@ internal sealed partial class SessionToolExecutor
                 ["inlineData"] = new JsonObject
                 {
                     ["mimeType"] = mime,
-                    ["data"] = Convert.ToBase64String(bytes),
+                    ["data"] = Convert.ToBase64String(await source.ReadAllBytesAsync(resource.FullPath, token)),
                 },
             };
         JsonObject? data = null;
         var text = await FileToolCore.ReadContent(
             resource.Display,
             resource.Display,
-            bytes.Length,
+            size,
             first,
             last,
-            (offset, count) =>
-            {
-                var start = (int)Math.Min(offset, bytes.Length);
-                return Task.FromResult(bytes[start..Math.Min(bytes.Length, start + count)]);
-            },
+            (offset, count) => source.ReadRangeAsync(resource.FullPath, offset, count, token),
             Programmatic ? value => data = value : null
         );
         var result = new JsonObject { ["output"] = $"FILE: {resource.Display}\n{text}" };

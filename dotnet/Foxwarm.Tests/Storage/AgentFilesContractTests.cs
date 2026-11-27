@@ -71,6 +71,50 @@ public abstract class AgentFilesContractTests
     }
 
     [Fact]
+    public async Task A_conditional_delete_removes_only_the_file_it_observed()
+    {
+        await using var store = await WithAgentAsync();
+        var files = store.Files;
+        var first = await files.WriteAsync("alpha", "a.md", Bytes("one"), null, None);
+        await files.WriteAsync("alpha", "a.md", Bytes("two"), null, None);
+        await Assert.ThrowsAsync<AgentFileConflictException>(() => files.DeleteAsync("alpha", "a.md", false, first, None));
+        Assert.True(files.FileExists("alpha", "a.md"));
+        await files.MakeDirectoryAsync("alpha", "empty", None);
+        await Assert.ThrowsAsync<AgentFileConflictException>(() => files.DeleteAsync("alpha", "empty", false, first, None));
+        Assert.True(files.Stat("alpha", "empty")!.IsDirectory);
+        await files.DeleteAsync("alpha", "a.md", false, files.Stat("alpha", "a.md")!.Generation, None);
+        Assert.False(files.FileExists("alpha", "a.md"));
+    }
+
+    [Fact]
+    public async Task Range_reads_return_only_the_requested_bytes()
+    {
+        await using var store = await WithAgentAsync();
+        var files = store.Files;
+        var content = new byte[300_000];
+        new Random(7).NextBytes(content);
+        await files.WriteAsync("alpha", "big.bin", content, null, None);
+        await files.WriteAsync("alpha", "small.bin", content[..10], null, None);
+        Assert.Equal(content[..16], await files.ReadRangeAsync("alpha", "big.bin", 0, 16, None));
+        Assert.Equal(content[299_990..], await files.ReadRangeAsync("alpha", "big.bin", 299_990, 100, None));
+        Assert.Equal(content[2..5], await files.ReadRangeAsync("alpha", "small.bin", 2, 3, None));
+        Assert.Empty(await files.ReadRangeAsync("alpha", "small.bin", 50, 3, None));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => files.ReadRangeAsync("alpha", "none", 0, 1, None));
+    }
+
+    [Theory]
+    [InlineData("C:/x")]
+    [InlineData("c:x")]
+    public async Task Drive_prefixed_paths_are_absolute(string path)
+    {
+        await using var store = await WithAgentAsync();
+        var error = await Assert.ThrowsAsync<AgentFilePathException>(() =>
+            store.Files.WriteAsync("alpha", path, Bytes("x"), null, None)
+        );
+        Assert.Equal($"Invalid path '{path}': absolute paths aren't allowed.", error.Message);
+    }
+
+    [Fact]
     public async Task Listings_are_ordinal_with_implicit_directories()
     {
         await using var store = await WithAgentAsync();

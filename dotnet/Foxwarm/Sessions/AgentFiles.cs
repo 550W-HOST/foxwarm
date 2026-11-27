@@ -65,6 +65,12 @@ internal interface IAgentFileStore
 
     Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token);
 
+    /// <summary>
+    /// Up to <paramref name="count"/> bytes of a file from <paramref name="offset"/>, without
+    /// reading the rest: headers and previews of files that may be large.
+    /// </summary>
+    Task<byte[]> ReadRangeAsync(string? agent, string path, long offset, int count, CancellationToken token);
+
     /// <summary>Creates or replaces a file and returns its new generation.</summary>
     Task<long> WriteAsync(
         string? agent,
@@ -138,6 +144,19 @@ internal interface IAgentStore : IAgentFileStore
 
     /// <summary>Every file and empty directory at or below a path, in ordinal path order.</summary>
     IReadOnlyList<AgentFileStat> Tree(string? agent, string path);
+
+    /// <summary>The limits in effect now.</summary>
+    AgentStoreLimits Limits { get; }
+
+    /// <summary>
+    /// Refuses, before anything is committed, a new Agent with these initial entries that
+    /// wouldn't fit the limits now.
+    /// </summary>
+    void AdmitCreation(
+        string agent,
+        IReadOnlyList<string> directories,
+        IReadOnlyList<KeyValuePair<string, byte[]>> files
+    );
 }
 
 /// <summary>The failures both store implementations report, with the same texts.</summary>
@@ -157,6 +176,35 @@ internal static class AgentFileErrors
 
     internal static AgentFileConflictException Exists(string path) =>
         new("File already exists: " + path);
+
+    // Up to count bytes of a stream from offset: by seeking where the stream can, otherwise
+    // by reading past the start.
+    internal static async Task<byte[]> ReadRangeAsync(Stream stream, long offset, int count, CancellationToken token)
+    {
+        if (stream.CanSeek)
+        {
+            if (offset >= stream.Length)
+                return [];
+            stream.Seek(offset, SeekOrigin.Begin);
+        }
+        else
+        {
+            var skip = new byte[81920];
+            for (var left = offset; left > 0; )
+            {
+                var read = await stream.ReadAsync(skip.AsMemory(0, (int)Math.Min(skip.Length, left)), token).ConfigureAwait(false);
+                if (read == 0)
+                    return [];
+                left -= read;
+            }
+        }
+        var buffer = new byte[count];
+        var total = await stream.ReadAtLeastAsync(buffer, count, throwOnEndOfStream: false, token).ConfigureAwait(false);
+        return total == count ? buffer : buffer[..total];
+    }
+
+    internal static AgentFilePathTooLongException PathTooLong(long bytes, long limit) =>
+        new($"This path is too long: {bytes:N0} bytes, and the limit here is {limit:N0}.");
 
     internal static AgentFileConflictException Changed(string path) =>
         new(path + " changed since it was read. Read it again, then retry.");
@@ -297,6 +345,18 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
         return new(bytes, AgentFileErrors.ContentGeneration(bytes));
     }
 
+    public async Task<byte[]> ReadRangeAsync(string? agent, string path, long offset, int count, CancellationToken token)
+    {
+        AgentFilePaths.Require(path);
+        var full = Resolve(agent, path, lookup: true);
+        if (System.IO.Directory.Exists(full))
+            throw AgentFileErrors.IsDirectory(path);
+        if (!File.Exists(full))
+            throw AgentFileErrors.NotFound(path);
+        await using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return await AgentFileErrors.ReadRangeAsync(stream, offset, count, token).ConfigureAwait(false);
+    }
+
     public Task<long> WriteAsync(
         string? agent,
         string path,
@@ -318,7 +378,7 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
                 CreateParents(agent, path);
                 var temporary = Path.Combine(
                     Path.GetDirectoryName(full)!,
-                    "." + Path.GetFileName(full) + "." + Guid.NewGuid().ToString("N") + ".tmp"
+                    "." + Guid.NewGuid().ToString("N") + ".tmp"
                 );
                 try
                 {
@@ -369,6 +429,9 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
                 var full = Resolve(agent, path);
                 if (System.IO.Directory.Exists(full))
                 {
+                    // A conditional delete removes the file it observed, never a directory.
+                    if (expectedGeneration is not null)
+                        throw AgentFileErrors.Changed(path);
                     if (!recursive && System.IO.Directory.EnumerateFileSystemEntries(full).Any())
                         throw AgentFileErrors.NotEmpty(path);
                     System.IO.Directory.Delete(full, recursive);

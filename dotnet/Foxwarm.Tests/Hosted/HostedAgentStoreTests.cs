@@ -25,12 +25,19 @@ public sealed partial class HostedAgentStoreTests
         internal HostedCapabilityProfileTests.Fixture Inner = null!;
         internal HostedTestDatabase? Database;
         internal IStorageContext? Storage;
+        internal PostgresStorageContext? Postgres;
 
         internal IAgentStore Store => Storage!.AgentFiles!;
 
         internal SessionManager Manager => Inner.Manager;
 
-        internal static async Task<StoreFixture> Create(bool store, JsonObject? extraApp = null)
+        internal static async Task<StoreFixture> Create(
+            bool store,
+            JsonObject? extraApp = null,
+            bool installedLayout = false,
+            // The Agent metadata document before startup.
+            string? agents = null
+        )
         {
             var fixture = new StoreFixture();
             Func<string, IStorageContext>? storage = null;
@@ -39,18 +46,24 @@ public sealed partial class HostedAgentStoreTests
                 var (database, tenant) = await PostgresAgentFilesTests.OpenAsync();
                 fixture.Database = database;
                 storage = root =>
+                {
                     fixture.Storage = HostedTestBackend.Compose(
-                        new PostgresStorageContext(tenant, root)
+                        fixture.Postgres = new PostgresStorageContext(tenant, root)
                         {
                             KeyRing = new HostedKeyRing(tenant, HostedTestBackend.Kek),
                         },
                         root
                     );
+                    if (agents is not null)
+                        fixture.Storage.Documents.Open(StateDocumentName.Agents).ReplaceText(agents);
+                    return fixture.Storage;
+                };
             }
             fixture.Inner = await HostedCapabilityProfileTests.Fixture.Create(
                 RuntimeCapabilities.Hosted,
                 extraApp: extraApp,
-                storage: storage
+                storage: storage,
+                installedLayout: installedLayout
             );
             return fixture;
         }
@@ -75,7 +88,9 @@ public sealed partial class HostedAgentStoreTests
             : SessionWait.Text(result["output"]) ?? result.ToJsonString();
         if (manager.AgentStore is null)
             foreach (var agent in manager.Agents())
-                text = text.Replace(manager.MemoryDirectory(agent) + "/", "", StringComparison.Ordinal);
+                text = text
+                    .Replace(manager.MemoryDirectory(agent) + "/", "", StringComparison.Ordinal)
+                    .Replace("'" + manager.MemoryDirectory(agent) + "'", "'.'", StringComparison.Ordinal);
         return Regex.Replace(text, @"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", "<time>");
     }
 
@@ -101,6 +116,11 @@ public sealed partial class HostedAgentStoreTests
         ("read_memory", new() { ["filePath"] = "a/./b/../../NOTES.md" }),
         ("read_memory", new() { ["filePath"] = "memory" }),
         ("read_memory", new() { ["filePath"] = "missing.md" }),
+        ("read_memory", new() { ["filePath"] = "sub/.." }),
+        ("edit_memory", new() { ["filePath"] = "nope/x.md", ["oldText"] = "x", ["newText"] = "y" }),
+        ("edit_memory", new() { ["filePath"] = "sub/..", ["oldText"] = "x", ["newText"] = "y" }),
+        ("write_memory", new() { ["filePath"] = "sub/..", ["content"] = "x" }),
+        ("delete_memory", new() { ["filePath"] = "sub/.." }),
         (
             "apply_patch_memory",
             new()
@@ -356,6 +376,8 @@ public sealed partial class HostedAgentStoreTests
     [
         """[{"id":"own","match":{"tool":{"source":"builtin","name":["read_memory","write_memory","edit_memory","delete_memory","apply_patch_memory"]},"path":{"allWithin":"${agent.memoryDir}"}},"action":"allow"},{"id":"rest","action":"deny"}]""",
         """[{"id":"outside","match":{"tool":{"source":"builtin"},"path":{"anyNotWithin":"${agent.memoryDir}/notes"}},"action":"deny"}]""",
+        """[{"id":"outside","match":{"tool":{"source":"builtin"},"path":{"anyNotWithin":"${agent.memoryDir}/./x/../notes//"}},"action":"deny"}]""",
+        """[{"id":"within","op":"env.write","path":{"notWithin":"${agent.dir}//memory/./notes"},"action":"deny"}]""",
         """[{"id":"writes","op":"env.write","path":{"within":"${agent.memoryDir}"},"action":"allow"},{"id":"reads","op":"env.read","path":{"within":"${agent.dir}"},"action":"allow"},{"id":"rest","action":"deny"}]""",
         """[{"id":"elsewhere","op":"env.read","path":{"within":"/elsewhere"},"action":"deny"},{"id":"any-node","op":"env.write","node":{"provider":"authenticated-remote"},"action":"deny"}]""",
     ];

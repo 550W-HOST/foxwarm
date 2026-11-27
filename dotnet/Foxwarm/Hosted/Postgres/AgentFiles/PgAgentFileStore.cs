@@ -27,6 +27,8 @@ internal sealed class PgAgentFileStore : IAgentStore
     private readonly TenantDb database;
     private readonly IBlobStore blobs;
     private readonly Func<AgentStoreLimits> limits;
+
+    public AgentStoreLimits Limits => limits();
     private readonly AgentWriteLanes lanes = new();
 
     internal PgAgentFileStore(TenantDb database, IBlobStore blobs, Func<AgentStoreLimits>? limits = null)
@@ -129,7 +131,29 @@ internal sealed class PgAgentFileStore : IAgentStore
         return database.Read(tx => StatIn(tx, key, path));
     }
 
+    public async Task<byte[]> ReadRangeAsync(string? agent, string path, long offset, int count, CancellationToken token)
+    {
+        var row = await LookupAsync(agent, path, token).ConfigureAwait(false);
+        if (row.Inline is { } inline)
+        {
+            var start = (int)Math.Min(offset, inline.Length);
+            return inline[start..(int)Math.Min(inline.Length, start + (long)count)];
+        }
+        await using var stream = blobs.OpenRead(row.BlobKey!);
+        return await AgentFileErrors.ReadRangeAsync(stream, offset, count, token).ConfigureAwait(false);
+    }
+
     public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token)
+    {
+        var row = await LookupAsync(agent, path, token).ConfigureAwait(false);
+        var bytes = row.Inline ?? await blobs.ReadAllAsync(row.BlobKey!, token).ConfigureAwait(false);
+        if (bytes.Length != row.Size || !SHA256.HashData(bytes).AsSpan().SequenceEqual(row.Sha256))
+            throw new IOException("Stored content of " + path + " doesn't match its digest.");
+        return new(bytes, row.Generation);
+    }
+
+    // The file row at a path; a directory or a missing path fails as a file read does.
+    private async Task<Row> LookupAsync(string? agent, string path, CancellationToken token)
     {
         AgentFilePaths.Require(path);
         var key = Key(agent);
@@ -168,10 +192,7 @@ internal sealed class PgAgentFileStore : IAgentStore
             throw AgentFileErrors.NotFound(path);
         if (row.Kind == "dir")
             throw AgentFileErrors.IsDirectory(path);
-        var bytes = row.Inline ?? await blobs.ReadAllAsync(row.BlobKey!, token).ConfigureAwait(false);
-        if (bytes.Length != row.Size || !SHA256.HashData(bytes).AsSpan().SequenceEqual(row.Sha256))
-            throw new IOException("Stored content of " + path + " doesn't match its digest.");
-        return new(bytes, row.Generation);
+        return row;
     }
 
     public Task<long> WriteAsync(
@@ -185,14 +206,39 @@ internal sealed class PgAgentFileStore : IAgentStore
         AgentFilePaths.Require(path);
         expectedGeneration = AgentFileErrors.Normalize(expectedGeneration);
         var key = Key(agent);
-        var limit = limits();
-        if (content.Length > limit.FileBytes)
-            throw AgentFileErrors.FileTooLarge(path, limit);
+        RequireKeyBytes(key, path);
+        if (content.Length > limits().FileBytes)
+            throw AgentFileErrors.FileTooLarge(path, limits());
         return lanes.RunAsync(
             key,
             async () =>
             {
                 var sha256 = SHA256.HashData(content.Span);
+                // A blob is durable once written, so a write the commit would refuse must not
+                // reach it: admit it first, without holding the tenant lock across the upload.
+                // The commit checks everything again.
+                // The admission runs in a fenced write transaction that commits nothing.
+                if (content.Length > InlineBytes)
+                    try
+                    {
+                        await database
+                            .WriteAsync<bool>(
+                                async (tx, cancel) =>
+                                {
+                                    var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                                    var (bytes, entries) = await WriteAdmissionAsync(
+                                            tx, key, agent, path, content.Length, expectedGeneration, cancel
+                                        )
+                                        .ConfigureAwait(false);
+                                    usage.Admit(limits(), bytes, entries);
+                                    throw new AdmittedException();
+                                },
+                                new PgWriteOptions(),
+                                token
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (AdmittedException) { }
                 var blobKey = await StoreLargeAsync(key, content, sha256, token).ConfigureAwait(false);
                 long generation = 0;
                 return await database
@@ -200,6 +246,9 @@ internal sealed class PgAgentFileStore : IAgentStore
                         async (tx, cancel) =>
                         {
                             var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                            var limit = limits();
+                            if (content.Length > limit.FileBytes)
+                                throw AgentFileErrors.FileTooLarge(path, limit);
                             await RequireAgentAsync(tx, key, agent, cancel).ConfigureAwait(false);
                             var current = await RowAtAsync(tx, key, path, cancel).ConfigureAwait(false);
                             if (
@@ -281,6 +330,9 @@ internal sealed class PgAgentFileStore : IAgentStore
                         var children = await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false);
                         if (current is null && !children)
                             throw AgentFileErrors.NotFound(path);
+                        // A conditional delete removes the file it observed, never a directory.
+                        if (expectedGeneration is not null && current?.Kind != "file")
+                            throw AgentFileErrors.Changed(path);
                         long bytes;
                         long entries;
                         if (current?.Kind == "file")
@@ -327,6 +379,7 @@ internal sealed class PgAgentFileStore : IAgentStore
         if (from.Length == 0 || to.Length == 0)
             throw AgentFileErrors.Root();
         var key = Key(agent);
+        RequireKeyBytes(key, to);
         return lanes.RunAsync(
             key,
             () =>
@@ -369,6 +422,7 @@ internal sealed class PgAgentFileStore : IAgentStore
                         entries -= await PrepareParentsAsync(tx, key, to, cancel).ConfigureAwait(false);
                         if (directory)
                         {
+                            await RequireMovedKeyBytesAsync(tx, key, from, key, to, cancel).ConfigureAwait(false);
                             var (range, parameters) = Below(from, 4);
                             await tx.ExecuteAsync(
                                     "UPDATE agent_files SET path = $3 || substr(path, char_length($2) + 1)"
@@ -407,6 +461,7 @@ internal sealed class PgAgentFileStore : IAgentStore
     {
         AgentFilePaths.Require(path);
         var key = Key(agent);
+        RequireKeyBytes(key, path);
         return lanes.RunAsync(
             key,
             () =>
@@ -466,6 +521,7 @@ internal sealed class PgAgentFileStore : IAgentStore
     )
     {
         AgentCatalog.ValidateName(agent);
+        AgentCatalog.ValidateNewName(agent);
         foreach (var directory in directories)
             AgentFilePaths.Require(directory);
         foreach (var file in files)
@@ -476,9 +532,9 @@ internal sealed class PgAgentFileStore : IAgentStore
         foreach (var file in files)
             if (paths.Any(other => other != file.Key && AgentFilePaths.Within(other, file.Key)))
                 throw AgentFileErrors.NotDirectory(file.Key);
-        var limit = limits();
-        if (files.FirstOrDefault(file => file.Value.Length > limit.FileBytes) is { Key: not null } large)
-            throw AgentFileErrors.FileTooLarge(large.Key, limit);
+        foreach (var path in paths)
+            RequireKeyBytes(agent, path);
+        AdmitCreation(agent, directories, files);
         return lanes.RunAsync(
             agent,
             async () =>
@@ -504,6 +560,9 @@ internal sealed class PgAgentFileStore : IAgentStore
                                 throw new AgentFileConflictException($"Agent '{agent}' already exists.");
                             var bytes = stored.Sum(file => (long)file.Content.Length);
                             var entries = (long)stored.Count + empty.Length;
+                            var limit = limits();
+                            if (stored.FirstOrDefault(file => file.Content.Length > limit.FileBytes) is { Path: not null } large)
+                                throw AgentFileErrors.FileTooLarge(large.Path, limit);
                             usage.Admit(limit, bytes, entries);
                             await InsertDirectoryAsync(tx, agent, "", cancel).ConfigureAwait(false);
                             foreach (var directory in empty)
@@ -623,7 +682,7 @@ internal sealed class PgAgentFileStore : IAgentStore
         AgentFilePaths.Require(targetPath, allowRoot: true);
         if (sourceAgent == targetAgent && (AgentFilePaths.Within(targetPath, sourcePath) || AgentFilePaths.Within(sourcePath, targetPath)))
             throw AgentFileErrors.IntoItself(sourcePath);
-        var limit = limits();
+        RequireKeyBytes(targetAgent, targetPath);
         return lanes.RunAsync(
             targetAgent,
             () =>
@@ -631,34 +690,46 @@ internal sealed class PgAgentFileStore : IAgentStore
                     async (tx, cancel) =>
                     {
                         var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                        var limit = limits();
                         await RequireAgentAsync(tx, targetAgent, targetAgent, cancel).ConfigureAwait(false);
+                        await RequireMovedKeyBytesAsync(tx, sourceAgent, sourcePath, targetAgent, targetPath, cancel)
+                            .ConfigureAwait(false);
+                        // Metadata only: contents are copied inside the database, row by row.
                         var (range, parameters) = Below(sourcePath, 3);
-                        var rows = new List<(string Path, string Kind, long Size, byte[]? Sha256, byte[]? Inline, string? BlobKey)>();
+                        var rows = new List<(string Path, string Kind, long Size)>();
                         await using (
                             var command = tx.Command(
-                                "SELECT path, kind, size, sha256, inline, blob_key FROM agent_files"
+                                "SELECT path, kind, size FROM agent_files"
                                     + " WHERE agent = $1 AND path <> '' AND (path = $2 OR " + range + ")",
                                 [sourceAgent, sourcePath, .. parameters]
                             )
                         )
                         await using (var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false))
                             while (await reader.ReadAsync(cancel).ConfigureAwait(false))
-                                rows.Add(
-                                    (
-                                        reader.GetString(0),
-                                        reader.GetString(1),
-                                        reader.GetInt64(2),
-                                        reader.IsDBNull(3) ? null : reader.GetFieldValue<byte[]>(3),
-                                        reader.IsDBNull(4) ? null : reader.GetFieldValue<byte[]>(4),
-                                        reader.IsDBNull(5) ? null : reader.GetString(5)
-                                    )
-                                );
-                        long bytes = 0;
-                        long entries = 0;
-                        foreach (var row in rows.OrderBy(row => row.Path, StringComparer.Ordinal))
+                                rows.Add((reader.GetString(0), reader.GetString(1), reader.GetInt64(2)));
+                        rows.Sort((left, right) => string.CompareOrdinal(left.Path, right.Path));
+                        string Target(string path)
                         {
-                            var rest = row.Path.Length == sourcePath.Length ? "" : row.Path[(sourcePath.Length == 0 ? 0 : sourcePath.Length + 1)..];
-                            var target = rest.Length == 0 ? targetPath : targetPath.Length == 0 ? rest : targetPath + "/" + rest;
+                            var rest = path.Length == sourcePath.Length ? "" : path[(sourcePath.Length == 0 ? 0 : sourcePath.Length + 1)..];
+                            return rest.Length == 0 ? targetPath : targetPath.Length == 0 ? rest : targetPath + "/" + rest;
+                        }
+                        // Admission before any content moves: the per-file limit for every copied
+                        // file and the byte growth. Entries are exact only after the parents are
+                        // settled, so they are checked with the rest at the end.
+                        long bytes = 0;
+                        foreach (var row in rows.Where(row => row.Kind == "file"))
+                        {
+                            if (row.Size > limit.FileBytes)
+                                throw AgentFileErrors.FileTooLarge(Target(row.Path), limit);
+                            var current = await RowAtAsync(tx, targetAgent, Target(row.Path), cancel).ConfigureAwait(false);
+                            bytes += row.Size - (current?.Kind == "file" ? current.Size : 0);
+                        }
+                        usage.Admit(limit, bytes, 0);
+                        bytes = 0;
+                        long entries = 0;
+                        foreach (var row in rows)
+                        {
+                            var target = Target(row.Path);
                             if (target.Length == 0)
                                 continue;
                             var current = await RowAtAsync(tx, targetAgent, target, cancel).ConfigureAwait(false);
@@ -679,7 +750,8 @@ internal sealed class PgAgentFileStore : IAgentStore
                             bytes += row.Size - (current?.Size ?? 0);
                             await tx.ExecuteAsync(
                                     "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
-                                        + " VALUES ($1, $2, 'file', $3, $4, $5, $6, $7)"
+                                        + " SELECT $1, $2, 'file', size, sha256, $3, inline, blob_key FROM agent_files"
+                                        + " WHERE agent = $4 AND path = $5"
                                         + " ON CONFLICT (tenant_id, agent, path) DO UPDATE SET kind = 'file',"
                                         + " size = excluded.size, sha256 = excluded.sha256,"
                                         + " generation = excluded.generation, inline = excluded.inline,"
@@ -687,11 +759,9 @@ internal sealed class PgAgentFileStore : IAgentStore
                                     cancel,
                                     targetAgent,
                                     target,
-                                    row.Size,
-                                    row.Sha256,
                                     await AllocateGenerationAsync(tx, cancel).ConfigureAwait(false),
-                                    row.Inline is null ? NullBytes() : row.Inline,
-                                    row.BlobKey
+                                    sourceAgent,
+                                    row.Path
                                 )
                                 .ConfigureAwait(false);
                         }
@@ -767,6 +837,124 @@ internal sealed class PgAgentFileStore : IAgentStore
 
     // Locks the tenant's usage row, creating it on the first write. Every write takes this lock
     // first, so writes of one tenant (across all of its Agents) run one at a time.
+    /// <summary>
+    /// The longest key the store indexes: the Agent name and the path in UTF-8, sized below
+    /// PostgreSQL's 2,704-byte btree row limit with room for the tenant key and row overhead.
+    /// </summary>
+    internal const int KeyBytes = 2_560;
+
+    private static void RequireKeyBytes(string key, string path)
+    {
+        var limit = KeyBytes - Encoding.UTF8.GetByteCount(key);
+        var bytes = Encoding.UTF8.GetByteCount(path);
+        if (bytes > limit)
+            throw AgentFileErrors.PathTooLong(bytes, limit);
+    }
+
+    // A tree moved or copied from `from` to `to`: its longest resulting path must fit as well.
+    private static async Task RequireMovedKeyBytesAsync(
+        PgTx tx,
+        string sourceKey,
+        string from,
+        string targetKey,
+        string to,
+        CancellationToken token
+    )
+    {
+        var (range, parameters) = Below(from, 3);
+        var longest = await ScalarAsync(
+                tx,
+                "SELECT max(octet_length(path)) FROM agent_files WHERE agent = $1 AND (path = $2 OR " + range + ")",
+                token,
+                [sourceKey, from, .. parameters]
+            )
+            .ConfigureAwait(false);
+        if (longest is not int and not long)
+            return;
+        var bytes =
+            Convert.ToInt64(longest)
+            - Encoding.UTF8.GetByteCount(from)
+            + Encoding.UTF8.GetByteCount(to)
+            + (from.Length == 0 && to.Length > 0 ? 1 : 0)
+            - (to.Length == 0 && from.Length > 0 ? 1 : 0);
+        var limit = KeyBytes - Encoding.UTF8.GetByteCount(targetKey);
+        if (bytes > limit)
+            throw AgentFileErrors.PathTooLong(bytes, limit);
+    }
+
+    // Ends an admission transaction without committing it.
+    private sealed class AdmittedException : Exception;
+
+    // The checks of a file write's commit, without its effects: membership, the target's and
+    // its parents' shape and the expected generation. Returns the usage the write adds.
+    private static async Task<(long Bytes, long Entries)> WriteAdmissionAsync(
+        PgTx tx,
+        string key,
+        string? agent,
+        string path,
+        long length,
+        long? expectedGeneration,
+        CancellationToken token
+    )
+    {
+        await RequireAgentAsync(tx, key, agent, token).ConfigureAwait(false);
+        var current = await RowAtAsync(tx, key, path, token).ConfigureAwait(false);
+        if (current?.Kind == "dir" || current is null && await HasChildrenAsync(tx, key, path, token).ConfigureAwait(false))
+            throw AgentFileErrors.IsDirectory(path);
+        Expect(current, path, expectedGeneration);
+        var ancestors = AgentFilePaths.Ancestors(path);
+        long implicitDirectories = 0;
+        if (ancestors.Length > 0)
+        {
+            if (
+                await ScalarAsync(
+                        tx,
+                        "SELECT path FROM agent_files WHERE agent = $1 AND path = ANY($2) AND kind = 'file' ORDER BY path LIMIT 1",
+                        token,
+                        key,
+                        ancestors
+                    )
+                    .ConfigureAwait(false)
+                is string file
+            )
+                throw AgentFileErrors.NotDirectory(file);
+            implicitDirectories = Convert.ToInt64(
+                await ScalarAsync(
+                        tx,
+                        "SELECT count(*) FROM agent_files WHERE agent = $1 AND path = ANY($2) AND kind = 'dir'",
+                        token,
+                        key,
+                        ancestors
+                    )
+                    .ConfigureAwait(false)
+            );
+        }
+        return (length - (current?.Size ?? 0), (current is null ? 1 : 0) - implicitDirectories);
+    }
+
+    /// <summary>
+    /// Whether a new Agent with these initial entries fits the limits now: the check a
+    /// creation runs before anything about it is committed. The creation checks again.
+    /// </summary>
+    public void AdmitCreation(
+        string agent,
+        IReadOnlyList<string> directories,
+        IReadOnlyList<KeyValuePair<string, byte[]>> files
+    )
+    {
+        var limit = limits();
+        if (files.FirstOrDefault(file => file.Value.Length > limit.FileBytes) is { Key: not null } large)
+            throw AgentFileErrors.FileTooLarge(large.Key, limit);
+        foreach (var path in directories.Concat(files.Select(file => file.Key)))
+            RequireKeyBytes(agent, path);
+        var empty = directories.Count(directory =>
+            !directories.Concat(files.Select(file => file.Key))
+                .Any(other => other != directory && AgentFilePaths.Within(other, directory))
+        );
+        var (bytes, entries) = Usage();
+        new UsageRow(bytes, entries).Admit(limit, files.Sum(file => (long)file.Value.Length), files.Count + empty);
+    }
+
     private static async Task<UsageRow> LockUsageAsync(PgTx tx, CancellationToken token)
     {
         await using var command = tx.Command(

@@ -82,6 +82,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     // Session stores are.
     internal IAgentStore? AgentStore => Capabilities.MasterNode ? null : Storage.AgentFiles;
 
+    internal AgentCatalog AgentCatalog => agents;
+
     public SessionManager(
         string root,
         string workspace,

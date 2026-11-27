@@ -31,7 +31,15 @@ internal sealed partial class AgentCatalog
             RequireNoCreatorChildren(name);
             if (beforeStage is not null)
                 await beforeStage(name, "directory");
-            if (store is not null)
+            if (store is not null && name == "main")
+            {
+                // main is always a member, so its root stays: its files go, as its folder's do,
+                // and its surviving Sessions can still write memory. Startup fills an empty
+                // memory directory with the templates, as for a missing folder.
+                foreach (var entry in store.List("main", ""))
+                    await store.DeleteAsync("main", entry.Name, recursive: true, null, CancellationToken.None);
+            }
+            else if (store is not null)
                 await store.DeleteAgentAsync(name, CancellationToken.None);
             else
                 Directory.Delete(SourceDirectory(name), recursive: true);

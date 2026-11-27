@@ -104,10 +104,9 @@ internal static partial class MemoryTools
             }
             segments.Add(segment);
         }
+        // A path that resolves to the memory directory itself names it, as in a folder.
         if (segments.Count == 0)
-            throw new InvalidDataException(
-                "filePath must point to a file inside the Agent's memory directory."
-            );
+            return new("memory", ".");
         var display = string.Join('/', segments);
         var store = "memory/" + display;
         AgentFilePaths.Require(store);
@@ -263,7 +262,8 @@ internal static partial class MemoryTools
             throw new InvalidDataException("Cannot delete directory: " + path.Display);
         try
         {
-            await store.DeleteAsync(agent, path.Store, false, null, token);
+            // Only the file observed: a replacement or a directory in its place stays.
+            await store.DeleteAsync(agent, path.Store, false, stat.Generation, token);
         }
         catch (FileNotFoundException)
         {
@@ -319,11 +319,11 @@ internal static partial class MemoryTools
                     var missing = new InvalidDataException(
                         "Cannot delete missing file: " + operation.Path
                     );
-                    if (store.Stat(agent, path.Store) is not { IsDirectory: false })
+                    if (store.Stat(agent, path.Store) is not { IsDirectory: false } observed)
                         throw missing;
                     try
                     {
-                        await store.DeleteAsync(agent, path.Store, false, null, token);
+                        await store.DeleteAsync(agent, path.Store, false, observed.Generation, token);
                     }
                     catch (FileNotFoundException)
                     {
@@ -382,6 +382,9 @@ internal static partial class MemoryTools
         }
         catch (FileNotFoundException)
         {
+            // A missing directory on the way is a missing part of the path, as in a folder.
+            if (AgentFilePaths.Ancestors(path.Store).Any(ancestor => store.Stat(agent, ancestor) is null))
+                throw new DirectoryNotFoundException($"Could not find a part of the path '{path.Display}'.");
             throw new FileNotFoundException($"Could not find file '{path.Display}'.", path.Display);
         }
         catch (IOException) when (store.Stat(agent, path.Store) is { IsDirectory: true })

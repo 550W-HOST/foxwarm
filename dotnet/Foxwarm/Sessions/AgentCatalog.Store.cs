@@ -148,7 +148,7 @@ internal sealed partial class AgentCatalog
             }
             catch (AgentFileConflictException) when (store.AgentExists("main")) { }
         }
-        if (store.List("main", "memory").Count > 0)
+        if (store.Stat("main", "memory") is { IsDirectory: true } && store.List("main", "memory").Count > 0)
             return;
         foreach (var (path, content) in files)
             try

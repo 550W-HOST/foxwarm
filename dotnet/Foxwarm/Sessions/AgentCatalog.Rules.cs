@@ -208,6 +208,33 @@ internal sealed partial class AgentCatalog
             );
     }
 
+    // Over an Agent store, a rule whose path root the store can't decide is refused where it
+    // is set; one that is already stored fails closed when it is evaluated.
+    internal void RequireStoreRoots(string agent, JsonArray? rules)
+    {
+        if (store is null || rules is null)
+            return;
+        foreach (var rule in rules.OfType<JsonObject>())
+        {
+            var match = rule["match"] as JsonObject ?? rule;
+            var roots = new[]
+            {
+                match["path"]?["allWithin"],
+                match["path"]?["anyNotWithin"],
+                rule["path"]?["within"],
+                rule["path"]?["notWithin"],
+            };
+            foreach (var root in roots.Select(SessionWait.Text).OfType<string>())
+            {
+                _ = AgentStorePaths.PolicyRoot(root, agent, out var refused);
+                if (refused)
+                    throw new InvalidDataException(
+                        $"Rule `{SessionWait.Text(rule["id"]) ?? "?"}`: the path root `{root}` can't be decided over Agent files."
+                    );
+            }
+        }
+    }
+
     internal async Task SetRulesAsync(
         string name,
         JsonArray rules,
@@ -216,6 +243,7 @@ internal sealed partial class AgentCatalog
     )
     {
         _ = AgentRulePolicy.Parse(rules);
+        RequireStoreRoots(name, rules);
         await createGate.WaitAsync();
         try
         {

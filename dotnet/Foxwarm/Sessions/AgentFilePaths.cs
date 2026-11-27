@@ -32,7 +32,13 @@ internal static class AgentFilePaths
             return "it has an empty segment";
         if (path.Length == 0)
             return allowRoot ? null : "it has an empty segment";
-        if (path[0] == '/')
+        // Slash-rooted, drive-prefixed (`C:`, which a Windows file system resolves against a
+        // drive rather than the base) or otherwise rooted on this platform.
+        if (
+            path[0] == '/'
+            || path.Length >= 2 && path[1] == ':' && char.IsAsciiLetter(path[0])
+            || Path.IsPathRooted(path)
+        )
             return "absolute paths aren't allowed";
         if (path.Contains('\\'))
             return "backslashes aren't allowed";
@@ -107,6 +113,9 @@ internal sealed class AgentFilePathException(string path, string problem)
 /// </summary>
 internal sealed class AgentFileConflictException(string message) : IOException(message);
 
+/// <summary>A valid path longer than the store can index; the store's own bound.</summary>
+internal sealed class AgentFilePathTooLongException(string message) : ArgumentException(message);
+
 /// <summary>A write refused at admission because it would exceed one of the <see cref="AgentStoreLimits"/>.</summary>
 internal sealed class AgentStoreQuotaException(string limit, string message) : IOException(message)
 {
@@ -179,6 +188,63 @@ internal static class AgentStorePaths
 
     /// <summary>The fact path of a store path: <c>&lt;agent&gt;/&lt;path&gt;</c>.</summary>
     internal static string Fact(string agent, string path) => path.Length == 0 ? agent : agent + "/" + path;
+
+    /// <summary>
+    /// The store root a policy root names for an Agent: `${agent.dir}` is the Agent's store
+    /// root, `${agent.memoryDir}` its `memory`, and a suffix resolves as file mode resolves it
+    /// (empty and `.` segments vanish, `..` removes one). Null when the text names no Agent
+    /// root; <paramref name="refused"/> when it does in a form the store can't decide: a
+    /// variable elsewhere than at the start, a suffix not after `/`, a `..` that leaves the
+    /// Agent's namespace or a segment that isn't a store path.
+    /// </summary>
+    internal static string? PolicyRoot(string text, string agent, out bool refused)
+    {
+        refused = false;
+        const string Directory = "${agent.dir}";
+        const string Memory = "${agent.memoryDir}";
+        var token =
+            text.StartsWith(Memory, StringComparison.Ordinal) ? Memory
+            : text.StartsWith(Directory, StringComparison.Ordinal) ? Directory
+            : null;
+        if (token is null)
+        {
+            refused =
+                text.Contains(Directory, StringComparison.Ordinal)
+                || text.Contains(Memory, StringComparison.Ordinal);
+            return null;
+        }
+        var rest = text[token.Length..];
+        if (rest.Length > 0 && rest[0] != '/' || rest.Contains("${", StringComparison.Ordinal))
+        {
+            refused = true;
+            return null;
+        }
+        var segments = new List<string> { agent };
+        if (token == Memory)
+            segments.Add("memory");
+        foreach (var segment in rest.Split('/'))
+        {
+            if (segment is "" or ".")
+                continue;
+            if (segment == "..")
+            {
+                if (segments.Count == 1)
+                {
+                    refused = true;
+                    return null;
+                }
+                segments.RemoveAt(segments.Count - 1);
+                continue;
+            }
+            if (AgentFilePaths.Problem(segment) is not null)
+            {
+                refused = true;
+                return null;
+            }
+            segments.Add(segment);
+        }
+        return string.Join('/', segments);
+    }
 
     /// <summary>Whether a store fact path lies at or below a store root.</summary>
     internal static bool Within(string path, string root) =>

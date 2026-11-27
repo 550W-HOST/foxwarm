@@ -486,6 +486,9 @@ internal static class OperationRules
             var text = SessionWait.Text(rootValue)!;
             var root = ToolAuthorizationEvaluation.PolicyRoot(text, request);
             var store = ToolAuthorizationEvaluation.PolicyStoreRoot(text, request);
+            // A root the Agent store can't decide is unknown, so a restrictive rule applies.
+            if (ToolAuthorizationEvaluation.StoreRootRefused(text, request))
+                return OperationMatch.Unknown;
             if (root is null && store is null)
                 return OperationMatch.No;
             var master = path.Node == "master";
