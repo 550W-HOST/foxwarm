@@ -187,7 +187,8 @@ public sealed partial class LocalSessionTurnHost
                 {
                     await persistent.Images.ExternalizeMessageAsync(wrapper);
                 }
-                catch (Foxwarm.Images.ImageInputException error)
+                catch (Exception error)
+                    when (error is Foxwarm.Images.ImageInputException or Foxwarm.Limits.TenantLimitException)
                 {
                     response["response"] = ToolFailure.Result(
                         error.Message + " The tool call completed; its effects were not reversed."

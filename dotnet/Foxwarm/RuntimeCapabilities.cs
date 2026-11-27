@@ -36,19 +36,34 @@ internal sealed record RuntimeCapabilities(
     /// </summary>
     internal Net.EgressPolicy Egress { get; init; } = Net.EgressPolicy.Unguarded;
 
+    /// <summary>
+    /// The tenant's limits (<see cref="Foxwarm.Limits.TenantLimits"/>), enforced at the runtime's
+    /// admission points; none in file mode. The hosted entry reads the tenant's own.
+    /// </summary>
+    internal Foxwarm.Limits.TenantLimits? Limits { get; init; }
+
     internal static RuntimeCapabilities File { get; } = new(true, true, true, true, true, true);
 
     /// <summary>Hosted: only the deployment's executable Providers; no Logs view (U16(b)).</summary>
     internal static RuntimeCapabilities Hosted { get; } =
-        new(false, false, false, false, true, false) { Egress = Net.EgressPolicy.Hosted() };
+        new(false, false, false, false, true, false)
+        {
+            Egress = Net.EgressPolicy.Hosted(),
+            Limits = Foxwarm.Limits.TenantLimits.Defaults,
+        };
 
     /// <summary>
     /// The operator's own tenant: file mode's full set over hosted stores, on a master-host
     /// replica (master, terminals and Code, stdio MCP, the Claude runtime, every deployment
-    /// Provider and the Logs view of its own runtime).
+    /// Provider and the Logs view of its own runtime). Its limits are a hosted tenant's (plan P2
+    /// §7.2), from its tenant row.
     /// </summary>
     internal static RuntimeCapabilities Operator { get; } =
-        new(true, true, true, true, true, true) { Egress = Net.EgressPolicy.Operator() };
+        new(true, true, true, true, true, true)
+        {
+            Egress = Net.EgressPolicy.Operator(),
+            Limits = Foxwarm.Limits.TenantLimits.Defaults,
+        };
 
     /// <summary>
     /// The capabilities of a hosted tenant's stored profile, with the deployment's

@@ -403,6 +403,7 @@ internal sealed partial class SessionToolExecutor
             WaitScope = waitScope,
             Detach = detach,
             SourceSkill = skill,
+            Nested = nested,
         };
         try
         {

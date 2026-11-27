@@ -321,7 +321,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     );
             }
             if (stream.Length > Limit)
-                throw new ImageInputException("File exceeds the 1 GiB upload limit.");
+                throw new ImageInputException("This file is larger than the 1 GiB upload limit.");
             return stream;
         }
         catch
@@ -340,7 +340,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         {
             copied += read;
             if (copied > Limit)
-                throw new ImageInputException("File exceeds the 1 GiB upload limit.");
+                throw new ImageInputException("This file is larger than the 1 GiB upload limit.");
             await output.WriteAsync(chunk.AsMemory(0, read), token);
         }
     }

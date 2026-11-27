@@ -273,11 +273,15 @@ internal static class HostedEntry
         ModelConfiguration configuration;
         HostPaths paths;
         JournalRetentionOptions retention;
-        // The profile the grant checked under the lease row lock, fixed for this runtime: a
-        // committed change retires it, and the next grant reads the new one.
+        // Profile comes from the grant's locked placement check; the tenant row supplies limits.
+        Foxwarm.Limits.TenantLimits limits;
+        TenantSettings settings;
         try
         {
             retention = JournalRetentionOptions.FromDeployment(deployment.Root["journal"]);
+            // The tenant's limits and settings (journal switch, retention) from its row.
+            (limits, settings) = await TenantPolicy.ReadAsync(tenant.Database, token).ConfigureAwait(false);
+            tenant.ApplyJournalSettings(settings);
             var (current, previous) = bootstrap.RequireKeks();
             var keys = new HostedKeyRing(tenant.Database, current, previous);
             keys.OpenOrCreate();
@@ -341,13 +345,14 @@ internal static class HostedEntry
                 distRoot,
                 captureDiagnostics: true,
                 storage: storage,
-                capabilities: RuntimeCapabilities.For(profile, deployment.Egress),
+                // Both profiles take the tenant's limits from its row.
+                capabilities: RuntimeCapabilities.For(profile, deployment.Egress) with { Limits = limits },
                 jsonStdoutLog: true,
                 logTenant: bootstrap.Tenant
             )
             .ConfigureAwait(false);
         // The owner's daily journal retention; it stops when the host disposes the journal.
-        tenant.StartJournalRetention(retention);
+        tenant.StartJournalRetention(settings.Retention(retention));
         return new MainHostRuntime(host, tenant);
     }
 }

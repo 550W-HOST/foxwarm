@@ -41,6 +41,19 @@ internal sealed partial class ApprovedNodeRegistry
     internal void ConfigureLimits(Func<(int MaxDepth, int MaxChildren)> limits) =>
         treeLimits = limits;
 
+    /// <summary>The tenant's resident Node limit (approved Nodes); null is unlimited.</summary>
+    internal int? MaxApprovedNodes { get; set; }
+
+    // Pairing: one more approved Node must fit the resident Node limit.
+    private void RequireNodeCapacity(JsonObject document)
+    {
+        if (MaxApprovedNodes is { } max && Approved(document).Count >= max)
+            throw new Foxwarm.Limits.TenantLimitException(
+                "residentNodes",
+                $"This installation already has {max} Nodes, the most it can have. Remove one before adding another."
+            );
+    }
+
     private static JsonObject ProviderNodes(JsonObject document) =>
         document["providerNodes"]!.AsObject();
 

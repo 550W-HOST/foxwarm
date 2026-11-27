@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using Foxwarm.Limits;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
@@ -118,23 +119,46 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 root,
                 new(authorityStageHook, canonicalCommitBarrier)
             );
-        Images = new(root, Storage.ImageBlobs);
+        // The tenant's blob limit applies to new images and artifacts.
+        var blobQuota = Capabilities.Limits is { } blobLimits
+            ? new Foxwarm.Limits.BlobQuota(
+                blobLimits.BlobBytes,
+                Storage is Foxwarm.Limits.IBlobUsage usage ? usage.StoredBlobBytesAsync : null
+            )
+            : null;
+        BlobQuota = blobQuota;
+        if (Capabilities.Limits is not null)
+            hotCharges = new(ReferenceEqualityComparer.Instance);
+        limitedImageBlobs = blobQuota?.Apply(Storage.ImageBlobs);
+        Images = new(root, limitedImageBlobs ?? Storage.ImageBlobs);
         Artifacts = new(
             Path.Combine(root, "state", "artifacts"),
             ArtifactPreparation,
-            Storage.ArtifactBlobs
+            blobQuota?.Apply(Storage.ArtifactBlobs) ?? Storage.ArtifactBlobs
         );
         ToolScript = new(Storage.ToolScriptRuns);
+        if (Capabilities.Limits is not null)
+            ToolScript.AdmitProcess = token => Admission!.ToolScripts.EnterAsync(token);
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))
             Directory.Delete(runtimeFiles, recursive: true);
-        diagnostics = new(this.root);
+        // The wire diagnostics copy request and response bodies: off with the tenant's journal.
+        // A journal that always records needs no callback.
+        diagnostics = new(this.root)
+        {
+            Recording = Storage.Journal.RecordingPolicy,
+        };
         RecallTargets = new(this.root);
         Nodes = new(this.root, Storage.Documents, Storage.Credentials)
         {
             MasterNode = Capabilities.MasterNode,
         };
+        if (Capabilities.Limits is { } nodeLimits)
+        {
+            Nodes.Registry.MaxApprovedNodes = nodeLimits.ResidentNodes;
+            Nodes.AdmitCall = token => Admission!.NodeExecs.EnterAsync(token);
+        }
         Nodes.Registry.ConfigureLimits(() =>
             (
                 (int)(
@@ -341,6 +365,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ConfigDocuments
         );
         mcp.Configuration.StdioAvailable = Capabilities.StdioMcp;
+        mcp.Configuration.MaxServers = Capabilities.Limits?.McpServers;
+        if (models.ConfigurationOwner is { } configurationOwner)
+            configurationOwner.Limits = Capabilities.Limits;
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
             mcp,
@@ -576,10 +603,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 $"Session catalog loaded: entries={catalogRows.Length}, requiredOwners={ids.Length}."
             );
         }
-        var mandatory = ids.Select(RecoverOwnerAsync).ToList();
-        await Task.WhenAll(mandatory);
+        // With the tenant's hot-owner limit, recovery loads now only what fits; the rest loads
+        // after the processors start, in order, as earlier owners finish and leave room.
+        var deferred = new List<string>();
+        if (Admission is null)
+            await Task.WhenAll(ids.Select(id => RecoverOwnerAsync(id, deferred)));
+        else
+            using (HotOwnerBudget.WithoutWaiting())
+                foreach (var id in ids)
+                    await RecoverOwnerAsync(id, deferred);
         // Before any Session starts processing or a timer fires.
         await MaterializeMigratedPlacementAsync();
+        var lostWaits = new List<string>();
         foreach (var row in catalogRows)
         {
             var id = SessionCatalog.Text(row["id"])!;
@@ -587,8 +622,24 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 SessionWait
                     .Strings(CatalogMetadata(id)?.Wait?["waitExecIds"])
                     .Any(SessionSaveLane.LostAfterRestart)
-                && await GetExistingAsync(id) is { } owner
             )
+                lostWaits.Add(id);
+        }
+        foreach (var id in lostWaits)
+        {
+            SessionOwner? owner;
+            try
+            {
+                using (Admission is null ? null : HotOwnerBudget.WithoutWaiting())
+                    owner = await GetExistingAsync(id);
+            }
+            catch (TenantLimitException error) when (error.Limit == "hotOwnerBytes")
+            {
+                if (!deferred.Contains(id))
+                    deferred.Add(id);
+                continue;
+            }
+            if (owner is not null)
                 await owner.Entry.SaveLane.ClearLostBackgroundWaitsAsync();
         }
         if (startMainServices)
@@ -608,23 +659,82 @@ internal sealed partial class SessionManager : IAsyncDisposable
         executor.StartReconciliation();
         StartIdleRelease();
         foreach (var owner in sessions.Values)
+            StartRecoveredProcessing(owner);
+        if (deferred.Count > 0)
         {
-            var envelope = owner.Entry.Snapshot().AuthorityEnvelope;
-            if (
-                (
-                    !ClaudeRuntimeState.IsExternal(envelope)
-                    || SessionWait.Text(envelope["externalRuntime"]?["status"]) == "complete"
-                ) && owner.Registry.HasRunnableWork(owner.Entry)
-            )
-                _ = owner.StartProcessing();
+            deferredRecovery = RecoverDeferredAsync(deferred, lostWaits.ToHashSet(), startMainServices);
         }
     }
 
-    private async Task RecoverOwnerAsync(string id)
+    private Task deferredRecovery = Task.CompletedTask;
+
+    private void StartRecoveredProcessing(SessionOwner owner)
+    {
+        var envelope = owner.Entry.Snapshot().AuthorityEnvelope;
+        if (
+            (
+                !ClaudeRuntimeState.IsExternal(envelope)
+                || SessionWait.Text(envelope["externalRuntime"]?["status"]) == "complete"
+            ) && owner.Registry.HasRunnableWork(owner.Entry)
+        )
+            _ = owner.StartProcessing();
+    }
+
+    // One at a time, in recovery order: each owner loads when there is room, and its processor
+    // starts at once, so the earlier owners' work frees room for the later ones.
+    private async Task RecoverDeferredAsync(
+        IReadOnlyList<string> order,
+        HashSet<string> lostWaits,
+        bool startMainServices
+    )
+    {
+        foreach (var id in order)
+        {
+            while (accepting)
+            {
+                try
+                {
+                    var owner = await GetExistingAsync(id, admissionStop.Token);
+                    if (owner is not null)
+                    {
+                        if (lostWaits.Contains(id))
+                            await owner.Entry.SaveLane.ClearLostBackgroundWaitsAsync();
+                        if (startMainServices)
+                            await ReconcileTimerWaitsAsync(owner);
+                        StartRecoveredProcessing(owner);
+                    }
+                    break;
+                }
+                catch (TenantLimitException error) when (error.Limit == "hotOwnerBytes")
+                {
+                    // No room yet: the owners already running will make some.
+                }
+                catch (Exception) when (!accepting || admissionStop.IsCancellationRequested)
+                {
+                    // Shutdown ends recovery.
+                    return;
+                }
+                catch (Exception error)
+                {
+                    MainLog.Diagnostic(
+                        "Session recovery failed: " + MainLog.SafeFailure(error),
+                        failure: true
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    private async Task RecoverOwnerAsync(string id, List<string> deferred)
     {
         try
         {
             await RequiredAsync(id);
+        }
+        catch (TenantLimitException error) when (error.Limit == "hotOwnerBytes")
+        {
+            deferred.Add(id);
         }
         catch (SessionAuthorityUnavailableException error)
         {
@@ -838,6 +948,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                 ? Task.CompletedTask
                 : hosted.Compactor.BeforeContinuationAsync(result, consume, token);
+        if (Capabilities.Limits is not null)
+            registry.TurnAdmission = EnterTurnAsync;
         registry.OnSafePoint = _ =>
             ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                 ? Task.CompletedTask
@@ -893,6 +1005,23 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     private async Task ShutdownCoreAsync()
     {
+        try
+        {
+            await DrainForShutdownAsync();
+        }
+        finally
+        {
+            // The terminal boundary every host reaches, also on composition rollback: the
+            // replica's budgets forget this runtime even when a final save failed. It accepts
+            // nothing more and offers no owners to release; its storage stays open.
+            DisposeAdmission();
+        }
+    }
+
+    private async Task DrainForShutdownAsync()
+    {
+        // Deferred recovery stops at BeginShutdown; it loads no owner after this.
+        await deferredRecovery;
         SessionOwner[] current;
         lock (lifecycle)
             current = sessions.Values.ToArray();
@@ -968,6 +1097,19 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         BeginShutdown();
+        try
+        {
+            await DisposeServicesAsync();
+        }
+        finally
+        {
+            // Also when disposal starts here, without a shutdown first.
+            DisposeAdmission();
+        }
+    }
+
+    private async Task DisposeServicesAsync()
+    {
         // A failed drain is not permission to close dependencies beneath its owner.
         await ShutdownAsync();
         await timers.DisposeAsync();
@@ -992,4 +1134,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     }
 
     internal static bool IsOwnedId(string id) => SessionIdentity.IsValid(id);
+
+    // The wire diagnostics' recording callback; null when the journal always records.
+    internal Func<bool>? DiagnosticsRecordingForTest => diagnostics.Recording;
 }

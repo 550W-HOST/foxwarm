@@ -122,6 +122,13 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
     }
 
     public string AuthorityPath => authorityFile.FilePath;
+
+    // The authority file holds the history; its size stands for it.
+    Task<long?> ISessionAuthority.PersistedHistoryBytesAsync(CancellationToken token)
+    {
+        var file = new FileInfo(AuthorityPath);
+        return Task.FromResult<long?>(file.Exists ? file.Length : null);
+    }
     public string ArchivePath => archive.DatabasePath;
     public DirectorySyncResult LastDirectorySyncResult => authorityFile.LastDirectorySyncResult;
     public SqliteArchiveMessageStore Archive => archive;

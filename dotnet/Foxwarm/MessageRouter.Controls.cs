@@ -79,7 +79,8 @@ internal sealed partial class MessageRouter
             switch (action)
             {
                 case "stop":
-                    if (!owner.Metadata().Busy)
+                    // A turn waiting for its busy-turn slot isn't busy yet, but its processor runs.
+                    if (!owner.Metadata().Busy && !owner.Processing)
                         return Reply("noop", "No active run");
                     if (owner.Compactor.Standalone)
                         return Reply(

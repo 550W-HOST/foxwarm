@@ -227,6 +227,8 @@ internal sealed class ModelRequestOwner(
                     explicitSelectionChanged = true;
                     interaction = diagnostics?.Begin(journalIteration);
                     requestStarted = null;
+                    // The replaced request is over: its start data goes.
+                    EndJournalRequest(journal, journalRequestId);
                     journalRequestId = null;
                     journalAttempt = 0;
                 }
@@ -301,6 +303,8 @@ internal sealed class ModelRequestOwner(
                         interaction = diagnostics?.Begin(journalIteration);
                         // An adoption notice refreshes journal input, but the same
                         // response still includes elapsed retries and failover.
+                        // The replaced request is over: its start data goes.
+                        EndJournalRequest(journal, journalRequestId);
                         journalRequestId = null;
                         journalAttempt = 0;
                     }
@@ -814,6 +818,8 @@ internal sealed class ModelRequestOwner(
                         history = updated;
                         interaction = diagnostics?.Begin(journalIteration);
                         requestStarted = null;
+                        // The replaced request is over: its start data goes.
+                        EndJournalRequest(journal, journalRequestId);
                         journalRequestId = null;
                         journalAttempt = 0;
                     }
@@ -847,6 +853,17 @@ internal sealed class ModelRequestOwner(
             }
             throw;
         }
+        finally
+        {
+            // Success, final failure and abort all end the request here.
+            EndJournalRequest(journal, journalRequestId);
+        }
+    }
+
+    private static void EndJournalRequest(ILlmJournalStore? journal, string? requestId)
+    {
+        if (journal is not null && requestId is not null)
+            journal.EndRequest(requestId);
     }
 
     private static ChatResult JournalResult(ChatResult result)

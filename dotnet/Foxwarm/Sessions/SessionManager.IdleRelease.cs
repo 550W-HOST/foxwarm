@@ -68,6 +68,19 @@ internal sealed partial class SessionManager
         {
             Monitor.Exit(idleReleaseGate);
         }
+        // Resident owners' estimates follow their history; outside the gate, so memory
+        // pressure never waits for it.
+        try
+        {
+            RemeasureHotOwners();
+        }
+        catch (Exception error)
+        {
+            MainLog.Diagnostic(
+                "Session hot-owner estimate failed: " + MainLog.SafeFailure(error),
+                failure: true
+            );
+        }
     }
 
     /// <summary>Releases every resident owner that is idle and quiet; returns how many.</summary>
@@ -188,6 +201,7 @@ internal sealed partial class SessionManager
             foreach (var key in keys)
                 identities.Remove(key);
         }
+        ReleaseHotCharge(owner);
         // Stale references now fail admission as a retired owner; scheduling tied to the
         // owner's identity-loss token (idle compaction, launchers) stops.
         owner.Entry.Retired = true;

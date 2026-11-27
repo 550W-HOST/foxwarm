@@ -9,7 +9,17 @@ namespace Foxwarm.Channels.WebUi;
 
 internal sealed partial class WebUIChannel
 {
-    private const long UploadLimit = WebUiUploadedFiles.Limit;
+    // One upload: the tenant's limit in hosted mode, 1 GiB in file mode.
+    private long UploadLimit =>
+        sessions.Capabilities.Limits?.UploadBytes is { } limit
+            ? Math.Min(limit, WebUiUploadedFiles.Limit)
+            : WebUiUploadedFiles.Limit;
+
+    // Multipart boundaries, part headers and small form fields around the one file.
+    internal const long UploadOverheadBytes = 1024 * 1024;
+
+    private string UploadLimitError =>
+        $"This file is larger than the {Foxwarm.Limits.TenantLimits.Size(UploadLimit)} upload limit.";
     private static string UploadRoot => WebUiUploadedFiles.StagingRoot;
 
     private static string AttachmentMime(string? declared, string filename) =>
@@ -22,18 +32,25 @@ internal sealed partial class WebUIChannel
             "/api/upload",
             async (HttpContext context) =>
             {
+                var uploadLimit = UploadLimit;
                 if (
                     context.Features.Get<IHttpMaxRequestBodySizeFeature>() is
                     { IsReadOnly: false } limit
                 )
-                    // Source limits each file, not the complete multipart body.
-                    limit.MaxRequestBodySize = null;
-                if (context.Request.ContentLength > UploadLimit)
+                    // Source limits each file, not the complete multipart body. A hosted tenant's
+                    // request is limited as it streams too: its file plus bounded multipart
+                    // overhead, whatever length it declares.
+                    limit.MaxRequestBodySize = sessions.Capabilities.Limits is null
+                        ? null
+                        : uploadLimit + UploadOverheadBytes;
+                // The declared length includes the multipart framing; the file itself is held to
+                // the exact limit below.
+                if (context.Request.ContentLength > uploadLimit + UploadOverheadBytes)
                     return Results.Json(
                         new JsonObject
                         {
-                            ["error"] = "Upload too large",
-                            ["maxBytes"] = UploadLimit,
+                            ["error"] = UploadLimitError,
+                            ["maxBytes"] = uploadLimit,
                         },
                         statusCode: 413
                     );
@@ -62,7 +79,7 @@ internal sealed partial class WebUIChannel
                     var form = await context.Request.ReadFormAsync(
                         new FormOptions
                         {
-                            MultipartBodyLengthLimit = UploadLimit,
+                            MultipartBodyLengthLimit = uploadLimit,
                             ValueLengthLimit = 1024 * 1024,
                         },
                         context.RequestAborted
@@ -73,9 +90,9 @@ internal sealed partial class WebUIChannel
                         );
                     var file = form.Files[0];
                     var mimeType = AttachmentMime(file.ContentType, file.FileName);
-                    if (file.Length > UploadLimit)
+                    if (file.Length > uploadLimit)
                         return Results.Json(
-                            new JsonObject { ["error"] = "File exceeds the 1 GiB upload limit." },
+                            new JsonObject { ["error"] = UploadLimitError },
                             statusCode: 413
                         );
                     Directory.CreateDirectory(UploadRoot);
@@ -124,13 +141,14 @@ internal sealed partial class WebUIChannel
                 {
                     if (
                         error is InvalidDataException
-                        && error.Message.Contains(
-                            "Multipart body length limit",
-                            StringComparison.Ordinal
-                        )
+                            && error.Message.Contains(
+                                "Multipart body length limit",
+                                StringComparison.Ordinal
+                            )
+                        || error is BadHttpRequestException { StatusCode: 413 }
                     )
                         return Results.Json(
-                            new JsonObject { ["error"] = "File exceeds the 1 GiB upload limit." },
+                            new JsonObject { ["error"] = UploadLimitError },
                             statusCode: 413
                         );
                     return Results.BadRequest(

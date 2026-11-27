@@ -157,6 +157,12 @@ public sealed class SessionRegistry
     /// <summary>Delivers the missing-report notice to the parent: entry, parent ID, last reply.</summary>
     internal Func<SessionEntry, string, string, Task>? OnChildReportMissing { get; set; }
     internal Func<SessionEntry, Exception?, bool, bool, Task>? OnProcessorFinalizing { get; set; }
+    /// <summary>
+    /// A busy-turn slot (the tenant's limit) a processor waits for before it claims busy; null
+    /// admits at once.
+    /// </summary>
+    internal Func<CancellationToken, ValueTask<IDisposable>>? TurnAdmission { get; set; }
+
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }
     public Func<SessionEntry, Task>? OnRetrySafePoint { get; set; }
     public Func<

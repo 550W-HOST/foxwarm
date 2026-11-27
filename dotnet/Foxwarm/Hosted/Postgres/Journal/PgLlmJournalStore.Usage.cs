@@ -428,21 +428,33 @@ internal sealed partial class PgLlmJournalStore
     public LlmUsageCoverage UsageCoverage()
     {
         CheckOpen();
+        // One statement: the earliest ledger row, the backfill's low mark with whether a success
+        // below it lacks its row, and the unrecorded requests' lost rows.
         return database.Read(
             tx =>
             {
-                var earliest = tx.Scalar("SELECT min(completed_at) FROM llm_usage");
-                var complete =
-                    ReadMetadataNumber(tx, LowKey) is long low
-                    && (
-                        low <= 1
-                        || tx.Scalar(
-                            "SELECT 1 FROM llm_journal_attempt_results WHERE seq<$1 AND outcome='success' LIMIT 1",
-                            low
-                        )
-                            is null
-                    );
-                return new LlmUsageCoverage(earliest is long first ? first : null, complete);
+                using var command = tx.Command(
+                    """
+                    WITH metadata AS (
+                        SELECT (SELECT value FROM llm_journal_metadata WHERE key=$1) AS low,
+                               (SELECT value FROM llm_journal_metadata WHERE key=$2) AS lost
+                    ), marks AS (
+                        SELECT CASE WHEN pg_input_is_valid(low,'bigint') THEN low::bigint END AS low,
+                               CASE WHEN pg_input_is_valid(lost,'bigint') THEN lost::bigint END AS lost
+                        FROM metadata
+                    )
+                    SELECT (SELECT min(completed_at) FROM llm_usage),
+                           low IS NOT NULL AND coalesce(lost,0) <= 0 AND
+                           (low <= 1 OR NOT EXISTS (SELECT 1 FROM llm_journal_attempt_results
+                                                    WHERE seq < low AND outcome='success'))
+                    FROM marks
+                    """,
+                    LowKey,
+                    LostKey
+                );
+                using var reader = command.ExecuteReader();
+                reader.Read();
+                return new LlmUsageCoverage(reader.IsDBNull(0) ? null : reader.GetInt64(0), reader.GetBoolean(1));
             },
             snapshot: true
         );

@@ -106,6 +106,8 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
+        if (!Recording)
+            return AdmitUnrecorded(sessionId, purpose);
         var requestId = Guid.NewGuid().ToString();
         // Consume request-owned JSON before admission; only immutable encoded values cross the queue.
         var prompt = LlmRequestJournalStore.PrepareObject("prompt", JsonValue.Create(systemPrompt)!);
@@ -252,6 +254,8 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
+        if (StartUnrecorded(requestId, attempt, concreteModelId, virtualModelKey, providerType))
+            return new(Task.FromResult(true));
         var prompt = LlmRequestJournalStore.PrepareObject("prompt", JsonValue.Create(effectivePrompt)!);
         var payloadHash = LlmRequestJournalStore.HashValue(semanticPayload);
         return await Writer
@@ -330,6 +334,12 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     {
         CheckOpen();
         token.ThrowIfCancellationRequested();
+        if (
+            await CompleteUnrecordedAsync(requestId, attempt, ledger, redaction, token)
+                .ConfigureAwait(false)
+            is { } unrecordedReceipt
+        )
+            return unrecordedReceipt;
         var resultJson = result is null ? null : LlmRequestJournalStore.Codec.Write(result);
         var errorJson = error is null ? null : LlmRequestJournalStore.Codec.Write(error);
         return await Writer
@@ -416,6 +426,8 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     )
     {
         CheckOpen();
+        if (IsUnrecorded(requestId))
+            return NotRecordedAnswer(requestId);
         await Writer.BarrierAsync(token).ConfigureAwait(false);
         try
         {

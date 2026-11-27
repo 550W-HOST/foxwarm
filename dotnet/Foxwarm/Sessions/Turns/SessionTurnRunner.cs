@@ -133,6 +133,38 @@ public sealed class SessionTurnRunner
         await RunProcessorAsync(sessionId, entry, settled, retry, admitted).ConfigureAwait(false);
     }
 
+    // Waits for a busy-turn slot under the Session's cancellation registration, so Stop and
+    // shutdown cancel the wait as they cancel a running turn; null when either ended it.
+    private static async Task<IDisposable?> AdmitTurnAsync(
+        SessionEntry entry,
+        Func<CancellationToken, ValueTask<IDisposable>> admit
+    )
+    {
+        var waiting = new CancellationTokenSource();
+        CancellationHandle handle;
+        try
+        {
+            handle = entry.RegisterCancellation(waiting)!;
+        }
+        catch (OperationCanceledException)
+        {
+            waiting.Dispose();
+            return null;
+        }
+        try
+        {
+            return await admit(handle.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (handle.Token.IsCancellationRequested)
+        {
+            return null;
+        }
+        finally
+        {
+            entry.ClearCancellation(handle);
+        }
+    }
+
     private async Task RunProcessorAsync(
         string sessionId,
         SessionEntry entry,
@@ -142,6 +174,7 @@ public sealed class SessionTurnRunner
     )
     {
         var turnScope = entry.EnterTurnScope();
+        IDisposable? turnSlot = null;
         var claimed = false;
         var ranTurn = false;
         var failed = false;
@@ -172,7 +205,13 @@ public sealed class SessionTurnRunner
                         throw new SessionContinuationUnavailableException();
                 });
             var host = hosts.For(entry);
-            claimed = await host.TryClaimBusyAsync(continuing: retry).ConfigureAwait(false);
+            // The tenant's busy-turn limit, before the busy claim: a waiting Session stays not
+            // busy and keeps its queued input; Stop and shutdown end the wait.
+            var entered = registry.TurnAdmission is not { } admitTurn
+                || (turnSlot = await AdmitTurnAsync(entry, admitTurn).ConfigureAwait(false)) is not null;
+            if (turnSlot is not null)
+                turnScope.AttachSlot(turnSlot);
+            claimed = entered && await host.TryClaimBusyAsync(continuing: retry).ConfigureAwait(false);
             if (!claimed)
             {
                 // A Stop that no running turn observed: it arrived after this processor was
@@ -410,6 +449,9 @@ public sealed class SessionTurnRunner
                     processors.Remove(entry);
                     entry.ReleaseProcessor();
                 }
+                // The busy-turn slot goes after the claim, so its waiters find this Session idle.
+                if (turnSlot is not null)
+                    turnScope.ReleaseOwnerSlot();
                 try
                 {
                     // A Stop that arrived after the checks above, while the claim was still held,

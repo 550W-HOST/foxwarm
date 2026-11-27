@@ -215,6 +215,7 @@ internal sealed partial class ApprovedNodeRegistry
             next =>
             {
                 RequireFresh(next, id);
+                RequireNodeCapacity(next);
                 RequireAdmission(next, id, parentNode);
                 var auth = Token();
                 Approved(next)[id] = new JsonObject
@@ -328,6 +329,7 @@ internal sealed partial class ApprovedNodeRegistry
                 throw new InvalidDataException("Pairing is no longer awaiting approval.");
             id = ApprovalId(next, pending, id);
             RequireFresh(next, id);
+            RequireNodeCapacity(next);
             RequireAdmission(next, id, null);
             beforeMutation?.Invoke();
             var auth = Token();

@@ -199,6 +199,9 @@ internal sealed class HttpServer
                 KeepAliveTimeout = TimeSpan.FromSeconds(10),
             }
         );
+        // The tenant's request rate and WebSocket limits (none in file mode).
+        if (sessions.Admission is { } admission)
+            app.Use((context, next) => Foxwarm.Limits.RequestLimits.InvokeAsync(context, admission, next));
         app.UseResponseCompression();
         var resources = new HttpAssets(sessions.Models.ConfigurationOwner?.Paths.ResourceRoot ?? AppContext.BaseDirectory);
         app.Use(

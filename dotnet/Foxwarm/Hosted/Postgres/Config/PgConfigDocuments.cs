@@ -56,6 +56,22 @@ internal sealed class PgConfigDocuments(TenantDb database, string? writer = null
             : null;
     }
 
+    public async Task<byte[]?> ReadAsync(ConfigDocumentName name, CancellationToken token)
+    {
+        var key = Key(name);
+        return await database
+                .ReadAsync(
+                    async (tx, cancel) =>
+                        await tx.Command("SELECT text FROM config_documents WHERE name = $1", key)
+                            .ExecuteScalarAsync(cancel)
+                            .ConfigureAwait(false) as string,
+                    token: token
+                )
+                .ConfigureAwait(false) is { } text
+            ? Strict.GetBytes(text)
+            : null;
+    }
+
     // One statement returns the size and, only within the limit, the text.
     public byte[]? ReadBounded(ConfigDocumentName name, int maxBytes)
     {

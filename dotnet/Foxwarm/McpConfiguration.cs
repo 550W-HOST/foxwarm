@@ -31,6 +31,9 @@ internal sealed class McpConfiguration
     // an update is a validation error, and a stored one fails the load.
     internal bool StdioAvailable { get; set; } = true;
 
+    /// <summary>The tenant's MCP server limit, checked when a server is added; null is unlimited.</summary>
+    internal int? MaxServers { get; set; }
+
     private JsonObject Admitted(string name, JsonObject config)
     {
         if (!StdioAvailable && SessionWait.Text(config["transport"]) == "stdio")
@@ -132,6 +135,11 @@ internal sealed class McpConfiguration
             foreach (var (key, value) in patch)
                 merged[key] = value?.DeepClone();
             next[name] = Admitted(name, Normalize(merged, managed: true));
+            if (previous is null && MaxServers is { } max && next.Count > max)
+                throw new Foxwarm.Limits.TenantLimitException(
+                    "mcpServers",
+                    $"This installation already has {max} MCP servers, the most it can have. Remove one before adding another."
+                );
             if (admit is not null)
                 await admit(Snapshot(), (JsonObject)next.DeepClone());
             try

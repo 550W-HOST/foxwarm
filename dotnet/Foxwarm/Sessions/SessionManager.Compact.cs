@@ -25,7 +25,9 @@ internal sealed partial class SessionManager
             value is > 1 and <= 100 ? value / 100
             : value is > 0 and <= 1 ? value
             : null;
-        var result = await target.Compactor.StartManualAsync(guidance, keep);
+        // A tool call still inside the source turn borrows its slot. Detached work whose
+        // source turn has ended takes a slot like an external control.
+        var result = await target.Compactor.StartManualAsync(guidance, keep, sourceTurn: source.Entry);
         if (result.AlreadyPending)
             return Output($"Compaction is already pending for session `{targetId}`.");
         var mode = guidance is null ? "automatic compaction plan" : "guided compaction plan";

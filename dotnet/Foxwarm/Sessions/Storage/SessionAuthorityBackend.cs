@@ -72,7 +72,10 @@ internal sealed record SessionAuthorityCallbacks(
         SessionSnapshot,
         IReadOnlyList<ArchiveMessageRecord>,
         IReadOnlyList<ArchiveBlockRecord>
-    >? ArchiveCommitted = null
+    >? ArchiveCommitted = null,
+    // The blob store the authority's image writer uses instead of the backend's: the tenant's
+    // limited one, so queue ingress, tool results and migrations count against its limit.
+    Foxwarm.Storage.IBlobStore? ImageBlobs = null
 );
 
 /// <summary>
@@ -98,4 +101,10 @@ internal interface ISessionAuthority
 
     /// <summary>Rejects every later write.</summary>
     void Retire();
+
+    /// <summary>
+    /// The stored size of the bound Session's history, read without loading it (the hot-owner
+    /// reservation of a cold load); null when unknown.
+    /// </summary>
+    Task<long?> PersistedHistoryBytesAsync(CancellationToken token) => Task.FromResult<long?>(null);
 }

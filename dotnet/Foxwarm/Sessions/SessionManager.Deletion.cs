@@ -487,7 +487,10 @@ internal sealed partial class SessionManager
         lock (lifecycle)
         {
             if (sessions.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
+            {
                 sessions.TryRemove(id, out _);
+                ReleaseHotCharge(owner);
+            }
             if (identities.TryGetValue(id, out var slot))
                 foreach (
                     var key in identities

@@ -12,6 +12,51 @@ namespace Foxwarm.Tests.Storage;
 [Trait("Backend", "s3")]
 public sealed class S3BlobStoreTests
 {
+    private sealed class LosePutResponse(Amazon.S3.IAmazonS3 inner, CancellationTokenSource? cancel)
+        : Amazon.S3.AmazonS3Client("synthetic", "synthetic", Amazon.RegionEndpoint.USEast1)
+    {
+        public override Task<Amazon.S3.Model.GetObjectMetadataResponse> GetObjectMetadataAsync(
+            Amazon.S3.Model.GetObjectMetadataRequest request, CancellationToken cancellationToken = default
+        ) => inner.GetObjectMetadataAsync(request, cancellationToken);
+
+        public override async Task<Amazon.S3.Model.PutObjectResponse> PutObjectAsync(
+            Amazon.S3.Model.PutObjectRequest request, CancellationToken cancellationToken = default
+        )
+        {
+            await inner.PutObjectAsync(request, cancellationToken);
+            cancel?.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new IOException("The response was lost after the object was stored.");
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostCreateResponseIsReconciledBeforeAnotherNewWrite(bool cancelAfterPut)
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        using var stop = new CancellationTokenSource();
+        using var client = new LosePutResponse(bucket.Client, cancelAfterPut ? stop : null);
+        var inner = new S3BlobStore(client, bucket.Name, S3TestBucket.Tenant, "images", conditionalWrites: true);
+        var measures = 0;
+        var quota = new Foxwarm.Limits.BlobQuota(600, async token =>
+        {
+            measures++;
+            return await inner.ExistsAsync("a", token) ? 600 : 0;
+        });
+        var limited = quota.Apply(inner);
+        var write = limited.CreateAsync("a", new byte[600], true, stop.Token);
+        if (cancelAfterPut)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => write);
+        else
+            Assert.False(await write);
+        Assert.True(await inner.ExistsAsync("a", default));
+        await Assert.ThrowsAsync<Foxwarm.Limits.TenantLimitException>(() => limited.CreateAsync("b", new byte[1], true, default));
+        Assert.Equal(2, measures);
+        Assert.Equal(600, await quota.UsedAsync(default));
+    }
+
     [Fact]
     public async Task Range_reads_return_the_requested_bytes_only()
     {

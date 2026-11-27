@@ -41,7 +41,7 @@ internal sealed class FileSessionAuthorityBackend(
                 ? null
                 : () => callbacks.CheckLifetime(store.SessionId),
             archiveCommitted: callbacks.ArchiveCommitted,
-            imageBlobs: imageBlobs
+            imageBlobs: callbacks.ImageBlobs ?? imageBlobs
         );
         return store;
     }

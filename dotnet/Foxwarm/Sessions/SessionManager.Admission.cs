@@ -1,3 +1,4 @@
+using Foxwarm.Limits;
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -23,6 +24,10 @@ internal sealed partial class SessionManager
         // which orders admissions within one clock tick; both change under lifecycle.
         internal long LastUse = Environment.TickCount64;
         internal long Uses;
+
+        // When the owner was published (monotonic milliseconds): the start of its publication
+        // grace against memory pressure, which lookups don't renew.
+        internal long Published;
 
         internal void Touch()
         {
@@ -59,6 +64,9 @@ internal sealed partial class SessionManager
 
     internal Func<string, CancellationToken, Task>? BeforeAdmissionRead { get; set; }
     internal Action<string>? AdmissionReadObserved { get; set; }
+
+    // Observes a cold load starting to read its history, after its owner admission.
+    internal Action<string>? HistoryReadStarting { get; set; }
 
     internal async Task<SessionOwner?> GetExistingAsync(
         string requestedId,
@@ -160,6 +168,8 @@ internal sealed partial class SessionManager
 
     private async Task LoadOwnerAsync(string id, IdentitySlot slot, bool acceptedTimer = false)
     {
+        HotOwnerBudget.Charge? charge = null;
+        IDisposable? hydration = null;
         try
         {
             var token = acceptedTimer ? CancellationToken.None : admissionStop.Token;
@@ -178,6 +188,18 @@ internal sealed partial class SessionManager
                     "Catalog Session binding is unsupported or its Agent is missing."
                 );
             var store = MakeStore(id, agent);
+            // Owner admission before the history is read: room in the tenant's and the
+            // replica's hot-owner budgets for the persisted history, then one of the tenant's
+            // hydration slots, so waiting loads hold no history.
+            if (Admission is { } limits)
+            {
+                charge = await ReserveHotOwnerAsync(
+                    await store.PersistedHistoryBytesAsync(token) ?? 0,
+                    token
+                );
+                hydration = await limits.Hydrations.EnterAsync(token);
+            }
+            HistoryReadStarting?.Invoke(id);
             var snapshot =
                 await store.LoadAsync(id)
                 ?? throw new SessionAuthorityUnavailableException(
@@ -198,12 +220,16 @@ internal sealed partial class SessionManager
                 ? RecoverBusySnapshot(snapshot, ExpiredApprovalText(expired))
                 : snapshot;
             token.ThrowIfCancellationRequested();
+            // The loaded history's own estimate; growth beyond the reservation doesn't wait.
+            charge?.Resize(HotOwnerBudget.Estimate(HistoryJsonBytes(snapshot.History)));
             var owner = MakeSession(id, agent, store);
             owner.Registry.Add(id, snapshot);
             BindMutations(owner);
             if (recoveringBusy || expired.Length > 0)
                 await owner.Entry.SaveLane.SaveStrictAsync(token);
-            PublishOwner(owner, slot, acceptedTimer);
+            // The charge becomes the resident owner's at its registry insertion.
+            PublishOwner(owner, slot, acceptedTimer, charge);
+            charge = null;
             if (servicesReady && !IsDeletionClaimed(owner.Id))
                 WaitTransition(owner.Id);
         }
@@ -213,6 +239,10 @@ internal sealed partial class SessionManager
         }
         finally
         {
+            // A charge not taken over by a resident owner returns.
+            if (charge is not null && !OwnsHotCharge(charge))
+                charge.Dispose();
+            hydration?.Dispose();
             slot.Finished.TrySetResult();
         }
     }
@@ -311,7 +341,12 @@ internal sealed partial class SessionManager
             Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
     }
 
-    private void PublishOwner(SessionOwner owner, IdentitySlot slot, bool acceptedTimer = false)
+    private void PublishOwner(
+        SessionOwner owner,
+        IdentitySlot slot,
+        bool acceptedTimer = false,
+        HotOwnerBudget.Charge? charge = null
+    )
     {
         lock (lifecycle)
         {
@@ -325,7 +360,10 @@ internal sealed partial class SessionManager
                 || !sessions.TryAdd(owner.Id, owner)
             )
                 throw new InvalidOperationException("Session identity collision after validation.");
+            // The resident owner holds its hot-owner charge from here on, whatever happens next.
+            RecordHotCharge(owner, charge);
             slot.Touch();
+            slot.Published = slot.LastUse;
         }
         owner.EnableCommittedNotifications();
         try

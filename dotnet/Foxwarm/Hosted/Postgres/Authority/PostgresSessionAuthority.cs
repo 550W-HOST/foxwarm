@@ -46,10 +46,29 @@ internal sealed class PostgresSessionAuthority : ISessionAuthority
         this.sessionId = sessionId;
         this.agent = agent;
         this.callbacks = callbacks;
-        Images = new(backend.ScratchRoot, backend.ImageBlobs);
+        Images = new(backend.ScratchRoot, callbacks.ImageBlobs ?? backend.ImageBlobs);
     }
 
     public string SessionId => sessionId;
+
+    public Task<long?> PersistedHistoryBytesAsync(CancellationToken token)
+    {
+        var id = sessionId;
+        return backend.Database.ReadAsync(
+            async (tx, cancel) =>
+                await tx.Command(
+                        "SELECT sum(s.byte_length) FROM session_heads h JOIN session_segments s"
+                            + " ON s.lifetime_id = h.lifetime_id AND s.segment_id = ANY(h.segment_ids)"
+                            + " WHERE h.session_id = $1",
+                        id
+                    )
+                    .ExecuteScalarAsync(cancel)
+                    .ConfigureAwait(false) is long bytes
+                    ? bytes
+                    : (long?)null,
+            token: token
+        );
+    }
 
     public string Agent => agent;
 

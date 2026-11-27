@@ -59,6 +59,13 @@ internal sealed partial class NodeConnectionHub
             );
     }
 
+    /// <summary>
+    /// Admission of one tool call to a resident Node (the tenant's limit on such calls in
+    /// flight through Main); calls over it wait. Provider Nodes keep their Provider's limits.
+    /// Null admits at once.
+    /// </summary>
+    internal Func<CancellationToken, ValueTask<IDisposable>>? AdmitCall { get; set; }
+
     internal async Task<JsonNode?> ExecuteAsync(
         string id,
         string tool,
@@ -133,6 +140,9 @@ internal sealed partial class NodeConnectionHub
                 }
             }
         }
+        // The tenant's limit on calls in flight to resident Nodes, taken at dispatch, after a
+        // legacy edit has read its source (a call of its own).
+        using var slot = AdmitCall is null ? null : await AdmitCall(token);
         if (tool != "exec")
             return await ExecuteOnceAsync(
                 connection,
