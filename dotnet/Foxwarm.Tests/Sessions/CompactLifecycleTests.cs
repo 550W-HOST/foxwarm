@@ -56,6 +56,44 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(0, slots.InUse);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedFirstCompactNotificationLeavesNoRegisteredRun(bool limited)
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        if (limited) f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        void Fail(SessionRuntimeEvent _) => throw new IOException("initial compact notification failed");
+        f.Owner.Changed += Fail;
+        try { await Assert.ThrowsAsync<IOException>(() => f.Owner.Compactor.StartManualAsync()); }
+        finally { f.Owner.Changed -= Fail; }
+        Assert.False(f.Owner.Compactor.Active);
+        Assert.False(f.Owner.Entry.HasProcessor);
+        Assert.Equal(0, slots.InUse);
+        await f.Owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedPostcommitBusyClaimIsStrictlyReleasedBeforeCompactionReturns(bool limited)
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        if (limited) f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        f.FailNextBusyCommit = true;
+        var failure = await Assert.ThrowsAsync<AuthorityCommittedException>(() => f.Owner.Compactor.StartManualAsync());
+        Assert.Contains("busy commit", failure.ToString());
+        Assert.False(f.Owner.Metadata().Busy);
+        Assert.False((await f.Store.LoadAsync(f.Owner.Id))!.Busy);
+        Assert.False(f.Owner.Compactor.Active);
+        Assert.False(f.Owner.Entry.HasProcessor);
+        Assert.Equal(0, slots.InUse);
+    }
+
     [Fact]
     public async Task ClosingAdmissionEndsAWaitingStandaloneCompact()
     {
@@ -1268,6 +1306,7 @@ public sealed partial class CompactLifecycleTests
         internal bool HoldSignal,
             FailHeldStage;
         internal bool HoldIngress;
+        internal bool FailNextBusyCommit;
         internal bool HoldApplyAfterSignal;
         internal readonly TaskCompletionSource ApplyReached = new(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1299,6 +1338,12 @@ public sealed partial class CompactLifecycleTests
                 "s",
                 authorityStageHook: stage =>
                 {
+                    if (FailNextBusyCommit && stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                        && JsonNode.Parse(File.ReadAllText(authorityPath))!["busy"]?.GetValue<bool>() == true)
+                    {
+                        FailNextBusyCommit = false;
+                        throw new IOException("busy commit publication fault");
+                    }
                     if (
                         HoldApplyAfterSignal
                         && stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
@@ -1485,8 +1530,8 @@ public sealed partial class CompactLifecycleTests
             Peer.ReleaseForeground();
             Peer.ReleasePlan();
             if (Owner.Compactor.Active)
-                await Owner.Compactor.StopAsync();
-            await Owner.DrainAsync();
+                await Owner.Compactor.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await Owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
             await AuthorizationManager.DisposeAsync();
             http.Dispose();
             StageRelease.Dispose();

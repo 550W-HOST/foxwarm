@@ -152,8 +152,29 @@ internal sealed partial class SessionCompactor
             active = run;
             CancelIdleSchedule();
             lifetimes[run] = run.Completion.Task;
-            PublishRuntime(run);
-            return run;
+            try
+            {
+                PublishRuntime(run);
+                return run;
+            }
+            catch
+            {
+                // No pipeline (or standalone processor/slot) has taken this run yet.
+                active = null;
+                try
+                {
+                    hosted.ClearCompactRuntime(run.OperationId);
+                }
+                catch (Exception cleanup)
+                {
+                    Report(cleanup);
+                }
+                run.Cancellation.Dispose();
+                run.PipelineDone.TrySetResult();
+                run.Completion.TrySetResult();
+                lifetimes.TryRemove(run, out _);
+                throw;
+            }
         }
     }
 
@@ -339,7 +360,16 @@ internal sealed partial class SessionCompactor
                     return new(false, false, false, true);
                 }
             }
-            claimed = await hosted.Registry.HostFor(hosted.Id).TryClaimBusyAsync();
+            try
+            {
+                claimed = await hosted.Registry.HostFor(hosted.Id).TryClaimBusyAsync();
+            }
+            catch (AuthorityCommittedException)
+            {
+                // Busy was durably claimed even though the post-commit step failed.
+                claimed = true;
+                throw;
+            }
             if (!claimed)
                 return new(false, false, false, true);
             run.PhaseLease = hosted.BeginCompactPhase();
