@@ -55,36 +55,79 @@ public sealed class PlacementRankTests
             Row("master/0001", ReplicaRoles.MasterHost),
             Row("operator/0001", ReplicaRoles.Operator),
         };
-        var hosted = Placement.Candidates("alpha", TenantProfiles.Hosted, null, live);
+        var hosted = Placement.Candidates("alpha", TenantProfile.Hosted, null, live);
         Assert.Equal(
             Placement.Rank("alpha", ["replica-a", "replica-c"]),
             hosted.Select(row => row.Name).ToArray()
         );
         Assert.Contains(hosted, row => row.Replica == "replica-a/0001");
         Assert.DoesNotContain(hosted, row => row.Replica == "replica-a/0002");
-        Assert.Equal(["master"], Placement.Candidates("ops", TenantProfiles.Operator, null, live).Select(row => row.Name));
-        Assert.Equal(["master"], Placement.Candidates("pinned", TenantProfiles.Hosted, ReplicaRoles.MasterHost, live).Select(row => row.Name));
+        Assert.Equal(["master"], Placement.Candidates("ops", TenantProfile.Operator, null, live).Select(row => row.Name));
+        // Q8: a pin to the master host doesn't make a hosted tenant its; nobody may serve it.
+        Assert.Empty(Placement.Candidates("pinned", TenantProfile.Hosted, ReplicaRoles.MasterHost, live));
         // The capacity filter narrows new placement only.
-        Assert.Equal(["replica-c"], Placement.Candidates("alpha", TenantProfiles.Hosted, null, live, row => row.Name == "replica-c").Select(row => row.Name));
+        Assert.Equal(["replica-c"], Placement.Candidates("alpha", TenantProfile.Hosted, null, live, row => row.Name == "replica-c").Select(row => row.Name));
     }
 
     [Theory]
-    [InlineData(ReplicaRoles.General, TenantProfiles.Hosted, null, true)]
-    [InlineData(ReplicaRoles.General, TenantProfiles.Operator, null, false)]
-    [InlineData(ReplicaRoles.General, TenantProfiles.Hosted, ReplicaRoles.MasterHost, false)]
-    [InlineData(ReplicaRoles.MasterHost, TenantProfiles.Operator, null, true)]
-    [InlineData(ReplicaRoles.MasterHost, TenantProfiles.Hosted, ReplicaRoles.MasterHost, true)]
-    [InlineData(ReplicaRoles.MasterHost, TenantProfiles.Hosted, null, false)]
-    [InlineData(ReplicaRoles.Operator, TenantProfiles.Hosted, null, false)]
-    [InlineData(ReplicaRoles.Operator, TenantProfiles.Operator, null, false)]
+    [InlineData(ReplicaRoles.General, "hosted", null, true)]
+    [InlineData(ReplicaRoles.General, "operator", null, false)]
+    [InlineData(ReplicaRoles.General, "hosted", ReplicaRoles.MasterHost, false)]
+    [InlineData(ReplicaRoles.MasterHost, "operator", null, true)]
+    [InlineData(ReplicaRoles.MasterHost, "hosted", ReplicaRoles.MasterHost, false)]
+    [InlineData(ReplicaRoles.MasterHost, "operator", ReplicaRoles.MasterHost, true)]
+    [InlineData(ReplicaRoles.MasterHost, "hosted", null, false)]
+    [InlineData(ReplicaRoles.Operator, "hosted", null, false)]
+    [InlineData(ReplicaRoles.Operator, "operator", null, false)]
     public void WhoMayServeWhat(string role, string profile, string? pinned, bool allowed) =>
-        Assert.Equal(allowed, ReplicaRoles.MayServe(role, profile, pinned));
+        Assert.Equal(allowed, ReplicaRoles.MayServe(role, TenantProfiles.Parse(profile), pinned));
 }
 
 [Trait("Backend", "postgres")]
 public sealed class PlacementAcquisitionTests
 {
     private const string Replica = "replica-a/0001";
+
+    [Fact]
+    public async Task AProfileEditWaitsForAnInFlightGrantAndAnAcquisitionAfterItSeesTheEdit()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        var tenant = await database.TenantIdAsync();
+        // A: an acquisition's row lock on the lease, held open.
+        await using var grant = new Npgsql.NpgsqlConnection(database.OwnerConnectionString);
+        await grant.OpenAsync();
+        await using var granting = await grant.BeginTransactionAsync();
+        await using (var locking = new Npgsql.NpgsqlCommand($"SELECT 1 FROM tenant_leases WHERE tenant_id = {tenant} FOR UPDATE", grant, granting))
+            await locking.ExecuteScalarAsync();
+        // B: the operator's edit, through any path, waits for A.
+        await using var edit = new Npgsql.NpgsqlConnection(database.OperatorConnectionString);
+        await edit.OpenAsync();
+        var editing = Task.Run(async () =>
+        {
+            await using var command = new Npgsql.NpgsqlCommand($"UPDATE tenants SET profile = 'operator' WHERE tenant_id = {tenant}", edit);
+            return await command.ExecuteNonQueryAsync();
+        });
+        await Task.Delay(500);
+        Assert.False(editing.IsCompleted, "the profile edit didn't wait for the grant");
+        await granting.CommitAsync();
+        Assert.Equal(1, await editing.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        // The other order: the edit's transaction holds the lease row. An acquisition that
+        // passes the unlocked preflight on the committed profile (operator) waits for the edit
+        // and is then refused under its new profile (hosted).
+        await using var second = await edit.BeginTransactionAsync();
+        await using (var command = new Npgsql.NpgsqlCommand($"UPDATE tenants SET profile = 'hosted' WHERE tenant_id = {tenant}", edit, second))
+            await command.ExecuteNonQueryAsync();
+        var app = database.OpenApp();
+        var acquisition = new TenantLease(app, PostgresServer.Tenant, 2, ReplicaRoles.MasterHost)
+            .TryAcquireAsync(Replica, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5), CancellationToken.None);
+        await Task.Delay(500);
+        Assert.False(acquisition.IsCompleted, "the acquisition didn't wait for the edit");
+        await second.CommitAsync();
+        await Assert.ThrowsAsync<TenantNotEligibleException>(() => acquisition.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0L, await database.ScalarAsync("SELECT epoch FROM tenant_leases WHERE tenant_id = $1", tenant));
+    }
 
     [Fact]
     public async Task AcquisitionEnforcesRoleAndProfileAndCarriesTheProfileInTheGrant()
@@ -108,9 +151,9 @@ public sealed class PlacementAcquisitionTests
         Assert.Equal(0L, await database.ScalarAsync("SELECT max(epoch) FROM tenant_leases"));
 
         var operatorGrant = (await Acquire("ops", ReplicaRoles.MasterHost))!;
-        Assert.Equal(TenantProfiles.Operator, operatorGrant.Profile);
-        Assert.Equal(TenantProfiles.Hosted, (await Acquire("pinned", ReplicaRoles.MasterHost))!.Profile);
-        Assert.Equal(TenantProfiles.Hosted, (await Acquire(PostgresServer.Tenant, ReplicaRoles.General))!.Profile);
+        Assert.Equal(TenantProfile.Operator, operatorGrant.Profile);
+        await Assert.ThrowsAsync<TenantNotEligibleException>(() => Acquire("pinned", ReplicaRoles.MasterHost));
+        Assert.Equal(TenantProfile.Hosted, (await Acquire(PostgresServer.Tenant, ReplicaRoles.General))!.Profile);
 
         // A tenant that isn't active is skipped (null), as in P1, not refused.
         await database.ScalarAsync("UPDATE tenants SET state = 'suspended' WHERE name = 'ops'");

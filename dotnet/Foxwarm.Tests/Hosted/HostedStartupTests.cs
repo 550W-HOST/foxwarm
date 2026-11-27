@@ -53,7 +53,8 @@ public sealed partial class HostedStartupTests
         Func<HostedRuntimeContext, CancellationToken, Task<IHostedRuntime>>? createRuntime = null,
         int readerVersion = AgentCatalog.ReaderVersion,
         IReadOnlyList<SchemaMigration>? migrations = null,
-        Action<int>? exit = null
+        Action<int>? exit = null,
+        string role = ReplicaRoles.General
     )
     {
         var port = FreePort();
@@ -68,7 +69,8 @@ public sealed partial class HostedStartupTests
                 new IPEndPoint(IPAddress.Loopback, port),
                 Timings,
                 DrainBound,
-                readerVersion
+                readerVersion,
+                role
             ),
             database,
             createRuntime ?? (async (context, token) =>

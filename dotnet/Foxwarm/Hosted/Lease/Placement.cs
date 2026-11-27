@@ -56,7 +56,7 @@ internal static class Placement
     /// </summary>
     internal static IReadOnlyList<ReplicaRow> Candidates(
         string slug,
-        string profile,
+        TenantProfile profile,
         string? pinnedRole,
         IEnumerable<ReplicaRow> live,
         Func<ReplicaRow, bool>? accepts = null

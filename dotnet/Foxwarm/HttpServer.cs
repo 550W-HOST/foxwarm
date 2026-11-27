@@ -45,7 +45,8 @@ internal sealed class HttpServer
         bool desktop = false,
         Socket? listenSocket = null,
         TimeSpan? shutdownTimeout = null,
-        Microsoft.AspNetCore.Hosting.Server.IServer? server = null
+        Microsoft.AspNetCore.Hosting.Server.IServer? server = null,
+        bool shutdownAvailable = true
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
@@ -407,6 +408,11 @@ internal sealed class HttpServer
             "/admin/shutdown",
             (IHostApplicationLifetime lifetime) =>
             {
+                if (!shutdownAvailable)
+                    return Results.Json(
+                        new JsonObject { ["error"] = "Shutting down isn't available in this deployment." },
+                        statusCode: StatusCodes.Status403Forbidden
+                    );
                 sessions.BeginShutdown();
                 lifetime.StopApplication();
                 return Results.Accepted();

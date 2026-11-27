@@ -36,7 +36,12 @@ internal sealed record ActivationContext(
 /// </summary>
 internal interface IGenerationRuntime : IAsyncDisposable
 {
-    /// <summary>Starts the runtime; it is published (admits work) only after this completes.</summary>
+    /// <summary>
+    /// Starts the runtime; it is published (admits work) only after this completes. It completes
+    /// only when the start itself has ended: <paramref name="token"/> may be passed on to the
+    /// start, but never cancels just the wait for it, so a fenced or shut down generation's
+    /// settlement covers its whole start (the supervisor bounds it).
+    /// </summary>
     Task StartAsync(CancellationToken token);
 
     /// <summary>

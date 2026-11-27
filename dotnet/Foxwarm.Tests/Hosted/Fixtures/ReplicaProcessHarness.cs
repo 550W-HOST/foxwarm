@@ -64,6 +64,38 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
             slug
         ) as string;
 
+    /// <summary>The tenant's lease row as stored, with the database's clock.</summary>
+    internal async Task<LeaseRow> LeaseRowAsync(string slug)
+    {
+        await using var connection = new Npgsql.NpgsqlConnection(Database.OwnerConnectionString);
+        await connection.OpenAsync();
+        await using var command = new Npgsql.NpgsqlCommand(
+            "SELECT l.state, l.owner_replica, l.epoch, l.acquired_at, l.expires_at, clock_timestamp()"
+                + " FROM tenant_leases l JOIN tenants t USING (tenant_id) WHERE t.name = $1",
+            connection
+        );
+        command.Parameters.Add(new Npgsql.NpgsqlParameter<string> { TypedValue = slug });
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return new(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.GetInt64(2),
+            reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+            reader.GetFieldValue<DateTimeOffset>(4),
+            reader.GetFieldValue<DateTimeOffset>(5)
+        );
+    }
+
+    internal sealed record LeaseRow(
+        string State,
+        string? Owner,
+        long Epoch,
+        DateTimeOffset? AcquiredAt,
+        DateTimeOffset ExpiresAt,
+        DateTimeOffset Now
+    );
+
     internal async Task<long> EpochAsync(string slug) =>
         (long)(await Database.ScalarAsync(
             "SELECT l.epoch FROM tenant_leases l JOIN tenants t USING (tenant_id) WHERE t.name = $1",

@@ -51,7 +51,8 @@ internal static class HostedEntry
                 deployment.PublicEndpoint,
                 LeaseTimings.Default,
                 DrainBound: TimeSpan.FromSeconds(8),
-                AgentCatalog.ReaderVersion
+                AgentCatalog.ReaderVersion,
+                bootstrap.Role
             ),
             database,
             (context, token) => CreateRuntimeAsync(context, bootstrap, deployment, token),
@@ -87,16 +88,20 @@ internal static class HostedEntry
                 bootstrap.AdvertiseAddress,
                 deployment.HealthEndpoint,
                 deployment.PublicEndpoint,
-                TenantPublicUrl(deployment),
+                deployment.TenantOrigin,
                 LeaseTimings.Default,
                 DrainBound: TimeSpan.FromSeconds(8),
                 AgentCatalog.ReaderVersion
-            ),
+            )
+            {
+                Role = bootstrap.Role,
+            },
             database,
             bootstrap.RequireDatabaseUrl(),
             (context, token) => CreateTenantRuntimeAsync(context, bootstrap, deployment, token),
             line => Console.Error.WriteLine(line),
-            exit: Environment.Exit
+            exit: Environment.Exit,
+            operatorDocumentsChanged: runtime => ((MainHostRuntime)runtime).OperatorDocumentsChanged()
         );
         var code = await replica.RunAsync(stop).ConfigureAwait(false);
         Console.Error.WriteLine($"[hosted] Replica {replica.Replica} exits with code {code}.");
@@ -105,15 +110,11 @@ internal static class HostedEntry
         return code;
     }
 
-    // A tenant runtime's public origin: the deployment URL with {slug}, or the front itself.
-    private static string TenantPublicUrl(DeploymentConfiguration deployment) =>
-        deployment.Root["url"]?.GetValue<string>() is { } url && url.Contains("{slug}", StringComparison.Ordinal)
-            ? url.TrimEnd('/')
-            : $"http://{{slug}}:{deployment.PublicEndpoint.Port}";
-
     /// <summary>
-    /// One tenant's runtime on a multi-tenant replica: its own scratch and Agents directories
-    /// under the replica's (<c>t/&lt;slug&gt;</c>), its blobs, and no listener of its own.
+    /// One tenant's runtime on a multi-tenant replica: the deployment configuration expanded for
+    /// the tenant (its <c>url</c>), its own scratch directory under the replica's, named by the
+    /// numeric tenant ID (<c>t/&lt;id&gt;</c>), its blobs, the profile its grant
+    /// checked, and no listener of its own.
     /// </summary>
     internal static async Task<IHostedRuntime> CreateTenantRuntimeAsync(
         Runtimes.TenantRuntimeContext context,
@@ -122,31 +123,66 @@ internal static class HostedEntry
         CancellationToken token = default
     )
     {
+        var grant = context.Activation.Grant;
         var slug = context.Activation.Generation.Tenant;
+        var directory = grant.TenantId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var tenant = bootstrap with
         {
             Tenant = slug,
-            ScratchRoot = Path.Combine(bootstrap.RequireScratchRoot(), "t", slug),
-            AgentsRoot = bootstrap.AgentsRoot is { } agents ? Path.Combine(agents, "t", slug) : null,
+            ScratchRoot = Path.Combine(bootstrap.RequireScratchRoot(), "t", directory),
         };
+        var configuration = deployment.ForTenant(slug);
         var storage = new PostgresStorageContext(context.Database, tenant.RequireScratchRoot());
+        await OpenTenantStorageAsync(storage, configuration, slug, token).ConfigureAwait(false);
+        return await BuildRuntimeAsync(storage, storage, tenant, configuration, null, token, context.Server, grant.Profile)
+            .ConfigureAwait(false);
+    }
+
+    // The tenant context's setup before the host exists. A failure releases the context; a
+    // release that fails too is reported with both, so the owner treats the stop as unconfirmed.
+    private static async Task OpenTenantStorageAsync(
+        PostgresStorageContext storage,
+        DeploymentConfiguration deployment,
+        string tenant,
+        CancellationToken token
+    ) =>
+        await SetUpOrReleaseAsync(
+                async () =>
+                {
+                    if (storage.Missing.Count > 0)
+                        throw new HostedStartupException(
+                            "This build has no PostgreSQL implementation of the "
+                                + string.Join(", ", storage.Missing)
+                                + " stores; hosted mode can't start."
+                        );
+                    await storage.OpenBlobsAsync(deployment.Blobs, tenant, token).ConfigureAwait(false);
+                },
+                storage.DisposeAsync
+            )
+            .ConfigureAwait(false);
+
+    /// <summary>
+    /// Runs <paramref name="setup"/>; when it fails, runs <paramref name="release"/> and rethrows.
+    /// A release that fails too is reported with both (<see cref="StartupCleanupFailedException"/>).
+    /// </summary>
+    internal static async Task SetUpOrReleaseAsync(Func<Task> setup, Func<ValueTask> release)
+    {
         try
         {
-            if (storage.Missing.Count > 0)
-                throw new HostedStartupException(
-                    "This build has no PostgreSQL implementation of the "
-                        + string.Join(", ", storage.Missing)
-                        + " stores; hosted mode can't start."
-                );
-            await storage.OpenBlobsAsync(deployment.Blobs, slug, token).ConfigureAwait(false);
+            await setup().ConfigureAwait(false);
         }
-        catch
+        catch (Exception error)
         {
-            await storage.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await release().ConfigureAwait(false);
+            }
+            catch (Exception cleanup)
+            {
+                throw new StartupCleanupFailedException(error, [cleanup]);
+            }
             throw;
         }
-        return await BuildRuntimeAsync(storage, storage, tenant, deployment, null, token, context.Server)
-            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -169,24 +205,16 @@ internal static class HostedEntry
     )
     {
         var storage = new PostgresStorageContext(context.Database, bootstrap.RequireScratchRoot());
-        try
-        {
-            if (storage.Missing.Count > 0)
-                throw new HostedStartupException(
-                    "This build has no PostgreSQL implementation of the "
-                        + string.Join(", ", storage.Missing)
-                        + " stores; hosted mode can't start."
-                );
-            await storage
-                .OpenBlobsAsync(deployment.Blobs, bootstrap.Tenant, token)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            await storage.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
-        return await BuildRuntimeAsync(storage, storage, bootstrap, deployment, context.PublicListener, token)
+        await OpenTenantStorageAsync(storage, deployment, bootstrap.Tenant, token).ConfigureAwait(false);
+        return await BuildRuntimeAsync(
+                storage,
+                storage,
+                bootstrap,
+                deployment,
+                context.PublicListener,
+                token,
+                profile: context.Grant.Profile
+            )
             .ConfigureAwait(false);
     }
 
@@ -203,14 +231,15 @@ internal static class HostedEntry
         DeploymentConfiguration deployment,
         System.Net.Sockets.Socket? publicListener = null,
         CancellationToken token = default,
-        Runtimes.TenantServer? server = null
+        Runtimes.TenantServer? server = null,
+        TenantProfile profile = TenantProfile.Hosted
     )
     {
         // The runtime owns the tenant context from here; a build that fails releases it. A
         // release that fails too is reported, so the owner treats the stop as unconfirmed.
         try
         {
-            return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, publicListener, server, token)
+            return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, publicListener, server, profile, token)
                 .ConfigureAwait(false);
         }
         catch (Exception error)
@@ -237,14 +266,15 @@ internal static class HostedEntry
         DeploymentConfiguration deployment,
         System.Net.Sockets.Socket? publicListener,
         Runtimes.TenantServer? server,
+        TenantProfile profile,
         CancellationToken token
     )
     {
         ModelConfiguration configuration;
         HostPaths paths;
         JournalRetentionOptions retention;
-        // The tenant's stored profile, fixed for this runtime: a change is a move to a new one.
-        var profile = await TenantProfileStore.ReadAsync(tenant.Database, token).ConfigureAwait(false);
+        // The profile the grant checked under the lease row lock, fixed for this runtime: a
+        // committed change retires it, and the next grant reads the new one.
         try
         {
             retention = JournalRetentionOptions.FromDeployment(deployment.Root["journal"]);
@@ -293,8 +323,10 @@ internal static class HostedEntry
             // The standby's public port, kept open through the takeover.
             ListenSocket = publicListener,
             ShutdownTimeout = HttpShutdownTimeout,
-            // A tenant of a multi-tenant replica: requests come from the replica's front.
+            // A tenant of a multi-tenant replica: requests come from the replica's front, and
+            // the tenant can't stop the replica's process.
             Server = server,
+            ShutdownAvailable = server is null,
         };
         // Without HTTP no host adopts it, so connections queued on it are refused now.
         if (!http.HttpEnabled)

@@ -724,6 +724,50 @@ public sealed class TenantActivationsTests
         stall.Set();
     }
 
+    // ---- Shutdown accounting (review 4b #2) ----
+
+    [Fact]
+    public async Task AShutdownWithAnAcquisitionInFlightIsNotCleanAndAGrantAcknowledgedLaterIsHandedBack()
+    {
+        await using var f = await CreateAsync(shutdownBound: TimeSpan.FromSeconds(1));
+        var tenant = await f.Database.TenantIdAsync();
+        // Another transaction holds the lease row, so the acquisition waits on its lock.
+        await using var holder = new Npgsql.NpgsqlConnection(f.Database.OwnerConnectionString);
+        await holder.OpenAsync();
+        await using var holding = await holder.BeginTransactionAsync();
+        await using (var locking = new Npgsql.NpgsqlCommand($"SELECT 1 FROM tenant_leases WHERE tenant_id = {tenant} FOR UPDATE", holder, holding))
+            await locking.ExecuteScalarAsync();
+        var activation = f.Activations.ActivateAsync(Tenant);
+        await Task.Delay(300);
+        Assert.False(await f.Activations.ShutdownAsync(), "a shutdown with an unresolved acquisition counted as clean");
+        // The acquisition commits after the shutdown's decision: its grant goes back at once.
+        await holding.CommitAsync();
+        await Assert.ThrowsAsync<TenantFencedException>(() => activation.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal("released", await f.LeaseStateAsync());
+        Assert.Equal(1L, await f.EpochAsync());
+        Assert.Equal(0, f.Builds);
+    }
+
+    [Fact]
+    public async Task AShutdownDuringABuildWhoseCleanupFailsIsNotClean()
+    {
+        await using var f = await CreateAsync(shutdownBound: TimeSpan.FromSeconds(5));
+        f.For(Tenant).FactoryGate = Fixture.Closed();
+        var activation = f.Activations.ActivateAsync(Tenant);
+        await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var shutdown = f.Activations.ShutdownAsync();
+        // The failed settlement's follow-up runs only after the shutdown decided: the decision
+        // can't rely on it to find the failed stop.
+        f.Activations.StopFollowUp = _ => shutdown.Wait(TimeSpan.FromSeconds(10));
+        await Task.Delay(100);
+        f.For(Tenant).FactoryGate.SetException(
+            new StartupCleanupFailedException(new IOException("build failed"), [new IOException("cleanup failed")])
+        );
+        await Assert.ThrowsAnyAsync<Exception>(() => activation);
+        Assert.False(await shutdown.WaitAsync(TimeSpan.FromSeconds(10)), "a failed build cleanup counted as a clean stop");
+        Assert.Equal("active", await f.LeaseStateAsync());
+    }
+
     // ---- Placement at acquisition (batch 4) ----
 
     [Fact]
@@ -737,8 +781,8 @@ public sealed class TenantActivationsTests
         await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator' WHERE name = '{Tenant}'");
         f.For(Tenant).FactoryGate.SetResult();
         var generation = await activation.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal(TenantProfiles.Hosted, generation.Grant.Profile);
-        Assert.Equal(TenantProfiles.Hosted, f.RuntimeOf(Tenant).Context.Grant.Profile);
+        Assert.Equal(TenantProfile.Hosted, generation.Grant.Profile);
+        Assert.Equal(TenantProfile.Hosted, f.RuntimeOf(Tenant).Context.Grant.Profile);
     }
 
     [Fact]

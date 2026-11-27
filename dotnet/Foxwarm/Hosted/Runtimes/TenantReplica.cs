@@ -13,7 +13,7 @@ namespace Foxwarm.Hosted.Runtimes;
 /// <summary>Settings of one multi-tenant replica process.</summary>
 /// <param name="PublicEndpoint">The front listener every tenant's requests arrive on.</param>
 /// <param name="PublicUrl">
-/// A tenant runtime's public origin; <c>{slug}</c> is replaced by the tenant's slug.
+/// A tenant runtime's public origin, by slug: the same expansion its configuration reads.
 /// </param>
 /// <param name="DrainBound">
 /// How long a fenced or overrunning stop may take after its grant's deadline before the process
@@ -24,7 +24,7 @@ internal sealed record TenantReplicaOptions(
     string? AdvertiseAddress,
     IPEndPoint? HealthEndpoint,
     IPEndPoint PublicEndpoint,
-    string PublicUrl,
+    Func<string, string> PublicUrl,
     LeaseTimings Timings,
     TimeSpan DrainBound,
     int ReaderVersion
@@ -112,6 +112,9 @@ internal sealed class TenantReplica
     internal int? FrontPort { get; private set; }
 
     internal int? HealthPort { get; private set; }
+
+    /// <summary>How many operator-document invalidations this replica has taken in.</summary>
+    internal long OperatorVersion => Interlocked.Read(ref operatorVersion);
 
     /// <summary>The activation coordinator, once running.</summary>
     internal TenantActivations? Activations => activations;
@@ -227,9 +230,15 @@ internal sealed class TenantReplica
     // front, and the operator-document version it was built at.
     private async Task<IGenerationRuntime> BuildAsync(ActivationContext context, CancellationToken token)
     {
+        // A grandfathered name that isn't a slug never names anything this replica builds.
+        if (!TenantSlugs.IsValid(context.Generation.Tenant))
+        {
+            log($"[hosted] Tenant {context.Grant.TenantId} has a stored name that isn't a slug ({TenantSlugs.Rule}); it isn't activated.");
+            throw new HostedStartupException($"Tenant {context.Grant.TenantId}'s name isn't a slug.");
+        }
         var database = new TenantDb(app, context.Grant.TenantId, context.Grant.Epoch, maxInFlight: options.MaxInFlight);
         context.Fence.Attach(database);
-        var server = new TenantServer(options.PublicUrl.Replace("{slug}", context.Generation.Tenant, StringComparison.Ordinal));
+        var server = new TenantServer(options.PublicUrl(context.Generation.Tenant));
         var built = Interlocked.Read(ref operatorVersion);
         var runtime = await factory(new(context, database, server), token).ConfigureAwait(false);
         var tenant = new TenantRuntime(this, runtime, server, built);
@@ -250,7 +259,7 @@ internal sealed class TenantReplica
             server.AddServerHeader = false;
         });
         var front = builder.Build();
-        front.Run(context => DispatchAsync(context, coordinator, hostnames));
+        front.Run(context => DispatchAsync(context, coordinator, hostnames, log));
         await front.StartAsync().ConfigureAwait(false);
         FrontPort = new Uri(front.Urls.First()).Port;
         return front;
@@ -258,7 +267,12 @@ internal sealed class TenantReplica
 
     // Host → tenant → its published generation. A tenant this replica can't serve gets a bare
     // 503 with no tenant data; forwarding to its owner replaces that.
-    private static async Task DispatchAsync(HttpContext context, TenantActivations coordinator, HostnameDirectory hostnames)
+    private static async Task DispatchAsync(
+        HttpContext context,
+        TenantActivations coordinator,
+        HostnameDirectory hostnames,
+        Action<string> log
+    )
     {
         var aborted = context.RequestAborted;
         string? tenant;
@@ -282,13 +296,11 @@ internal sealed class TenantReplica
         {
             (generation, admission) = await coordinator.AdmitAsync(tenant, ActivationCause.Request, aborted).ConfigureAwait(false);
         }
-        catch (Exception error) when (
-            error is TenantHeldElsewhereException or TenantNotEligibleException or TenantFencedException
-                or LeaseRefusedException or ObjectDisposedException or Npgsql.NpgsqlException
-                or HostedStartupException or StartupCleanupFailedException
-            || error is OperationCanceledException && !aborted.IsCancellationRequested
-        )
+        catch (Exception error) when (!aborted.IsCancellationRequested)
         {
+            // Acquisition, build and start fail alike for the client: the cause stays in the log.
+            if (error is not (TenantHeldElsewhereException or ObjectDisposedException))
+                log($"[hosted] Tenant {tenant} couldn't be activated: {error.GetType().Name}: {error.Message}");
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             return;
         }
@@ -359,12 +371,16 @@ internal sealed class TenantReplica
                     if (notification.Channel == "foxwarm_operator")
                         _ = Task.Run(InvalidateOperatorDocuments);
                     else if (notification.Channel == "foxwarm_tenants")
+                    {
                         hostnames.Invalidate();
+                        CheckPlacement();
+                    }
                 };
                 await using (var listen = new Npgsql.NpgsqlCommand("LISTEN foxwarm_operator; LISTEN foxwarm_tenants", connection))
                     await listen.ExecuteNonQueryAsync(token).ConfigureAwait(false);
                 hostnames.Invalidate();
                 InvalidateOperatorDocuments();
+                CheckPlacement();
                 delay = TimeSpan.FromMilliseconds(200);
                 while (true)
                     await connection.WaitAsync(token).ConfigureAwait(false);
@@ -389,6 +405,56 @@ internal sealed class TenantReplica
         }
     }
 
+    // Coalesced: one check runs, and one more after it when signalled meanwhile.
+    private int placementChecks;
+
+    private void CheckPlacement()
+    {
+        if (Interlocked.Increment(ref placementChecks) == 1)
+            _ = Task.Run(CheckPlacementLoopAsync);
+    }
+
+    private async Task CheckPlacementLoopAsync()
+    {
+        do
+        {
+            Interlocked.Exchange(ref placementChecks, 1);
+            try
+            {
+                if (activations is { } coordinator)
+                    await RetireMisplacedAsync(coordinator).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                log("[hosted] The placement check failed: " + error.Message);
+            }
+        } while (Interlocked.Decrement(ref placementChecks) > 0);
+    }
+
+    // A published tenant whose committed profile or pin no longer matches its grant (or that
+    // this role may no longer serve) is retired and released, then acquired again under the
+    // new eligibility. The lease row lock orders such an edit after any grant in flight.
+    private async Task RetireMisplacedAsync(TenantActivations coordinator)
+    {
+        var published = coordinator.Published();
+        if (published.Count == 0)
+            return;
+        await using var connection = await app.OpenAsync(CancellationToken.None).ConfigureAwait(false);
+        await using var command = new Npgsql.NpgsqlCommand(
+            "SELECT tenant_id, profile, pinned_role FROM tenants WHERE tenant_id = ANY($1)",
+            connection
+        );
+        command.Parameters.Add(new Npgsql.NpgsqlParameter<int[]> { TypedValue = [.. published.Select(item => item.Grant.TenantId).Distinct()] });
+        Dictionary<int, (TenantProfile Profile, string? Pinned)> placement = [];
+        await using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
+            while (await reader.ReadAsync().ConfigureAwait(false))
+                placement[reader.GetInt32(0)] = (TenantProfiles.Parse(reader.GetString(1)), reader.IsDBNull(2) ? null : reader.GetString(2));
+        foreach (var generation in published)
+            if (placement.TryGetValue(generation.Grant.TenantId, out var now)
+                && (now.Profile != generation.Grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
+                _ = coordinator.RetireForPlacementAsync(generation.Id, $"Tenant {generation.Id.Tenant}'s placement changed");
+    }
+
     private void InvalidateOperatorDocuments()
     {
         TenantRuntime[] runtimes;
@@ -407,35 +473,63 @@ internal sealed class TenantReplica
             live.Remove(runtime);
     }
 
-    // A built tenant runtime as the activation coordinator drives it.
+    // A built tenant runtime as the activation coordinator drives it. Operator-document changes
+    // reach it only once started, one callback at a time; a change during its start is applied
+    // when the start ends, and retirement waits for a running callback and stops further ones.
     private sealed class TenantRuntime(TenantReplica owner, IHostedRuntime runtime, TenantServer server, long builtAt)
         : IGenerationRuntime
     {
         private readonly object state = new();
         private bool started;
+        private bool retired;
+        private bool pending;
         private long appliedAt = builtAt;
+        private Task callbacks = Task.CompletedTask;
 
         internal TenantServer Server => server;
 
         internal IHostedRuntime Inner => runtime;
 
+        // The host's start takes no token: the whole start is awaited, never only the wait.
         public async Task StartAsync(CancellationToken token)
         {
-            await runtime.StartAsync().WaitAsync(token).ConfigureAwait(false);
+            await runtime.StartAsync().ConfigureAwait(false);
             lock (state)
+            {
                 started = true;
-            // A change after the build read the documents, notified before the start ended.
-            if (Interlocked.Read(ref owner.operatorVersion) != appliedAt)
-                OperatorDocumentsChanged();
+                // A change notified after the build read the documents, or during the start.
+                pending |= Interlocked.Read(ref owner.operatorVersion) != appliedAt;
+            }
+            Deliver();
         }
 
         internal void OperatorDocumentsChanged()
         {
             lock (state)
+                pending = true;
+            Deliver();
+        }
+
+        // Runs the callback for the latest version once, after any running one; nothing once
+        // retired, and nothing before the start ended.
+        private void Deliver()
+        {
+            lock (state)
             {
-                appliedAt = Interlocked.Read(ref owner.operatorVersion);
-                if (!started)
+                if (!started || retired || !pending)
                     return;
+                callbacks = callbacks.ContinueWith(_ => Apply(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            }
+        }
+
+        private void Apply()
+        {
+            lock (state)
+            {
+                if (retired || !pending)
+                    return;
+                pending = false;
+                appliedAt = Interlocked.Read(ref owner.operatorVersion);
             }
             try
             {
@@ -459,14 +553,15 @@ internal sealed class TenantReplica
 
         public async ValueTask DisposeAsync()
         {
-            try
+            Task running;
+            lock (state)
             {
-                await runtime.DisposeAsync().ConfigureAwait(false);
+                retired = true;
+                running = callbacks;
             }
-            finally
-            {
-                owner.Retired(this);
-            }
+            owner.Retired(this);
+            await running.ConfigureAwait(false);
+            await runtime.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -490,30 +585,109 @@ internal sealed class TenantReplica
 
 /// <summary>
 /// The front's hostname lookup: <c>Host</c>, lowercased and without the port, to a tenant slug
-/// through <c>tenant_hostnames</c>. Cached briefly, and cleared on <c>NOTIFY foxwarm_tenants</c>.
-/// It routes only; suspension and deletion are the lease row's.
+/// through <c>tenant_hostnames</c>. Cached briefly and cleared on <c>NOTIFY foxwarm_tenants</c>;
+/// a clear starts a new generation, and a lookup that began in an older one is neither cached
+/// nor trusted: it is repeated. Expired entries are evicted, and entries for unknown hosts are
+/// bounded. It routes only; suspension and deletion are the lease row's.
 /// </summary>
-internal sealed class HostnameDirectory(PgDatabase database)
+internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock = null)
 {
-    private static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(30);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string? Tenant, long Expires)> cache = new(StringComparer.Ordinal);
+    internal static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(30);
 
-    internal void Invalidate() => cache.Clear();
+    /// <summary>At most this many unknown hosts are remembered; more are looked up each time.</summary>
+    internal const int MaxNegative = 1024;
+
+    private readonly Func<long> clock = clock ?? (() => Environment.TickCount64);
+    private readonly object gate = new();
+    private readonly Dictionary<string, (string? Tenant, long Expires)> cache = new(StringComparer.Ordinal);
+    private long generation;
+    private int negative;
+
+    /// <summary>Test hook: runs after a lookup's query, before its result is used.</summary>
+    internal Func<Task>? AfterQuery { get; set; }
+
+    internal int Count
+    {
+        get
+        {
+            lock (gate)
+                return cache.Count;
+        }
+    }
+
+    internal void Invalidate()
+    {
+        lock (gate)
+        {
+            generation++;
+            cache.Clear();
+            negative = 0;
+        }
+    }
 
     internal async Task<string?> ResolveAsync(string host, CancellationToken token)
     {
         var key = host.ToLowerInvariant();
-        var now = Environment.TickCount64;
-        if (cache.TryGetValue(key, out var cached) && cached.Expires > now)
-            return cached.Tenant;
+        while (true)
+        {
+            long started;
+            lock (gate)
+            {
+                if (cache.TryGetValue(key, out var cached))
+                {
+                    if (cached.Expires > clock())
+                        return cached.Tenant;
+                    Remove(key, cached);
+                }
+                started = generation;
+            }
+            var tenant = await QueryAsync(key, token).ConfigureAwait(false);
+            if (AfterQuery is { } hook)
+                await hook().ConfigureAwait(false);
+            lock (gate)
+            {
+                // Invalidated meanwhile: this answer may predate the change.
+                if (generation != started)
+                    continue;
+                Evict();
+                if (tenant is not null || negative < MaxNegative)
+                {
+                    if (cache.TryGetValue(key, out var previous))
+                        Remove(key, previous);
+                    cache[key] = (tenant, clock() + (long)Lifetime.TotalMilliseconds);
+                    if (tenant is null)
+                        negative++;
+                }
+                return tenant;
+            }
+        }
+    }
+
+    private void Remove(string key, (string? Tenant, long Expires) entry)
+    {
+        cache.Remove(key);
+        if (entry.Tenant is null)
+            negative--;
+    }
+
+    // Drops expired entries once the cache has grown; caller holds the lock.
+    private void Evict()
+    {
+        if (cache.Count < 64)
+            return;
+        var now = clock();
+        foreach (var (key, entry) in cache.Where(pair => pair.Value.Expires <= now).ToArray())
+            Remove(key, entry);
+    }
+
+    private async Task<string?> QueryAsync(string key, CancellationToken token)
+    {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new Npgsql.NpgsqlCommand(
             "SELECT t.name FROM tenant_hostnames h JOIN tenants t USING (tenant_id) WHERE h.hostname = $1",
             connection
         );
         command.Parameters.Add(new Npgsql.NpgsqlParameter<string> { TypedValue = key });
-        var tenant = await command.ExecuteScalarAsync(token).ConfigureAwait(false) as string;
-        cache[key] = (tenant, now + (long)Lifetime.TotalMilliseconds);
-        return tenant;
+        return await command.ExecuteScalarAsync(token).ConfigureAwait(false) as string;
     }
 }

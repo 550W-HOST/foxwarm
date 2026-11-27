@@ -74,7 +74,8 @@ internal sealed record HostedReplicaOptions(
     IPEndPoint? PublicEndpoint,
     LeaseTimings Timings,
     TimeSpan DrainBound,
-    int ReaderVersion
+    int ReaderVersion,
+    string Role = ReplicaRoles.General
 );
 
 /// <summary>
@@ -171,7 +172,7 @@ internal sealed class HostedReplica
         {
             return HostedExit.Stopped;
         }
-        var lease = new TenantLease(database, options.Tenant, options.ReaderVersion);
+        var lease = new TenantLease(database, options.Tenant, options.ReaderVersion, options.Role);
         var registry = new ReplicaRegistry(database);
         await using var healthEndpoint = options.HealthEndpoint is { } healthAddress
             ? new HealthEndpoint(healthAddress, () => Health)
@@ -183,13 +184,14 @@ internal sealed class HostedReplica
         {
             await lease.TenantIdAsync(stop).ConfigureAwait(false);
             await registry
-                .RegisterAsync(Replica, options.AdvertiseAddress, SchemaMigrator.BinaryLevel, options.ReaderVersion, stop)
+                .RegisterAsync(Replica, options.AdvertiseAddress, SchemaMigrator.BinaryLevel, options.ReaderVersion, stop, options.Role)
                 .ConfigureAwait(false);
             heartbeat = HeartbeatAsync(registry, heartbeatStop.Token);
             return await RunRegisteredAsync(lease, registry, stop).ConfigureAwait(false);
         }
-        catch (LeaseRefusedException error)
+        catch (Exception error) when (error is LeaseRefusedException or TenantNotEligibleException)
         {
+            // This replica can't serve its one tenant (reader level, state, or its role).
             log("[hosted] " + error.Message);
             return HostedExit.Configuration;
         }

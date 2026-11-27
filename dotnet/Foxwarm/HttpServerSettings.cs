@@ -36,6 +36,12 @@ internal sealed record HttpServerSettings(
     /// </summary>
     internal Microsoft.AspNetCore.Hosting.Server.IServer? Server { get; init; }
 
+    /// <summary>
+    /// Whether <c>POST /admin/shutdown</c> may stop the process. A tenant of a replica that
+    /// hosts several tenants doesn't own the process, and the route refuses.
+    /// </summary>
+    internal bool ShutdownAvailable { get; init; } = true;
+
     internal static bool Enabled(ModelConfiguration? configuration) =>
         Feature(configuration, "enableWebUI");
 

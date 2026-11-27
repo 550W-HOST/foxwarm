@@ -49,7 +49,8 @@ public sealed class FenceSupervisorTests
     public async Task TheExitWaitsForNoLoggerAndCountsFromTheHardStop()
     {
         var exited = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var blocked = new ManualResetEventSlim();
+        // Not disposed: the supervisor may log again after the test, and a set event lets it.
+        var blocked = new ManualResetEventSlim();
         var supervisor = new FenceSupervisor(
             LeaseTimings.Default,
             Bound,

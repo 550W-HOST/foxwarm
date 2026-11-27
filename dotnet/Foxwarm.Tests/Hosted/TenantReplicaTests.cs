@@ -21,19 +21,29 @@ public sealed class TenantReplicaTests
     private static readonly LeaseTimings Fast = new(TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(400), TimeSpan.FromMilliseconds(1200));
     private static readonly TimeSpan Drain = TimeSpan.FromSeconds(1);
 
-    private sealed class Runtime(WebApplication app, string tenant, long epoch) : IHostedRuntime
+    private sealed class Runtime(WebApplication app, string tenant, long epoch, Fixture owner) : IHostedRuntime
     {
         internal string Tenant => tenant;
         internal long Epoch => epoch;
         internal int OperatorChanges;
         internal readonly TaskCompletionSource Disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task StartAsync() => app.StartAsync();
+        public async Task StartAsync()
+        {
+            if (owner.StartGate is { } gate)
+            {
+                owner.Event($"{tenant}:start-waits");
+                await gate.Task;
+            }
+            await app.StartAsync();
+            owner.Event($"{tenant}:start-end");
+        }
 
         public Task Stopped => app.WaitForShutdownAsync();
 
         public async ValueTask DisposeAsync()
         {
+            owner.Event($"{tenant}:dispose");
             await app.StopAsync();
             await app.DisposeAsync();
             Disposed.TrySetResult();
@@ -43,12 +53,40 @@ public sealed class TenantReplicaTests
     private sealed class Fixture : IAsyncDisposable
     {
         internal required HostedTestDatabase Database { get; init; }
-        internal required TenantReplica Replica { get; init; }
+        internal TenantReplica Replica { get; set; } = null!;
         internal required CancellationTokenSource Stop { get; init; }
-        internal required Task<int> Run { get; init; }
+        internal Task<int> Run { get; set; } = null!;
         internal readonly List<Runtime> Runtimes = [];
+        internal readonly List<string> Events = [];
+        internal readonly List<string> Log = [];
         internal int Exits;
+        internal int Builds;
         internal HttpClient Client = null!;
+
+        /// <summary>When set, every runtime's start waits for it.</summary>
+        internal TaskCompletionSource? StartGate;
+
+        /// <summary>When set, the factory throws it.</summary>
+        internal Exception? FactoryError;
+
+        /// <summary>When set, the operator-document callback waits for it.</summary>
+        internal TaskCompletionSource? CallbackGate;
+        internal TaskCompletionSource CallbackEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The operator documents' text as the last callback read it.</summary>
+        internal string? ObservedDocuments;
+
+        internal void Event(string what)
+        {
+            lock (Events)
+                Events.Add(what);
+        }
+
+        internal string[] EventList()
+        {
+            lock (Events)
+                return [.. Events];
+        }
 
         internal async Task<HttpResponseMessage> GetAsync(string tenant, string path = "/whoami")
         {
@@ -78,6 +116,8 @@ public sealed class TenantReplicaTests
 
         public async ValueTask DisposeAsync()
         {
+            StartGate?.TrySetResult();
+            CallbackGate?.TrySetResult();
             Stop.Cancel();
             try
             {
@@ -89,30 +129,32 @@ public sealed class TenantReplicaTests
         }
     }
 
+    private static async Task AddTenantAsync(HostedTestDatabase database, string tenant)
+    {
+        if (tenant != PostgresServer.Tenant)
+            await database.ExecuteOwnerAsync(
+                $"INSERT INTO tenants (name) VALUES ('{tenant}');"
+                    + $" INSERT INTO tenant_leases (tenant_id) SELECT tenant_id FROM tenants WHERE name = '{tenant}'"
+            );
+        await database.ExecuteOwnerAsync(
+            $"INSERT INTO tenant_hostnames (hostname, tenant_id, kind) SELECT '{tenant.ToLowerInvariant().Replace('_', '-')}.test', tenant_id, 'primary' FROM tenants WHERE name = '{tenant}'"
+        );
+    }
+
     private static async Task<Fixture> StartAsync(params string[] tenants)
     {
         var server = await PostgresServer.SharedAsync();
         var database = await server.CreateDatabaseAsync();
         foreach (var tenant in tenants)
-        {
-            if (tenant != PostgresServer.Tenant)
-                await database.ExecuteOwnerAsync(
-                    $"INSERT INTO tenants (name) VALUES ('{tenant}');"
-                        + $" INSERT INTO tenant_leases (tenant_id) SELECT tenant_id FROM tenants WHERE name = '{tenant}'"
-                );
-            await database.ExecuteOwnerAsync(
-                $"INSERT INTO tenant_hostnames (hostname, tenant_id, kind) SELECT '{tenant}.test', tenant_id, 'primary' FROM tenants WHERE name = '{tenant}'"
-            );
-        }
-        Fixture? fixture = null;
-        var stop = new CancellationTokenSource();
-        var replica = new TenantReplica(
+            await AddTenantAsync(database, tenant);
+        var fixture = new Fixture { Database = database, Stop = new CancellationTokenSource() };
+        fixture.Replica = new TenantReplica(
             new TenantReplicaOptions(
                 "replica-a",
                 null,
                 null,
                 new IPEndPoint(IPAddress.Loopback, 0),
-                "http://{slug}.test",
+                slug => $"http://{slug}.test",
                 Fast,
                 Drain,
                 ReaderVersion: 2
@@ -124,6 +166,9 @@ public sealed class TenantReplicaTests
             database.AppConnectionString,
             async (context, token) =>
             {
+                Interlocked.Increment(ref fixture.Builds);
+                if (fixture.FactoryError is { } error)
+                    throw error;
                 var builder = WebApplication.CreateSlimBuilder();
                 builder.Logging.ClearProviders();
                 builder.Services.AddSingleton<IServer>(context.Server);
@@ -131,26 +176,36 @@ public sealed class TenantReplicaTests
                 var app = builder.Build();
                 var grant = context.Activation.Grant;
                 app.MapGet("/whoami", () => $"{grant.Tenant}:{grant.Epoch}");
-                var runtime = new Runtime(app, grant.Tenant, grant.Epoch);
-                lock (fixture!.Runtimes)
+                context.Activation.Fence.Lost.Register(() => fixture.Event($"{grant.Tenant}:fenced"));
+                var runtime = new Runtime(app, grant.Tenant, grant.Epoch, fixture);
+                lock (fixture.Runtimes)
                     fixture.Runtimes.Add(runtime);
                 await Task.Yield();
                 return runtime;
             },
-            _ => { },
-            code => Interlocked.Increment(ref fixture!.Exits),
-            operatorDocumentsChanged: runtime => Interlocked.Increment(ref ((Runtime)runtime).OperatorChanges)
+            line =>
+            {
+                lock (fixture.Log)
+                    fixture.Log.Add(line);
+            },
+            code => Interlocked.Increment(ref fixture.Exits),
+            operatorDocumentsChanged: runtime =>
+            {
+                var target = (Runtime)runtime;
+                fixture.Event($"{target.Tenant}:callback{(target.Disposed.Task.IsCompleted ? "-after-dispose" : "")}");
+                fixture.CallbackEntered.TrySetResult();
+                fixture.CallbackGate?.Task.Wait();
+                fixture.ObservedDocuments = database
+                    .ScalarAsync("SELECT coalesce(string_agg(text, ',' ORDER BY name), '') FROM operator_documents")
+                    .GetAwaiter()
+                    .GetResult() as string;
+                Interlocked.Increment(ref target.OperatorChanges);
+            }
         );
-        fixture = new Fixture
-        {
-            Database = database,
-            Replica = replica,
-            Stop = stop,
-            Run = replica.RunAsync(stop.Token),
-        };
+        fixture.Run = fixture.Replica.RunAsync(fixture.Stop.Token);
         fixture.Client = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(20) };
-        await Task.WhenAny(replica.Serving, fixture.Run).WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.True(replica.Serving.IsCompleted, "the replica didn't start serving: " + (fixture.Run.IsCompleted ? fixture.Run.Result.ToString() : "?"));
+        await Task.WhenAny(fixture.Replica.Serving, fixture.Run).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(fixture.Replica.Serving.IsCompleted, "the replica didn't start serving: " + (fixture.Run.IsCompleted ? fixture.Run.Result.ToString() : "?"));
         return fixture;
     }
 
@@ -162,6 +217,23 @@ public sealed class TenantReplicaTests
             Assert.True(watch.Elapsed < (limit ?? TimeSpan.FromSeconds(10)), what);
             await Task.Delay(20);
         }
+    }
+
+    private static async Task UntilAsync(Func<Task<bool>> condition, string what, TimeSpan? limit = null)
+    {
+        var watch = Stopwatch.StartNew();
+        while (!await condition())
+        {
+            Assert.True(watch.Elapsed < (limit ?? TimeSpan.FromSeconds(10)), what);
+            await Task.Delay(20);
+        }
+    }
+
+    private static int IndexOf(string[] events, string what)
+    {
+        var index = Array.IndexOf(events, what);
+        Assert.True(index >= 0, $"no {what} in [{string.Join(", ", events)}]");
+        return index;
     }
 
     [Fact]
@@ -211,28 +283,198 @@ public sealed class TenantReplicaTests
         Assert.Equal(0, f.Exits);
     }
 
+    // Review 4b #1: a fence during the start doesn't detach the start from the settlement.
     [Fact]
-    public async Task AnOperatorDocumentChangeAndEveryResubscriptionReachEveryLiveRuntime()
+    public async Task AFenceDuringAStartDisposesTheRuntimeOnlyAfterTheStartEnded()
+    {
+        await using var f = await StartAsync("alpha");
+        f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = f.GetAsync("alpha");
+        await UntilAsync(() => f.EventList().Contains("alpha:start-waits"), "the start began");
+        await f.Database.TakeLeaseAsync(await f.Database.TenantIdAsync("alpha"), "replica-b/0002", TimeSpan.FromMinutes(1));
+        await UntilAsync(() => f.EventList().Contains("alpha:fenced"), "the generation was fenced");
+        await Task.Delay(300);
+        Assert.DoesNotContain("alpha:dispose", f.EventList());
+        f.StartGate.SetResult();
+        using (var response = await request)
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        await UntilAsync(() => f.EventList().Contains("alpha:dispose"), "the runtime was disposed");
+        var events = f.EventList();
+        Assert.True(IndexOf(events, "alpha:start-end") < IndexOf(events, "alpha:dispose"), string.Join(", ", events));
+        Assert.Equal("replica-b/0002", await f.OwnerAsync("alpha"));
+        await Task.Delay(Drain);
+        Assert.Equal(0, f.Exits);
+    }
+
+    // Review 4b #1, at shutdown: the stop waits for the start rather than only for its wait.
+    [Fact]
+    public async Task ASigtermDuringAStartDisposesTheRuntimeOnlyAfterTheStartEnded()
+    {
+        await using var f = await StartAsync("alpha");
+        f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = f.GetAsync("alpha");
+        await UntilAsync(() => f.EventList().Contains("alpha:start-waits"), "the start began");
+        f.Stop.Cancel();
+        await Task.Delay(300);
+        Assert.DoesNotContain("alpha:dispose", f.EventList());
+        f.StartGate.SetResult();
+        Assert.Equal(HostedExit.Stopped, await f.Run.WaitAsync(TimeSpan.FromSeconds(30)));
+        var events = f.EventList();
+        Assert.True(IndexOf(events, "alpha:start-end") < IndexOf(events, "alpha:dispose"), string.Join(", ", events));
+        Assert.Null(await f.OwnerAsync("alpha"));
+        try
+        {
+            (await request).Dispose();
+        }
+        catch (HttpRequestException) { }
+    }
+
+    // Review 4b #4: a committed placement change retires the held generation and releases it,
+    // so the next request acquires under the new eligibility (refused on a general replica).
+    [Fact]
+    public async Task AProfileChangeRetiresTheTenantAndTheNextRequestIsRefusedUnderTheNewProfile()
+    {
+        await using var f = await StartAsync("alpha", "beta");
+        await f.WhoAmIAsync("alpha");
+        var beta = await f.WhoAmIAsync("beta");
+        var alpha = f.Live("alpha").Single();
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator' WHERE name = 'alpha'");
+        await alpha.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await UntilAsync(async () => await f.OwnerAsync("alpha") is null, "alpha's lease was released");
+        using (var refused = await f.GetAsync("alpha"))
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+        Assert.Equal(beta, await f.WhoAmIAsync("beta"));
+        Assert.Equal(0, f.Exits);
+    }
+
+    // Review 4b #8: a stored name that isn't a slug is refused before anything is built from it.
+    [Fact]
+    public async Task ATenantWhoseStoredNameIsntASlugIsRefusedBeforeItsRuntimeIsBuilt()
+    {
+        await using var f = await StartAsync("alpha");
+        // Grandfathered: the DNS-label check doesn't hold for names from before it existed.
+        await f.Database.ExecuteOwnerAsync(
+            "ALTER TABLE tenants DROP CONSTRAINT tenants_slug_dns_label;"
+                + " INSERT INTO tenants (name) VALUES ('Legacy_Name');"
+                + " INSERT INTO tenant_leases (tenant_id) SELECT tenant_id FROM tenants WHERE name = 'Legacy_Name';"
+                + " INSERT INTO tenant_hostnames (hostname, tenant_id, kind) SELECT 'legacy.test', tenant_id, 'primary' FROM tenants WHERE name = 'Legacy_Name'"
+        );
+        var id = await f.Database.TenantIdAsync("Legacy_Name");
+        var builds = f.Builds;
+        using (var refused = await f.GetAsync("legacy"))
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+        Assert.Equal(builds, f.Builds);
+        lock (f.Log)
+            Assert.Contains(f.Log, line => line.Contains($"Tenant {id} ") && line.Contains("isn't a slug"));
+        Assert.StartsWith("alpha:", await f.WhoAmIAsync("alpha"));
+    }
+
+    // Review 4b #11: any activation failure is a bare 503, its cause logged.
+    [Fact]
+    public async Task AnyActivationFailureIsABare503AndItsCauseIsLogged()
+    {
+        await using var f = await StartAsync("alpha");
+        f.FactoryError = new IOException("the blob store answered 500");
+        using (var refused = await f.GetAsync("alpha"))
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+            Assert.Equal("", await refused.Content.ReadAsStringAsync());
+        }
+        lock (f.Log)
+            Assert.Contains(f.Log, line => line.Contains("alpha") && line.Contains("the blob store answered 500"));
+        f.FactoryError = null;
+        await UntilAsync(async () => (await f.GetAsync("alpha")).StatusCode == HttpStatusCode.OK, "alpha serves after the backoff", TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task AnOperatorDocumentChangeReachesEveryLiveRuntime()
     {
         await using var f = await StartAsync("alpha", "beta");
         await f.WhoAmIAsync("alpha");
         await f.WhoAmIAsync("beta");
         var runtimes = f.Runtimes.ToArray();
         var before = runtimes.Select(runtime => Volatile.Read(ref runtime.OperatorChanges)).ToArray();
-        // A change notifies every replica through foxwarm_operator.
-        await f.Database.ExecuteOwnerAsync("INSERT INTO operator_documents (scope, name, text) VALUES ('global', 'ceiling', '{}')");
+        await f.Database.ExecuteOwnerAsync("INSERT INTO operator_documents (scope, name, text) VALUES ('global', 'ceiling', 'changed')");
         await UntilAsync(
             () => runtimes.Select((runtime, index) => Volatile.Read(ref runtime.OperatorChanges) > before[index]).All(changed => changed),
             "the change reached both runtimes"
         );
-        // A lost listener connection: a change made while it was down notified nobody, so the
-        // resubscription invalidates on its own.
-        var counted = runtimes.Select(runtime => Volatile.Read(ref runtime.OperatorChanges)).ToArray();
-        await f.Database.ScalarAsync("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE application_name = 'foxwarm-listen'");
-        await UntilAsync(
-            () => runtimes.Select((runtime, index) => Volatile.Read(ref runtime.OperatorChanges) > counted[index]).All(changed => changed),
-            "the resubscription reached both runtimes"
+        Assert.Equal("changed", f.ObservedDocuments);
+    }
+
+    // Review 4b #9: a change during the start is applied once the start ended.
+    [Fact]
+    public async Task AnOperatorDocumentChangeDuringAStartIsAppliedWhenTheStartEnds()
+    {
+        await using var f = await StartAsync("alpha");
+        f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = f.GetAsync("alpha");
+        await UntilAsync(() => f.EventList().Contains("alpha:start-waits"), "the start began");
+        var version = f.Replica.OperatorVersion;
+        await f.Database.ExecuteOwnerAsync("INSERT INTO operator_documents (scope, name, text) VALUES ('global', 'ceiling', 'during-start')");
+        await UntilAsync(() => f.Replica.OperatorVersion > version, "the replica took the change in");
+        await Task.Delay(100);
+        Assert.DoesNotContain("alpha:callback", f.EventList());
+        f.StartGate.SetResult();
+        using (var response = await request)
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var runtime = f.Live("alpha").Single();
+        await UntilAsync(() => Volatile.Read(ref runtime.OperatorChanges) == 1, "the change was applied after the start");
+        Assert.Equal("during-start", f.ObservedDocuments);
+    }
+
+    // Review 4b #9: retirement waits for a running callback and no callback follows it.
+    [Fact]
+    public async Task RetirementWaitsForARunningCallbackAndNoneRunsAfterIt()
+    {
+        await using var f = await StartAsync("alpha");
+        await f.WhoAmIAsync("alpha");
+        var runtime = f.Live("alpha").Single();
+        // Settled: any catch-up callback from the start has run.
+        await Task.Delay(300);
+        var before = Volatile.Read(ref runtime.OperatorChanges);
+        f.CallbackEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.CallbackGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await f.Database.ExecuteOwnerAsync("INSERT INTO operator_documents (scope, name, text) VALUES ('global', 'ceiling', 'one')");
+        await f.CallbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await f.Database.TakeLeaseAsync(await f.Database.TenantIdAsync("alpha"), "replica-b/0002", TimeSpan.FromMinutes(1));
+        await UntilAsync(() => f.EventList().Contains("alpha:fenced"), "the generation was fenced");
+        await Task.Delay(200);
+        Assert.False(runtime.Disposed.Task.IsCompleted, "disposed while its callback ran");
+        f.CallbackGate.SetResult();
+        await runtime.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await f.Database.ExecuteOwnerAsync("UPDATE operator_documents SET text = 'two'");
+        await Task.Delay(500);
+        Assert.DoesNotContain(f.EventList(), item => item.EndsWith("-after-dispose", StringComparison.Ordinal));
+        Assert.Equal(before + 1, Volatile.Read(ref runtime.OperatorChanges));
+    }
+
+    // Review 4b #13: a change committed while the listener is disconnected reaches the runtime
+    // through the resubscription, which nothing else signals.
+    [Fact]
+    public async Task AChangeCommittedWhileTheListenerIsDisconnectedReachesTheRuntimeAfterReconnect()
+    {
+        await using var f = await StartAsync("alpha");
+        await f.WhoAmIAsync("alpha");
+        var runtime = f.Live("alpha").Single();
+        const string Listeners = "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'foxwarm-listen' AND datname = current_database()";
+        await UntilAsync(async () => (long)(await f.Database.ScalarAsync(Listeners))! == 1, "the listener subscribed");
+        // Quiet: nothing queued from the start.
+        var changes = Volatile.Read(ref runtime.OperatorChanges);
+        await Task.Delay(300);
+        Assert.Equal(changes, Volatile.Read(ref runtime.OperatorChanges));
+        var version = f.Replica.OperatorVersion;
+        // One transaction ends this database's listener backend and commits the change, before
+        // the listener's reconnect backoff has passed.
+        var ended = await f.Database.ScalarAsync(
+            "WITH ended AS (SELECT pg_terminate_backend(pid) AS done FROM pg_stat_activity"
+                + " WHERE application_name = 'foxwarm-listen' AND datname = current_database()),"
+                + " written AS (INSERT INTO operator_documents (scope, name, text) VALUES ('global', 'ceiling', 'while-away') RETURNING 1)"
+                + " SELECT (SELECT count(*) FROM ended WHERE done) + 0 * (SELECT count(*) FROM written)"
         );
+        Assert.Equal(1L, ended);
+        await UntilAsync(async () => (long)(await f.Database.ScalarAsync(Listeners))! == 1 && f.Replica.OperatorVersion > version, "the listener resubscribed");
+        await UntilAsync(() => f.ObservedDocuments == "while-away", "the runtime saw the change made while the listener was away");
         Assert.StartsWith("alpha:", await f.WhoAmIAsync("alpha"));
     }
 

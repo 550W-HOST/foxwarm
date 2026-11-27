@@ -1,3 +1,4 @@
+using Foxwarm.Hosted.Lease;
 using System.Net.Sockets;
 using System.Net;
 using System.Net.Http.Json;
@@ -204,19 +205,24 @@ public sealed partial class HostedStartupTests
         Assert.False(Directory.Exists(files.Agents));
     }
 
-    // The runtime's capabilities come from the tenant's stored profile when it is built: the
-    // operator profile is file mode's set over the tenant database, and a profile change takes
-    // effect only in the next runtime.
+    // The runtime's capabilities come from the profile its grant read under the lease row: the
+    // operator profile is file mode's set over the tenant database, on a master-host replica
+    // only, and a profile change takes effect only in the next runtime.
     [Fact]
-    public async Task TheRuntimeCapabilitiesComeFromTheTenantsStoredProfile()
+    public async Task TheRuntimeCapabilitiesComeFromTheProfileTheGrantRead()
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
         await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator'");
         using var temp = new TempDirectory();
         var files = HostedFiles.Create(temp.Path);
+        // A general replica may not take an operator-profile tenant: its one tenant can't be
+        // served, a configuration exit, and no runtime is built.
+        var general = StartHosted(database.OpenApp(), files);
+        Assert.Equal(HostedExit.Configuration, await general.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+        Assert.Empty(general.Runtimes);
         IStorageContext? storage = null;
-        var replica = StartHosted(database.OpenApp(), files, built => storage = built);
+        var replica = StartHosted(database.OpenApp(), files, built => storage = built, role: ReplicaRoles.MasterHost);
         await WaitUntilAsync(
             () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
             TimeSpan.FromSeconds(60),
@@ -250,7 +256,8 @@ public sealed partial class HostedStartupTests
         replica.Stop.Cancel();
         Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
 
-        // The next runtime of the tenant is built with the stored profile.
+        // The next runtime of the tenant is built with the profile its grant read: on a general
+        // replica, since the master host takes only operator-profile tenants.
         var next = StartHosted(database.OpenApp(), files);
         await WaitUntilAsync(
             () => next.Inner.Health.Role == ReplicaRole.Owner && next.Inner.Health.RuntimeStarted,

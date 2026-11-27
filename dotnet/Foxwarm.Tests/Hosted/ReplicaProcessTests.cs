@@ -9,27 +9,54 @@ namespace Foxwarm.Tests.Hosted;
 
 // Multi-tenant replicas as real processes with production tenant runtimes. A tenant runtime
 // answers an unauthenticated API request with 401; the front's own refusals are bare 503/404.
+// Ordering claims are checked on the database's clock: the successor's acquisition against the
+// old lease's expiry.
 [Trait("Backend", "postgres")]
 [Collection("Process console")]
 public sealed class ReplicaProcessTests(ITestOutputHelper output)
 {
     private static readonly TimeSpan Ttl = LeaseTimings.Default.Ttl;
 
-    private static async Task<HttpStatusCode> StatusAsync(ReplicaProcessHarness.Replica replica, string tenant)
+    // A bounded request; gap probes use the short bound, a first activation a cold build's.
+    private static async Task<HttpStatusCode?> ProbeAsync(ReplicaProcessHarness.Replica replica, string tenant, int seconds = 1)
     {
-        using var response = await replica.GetAsync(tenant);
-        return response.StatusCode;
-    }
-
-    private static async Task UntilAsync(Func<Task<bool>> condition, TimeSpan limit, string what)
-    {
-        var watch = Stopwatch.StartNew();
-        while (!await condition())
+        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+        try
         {
-            Assert.True(watch.Elapsed < limit, what);
-            await Task.Delay(200);
+            using var response = await replica.GetAsync(tenant, token: bound.Token);
+            return response.StatusCode;
+        }
+        catch (Exception error) when (error is OperationCanceledException or HttpRequestException)
+        {
+            return null;
         }
     }
+
+    // Probes the replica for the tenant without pause until it serves; returns when, and how
+    // many probes it refused before.
+    private static async Task<(TimeSpan Served, int Refused)> ProbeUntilServedAsync(
+        ReplicaProcessHarness.Replica replica,
+        string tenant,
+        Stopwatch since,
+        TimeSpan limit
+    )
+    {
+        var refused = 0;
+        while (since.Elapsed < limit)
+        {
+            if (await ProbeAsync(replica, tenant) == HttpStatusCode.Unauthorized)
+                return (since.Elapsed, refused);
+            refused++;
+            await Task.Delay(100);
+        }
+        throw new Xunit.Sdk.XunitException($"{replica.Name} didn't serve {tenant} within {limit}");
+    }
+
+    private static Task<HttpStatusCode?> ServeAsync(ReplicaProcessHarness.Replica replica, string tenant) =>
+        ProbeAsync(replica, tenant, 60);
+
+    private static async Task<int> TenantsAsync(ReplicaProcessHarness.Replica replica) =>
+        (int)(await replica.StatusAsync())["tenants"]!;
 
     [Fact]
     public async Task ReplicasServeTheirTenantsAndAKilledReplicasTenantMovesOnlyAfterExpiry()
@@ -42,30 +69,27 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         try
         {
             // First requests activate each tenant on the replica they arrive at.
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(a, "alpha"));
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(b, "beta"));
-            var alphaOwner = await harness.OwnerAsync("alpha");
-            Assert.Equal("replica-a", ReplicaRegistry.LogicalName(alphaOwner!));
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "alpha"));
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "beta"));
+            Assert.Equal("replica-a", ReplicaRegistry.LogicalName((await harness.OwnerAsync("alpha"))!));
             Assert.Equal("replica-b", ReplicaRegistry.LogicalName((await harness.OwnerAsync("beta"))!));
-            Assert.Equal(1, (int)(await a.StatusAsync())["tenants"]!);
+            Assert.Equal(1, await TenantsAsync(a));
             // Held by the other replica: refused (forwarding comes later), the owner unchanged.
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, await StatusAsync(b, "alpha"));
-            var epoch = await harness.EpochAsync("alpha");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, await ServeAsync(b, "alpha"));
 
             var killed = Stopwatch.StartNew();
             a.Kill();
             await a.ExitAsync(TimeSpan.FromSeconds(10));
-            // Until the grant expires nobody else takes the tenant.
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, await StatusAsync(b, "alpha"));
-            await UntilAsync(
-                async () => await StatusAsync(b, "alpha") == HttpStatusCode.Unauthorized,
-                Ttl + TimeSpan.FromSeconds(20),
-                "replica B serves alpha after the expiry"
-            );
-            output.WriteLine($"takeover after {killed.Elapsed}");
-            Assert.True(killed.Elapsed > Ttl - LeaseTimings.Default.RenewInterval * 2, $"taken over after {killed.Elapsed}");
-            Assert.Equal(epoch + 1, await harness.EpochAsync("alpha"));
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(b, "beta"));
+            var before = await harness.LeaseRowAsync("alpha");
+            // B is asked throughout; it may serve alpha only once the old grant expired.
+            var (served, refused) = await ProbeUntilServedAsync(b, "alpha", killed, Ttl + TimeSpan.FromSeconds(30));
+            var after = await harness.LeaseRowAsync("alpha");
+            output.WriteLine($"served after {served}, {refused} refusals; old expiry {before.ExpiresAt:O}, acquired {after.AcquiredAt:O}");
+            Assert.True(refused > 0, "B wasn't asked during the gap");
+            Assert.Equal(before.Epoch + 1, after.Epoch);
+            Assert.True(after.AcquiredAt >= before.ExpiresAt, $"acquired at {after.AcquiredAt:O}, before the expiry {before.ExpiresAt:O}");
+            Assert.Equal("replica-b", ReplicaRegistry.LogicalName(after.Owner!));
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "beta"));
         }
         finally
         {
@@ -84,15 +108,20 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         var b = await harness.StartAsync("replica-b");
         try
         {
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(a, "alpha"));
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(a, "beta"));
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "alpha"));
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "beta"));
+            Assert.Equal(2, await TenantsAsync(a));
             var stopped = Stopwatch.StartNew();
             a.Terminate();
             Assert.Equal(HostedExit.Stopped, await a.ExitAsync(TimeSpan.FromSeconds(30)));
-            Assert.Null(await harness.OwnerAsync("alpha"));
-            Assert.Null(await harness.OwnerAsync("beta"));
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(b, "alpha"));
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(b, "beta"));
+            foreach (var tenant in new[] { "alpha", "beta" })
+            {
+                var row = await harness.LeaseRowAsync(tenant);
+                Assert.Equal("released", row.State);
+                Assert.True(row.ExpiresAt <= row.Now);
+            }
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "alpha"));
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "beta"));
             Assert.True(stopped.Elapsed < Ttl / 2, $"took over after {stopped.Elapsed}");
         }
         finally
@@ -110,43 +139,43 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         var b = await harness.StartAsync("replica-b");
         try
         {
-            Assert.Equal(HttpStatusCode.Unauthorized, await StatusAsync(a, "alpha"));
-            var epoch = await harness.EpochAsync("alpha");
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "alpha"));
+            Assert.Equal(1, await TenantsAsync(a));
             var partitioned = Stopwatch.StartNew();
             a.Proxy.Partition();
-            // The owner stops serving at its fence deadline, before the TTL. A request after the
-            // fence may wait on a new activation that can't reach the database, so each probe is
-            // bounded and the measure is the last response A served.
-            var lastServed = TimeSpan.Zero;
-            while (partitioned.Elapsed < Ttl + TimeSpan.FromSeconds(5) && !a.Exited)
+            var before = await harness.LeaseRowAsync("alpha");
+            // When the old grant expires, on this test's clock (the database clock's offset).
+            var expiry = partitioned.Elapsed + (before.ExpiresAt - before.Now);
+
+            // B is asked from the start of the partition, concurrently with the watch on A.
+            var successor = ProbeUntilServedAsync(b, "alpha", partitioned, Ttl + TimeSpan.FromSeconds(30));
+
+            // A: its published tenant count (or its fenced exit) drops before the expiry.
+            TimeSpan? retired = null;
+            while (partitioned.Elapsed < expiry)
             {
-                using var probe = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-                try
+                if (a.Exited || await TenantsAsync(a) == 0)
                 {
-                    using var response = await a.GetAsync("alpha", token: probe.Token);
-                    if (response.StatusCode == HttpStatusCode.Unauthorized)
-                        lastServed = partitioned.Elapsed;
-                    else
-                        break;
+                    retired = partitioned.Elapsed;
+                    break;
                 }
-                catch (Exception error) when (error is OperationCanceledException or HttpRequestException) { }
                 await Task.Delay(100);
             }
-            output.WriteLine($"A last served alpha after {lastServed}");
-            Assert.True(lastServed > TimeSpan.Zero, "A served alpha during the partition");
-            Assert.True(
-                lastServed < LeaseTimings.Default.FenceAfter + TimeSpan.FromSeconds(1),
-                $"A served until {lastServed}"
-            );
-            await UntilAsync(
-                async () => await StatusAsync(b, "alpha") == HttpStatusCode.Unauthorized,
-                Ttl + TimeSpan.FromSeconds(20),
-                "replica B serves alpha after the expiry"
-            );
-            output.WriteLine($"B took over after {partitioned.Elapsed}");
-            Assert.True(partitioned.Elapsed > Ttl - LeaseTimings.Default.RenewInterval * 2, $"taken over after {partitioned.Elapsed}");
-            Assert.Equal(epoch + 1, await harness.EpochAsync("alpha"));
-            // A fenced replica either exited (an unconfirmed stop) or keeps running with no grant.
+            output.WriteLine($"A retired alpha at {retired}; the grant expires at {expiry}");
+            Assert.True(retired is not null, "A still published alpha at the expiry");
+            // And A refuses alpha from then on, across the expiry.
+            while (partitioned.Elapsed < expiry + TimeSpan.FromSeconds(2) && !a.Exited)
+            {
+                Assert.NotEqual(HttpStatusCode.Unauthorized, await ProbeAsync(a, "alpha"));
+                await Task.Delay(100);
+            }
+
+            var (served, refused) = await successor;
+            var after = await harness.LeaseRowAsync("alpha");
+            output.WriteLine($"B served after {served}, {refused} refusals; old expiry {before.ExpiresAt:O}, acquired {after.AcquiredAt:O}");
+            Assert.True(refused > 0, "B wasn't asked during the gap");
+            Assert.Equal(before.Epoch + 1, after.Epoch);
+            Assert.True(after.AcquiredAt >= before.ExpiresAt, $"acquired at {after.AcquiredAt:O}, before the expiry {before.ExpiresAt:O}");
             if (a.Exited)
                 Assert.Equal(HostedExit.Fenced, await a.ExitAsync(TimeSpan.FromSeconds(5)));
         }

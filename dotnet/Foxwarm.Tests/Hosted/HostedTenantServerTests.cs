@@ -50,6 +50,30 @@ public sealed class HostedTenantServerTests
         Assert.NotEqual(HttpStatusCode.RequestEntityTooLarge, uploaded.StatusCode);
     }
 
+    // Review 4b #3: a tenant can't stop the replica's process; the single-tenant runtime still can.
+    [Fact]
+    public async Task ShutdownIsRefusedBehindTheFrontAndTheTenantKeepsServing()
+    {
+        await using var harness = await HostedRuntimeHarness.CreateAsync();
+        await using var front = await TenantFront.StartAsync();
+        await using var alpha = await harness.StartAsync("alpha", front);
+        await using var beta = await harness.StartAsync("beta", front);
+        var refused = await alpha.Client.PostAsync("admin/shutdown", null);
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal(
+            "Shutting down isn't available in this deployment.",
+            JsonNode.Parse(await refused.Content.ReadAsStringAsync())!["error"]!.GetValue<string>()
+        );
+        await Task.Delay(300);
+        Assert.False(alpha.Host.Stopped.IsCompleted, "the tenant runtime stopped");
+        Assert.Equal(HttpStatusCode.OK, (await alpha.Client.GetAsync("api/sessions")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await beta.Client.GetAsync("api/sessions")).StatusCode);
+
+        await using var single = await harness.StartAsync("single");
+        Assert.Equal(HttpStatusCode.Accepted, (await single.Client.PostAsync("admin/shutdown", null)).StatusCode);
+        await single.Host.Stopped.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
     [Fact]
     public async Task TheWebUiSocketUpgradesThroughTheFrontAndTenantHostsHaveNoLogs()
     {

@@ -42,14 +42,18 @@ internal sealed record LeaseGrant(int TenantId, string Tenant, string Replica, l
     /// The tenant's capability profile (<c>hosted</c> or <c>operator</c>) read by the acquiring
     /// transaction, so the runtime is built for the profile the acquisition checked.
     /// </summary>
-    internal string Profile { get; init; } = TenantProfiles.Hosted;
+    internal TenantProfile Profile { get; init; } = TenantProfile.Hosted;
 }
 
-/// <summary>A tenant's capability profile, as <c>tenants.profile</c> stores it.</summary>
-internal static class TenantProfiles
+/// <summary>The slug rule of tenant names (migration 0003's DNS label check).</summary>
+internal static partial class TenantSlugs
 {
-    internal const string Hosted = "hosted";
-    internal const string Operator = "operator";
+    internal const string Rule = "a DNS label: lowercase letters, digits and inner hyphens, at most 63 characters";
+
+    internal static bool IsValid(string name) => Pattern().IsMatch(name);
+
+    [System.Text.RegularExpressions.GeneratedRegex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\z")]
+    private static partial System.Text.RegularExpressions.Regex Pattern();
 }
 
 /// <summary>A replica's placement role, as <c>replicas.role</c> stores it.</summary>
@@ -65,14 +69,14 @@ internal static class ReplicaRoles
 
     /// <summary>
     /// Whether a replica of <paramref name="role"/> may take a tenant with this profile and pin
-    /// (plan §3.3): the master host takes only the operator tenant (or a tenant pinned to it),
-    /// a general replica only unpinned hosted tenants, and the operator surface none.
+    /// (plan §3.3, Q8): the master host takes only operator-profile tenants (a pin alone isn't
+    /// enough), a general replica only unpinned hosted tenants, and the operator surface none.
     /// </summary>
-    internal static bool MayServe(string role, string profile, string? pinnedRole) =>
+    internal static bool MayServe(string role, TenantProfile profile, string? pinnedRole) =>
         role switch
         {
-            MasterHost => profile == TenantProfiles.Operator || pinnedRole == MasterHost,
-            General => profile == TenantProfiles.Hosted && pinnedRole is null,
+            MasterHost => profile == TenantProfile.Operator,
+            General => profile == TenantProfile.Hosted && pinnedRole is null,
             _ => false,
         };
 }
@@ -245,7 +249,7 @@ internal sealed class TenantLease
     // binary, servable by this replica's role, and its lease is released, expired or this
     // replica's; null otherwise. Throws when the tenant refuses this binary or this role; both
     // checks run again under the row lock.
-    private async Task<string?> EligibleAsync(
+    private async Task<TenantProfile?> EligibleAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         string replica,
@@ -272,11 +276,11 @@ internal sealed class TenantLease
             throw new LeaseRefusedException(
                 $"Tenant {Tenant} requires a Foxwarm Main that reads installation level {required}; this binary reads level {ReaderVersion}. Upgrade Main instead of downgrading."
             );
-        var profile = reader.GetString(3);
+        var profile = TenantProfiles.Parse(reader.GetString(3));
         var pinned = reader.IsDBNull(4) ? null : reader.GetString(4);
         if (!ReplicaRoles.MayServe(Role, profile, pinned))
             throw new TenantNotEligibleException(
-                $"Tenant {Tenant} (profile {profile}{(pinned is null ? "" : ", pinned to " + pinned)}) isn't served by a {Role} replica."
+                $"Tenant {Tenant} (profile {TenantProfiles.Name(profile)}{(pinned is null ? "" : ", pinned to " + pinned)}) isn't served by a {Role} replica."
             );
         if (state != "active")
             return null;
@@ -716,7 +720,7 @@ internal sealed class TenantLease
                     await listener.WaitAsync(timings.RenewInterval, token).ConfigureAwait(false);
                 }
                 catch (Exception error)
-                    when (error is not OperationCanceledException and not LeaseRefusedException)
+                    when (error is not (OperationCanceledException or LeaseRefusedException or TenantNotEligibleException))
                 {
                     onError?.Invoke(error);
                     if (listener is not null)

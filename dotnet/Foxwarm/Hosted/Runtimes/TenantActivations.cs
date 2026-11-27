@@ -263,6 +263,60 @@ internal sealed class TenantActivations : IAsyncDisposable
     }
 
     /// <summary>
+    /// Retires <paramref name="id"/>, published, because its tenant's placement changed (its
+    /// profile or pin no longer matches the grant): latches its gate, retires it while still
+    /// owner, and releases the grant once the stop is confirmed, so the next activation acquires
+    /// under the new eligibility. Demand meanwhile waits for the release. A stop that overruns
+    /// the drain bound loses the grant instead. False when <paramref name="id"/> isn't published.
+    /// </summary>
+    internal async Task<bool> RetireForPlacementAsync(GenerationId id, string reason)
+    {
+        Slot slot;
+        TenantGeneration generation;
+        TaskCompletionSource<IdleReleaseOutcome> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (gate)
+        {
+            if (disposed || !slots.TryGetValue(id.Tenant, out slot!) || slot.Current?.Id != id || slot.Releasing is not null)
+                return false;
+            generation = slot.Current;
+            generation.Gate.Latch(AdmissionLatch.Stop);
+            slot.Current = null;
+            slot.Retiring = generation;
+            slot.Releasing = done.Task;
+        }
+        var outcome = IdleReleaseOutcome.Aborted;
+        try
+        {
+            var stopped = generation.RetireAsync();
+            if (await Task.WhenAny(stopped, Task.Delay(supervisor.DrainBound, CancellationToken.None)).ConfigureAwait(false) != stopped)
+            {
+                renewer.Lose(generation.Handle, $"{reason}; its runtime didn't stop within the drain bound.");
+                await generation.Supervision.ConfigureAwait(false);
+                return true;
+            }
+            if (!(await stopped.ConfigureAwait(false)).Confirmed)
+                return true;
+            GrantHandle? held = null;
+            lock (gate)
+                if (slot.Grant == generation.Handle && generation.Handle.IsCurrent(clock()))
+                {
+                    held = slot.Grant;
+                    slot.Grant = null;
+                }
+            if (held is not null)
+                await ReleaseAsync(slot.Lease, held).ConfigureAwait(false);
+            outcome = IdleReleaseOutcome.Released;
+            return true;
+        }
+        finally
+        {
+            lock (gate)
+                slot.Releasing = null;
+            done.TrySetResult(outcome);
+        }
+    }
+
+    /// <summary>
     /// Releases an idle tenant (plan §2.3): latches the gate when nothing is admitted and the
     /// runtime is idle, stops its producers, settles in-flight deliveries, computes the next
     /// due time, disposes the runtime (whose final saves still hold the lease), then writes the
@@ -359,6 +413,12 @@ internal sealed class TenantActivations : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Test hook: runs first in the follow-up of every settled generation (scheduled after its
+    /// settlement), so a test can order a decision before it.
+    /// </summary>
+    internal Action<TenantGeneration>? StopFollowUp { get; set; }
+
     private Slot SlotOf(string tenant)
     {
         if (!slots.TryGetValue(tenant, out var slot))
@@ -388,6 +448,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         generation.Stopped.ContinueWith(
             task =>
             {
+                StopFollowUp?.Invoke(generation);
                 if (task.Result.Confirmed)
                 {
                     lock (gate)
@@ -449,15 +510,39 @@ internal sealed class TenantActivations : IAsyncDisposable
             if (held is null)
             {
                 // No live grant here: the only acquisition. A grant this replica holds is reused.
-                var acquired =
-                    await slot.Lease.TryAcquireAsync(replica, timings.Ttl, timings.RenewInterval, stopping.Token)
-                        .ConfigureAwait(false)
-                    ?? throw new TenantHeldElsewhereException(slot.Lease.Tenant);
+                // Shutdown doesn't cancel it: a cancelled commit leaves its outcome unknown. Its
+                // own lock and statement timeouts bound it.
+                LeaseGrant? acquired;
+                try
+                {
+                    acquired = await slot.Lease
+                        .TryAcquireAsync(replica, timings.Ttl, timings.RenewInterval, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception error) when (error is not (TenantNotEligibleException or LeaseRefusedException))
+                {
+                    // The commit may have taken effect: this replica may hold the lease until it expires.
+                    MarkUncertain(slot);
+                    throw;
+                }
+                if (acquired is null)
+                    throw new TenantHeldElsewhereException(slot.Lease.Tenant);
                 held = renewer.Track(acquired);
                 held.OnLoss(OnGrantLost);
+                bool late;
                 lock (gate)
-                    if (held.IsCurrent(clock()))
+                {
+                    late = disposed;
+                    if (!late && held.IsCurrent(clock()))
                         slot.Grant = held;
+                }
+                if (late)
+                {
+                    // Acknowledged after shutdown began: handed back at once, within a bound.
+                    if (!await ReleaseAsync(slot.Lease, held, timings.RenewInterval).ConfigureAwait(false))
+                        MarkUncertain(slot);
+                    throw new TenantFencedException($"Tenant {slot.Lease.Tenant} was acquired during shutdown and handed back.");
+                }
             }
             generation = Register(slot, held);
             var id = generation.Id;
@@ -537,8 +622,9 @@ internal sealed class TenantActivations : IAsyncDisposable
                     if (generation is not null && slot.Building == generation)
                     {
                         slot.Building = null;
-                        // Until its settlement is known, a new activation waits for it.
-                        if (!generation.Stopped.IsCompleted)
+                        // Until its settlement is known, a new activation waits for it; a failed
+                        // stop stays, so no later decision can miss it.
+                        if (!generation.Stopped.IsCompleted || !generation.Stopped.Result.Confirmed)
                             slot.Retiring = generation;
                     }
                 }
@@ -633,12 +719,20 @@ internal sealed class TenantActivations : IAsyncDisposable
         );
         if (remaining > TimeSpan.Zero)
             await Task.WhenAny(all, Task.Delay(remaining)).ConfigureAwait(false);
-        var confirmed = true;
+        // Clean only when every snapshotted activation ended (no acquisition left unresolved),
+        // every generation known then or now recorded a confirmed stop, and no acquisition's
+        // outcome is unknown.
+        var confirmed = activations.All(task => task.IsCompleted);
         lock (gate)
-            foreach (var slot in slots.Values)
-                foreach (var generation in new[] { slot.Retiring, slot.Building }.OfType<TenantGeneration>())
-                    if (!generation.Stopped.IsCompletedSuccessfully || !generation.Stopped.Result.Confirmed)
-                        confirmed = false;
+        {
+            var known = generations.Select(item => item.Generation)
+                .Concat(slots.Values.SelectMany(slot => new[] { slot.Retiring, slot.Building }).OfType<TenantGeneration>());
+            foreach (var generation in known)
+                if (!generation.Stopped.IsCompletedSuccessfully || !generation.Stopped.Result.Confirmed)
+                    confirmed = false;
+            if (slots.Values.Any(slot => slot.UncertainUntil > clock()))
+                confirmed = false;
+        }
         if (!confirmed)
             foreach (var (_, generation) in generations)
                 if (!generation.Stopped.IsCompleted)
@@ -676,14 +770,28 @@ internal sealed class TenantActivations : IAsyncDisposable
             await ReleaseAsync(slot.Lease, held).ConfigureAwait(false);
     }
 
-    private async Task ReleaseAsync(TenantLease lease, GrantHandle handle)
+    // True when the release was written; a failed one leaves the lease to expire.
+    private async Task<bool> ReleaseAsync(TenantLease lease, GrantHandle handle, TimeSpan? bound = null)
     {
         renewer.Untrack(handle);
+        using var timeout = bound is { } limit ? new CancellationTokenSource(limit) : null;
         try
         {
-            await lease.ReleaseAsync(handle.Grant, CancellationToken.None).ConfigureAwait(false);
+            await lease.ReleaseAsync(handle.Grant, timeout?.Token ?? CancellationToken.None).ConfigureAwait(false);
+            return true;
         }
-        catch (Exception error) when (error is Npgsql.NpgsqlException or TimeoutException) { }
+        catch (Exception error) when (error is Npgsql.NpgsqlException or TimeoutException or OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    // An acquisition whose outcome is unknown: this replica may hold the lease for up to a TTL.
+    private void MarkUncertain(Slot slot)
+    {
+        var until = clock() + (long)(timings.Ttl.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+        lock (gate)
+            slot.UncertainUntil = Math.Max(slot.UncertainUntil, until);
     }
 
     public async ValueTask DisposeAsync() => await ShutdownAsync().ConfigureAwait(false);
@@ -699,6 +807,9 @@ internal sealed class TenantActivations : IAsyncDisposable
         // an unconfirmed one stays, and the tenant is unavailable here until the process exits.
         internal TenantGeneration? Retiring { get; set; }
         internal GrantHandle? Grant { get; set; }
+        // Until this clock value, an acquisition's outcome is unknown (its commit may have
+        // taken effect); a shutdown before then isn't clean.
+        internal long UncertainUntil { get; set; }
         internal long Generations { get; set; }
         internal Task<IdleReleaseOutcome>? Releasing { get; set; }
         // Work that arrived while an idle release ran; it aborts the release.

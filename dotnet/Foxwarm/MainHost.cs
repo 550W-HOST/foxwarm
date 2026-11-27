@@ -222,7 +222,8 @@ internal sealed class MainHost : IAsyncDisposable
                 http.Desktop,
                 http.ListenSocket,
                 http.ShutdownTimeout,
-                http.Server
+                http.Server,
+                http.ShutdownAvailable
             );
             if (server.WebUiEnabled)
             {

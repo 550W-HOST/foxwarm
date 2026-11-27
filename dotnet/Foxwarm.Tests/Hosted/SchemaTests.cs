@@ -218,6 +218,23 @@ public sealed class HostedBootstrapTests
     }
 
     [Fact]
+    public void TheReplicaRoleIsGeneralUnlessTheDeploymentSetsOne()
+    {
+        static string Role(string? value) =>
+            Foxwarm.Hosted.HostedBootstrap.FromEnvironment(
+                value is null ? new System.Collections.Hashtable() : new System.Collections.Hashtable { ["FOXWARM_ROLE"] = value }
+            ).Role;
+        Assert.Equal("general", Role(null));
+        Assert.Equal("general", Role(""));
+        Assert.Equal("master-host", Role("master-host"));
+        Assert.Equal("operator", Role("operator"));
+        Assert.Contains(
+            "FOXWARM_ROLE must be general, master-host or operator.",
+            Assert.Throws<Foxwarm.Hosted.HostedBootstrapException>(() => Role("Master-Host")).Message
+        );
+    }
+
+    [Fact]
     public void PostgresUrlsBecomeKeywordConnectionStrings()
     {
         var settings = new Npgsql.NpgsqlConnectionStringBuilder(

@@ -37,6 +37,31 @@ public sealed class DeploymentConfigurationTests
             );
     }
 
+    // Review 4b #7: a `url` template passes bootstrap, expands once per tenant, and a literal
+    // URL stays as it is.
+    [Fact]
+    public void A_url_template_is_validated_by_its_expansion_and_expands_per_tenant()
+    {
+        var template = DeploymentConfiguration.Parse(
+            "url: https://{slug}.tenants.example.com\nhealth: {port: 3081}\nblobs: {backend: postgres}\n"
+        );
+        Assert.True(template.UrlIsTemplate);
+        Assert.Equal("https://alpha.tenants.example.com", template.ForTenant("alpha").Root["url"]!.GetValue<string>());
+        Assert.Equal("https://beta.tenants.example.com", template.ForTenant("beta").Root["url"]!.GetValue<string>());
+        // The shared document keeps the template.
+        Assert.Equal("https://{slug}.tenants.example.com", template.Root["url"]!.GetValue<string>());
+        var literal = DeploymentConfiguration.Parse("url: https://fox.example\nhealth: {port: 3081}\nblobs: {backend: postgres}\n");
+        Assert.Same(literal, literal.ForTenant("alpha"));
+        Assert.Equal("https://fox.example", literal.TenantOrigin("alpha"));
+        // A template that doesn't expand to a valid URL still refuses.
+        Assert.Contains(
+            "url",
+            Assert.Throws<HostedBootstrapException>(
+                () => DeploymentConfiguration.Parse("url: https://{slug}.example.com?x=1\nhealth: {port: 3081}\nblobs: {backend: postgres}\n")
+            ).Message
+        );
+    }
+
     [Theory]
     [InlineData("access: {}\n", "access", "isn't a deployment setting")]
     [InlineData("bot: {name: Fox}\n", "bot.name", "isn't a deployment setting")]

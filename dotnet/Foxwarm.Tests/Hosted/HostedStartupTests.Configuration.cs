@@ -1,3 +1,4 @@
+using Foxwarm.Hosted.Lease;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
@@ -40,7 +41,8 @@ public sealed partial class HostedStartupTests
         HostedFiles files,
         Action<IStorageContext>? built = null,
         string? fileStores = null,
-        string deploymentExtra = ""
+        string deploymentExtra = "",
+        string role = ReplicaRoles.General
     )
     {
         Replica? replica = null;
@@ -59,10 +61,18 @@ public sealed partial class HostedStartupTests
                 var tenant = new PostgresStorageContext(context.Database, files.Scratch);
                 var storage = HostedTestBackend.Compose(tenant, fileStores ?? files.Scratch);
                 built?.Invoke(storage);
-                var runtime = await HostedEntry.BuildRuntimeAsync(tenant, storage, files.Bootstrap, deployment, context.PublicListener);
+                var runtime = await HostedEntry.BuildRuntimeAsync(
+                    tenant,
+                    storage,
+                    files.Bootstrap,
+                    deployment,
+                    context.PublicListener,
+                    profile: context.Grant.Profile
+                );
                 replica.Runtimes.Add(runtime);
                 return runtime;
-            }
+            },
+            role: role
         );
         return replica;
     }

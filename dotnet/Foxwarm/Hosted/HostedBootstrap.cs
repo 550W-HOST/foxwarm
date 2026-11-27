@@ -22,7 +22,8 @@ internal sealed record HostedBootstrap(
     string? DeploymentConfigPath = null,
     string? KekFile = null,
     string? KekPreviousFile = null,
-    string OperatorRole = HostedBootstrap.DefaultOperatorRole
+    string OperatorRole = HostedBootstrap.DefaultOperatorRole,
+    string Role = Lease.ReplicaRoles.General
 )
 {
     internal const string DefaultTenant = "default";
@@ -60,9 +61,21 @@ internal sealed record HostedBootstrap(
             Path(environment, DeploymentConfiguration.Variable),
             Path(environment, "FOXWARM_KEK_FILE"),
             Path(environment, "FOXWARM_KEK_PREVIOUS_FILE"),
-            Name(environment, "FOXWARM_OPERATOR_ROLE", DefaultOperatorRole)
+            Name(environment, "FOXWARM_OPERATOR_ROLE", DefaultOperatorRole),
+            ReplicaRole(Read(environment, "FOXWARM_ROLE"))
         );
     }
+
+    // The replica's placement role (plan §3.3): general unless the deployment says otherwise.
+    private static string ReplicaRole(string? value) =>
+        value switch
+        {
+            null or "" => Lease.ReplicaRoles.General,
+            Lease.ReplicaRoles.General or Lease.ReplicaRoles.MasterHost or Lease.ReplicaRoles.Operator => value,
+            _ => throw new HostedBootstrapException(
+                $"FOXWARM_ROLE must be {Lease.ReplicaRoles.General}, {Lease.ReplicaRoles.MasterHost} or {Lease.ReplicaRoles.Operator}."
+            ),
+        };
 
     /// <summary>The deployment configuration, read from <c>FOXWARM_DEPLOYMENT_CONFIG</c>.</summary>
     internal DeploymentConfiguration RequireDeployment() =>
