@@ -64,6 +64,8 @@ interface SetupViewProps {
   /** First run only: show the Foxwarm mark above the title (a window frame's title row shows it instead). */
   showBrand?: boolean
   focusModelsRequest?: number
+  /** Opens this Setup tab; a new nonce repeats the request. */
+  tabRequest?: { tab: SetupTab; nonce: number } | null
   onFocusModelsRequestHandled?: (request: number) => void
   webUiSettings?: WebUiBrandingSettingsValue
   onInstanceNameChange?: (name: string) => Promise<void> | void
@@ -105,7 +107,7 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config' | 'authorization' | 'mcp' | 'secrets' | 'notifications'
+export type SetupTab = 'appearance' | 'models' | 'config' | 'authorization' | 'mcp' | 'secrets' | 'notifications'
 type ModelsView = 'form' | 'yaml'
 const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorization', 'mcp', 'secrets', 'notifications']
 
@@ -134,7 +136,7 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, onModelsSaved, showBrand = true, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, onModelsSaved, showBrand = true, focusModelsRequest = 0, tabRequest, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   // First-run Setup exists to add a model, so it starts on Models; ordinary Setup starts on Appearance.
   const [activeTab, setActiveTab] = useState<SetupTab>(forced ? 'models' : 'appearance')
@@ -290,6 +292,10 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   useEffect(() => {
     if (forced) setActiveTab('models')
   }, [forced])
+
+  useEffect(() => {
+    if (tabRequest && !forced) setActiveTab(tabRequest.tab)
+  }, [tabRequest?.tab, tabRequest?.nonce])
 
   useEffect(() => {
     // Wait for the saved configuration: it decides whether the form or the YAML editor receives focus.

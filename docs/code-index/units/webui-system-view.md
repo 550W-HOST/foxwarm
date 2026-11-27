@@ -1,17 +1,18 @@
 # Unit: webui-system-view
 
-Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/SystemWebhooks.tsx, packages/webui/src/components/SystemUsage.tsx, packages/webui/src/components/SystemActivity.tsx, packages/webui/src/activity.ts, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/src/systemWebhooks.ts, packages/webui/src/usageOverview.ts, packages/webui/src/useUsageReport.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/systemWebhooks.test.mjs, packages/webui/test/usageOverview.test.mjs, packages/webui/test/activity.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs, packages/webui/test/mainHostSystemWebhooks.e2e.mjs, packages/webui/test/mainHostSystemUsage.e2e.mjs, packages/webui/test/mainHostSystemActivity.e2e.mjs, packages/webui/test/mainHostSystemMobile.e2e.mjs
-Secondary files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/useNodeDirectory.ts, packages/webui/src/App.tsx, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionReplay.test.mjs
+Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemSplit.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/SystemWebhooks.tsx, packages/webui/src/components/SystemUsage.tsx, packages/webui/src/components/SystemActivity.tsx, packages/webui/src/activity.ts, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/src/systemWebhooks.ts, packages/webui/src/usageOverview.ts, packages/webui/src/useUsageReport.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/systemWebhooks.test.mjs, packages/webui/test/usageOverview.test.mjs, packages/webui/test/activity.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs, packages/webui/test/mainHostSystemWebhooks.e2e.mjs, packages/webui/test/mainHostSystemUsage.e2e.mjs, packages/webui/test/mainHostSystemActivity.e2e.mjs, packages/webui/test/mainHostSystemMobile.e2e.mjs, packages/webui/test/mainHostSystemLayout.e2e.mjs
+Secondary files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/SetupView.tsx, packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/useNodeDirectory.ts, packages/webui/src/App.tsx, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
 
-The **System** page explains how Foxwarm is organized and running, in six sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline), **Nodes** (execution environments and the Sessions on them), **Timers** (scheduled messages and scripts across all Sessions), **Webhooks** (configured inbound webhooks and their recent deliveries) and **Usage** (model requests, tokens and recorded cost across the installation). The Sidebar answers which Session to enter; System is diagnostic and administrative.
+The **System** page explains how Foxwarm is organized and running, in six sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline), **Nodes** (execution environments, their status and how many Sessions each holds), **Timers** (scheduled messages and scripts across all Sessions), **Webhooks** (configured inbound webhooks and their recent deliveries) and **Usage** (model requests, tokens and recorded cost across the installation). The Sidebar answers which Session to enter; System is diagnostic and administrative.
 
 ## Key Exports
 
 - `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the six sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
-- `SessionFilterBar`, `SessionOperationRow`, `SessionInspector` (`SystemSessions.tsx`) — Sessions list controls, rows and inspector; the inspector lists [running background commands](./webui-running-commands.md#running-background-commands) with Stop when the row's `runningExecs` count is nonzero.
-- `AgentRegistryCard`, `AgentRegistryInspector` (`SystemAgents.tsx`) — Agent registry.
+- `SessionFilterBar`, `SessionRows`, `SystemSessionsList`, `SessionInspector` (`SystemSessions.tsx`) — Sessions list controls, rows, the list/detail split and the inspector; the inspector lists [running background commands](./webui-running-commands.md#running-background-commands) with Stop when the row's `runningExecs` count is nonzero.
+- `SystemAgents` — Agents section ([webui-system-agents](./webui-system-agents.md)).
+- `SystemSplit`, `useSystemSplit` (`SystemSplit.tsx`) — the shared list/detail layout ([layout](#list-and-detail-layout)).
 - `SystemNodes` ([webui-nodes](./webui-nodes.md)) — Nodes section.
 - `SystemTimers`, `SessionTimersSection` (`SystemTimers.tsx`) — Timers section and the Session inspector's Timers section; `systemTimers.ts` owns their pure list projection, filters, ordering and edit-request building.
 - `SystemWebhooks` (`SystemWebhooks.tsx`) — read-only Webhooks section; `systemWebhooks.ts` owns its labels, outcome tones, loopback-address check and ordering.
@@ -20,7 +21,6 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 - `getArchitectureSessionNodeId(session)` — effective placement: an active tool's exact execution node, otherwise the Session's current node, otherwise `master`.
 - `getArchitectureSessionModel(session)` — model in use, otherwise the configured model.
 - `filterArchitectureSessions(sessions, filter, query, { nodeId, model })` — canonical runtime-state filter, effective-node and model filters, and cross-field search.
-- `groupArchitectureSessionsByNode` / `getArchitectureNodePreview` — per-Node grouping and a bounded preview that keeps preferred and active Sessions visible.
 
 ## Behavior
 
@@ -36,6 +36,15 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 - The sole-tab title/actions row uses the shared [empty-header pane movement](./webui-workbench.md#d-workbench-pane-drag) boundary.
 - Cached/Input/Output rows and percentages use the shared [TokenUsageDetails](./webui-token-usage-details.md) renderer.
 
+### List and detail layout
+
+[2026-11-27, user decision, direction A of the System redesign] Agents, Sessions (List), Timers and Webhooks are split views: a compact list and an always-visible detail pane for the selection.
+
+- On desktop the System header (title, subtitle, section switch) stays put and only the content below it scrolls (`data-system-scroll`). In a split section the list and the detail pane fill that area and scroll separately (`data-system-pane-scroll="list|detail"`), so selecting a row far down a long list shows its details at the top of the detail pane without moving the list. Usage, Activity, Nodes and the Sessions Timeline scroll as one page below the header.
+- The layout follows the width of the section's own pane, not the viewport (`useSystemSplit` observes it with a `ResizeObserver` through a callback ref, because the wide and narrow trees have different roots). Below 760 px (`SYSTEM_SPLIT_MIN_WIDTH`), and always on phones, the section shows the list alone; selecting a row opens its details as a page (`data-system-split-layout="detail"`) that starts at its top, with a Back link (`data-system-split-back`) that returns to the list at its previous scroll position. Selection highlights are not shown on the narrow list.
+- Entry points that target a selection (`agentRequest`, the Agent inspector's Session links, Nodes, Timers and Webhooks links into Sessions) also open the details page on a narrow pane.
+- Opening a file in Code replaces the System tab's content. The inspected Agent and its tab are kept in module memory while System is unmounted, and an `agentRequest` applies once (by nonce), so returning restores the Agent rather than replaying the request.
+
 ### Bounded catalog ownership
 
 - System owns `/session-list/architecture`, `/session-list/children`, and exact `/session-list/by-id` requests; it never accepts an all-session array prop or performs the legacy global Session fetch.
@@ -45,15 +54,16 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 
 ### Sessions list and inspector
 
-- List and Timeline views. The list shows loaded Sessions, newest activity first, with state, duration, Agent, effective node, queue, model and a per-Session usage pie; "Load 50 more root sessions" extends the window.
+- List and Timeline views. The list shows loaded Sessions, newest activity first, one compact row each: state dot, short name (the ID part after the Agent), current/archived marks, runtime state text with duration or queue, Agent, effective Node when not `master`, child mark, and last activity time; Open enters the Session. Its footer states how many loaded rows match, the catalog total and "Load 50 more root sessions", which extends the window.
 - Filters: search (ID/name, Agent, effective node, model, active tool, wait kind), status (all, active, waiting, queued), Agent (backend-owned, reloads the window), effective node and model (local over loaded rows). The trailing global usage pie uses catalog summary totals and is labelled Conversation turns; its popover states that it covers conversation turns of existing sessions and that System › Usage counts every model request.
-- Usage pies split cached/input/output tokens and open a viewport-bounded detail popover; Session pies use row usage, Agent pies sum loaded rows. Pie interaction does not select its row.
-- Clicking a row inspects it without navigation; Open enters the Session. The inspector shows runtime state/phase/model/queue, active tool and arguments, wait condition, Agent/node/CWD, messages/activity/tokens and parent/child relationships.
+- The global usage pie splits cached/input/output tokens and opens a viewport-bounded detail popover. Rows carry no usage pies; the inspector shows the Session's tokens.
+- Clicking a row inspects it in the detail pane without navigation; Open enters the Session. The inspector shows runtime state/phase/model/queue, active tool and arguments, wait condition, Agent/node/CWD, messages/activity/tokens and parent/child relationships.
 - The current Session is exact-loaded and initially inspected. A one-second clock runs only while a loaded Session is actively working.
 
 ### Nodes section
 
-- Lists real directory Nodes plus unavailable cards for placement IDs outside the directory, each with the Sessions placed on it by effective placement. A card names the Node once: the mono ID only when it differs from the display name, the type only when it differs from both; service versions sit behind a collapsed **Details** disclosure. Selecting one switches to Sessions (List) with that Session inspected; there is no second inspector. Directory, pending-approval and onboarding ownership are in [webui-nodes](./webui-nodes.md).
+- A table of real directory Nodes plus rows for placement IDs outside the directory (Unavailable): name (with the ID in mono only when it differs), status, type (only when it differs from both), last seen, Sessions and a row menu. Below 640 px of pane width (and on phones) it becomes a list of compact rows. There are no Session lists: the Sessions cell shows the Node's count from the architecture payload's `nodeCounts` (every Session per stored current Node, from the catalog) plus the active ones among loaded rows, and opens Sessions (List) filtered to that Node. The Sidebar's Node grouping is the place to browse Sessions by Node.
+- A row expands (`data-node-details`) to its service versions. Nodes with managed credentials have a row menu (the shared `ContextMenu` with a "More actions for {name}" trigger, `data-node-menu`) with Start command (CLI and Shell Nodes) and Delete, which open the existing Node actions dialog. Directory, pending-approval and onboarding ownership are in [webui-nodes](./webui-nodes.md).
 
 ### Timers section
 
@@ -63,7 +73,7 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 - Actions: Pause/Resume; Edit (schedule kept, cron, date-time or delay; message for message timers, or the complete script settings as JSON for ToolScript timers), validated again by `update_timer`; Delete after an inline confirmation. A paused one-time timer past its time notes that resuming fires it once. There is no run-now action.
 - Live updates: the section and the inspector's Timers list reload (debounced) on the realtime `timers-changed` event and on socket reopen; no polling. A 30-second clock refreshes relative times only while mounted.
 - The Session inspector's Timers section lists up to five of that Session's timers from `GET /api/timers?sessionId=` with a "View in Timers" link.
-- Narrow widths stack the inspector below the list without horizontal overflow.
+- Narrow panes and phones open the inspector as a details page ([layout](#list-and-detail-layout)) without horizontal overflow.
 
 ### Usage section
 
@@ -84,18 +94,15 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 - The Session inspector links to the selected Session tree's activity ("View activity"). `#activity` opens the section.
 - Live updates: `activity-changed` and socket reopen (debounced) refetch the first page and merge it above loaded rows (`mergeActivity`), keeping earlier pages; a filter change starts over. No polling. It notes when older history is still being indexed.
 
-### Agent registry
+### Agents section
 
-- The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
-- An `agentRequest` prop (`{ agent, nonce }`) switches to the Agents section and selects that Agent's inspector; the Sidebar's Agent group menu uses it for Agent settings.
-- Registry cards show self-owned memory file count/recency plus session, active, queue, inheritance, and policy summaries: a `restricted` badge when the Agent's own parsed local layer ends in an enabled deny without selectors, and `blocked` while a fail-closed migration layer is unchanged. The policy badge sits left of the usage circle, so the circle keeps the same right-edge position on every card. Counts use singular and plural forms ("1 agent", "4 agents"). Their order is independent of selection so clicking a card never moves it: `main` is first, followed by active Agents, other populated Agents, and empty workspaces, with IDs alphabetical inside each group.
-- The registry reuses `AgentCreationMenu` for Agent and Session creation. Its shared `+` opens New session directly, with Agent tags and a trailing New agent tag in the same modal flow. Agent update changes only mutable inheritance and new-session default Node/working-directory metadata; Agent ID is not renamed because it is a durable namespace, permission scope, and archive identity component.
-- The Agent inspector shows its header (ID, Memory, counts), then the shared Agent settings form ([D-webui-agent-settings-form](#d-webui-agent-settings-form)) with the inheritance chain and one Reset/Save pair (`data-agent-settings-reset`, `data-agent-settings-save`) enabled only for changes, then memory files and the danger zone. A save disables the form and both buttons (Save reads "Saving…") until the PUT and the following Agent-list reload finish; the draft then resets from the saved Agent. The server already reports the change before that reload ends, so `mainHostKnowledge.e2e.mjs` waits for the inspector to finish saving before it edits again. It loads a bounded, symlink-free Markdown manifest from self-owned `memory/`. Top-level `00_SYSTEM.md`, `MEMORY.md`, `SOUL.md`, and `USER.md` are prioritized, nested project files follow, and `archive/` is last. Folder/file actions open the exact Master path in Code without copying file content through the registry API.
-- Agent deletion requires exact typed Agent-ID confirmation. `main` is immutable; Agents inherited by another Agent and Agents with active Sessions are rejected. Confirmation authorizes destructive removal of idle owned Sessions and any queued work through canonical Session deletion, then removes the self-owned workspace and Agent metadata; durable Session archives and their reserved identities remain.
+Owned by [webui-system-agents](./webui-system-agents.md): the creator-tree list and the Agent inspector with its Overview, Prompt, Rules and Settings tabs.
 
 ## Phone layout verification
 
-`mainHostSystemMobile.e2e.mjs` opens every section over a real Main host at 360×780, 390×844 and 844×390 with touch, in light and dark themes, with long Session, Agent, timer and webhook names, priced, unpriced and redacted usage and a recorded tool call. It fails when any visible element reaches past the viewport outside a horizontal scroller, when the System scroller scrolls sideways, or when the selected section tab is clipped; for both Usage tables it checks that the scroller fits the viewport, the first column is at least 100 px and does not move when the table scrolls to its end, and the first row starts below the header. On Agents, with one `restricted` Agent, it checks that the section subtitle appears only in the desktop header, that there is no separate registry heading, and that every card's usage circle has the same position. It then checks the desktop layout at 1500 px, including the same Agents checks. `FOXWARM_SYSTEM_SCREENSHOT_DIR` saves screenshots.
+`mainHostSystemMobile.e2e.mjs` opens every section over a real Main host at 360×780, 390×844 and 844×390 with touch, in light and dark themes, with long Session, Agent, timer and webhook names, priced, unpriced and redacted usage and a recorded tool call. It fails when any visible element reaches past the viewport outside a horizontal scroller, when the System scroller scrolls sideways, or when the selected section tab is clipped; for both Usage tables it checks that the scroller fits the viewport, the first column is at least 100 px and does not move when the table scrolls to its end, and the first row starts below the header. On Agents it checks that the section subtitle appears only in the desktop header, that there is no separate registry heading, and that the allowlist Agent's row shows it; at 390×844 it opens an Agent and a Session as details pages that start below the header and returns with Back. It then checks the desktop layout at 1500 px. `FOXWARM_SYSTEM_SCREENSHOT_DIR` saves screenshots.
+
+`mainHostSystemLayout.e2e.mjs` checks the split layout at 1600 and 1100 px (selecting the last row of a 30-Session list keeps the tabs, the selected row and the inspector header in view while only the list scrolls), the creator-tree order, the Prompt layers (framework prompt dialog for a model-dependent prompt, Create in Code writing the empty installation file and opening Code) and the Rules layers (installation and creator layers read-only, a server rejection shown inline with the layer unchanged, a save that replaces the layer, Edit in Setup opening Authorization).
 
 ## Integration
 
@@ -132,21 +139,17 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 
 [2026-11-07, user decision] Global timers are a fourth System section, Agents | Sessions | Nodes | Timers, rather than a separate page, and the Session inspector shows that Session's timers with a link into the section. The section offers the read-only list, recent results, pause/resume, edit and delete; run-now was deliberately not included. Changes go through the timer tools' own operations ([timer persistence](./tasks-timers.md#d-timers-pause-and-recent-runs)); the routes are administrator-only. Refresh is event-driven over the existing realtime list subscription instead of polling.
 
+### D-webui-system-split-view
+
+[2026-11-27, user decision] System is reorganized for acting rather than reading (direction A of the redesign prototypes). Rows carry only what a user needs to pick the right item: Agents as a creator tree with rule state, memory source, start Node, Session count and last activity; Sessions as one compact line each; Nodes as a table with a Session count instead of Session lists. Details live in an inspector that is always visible beside the list on a wide pane and is a separate page with Back on a narrow pane or phone, chosen by pane width so split Workbench panes behave like small windows. The System header stays fixed. The Agent inspector shows the prompt chain (framework → installation additions → inherited memory → own memory, files opening in Code; the framework prompt in a read-only dialog because it is not an installation file) and the rule chain (installation policy → creator ancestors, read-only with who may change them → the Agent's own layer, edited as YAML and saved through the existing Agent rules API). The alternatives, full-width tables with a closable side sheet and a full Agent page, were not chosen. Timers and Webhooks use the same split.
+
 ### D-webui-system-page
 
-[2026-11-03, user decision] The former System Architecture page and the standalone Nodes page become one **System** page with Agents | Sessions | Nodes; Tasks stays a separate page. Topology is removed: its filters, search, usage pie and inspector move to Sessions, and per-Node Session placement moves to Nodes. The global summary row is replaced by per-section summaries. Former entry points (Nodes tab, hashes, status bar, popup leaf, saved layouts) open System on the right section by read-old/write-new normalization. This supersedes [D-webui-nodes-workbench](./webui-nodes.md#d-webui-nodes-workbench).
+[2026-11-03, user decision] The former System Architecture page and the standalone Nodes page become one **System** page with Agents | Sessions | Nodes; Tasks stays a separate page. Topology is removed: its filters, search, usage pie and inspector move to Sessions, and per-Node Session placement moves to Nodes (Session lists under Nodes were later replaced by counts, [D-webui-system-split-view](#d-webui-system-split-view)). The global summary row is replaced by per-section summaries. Former entry points (Nodes tab, hashes, status bar, popup leaf, saved layouts) open System on the right section by read-old/write-new normalization. This supersedes [D-webui-nodes-workbench](./webui-nodes.md#d-webui-nodes-workbench).
 
 ### D-webui-architecture-operational-topology
 
 [2026-08-25; the node-lane layout is superseded by [D-webui-system-page](#d-webui-system-page), the placement and inspector rationale still applies] Architecture answers how Foxwarm is organized and running; Sidebar answers which Session the user wants to enter. Architecture therefore uses effective execution-node lanes plus a diagnostic entity inspector instead of a second recursive session-navigation tree. Keep current/active rows visible, preserve bounded backend ownership, cap expanded node bodies with local scrolling, and make navigation an explicit secondary action. This distinction prevents duplicated branch-order/collapse behavior while exposing placement, queue, wait, tool, model, token, and relationship information that Sidebar does not provide.
-
-### D-webui-architecture-agent-registry
-
-[2026-08-25] Persistent Agent CRUD belongs beside runtime topology because an Agent is a workspace/memory owner, not a Sidebar branch. Create and mutable metadata update are ordinary registry actions; rename is intentionally absent because Agent ID participates in Session namespace, permission scope, and retained archive identity. Memory navigation is manifest-only and path-confined, while destructive deletion uses typed confirmation and backend lifecycle blockers.
-
-### D-webui-agent-settings-form
-
-[2026-11-02, user decision] New agent and the Agents inspector use one `AgentSettingsFields` form, so creation and later editing offer the same settings with the same order, labels, choices and hints: Memory inheritance (excluding the Agent itself and Agents that are not inheritable) and Session defaults (Node, `master` by default, and working directory). [2026-11-10] The Isolation section was removed with legacy isolation. The master Node is shown by its Node name (`master`), not as "Main", which named the retired multi-process server role. Creation sends only chosen settings through the existing `POST /api/agents` fields. The working directory applies only on the default Node. New session shows the selected Agent's start location from its saved settings (`Starts on <Node> · <directory>`) but does not override it; the line is omitted when no placement is configured. When `GET /api/nodes` reports an installation `agentDefaultNode` other than master, the Node choice separates unset (`Installation default (<Node>)`) from an explicit `master`, and the start location and directory placeholder use that default for Agents without their own.
 
 ## Workbench header integration
 

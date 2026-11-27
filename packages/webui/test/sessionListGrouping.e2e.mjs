@@ -208,7 +208,7 @@ test('Agent group headers create Sessions, open Agent settings and keep their co
     await header.click({ button: 'right' })
     const settings = await page.waitForSelector('xpath/.//*[@role="menuitem"][contains(., "Agent settings")]', { timeout: 5_000 })
     await settings.click()
-    await page.waitForSelector('[data-architecture-agent-inspector-id="beta"]', { timeout: 10_000 })
+    await page.waitForSelector('[data-architecture-agent-inspector-id="beta"] [data-agent-tab-panel="settings"] [data-agent-settings-save]', { timeout: 10_000 })
 
     await page.click(`${groupSelector('beta')} [data-session-group-toggle]`)
     await page.waitForFunction(() => !document.querySelector('[data-session-group="beta"] [data-session-id]'), { timeout: 10_000 })

@@ -1,3 +1,4 @@
+import { SystemSplit, useSystemSplit } from './SystemSplit'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlarmClock, Bot, ChevronRight, Code2, ExternalLink, ListFilter, MessageSquare, Pause, Pencil, Play, Search, Trash2, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -226,7 +227,7 @@ function TimerInspector({ timer, owner, now, onInspectSession, onOpenSession, on
   const script = timer.script || {}
   const runs = timer.recentRuns || []
   return (
-    <aside className="min-w-0 rounded-xl border border-fw-border bg-fw-surface p-4 xl:sticky xl:top-4 xl:self-start" data-system-timer-inspector={timer.id}>
+    <aside className="min-w-0 rounded-xl border border-fw-border bg-fw-surface p-4" data-system-timer-inspector={timer.id}>
       <div className="flex items-start gap-2">
         <ActionIcon timer={timer} />
         <div className="min-w-0 flex-1">
@@ -326,6 +327,7 @@ function useTimerOwners(timers: TimerRow[]) {
 }
 
 export interface SystemTimersProps {
+  phone: boolean
   /** Shows only this Session's timers when set. */
   sessionFilter: string | null
   onSessionFilterChange: (sessionId: string | null) => void
@@ -333,7 +335,8 @@ export interface SystemTimersProps {
   onOpenSession: (sessionId: string) => void
 }
 
-export default function SystemTimers({ sessionFilter: sessionId, onSessionFilterChange, onInspectSession, onOpenSession }: SystemTimersProps) {
+export default function SystemTimers({ phone, sessionFilter: sessionId, onSessionFilterChange, onInspectSession, onOpenSession }: SystemTimersProps) {
+  const split = useSystemSplit(phone)
   const { timers, loaded, error, reload, setTimers } = useTimerList()
   const owners = useTimerOwners(timers)
   const now = useMinuteClock()
@@ -360,7 +363,9 @@ export default function SystemTimers({ sessionFilter: sessionId, onSessionFilter
   const select = 'w-full sm:w-auto'
 
   return (
-    <div className="space-y-4" data-system-timers>
+    <div className={split.narrow ? '' : 'h-full'} data-system-timers>
+      <SystemSplit split={split} name="timers" backLabel="Timers" detailWidth="minmax(340px,400px)"
+        toolbar={<div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:flex-1">
           <label className="relative w-full sm:w-64 sm:shrink-0">
@@ -384,14 +389,14 @@ export default function SystemTimers({ sessionFilter: sessionId, onSessionFilter
         </div>
       </div>
       {error ? <div className="flex items-center justify-between gap-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger"><span>{error}</span><button type="button" onClick={() => { void reload() }} className="font-medium underline">Retry</button></div> : null}
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <main className="min-w-0 space-y-2" data-system-timer-list>
-          {visible.map(timer => <TimerRowCard key={timer.id} timer={timer} owner={owners[timer.sessionId]} selected={timer.id === selectedId} now={now} onSelect={() => setSelectedId(timer.id)} />)}
+        </div>}
+        list={<div className="space-y-2" data-system-timer-list>
+          {visible.map(timer => <TimerRowCard key={timer.id} timer={timer} owner={owners[timer.sessionId]} selected={!split.narrow && timer.id === selectedId} now={now} onSelect={() => { setSelectedId(timer.id); split.open() }} />)}
           {loaded && visible.length === 0 ? (
             <div className="rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">{timers.length ? 'No timers match these filters.' : 'No timers yet. Sessions create them with the timer tools or /timer.'}</div>
           ) : null}
-        </main>
-        <TimerInspector
+        </div>}
+        detail={<TimerInspector
           timer={selected}
           owner={selected ? owners[selected.sessionId] : undefined}
           now={now}
@@ -399,8 +404,8 @@ export default function SystemTimers({ sessionFilter: sessionId, onSessionFilter
           onOpenSession={onOpenSession}
           onChanged={timer => setTimers(current => current.map(item => item.id === timer.id ? timer : item))}
           onDeleted={timerId => setTimers(current => current.filter(item => item.id !== timerId))}
-        />
-      </div>
+        />}
+      />
     </div>
   )
 }

@@ -65,6 +65,8 @@ internal sealed partial class SessionListQueries
 
     public JsonArray AgentCounts() => Catalog.AgentCounts();
 
+    public JsonArray NodeCounts() => Catalog.NodeCounts();
+
     public Dictionary<string, int> DescendantActivity(string[] ids)
     {
         var local = runtime.LocalProjections();

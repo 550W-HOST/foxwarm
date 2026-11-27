@@ -66,7 +66,11 @@ internal sealed partial class WebUIChannel
             "/api/agents",
             () =>
                 Results.Ok(
-                    new JsonObject { ["agents"] = JsonData.WebNode(sessions.AgentRegistry()) }
+                    new JsonObject
+                    {
+                        ["agents"] = JsonData.WebNode(sessions.AgentRegistry()),
+                        ["prompt"] = sessions.PromptSources(),
+                    }
                 )
         );
         app.MapPost(
@@ -322,6 +326,13 @@ internal sealed partial class WebUIChannel
                     return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
+        );
+        app.MapGet(
+            "/api/agents/{agentId}/framework-prompt",
+            async (string agentId, CancellationToken token) =>
+                sessions.Agents().Contains(agentId)
+                    ? Results.Ok(await sessions.FrameworkPromptViewAsync(token))
+                    : Results.NotFound(new JsonObject { ["error"] = "Agent not found." })
         );
         app.MapGet(
             "/api/agents/{agentId}/memory",

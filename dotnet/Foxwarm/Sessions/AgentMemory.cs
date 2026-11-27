@@ -17,6 +17,34 @@ internal sealed partial class AgentMemory(
     Func<string, string, Func<SkillInfo, SkillAccess>?>? skillAccess = null
 )
 {
+    // The framework prompt file that applies: a legacy copy still present at startup was edited
+    // and keeps replacing the bundled base.
+    private string? FrameworkSourcePath() =>
+        File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
+        : File.Exists(agents.MainFallbackSystemPath) ? agents.MainFallbackSystemPath
+        : File.Exists(frameworkTemplatePath) ? frameworkTemplatePath
+        : null;
+
+    /// <summary>
+    /// The framework prompt text an Agent's Sessions receive for <paramref name="modelId"/>, as
+    /// <see cref="BuildAsync"/> places it before the installation additions. Null when there is none.
+    /// </summary>
+    internal async Task<(string Text, bool ModelDependent)?> FrameworkPromptAsync(
+        string modelId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (FrameworkSourcePath() is not { } path)
+            return null;
+        var source = await File.ReadAllTextAsync(path, cancellationToken);
+        var text = ConditionalMemory.FilterConditionalMemorySource(source, modelId);
+        // Model conditions are `<foxwarm-if model-id="...">` blocks; runtime-only blocks are not.
+        return (
+            text,
+            Regex.IsMatch(source, "<foxwarm-if[^>]* model-id=\"", RegexOptions.CultureInvariant)
+        );
+    }
+
     public async Task<string> BuildAsync(
         string agentName,
         string sessionId,
@@ -40,13 +68,7 @@ internal sealed partial class AgentMemory(
             );
         else
         {
-            // A legacy copy still present at startup was edited and keeps replacing the bundled base.
-            var replacement =
-                File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
-                : File.Exists(agents.MainFallbackSystemPath) ? agents.MainFallbackSystemPath
-                : null;
-            var frameworkPath =
-                replacement ?? (File.Exists(frameworkTemplatePath) ? frameworkTemplatePath : null);
+            var frameworkPath = FrameworkSourcePath();
             if (frameworkPath is not null)
                 AppendBlock(
                     blocks,

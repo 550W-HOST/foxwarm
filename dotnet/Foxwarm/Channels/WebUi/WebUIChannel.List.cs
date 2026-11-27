@@ -457,6 +457,7 @@ internal sealed partial class WebUIChannel
                         ["revision"] = view.Revision,
                         ["summary"] = view.GlobalSummary(),
                         ["agentCounts"] = view.AgentCounts(),
+                        ["nodeCounts"] = view.NodeCounts(),
                         ["agent"] = agent,
                         ["roots"] = roots,
                         ["children"] = new JsonArray(

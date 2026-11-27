@@ -57,20 +57,6 @@ export const getStatusTone = (session: Session) => {
   return tone === 'muted' ? 'bg-fw-border-strong dark:bg-fw-text' : `bg-fw-${tone}`
 }
 
-export type LoadedUsage = TokenUsage & { count: number }
-
-export function addLoadedUsage(total: LoadedUsage, session: Session) {
-  if (!session.tokenUsage) return total
-  total.cachedTokens += session.tokenUsage.cachedTokens || 0
-  total.inputTokens += session.tokenUsage.inputTokens || 0
-  total.outputTokens += session.tokenUsage.outputTokens || 0
-  if (session.tokenUsage.cost !== undefined) total.cost = (total.cost ?? 0) + session.tokenUsage.cost
-  total.count += 1
-  return total
-}
-
-export const emptyLoadedUsage = (): LoadedUsage => ({ cachedTokens: 0, inputTokens: 0, outputTokens: 0, count: 0 })
-
 export function UsagePie({ usage, loaded = false, global = false }: { usage?: TokenUsage; loaded?: boolean; global?: boolean }) {
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)

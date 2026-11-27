@@ -296,7 +296,11 @@ focus paths, busy-descendant badges, search, Architecture, Tasks and lifecycle.
 - Storage. Agent counts reuse `catalog_parent_agent_count` (top-level) and
   `catalog_agent_count` (all); Node counts use the maintained
   `catalog_node_count` (all and top-level rows per Node). Both subtract the small
-  pinned partition at read time. Tree-mode group pages are keyset reads through
+  pinned partition at read time. The System view reads the same tables without
+  that subtraction: `/session-list/architecture` carries `agentCounts` and
+  `nodeCounts` (`{node, count}` for every Session per stored current Node), and the
+  Agent list's `lastActivity` is each Agent's `MIN(recent_rank)` over
+  `session_catalog`. Tree-mode group pages are keyset reads through
   the additive partial `idx_session_catalog_{agent,node}_root_activity[_default]`
   indexes ([D-sidebar-tree-activity](#d-sidebar-tree-activity)); Flat group pages use
   `idx_session_catalog_agent_time` and `idx_session_catalog_node_time`. The earlier

@@ -51,17 +51,23 @@ try {
   assert.equal((await state(page)).workbench.tabsById['system:agents'].section, 'agents')
   await shot(page, 'system-agents.png')
 
-  // Nodes lists the Sessions placed on each Node; a Session opens in the Sessions inspector.
+  // Nodes is a table without Session lists; a Node's count opens Sessions filtered to it.
   await page.click('[data-system-tab="nodes"]')
-  await page.waitForSelector('[data-node-surface] [data-system-node-id="master"] [data-system-node-session="worker"]')
+  await page.waitForSelector('[data-node-surface] table[data-system-node-table="table"] [data-system-node-id="master"]')
   assert.match(await page.$eval('[data-system-summary="nodes"]', element => element.textContent), /Online 1 · Total 1/)
-  assert.match(await page.$eval('[data-system-node-id="master"]', element => element.textContent), /3 sessions here/)
-  // The Node's label appears once, and its service versions wait behind Details.
+  assert.equal(await page.$('[data-system-node-session], [data-system-node-sessions]'), null)
+  assert.equal(await page.$eval('[data-node-sessions-link="master"]', element => element.textContent), '3')
+  // The Node's label appears once, and its service versions wait behind its details.
   assert.equal(await page.$eval('[data-system-node-id="master"]', element => element.textContent.match(/master/g).length), 1)
-  assert.equal(await page.$eval('[data-system-node-id="master"] [data-system-node-details]', details => details.open), false)
+  assert.equal(await page.$('[data-node-details="master"]'), null)
+  await page.click('[data-system-node-id="master"] button[aria-expanded="false"]')
+  await page.waitForSelector('[data-node-details="master"]')
   await shot(page, 'system-nodes.png')
-  await page.click('[data-system-node-session="worker"]')
-  await page.waitForSelector('[data-system-section="sessions"] [data-architecture-inspector-session-id="worker"]')
+  await page.click('[data-node-sessions-link="master"]')
+  await page.waitForSelector('[data-system-section="sessions"] [data-architecture-session-id="worker"]')
+  assert.equal(await page.$eval('[role="combobox"][aria-label="Filter by node"]', element => element.textContent.trim().startsWith('master')), true)
+  await page.click('[data-architecture-session-id="worker"]')
+  await page.waitForSelector('[data-architecture-inspector-session-id="worker"]')
   assert.ok(await page.$('[data-architecture-session-id="worker"][data-architecture-session-selected="true"]'))
 
   // Former entry points open System on the right section.

@@ -37,6 +37,7 @@ import { reloadInstallationChatDefaults, useChatPreferences } from './chatPrefer
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 import { FoxwarmMark } from './components/FoxwarmMark'
 import { FoxPaneLoader } from './components/FoxLoaders'
+import type { SetupTab } from './components/SetupView'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
@@ -486,6 +487,7 @@ function App() {
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
+  const [setupTabRequest, setSetupTabRequest] = useState<{ tab: SetupTab; nonce: number } | null>(null)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   // Under a window frame every pane's tab strip is a title row, so a sole tab keeps it.
@@ -1624,8 +1626,10 @@ function App() {
     openAgentsView()
   }
 
-  const openSetupView = (options?: { focusModels?: boolean }) => {
+  const openSetupView = (options?: { focusModels?: boolean; tab?: SetupTab }) => {
     if (options?.focusModels) setFocusModelsRequest((current) => current + 1)
+    const requestedTab = options?.tab
+    if (requestedTab) setSetupTabRequest(current => ({ tab: requestedTab, nonce: (current?.nonce || 0) + 1 }))
     const tab = tabsById[SETUP_TAB_ID] || makeSetupTab()
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
@@ -1783,6 +1787,7 @@ function App() {
             agentRequest={agentSettingsRequest}
             sessionsRequest={sessionsFilterRequest}
             usageRequest={usageRequest}
+            onOpenSetupAuthorization={() => openSetupView({ tab: 'authorization' })}
             onOpenAgentMemory={(memoryRoot: string, filePath?: string) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
@@ -1802,6 +1807,7 @@ function App() {
             onSetupChanged={() => { void fetchSetupStatus() }}
             onModelsSaved={handleModelsSaved}
             focusModelsRequest={focusModelsRequest}
+            tabRequest={setupTabRequest}
             onFocusModelsRequestHandled={handleFocusModelsRequestHandled}
             webUiSettings={webUiSettings}
             onInstanceNameChange={saveWebUiInstanceName}

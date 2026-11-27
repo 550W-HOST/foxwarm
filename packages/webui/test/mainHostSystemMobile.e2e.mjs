@@ -111,30 +111,38 @@ const openSection = async (page, id) => {
 const ready = {
   agents: '[data-system-summary="agents"]',
   sessions: '[data-system-session-list] [data-architecture-session-id]',
-  nodes: '[data-system-section="nodes"] main, [data-system-section="nodes"] [data-node-card], [data-system-section="nodes"] section',
+  nodes: '[data-node-surface] [data-system-node-table="list"] [data-system-node-id="master"]',
   timers: '[data-system-timer-list] [data-system-timer-id]',
   webhooks: '[data-system-webhook-list] [data-system-webhook-id]',
   activity: '[data-system-section="activity"] [data-activity-row], [data-system-section="activity"] tbody tr, [data-system-section="activity"] li',
   usage: '[data-usage-groups] [data-usage-row-kind]',
 }
 const failures = []
-// Agents: the section subtitle is desktop-header only, there is no separate registry heading, and the usage circle keeps
-// the same place on every card whether or not the policy badge is shown.
+// Agents: the section subtitle is desktop-header only, there is no separate registry heading, and
+// each row carries its rule state: the allowlist Agent shows it, main shows none.
 const checkAgents = async (page, label, { phone }) => {
-  await page.waitForSelector('[data-architecture-agent-id="release-engineering"] [data-agent-card-status]')
+  await page.waitForSelector('[data-architecture-agent-id="release-engineering"]')
   const result = await page.evaluate(() => ({
     subtitles: document.body.innerText.split('Agent workspaces, inheritance and memory.').length - 1,
     registryHeading: document.body.innerText.includes('Agent registry'),
-    cards: [...document.querySelectorAll('[data-architecture-agent-id]')].map(card => {
-      const circle = card.querySelector('[data-agent-card-status] button').getBoundingClientRect()
-      const box = card.getBoundingClientRect()
-      return { id: card.getAttribute('data-architecture-agent-id'), restricted: card.querySelector('[data-agent-card-status]').textContent.includes('restricted'), right: Math.round(box.right - circle.right), top: Math.round(circle.top - box.top) }
-    }),
+    rows: Object.fromEntries([...document.querySelectorAll('[data-architecture-agent-id]')].map(row => [row.getAttribute('data-architecture-agent-id'), row.textContent])),
   }))
   if (result.subtitles !== (phone ? 0 : 1)) failures.push(`${label} agents: subtitle shown ${result.subtitles} times`)
   if (result.registryHeading) failures.push(`${label} agents: registry heading shown`)
-  if (!result.cards.some(card => card.restricted) || !result.cards.some(card => !card.restricted)) failures.push(`${label} agents: expected cards with and without the restricted badge`)
-  if (new Set(result.cards.map(card => `${card.right},${card.top}`)).size !== 1) failures.push(`${label} agents: usage circles moved ${JSON.stringify(result.cards)}`)
+  if (!/Allowlist/.test(result.rows['release-engineering'] || '') || /Allowlist/.test(result.rows.main || '')) failures.push(`${label} agents: rule state ${JSON.stringify(result.rows)}`)
+}
+// A tap on a row opens its details as a page that starts at its top, and Back returns to the list.
+const checkDetailPage = async (page, label, row, detail) => {
+  await page.$eval('[data-system-scroll]', scroller => { scroller.scrollTop = scroller.scrollHeight })
+  await page.$eval(row, element => element.scrollIntoView({ block: 'center' }))
+  await page.tap(row)
+  const opened = await page.waitForSelector(`[data-system-split-layout="detail"] ${detail}`, { timeout: 5000 }).catch(() => null)
+  if (!opened) { failures.push(`${label}: ${row} opened no detail page`); return }
+  await new Promise(resolve => setTimeout(resolve, 300))
+  const box = await page.$eval(detail, element => { const rect = element.getBoundingClientRect(); return { top: rect.top, header: document.querySelector('[data-mobile-page-header]')?.getBoundingClientRect().bottom ?? 0, height: innerHeight } })
+  if (box.top < box.header - 1 || box.top > box.height / 2) failures.push(`${label}: ${detail} starts at ${Math.round(box.top)} (header ends ${Math.round(box.header)})`)
+  await page.tap('[data-system-split-back]')
+  if (!await page.waitForSelector('[data-system-split-layout="list"]', { timeout: 5000 }).catch(() => null)) failures.push(`${label}: Back did not return to the list`)
 }
 // Each Usage table scrolls inside itself; its first column stays in view at either end.
 const checkTables = async (page, label) => {
@@ -163,7 +171,7 @@ const checkTables = async (page, label) => {
 try {
   await fixture.start()
   assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'release-engineering' })).status, 201)
-  // A trailing deny without selectors marks the Agent restricted, so its card carries the policy badge.
+  // A trailing deny without selectors makes the Agent's layer an allowlist, shown on its row.
   assert.equal((await fixture.api('PUT', '/api/agents/release-engineering', { rules: [{ id: 'deny-everything-else', action: 'deny' }] })).status, 200)
   const ids = {}
   for (const [agentId, sessionId, parent] of [['main', LONG], ['main', 'helper', LONG], ['release-engineering', 'changelog-and-migration-notes-writer']]) {
@@ -209,6 +217,8 @@ try {
         }
         if (section === 'usage' && view.name.startsWith('portrait')) await checkTables(page, `${theme} ${view.name}`)
         if (section === 'agents') await checkAgents(page, `${theme} ${view.name}`, { phone: view.width < 768 })
+        if (view.name === 'portrait-390' && section === 'agents') await checkDetailPage(page, `${theme} ${view.name} agents`, '[data-architecture-agent-id="release-engineering"]', '[data-architecture-agent-inspector-id="release-engineering"]')
+        if (view.name === 'portrait-390' && section === 'sessions') await checkDetailPage(page, `${theme} ${view.name} sessions`, '[data-architecture-session-id$="changelog-and-migration-notes-writer"]', '[data-architecture-inspector-session-id]')
       }
     }
   }

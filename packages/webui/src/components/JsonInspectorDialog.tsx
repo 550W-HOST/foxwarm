@@ -12,6 +12,8 @@ interface JsonInspectorDialogProps {
   onRefresh?: () => void
   status?: ReactNode
   snapshotVersion?: number
+  /** Editor language of `text`; JSON opens folded to its second level. */
+  language?: 'json' | 'markdown'
 }
 
 const ignoreChange = () => {}
@@ -24,6 +26,7 @@ export default function JsonInspectorDialog({
   onRefresh,
   status,
   snapshotVersion = 0,
+  language = 'json',
 }: JsonInspectorDialogProps) {
   const titleId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -112,7 +115,7 @@ export default function JsonInspectorDialog({
         {status}
         {loading && <div role="status" className="shrink-0 px-4 py-2 text-xs text-fw-text-muted">Loading…</div>}
         <div data-json-inspector-content className="min-h-0 flex-1">
-          {text && <SimpleCodeEditor key={snapshotVersion} value={text} onChange={ignoreChange} language="json" readOnly height="100%" initialFoldLevel={2} focusRequest={1} ariaLabel={title} />}
+          {text && <SimpleCodeEditor key={snapshotVersion} value={text} onChange={ignoreChange} language={language} readOnly height="100%" initialFoldLevel={language === 'json' ? 2 : undefined} focusRequest={1} ariaLabel={title} />}
         </div>
       </div>
     </div>, document.body,

@@ -124,22 +124,23 @@ try {
   await page.evaluate(() => { location.hash = 'timers' })
   await page.waitForSelector('[data-system-section="timers"] [data-system-timers]')
 
-  // Narrow layout keeps the list and inspector usable.
+  // On a phone a row opens its details as a page with Back to the list.
   // Changing to a mobile viewport reloads the page.
   await page.setViewport({ width: 390, height: 844, isMobile: true })
   await page.waitForSelector('[data-fox-splash]', { hidden: true })
   await page.evaluate(() => { location.hash = 'timers' })
   await page.waitForSelector('[data-system-timer-id="script1"]', { visible: true })
-  await page.click('[data-system-timer-id="script1"]')
-  await page.waitForSelector('[data-system-timer-inspector="script1"]')
-  await page.waitForSelector('[data-system-timer-id="script1"][data-system-timer-selected="true"]')
-  assert.equal(await page.$('[data-system-timer-id="msg1"][data-system-timer-selected]'), null)
-  const overflow = await page.evaluate(() => document.querySelector('[data-system-timers]').scrollWidth - document.querySelector('[data-system-timers]').clientWidth)
-  assert.ok(overflow <= 1, `no horizontal overflow (${overflow}px)`)
+  const overflow = async () => page.evaluate(() => { const root = document.querySelector('[data-system-timers]'); return root.scrollWidth - root.clientWidth })
+  assert.ok(await overflow() <= 1, `no horizontal overflow (${await overflow()}px)`)
   await new Promise(done => setTimeout(done, 300)) // Let row color transitions settle.
   await shot(page, 'system-timers-narrow.png')
-  await page.$eval('[data-system-timer-inspector="script1"]', element => element.scrollIntoView())
+  await page.click('[data-system-timer-id="script1"]')
+  await page.waitForSelector('[data-system-split-layout="detail"] [data-system-timer-inspector="script1"]')
+  assert.equal(await page.$('[data-system-timer-id="msg1"]'), null, 'the detail page replaces the list')
+  assert.ok(await overflow() <= 1, `no horizontal overflow (${await overflow()}px)`)
   await shot(page, 'system-timers-narrow-inspector.png')
+  await page.click('[data-system-split-back]')
+  await page.waitForSelector('[data-system-split-layout="list"] [data-system-timer-id="msg1"]')
 
   assert.deepEqual(browserErrors, [])
   console.log('system timers e2e passed')

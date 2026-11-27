@@ -217,6 +217,7 @@ try {
   await page.waitForSelector('[data-architecture-agent-id="leaf"]')
   await page.click('[data-architecture-agent-id="leaf"]')
   await page.waitForSelector('[data-architecture-agent-inspector-id="leaf"]')
+  await page.click('[data-architecture-agent-inspector-id="leaf"] [data-agent-tab="settings"]')
   await chooseSelectOption(page, '[data-architecture-agent-inspector-id="leaf"] [data-agent-settings-inherit]', 'base')
   await page.click('[data-architecture-agent-inspector-id="leaf"] [data-agent-settings-save]:not(:disabled)')
   await until(async () => (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf').inherit === 'base', 'original Architecture inherit PUT')

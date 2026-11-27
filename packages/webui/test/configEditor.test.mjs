@@ -35,7 +35,8 @@ after(async () => {
 
 test('static config schemas are distinct, permissive, and omit the removed models path field', () => {
   assert.notEqual(schemas.MODELS_YAML_MODEL_URI, schemas.APP_CONFIG_YAML_MODEL_URI)
-  assert.equal(schemas.YAML_CONFIG_SCHEMAS.length, 3)
+  // Models, configuration, tool authorization and Agent rule layers.
+  assert.equal(schemas.YAML_CONFIG_SCHEMAS.length, 4)
   assert.equal(new Set([schemas.MODELS_YAML_MODEL_URI, schemas.APP_CONFIG_YAML_MODEL_URI, schemas.TOOL_AUTHORIZATION_YAML_MODEL_URI]).size, 3)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.additionalProperties, true)
   assert.equal(schemas.APP_CONFIG_SCHEMA.additionalProperties, true)
@@ -242,6 +243,26 @@ test('tool authorization schema agrees with the Main server parser on its corpus
   assert.equal(schema.additionalProperties, false)
   assert(schema.properties.rules.items.then.properties.op.anyOf[0].enum.includes('env.*'))
   assert(schema.properties.rules.items.then.properties.op.anyOf[0].enum.includes('secret.use'))
+})
+
+test('Agent rule layer schema accepts policy rules without caller selectors', () => {
+  assert.deepEqual(schemas.AGENT_RULES_SCHEMA, sharedSchemas.AGENT_RULES_SCHEMA)
+  const validate = new Ajv({ allErrors: true, strict: false }).compile(schemas.AGENT_RULES_SCHEMA)
+  const valid = [
+    [],
+    [{ id: 'no-exec', tool: 'exec', action: 'deny', reason: 'No commands.' }],
+    [{ id: 'build', tool: ['exec', 'write'], node: ['build-linux'], action: 'allow' }, { id: 'rest', action: 'deny' }],
+  ]
+  for (const document of valid) assert.equal(validate(document), true, `${JSON.stringify(document)}: ${JSON.stringify(validate.errors)}`)
+  const invalid = [
+    { rules: [] },
+    [{ id: 'x', tool: 'exec', action: 'maybe' }],
+    [{ id: 'x', agent: 'main', action: 'deny' }],
+    [{ id: 'x', session: 'main/main', action: 'deny' }],
+    [{ id: 'x', tool: 'exec', match: { sessionPattern: 'main/*' }, action: 'deny' }],
+  ]
+  for (const document of invalid) assert.equal(validate(document), false, JSON.stringify(document))
+  assert.equal(schemas.agentRulesYamlModelUri('docs writer'), 'inmemory://foxwarm/system/agents/docs%20writer/foxwarm-agent-rules.yaml')
 })
 
 test('models schema accepts complete image pricing at provider and model level and rejects partial or extra rates', () => {
