@@ -56,6 +56,9 @@ internal sealed class PgDatabase : IAsyncDisposable
     internal ValueTask<NpgsqlConnection> OpenAsync(CancellationToken token) =>
         source.OpenConnectionAsync(token);
 
+    /// <summary>Closes the pool's idle connections; connections in use close when returned.</summary>
+    internal void ClearPool() => source.Clear();
+
     public ValueTask DisposeAsync() => source.DisposeAsync();
 }
 
