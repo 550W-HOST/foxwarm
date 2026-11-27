@@ -371,6 +371,11 @@ internal sealed class ManagedChannels(
                 http.For("matrix")
             ),
             "qqbot" => new QQBotChannel(id, config, sessions, router, dependencies, health),
+            // Hosted mode never opens a WeWork callback listener, even from a stored document
+            // that predates the installation check.
+            "wework" when configuration.Hosted
+                && Models.AppConfigurationSplit.WeWorkCallbackListener(id, config) =>
+                throw new ChannelRequestException(Models.AppConfigurationSplit.WeWorkCallbackUnavailable),
             "wework" => new WeWorkChannel(
                 id,
                 config,

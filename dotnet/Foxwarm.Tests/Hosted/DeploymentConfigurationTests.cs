@@ -229,4 +229,21 @@ public sealed class DeploymentConfigurationTests
         foreach (var profile in new[] { TenantProfile.Hosted, TenantProfile.Operator })
             Assert.Empty(AppConfigurationSplit.TenantPaths(profile).Intersect(AppConfigurationSplit.DeploymentPaths));
     }
+
+    [Fact]
+    public void Import_refuses_a_WeWork_callback_listener()
+    {
+        var refused = Assert.Throws<Foxwarm.Hosted.Import.ImportRefusedException>(() =>
+            Foxwarm.Hosted.Import.ConfigSplit.Split(
+                "channels:\n  wework:\n    token: synthetic\n    encodingAESKey: synthetic\n    listenPort: 18731\n    listenPath: /wework\n"
+            )
+        );
+        Assert.Equal(
+            "config.yaml: WeWork callback mode isn't available in this deployment; use WebSocket mode.",
+            refused.Message
+        );
+        Foxwarm.Hosted.Import.ConfigSplit.Split(
+            "channels:\n  wework:\n    aibot:\n      websocket: {enabled: true, botId: synthetic, secret: synthetic}\n"
+        );
+    }
 }

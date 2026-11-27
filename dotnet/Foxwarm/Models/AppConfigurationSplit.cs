@@ -141,6 +141,33 @@ internal static class AppConfigurationSplit
         return kept;
     }
 
+    /// <summary>The refusal of a WeWork channel with a callback listener in hosted mode.</summary>
+    internal const string WeWorkCallbackUnavailable =
+        "WeWork callback mode isn't available in this deployment; use WebSocket mode.";
+
+    /// <summary>
+    /// Whether a channel is a WeWork channel in callback mode: its own HTTP listener on
+    /// <c>listenPort</c>/<c>listenPath</c>. In hosted mode that listener would bind a port of the
+    /// replica outside the tenant's request routing; webhook (send-only) and WebSocket modes
+    /// need no listener.
+    /// </summary>
+    internal static bool WeWorkCallbackListener(string id, JsonObject channel) =>
+        Foxwarm.Channels.ManagedChannels.Type(id, channel) == "wework"
+        && (
+            Foxwarm.Sessions.SessionWait.Number(channel["listenPort"]) is { } port && port != 0
+            || !string.IsNullOrWhiteSpace(Foxwarm.Sessions.SessionWait.Text(channel["listenPath"]))
+        );
+
+    /// <summary>Refuses channel settings hosted mode can't serve (installation and import).</summary>
+    internal static void RequireHostedChannels(JsonObject tenant)
+    {
+        if (tenant["channels"] is not JsonObject channels)
+            return;
+        foreach (var (id, value) in channels)
+            if (value is JsonObject channel && WeWorkCallbackListener(id, channel))
+                throw new InvalidDataException(WeWorkCallbackUnavailable);
+    }
+
     /// <summary>Refuses every path but the deployment paths in the deployment configuration.</summary>
     internal static void RequireDeploymentDocument(JsonObject deployment)
     {

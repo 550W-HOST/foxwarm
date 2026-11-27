@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Foxwarm.Hosted;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Models;
+using Foxwarm.Sessions;
 using Foxwarm.Storage;
 using Foxwarm.Tests.Hosted;
 using Foxwarm.Tools;
@@ -427,6 +428,52 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
         // A clean document loads with nothing ignored.
         await configuration.SaveAppAsync("sessionAutoTitle: true\n");
         Assert.Empty(backend.Open().IgnoredAppPaths);
+    }
+
+    // A WeWork callback listener would bind a replica port outside the tenant's request
+    // routing: installation refuses it, and a stored one never starts. Webhook (send-only) and
+    // WebSocket modes stay available.
+    [Fact]
+    public async Task A_WeWork_callback_listener_is_refused_and_never_started()
+    {
+        await using var backend = await CreateAsync();
+        const string Callback =
+            "channels:\n  office:\n    type: wework\n    token: synthetic\n    encodingAESKey: synthetic\n    listenPort: 18731\n    listenPath: /wework\n";
+        await backend.Documents.ReplaceAsync(ConfigDocumentName.Models, Encoding.UTF8.GetBytes(LocalModels), CancellationToken.None);
+        await backend.Documents.ReplaceAsync(ConfigDocumentName.Config, Encoding.UTF8.GetBytes(Callback), CancellationToken.None);
+        var configuration = backend.Open();
+        Assert.True(configuration.Hosted);
+        foreach (var raw in new[]
+        {
+            Callback,
+            "channels:\n  wework:\n    listenPath: /cb\n",
+            "channels:\n  wework:\n    listenPort: 18731\n",
+        })
+            Assert.Equal(
+                "WeWork callback mode isn't available in this deployment; use WebSocket mode.",
+                (await Assert.ThrowsAsync<InvalidDataException>(() => configuration.SaveAppAsync(raw))).Message
+            );
+
+        // The stored document predates the check: its adapter refuses to start.
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        Directory.CreateDirectory(work);
+        await using var manager = new SessionManager(
+            data,
+            work,
+            new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "local/wire", "synthetic", "", 713),
+            configuration.Models
+        );
+        manager.InitializeChannels(new MessageRouter(new SessionRuntime(manager)), configuration);
+        var refused = await Assert.ThrowsAnyAsync<Exception>(() => manager.ManagedChannels!.ChangeAsync("start", "office"));
+        Assert.Equal("WeWork callback mode isn't available in this deployment; use WebSocket mode.", refused.Message);
+
+        // Send-only and WebSocket modes install.
+        await configuration.SaveAppAsync(
+            "channels:\n  office:\n    type: wework\n    webhookUrl: https://example.invalid/hook\n    aibot:\n      websocket: {enabled: true, botId: synthetic, secret: synthetic}\n"
+        );
     }
 
     [Fact]

@@ -350,6 +350,9 @@ internal sealed partial class ModelConfiguration
     // The operator's deployment settings in hosted mode; null in file mode.
     internal JsonObject? Deployment => (JsonObject?)deployment?.DeepClone();
 
+    // Hosted mode: the app configuration is a tenant document over a deployment configuration.
+    internal bool Hosted => deployment is not null;
+
     // The effective app configuration of an app document: the document itself in file mode,
     // otherwise the tenant document with the deployment settings laid over it. A tenant document
     // being installed or read at startup may hold no deployment or unavailable settings.
@@ -372,7 +375,10 @@ internal sealed partial class ModelConfiguration
                 );
         }
         else if (tenantDocument)
+        {
             AppConfigurationSplit.RequireTenantDocument(document, profile);
+            AppConfigurationSplit.RequireHostedChannels(document);
+        }
         return AppConfigurationSplit.Merge(deployment, document);
     }
 

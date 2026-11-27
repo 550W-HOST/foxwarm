@@ -153,6 +153,14 @@ internal static class ConfigSplit
             expected.Remove(Bot);
         try
         {
+            AppConfigurationSplit.RequireHostedChannels(tenant);
+        }
+        catch (InvalidDataException error)
+        {
+            throw new ImportRefusedException($"{sourceName}: {error.Message}");
+        }
+        try
+        {
             AppConfigurationSplit.RequireTenantDocument(tenant);
             AppConfigurationSplit.RequireDeploymentDocument(deployment);
         }
