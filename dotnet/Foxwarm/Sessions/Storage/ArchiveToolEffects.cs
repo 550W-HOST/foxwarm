@@ -347,7 +347,10 @@ internal static class ArchiveToolEffects
         if (Text(exec?["cwd"]) is { } cwd)
             refs["cwd"] = Bounded(cwd, MaxText);
         var deliveries = new List<JsonObject>();
-        if (subcall?["sessionMessage"] is JsonObject delivery)
+        // A subcall keeps every delivery in sessionMessages; older rows kept one sessionMessage.
+        if (subcall?["sessionMessages"] is JsonArray list)
+            deliveries.AddRange(list.OfType<JsonObject>().Take(5));
+        else if (subcall?["sessionMessage"] is JsonObject delivery)
             deliveries.Add(delivery);
         else if (subcall is null && meta?["sessionMessages"] is JsonArray messages)
             deliveries.AddRange(messages.OfType<JsonObject>().Take(5));
@@ -563,15 +566,15 @@ internal static class ArchiveToolEffects
         string? summary,
         ToolEffectInitiator? initiator,
         string? runId,
-        JsonObject? delivery = null,
+        JsonArray? deliveries = null,
         string? fallbackNode = null
     )
     {
         var subcall = new JsonObject();
         if (exec is not null)
             subcall["exec"] = exec.DeepClone();
-        if (delivery is not null)
-            subcall["sessionMessage"] = delivery.DeepClone();
+        if (deliveries is { Count: > 0 })
+            subcall["sessionMessages"] = deliveries.DeepClone();
         return new(
             sessionId,
             0,

@@ -64,7 +64,12 @@ internal sealed class ToolScriptDetach
 
     // Receives the lean outcome of a segment that ended after detaching: completed, failed,
     // cancelled, or waiting for agent input.
-    internal Func<JsonObject, Task>? Finished { get; init; }
+    // Also receives the deliveries made after the hand-off.
+    internal Func<JsonObject, IReadOnlyList<JsonObject>, Task>? Finished { get; init; }
+
+    // Deliveries made after the hand-off, which the tool row does not show; written under Gate
+    // and read once the segment has settled.
+    internal List<JsonObject> Deliveries { get; } = [];
 
     // Printed output of the current segment so far; read under Gate.
     internal Func<string>? Output { get; set; }

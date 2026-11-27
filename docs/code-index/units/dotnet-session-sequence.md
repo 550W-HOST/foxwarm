@@ -22,7 +22,7 @@ Implements [D-session-delivery-seq](../threads/session-sequence-view.md#d-sessio
 | `ArchiveSequenceCursor` | `(at, sessionId?, seq?)` paging position; a time-only cursor is a minute boundary |
 | `SessionSequenceProjection.BuildPage` | k-way newest-first merge over candidate Sessions, minute-boundary page end (row cursor only for an oversized minute), normalization, pairing and visibility |
 | `SessionSequenceProjection.BuildIncremental` | Live append for known cursors and newly active Sessions |
-| `SessionSequenceProjection.Pair` | Exact, inferred, queued/unread, `pending: "older"` and child-creation links with stable keys |
+| `SessionSequenceProjection.Pair` | Exact, inferred, queued/unread, `pending: "older"` and child-creation links with stable keys; Task links carry `taskEvent` and, from envelopes that name it, `taskRecipient`. Outgoing deliveries come from a response's delivery list and from every record of a subcall's `sessionMessages` list, or the older single record of a completed subcall |
 | `ParseWrapper` / `WrapperTime` / `ParseDeliverySeq` | Leading trusted wrapper attributes, wrapper send time and ID anchors |
 | `WebUIChannel.RegisterSequenceRoutes` / `OpaquePeer` | `POST /api/session-sequence` validation, scoped visibility and process-keyed opaque peer IDs |
 | `TaskStore.Summaries` | Title/status of Tasks referenced by links, administrator view only |

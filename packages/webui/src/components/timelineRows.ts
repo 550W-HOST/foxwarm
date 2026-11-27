@@ -585,6 +585,8 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   && a.literalUserText === b.literalUserText
   && a.communication?.key === b.communication?.key && a.communication?.direction === b.communication?.direction
   && a.communication?.peerSessionId === b.communication?.peerSessionId && a.communication?.message === b.communication?.message && a.communication?.truncated === b.communication?.truncated
+  && a.communication?.origin === b.communication?.origin && a.communication?.task?.taskId === b.communication?.task?.taskId
+  && a.communication?.task?.event === b.communication?.task?.event && a.communication?.task?.recipient === b.communication?.task?.recipient && a.communication?.task?.title === b.communication?.task?.title
   && a.activity === b.activity
   && a.question === b.question
   && a.prevMsg === b.prevMsg
@@ -896,7 +898,14 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
       if (msg.role === 'user') {
         const inputKind = getConversationInputKind(msg)
-        if (inputKind === 'activity') addActivity(index, msg)
+        // A background run's finish event carries what the run delivered after its hand-off.
+        if (inputKind === 'activity' && deliveries?.length) {
+          addActivity(index, msg)
+          if (showInterAgentMessages) {
+            flushActivity()
+            for (const communication of deliveries) emitRow(index, null, false, null, { key: `${messageKeys[index]}-communication-${communication.key}`, communication })
+          }
+        } else if (inputKind === 'activity') addActivity(index, msg)
         else {
           flushActivity()
           emitRow(index, null, false, null, { key: messageKeys[index], literalUserText: inputKind === 'user' })

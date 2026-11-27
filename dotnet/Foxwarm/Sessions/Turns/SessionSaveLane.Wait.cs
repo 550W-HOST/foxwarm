@@ -267,16 +267,22 @@ public sealed partial class SessionSaveLane
     internal Task<bool> CommitRemoteExecCompletionAsync(
         string execId,
         string message,
-        string eventId
-    ) =>
-        AdmitWithReceiptAsync(
+        string eventId,
+        JsonArray? sessionMessages = null
+    )
+    {
+        var fields = new JsonObject { ["execId"] = execId, ["externalEventId"] = eventId };
+        if (sessionMessages is { Count: > 0 })
+            fields["sessionMessages"] = sessionMessages.DeepClone();
+        return AdmitWithReceiptAsync(
             new QueueItem(
                 QueueItemType.Background,
                 [new JsonObject { ["system"] = message }],
-                OpenFields: new JsonObject { ["execId"] = execId, ["externalEventId"] = eventId }
+                OpenFields: fields
             ),
             eventId
         );
+    }
 
     internal async Task<string?> StartWaitAsync(JsonObject declaration)
     {

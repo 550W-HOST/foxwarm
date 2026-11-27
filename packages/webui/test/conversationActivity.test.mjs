@@ -100,3 +100,21 @@ test('native hosted search counts the server call once across a deferred result 
   const result = { role: 'model', parts: [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [] }] } } }] }
   assert.equal(summary([search, result]), '1 call')
 })
+
+test('recorded deliveries count every Task notification, scripted subcall and background delivery', () => {
+  const record = (id, recipient = 'owner') => ({ id, targetSessionId: 'peer', message: 'm', task: { taskId: 't', event: 'transferred', recipient } })
+  const assign = call('assign', 'task', { action: 'assign', taskId: 't', ownerSessionId: 'next' })
+  const assigned = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'assign', name: 'task', response: receipt(2), __meta: { sessionMessages: [record('assign', 'previous-owner'), record('assign#2')] } } }] }
+  assert.equal(summary([assign, assigned]), '1 call · 2 sent')
+  const script = call('script', 'run_script', { code: 'x' })
+  const scripted = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'script', name: 'run_script', response: { status: 'failed' }, __meta: { toolScriptSubCalls: [
+    { id: 'a', name: 'task', status: 'completed', sessionMessages: [] },
+    { id: 'b', name: 'create_child_session', status: 'completed', sessionMessages: [record('b')] },
+    { id: 'c', name: 'run_script', status: 'completed', sessionMessages: [record('c'), record('c#2')] },
+    { id: 'd', name: 'send_to_session', status: 'completed', sessionMessage: { targetSessionId: 'peer', message: 'legacy' } },
+  ] } } }] }
+  // A scripted child creation counts its delivery, not a top-level child session.
+  assert.equal(summary([script, scripted]), '1 call · 4 sent')
+  const background = { role: 'user', parts: [{ system: '<foxwarm-system kind="event" type="background-script-finished">\nrunId: r\n</foxwarm-system>' }], __meta: { seq: 9, sessionMessages: [record('e'), record('f')] } }
+  assert.equal(summary([background]), '2 sent')
+})

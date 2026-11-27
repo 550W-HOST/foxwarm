@@ -511,19 +511,26 @@ internal sealed partial class SessionSequenceProjection
                             ["status"] = Str(sub["status"]) ?? "completed",
                         }
                     );
-                if (Str(sub["target"]) is { } subTarget && Str(sub["status"]) == "completed")
-                    lane.Outgoing.Add(
-                        new(
-                            subTarget,
-                            Str(sub["deliverySeq"]),
-                            subStart,
-                            Preview(Str(sub["message"])),
-                            row.Seq,
-                            callSeq,
-                            position,
-                            n + 1
-                        )
-                    );
+                // Every committed delivery of the subcall; rows written before the list kept one,
+                // shown only for a completed subcall.
+                var subDeliveries =
+                    (sub["deliveries"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
+                if (subDeliveries.Length == 0 && Str(sub["status"]) == "completed")
+                    subDeliveries = [sub];
+                foreach (var subDelivery in subDeliveries)
+                    if (Str(subDelivery["target"]) is { } subTarget)
+                        lane.Outgoing.Add(
+                            new(
+                                subTarget,
+                                Str(subDelivery["deliverySeq"]),
+                                subStart,
+                                Preview(Str(subDelivery["message"])),
+                                row.Seq,
+                                callSeq,
+                                position,
+                                n + 1
+                            )
+                        );
             }
             lane.Tools.Add(new(row.Seq, callSeq, position, total, name, start, end, spans));
             var item = new JsonObject

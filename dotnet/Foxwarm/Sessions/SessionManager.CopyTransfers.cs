@@ -289,7 +289,8 @@ internal sealed partial class SessionManager
         SessionOwner owner,
         string id,
         string message,
-        string? eventId = null
+        string? eventId = null,
+        JsonArray? sessionMessages = null
     )
     {
         try
@@ -308,7 +309,8 @@ internal sealed partial class SessionManager
                         : await owner.Entry.SaveLane.CommitRemoteExecCompletionAsync(
                             id,
                             message,
-                            eventId
+                            eventId,
+                            sessionMessages
                         );
                     if (admitted)
                         WakeNodeEventOwner(owner);

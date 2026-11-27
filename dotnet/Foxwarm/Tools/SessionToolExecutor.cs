@@ -913,7 +913,7 @@ internal sealed partial class SessionToolExecutor(
     {
         sessions.SetDeliverySeq(hosted, invocation.Value?.DeliverySeq(script: false));
         var (response, completionTarget) = await Manager
-            .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args)
+            .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args, RecordDelivery)
             .ConfigureAwait(false);
         var action = SessionWait.Text(args["action"]);
         var visible =
@@ -1098,6 +1098,34 @@ internal sealed partial class SessionToolExecutor(
             )
         )!.AsObject();
 
+    // Keeps one committed delivery of the current call as UI-only evidence, in delivery order.
+    // A call can cause several: an assignment notifies the new and previous owner.
+    private void RecordDelivery(SessionDelivery delivery)
+    {
+        if (invocation.Value is not { } current)
+            return;
+        var deliveries = current.SessionMessages ??= new JsonArray();
+        var record = new JsonObject
+        {
+            ["id"] = DeliveryId(current.CallId, deliveries.Count),
+            ["targetSessionId"] = delivery.TargetSessionId,
+            ["message"] = SessionOwner.Bound(delivery.Message, 32768),
+        };
+        if (delivery.Message.Length > 32768)
+            record["truncated"] = true;
+        if (delivery.DeliverySeq is not null)
+            record["deliverySeq"] = delivery.DeliverySeq;
+        if (delivery.Task is not null)
+            record["task"] = delivery.Task.DeepClone();
+        deliveries.Add(record);
+    }
+
+    /// <summary>The first delivery keeps its call's ID; later ones add their 1-based position.</summary>
+    internal static string DeliveryId(string callId, int index) =>
+        index == 0
+            ? callId
+            : callId + "#" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     private async Task<JsonObject> ExecuteAgentAsync(
         string name,
         JsonObject args,
@@ -1112,22 +1140,7 @@ internal sealed partial class SessionToolExecutor(
             name,
             args,
             cancellationToken,
-            (target, body) =>
-            {
-                if (invocation.Value is not { } current)
-                    return;
-                var delivery = new JsonObject
-                {
-                    ["id"] = current.CallId,
-                    ["targetSessionId"] = target,
-                    ["message"] = SessionOwner.Bound(body, 32768),
-                };
-                if (body.Length > 32768)
-                    delivery["truncated"] = true;
-                if (deliverySeq is not null)
-                    delivery["deliverySeq"] = deliverySeq;
-                current.SessionMessages = new JsonArray(delivery);
-            },
+            RecordDelivery,
             scriptScope.Value?.RunId,
             // Only a direct model call is visible as such in the Session's own history.
             !unattended && !Programmatic

@@ -84,6 +84,9 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
         })
         const key = getMessageStableKey(message, history.indexOf(message))
         if (communication && !countedInputs.has(key)) { countedInputs.add(key); received++ }
+        // Deliveries a background run made after its hand-off, recorded on its finish event.
+        const background = message.__meta?.sessionMessages
+        if (Array.isArray(background) && !countedInputs.has(`${key}:sent`)) { countedInputs.add(`${key}:sent`); sent += background.length }
       }
       for (const part of message.parts) {
         const item = hosted(part)
@@ -100,8 +103,20 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
         if (countedResponses.has(response) || response.tool_use_id && countedOutcomes.has(response.tool_use_id)) continue
         countedResponses.add(response)
         if (response.tool_use_id) countedOutcomes.add(response.tool_use_id)
+        // Recorded deliveries of scripted calls count even when the script failed later.
+        for (const subCall of response.__meta?.toolScriptSubCalls || []) {
+          if (Array.isArray(subCall.sessionMessages)) sent += subCall.sessionMessages.length
+          else if (subCall.status === 'completed' && subCall.sessionMessage) sent++
+        }
         if (response.response?.error !== undefined && response.response?.error !== null) continue
         const tool = call ? target(call) : { source: 'builtin', name: response.name, args: undefined }
+        // A direct call's recorded deliveries replace its receipt facts; older rows keep the receipt.
+        const recorded = Array.isArray(response.__meta?.sessionMessages)
+        if (recorded && tool.source === 'builtin' && ['task', 'create_child_session', 'send_to_session'].includes(tool.name)) {
+          sent += response.__meta!.sessionMessages!.length
+          if (tool.name === 'create_child_session' && /^Child session created: `[^`]+`/.test(typeof response.response?.output === 'string' ? response.response.output : '')) created++
+          continue
+        }
         if (tool.source !== 'builtin') continue
         const output = typeof response.response?.output === 'string' ? response.response.output : ''
         // Persisted historical Task receipts keep this fact in a JSON output envelope.

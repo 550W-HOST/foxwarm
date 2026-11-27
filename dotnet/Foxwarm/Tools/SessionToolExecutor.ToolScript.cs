@@ -120,11 +120,12 @@ internal sealed partial class SessionToolExecutor
                 {
                     // One event identity per detached segment; a run can detach again after
                     // an ask_agent continuation.
-                    Finished = outcome =>
+                    Finished = (outcome, deliveries) =>
                         sessions.DeliverToolScriptRunEventAsync(
                             hosted,
                             outcome,
-                            Guid.NewGuid().ToString("N")
+                            Guid.NewGuid().ToString("N"),
+                            deliveries
                         ),
                 }
                 : null;
@@ -194,7 +195,15 @@ internal sealed partial class SessionToolExecutor
                     );
                     if (execution.SessionMessages is { Count: > 0 } deliveries)
                         foreach (var delivery in deliveries.OfType<JsonObject>())
+                        {
                             context.SessionMessageDelivered?.Invoke(delivery);
+                            // A nested run reports its deliveries as its own call's, so the
+                            // calling run records them on the subcall that started it.
+                            if (nested && rootCall is not null)
+                                (rootCall.SessionMessages ??= new JsonArray()).Add(
+                                    delivery.DeepClone()
+                                );
+                        }
                     if (execution.ExecPlacement is { } placement)
                         context.ExecPlacementObserved?.Invoke(placement);
                     if (execution.Target is { } target)
@@ -220,7 +229,7 @@ internal sealed partial class SessionToolExecutor
                                     ),
                                 unattended ? new(0, unattendedOrigin, unattendedOriginId) : null,
                                 context.ToolScriptRunId,
-                                execution.SessionMessages?.OfType<JsonObject>().FirstOrDefault()
+                                execution.SessionMessages
                             )
                         );
                     if (

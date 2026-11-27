@@ -11,7 +11,7 @@ internal sealed partial class SessionManager
         string name,
         JsonObject? args,
         CancellationToken cancellationToken = default,
-        Action<string, string>? sessionMessageDelivered = null,
+        Action<SessionDelivery>? sessionMessageDelivered = null,
         string? toolScriptRunId = null,
         string? modelCallId = null,
         string? scriptRootCallId = null
@@ -41,7 +41,7 @@ internal sealed partial class SessionManager
         SessionOwner source,
         string name,
         JsonObject? args,
-        Action<string, string>? sessionMessageDelivered,
+        Action<SessionDelivery>? sessionMessageDelivered,
         string? toolScriptRunId,
         string? modelCallId,
         string? scriptRootCallId
@@ -357,7 +357,8 @@ internal sealed partial class SessionManager
                             ),
                             creatorCallId: modelCallId,
                             model: suggestedModel,
-                            scriptRootCallId: scriptRootCallId
+                            scriptRootCallId: scriptRootCallId,
+                            delivered: sessionMessageDelivered
                         );
                     if (taskId is null)
                     {
@@ -380,7 +381,8 @@ internal sealed partial class SessionManager
                                 callVisible = created.CallVisible;
                                 return created.Child;
                             },
-                            () => callVisible ? null : initialMessage
+                            () => callVisible ? null : initialMessage,
+                            sessionMessageDelivered
                         );
                         child = attached.Child;
                         delivered = attached.AssignmentDelivered;
@@ -437,16 +439,9 @@ internal sealed partial class SessionManager
                         source,
                         requested,
                         RequiredString(args, "message"),
-                        toolScriptRunId: toolScriptRunId
+                        toolScriptRunId: toolScriptRunId,
+                        delivered: sessionMessageDelivered
                     );
-                    try
-                    {
-                        sessionMessageDelivered?.Invoke(target, RequiredString(args, "message"));
-                    }
-                    catch (Exception error)
-                    {
-                        source.Entry.RecordBestEffortFailure(error);
-                    }
                     return (
                         Output(
                             target == requested

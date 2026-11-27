@@ -144,7 +144,7 @@ export interface FunctionResponse {
   __meta?: {
     resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>
     toolScriptSubCalls?: ToolScriptSubCall[]
-    sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>
+    sessionMessages?: SessionDeliveryRecord[]
     approval?: ToolApprovalMeta
     /** What the call resolved to; `node` is its execution Node for `source: 'node'`. */
     target?: { source?: string; name?: string; node?: string }
@@ -230,8 +230,20 @@ export interface MessagePart {
   }
 }
 
+/** UI-only evidence of one committed Session-sourced delivery; `task` describes a Task notification. */
+export interface SessionDeliveryRecord {
+  id: string
+  targetSessionId: string
+  message: string
+  truncated?: boolean
+  deliverySeq?: string
+  task?: { taskId: string; event: string; title?: string; recipient: string }
+}
+
 export interface ToolScriptSubCall {
+  /** Rows written before delivery lists kept one delivery. */
   sessionMessage?: { targetSessionId: string; message: string; truncated?: boolean };
+  sessionMessages?: SessionDeliveryRecord[];
   id: string
   name: string
   status: 'running' | 'completed' | 'failed'

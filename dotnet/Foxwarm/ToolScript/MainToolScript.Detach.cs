@@ -130,7 +130,10 @@ internal sealed partial class MainToolScript
             if (await detach.Decision && detach.Finished is { } finished)
                 try
                 {
-                    await finished(outcome);
+                    JsonObject[] deliveries;
+                    lock (detach.Gate)
+                        deliveries = [.. detach.Deliveries];
+                    await finished(outcome, deliveries);
                 }
                 catch (Exception error)
                 {

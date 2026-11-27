@@ -1,6 +1,7 @@
 import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHistory'
 import { subscribeWindowFrame, windowFrameActive } from './windowFrame'
-import { SessionMessageNamesContext } from './components/SessionMessageCard'
+import { SessionMessageNamesContext, TaskLinkContext } from './components/SessionMessageCard'
+import type { TaskFocusRequest } from './components/TasksView'
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type Modifier } from '@dnd-kit/core'
 import { getEventCoordinates } from '@dnd-kit/utilities'
@@ -1134,6 +1135,14 @@ function App() {
     upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
     navigateToTab(TASKS_TAB_ID)
   }
+  const [taskFocus, setTaskFocus] = useState<TaskFocusRequest | null>(null)
+  // Stable for the communication cards' context; the tab helpers are recreated each render.
+  const openTasksTabRef = useRef(openTasksTab)
+  openTasksTabRef.current = openTasksTab
+  const openTask = useCallback((taskId: string) => {
+    setTaskFocus(current => ({ taskId, nonce: (current?.nonce || 0) + 1 }))
+    openTasksTabRef.current()
+  }, [])
 
   const openLogsTab = () => {
     upsertTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }, { activate: true })
@@ -1752,7 +1761,7 @@ function App() {
       )
     }
 
-    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView mobileHome={tab.id.startsWith('mobile:')} onBack={onBack} onOpenSession={openChatTab} /></Suspense>
+    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView mobileHome={tab.id.startsWith('mobile:')} onBack={onBack} onOpenSession={openChatTab} focus={taskFocus} /></Suspense>
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
@@ -2139,7 +2148,7 @@ function App() {
   const workbenchContentLayout = useMemo(() => [root, isMobile, showSessionList, mobilePaneId, sidebarWidth, sidebarCollapsed, setupOobe],
     [root, isMobile, showSessionList, mobilePaneId, sidebarWidth, sidebarCollapsed, setupOobe])
   const communicationNames = useMemo(() => Object.fromEntries(sessions.flatMap(session => [session.id, ...(session.aliases || [])].map(id => [id, session.displayName || session.id]))),[sessions])
-  const renderStableContent = () => <SessionMessageNamesContext.Provider value={communicationNames}><WorkbenchContentLayer>{allTabs.map(tab => {
+  const renderStableContent = () => <SessionMessageNamesContext.Provider value={communicationNames}><TaskLinkContext.Provider value={openTask}><WorkbenchContentLayer>{allTabs.map(tab => {
     const pane = findPaneContainingTab(root, tab.id)
     if (!pane) return null
     const visible = (isMobile || !pane.collapsed) && pane.activeTabId === tab.id
@@ -2153,7 +2162,7 @@ function App() {
       navigationPending={pendingChatNavigation?.paneId === pane.id ? pendingChatNavigation : null}
       canClose={!(tab.type === 'setup' && setupOobe)}
       renderContent={() => renderTabContent(tab, isMobile ? handleBackToList : undefined, visible)} />
-  })}</WorkbenchContentLayer></SessionMessageNamesContext.Provider>
+  })}</WorkbenchContentLayer></TaskLinkContext.Provider></SessionMessageNamesContext.Provider>
 
   const renderWorkbenchSurface = (content: ReactNode) => (
     <DndContext

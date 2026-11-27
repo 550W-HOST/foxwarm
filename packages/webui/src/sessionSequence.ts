@@ -78,6 +78,8 @@ export interface SequenceLink {
   pending?: 'older'
   taskId?: string
   taskEvent?: string
+  /** The recipient's role on envelopes that name it: owner, previous-owner or creator. */
+  taskRecipient?: string
   mode?: string
 }
 
@@ -348,17 +350,20 @@ const LINK_TITLES: Record<SequenceLinkKind, string> = {
   event: 'Notice',
 }
 
+// The events Task notifications carry; a transfer reads differently for the new and the previous owner.
 const TASK_EVENTS: Record<string, string> = {
   assigned: 'Task assigned',
-  completed: 'Task completed',
-  cancelled: 'Task cancelled',
+  transferred: 'Task reassigned',
   released: 'Task released',
-  reassigned: 'Task reassigned',
-  updated: 'Task updated',
+  note: 'Task note',
+  completed: 'Task completed',
 }
 
 export function sequenceLinkTitle(link: SequenceLink): string {
-  if (link.kind === 'task') return (link.taskEvent && TASK_EVENTS[link.taskEvent]) || 'Task update'
+  if (link.kind === 'task') {
+    if (link.taskEvent === 'transferred' && link.taskRecipient === 'previous-owner') return 'Task transferred'
+    return (link.taskEvent && TASK_EVENTS[link.taskEvent]) || 'Task update'
+  }
   if (link.kind === 'spawn') return link.mode === 'history-inherited' ? 'Forked session' : link.mode === 'user-child-created' ? 'Session created by you' : 'New session'
   if (link.kind === 'event' && link.from.label) return link.from.label
   return LINK_TITLES[link.kind]

@@ -39,6 +39,8 @@ internal sealed partial class SessionSequenceProjection
                     link["taskId"] = taskId;
                     if (attributes.GetValueOrDefault("event") is { Length: > 0 } taskEvent)
                         link["taskEvent"] = taskEvent;
+                    if (attributes.GetValueOrDefault("recipient") is { Length: > 0 } recipient)
+                        link["taskRecipient"] = recipient;
                 }
                 switch (incoming.Type)
                 {

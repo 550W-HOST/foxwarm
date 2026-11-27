@@ -246,7 +246,12 @@ internal static partial class SqliteArchiveSequence
                   'durationMs',json_extract(s.value,'$.durationMs'),
                   'target',json_extract(s.value,'$.sessionMessage.targetSessionId'),
                   'deliverySeq',json_extract(s.value,'$.sessionMessage.deliverySeq'),
-                  'message',{Text("s.value", "'$.sessionMessage.message'")}))
+                  'message',{Text("s.value", "'$.sessionMessage.message'")},
+                  'deliveries',(SELECT json_group_array(json_object(
+                      'target',json_extract(sd.value,'$.targetSessionId'),
+                      'deliverySeq',json_extract(sd.value,'$.deliverySeq'),
+                      'message',{Text("sd.value", "'$.message'")}))
+                    FROM json_each(s.value,'$.sessionMessages') sd)))
                 FROM json_each(message_json,{Part}||'.functionResponse.__meta.toolScriptSubCalls') s)))
             FROM json_each(message_json,'$.parts') p
             WHERE json_type(message_json,{Part}||'.functionResponse')='object'))

@@ -155,7 +155,10 @@ function SessionReference({ sessionId, agent, compact = true, onOpenSession }: {
   </span>
 }
 
-export default function TasksView({ onBack, onOpenSession: navigateToSession, mobileHome = false }: { onBack?: () => void; onOpenSession?: (sessionId: string) => void; mobileHome?: boolean }) {
+/** A request to show one Task; the nonce repeats a request for the same Task. */
+export interface TaskFocusRequest { taskId: string; nonce: number }
+
+export default function TasksView({ onBack, onOpenSession: navigateToSession, mobileHome = false, focus }: { onBack?: () => void; onOpenSession?: (sessionId: string) => void; mobileHome?: boolean; focus?: TaskFocusRequest | null }) {
   const tabHeader = useWorkbenchTabHeader()
   const rootRef = useRef<HTMLElement>(null)
   const filterRef = useRef<HTMLDivElement>(null)
@@ -235,6 +238,13 @@ export default function TasksView({ onBack, onOpenSession: navigateToSession, mo
     document.addEventListener('pointerdown', closeOutside)
     return () => document.removeEventListener('pointerdown', closeOutside)
   }, [filtersOpen])
+
+  // A linked Task opens in All, so its row is in the list whatever its status.
+  useEffect(() => {
+    if (!focus) return
+    setScope('all')
+    setSelectedId(focus.taskId)
+  }, [focus])
 
   useEffect(() => {
     if (!selectedId || !isNarrow) return

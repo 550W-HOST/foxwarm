@@ -695,6 +695,13 @@ public sealed partial class LocalSessionTurnHost
                     message["__meta"] = meta = new JsonObject();
                 meta["questionAnswer"] = answer.DeepClone();
             }
+            // Display-only deliveries a background run made after its hand-off.
+            if (item.OpenFields?["sessionMessages"] is JsonArray deliveries)
+            {
+                if (message["__meta"] is not JsonObject meta)
+                    message["__meta"] = meta = new JsonObject();
+                meta["sessionMessages"] = deliveries.DeepClone();
+            }
             // Administrator-only evidence of who sent WebUI input; scoped projections remove it.
             if (item.OpenFields?["sender"] is JsonObject sender)
             {

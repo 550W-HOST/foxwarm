@@ -12,7 +12,7 @@ Provides a Tasks singleton workbench tab with Table and Board views, manual Refr
 | Symbol | Responsibility |
 |---|---|
 | `StatusBadge` / `TaskStatusBadge` / `NodeStatusBadge` | Share the existing Tasks badge geometry and semantic tones without sharing Task/Node state models |
-| `TasksView` | Own the selected view, bounded task windows, selected task details, loading/error states and manual refresh |
+| `TasksView` | Own the selected view, bounded task windows, selected task details, loading/error states and manual refresh. A `focus` request (from a Task card's Task ID control through App's `openTask`) switches to All and selects that Task |
 | `SessionSelector` | Controlled bounded Session search/exact hydration control shared by task creation and owner changes |
 | `readTasks` | Read one deployment-relative JSON endpoint with cancellation and an actionable API error |
 | `writeTask` | Send deployment-relative JSON user mutations and surface server task errors |
