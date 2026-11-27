@@ -83,7 +83,9 @@ public sealed partial class ToolAuthorizationEffectsTests
             manager.AuthorizeToolAsync(caller, Exec("rm"), execution.Files, CancellationToken.None)
         );
         Assert.IsNotType<ToolApprovalRequiredException>(denied);
-        Assert.StartsWith("The operator doesn't allow rm.", denied.Message);
+        // The operator's own reason isn't shown; the deny reads as the deployment's restriction.
+        Assert.StartsWith("Blocked by a restriction of this deployment's operator.", denied.Message);
+        Assert.DoesNotContain("The operator doesn't allow rm.", denied.Message);
         Assert.Contains("Rule `no-rm` (#1) in the operator ceiling", denied.Message);
 
         var result = await Explain(
@@ -102,7 +104,11 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal("ceiling", rm["layers"]![0]!["layer"]!.GetValue<string>());
         Assert.Equal("deny", rm["layers"]![0]!["decision"]!.GetValue<string>());
         Assert.Equal("no-rm", rm["layers"]![0]!["rule"]!["id"]!.GetValue<string>());
-        Assert.Equal("The operator doesn't allow rm.", rm["layers"]![0]!["rule"]!["reason"]!.GetValue<string>());
+        Assert.Equal(
+            "Blocked by a restriction of this deployment's operator.",
+            rm["layers"]![0]!["rule"]!["reason"]!.GetValue<string>()
+        );
+        Assert.DoesNotContain("The operator doesn't allow rm.", result.ToJsonString());
         // The tenant's own layer still reports its allow.
         Assert.Equal("global", rm["layers"]![1]!["layer"]!.GetValue<string>());
         Assert.Equal("tenant-exec", rm["layers"]![1]!["rule"]!["id"]!.GetValue<string>());
@@ -133,6 +139,10 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Equal(OperatorCeiling.Layer, ls.Assessment.Asking.Single().Layer);
         Assert.Equal("confirm-ls", ls.Assessment.Asking.Single().Decision.Rule!["id"]!.GetValue<string>());
+        Assert.Equal(
+            "This call needs approval for a step its approval does not cover (node `exec`, rule confirm-ls), and approval can't be requested at this point. It was not executed.",
+            ls.Message
+        );
 
         // Both ask: one approval, with the shorter deadline and only approvers both admit.
         var read = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>

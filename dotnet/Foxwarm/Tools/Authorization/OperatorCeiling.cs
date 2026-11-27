@@ -31,6 +31,9 @@ internal static class OperatorCeiling
     /// </summary>
     internal const string Layer = ":ceiling";
 
+    /// <summary>The reason a ceiling deny gives.</summary>
+    internal const string DenialReason = "Blocked by a restriction of this deployment's operator.";
+
     /// <summary>
     /// Parses and validates a ceiling document: a version-1 policy without allow rules and
     /// without a default other than the implicit pass.
@@ -43,10 +46,17 @@ internal static class OperatorCeiling
                 "An operator ceiling has no defaultAction: anything its rules don't match passes."
             );
         foreach (var rule in (policy.Value["rules"] as System.Text.Json.Nodes.JsonArray ?? []).OfType<System.Text.Json.Nodes.JsonObject>())
-            if (SessionWait.Text(rule["action"]) == "allow")
+        {
+            var action = SessionWait.Text(rule["action"]);
+            if (action == "allow")
                 throw new InvalidDataException(
                     $"Operator ceiling rule `{SessionWait.Text(rule["id"])}` allows; a ceiling rule may only deny or ask."
                 );
+            // What a tenant is shown for a ceiling deny, wherever a rule's reason appears
+            // (the denial, explain); the operator's own reason stays in its document.
+            if (action == "deny")
+                rule["reason"] = DenialReason;
+        }
         return policy with { PassesByDefault = true };
     }
 
