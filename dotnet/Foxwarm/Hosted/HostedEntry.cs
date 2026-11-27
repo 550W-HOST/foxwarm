@@ -293,10 +293,15 @@ internal static class HostedEntry
             var keys = new HostedKeyRing(tenant.Database, current, previous);
             keys.OpenOrCreate();
             tenant.KeyRing = keys;
-            // The Agents' files are in the tenant's Agent store; the host's Agents root is a
-            // directory of the replica that nothing creates (the scratch guard checks it).
+            // A general runtime reads the Agent store. The operator opens its physical Agent
+            // directories on the persistent volume, under its immutable database identity.
             var scratch = bootstrap.RequireScratchRoot();
-            paths = HostPaths.ForDataRoot(scratch) with { AgentsRoot = Path.Combine(scratch, "agents") };
+            paths = HostPaths.ForDataRoot(scratch) with
+            {
+                AgentsRoot = profile == TenantProfile.Operator
+                    ? bootstrap.OperatorAgentsRoot(tenant.Database.TenantId)
+                    : Path.Combine(scratch, "agents"),
+            };
             configuration = new ModelConfiguration(
                 paths,
                 new ConfigurationSources(
