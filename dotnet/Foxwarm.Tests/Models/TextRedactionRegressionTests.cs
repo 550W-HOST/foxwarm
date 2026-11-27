@@ -542,6 +542,81 @@ public sealed class TextRedactionRegressionTests
         }
     }
 
+    // A redacting target the egress policy refuses ends the request when the only other
+    // target doesn't redact, even though that plain primary is the route's fallback: the
+    // alternative is judged by the requirement the redacting leaf set.
+    [Fact]
+    public async Task A_refused_redacting_secondary_doesnt_fail_over_to_a_cooling_plain_primary()
+    {
+        await using var detector = await TextDetectionPeer.StartAsync();
+        await using var fixture = await Foxwarm.Tests.Net.EgressFixture.StartAsync();
+        fixture.Name("plain.example", Foxwarm.Tests.Net.EgressFixture.PublicV4);
+        fixture.Name("secret.internal", System.Net.IPAddress.Parse("10.0.0.1"));
+        // The detector is the one loopback exception.
+        var egress = fixture.Hosted(
+            Foxwarm.Net.EgressRules.Parse(ConfigurationYaml.Parse("allow: {hosted: [127.0.0.1/32]}", "egress"))
+        );
+        var catalog = HostModels.Parse(
+            new JsonObject
+            {
+                ["providers"] = new JsonObject
+                {
+                    ["q"] = AnthropicProvider(new Uri($"http://plain.example:{fixture.Port}/v1"), null),
+                    ["r"] = AnthropicProvider(new Uri($"http://secret.internal:{fixture.Port}/v1"), detector.Endpoint),
+                    ["route"] = new JsonObject
+                    {
+                        ["providerType"] = "failover",
+                        ["targets"] = new JsonArray("q", "r"),
+                        ["failureThreshold"] = 1,
+                    },
+                },
+            },
+            new()
+        );
+        var routing = new ModelRouting();
+        var request = routing.Begin("route", catalog.Resolve("route"));
+        routing.Failed(request, routing.Select(request, "k"), exhausted: true);
+        using var http = ProviderHttpRequest.CreateClient(egress);
+        using var keys = new TextRedactionKeys(allLabels: true);
+        var events = new List<ModelRetryEvent>();
+        var owner = new ModelRequestOwner(
+            http,
+            new(new Uri("http://plain.example/v1"), "m", "q", "", "", 100),
+            routing,
+            egress,
+            (_, _) => Task.CompletedTask,
+            secrets: keys.Secrets
+        );
+        var error = await Assert.ThrowsAsync<ModelRequestException>(() =>
+            owner.RequestAsync(
+                "s",
+                owner.Capture(catalog, "route", null),
+                "cache",
+                "turn",
+                [ChatResult.Text("input").AssistantMessage!],
+                (_, _) => Task.FromResult(""),
+                retry =>
+                {
+                    events.Add(retry);
+                    return Task.FromResult(true);
+                },
+                null,
+                null,
+                null,
+                default,
+                maxAttempts: 6
+            )
+        );
+        Assert.Equal((1, "r/m", true), (error.Final.Attempt, error.Final.ModelId, error.Final.Final));
+        Assert.Contains("blocked by this deployment's network policy", error.Message);
+        // One final notice, no retry announced; the plain primary received nothing and the
+        // refused target was looked up once.
+        Assert.Equal([true], events.Select(item => item.Final));
+        Assert.Equal(0, fixture.Requests);
+        Assert.Equal(1, fixture.Lookups.Count(name => name == "secret.internal"));
+        Assert.DoesNotContain("plain.example", fixture.Lookups);
+    }
+
     // F8: failover never moves a request that started on a redacting model to one without
     // redaction. Such targets are passed over; when every redacting target is cooling, the
     // last of them is retried within the normal retry budget.

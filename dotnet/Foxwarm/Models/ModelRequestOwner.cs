@@ -205,6 +205,8 @@ internal sealed class ModelRequestOwner(
         // Targets this request's egress policy refused: never retried, not counted against
         // their route health, passed over like ineligible ones.
         var refused = new HashSet<string>(StringComparer.Ordinal);
+        // The latest refusal, which ends the request if no admissible target is left.
+        ModelRetryEvent? lastRefusal = null;
         try
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
@@ -232,6 +234,7 @@ internal sealed class ModelRequestOwner(
                 {
                     redactionRequired = null;
                     refused.Clear();
+                    lastRefusal = null;
                 }
                 // Route health is shared by every Session. When a failover route's primary
                 // target redacts, every request on it admits only redacting targets from its
@@ -265,6 +268,15 @@ internal sealed class ModelRequestOwner(
                 redactionRequired ??=
                     leaf.Configuration["textRedaction"] is JsonObject started
                     && TextRedactionOptions.FromResolved(started) is not null;
+                // Selection falls back to an ineligible target when nothing else is left (route
+                // health can also change between the refusal and this selection): a refused
+                // target is never tried again, the request ends with its refusal.
+                if (refused.Contains(leaf.Key) && lastRefusal is { } ended)
+                    throw new ModelRequestException(
+                        $"API request failed after {ended.Attempt} attempts: {ended.Reason}",
+                        ended with { NextAttempt = null, DelayMs = null, Final = true },
+                        scope
+                    );
                 if (redactionRequired == true && !Redacts(catalog, leaf.Key))
                     throw new ModelPreparationException(
                         string.Format(RedactionFailoverRefused, leaf.Key)
@@ -713,15 +725,16 @@ internal sealed class ModelRequestOwner(
                 if (failure.PolicyRefusal)
                 {
                     refused.Add(leaf.Key);
+                    // The redaction requirement as this leaf settled it, not as it stood
+                    // before selection: an alternative must satisfy both conditions.
+                    var requireRedaction = redactionRequired == true;
+                    var refusalCatalog = catalog;
+                    bool Admissible(string target) =>
+                        !refused.Contains(target) && (!requireRedaction || Redacts(refusalCatalog, target));
                     failsOver =
                         request is not null
-                        && routing.Select(
-                            request,
-                            cacheKey,
-                            target => !refused.Contains(target) && redacting?.Invoke(target) != false
-                        ) is { } alternative
-                        && !refused.Contains(alternative.TargetKey)
-                        && redacting?.Invoke(alternative.TargetKey) != false;
+                        && routing.Select(request, cacheKey, Admissible) is { } alternative
+                        && Admissible(alternative.TargetKey);
                 }
                 var final =
                     failure.PolicyRefusal ? !failsOver || attempt == maxAttempts
@@ -756,6 +769,8 @@ internal sealed class ModelRequestOwner(
                     cause,
                     explanation
                 );
+                if (failure.PolicyRefusal)
+                    lastRefusal = value;
                 var delivered = false;
                 if (retry is not null)
                 {
