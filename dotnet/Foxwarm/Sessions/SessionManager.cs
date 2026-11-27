@@ -980,7 +980,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 ? Task.CompletedTask
                 : hosted.Compactor.BeforeContinuationAsync(result, consume, token);
         if (Capabilities.Limits is not null)
+        {
             registry.TurnAdmission = EnterTurnAsync;
+            registry.AdmissionClosed = admissionStop.Token;
+            registry.TurnAdmissionWaiting = hosted.PublishStateChanged;
+        }
         registry.OnSafePoint = _ =>
             ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                 ? Task.CompletedTask

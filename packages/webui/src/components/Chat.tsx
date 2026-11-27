@@ -1893,7 +1893,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         sessionMissing={sessionMissing}
         loading={loading}
         stopPending={pendingControl === 'stop' || !!sessionRecord?.runtimeState?.stopping}
-        sessionRunning={isSessionRuntimeActive({runtimeState: sessionRecord?.runtimeState, busy: sessionBusy})}
+        sessionRunning={isSessionRuntimeActive({runtimeState: sessionRecord?.runtimeState, busy: sessionBusy}) || !!sessionRecord?.runtimeState?.processing}
         onStop={webUiIdentityMode ? undefined : handleStop}
         asrAvailable={asrAvailable}
         modelOptions={modelOptions}

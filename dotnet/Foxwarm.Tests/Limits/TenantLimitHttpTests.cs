@@ -92,11 +92,16 @@ public sealed class TenantLimitHttpTests
         var holder = await f.Manager.CreateNamedAsync("main", "holder", null, null);
         using var slot = await holder.Registry.TurnAdmission!(default);
         var owner = (await f.Manager.GetExistingAsync("uploads"))!;
+        var waitingPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        owner.Changed += _ =>
+        {
+            if (owner.Processing && !owner.Metadata().Busy && owner.Entry.HasProcessor)
+                waitingPublished.TrySetResult();
+        };
         await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("pending input"));
         var waiting = owner.StartProcessing();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!owner.Entry.HasProcessor)
-            await Task.Delay(5, deadline.Token);
+        await waitingPublished.Task.WaitAsync(deadline.Token);
         Assert.False(owner.Metadata().Busy);
         using var response = path switch
         {

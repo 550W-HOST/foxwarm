@@ -192,9 +192,23 @@ internal sealed partial class SessionCompactor
         }
         finally
         {
-            hosted.ClearCompactRuntime(run.OperationId);
+            try
+            {
+                hosted.ClearCompactRuntime(run.OperationId);
+            }
+            catch (Exception error)
+            {
+                Report(error);
+            }
             if (run.PhaseLease is not null)
-                hosted.EndCompactPhase(run.PhaseLease);
+                try
+                {
+                    hosted.EndCompactPhase(run.PhaseLease);
+                }
+                catch (Exception error)
+                {
+                    Report(error);
+                }
             run.Cancellation.Dispose();
             run.Completion.TrySetResult();
             lifetimes.TryRemove(run, out _);
@@ -300,6 +314,7 @@ internal sealed partial class SessionCompactor
         }
         run.OwnsProcessor = true;
         var claimed = false;
+        var handedOff = false;
         try
         {
             // The tenant's busy-turn limit counts a standalone busy window like a turn: one
@@ -309,9 +324,17 @@ internal sealed partial class SessionCompactor
             {
                 try
                 {
-                    run.TurnSlot = sourceTurn?.BorrowTurnSlot() ?? await admit(run.Cancellation.Token);
+                    run.TurnSlot = sourceTurn?.BorrowTurnSlot();
+                    if (run.TurnSlot is null)
+                    {
+                        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(
+                            run.Cancellation.Token, hosted.Registry.AdmissionClosed);
+                        run.TurnSlot = await admit(waiting.Token);
+                    }
                 }
-                catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
+                catch (OperationCanceledException) when (
+                    run.Cancellation.IsCancellationRequested || hosted.Registry.AdmissionClosed.IsCancellationRequested
+                )
                 {
                     return new(false, false, false, true);
                 }
@@ -321,21 +344,13 @@ internal sealed partial class SessionCompactor
                 return new(false, false, false, true);
             run.PhaseLease = hosted.BeginCompactPhase();
             _ = RunStandaloneAsync(run, guidance);
+            handedOff = true;
             return new(false, true, false, false);
         }
         finally
         {
-            if (!claimed)
-            {
-                entry.ReleaseProcessor();
-                entry.NotifyProcessorReleased();
-                run.TurnSlot?.Dispose();
-                run.PipelineDone.TrySetResult();
-                await FinishAsync(run);
-                // A Stop that found this claim but no turn: a turn processor finalizes it.
-                if (entry.HasUnobservedStop)
-                    _ = hosted.StartProcessing();
-            }
+            if (!handedOff)
+                await SettleStandaloneAsync(run, claimed);
         }
     }
 
@@ -354,6 +369,13 @@ internal sealed partial class SessionCompactor
         }
         finally
         {
+            await SettleStandaloneAsync(run, claimed: true);
+        }
+    }
+
+    private async Task SettleStandaloneAsync(CompactRun run, bool claimed)
+    {
+        if (claimed)
             try
             {
                 await hosted.Entry.SaveLane.ReleaseStandaloneCompactAsync();
@@ -362,19 +384,23 @@ internal sealed partial class SessionCompactor
             {
                 Report(error);
             }
-            hosted.Entry.ReleaseProcessor();
-            hosted.Entry.NotifyProcessorReleased();
-            // After the claim, so the next turn finds this Session idle.
-            run.TurnSlot?.Dispose();
-            run.PipelineDone.TrySetResult();
-            await FinishAsync(run);
+        hosted.Entry.ReleaseProcessor();
+        hosted.Entry.NotifyProcessorReleased();
+        run.TurnSlot?.Dispose();
+        run.PipelineDone.TrySetResult();
+        await FinishAsync(run);
+        try
+        {
             hosted.PublishStateChanged();
-            if (
-                !hosted.Entry.WithState(state => state.Busy || state.Stopping)
-                && hosted.Registry.HasRunnableWork(hosted.Entry)
-            )
-                _ = hosted.StartProcessing();
         }
+        catch (Exception error)
+        {
+            Report(error);
+        }
+        if (!hosted.Registry.Runner.Closing && !hosted.Entry.Retired &&
+            (hosted.Entry.HasUnobservedStop || (!hosted.Entry.WithState(state => state.Busy || state.Stopping)
+                && hosted.Registry.HasRunnableWork(hosted.Entry))))
+            hosted.Registry.Trigger(hosted.Id);
     }
 
     public async Task<bool> AutoAfterTurnAsync(ChatResult result)

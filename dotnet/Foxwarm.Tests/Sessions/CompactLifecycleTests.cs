@@ -57,6 +57,67 @@ public sealed partial class CompactLifecycleTests
     }
 
     [Fact]
+    public async Task ClosingAdmissionEndsAWaitingStandaloneCompact()
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        using var closing = new CancellationTokenSource();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        f.Owner.Registry.AdmissionClosed = closing.Token;
+        f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        using var held = await slots.EnterAsync();
+        var starting = f.Owner.Compactor.StartManualAsync();
+        try
+        {
+            Assert.False(starting.IsCompleted);
+            closing.Cancel();
+            Assert.False((await starting.WaitAsync(TimeSpan.FromSeconds(3))).Started);
+            Assert.False(f.Owner.Entry.HasProcessor);
+        }
+        finally { await f.Owner.Compactor.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task AFailedStandalonePhasePublicationReturnsTheBusyClaimAndSlot()
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        f.Owner.Changed += _ =>
+        {
+            if (f.Owner.Compacting) throw new IOException("phase publication failed");
+        };
+        await Assert.ThrowsAsync<IOException>(() => f.Owner.Compactor.StartManualAsync());
+        Assert.False(f.Owner.Compacting);
+        Assert.False(f.Owner.Metadata().Busy);
+        Assert.False(f.Owner.Entry.HasProcessor);
+        Assert.False(f.Owner.Compactor.Active);
+        Assert.Equal(0, slots.InUse);
+    }
+
+    [Fact]
+    public async Task CancellingAWaitingCompactReschedulesItsQueuedInput()
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        using var held = await slots.EnterAsync();
+        var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var starting = f.Owner.Compactor.StartManualAsync();
+        f.Owner.Registry.TriggerOverride = _ =>
+        {
+            if (!f.Owner.Entry.HasProcessor) wake.TrySetResult();
+            return Task.CompletedTask;
+        };
+        await f.Owner.Registry.Ingress.EnqueueAsync(f.Owner.Id, QueueItem.UserText("next input"));
+        await f.Owner.Compactor.StopAsync();
+        Assert.False((await starting).Started);
+        await wake.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public void Compact_plan_schema_allows_direct_or_repaired_file_submission()
     {
         var definition = CompactPrompt.ToolDefinition();
