@@ -36,11 +36,21 @@ internal sealed record RuntimeCapabilities(
     /// </summary>
     internal Net.EgressPolicy Egress { get; init; } = Net.EgressPolicy.Unguarded;
 
+    /// <summary>
+    /// The tenant's limits (<see cref="Foxwarm.Limits.TenantLimits"/>), enforced at the runtime's
+    /// admission points; none in file mode. The hosted entry reads the tenant's own.
+    /// </summary>
+    internal Foxwarm.Limits.TenantLimits? Limits { get; init; }
+
     internal static RuntimeCapabilities File { get; } = new(true, true, true, true, true, true);
 
     /// <summary>Hosted: only the deployment's executable Providers; no Logs view (U16(b)).</summary>
     internal static RuntimeCapabilities Hosted { get; } =
-        new(false, false, false, false, true, false) { Egress = Net.EgressPolicy.Hosted() };
+        new(false, false, false, false, true, false)
+        {
+            Egress = Net.EgressPolicy.Hosted(),
+            Limits = Foxwarm.Limits.TenantLimits.Defaults,
+        };
 
     /// <summary>
     /// The operator's own tenant: file mode's full set over hosted stores, on a master-host
