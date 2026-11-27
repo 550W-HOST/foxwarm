@@ -111,7 +111,7 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
       const data = await response.json().catch(() => ({}))
       if (generation !== saveGenerationRef.current) return
       if (response.status === 409) {
-        setSaveResult({ kind: 'error', conflict: true, message: 'The policy was changed elsewhere after you opened it. Reload to see the current policy; your edits will be replaced.' })
+        setSaveResult({ kind: 'error', conflict: true, message: 'This policy changed after you opened it. Reload to get the current version; your edits will be discarded.' })
         return
       }
       if (!response.ok) throw new Error(data.error || `Failed to save the policy (${response.status})`)
@@ -122,7 +122,7 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
       if (editRevisionRef.current === submittedEdit && textRef.current === submitted) {
         setSaveResult({
           kind: 'success',
-          message: warnings.length > 0 ? `Policy saved. ${warnings.join(' ')}` : 'Policy saved. It applies to the next tool call.',
+          message: warnings.length > 0 ? `Policy saved. ${warnings.join(' ')}` : 'Policy saved. It applies from the next tool call.',
         })
       }
     } catch (error) {
@@ -151,12 +151,12 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
     <div className="foxwarm-setup-editor-section">
       <div className="shrink-0">
         <h2 className="text-base font-semibold text-fw-text-strong">Tool authorization</h2>
-        <p className="mt-1 text-sm text-fw-text">Choose which tools Agents and connected clients can use, in YAML.</p>
+        <p className="mt-1 text-sm text-fw-text">Rules that decide which tools Agents and connected clients can use.</p>
         {policy && !policy.exists && (
-          <p data-authorization-absent className="mt-2 text-sm text-fw-text-muted">No policy yet: Agents can use every tool their own rules allow, and external callers can’t use any.</p>
+          <p data-authorization-absent className="mt-2 text-sm text-fw-text-muted">No policy yet. Agents can use every tool their own rules allow; connected clients can’t use any.</p>
         )}
         {policy?.error && (
-          <p role="alert" data-authorization-invalid className="mt-2 text-sm text-fw-danger">The saved policy can’t be used, so every tool call is refused until it’s fixed: {policy.error}</p>
+          <p role="alert" data-authorization-invalid className="mt-2 text-sm text-fw-danger">The saved policy is invalid, so every tool call is refused until it’s fixed: {policy.error}</p>
         )}
         {loadError && <p role="alert" className="mt-2 text-sm text-fw-danger">{loadError}</p>}
       </div>

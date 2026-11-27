@@ -14,7 +14,7 @@ internal sealed partial class WebUIChannel
 {
     // The revision a save carried no longer names the active policy.
     private sealed class PolicyRevisionConflictException(string current)
-        : Exception("The policy was changed elsewhere after you opened it.")
+        : Exception("This policy changed after you opened it.")
     {
         internal string Current => current;
     }

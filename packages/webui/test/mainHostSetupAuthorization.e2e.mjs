@@ -121,7 +121,7 @@ try {
   assert.equal(await readFile(policyPath, 'utf8'), tightened)
   await replaceEditorText(denyWrite + '# an edit made before the Agent changed the policy\n')
   await clickSave()
-  assert.match(await feedback('alert'), /changed elsewhere/)
+  assert.match(await feedback('alert'), /This policy changed after you opened it/)
   assert.equal(await readFile(policyPath, 'utf8'), tightened, 'a stale save never undoes the newer policy')
   // The same refusal through the route itself, with the revision the editor loaded earlier.
   const stale = await fixture.api('POST', '/api/setup/authorization', { yaml: denyWrite, revision: loaded.body.revision })
