@@ -19,6 +19,16 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     // discovery builtin. They never make a policy unavailable.
     internal IReadOnlyList<string> Warnings { get; init; } = [];
 
+    // True when the rule list was produced by a PolicyScriptRunner generator script.
+    internal bool FromScript { get; init; }
+
+    // Pre-normalization validated rule objects for read-only WebUI preview (preserves shorthand
+    // selectors rather than expanding them into legacy `match` / `equals` wrappers).
+    internal JsonArray? SourceRules { get; init; }
+
+    internal JsonArray PreviewRules =>
+        (SourceRules ?? Value["rules"] as JsonArray ?? new JsonArray()).DeepClone().AsArray();
+
     // Builtin names that are not concrete capabilities. search_tools only gated discovery,
     // which is now filtered by each target's own policy; ctl and the former call_tool are
     // permission-neutral front ends. A rule naming one is accepted and has no effect.
@@ -830,6 +840,10 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 ["defaultAction"] = action,
                 ["rules"] = rules,
             }
-        );
+        )
+        {
+            FromScript = fromScript,
+            SourceRules = (JsonArray)raw.DeepClone(),
+        };
     }
 }

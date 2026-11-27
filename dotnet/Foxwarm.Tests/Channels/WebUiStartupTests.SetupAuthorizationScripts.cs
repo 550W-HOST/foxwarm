@@ -73,6 +73,38 @@ public sealed partial class WebUiStartupTests
         var reloaded = await h.Client.GetFromJsonAsync<JsonObject>("/api/setup/authorization");
         Assert.Equal(rev1, reloaded!["revision"]!.GetValue<string>());
         Assert.Null(reloaded["error"]);
+        Assert.True(reloaded["scripted"]!.GetValue<bool>());
+        Assert.Single(reloaded["expandedRules"]!.AsArray());
+        Assert.Equal(
+            "no-guest",
+            reloaded["expandedRules"]![0]!["id"]!.GetValue<string>()
+        );
+
+        // Preview endpoint evaluates unsaved scripted YAML without modifying active policy.
+        var preview = await h.Client.PostAsJsonAsync(
+            "/api/setup/authorization/preview",
+            new
+            {
+                yaml = "version: 1\ndefaultAction: deny\ndata: { names: [a, b] }\nscript: |\n  return [{'id': f'r-{n}', 'agent': n, 'action': 'allow'} for n in data['names']]\n",
+            }
+        );
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        var previewBody = await preview.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.True(previewBody!["scripted"]!.GetValue<bool>());
+        Assert.Equal("deny", previewBody["defaultAction"]!.GetValue<string>());
+        Assert.Equal(2, previewBody["expandedRules"]!.AsArray().Count);
+
+        var badPreview = await h.Client.PostAsJsonAsync(
+            "/api/setup/authorization/preview",
+            new { yaml = "version: 1\nscript: |\n  return [1 / 0]\n" }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, badPreview.StatusCode);
+        var badPreviewBody = await badPreview.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Contains("line 1", badPreviewBody!["error"]!.GetValue<string>());
+
+        // Active revision is still rev1 after preview calls.
+        var afterPreview = await h.Client.GetFromJsonAsync<JsonObject>("/api/setup/authorization");
+        Assert.Equal(rev1, afterPreview!["revision"]!.GetValue<string>());
     }
 
     [Fact]
@@ -106,7 +138,37 @@ public sealed partial class WebUiStartupTests
             .Single(item => item["id"]!.GetValue<string>() == "scripted-worker");
         Assert.IsType<JsonObject>(row["rules"]);
         Assert.Equal(2, row["ruleCount"]!.GetValue<int>());
+        Assert.Equal(2, row["expandedRules"]!.AsArray().Count);
+        Assert.Equal("allow-env.read", row["expandedRules"]![0]!["id"]!.GetValue<string>());
         Assert.True(row["restricted"]!.GetValue<bool>());
+
+        // Agent rules preview endpoint evaluates unsaved script layers without modifying the Agent.
+        var preview = await h.Client.PostAsJsonAsync(
+            "/api/agents/rules/preview",
+            new
+            {
+                rules = new
+                {
+                    data = new { ops = new[] { "env.read", "env.write" } },
+                    script = "return [{'id': f'allow-{o}', 'op': o, 'action': 'allow'} for o in data['ops']]",
+                },
+            }
+        );
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        var previewBody = await preview.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.True(previewBody!["scripted"]!.GetValue<bool>());
+        Assert.Equal(2, previewBody["expandedRules"]!.AsArray().Count);
+
+        var badPreview = await h.Client.PostAsJsonAsync(
+            "/api/agents/rules/preview",
+            new
+            {
+                rules = new { script = "return [{'id': 'bad', 'agent': 'x', 'action': 'allow'}]" },
+            }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, badPreview.StatusCode);
+        var badPreviewBody = await badPreview.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Contains("rule[0]", badPreviewBody!["error"]!.GetValue<string>());
 
         // Bad script via PUT /api/agents/{id} returns 400 with line/index error and keeps rules unchanged.
         var badPut = await h.Client.PutAsJsonAsync(

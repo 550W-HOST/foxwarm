@@ -252,10 +252,15 @@ test('Agent rule layer schema accepts policy rules without caller selectors', ()
     [],
     [{ id: 'no-exec', tool: 'exec', action: 'deny', reason: 'No commands.' }],
     [{ id: 'build', tool: ['exec', 'write'], node: ['build-linux'], action: 'allow' }, { id: 'rest', action: 'deny' }],
+    { script: 'return [{"id": "deny-all", "action": "deny"}]' },
+    { data: { ops: ['env.read'] }, script: 'return [{"id": o, "op": o, "action": "allow"} for o in data["ops"]]' },
   ]
   for (const document of valid) assert.equal(validate(document), true, `${JSON.stringify(document)}: ${JSON.stringify(validate.errors)}`)
   const invalid = [
     { rules: [] },
+    { data: { a: 1 } },
+    { script: '   ' },
+    { script: 'return []', extra: true },
     [{ id: 'x', tool: 'exec', action: 'maybe' }],
     [{ id: 'x', agent: 'main', action: 'deny' }],
     [{ id: 'x', session: 'main/main', action: 'deny' }],

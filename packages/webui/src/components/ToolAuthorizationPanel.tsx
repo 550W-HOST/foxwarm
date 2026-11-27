@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import YAML from 'yaml'
 import { API_BASE_PATH } from '../config'
 import { TOOL_AUTHORIZATION_YAML_MODEL_URI } from '../yamlConfigSchemas'
 import SimpleCodeEditor from './SimpleCodeEditor'
+import { RuleList, pill } from './SystemAgentLayers'
 
 type PolicyState = {
   exists: boolean
@@ -9,6 +12,16 @@ type PolicyState = {
   revision: string
   error?: string
   warnings?: string[]
+  scripted: boolean
+  defaultAction: string
+  expandedRules: unknown[]
+}
+
+type PreviewState = {
+  draft: boolean
+  rules: unknown[]
+  defaultAction: string
+  error?: string
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string; conflict?: boolean }
@@ -23,6 +36,15 @@ function warningsOf(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
+function looksScriptedYaml(text: string): boolean {
+  try {
+    const parsed = YAML.parse(text)
+    return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'script')
+  } catch {
+    return /^\s*script\s*:/m.test(text)
+  }
+}
+
 // Setup > Authorization: the complete global tool authorization policy in the schema-aware YAML
 // editor. Every save carries the revision the text was loaded from; the server refuses it when the
 // active policy changed meanwhile, and the panel then offers to reload.
@@ -32,6 +54,9 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [preview, setPreview] = useState<PreviewState | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const textRef = useRef(text)
   const editRevisionRef = useRef(0)
   const baseRevisionRef = useRef<string | null>(null)
@@ -39,8 +64,11 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
   const loadedTextRef = useRef<string | null>(null)
   const loadGenerationRef = useRef(0)
   const saveGenerationRef = useRef(0)
+  const previewGenerationRef = useRef(0)
   const savingRef = useRef(false)
   textRef.current = text
+
+  const hasScript = useMemo(() => Boolean(policy?.scripted) || looksScriptedYaml(text), [policy?.scripted, text])
 
   const updateText = (next: string) => {
     if (textRef.current === next) return
@@ -57,6 +85,11 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
     textRef.current = next.yaml
     editRevisionRef.current += 1
     setText(next.yaml)
+    setPreview(
+      next.scripted && !next.error
+        ? { draft: false, rules: next.expandedRules, defaultAction: next.defaultAction }
+        : null,
+    )
   }
 
   // `replaceEdits` discards unsaved text (Reload after a refusal); otherwise only an unedited
@@ -76,6 +109,9 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
         revision: String(data.revision ?? ''),
         error: typeof data.error === 'string' ? data.error : undefined,
         warnings: warningsOf(data.warnings),
+        scripted: data.scripted === true,
+        defaultAction: typeof data.defaultAction === 'string' ? data.defaultAction : 'allow',
+        expandedRules: Array.isArray(data.expandedRules) ? data.expandedRules : [],
       }
       if (replaceEdits || baseRevisionRef.current === null || textRef.current === loadedTextRef.current) {
         saveGenerationRef.current += 1
@@ -93,6 +129,38 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
     void load(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshRequest])
+
+  const runPreview = async () => {
+    const generation = ++previewGenerationRef.current
+    const submitted = textRef.current
+    setPreviewing(true)
+    try {
+      const response = await fetch(`${API_BASE_PATH}/setup/authorization/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ yaml: submitted }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (generation !== previewGenerationRef.current) return
+      if (!response.ok) {
+        setPreview({ draft: submitted !== loadedTextRef.current, rules: [], defaultAction: 'allow', error: data.error || `Preview failed (${response.status})` })
+      } else {
+        setPreview({
+          draft: submitted !== loadedTextRef.current,
+          rules: Array.isArray(data.expandedRules) ? data.expandedRules : [],
+          defaultAction: typeof data.defaultAction === 'string' ? data.defaultAction : 'allow',
+        })
+      }
+      setPreviewOpen(true)
+    } catch (error) {
+      if (generation === previewGenerationRef.current) {
+        setPreview({ draft: submitted !== loadedTextRef.current, rules: [], defaultAction: 'allow', error: error instanceof Error ? error.message : String(error) })
+        setPreviewOpen(true)
+      }
+    } finally {
+      if (generation === previewGenerationRef.current) setPreviewing(false)
+    }
+  }
 
   const save = async () => {
     if (savingRef.current || baseRevisionRef.current === null) return
@@ -118,7 +186,11 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
       baseRevisionRef.current = String(data.revision ?? '')
       loadedTextRef.current = submitted
       const warnings = warningsOf(data.warnings)
-      setPolicy({ exists: true, yaml: submitted, revision: baseRevisionRef.current, warnings })
+      const scripted = data.scripted === true
+      const defaultAction = typeof data.defaultAction === 'string' ? data.defaultAction : 'allow'
+      const expandedRules = Array.isArray(data.expandedRules) ? data.expandedRules : []
+      setPolicy({ exists: true, yaml: submitted, revision: baseRevisionRef.current, warnings, scripted, defaultAction, expandedRules })
+      setPreview(scripted ? { draft: false, rules: expandedRules, defaultAction } : null)
       if (editRevisionRef.current === submittedEdit && textRef.current === submitted) {
         setSaveResult({
           kind: 'success',
@@ -147,6 +219,13 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
   }
 
   const isError = saveResult?.kind === 'error'
+  const showPreviewPanel = preview !== null
+  const previewBadge = preview?.error
+    ? pill('Invalid', 'danger')
+    : preview?.rules.length
+      ? pill(`${preview.rules.length} rule${preview.rules.length === 1 ? '' : 's'}`, 'neutral')
+      : pill('No rules', 'muted')
+
   return (
     <div className="foxwarm-setup-editor-section">
       <div className="shrink-0">
@@ -166,6 +245,11 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
       </div>
       <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
         <button disabled={saving || !policy} onClick={() => void save()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{saving ? 'Saving…' : 'Save policy'}</button>
+        {hasScript && (
+          <button type="button" data-authorization-preview disabled={previewing || !policy} onClick={() => void runPreview()} className="rounded-lg border border-fw-border px-3 py-2 text-sm font-medium text-fw-text-strong hover:bg-fw-hover disabled:opacity-60">
+            {previewing ? 'Previewing…' : 'Preview rules'}
+          </button>
+        )}
         {saveResult && (
           <div
             role={isError ? 'alert' : 'status'}
@@ -180,6 +264,29 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
           <button type="button" data-authorization-reload onClick={() => void load(true)} className="rounded-lg border border-fw-border px-3 py-1.5 text-sm font-medium text-fw-text hover:bg-fw-hover">Reload policy</button>
         )}
       </div>
+
+      {showPreviewPanel && (
+        <div className="mt-4 shrink-0 rounded-lg border border-fw-border bg-fw-surface-sunken/60 px-3 py-2" data-authorization-expanded-preview>
+          <button type="button" onClick={() => setPreviewOpen((open) => !open)} aria-expanded={previewOpen} className="flex w-full items-center gap-1.5 text-left text-xs font-medium text-fw-text-strong">
+            {previewOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fw-text-muted" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-fw-text-muted" />}
+            <span>Expanded rules</span>
+            {previewBadge}
+            {preview.draft ? pill('Draft', 'neutral') : null}
+          </button>
+          {previewOpen && (
+            <div className="mt-2 max-h-64 overflow-y-auto">
+              {preview.error ? (
+                <div role="alert" className="rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger">{preview.error}</div>
+              ) : (
+                <>
+                  <RuleList rules={preview.rules} emptyText="No rules generated." />
+                  {preview.defaultAction !== 'allow' ? <div className="mt-1.5 text-xs text-fw-text-muted">Calls that match no rule: {preview.defaultAction}</div> : null}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

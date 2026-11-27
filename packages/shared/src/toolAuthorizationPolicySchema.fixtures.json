@@ -226,6 +226,31 @@
       "yaml": "version: 1\nrules:\n  - tool: {source: builtin, name: set_tool_rules}\n    action: deny\n",
       "valid": false,
       "schema": "server-only"
+    },
+    {
+      "name": "script-only",
+      "yaml": "version: 1\ndefaultAction: deny\nscript: |\n  return [{\"id\": \"allow-read\", \"op\": \"env.read\", \"action\": \"allow\"}]\n",
+      "valid": true
+    },
+    {
+      "name": "script-with-data",
+      "yaml": "version: 1\ndefaultAction: deny\ndata:\n  agents: [alpha, beta]\nscript: |\n  return [{\"id\": f\"{a}-read\", \"agent\": a, \"op\": \"env.read\", \"action\": \"allow\"} for a in data[\"agents\"]]\n",
+      "valid": true
+    },
+    {
+      "name": "rules-and-script",
+      "yaml": "version: 1\nrules: []\nscript: \"return []\"\n",
+      "valid": false
+    },
+    {
+      "name": "data-without-script",
+      "yaml": "version: 1\ndata:\n  a: 1\nrules: []\n",
+      "valid": false
+    },
+    {
+      "name": "blank-script",
+      "yaml": "version: 1\nscript: \"   \"\n",
+      "valid": false
     }
   ]
 }

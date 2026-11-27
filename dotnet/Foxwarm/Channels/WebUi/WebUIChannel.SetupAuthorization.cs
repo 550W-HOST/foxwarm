@@ -37,8 +37,7 @@ internal sealed partial class WebUIChannel
                         try
                         {
                             var policy = await authority.ParseOrCachedAsync(bytes, revision, token);
-                            if (policy.Warnings.Count > 0)
-                                result["warnings"] = Warnings(policy);
+                            AttachParsed(result, policy);
                         }
                         catch (InvalidDataException error)
                         {
@@ -96,8 +95,7 @@ internal sealed partial class WebUIChannel
                     foreach (var (key, field) in state)
                         installed[key] = field?.DeepClone();
                     var policy = await authority.ParseOrCachedAsync(bytes, savedRevision, token);
-                    if (policy.Warnings.Count > 0)
-                        installed["warnings"] = Warnings(policy);
+                    AttachParsed(installed, policy);
                     return Results.Ok(installed);
                 }
                 catch (PolicyRevisionConflictException conflict)
@@ -132,6 +130,60 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
+        app.MapPost(
+            "/api/setup/authorization/preview",
+            async (HttpRequest request, CancellationToken token) =>
+            {
+                try
+                {
+                    var input =
+                        await JsonNode.ParseAsync(request.Body, cancellationToken: token)
+                            as JsonObject
+                        ?? throw new InvalidDataException("Policy input must be an object.");
+                    ToolRegistry.Keys(input, ["yaml"]);
+                    var text =
+                        input["yaml"] is JsonValue yaml && yaml.TryGetValue<string>(out var value)
+                            ? value
+                            : throw new InvalidDataException("Policy yaml must be a string.");
+                    var bytes = new UTF8Encoding(false).GetBytes(text);
+                    var policy = await authority.ParseOrCachedAsync(
+                        bytes,
+                        ToolAuthorizationAuthority.Revision(bytes),
+                        token
+                    );
+                    var result = new JsonObject();
+                    AttachParsed(result, policy);
+                    return Results.Ok(result);
+                }
+                catch (Exception error)
+                    when (error
+                            is JsonException
+                                or InvalidDataException
+                                or InvalidOperationException
+                                or IOException
+                    )
+                {
+                    return Results.BadRequest(
+                        new JsonObject
+                        {
+                            ["error"] =
+                                error is JsonException
+                                    ? "Policy input must be JSON."
+                                    : configuration.SafeAppError(error),
+                        }
+                    );
+                }
+            }
+        );
+    }
+
+    private static void AttachParsed(JsonObject target, ToolAuthorizationPolicy policy)
+    {
+        target["scripted"] = policy.FromScript;
+        target["defaultAction"] = policy.Value["defaultAction"]?.DeepClone() ?? "allow";
+        target["expandedRules"] = policy.PreviewRules;
+        if (policy.Warnings.Count > 0)
+            target["warnings"] = Warnings(policy);
     }
 
     private static JsonObject PolicyState(byte[]? bytes, string revision) =>

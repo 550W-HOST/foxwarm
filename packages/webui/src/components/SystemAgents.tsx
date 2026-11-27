@@ -21,8 +21,12 @@ export type AgentRegistryEntry = {
   createdBy: string | null
   /** Root-first creator ancestry ending with this Agent; null when it can't be resolved. */
   creatorChain: string[] | null
-  /** This Agent's own rule layer. */
-  rules: unknown[]
+  /** This Agent's own rule layer: a rule list or a `{ script, data? }` generator. */
+  rules: unknown[] | { script: string; data?: unknown }
+  /** Expanded rule list produced from `rules` (for read-only preview). */
+  expandedRules?: unknown[]
+  /** Parse error if the stored local rule layer cannot be expanded. */
+  rulesError?: string
   ruleCount: number
   inheritable: boolean
   restricted: boolean
@@ -39,7 +43,7 @@ export type AgentRegistryEntry = {
   memoryLastModified: number | null
 }
 
-export type AgentRegistryChanges = AgentSettingsChanges | { rules: unknown[] }
+export type AgentRegistryChanges = AgentSettingsChanges | { rules: unknown[] | { script: string; data?: unknown } }
 
 export type AgentMemoryFile = { path: string; absolutePath: string; size: number; modifiedAt: number }
 
@@ -260,7 +264,7 @@ function AgentInspector({ agent, props }: { agent: AgentRegistryEntry; props: Sy
             <section data-agent-access>
               <h3 className={systemHeading}>Access</h3>
               <p className="mt-1.5 text-xs leading-5 text-fw-text">
-                {agent.restricted || isAllowlistLayer(agent.rules || []) ? 'Only what its own rules allow.' : agent.ruleCount > 0 ? `Whatever the layers above allow, narrowed by its ${agent.ruleCount === 1 ? 'rule' : `${agent.ruleCount} rules`}.` : 'Whatever the layers above allow.'}
+                {agent.restricted || isAllowlistLayer(agent.expandedRules ?? (Array.isArray(agent.rules) ? agent.rules : [])) ? 'Only what its own rules allow.' : agent.ruleCount > 0 ? `Whatever the layers above allow, narrowed by its ${agent.ruleCount === 1 ? 'rule' : `${agent.ruleCount} rules`}.` : 'Whatever the layers above allow.'}
                 {ancestors.length ? ` Rules from ${joinNames(ancestors)} apply too.` : ''}{' '}
                 <button type="button" className="font-medium text-fw-accent hover:underline" onClick={() => setTab('rules')}>View rules</button>
               </p>

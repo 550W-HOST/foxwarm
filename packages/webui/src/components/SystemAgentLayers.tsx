@@ -203,8 +203,19 @@ export function RuleList({ rules, emptyText }: { rules: unknown[]; emptyText: st
   )
 }
 
+/** Whether a stored Agent rule layer uses the `{ script, data? }` object form. */
+export const isScriptRuleLayer = (rules: unknown): rules is { script: string; data?: unknown } =>
+  !!rules && typeof rules === 'object' && !Array.isArray(rules)
+
+const expandedRulesOf = (agent?: AgentRegistryEntry): unknown[] => {
+  if (!agent) return []
+  if (Array.isArray(agent.expandedRules)) return agent.expandedRules
+  return Array.isArray(agent.rules) ? agent.rules : []
+}
+
 /** A layer whose last rule is a selector-free deny admits only what its earlier rules allow. */
 export const isAllowlistLayer = (rules: unknown[]) => {
+  if (!Array.isArray(rules)) return false
   const last = rules.at(-1) as Rule | undefined
   return !!last && last.action === 'deny' && last.enabled !== false && Object.keys(last).every(key => RULE_META.includes(key))
 }
@@ -218,7 +229,7 @@ function whoMayChange(agents: Map<string, AgentRegistryEntry>, id: string) {
   return ancestors.length ? `Changed by administrators and sessions of ${joinNames(ancestors)}` : 'Changed by administrators'
 }
 
-type InstallationPolicy = { rules: unknown[]; defaultAction: string; error?: string } | { loadError: string }
+type InstallationPolicy = { rules: unknown[]; defaultAction: string; scripted?: boolean; error?: string } | { loadError: string }
 
 /** The global policy's rules, read-only, from Setup › Authorization's route. */
 function useInstallationPolicy() {
@@ -229,6 +240,13 @@ function useInstallationPolicy() {
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || `Couldn't load the rules (${response.status})`)
       if (payload.error) return { rules: [], defaultAction: 'deny', error: String(payload.error) }
+      if (Array.isArray(payload.expandedRules)) {
+        return {
+          rules: payload.expandedRules,
+          defaultAction: String(payload.defaultAction || 'allow'),
+          scripted: payload.scripted === true,
+        }
+      }
       const document = payload.exists ? YAML.parse(String(payload.yaml || '')) || {} : {}
       return { rules: Array.isArray(document.rules) ? document.rules : [], defaultAction: String(document.defaultAction || 'allow') }
     }).then(next => { if (live) setPolicy(next) }).catch(cause => { if (live) setPolicy({ loadError: cause instanceof Error ? cause.message : String(cause) }) })
@@ -253,27 +271,85 @@ function ReadOnlyLayer({ name, title, kind, who, action, children }: { name: str
   )
 }
 
-function OwnLayerEditor({ agent, onSave }: { agent: AgentRegistryEntry; onSave: (rules: unknown[]) => Promise<void> }) {
-  const original = useMemo(() => agent.rules?.length ? YAML.stringify(agent.rules) : '', [agent.rules])
+function parseLayerYaml(text: string): unknown[] | { script: string; data?: unknown } {
+  let parsed: unknown
+  try { parsed = text.trim() ? YAML.parse(text) : [] } catch (cause) { throw new Error(`YAML: ${cause instanceof Error ? cause.message : String(cause)}`) }
+  if (Array.isArray(parsed) || (parsed && typeof parsed === 'object')) {
+    return parsed as unknown[] | { script: string; data?: unknown }
+  }
+  throw new Error('Rules must be a YAML list or a { script, data? } mapping.')
+}
+
+function looksScriptedAgentYaml(text: string): boolean {
+  try {
+    const parsed = YAML.parse(text)
+    return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+  } catch {
+    return /^\s*script\s*:/m.test(text)
+  }
+}
+
+function OwnLayerEditor({ agent, onSave }: { agent: AgentRegistryEntry; onSave: (rules: unknown[] | { script: string; data?: unknown }) => Promise<void> }) {
+  const scripted = isScriptRuleLayer(agent.rules)
+  const expanded = useMemo(() => expandedRulesOf(agent), [agent])
+  const original = useMemo(() => {
+    if (isScriptRuleLayer(agent.rules)) return YAML.stringify(agent.rules)
+    return Array.isArray(agent.rules) && agent.rules.length ? YAML.stringify(agent.rules) : ''
+  }, [agent.rules])
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(original)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
-  useEffect(() => { setText(original); setEditing(false); setError('') }, [agent.id, original])
+  const [previewing, setPreviewing] = useState(false)
+  const [preview, setPreview] = useState<{ rules: unknown[]; error?: string } | null>(null)
+  useEffect(() => { setText(original); setEditing(false); setError(''); setPreview(null) }, [agent.id, original])
+
+  const editorHasScript = useMemo(() => scripted || looksScriptedAgentYaml(text), [scripted, text])
+
+  const runPreview = async () => {
+    setPreviewing(true); setError('')
+    try {
+      const parsed = parseLayerYaml(text)
+      const response = await fetch(`${API_BASE_PATH}/agents/rules/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: parsed }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setPreview({ rules: [], error: data.error || `Preview failed (${response.status})` })
+      } else {
+        setPreview({ rules: Array.isArray(data.expandedRules) ? data.expandedRules : [] })
+      }
+    } catch (cause) {
+      setPreview({ rules: [], error: cause instanceof Error ? cause.message : String(cause) })
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
   const save = async () => {
     setSaving(true); setError('')
     try {
-      let parsed: unknown
-      try { parsed = text.trim() ? YAML.parse(text) : [] } catch (cause) { throw new Error(`YAML: ${cause instanceof Error ? cause.message : String(cause)}`) }
-      if (!Array.isArray(parsed)) throw new Error('Rules must be a YAML list.')
+      const parsed = parseLayerYaml(text)
       await onSave(parsed)
+      setPreview(null)
       setEditing(false)
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setSaving(false) }
   }
   if (!editing) return (
     <>
-      <RuleList rules={agent.rules || []} emptyText="No rules. This agent can do whatever the layers above allow." />
+      {agent.rulesError ? (
+        <div role="alert" data-rule-error className="rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger">
+          These rules are invalid, so all tool calls of this agent are refused: {agent.rulesError}
+        </div>
+      ) : (
+        <>
+          {scripted ? <div className="mb-1.5 text-[11px] font-medium text-fw-text-muted" data-rule-expanded-label>Expanded rules</div> : null}
+          <RuleList rules={expanded} emptyText={scripted ? 'No rules generated. This agent can do whatever the layers above allow.' : 'No rules. This agent can do whatever the layers above allow.'} />
+        </>
+      )}
       <div className="mt-2 flex justify-end"><button type="button" data-rule-edit onClick={() => setEditing(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-fw-border px-2.5 py-1.5 text-xs font-medium text-fw-text-strong hover:bg-fw-hover"><Pencil className="h-3.5 w-3.5" />Edit rules</button></div>
     </>
   )
@@ -281,10 +357,28 @@ function OwnLayerEditor({ agent, onSave }: { agent: AgentRegistryEntry; onSave: 
     <div data-rule-editor>
       <div className="overflow-hidden rounded-lg border border-fw-accent-border"><SimpleCodeEditor value={text} onChange={setText} language="yaml" height={280} modelUri={agentRulesYamlModelUri(agent.id)} ariaLabel={`Rules of ${agent.id}`} /></div>
       {error ? <div className="mt-2 rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger" role="alert" data-rule-error>{error}</div> : null}
-      <div className="mt-2 flex items-center justify-end gap-2">
-        <button type="button" data-rule-cancel onClick={() => { setText(original); setEditing(false); setError('') }} className="rounded-lg px-3 py-1.5 text-xs text-fw-text hover:bg-fw-hover">Cancel</button>
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        {editorHasScript ? (
+          <button type="button" data-rule-preview disabled={previewing} onClick={() => { void runPreview() }} className="rounded-lg border border-fw-border px-3 py-1.5 text-xs font-medium text-fw-text-strong hover:bg-fw-hover disabled:opacity-40">
+            {previewing ? 'Previewing…' : 'Preview rules'}
+          </button>
+        ) : null}
+        <button type="button" data-rule-cancel onClick={() => { setText(original); setEditing(false); setError(''); setPreview(null) }} className="rounded-lg px-3 py-1.5 text-xs text-fw-text hover:bg-fw-hover">Cancel</button>
         <button type="button" data-rule-save disabled={saving || text === original} onClick={() => { void save() }} className="inline-flex items-center gap-1.5 rounded-lg bg-fw-accent px-3 py-1.5 text-xs font-medium text-fw-accent-text disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save rules'}</button>
       </div>
+      {preview ? (
+        <div className="mt-3 rounded-lg border border-fw-border bg-fw-surface-sunken/60 p-2.5" data-rule-expanded-preview>
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-fw-text-strong">
+            <span>Expanded rules</span>
+            {preview.error ? pill('Invalid', 'danger') : layerPill(preview.rules)}
+          </div>
+          {preview.error ? (
+            <div role="alert" className="rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger">{preview.error}</div>
+          ) : (
+            <RuleList rules={preview.rules} emptyText="No rules generated." />
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -296,7 +390,7 @@ function OwnLayerEditor({ agent, onSave }: { agent: AgentRegistryEntry; onSave: 
 export function RuleLayers({ agent, agents, onSave, onShowAgent, onOpenSetupAuthorization }: {
   agent: AgentRegistryEntry
   agents: AgentRegistryEntry[]
-  onSave: (rules: unknown[]) => Promise<void>
+  onSave: (rules: unknown[] | { script: string; data?: unknown }) => Promise<void>
   onShowAgent: (agentId: string) => void
   onOpenSetupAuthorization?: () => void
 }) {
@@ -304,13 +398,14 @@ export function RuleLayers({ agent, agents, onSave, onShowAgent, onOpenSetupAuth
   const installation = useInstallationPolicy()
   const chain = agent.creatorChain || [agent.id]
   const openAgent = (id: string) => <button type="button" className={linkButton} onClick={() => onShowAgent(id)}>Open<ChevronRight className="h-3 w-3" /></button>
+  const ownExpanded = expandedRulesOf(agent)
   return (
     <div data-rule-layers>
       <p className="mb-3 text-xs leading-5 text-fw-text-muted">A call must pass every layer. Each layer can only narrow what the layers above allow.</p>
       {agent.creatorChain === null ? <p role="alert" className="mb-3 rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger">This agent's creators can't be determined, so all its tool calls are refused.</p> : null}
       <ol className="space-y-2">
         <ReadOnlyLayer name="installation" title={<><ShieldCheck className="h-3.5 w-3.5 text-fw-text-muted" />Installation rules</>}
-          kind={!installation ? null : 'loadError' in installation ? pill('Unavailable', 'muted') : installation.error ? pill('Invalid', 'danger') : layerPill(installation.rules, installation.defaultAction === 'deny')}
+          kind={!installation ? null : 'loadError' in installation ? pill('Unavailable', 'muted') : installation.error ? pill('Invalid', 'danger') : <>{installation.scripted ? pill('Script', 'neutral') : null}{layerPill(installation.rules, installation.defaultAction === 'deny')}</>}
           who="Changed by administrators in Setup"
           action={onOpenSetupAuthorization ? <button type="button" data-rule-installation-setup className={linkButton} onClick={onOpenSetupAuthorization}>Edit in Setup<ChevronRight className="h-3 w-3" /></button> : null}>
           {!installation ? <div className="text-xs text-fw-text-muted">Loading…</div>
@@ -322,16 +417,22 @@ export function RuleLayers({ agent, agents, onSave, onShowAgent, onOpenSetupAuth
             </>}
         </ReadOnlyLayer>
         {chain.slice(0, -1).map(id => {
-          const rules = byId.get(id)?.rules || []
+          const entry = byId.get(id)
+          const rules = expandedRulesOf(entry)
+          const scripted = isScriptRuleLayer(entry?.rules)
           return (
-            <ReadOnlyLayer key={id} name={id} title={<>From {id}</>} kind={layerPill(rules)} who={whoMayChange(byId, id)} action={openAgent(id)}>
-              <RuleList rules={rules} emptyText="No rules." />
+            <ReadOnlyLayer key={id} name={id} title={<>From {id}</>} kind={<>{scripted ? pill('Script', 'neutral') : null}{entry?.rulesError ? pill('Invalid', 'danger') : layerPill(rules)}</>} who={whoMayChange(byId, id)} action={openAgent(id)}>
+              {entry?.rulesError ? <div role="alert" className="text-xs text-fw-danger">{entry.rulesError}</div> : <RuleList rules={rules} emptyText="No rules." />}
             </ReadOnlyLayer>
           )
         })}
         <li className="rounded-lg border border-fw-accent-border bg-fw-surface px-3 py-2.5" data-rule-layer="own">
           <div className="mb-2 min-w-0">
-            <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold text-fw-text-strong">{agent.id} {layerPill(agent.rules || [])}</div>
+            <div className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold text-fw-text-strong">
+              {agent.id}
+              {isScriptRuleLayer(agent.rules) ? pill('Script', 'neutral') : null}
+              {agent.rulesError ? pill('Invalid', 'danger') : layerPill(ownExpanded)}
+            </div>
             <div className="mt-0.5 text-[11px] text-fw-text-muted">{whoMayChange(byId, agent.id)}</div>
           </div>
           <OwnLayerEditor agent={agent} onSave={onSave} />
