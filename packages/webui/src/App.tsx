@@ -2135,6 +2135,9 @@ function App() {
   }
 
   const mobilePaneId = focusedPaneId || paneIds[0]
+  // State that places the content slots; the content hosts reposition when it changes.
+  const workbenchContentLayout = useMemo(() => [root, isMobile, showSessionList, mobilePaneId, sidebarWidth, sidebarCollapsed, setupOobe],
+    [root, isMobile, showSessionList, mobilePaneId, sidebarWidth, sidebarCollapsed, setupOobe])
   const communicationNames = useMemo(() => Object.fromEntries(sessions.flatMap(session => [session.id, ...(session.aliases || [])].map(id => [id, session.displayName || session.id]))),[sessions])
   const renderStableContent = () => <SessionMessageNamesContext.Provider value={communicationNames}><WorkbenchContentLayer>{allTabs.map(tab => {
     const pane = findPaneContainingTab(root, tab.id)
@@ -2184,7 +2187,7 @@ function App() {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <WorkbenchContentProvider>
+      <WorkbenchContentProvider layout={workbenchContentLayout}>
         {content}
         {renderStableContent()}
         <DragOverlay
