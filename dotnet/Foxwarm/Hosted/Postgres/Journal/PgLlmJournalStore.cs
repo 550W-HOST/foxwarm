@@ -335,7 +335,7 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
         CheckOpen();
         token.ThrowIfCancellationRequested();
         if (
-            await CompleteUnrecordedAsync(requestId, attempt, outcome, ledger, redaction, token)
+            await CompleteUnrecordedAsync(requestId, attempt, ledger, redaction, token)
                 .ConfigureAwait(false)
             is { } unrecordedReceipt
         )

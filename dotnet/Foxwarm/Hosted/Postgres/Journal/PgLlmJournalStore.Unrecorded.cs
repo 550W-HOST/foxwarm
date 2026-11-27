@@ -9,7 +9,8 @@ namespace Foxwarm.Hosted.Postgres;
 /// The tenant's journal off switch (<c>tenants.settings.journal.enabled: false</c>): requests
 /// get an ID and are admitted as usual, but no request content is written: no manifest,
 /// objects, attempt starts or results. The usage-ledger and redaction rows are still written,
-/// from the start data this owner keeps while the request is live. The ID itself records the
+/// from the start data this owner keeps from admission until the request's owner ends it
+/// (<see cref="ILlmJournalStore.EndRequest"/>); an attempt in progress never expires. The ID itself records the
 /// disposition (<see cref="UnrecordedPrefix"/>), so reconstruction reports such a request as
 /// not recorded on any later owner, whether recording is on or off by then. Requests recorded
 /// before the switch keep their content and retention.
@@ -26,64 +27,38 @@ internal sealed partial class PgLlmJournalStore
     private const string LostKey = "usage-unrecorded-lost";
 
     // A live unrecorded request: what its ledger rows need.
-    private sealed class Unrecorded(string? sessionId, string purpose, long touched)
+    private sealed class Unrecorded(string? sessionId, string purpose)
     {
         internal readonly string? SessionId = sessionId;
         internal readonly string Purpose = purpose;
-        internal long Touched = touched;
         internal readonly ConcurrentDictionary<int, (string Model, string? Virtual, string Type)> Starts = new();
     }
 
     private readonly ConcurrentDictionary<string, Unrecorded> unrecorded = new(StringComparer.Ordinal);
 
-    // Admission order, for expiry of requests that ended without a success.
-    private readonly ConcurrentQueue<(string Id, long Admitted)> unrecordedOrder = new();
-
-    // A request that ends without a success (a final failure, a cancellation) has no closing
-    // call; its start data is dropped an hour after its last attempt.
-    private static readonly long UnrecordedIdleMs = (long)TimeSpan.FromHours(1).TotalMilliseconds;
-
     /// <summary>Whether request content is written (the tenant's journal setting).</summary>
     internal bool Recording { get; set; } = true;
 
-    bool ILlmJournalStore.RecordsContent => Recording;
+    Func<bool> ILlmJournalStore.RecordingPolicy => () => Recording;
 
     /// <summary>Live unrecorded requests whose start data this owner keeps.</summary>
     internal int UnrecordedLiveCount => unrecorded.Count;
 
+    // Exactly the issued form: the prefix and a GUID's 32 lowercase hex digits.
     internal static bool IsUnrecorded(string requestId) =>
-        requestId.StartsWith(UnrecordedPrefix, StringComparison.Ordinal);
+        requestId.Length == UnrecordedPrefix.Length + 32
+        && requestId.StartsWith(UnrecordedPrefix, StringComparison.Ordinal)
+        && requestId.AsSpan(UnrecordedPrefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0;
 
     private JournalRequestAdmission AdmitUnrecorded(string? sessionId, string purpose)
     {
-        var now = Now();
-        ExpireUnrecorded(now);
         var requestId = UnrecordedPrefix + Guid.NewGuid().ToString("N");
-        unrecorded[requestId] = new Unrecorded(
-            string.IsNullOrEmpty(sessionId) ? null : sessionId,
-            purpose,
-            now
-        );
-        unrecordedOrder.Enqueue((requestId, now));
+        unrecorded[requestId] = new Unrecorded(string.IsNullOrEmpty(sessionId) ? null : sessionId, purpose);
         return new(requestId, Task.CompletedTask);
     }
 
-    // Drops idle requests from the front of the admission order: each request is looked at
-    // about once, so admission stays constant time.
-    private void ExpireUnrecorded(long now)
-    {
-        while (unrecordedOrder.TryPeek(out var oldest) && now - oldest.Admitted >= UnrecordedIdleMs)
-        {
-            if (!unrecordedOrder.TryDequeue(out oldest))
-                break;
-            if (!unrecorded.TryGetValue(oldest.Id, out var entry))
-                continue;
-            if (now - Volatile.Read(ref entry.Touched) >= UnrecordedIdleMs)
-                unrecorded.TryRemove(oldest.Id, out _);
-            else
-                unrecordedOrder.Enqueue((oldest.Id, Volatile.Read(ref entry.Touched)));
-        }
-    }
+    // The request's owner is done with it: its start data goes.
+    void ILlmJournalStore.EndRequest(string requestId) => unrecorded.TryRemove(requestId, out _);
 
     private bool StartUnrecorded(
         string requestId,
@@ -97,17 +72,15 @@ internal sealed partial class PgLlmJournalStore
             return false;
         if (!unrecorded.TryGetValue(requestId, out var entry))
             throw new InvalidDataException("LLM journal request is missing before attempt start.");
-        Volatile.Write(ref entry.Touched, Now());
         entry.Starts[attempt] = (concreteModelId, virtualModelKey, providerType);
         return true;
     }
 
-    // The result of an unrecorded request: only its ledger and redaction rows. A success ends
-    // the request, any result ends its attempt.
+    // The result of an unrecorded request: only its ledger and redaction rows. Any result ends
+    // its attempt; the owner ends the request.
     private async ValueTask<WriteReceipt<bool>?> CompleteUnrecordedAsync(
         string requestId,
         int attempt,
-        string outcome,
         LlmRequestJournalStore.UsageRow? ledger,
         LlmRedactionRecord? redaction,
         CancellationToken token
@@ -120,9 +93,6 @@ internal sealed partial class PgLlmJournalStore
             || !entry.Starts.TryRemove(attempt, out var start)
         )
             throw new InvalidDataException("LLM journal attempt is missing before its result.");
-        Volatile.Write(ref entry.Touched, Now());
-        if (outcome == "success")
-            unrecorded.TryRemove(requestId, out _);
         return await Writer
             .EnqueueAsync(
                 tx =>
@@ -191,8 +161,6 @@ internal sealed partial class PgLlmJournalStore
 
     // A test makes the next unrecorded usage insert fail as a database rejection would.
     internal static Action? InsertUsageForTest { get; set; }
-
-    private static bool UnrecordedUsageLost(PgTx tx) => ReadMetadataNumber(tx, LostKey) is > 0;
 
     private static JsonObject NotRecordedAnswer(string requestId) =>
         new()

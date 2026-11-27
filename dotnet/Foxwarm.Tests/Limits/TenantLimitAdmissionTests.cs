@@ -71,6 +71,8 @@ public sealed partial class TenantLimitAdmissionTests
         Assert.Null(f.Manager.ReplicaLimits);
         var owner = await f.Manager.CreateNamedAsync("main", "plain", null, null);
         Assert.Null(owner.Registry.TurnAdmission);
+        Assert.Null(BlobQuota.AllowOverLimit(owner.AuthorityStore.Images.Blobs));
+        Assert.Null(f.Manager.DiagnosticsRecordingForTest);
         Assert.False(f.Manager.HotChargesAllocatedForTest);
     }
 

@@ -143,7 +143,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (Directory.Exists(runtimeFiles))
             Directory.Delete(runtimeFiles, recursive: true);
         // The wire diagnostics copy request and response bodies: off with the tenant's journal.
-        diagnostics = new(this.root) { Recording = () => Journal.RecordsContent };
+        // A journal that always records needs no callback.
+        diagnostics = new(this.root)
+        {
+            Recording = Storage.Journal.RecordingPolicy,
+        };
         RecallTargets = new(this.root);
         Nodes = new(this.root, Storage.Documents, Storage.Credentials)
         {
@@ -1030,4 +1034,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     }
 
     internal static bool IsOwnedId(string id) => SessionIdentity.IsValid(id);
+
+    // The wire diagnostics' recording callback; null when the journal always records.
+    internal Func<bool>? DiagnosticsRecordingForTest => diagnostics.Recording;
 }

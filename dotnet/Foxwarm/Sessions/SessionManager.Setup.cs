@@ -135,135 +135,143 @@ internal sealed partial class SessionManager
             "setup-model-test",
             cancellationToken
         );
-        var interaction = diagnostics.Begin();
-        var attemptStarted = false;
-        options = options with
-        {
-            Diagnostics = interaction.StartAttempt(model, options, 1),
-            AttemptPrepared = async payload =>
-            {
-                await Journal.AppendAttemptStartAsync(
-                    requestId,
-                    1,
-                    model.Key,
-                    null,
-                    model.ProviderType,
-                    payload,
-                    "",
-                    cancellationToken
-                );
-                attemptStarted = true;
-            },
-        };
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        var service = ConfiguredModelRequests.CreatePreparedService(
-            http,
-            model,
-            options,
-            "setup-model-test",
-            Capabilities.Egress,
-            scope: ModelRequestScope.LowLevel
-        );
         try
         {
-            var result = await service.ChatAsync("setup-model-test", setupHistory, timeout.Token);
+            var interaction = diagnostics.Begin();
+            var attemptStarted = false;
+            options = options with
+            {
+                Diagnostics = interaction.StartAttempt(model, options, 1),
+                AttemptPrepared = async payload =>
+                {
+                    await Journal.AppendAttemptStartAsync(
+                        requestId,
+                        1,
+                        model.Key,
+                        null,
+                        model.ProviderType,
+                        payload,
+                        "",
+                        cancellationToken
+                    );
+                    attemptStarted = true;
+                },
+            };
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            var service = ConfiguredModelRequests.CreatePreparedService(
+                http,
+                model,
+                options,
+                "setup-model-test",
+                Capabilities.Egress,
+                scope: ModelRequestScope.LowLevel
+            );
             try
             {
-                // Setup checks are real provider requests: record them priced like any other.
-                await Journal.AppendChatResultAsync(
-                    requestId,
-                    1,
-                    result with { Usage = ModelUsageCost.Complete(model, result) },
-                    timeout.Token,
-                    new LlmUsageAttribution(model.ProviderKey)
-                );
+                var result = await service.ChatAsync("setup-model-test", setupHistory, timeout.Token);
+                try
+                {
+                    // Setup checks are real provider requests: record them priced like any other.
+                    await Journal.AppendChatResultAsync(
+                        requestId,
+                        1,
+                        result with { Usage = ModelUsageCost.Complete(model, result) },
+                        timeout.Token,
+                        new LlmUsageAttribution(model.ProviderKey)
+                    );
+                }
+                catch (Exception journalError)
+                {
+                    System.Diagnostics.Trace.TraceWarning(
+                        "LLM journal setup result persistence failed: {0}",
+                        journalError.Message
+                    );
+                }
+                return result;
             }
-            catch (Exception journalError)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                System.Diagnostics.Trace.TraceWarning(
-                    "LLM journal setup result persistence failed: {0}",
-                    journalError.Message
+                await interaction.MoveToErrorAsync().ConfigureAwait(false);
+                if (attemptStarted)
+                    try
+                    {
+                        await Journal.AppendAttemptResultAsync(
+                            requestId,
+                            1,
+                            "abort",
+                            null,
+                            new JsonObject { ["kind"] = "abort", ["message"] = "Request cancelled." }
+                        );
+                    }
+                    catch (Exception journalError)
+                    {
+                        System.Diagnostics.Trace.TraceWarning(
+                            "LLM journal setup cancellation persistence failed: {0}",
+                            journalError.Message
+                        );
+                    }
+                throw;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                await interaction.MoveToErrorAsync().ConfigureAwait(false);
+                if (attemptStarted)
+                    try
+                    {
+                        await Journal.AppendAttemptResultAsync(
+                            requestId,
+                            1,
+                            "abort",
+                            null,
+                            new JsonObject
+                            {
+                                ["kind"] = "timeout",
+                                ["message"] = "Configured model request timed out.",
+                            }
+                        );
+                    }
+                    catch (Exception journalError)
+                    {
+                        System.Diagnostics.Trace.TraceWarning(
+                            "LLM journal setup timeout persistence failed: {0}",
+                            journalError.Message
+                        );
+                    }
+                throw new SetupProviderRequestException(
+                    "timeout",
+                    "Configured model request timed out.",
+                    400
                 );
             }
-            return result;
+            catch (Exception error)
+            {
+                await interaction.MoveToErrorAsync().ConfigureAwait(false);
+                if (attemptStarted)
+                    try
+                    {
+                        await Journal.AppendAttemptResultAsync(
+                            requestId,
+                            1,
+                            "failure",
+                            null,
+                            new JsonObject { ["kind"] = "request-error", ["message"] = error.Message }
+                        );
+                    }
+                    catch (Exception journalError)
+                    {
+                        System.Diagnostics.Trace.TraceWarning(
+                            "LLM journal setup failure persistence failed: {0}",
+                            journalError.Message
+                        );
+                    }
+                throw new SetupProviderRequestException("request", SetupTestFailure(error, model), 400);
+            }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        finally
         {
-            await interaction.MoveToErrorAsync().ConfigureAwait(false);
-            if (attemptStarted)
-                try
-                {
-                    await Journal.AppendAttemptResultAsync(
-                        requestId,
-                        1,
-                        "abort",
-                        null,
-                        new JsonObject { ["kind"] = "abort", ["message"] = "Request cancelled." }
-                    );
-                }
-                catch (Exception journalError)
-                {
-                    System.Diagnostics.Trace.TraceWarning(
-                        "LLM journal setup cancellation persistence failed: {0}",
-                        journalError.Message
-                    );
-                }
-            throw;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            await interaction.MoveToErrorAsync().ConfigureAwait(false);
-            if (attemptStarted)
-                try
-                {
-                    await Journal.AppendAttemptResultAsync(
-                        requestId,
-                        1,
-                        "abort",
-                        null,
-                        new JsonObject
-                        {
-                            ["kind"] = "timeout",
-                            ["message"] = "Configured model request timed out.",
-                        }
-                    );
-                }
-                catch (Exception journalError)
-                {
-                    System.Diagnostics.Trace.TraceWarning(
-                        "LLM journal setup timeout persistence failed: {0}",
-                        journalError.Message
-                    );
-                }
-            throw new SetupProviderRequestException(
-                "timeout",
-                "Configured model request timed out.",
-                400
-            );
-        }
-        catch (Exception error)
-        {
-            await interaction.MoveToErrorAsync().ConfigureAwait(false);
-            if (attemptStarted)
-                try
-                {
-                    await Journal.AppendAttemptResultAsync(
-                        requestId,
-                        1,
-                        "failure",
-                        null,
-                        new JsonObject { ["kind"] = "request-error", ["message"] = error.Message }
-                    );
-                }
-                catch (Exception journalError)
-                {
-                    System.Diagnostics.Trace.TraceWarning(
-                        "LLM journal setup failure persistence failed: {0}",
-                        journalError.Message
-                    );
-                }
-            throw new SetupProviderRequestException("request", SetupTestFailure(error, model), 400);
+            // The check's request is over, whatever its outcome.
+            Journal.EndRequest(requestId);
         }
 
         // Provider rejections name their cause; other failures keep the redacted generic text.

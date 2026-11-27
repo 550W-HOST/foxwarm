@@ -93,6 +93,7 @@ public sealed partial class HostedStartupTests
         await Task.Delay(500);
         await WaitUntilAsync(() => !owner.Entry.Snapshot().Busy, TimeSpan.FromSeconds(30), "the failed turn ends");
 
+        Assert.Equal(0, ((Foxwarm.Hosted.Postgres.PgLlmJournalStore)sessions.Journal).UnrecordedLiveCount);
         replica.Stop.Cancel();
         Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
         // No wire diagnostics: neither the recent files nor the failure directory.

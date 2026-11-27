@@ -19,11 +19,14 @@ internal interface ILlmJournalStore : IAsyncDisposable
     /// <summary>Raised when the usage ledger fails to record a result.</summary>
     event Action? UsageLedgerFailed;
 
+    /// <summary>The current recording switch, or null when the store always records.</summary>
+    Func<bool>? RecordingPolicy => null;
+
     /// <summary>
-    /// Whether request and response content is recorded; the tenant's journal switch turns it
-    /// off, and the wire diagnostics follow it.
+    /// The request's owner is done with it (success, final failure, abort, or replacement by a
+    /// new request): state kept for its later results can go. Nothing is written.
     /// </summary>
-    bool RecordsContent => true;
+    void EndRequest(string requestId) { }
 
     Task<string> BeginRequestAsync(
         string? sessionId,

@@ -57,7 +57,58 @@ public sealed class HostedTenantPolicyTests
                 false
             )
         );
+        ((Foxwarm.Models.ILlmJournalStore)store).EndRequest(id);
         return id;
+    }
+
+    private sealed class JournalClock : TimeProvider
+    {
+        internal DateTimeOffset Time = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => Time;
+    }
+
+    [Fact]
+    public async Task AnUnrecordedRequestKeepsItsAttemptUntilItsOwnerEndsIt()
+    {
+        var (database, tenant) = await TenantAsync();
+        await using var db = database;
+        var clock = new JournalClock();
+        await using var store = new PgLlmJournalStore(tenant, clock) { Recording = false };
+        var live = await store.BeginRequestAsync("s", "chat", 0, "", [], Messages("long"), "m", "cache");
+        await store.AppendAttemptStartAsync(live, 1, "m", null, "wire", new JsonObject(), "");
+        clock.Time += TimeSpan.FromHours(2);
+        await RequestAsync(store, "other", "later");
+        await store.AppendChatResultAsync(live, 1, Result(5, 2));
+        ((Foxwarm.Models.ILlmJournalStore)store).EndRequest(live);
+        Assert.Equal(0, store.UnrecordedLiveCount);
+        Assert.Equal(2L, await database.ScalarAsync("SELECT count(*) FROM llm_usage"));
+        Assert.True(PgLlmJournalStore.IsUnrecorded(live));
+        Assert.False(PgLlmJournalStore.IsUnrecorded(live + "1"));
+        Assert.False(PgLlmJournalStore.IsUnrecorded("unrecorded-" + new string('z', 32)));
+    }
+
+    [Fact]
+    public async Task UsageCoverageReadsTheLossFlagInItsCoverageStatement()
+    {
+        var (database, tenant) = await TenantAsync();
+        await using var db = database;
+        await using var store = new PgLlmJournalStore(tenant);
+        await store.BackfillUsageAsync(default);
+        using var root = new System.Diagnostics.Activity("coverage").Start();
+        var reads = 0;
+        using var listen = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Npgsql",
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllData,
+            ActivityStopped = activity => { if (activity.TraceId == root.TraceId) Interlocked.Increment(ref reads); },
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listen);
+        tenant.Read(tx => tx.Scalar("SELECT 1"), snapshot: true);
+        var oneStatement = reads;
+        Assert.True(oneStatement > 0);
+        reads = 0;
+        Assert.True(store.UsageCoverage().Complete);
+        Assert.Equal(oneStatement, reads);
     }
 
     [Fact]
