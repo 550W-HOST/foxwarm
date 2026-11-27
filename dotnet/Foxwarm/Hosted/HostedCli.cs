@@ -67,8 +67,9 @@ internal static class HostedCli
 
     internal const string Usage =
         "Usage: foxwarm db migrate [--app-role <role>] [--operator-role <role>] [--tenant <name>] | foxwarm db status\n"
-        + "       foxwarm hosted import --data-root <dir> [--agents-dir <path>] [--tenant <name>] [--journal] [--dry-run]\n"
+        + "       foxwarm hosted import --data-root <dir> [--agents-dir <path>] [--profile hosted|operator] [--tenant <name>] [--journal] [--dry-run]\n"
         + "                              [--report <file>] [--deployment-config <file>]\n"
+        + "       foxwarm hosted import --profile operator --tenant <name> --abandon [--report <file>]\n"
         + "       foxwarm hosted agents import --tenant <name> (--from <dir> | --abandon) [--report <file>] [--deployment-config <file>]\n"
         + "       foxwarm hosted token [--tenant <name>]\n"
         + "       foxwarm hosted health [--ready]";
@@ -189,15 +190,20 @@ internal static class HostedCli
     {
         string? dataRoot = null;
         string? agentsDirectory = null;
+        var profile = TenantProfile.Hosted;
         string? report = null;
         var deployment = bootstrap.DeploymentConfigPath;
         var tenant = agentsOnly ? null : bootstrap.Tenant;
         var abandon = false;
+        var namedTenant = false;
         var journal = false;
         var dryRun = false;
         for (var index = 0; index < options.Length; index++)
             switch (options[index])
             {
+                case "--profile" when !agentsOnly && index + 1 < options.Length && options[index + 1] is "hosted" or "operator":
+                    profile = TenantProfiles.Parse(options[++index]);
+                    break;
                 case "--agents-dir" when !agentsOnly && index + 1 < options.Length:
                     agentsDirectory = options[++index];
                     break;
@@ -206,6 +212,7 @@ internal static class HostedCli
                     dataRoot = options[++index];
                     break;
                 case "--tenant" when index + 1 < options.Length:
+                    namedTenant = true;
                     tenant = options[++index];
                     break;
                 case "--report" when index + 1 < options.Length:
@@ -214,7 +221,7 @@ internal static class HostedCli
                 case "--deployment-config" when index + 1 < options.Length:
                     deployment = options[++index];
                     break;
-                case "--abandon" when agentsOnly:
+                case "--abandon":
                     abandon = true;
                     break;
                 case "--journal" when !agentsOnly:
@@ -228,7 +235,8 @@ internal static class HostedCli
                     await error.WriteLineAsync(Usage);
                     return UsageError;
             }
-        if ((dataRoot is null) != abandon || string.IsNullOrWhiteSpace(tenant))
+        if ((dataRoot is null) != abandon || string.IsNullOrWhiteSpace(tenant)
+            || abandon && !agentsOnly && (!namedTenant || profile != TenantProfile.Operator || dryRun || journal || agentsDirectory is not null))
         {
             await error.WriteLineAsync(Usage);
             return UsageError;
@@ -241,9 +249,11 @@ internal static class HostedCli
         await using var owner = new PgDatabase(bootstrap.RequireMigrateDatabaseUrl(), "foxwarm-import-owner");
         if (agentsOnly)
             return await Import.HostedAgentImport.RunAsync(app, owner, tenant, dataRoot, abandon, report, blobs, output);
+        if (abandon)
+            return await Import.HostedImport.AbandonOperatorAsync(app, owner, tenant, bootstrap.AgentsVolume, report, output);
         var (kek, _) = bootstrap.RequireKeks();
         return await Import.HostedImport.RunAsync(
-            new Import.HostedImportOptions(dataRoot!, tenant, journal, dryRun, report) { Blobs = blobs, AgentsDirectory = agentsDirectory },
+            new Import.HostedImportOptions(dataRoot!, tenant, journal, dryRun, report) { Blobs = blobs, AgentsDirectory = agentsDirectory, Profile = profile, AgentsVolume = bootstrap.AgentsVolume },
             new Import.ImportDatabases(app, owner, kek),
             output
         );
