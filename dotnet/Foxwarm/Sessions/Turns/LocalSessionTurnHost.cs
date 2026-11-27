@@ -24,6 +24,10 @@ public sealed partial class LocalSessionTurnHost
 
     private void AssertCanContinue() => assertCanContinue?.Invoke();
 
+    // The tenant's busy-turn limit: a turn waits for a slot under its own cancellation, so
+    // Stop ends the wait as it ends a running turn.
+    private readonly Func<CancellationToken, ValueTask<IDisposable>>? turnSlot;
+
     private readonly Func<Task>? safePoint;
     private readonly Func<Task>? retrySafePoint;
     private readonly Func<
@@ -47,9 +51,11 @@ public sealed partial class LocalSessionTurnHost
             null,
         Action? assertCanContinue = null,
         Func<bool>? closing = null,
-        Func<string, string, Task>? childReportMissing = null
+        Func<string, string, Task>? childReportMissing = null,
+        Func<CancellationToken, ValueTask<IDisposable>>? turnSlot = null
     )
     {
+        this.turnSlot = turnSlot;
         this.entry = entry;
         this.store = store;
         this.chat = chat;
@@ -120,6 +126,7 @@ public sealed partial class LocalSessionTurnHost
                 ?? throw new InvalidOperationException(
                     "Cancellation registration was not created."
                 );
+            using var slot = turnSlot is null ? null : await turnSlot(registered.Token).ConfigureAwait(false);
             if (tools is ITurnToolControl control)
                 control.BeginTurn();
             if (

@@ -820,7 +820,16 @@ internal sealed partial class SessionManager
             slot =
                 identities.GetValueOrDefault(session.Id)
                 ?? throw new InvalidOperationException("Creation identity was not claimed.");
-        PublishOwner(session, slot);
+        RecordHotCharge(session, ChargeCreatedOwner(session));
+        try
+        {
+            PublishOwner(session, slot);
+        }
+        catch
+        {
+            ReleaseHotCharge(session);
+            throw;
+        }
     }
 
     private (string? Model, string? Effort) ValidateModelSettings(

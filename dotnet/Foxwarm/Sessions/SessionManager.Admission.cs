@@ -198,12 +198,32 @@ internal sealed partial class SessionManager
                 ? RecoverBusySnapshot(snapshot, ExpiredApprovalText(expired))
                 : snapshot;
             token.ThrowIfCancellationRequested();
-            var owner = MakeSession(id, agent, store);
-            owner.Registry.Add(id, snapshot);
-            BindMutations(owner);
-            if (recoveringBusy || expired.Length > 0)
-                await owner.Entry.SaveLane.SaveStrictAsync(token);
-            PublishOwner(owner, slot, acceptedTimer);
+            // Owner admission: room in the tenant's and the replica's hot-owner budgets.
+            var charge = await ReserveHotOwnerAsync(snapshot.History, token);
+            SessionOwner owner;
+            try
+            {
+                owner = MakeSession(id, agent, store);
+            }
+            catch
+            {
+                charge?.Dispose();
+                throw;
+            }
+            RecordHotCharge(owner, charge);
+            try
+            {
+                owner.Registry.Add(id, snapshot);
+                BindMutations(owner);
+                if (recoveringBusy || expired.Length > 0)
+                    await owner.Entry.SaveLane.SaveStrictAsync(token);
+                PublishOwner(owner, slot, acceptedTimer);
+            }
+            catch
+            {
+                ReleaseHotCharge(owner);
+                throw;
+            }
             if (servicesReady && !IsDeletionClaimed(owner.Id))
                 WaitTransition(owner.Id);
         }

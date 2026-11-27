@@ -8,6 +8,11 @@ namespace Foxwarm.ToolScript;
 internal sealed partial class MainToolScript : IAsyncDisposable
 {
     private readonly IToolScriptRunStore store;
+
+    /// <summary>
+    /// Admission of one Monty process (the tenant's ToolScript limit); null admits at once.
+    /// </summary>
+    internal Func<CancellationToken, ValueTask<IDisposable>>? AdmitProcess { get; set; }
     private readonly string binary;
     private readonly ConcurrentDictionary<string, ActiveRun> active = new(StringComparer.Ordinal);
     private volatile bool closing;

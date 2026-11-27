@@ -56,6 +56,8 @@ internal sealed partial class SessionManager
         try
         {
             ReleaseIdleOwners();
+            // Resident owners' estimates follow their history.
+            RemeasureHotOwners();
         }
         catch (Exception error)
         {
@@ -188,6 +190,7 @@ internal sealed partial class SessionManager
             foreach (var key in keys)
                 identities.Remove(key);
         }
+        ReleaseHotCharge(owner);
         // Stale references now fail admission as a retired owner; scheduling tied to the
         // owner's identity-loss token (idle compaction, launchers) stops.
         owner.Entry.Retired = true;

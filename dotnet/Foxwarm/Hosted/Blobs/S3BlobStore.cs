@@ -164,6 +164,29 @@ internal sealed class S3BlobStore : IBlobStore
             }
         });
 
+    /// <summary>The bytes under this store's prefix (the blob limit's usage).</summary>
+    internal async Task<long> StoredBytesAsync(CancellationToken token)
+    {
+        long bytes = 0;
+        var request = new ListObjectsV2Request { BucketName = bucket, Prefix = root, MaxKeys = pageSize };
+        try
+        {
+            while (true)
+            {
+                var page = await client.ListObjectsV2Async(request, token).ConfigureAwait(false);
+                foreach (var item in page.S3Objects ?? [])
+                    bytes += item.Size ?? 0;
+                if (page.IsTruncated != true || string.IsNullOrEmpty(page.NextContinuationToken))
+                    return bytes;
+                request.ContinuationToken = page.NextContinuationToken;
+            }
+        }
+        catch (Exception error) when (S3Blobs.Failure(error, "") is { } failure)
+        {
+            throw failure;
+        }
+    }
+
     public IReadOnlyList<string> List(string prefix) =>
         Wait(async () =>
         {

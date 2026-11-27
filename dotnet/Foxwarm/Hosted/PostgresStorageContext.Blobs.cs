@@ -4,8 +4,22 @@ using Foxwarm.Storage;
 
 namespace Foxwarm.Hosted;
 
-internal sealed partial class PostgresStorageContext
+internal sealed partial class PostgresStorageContext : Foxwarm.Limits.IBlobUsage
 {
+    /// <summary>The tenant's stored image and artifact bytes, for its blob limit.</summary>
+    public async Task<long> StoredBlobBytesAsync(CancellationToken token)
+    {
+        long bytes = 0;
+        foreach (var store in new[] { ImageBlobs, ArtifactBlobs })
+            bytes += store switch
+            {
+                PgBlobStore pg => await pg.StoredBytesAsync(token).ConfigureAwait(false),
+                S3BlobStore s3 => await s3.StoredBytesAsync(token).ConfigureAwait(false),
+                _ => 0,
+            };
+        return bytes;
+    }
+
     internal const string ImageBlobsName = "images";
     internal const string ArtifactBlobsName = "artifacts";
 

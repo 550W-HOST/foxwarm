@@ -19,6 +19,7 @@ public sealed class LocalSessionTurnHostFactory
     private readonly Action? assertCanContinue;
     private readonly Func<bool>? closing;
     private readonly Func<SessionEntry, string, string, Task>? childReportMissing;
+    private readonly Func<CancellationToken, ValueTask<IDisposable>>? turnSlot;
     private readonly Func<
         SessionEntry,
         ChatResult,
@@ -45,9 +46,11 @@ public sealed class LocalSessionTurnHostFactory
         >? beforeContinuation = null,
         Action? assertCanContinue = null,
         Func<bool>? closing = null,
-        Func<SessionEntry, string, string, Task>? childReportMissing = null
+        Func<SessionEntry, string, string, Task>? childReportMissing = null,
+        Func<CancellationToken, ValueTask<IDisposable>>? turnSlot = null
     )
     {
+        this.turnSlot = turnSlot;
         this.store = store;
         this.chat = chat;
         this.tools = tools;
@@ -80,7 +83,8 @@ public sealed class LocalSessionTurnHostFactory
             closing,
             childReportMissing is null
                 ? null
-                : (parent, reply) => childReportMissing(entry, parent, reply)
+                : (parent, reply) => childReportMissing(entry, parent, reply),
+            turnSlot
         );
 }
 
@@ -136,7 +140,8 @@ public sealed class SessionRegistry
             () => Runner.AssertCanContinue(),
             () => Runner.Closing,
             (entry, parent, reply) =>
-                OnChildReportMissing?.Invoke(entry, parent, reply) ?? Task.CompletedTask
+                OnChildReportMissing?.Invoke(entry, parent, reply) ?? Task.CompletedTask,
+            token => TurnAdmission?.Invoke(token) ?? ValueTask.FromResult(Foxwarm.Limits.AdmissionSlots.None)
         );
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);
@@ -157,6 +162,9 @@ public sealed class SessionRegistry
     /// <summary>Delivers the missing-report notice to the parent: entry, parent ID, last reply.</summary>
     internal Func<SessionEntry, string, string, Task>? OnChildReportMissing { get; set; }
     internal Func<SessionEntry, Exception?, bool, bool, Task>? OnProcessorFinalizing { get; set; }
+    /// <summary>A busy-turn slot (the tenant's limit) a turn waits for; null admits at once.</summary>
+    internal Func<CancellationToken, ValueTask<IDisposable>>? TurnAdmission { get; set; }
+
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }
     public Func<SessionEntry, Task>? OnRetrySafePoint { get; set; }
     public Func<

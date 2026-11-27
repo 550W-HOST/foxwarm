@@ -327,6 +327,8 @@ internal sealed partial class ModelConfiguration
             access,
             await HttpServerSettings.ReadExistingTokenAsync(Paths.DataRoot, credentials) ?? ""
         );
+        if (Limits is { } limits)
+            RequireConfigurationCounts(limits, config, access);
         return (config, access);
     }
 

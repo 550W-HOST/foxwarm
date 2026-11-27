@@ -23,6 +23,21 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
     /// <summary>Runs at the end of a creating transaction, before COMMIT; for tests.</summary>
     internal Action? BeforeCommit { get; set; }
 
+    /// <summary>The bytes this store holds for the tenant (the blob limit's usage).</summary>
+    internal Task<long> StoredBytesAsync(CancellationToken token) =>
+        database.ReadAsync(
+            async (tx, cancel) =>
+                Convert.ToInt64(
+                    await tx.Command(
+                            "SELECT COALESCE(SUM(byte_length), 0) FROM blob_objects WHERE store = $1",
+                            store
+                        )
+                        .ExecuteScalarAsync(cancel)
+                        .ConfigureAwait(false)
+                ),
+            token: token
+        );
+
     public bool Exists(string key) =>
         database.Read(tx =>
             tx.Scalar("SELECT 1 FROM blob_objects WHERE store = $1 AND key = $2", store, key)

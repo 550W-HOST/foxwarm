@@ -37,6 +37,7 @@ internal sealed partial class MainToolScript
             }
         }
         MontyWorker? worker = null;
+        IDisposable? processSlot = null;
         var stdout = new ToolScriptStdout(Text(record["stdout"]) ?? "");
         var offset = stdout.Count;
         // A detachable segment's output so far is read by its waiting call when it detaches.
@@ -104,6 +105,13 @@ internal sealed partial class MainToolScript
             await CommitAsync();
             run.Token.ThrowIfCancellationRequested();
             context.Owner.Entry.RequireIdentityAuthority();
+            // One Monty process per running segment, within the tenant's and the replica's
+            // ToolScript slots; a run over them waits here.
+            if (AdmitProcess is { } admit)
+            {
+                processSlot = await admit(run.Token);
+                context.Owner.Entry.RequireIdentityAuthority();
+            }
             worker = new MontyWorker(binary);
             WorkerEvent progress;
             ToolScriptDataBudget progressBudget;
@@ -492,6 +500,7 @@ internal sealed partial class MainToolScript
         {
             if (worker is not null)
                 await worker.DisposeAsync();
+            processSlot?.Dispose();
             active.TryRemove(id, out _);
             run.Dispose();
         }

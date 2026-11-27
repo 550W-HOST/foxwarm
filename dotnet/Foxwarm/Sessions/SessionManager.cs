@@ -118,13 +118,23 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 root,
                 new(authorityStageHook, canonicalCommitBarrier)
             );
-        Images = new(root, Storage.ImageBlobs);
+        // The tenant's blob limit applies to new images and artifacts.
+        var blobQuota = Capabilities.Limits is { } blobLimits
+            ? new Foxwarm.Limits.BlobQuota(
+                blobLimits.BlobBytes,
+                Storage is Foxwarm.Limits.IBlobUsage usage ? usage.StoredBlobBytesAsync : null
+            )
+            : null;
+        BlobQuota = blobQuota;
+        Images = new(root, blobQuota?.Apply(Storage.ImageBlobs) ?? Storage.ImageBlobs);
         Artifacts = new(
             Path.Combine(root, "state", "artifacts"),
             ArtifactPreparation,
-            Storage.ArtifactBlobs
+            blobQuota?.Apply(Storage.ArtifactBlobs) ?? Storage.ArtifactBlobs
         );
         ToolScript = new(Storage.ToolScriptRuns);
+        if (Capabilities.Limits is not null)
+            ToolScript.AdmitProcess = token => Admission!.ToolScripts.EnterAsync(token);
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))
@@ -135,6 +145,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             MasterNode = Capabilities.MasterNode,
         };
+        if (Capabilities.Limits is { } nodeLimits)
+        {
+            Nodes.Registry.MaxApprovedNodes = nodeLimits.ResidentNodes;
+            Nodes.AdmitCall = token => Admission!.NodeExecs.EnterAsync(token);
+        }
         Nodes.Registry.ConfigureLimits(() =>
             (
                 (int)(
@@ -341,6 +356,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ConfigDocuments
         );
         mcp.Configuration.StdioAvailable = Capabilities.StdioMcp;
+        mcp.Configuration.MaxServers = Capabilities.Limits?.McpServers;
+        if (models.ConfigurationOwner is { } configurationOwner)
+            configurationOwner.Limits = Capabilities.Limits;
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
             mcp,
@@ -838,6 +856,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                 ? Task.CompletedTask
                 : hosted.Compactor.BeforeContinuationAsync(result, consume, token);
+        if (Capabilities.Limits is not null)
+            registry.TurnAdmission = EnterTurnAsync;
         registry.OnSafePoint = _ =>
             ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                 ? Task.CompletedTask
@@ -988,6 +1008,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Tasks.Dispose();
         admissionStop.Dispose();
         Catalog.Dispose();
+        DisposeAdmission();
         http.Dispose();
     }
 
