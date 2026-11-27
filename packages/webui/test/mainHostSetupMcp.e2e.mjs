@@ -84,7 +84,6 @@ try {
   assert.equal((await stored()).remote.url, `http://127.0.0.1:${httpPort}/mcp`)
 
   page = await fixture.openApp()
-  page.on('dialog', dialog => void dialog.accept())
   await page.evaluate(() => { location.hash = 'setup' })
   await page.waitForSelector('#setup-tab-mcp')
   await page.click('#setup-tab-mcp')
@@ -169,6 +168,9 @@ try {
   assert.equal((await stored()).local.enable, false)
   assert.equal(await page.$(`${row('local')} [data-mcp-action="check"]`), null)
   await click(`${row('local')} [data-mcp-action="delete"]`)
+  await page.waitForSelector(`${row('local')} [data-mcp-confirm-delete]`)
+  assert.match(await page.$eval(`${row('local')} [data-mcp-confirm-delete]`, node => node.textContent), /^Delete local\? Agents lose its tools, and its sign-in is removed\./)
+  await click(`${row('local')} [data-mcp-action="confirm-delete"]`)
   await page.waitForFunction(selector => !document.querySelector(selector), { timeout: 10000 }, row('local'))
   assert.equal((await stored()).local, undefined)
 
