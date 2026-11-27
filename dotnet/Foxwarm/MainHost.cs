@@ -297,6 +297,19 @@ internal sealed class MainHost : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        try
+        {
+            await StopServicesAsync();
+        }
+        finally
+        {
+            // Also when stopping ingress failed before Session shutdown was reached.
+            sessions.DisposeAdmission();
+        }
+    }
+
+    private async Task StopServicesAsync()
+    {
         log?.UseFor();
         var stopping = System.Diagnostics.Stopwatch.StartNew();
         sessions.BeginShutdown();
