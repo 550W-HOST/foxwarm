@@ -164,6 +164,13 @@ internal sealed class TenantActivations : IAsyncDisposable
         }
     }
 
+    /// <summary>Every tenant's published generation, at this moment.</summary>
+    internal IReadOnlyList<TenantGeneration> Published()
+    {
+        lock (gate)
+            return [.. slots.Values.Select(slot => slot.Current).OfType<TenantGeneration>()];
+    }
+
     /// <summary>The tenant's published generation, or null.</summary>
     internal TenantGeneration? Current(string tenant)
     {

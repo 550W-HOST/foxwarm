@@ -165,6 +165,18 @@ A runtime owns what its build started, so a retired or failed runtime releases i
 - **Eligibility at acquisition.** `TenantLease` carries the acquiring replica's role. Both eligibility reads (before and under the row lock) check `ReplicaRoles.MayServe(role, profile, pinned_role)`: a general replica takes only unpinned `hosted` tenants, the master host only the `operator` tenant or one pinned to it, the operator surface none. A refusal is `TenantNotEligibleException`, a definite decline that leaves the lease untouched; another replica may take the tenant.
 - **The checked profile.** The acquisition returns the profile it read under the row lock in `LeaseGrant.Profile`, and the runtime is built for that profile (`ActivationContext.Grant`). A profile change after the acquisition doesn't change the generation being built.
 
+## D-hosted-runtimes-host
+
+**Plan §2.1 (P2), coordinator-confirmed; transitional selection.** `TenantReplica` is the multi-tenant replica: one front, many tenant runtimes, each a generation of `TenantActivations`.
+
+- **Selection.** `FOXWARM_HOSTED_TOPOLOGY=tenants`, read only in `HostedEntry.RunAsync`. Without it a process runs P1's single-tenant `HostedReplica`. The variable is transitional: no chart, Compose file or user doc sets it, and it is removed when forwarding replaces the single-tenant replica (plan §12.1).
+- **Composition.** After the schema check the replica opens the control and renewal data sources, the `GrantRenewer`, the `FenceSupervisor` (exit through `Environment.Exit`) and `TenantActivations` with the replica's role and one shutdown bound, then registers its boot. Each generation gets a `TenantDb` with the statement cap, attached to the generation's fence, and a `TenantServer` with the tenant's public origin (the deployment `url` with `{slug}`). `HostedEntry.CreateTenantRuntimeAsync` builds the production runtime through `BuildRuntimeAsync` with scratch and Agents directories under `t/<slug>`.
+- **Dispatch.** The front resolves `Host` through `tenant_hostnames` (`HostnameDirectory`, cached and cleared on `NOTIFY foxwarm_tenants`) and admits the request into the tenant's published generation; the admission is held until dispatch completes. A host with no tenant gets a bare 404. A tenant this replica can't serve (held elsewhere, not eligible, fenced, a failed start) gets a bare 503 with no tenant data; forwarding replaces that.
+- **Operator documents.** One `LISTEN` connection (`foxwarm-listen`) subscribes to `foxwarm_operator` and `foxwarm_tenants`. Every subscription and resubscription invalidates as a notification does, since a change made while the connection was down notified nobody. Invalidation applies the injected callback to every started runtime; a runtime still starting applies it when its start ends if the version moved after its build.
+- **Health.** `/livez`, `/readyz` (serving) and `/status` (role, state, replica, published tenant count), with no tenant names.
+- **Stop.** A graceful stop runs `ShutdownAsync` (parallel retirement under one bound), then stops the front. The exit is `Stopped` when every stop was confirmed and `Fenced` otherwise; the boot row is removed only after a confirmed stop.
+- **Not yet.** Tenant runtimes report themselves never idle, so idle release releases nothing until runtimes report busy work and wake-ups. There is no forwarding or mesh, no placement-driven acquisition (a replica activates whatever it is asked for, subject to eligibility), and the operator-document callback is a seam: production passes none until the ceiling entry point lands.
+
 ## D-hosted-tenant-server
 
 `TenantServer` is the `IServer` of a tenant runtime that has no listener (`HttpServerSettings.Server`): a replica's front server receives every request and hands it to the tenant with `DispatchAsync`.
@@ -210,6 +222,10 @@ A runtime owns what its build started, so a retired or failed runtime releases i
   - coordinator disposal.
 
   - placement at acquisition: the runtime is built for the profile the acquisition checked even when it changes before the build, and a general replica refuses an operator tenant without touching its lease.
+
+  `TenantReplicaTests` runs the runtimes host in process over real lease rows with small runtimes: activation on the first request and routing by `Host`, a tenant held elsewhere refused without data, a takeover fencing only its tenant, operator-document invalidation on notification and on resubscription after the listener's backend is terminated, and a graceful stop that releases every tenant.
+
+  `ReplicaProcessTests` runs real replica processes through `ReplicaProcessHarness` (`dotnet Foxwarm.dll`, a `PgTcpProxy` per replica, `DOTNET_GCHeapHardLimit`, kill and SIGTERM, `/status`): a killed replica's tenant moves only after expiry at the next epoch, SIGTERM releases every tenant for an immediate takeover, and a partitioned owner stops serving before the TTL while the tenant moves only after it.
 
   `AdmissionGateTests` races admissions against the idle latch. `PlacementTests` covers the rank's stability and order, candidate filtering (role, drain, duplicate logical name, capacity), acquisition by role and profile with the profile carried in the grant, and the registry's live boots.
 - **Renewal (P2).** `GrantRenewalTests`, on real lease rows:

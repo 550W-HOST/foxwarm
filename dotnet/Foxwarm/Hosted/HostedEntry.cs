@@ -37,6 +37,10 @@ internal static class HostedEntry
         using var terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Cancel);
         using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, Cancel);
         await using var database = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm");
+        // Transitional: the multi-tenant runtimes host, until forwarding replaces the
+        // single-tenant replica and this selection is removed.
+        if (Environment.GetEnvironmentVariable("FOXWARM_HOSTED_TOPOLOGY") == "tenants")
+            return await RunTenantsAsync(bootstrap, deployment, database, stop.Token).ConfigureAwait(false);
         var replica = new HostedReplica(
             new HostedReplicaOptions(
                 bootstrap.Tenant,
@@ -68,6 +72,81 @@ internal static class HostedEntry
             context.Cancel = true;
             stop.Cancel();
         }
+    }
+
+    private static async Task<int> RunTenantsAsync(
+        HostedBootstrap bootstrap,
+        DeploymentConfiguration deployment,
+        PgDatabase database,
+        CancellationToken stop
+    )
+    {
+        var replica = new Runtimes.TenantReplica(
+            new Runtimes.TenantReplicaOptions(
+                bootstrap.ReplicaName ?? Environment.MachineName,
+                bootstrap.AdvertiseAddress,
+                deployment.HealthEndpoint,
+                deployment.PublicEndpoint,
+                TenantPublicUrl(deployment),
+                LeaseTimings.Default,
+                DrainBound: TimeSpan.FromSeconds(8),
+                AgentCatalog.ReaderVersion
+            ),
+            database,
+            bootstrap.RequireDatabaseUrl(),
+            (context, token) => CreateTenantRuntimeAsync(context, bootstrap, deployment, token),
+            line => Console.Error.WriteLine(line),
+            exit: Environment.Exit
+        );
+        var code = await replica.RunAsync(stop).ConfigureAwait(false);
+        Console.Error.WriteLine($"[hosted] Replica {replica.Replica} exits with code {code}.");
+        if (code == HostedExit.Fenced)
+            Environment.Exit(code);
+        return code;
+    }
+
+    // A tenant runtime's public origin: the deployment URL with {slug}, or the front itself.
+    private static string TenantPublicUrl(DeploymentConfiguration deployment) =>
+        deployment.Root["url"]?.GetValue<string>() is { } url && url.Contains("{slug}", StringComparison.Ordinal)
+            ? url.TrimEnd('/')
+            : $"http://{{slug}}:{deployment.PublicEndpoint.Port}";
+
+    /// <summary>
+    /// One tenant's runtime on a multi-tenant replica: its own scratch and Agents directories
+    /// under the replica's (<c>t/&lt;slug&gt;</c>), its blobs, and no listener of its own.
+    /// </summary>
+    internal static async Task<IHostedRuntime> CreateTenantRuntimeAsync(
+        Runtimes.TenantRuntimeContext context,
+        HostedBootstrap bootstrap,
+        DeploymentConfiguration deployment,
+        CancellationToken token = default
+    )
+    {
+        var slug = context.Activation.Generation.Tenant;
+        var tenant = bootstrap with
+        {
+            Tenant = slug,
+            ScratchRoot = Path.Combine(bootstrap.RequireScratchRoot(), "t", slug),
+            AgentsRoot = bootstrap.AgentsRoot is { } agents ? Path.Combine(agents, "t", slug) : null,
+        };
+        var storage = new PostgresStorageContext(context.Database, tenant.RequireScratchRoot());
+        try
+        {
+            if (storage.Missing.Count > 0)
+                throw new HostedStartupException(
+                    "This build has no PostgreSQL implementation of the "
+                        + string.Join(", ", storage.Missing)
+                        + " stores; hosted mode can't start."
+                );
+            await storage.OpenBlobsAsync(deployment.Blobs, slug, token).ConfigureAwait(false);
+        }
+        catch
+        {
+            await storage.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+        return await BuildRuntimeAsync(storage, storage, tenant, deployment, null, token, context.Server)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

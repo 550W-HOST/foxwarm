@@ -31,10 +31,10 @@ internal sealed class HealthEndpoint : IAsyncDisposable
 {
     private readonly TcpListener listener;
     private readonly CancellationTokenSource stopping = new();
-    private readonly Func<HealthState> state;
+    private readonly Func<IHealthReport> state;
     private readonly Task accepting;
 
-    internal HealthEndpoint(IPEndPoint endpoint, Func<HealthState> state)
+    internal HealthEndpoint(IPEndPoint endpoint, Func<IHealthReport> state)
     {
         this.state = state;
         listener = new TcpListener(endpoint);
@@ -120,14 +120,26 @@ internal sealed class HealthEndpoint : IAsyncDisposable
         var current = state();
         return path switch
         {
-            "/livez" => current.Role == ReplicaRole.Fencing
-                ? (503, "{\"live\":false}")
-                : (200, "{\"live\":true}"),
+            "/livez" => current.Live
+                ? (200, "{\"live\":true}")
+                : (503, "{\"live\":false}"),
             "/readyz" => current.Ready ? (200, "{\"ready\":true}") : (503, "{\"ready\":false}"),
             "/status" => (200, current.ToJson()),
             _ => (404, "{\"error\":\"not found\"}"),
         };
     }
+}
+
+/// <summary>What the health endpoint reports, as one snapshot.</summary>
+internal interface IHealthReport
+{
+    /// <summary>False while the replica is fencing itself.</summary>
+    bool Live { get; }
+
+    bool Ready { get; }
+
+    /// <summary>The <c>/status</c> body; no tenant data beyond what the role needs.</summary>
+    string ToJson();
 }
 
 /// <summary>A snapshot of what the health endpoint reports.</summary>
@@ -138,12 +150,14 @@ internal sealed record HealthState(
     long? Epoch = null,
     TimeSpan? SinceRenewal = null,
     bool RuntimeStarted = false
-)
+) : IHealthReport
 {
-    internal bool Ready =>
+    public bool Live => Role != ReplicaRole.Fencing;
+
+    public bool Ready =>
         Role == ReplicaRole.Standby || (Role == ReplicaRole.Owner && RuntimeStarted);
 
-    internal string ToJson() =>
+    public string ToJson() =>
         new JsonObject
         {
             ["role"] = Role.ToString().ToLowerInvariant(),

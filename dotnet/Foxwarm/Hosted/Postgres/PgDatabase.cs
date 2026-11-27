@@ -46,6 +46,35 @@ internal sealed class PgDatabase : IAsyncDisposable
     internal static PgDatabase Renewal(string connectionString) =>
         new(connectionString, "foxwarm-renewal", 1);
 
+    /// <summary>
+    /// A dedicated, unpooled connection for <c>LISTEN</c>, with TCP keepalive so a lost peer is
+    /// noticed while waiting for notifications. The caller owns it and disposes it.
+    /// </summary>
+    internal static async Task<Npgsql.NpgsqlConnection> OpenListenerAsync(
+        string connectionString,
+        TimeSpan keepAlive,
+        CancellationToken token
+    )
+    {
+        var settings = new Npgsql.NpgsqlConnectionStringBuilder(PgConnectionString.Normalize(connectionString))
+        {
+            ApplicationName = "foxwarm-listen",
+            Pooling = false,
+            KeepAlive = (int)Math.Max(1, keepAlive.TotalSeconds),
+        };
+        var connection = new Npgsql.NpgsqlConnection(settings.ConnectionString);
+        try
+        {
+            await connection.OpenAsync(token).ConfigureAwait(false);
+            return connection;
+        }
+        catch
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     internal int? MaxPoolSize { get; }
 
     /// <summary>The database name, for diagnostics.</summary>
