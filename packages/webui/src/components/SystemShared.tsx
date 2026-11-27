@@ -12,18 +12,6 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
  */
 export const USAGE_TABLE_FIRST_COLUMN = 'max-md:sticky max-md:left-0 max-md:z-[1] max-md:w-full max-md:min-w-[7rem] max-md:max-w-0 max-md:bg-fw-surface'
 
-export const formatRelativeTime = (timestamp?: number) => {
-  if (!timestamp) return 'No messages yet'
-  const diff = Math.max(0, Date.now() - timestamp)
-  const minute = 60 * 1000
-  const hour = 60 * minute
-  const day = 24 * hour
-  if (diff < minute) return 'just now'
-  if (diff < hour) return `${Math.floor(diff / minute)}m ago`
-  if (diff < day) return `${Math.floor(diff / hour)}h ago`
-  return `${Math.floor(diff / day)}d ago`
-}
-
 export const formatBusyDuration = (startedAt?: number | null, now: number = Date.now()) => {
   if (!startedAt) return '—'
   const totalSeconds = Math.floor(Math.max(0, now - startedAt) / 1000)

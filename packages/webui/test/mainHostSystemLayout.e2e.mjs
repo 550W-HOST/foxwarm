@@ -81,7 +81,7 @@ try {
   assert.match(await page.$eval('[data-architecture-agent-id="parent"]', row => row.textContent), /1 rule/)
   await page.click('[data-architecture-agent-id="child"]')
   await page.waitForSelector('[data-architecture-agent-inspector-id="child"] [data-agent-tab-panel="overview"]')
-  assert.match(await page.$eval('[data-agent-can-do]', element => element.textContent), /Rules of parent also apply/)
+  assert.match(await page.$eval('[data-agent-access]', element => element.textContent), /Rules from parent apply too/)
 
   // Prompt layers: framework, installation additions, then the Agent's own memory.
   await page.click('[data-agent-tab="prompt"]')
@@ -111,7 +111,10 @@ try {
   await page.click('[data-agent-tab="rules"]')
   await page.waitForSelector('[data-rule-layers]')
   assert.deepEqual(await page.$$eval('[data-rule-layer]', rows => rows.map(row => row.getAttribute('data-rule-layer'))), ['installation', 'parent', 'own'])
-  assert.match(await page.$eval('[data-rule-layer="parent"]', row => row.textContent), /Administrators only/)
+  // A top-level creator's layer is changed only by administrators.
+  const parentLayer = await page.$eval('[data-rule-layer="parent"]', row => row.textContent)
+  assert.match(parentLayer, /Changed by administrators/)
+  assert.doesNotMatch(parentLayer, /sessions of/)
   assert.match(await page.$eval('[data-rule-layer="own"]', row => row.textContent), /sessions of parent/)
   await page.click('[data-rule-layer="installation"] button[aria-expanded="false"]')
   await page.waitForSelector('[data-rule-layer="installation"] [data-rule-id="global-no-web"]')

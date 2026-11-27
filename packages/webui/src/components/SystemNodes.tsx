@@ -10,7 +10,7 @@ import NodeOnboardingModal, { useNodePendingApprovals } from './NodeOnboardingMo
 import NodeActionsModal from './NodeActionsModal'
 import { getArchitectureSessionNodeId } from '../architectureOperations'
 import { isSessionRuntimeActive } from '../sessionRuntimeState'
-import { formatRelativeTime } from './SystemShared'
+import { formatActivityTime } from '../activityTime'
 
 /** Pane width below which the table becomes a two-line list. */
 const NODE_TABLE_MIN_WIDTH = 640
@@ -63,7 +63,7 @@ export default function SystemNodes({ nodes, error, sessions, sessionCounts, pho
   // differs from both.
   const nodeId = (node: WebUiNodeTarget) => node.id !== node.displayName ? node.id : ''
   const nodeType = (node: WebUiNodeTarget) => node.type !== node.id && node.type !== node.displayName ? node.type : ''
-  const lastSeen = (node: WebUiNodeTarget) => node.id === 'master' ? 'This server' : node.online ? 'Connected' : node.lastSeenAt ? formatRelativeTime(node.lastSeenAt) : '—'
+  const lastSeen = (node: WebUiNodeTarget) => node.id === 'master' ? 'This server' : node.online ? 'Connected' : node.lastSeenAt ? formatActivityTime(node.lastSeenAt) : '—'
   const sessionsCell = (node: WebUiNodeTarget) => {
     const total = sessionCounts.get(node.id) || 0
     if (!total) return <span className="text-fw-text-muted">—</span>

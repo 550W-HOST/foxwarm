@@ -7,9 +7,10 @@ import type { AgentSettingsChanges } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
 import type { Session } from './SessionListCore'
 import { API_BASE_PATH } from '../config'
-import { formatRelativeTime, getStatusTone } from './SystemShared'
+import { getStatusTone } from './SystemShared'
+import { formatActivityTime } from '../activityTime'
 import { SystemEmptyDetail, SystemSplit, useSystemSplit } from './SystemSplit'
-import { PromptLayers, RuleLayers, isAllowlistLayer, pill, systemHeading, type InstallationPrompt, type OpenInCode } from './SystemAgentLayers'
+import { PromptLayers, RuleLayers, isAllowlistLayer, joinNames, pill, systemHeading, type InstallationPrompt, type OpenInCode } from './SystemAgentLayers'
 import { SessionStateText, sessionShortName } from './SystemSessions'
 
 export type AgentRegistryEntry = {
@@ -92,11 +93,11 @@ function AgentList({ agents, selectedId, onSelect, onCreateSession }: { agents: 
               <span className={`h-2 w-2 shrink-0 rounded-full ${active ? 'bg-fw-accent' : 'bg-fw-border-strong'}`} aria-hidden />
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-1.5"><span className="truncate text-[13px] font-semibold text-fw-text-strong">{agent.id}</span><AgentRulesPill agent={agent} /></div>
-                <div className="mt-0.5 truncate text-[11px] text-fw-text-muted">{[agent.inherit ? `memory from ${agent.inherit}` : 'own memory', agent.defaultNode ? `on ${agent.defaultNode}` : ''].filter(Boolean).join(' · ')}</div>
+                <div className="mt-0.5 truncate text-[11px] text-fw-text-muted">{[agent.inherit ? `memory from ${agent.inherit}` : 'own memory', agent.defaultNode ? `starts on ${agent.defaultNode}` : ''].filter(Boolean).join(' · ')}</div>
               </div>
               <div className="shrink-0 text-right text-[11px] tabular-nums text-fw-text-muted">
                 {active ? <div className="font-medium text-fw-accent">{active} active</div> : <div>{agent.sessionCount} session{agent.sessionCount === 1 ? '' : 's'}</div>}
-                <div>{agent.lastActivity ? formatRelativeTime(agent.lastActivity) : '—'}</div>
+                <div>{agent.lastActivity ? formatActivityTime(agent.lastActivity) : '—'}</div>
               </div>
               {onCreateSession ? <button type="button" aria-label={`New session for ${agent.id}`} title="New session" onClick={event => { event.stopPropagation(); onCreateSession(agent.id) }} className="rounded-md p-1 text-fw-text-muted opacity-0 hover:bg-fw-surface hover:text-fw-text focus:opacity-100 group-hover:opacity-100"><Plus className="h-3.5 w-3.5" /></button> : null}
             </div>
@@ -144,14 +145,14 @@ function AgentSessionList({ sessions, total, now, onInspect, onOpen, onShowAll }
             <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusTone(session)}`} aria-hidden />
             <button type="button" onClick={() => onInspect(session.id)} className="min-w-0 flex-1 truncate text-left font-medium text-fw-text-strong hover:text-fw-accent" title={session.id}>{sessionShortName(session)}</button>
             <SessionStateText session={session} now={now} />
-            <span className="shrink-0 text-fw-text-muted">{formatRelativeTime(session.lastMessageTime)}</span>
+            <span className="shrink-0 text-fw-text-muted">{session.lastMessageTime ? formatActivityTime(session.lastMessageTime) : '—'}</span>
             <button type="button" onClick={() => onOpen(session.id)} aria-label={`Open ${session.id}`} title="Open session" className="rounded p-1 text-fw-text-muted hover:bg-fw-hover hover:text-fw-text"><ExternalLink className="h-3 w-3" /></button>
           </li>
         ))}
       </ul>
       {/* The inspector loads the newest Sessions; the Sessions section lists all of them. */}
       {total > sessions.length && (all || sessions.length <= limit)
-        ? <button type="button" data-agent-sessions-all onClick={onShowAll} className="mt-1 text-xs font-medium text-fw-accent hover:underline">View all {total} in Sessions</button>
+        ? <button type="button" data-agent-sessions-all onClick={onShowAll} className="mt-1 text-xs font-medium text-fw-accent hover:underline">Show all {total} in Sessions</button>
         : sessions.length > limit ? <button type="button" onClick={() => setAll(value => !value)} className="mt-1 text-xs font-medium text-fw-accent hover:underline">{all ? 'Show fewer' : `Show all ${sessions.length}`}</button> : null}
     </div>
   )
@@ -234,7 +235,7 @@ function AgentInspector({ agent, props }: { agent: AgentRegistryEntry; props: Sy
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-fw-text-strong">{agent.id}</h2>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fw-text-muted">
-              <span>{agent.inherit ? <>Memory from <span className="text-fw-text-strong">{agent.inherit}</span></> : 'Own memory only'}</span>
+              <span>{agent.inherit ? <>Memory from <span className="text-fw-text-strong">{agent.inherit}</span></> : 'Own memory'}</span>
               {agent.createdBy ? <span>Created by <span className="text-fw-text-strong">{agent.createdBy}</span></span> : null}
               <span>Starts on <span className="text-fw-text-strong">{agent.defaultNode || props.installDefaultNode || 'master'}</span></span>
             </div>
@@ -255,19 +256,19 @@ function AgentInspector({ agent, props }: { agent: AgentRegistryEntry; props: Sy
         {tab === 'overview' ? (
           <div className="space-y-5">
             <section><h3 className={systemHeading}>Sessions</h3><div className="mt-1.5"><AgentSessionList sessions={sessions} total={agent.sessionCount} now={props.now} onInspect={props.onInspectSession} onOpen={props.onOpenSession} onShowAll={() => props.onShowAgentSessions(agent.id)} /></div></section>
-            <section data-agent-can-do>
-              <h3 className={systemHeading}>Can do</h3>
+            <section data-agent-access>
+              <h3 className={systemHeading}>Access</h3>
               <p className="mt-1.5 text-xs leading-5 text-fw-text">
-                {agent.restricted || isAllowlistLayer(agent.rules || []) ? 'Only what its rules allow.' : agent.ruleCount > 0 ? `Everything the layers above allow, except what its ${agent.ruleCount} rule${agent.ruleCount === 1 ? '' : 's'} narrow.` : 'Everything the layers above allow.'}
-                {ancestors.length ? ` Rules of ${ancestors.join(', ')} also apply.` : ''}{' '}
-                <button type="button" className="font-medium text-fw-accent hover:underline" onClick={() => setTab('rules')}>Rules</button>
+                {agent.restricted || isAllowlistLayer(agent.rules || []) ? 'Only what its own rules allow.' : agent.ruleCount > 0 ? `Whatever the layers above allow, narrowed by its ${agent.ruleCount === 1 ? 'rule' : `${agent.ruleCount} rules`}.` : 'Whatever the layers above allow.'}
+                {ancestors.length ? ` Rules from ${joinNames(ancestors)} apply too.` : ''}{' '}
+                <button type="button" className="font-medium text-fw-accent hover:underline" onClick={() => setTab('rules')}>View rules</button>
               </p>
             </section>
             <section>
               <h3 className={systemHeading}>Prompt</h3>
               <p className="mt-1.5 text-xs leading-5 text-fw-text">
-                {agent.inheritanceChain.length > 1 ? `Framework, installation additions, memory of ${agent.inheritanceChain.slice(0, -1).join(', ')}, then its own.` : 'Framework, installation additions, then its own memory.'}{' '}
-                <button type="button" className="font-medium text-fw-accent hover:underline" onClick={() => setTab('prompt')}>Prompt</button>
+                {agent.inheritanceChain.length > 1 ? `Framework prompt, installation additions, memory of ${joinNames(agent.inheritanceChain.slice(0, -1))}, then its own memory.` : 'Framework prompt, installation additions, then its own memory.'}{' '}
+                <button type="button" className="font-medium text-fw-accent hover:underline" onClick={() => setTab('prompt')}>View prompt</button>
               </p>
             </section>
           </div>

@@ -14,8 +14,11 @@ export type OpenInCode = (workspace: string, filePath?: string) => void
 /** The installation's prompt additions file, from `GET /api/agents` `prompt.installation`. */
 export type InstallationPrompt = { path: string; exists: boolean } | null
 
+/** Names in running text: "a", "a and b", "a, b and c". */
+export const joinNames = (names: string[]) => names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] || ''
+
 export const systemHeading = 'text-[11px] font-semibold uppercase tracking-[0.12em] text-fw-text-muted'
-const linkButton = 'inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface disabled:opacity-50'
+const linkButton = 'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface disabled:opacity-50'
 
 type Tone = 'neutral' | 'accent' | 'warning' | 'danger' | 'success' | 'muted'
 export const pill = (label: ReactNode, tone: Tone = 'neutral', title?: string) => {
@@ -93,14 +96,14 @@ export function FrameworkPromptDialog({ agentId, onClose }: { agentId: string; o
     let live = true
     void fetch(`${API_BASE_PATH}/agents/${encodeURIComponent(agentId)}/framework-prompt`).then(async response => {
       const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || `Prompt query failed (${response.status})`)
+      if (!response.ok) throw new Error(payload.error || `Couldn't load the prompt (${response.status})`)
       if (live) setPrompt(payload)
     }).catch(cause => { if (live) setError(cause instanceof Error ? cause.message : String(cause)) })
     return () => { live = false }
   }, [agentId])
   const status = error ? <p role="alert" className="shrink-0 px-4 py-2 text-xs text-fw-danger">{error}</p>
     : prompt && prompt.text === null ? <p className="shrink-0 px-4 py-2 text-xs text-fw-text-muted">This installation has no framework prompt.</p>
-    : prompt?.modelDependent ? <p data-framework-prompt-model={prompt.model || ''} className="shrink-0 border-b border-fw-border-muted px-4 py-2 text-xs text-fw-text-muted">Parts of this prompt depend on the model. Shown for <span className="font-mono text-fw-text-strong">{prompt.model || prompt.defaultModel || 'no model'}</span>, the default model of new sessions.</p>
+    : prompt?.modelDependent ? <p data-framework-prompt-model={prompt.model || ''} className="shrink-0 border-b border-fw-border-muted px-4 py-2 text-xs text-fw-text-muted">Parts of this prompt depend on the model. Shown for <span className="font-mono text-fw-text-strong">{prompt.model || prompt.defaultModel || 'no model'}</span>, which new sessions of this agent use.</p>
     : null
   return <JsonInspectorDialog title="Foxwarm framework prompt" text={prompt?.text || ''} language="markdown" loading={!prompt && !error} status={status} onClose={onClose} />
 }
@@ -128,7 +131,7 @@ export function PromptLayers({ agent, installation, onOpen, onCreateInstallation
   return (
     <>
       <ol className="space-y-4" data-prompt-layers>
-        <LayerRow name="framework" index={++index} title="Foxwarm framework prompt" badge={pill('Built in', 'muted')} subtitle="Same for every installation"
+        <LayerRow name="framework" index={++index} title="Foxwarm framework prompt" badge={pill('Built in', 'muted')} subtitle="Part of this Foxwarm version"
           actions={<button type="button" data-prompt-framework-view className={linkButton} onClick={() => setFrameworkOpen(true)}><BookOpen className="h-3.5 w-3.5" />View</button>} />
         <LayerRow name="installation" index={++index} title="Installation additions" badge={pill('Every agent', 'neutral')}
           subtitle={<span className="font-mono text-[11px]">agents/00_SYSTEM.local.md</span>}
@@ -187,7 +190,7 @@ export function RuleList({ rules, emptyText }: { rules: unknown[]; emptyText: st
             <div className="flex min-w-0 items-center gap-2">
               {pill(String(rule.action ?? 'allow'), actionTone(rule.action))}
               <span className="min-w-0 truncate font-mono text-[11px] text-fw-text-strong">{id}</span>
-              {rule.enabled === false ? pill('off', 'muted') : null}
+              {rule.enabled === false ? pill('disabled', 'muted') : null}
             </div>
             <div className="mt-1 font-mono text-[11px] leading-5 text-fw-text-muted">
               {selectors.length ? selectors.map(([key, value]) => <div key={key} className="break-words"><span className="text-fw-text">{key}</span> {flow(value)}</div>) : <div>every call</div>}
@@ -212,7 +215,7 @@ const layerPill = (rules: unknown[], allowlist = isAllowlistLayer(rules)) =>
 /** Who may replace an Agent's layer: administrators, and Sessions of its strict creator ancestors. */
 function whoMayChange(agents: Map<string, AgentRegistryEntry>, id: string) {
   const ancestors = (agents.get(id)?.creatorChain || [id]).slice(0, -1)
-  return ancestors.length ? `Administrators, and sessions of ${ancestors.join(', ')}` : 'Administrators only'
+  return ancestors.length ? `Changed by administrators and sessions of ${joinNames(ancestors)}` : 'Changed by administrators'
 }
 
 type InstallationPolicy = { rules: unknown[]; defaultAction: string; error?: string } | { loadError: string }
@@ -224,7 +227,7 @@ function useInstallationPolicy() {
     let live = true
     void fetch(`${API_BASE_PATH}/setup/authorization`).then(async response => {
       const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || `Policy query failed (${response.status})`)
+      if (!response.ok) throw new Error(payload.error || `Couldn't load the rules (${response.status})`)
       if (payload.error) return { rules: [], defaultAction: 'deny', error: String(payload.error) }
       const document = payload.exists ? YAML.parse(String(payload.yaml || '')) || {} : {}
       return { rules: Array.isArray(document.rules) ? document.rules : [], defaultAction: String(document.defaultAction || 'allow') }
@@ -304,18 +307,18 @@ export function RuleLayers({ agent, agents, onSave, onShowAgent, onOpenSetupAuth
   return (
     <div data-rule-layers>
       <p className="mb-3 text-xs leading-5 text-fw-text-muted">A call must pass every layer. Each layer can only narrow what the layers above allow.</p>
-      {agent.creatorChain === null ? <p role="alert" className="mb-3 rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger">This agent's creator chain can't be resolved, so its tool calls are rejected.</p> : null}
+      {agent.creatorChain === null ? <p role="alert" className="mb-3 rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger">This agent's creators can't be determined, so all its tool calls are refused.</p> : null}
       <ol className="space-y-2">
         <ReadOnlyLayer name="installation" title={<><ShieldCheck className="h-3.5 w-3.5 text-fw-text-muted" />Installation rules</>}
           kind={!installation ? null : 'loadError' in installation ? pill('Unavailable', 'muted') : installation.error ? pill('Invalid', 'danger') : layerPill(installation.rules, installation.defaultAction === 'deny')}
-          who="Administrators, in Setup"
+          who="Changed by administrators in Setup"
           action={onOpenSetupAuthorization ? <button type="button" data-rule-installation-setup className={linkButton} onClick={onOpenSetupAuthorization}>Edit in Setup<ChevronRight className="h-3 w-3" /></button> : null}>
           {!installation ? <div className="text-xs text-fw-text-muted">Loading…</div>
             : 'loadError' in installation ? <div role="alert" className="text-xs text-fw-danger">{installation.loadError}</div>
             : installation.error ? <div role="alert" className="text-xs text-fw-danger">{installation.error}</div>
             : <>
               <RuleList rules={installation.rules} emptyText="No rules." />
-              {installation.defaultAction !== 'allow' ? <div className="mt-1.5 text-xs text-fw-text-muted" data-rule-default-action>Calls no rule matches: {installation.defaultAction}</div> : null}
+              {installation.defaultAction !== 'allow' ? <div className="mt-1.5 text-xs text-fw-text-muted" data-rule-default-action>Calls that match no rule: {installation.defaultAction}</div> : null}
             </>}
         </ReadOnlyLayer>
         {chain.slice(0, -1).map(id => {

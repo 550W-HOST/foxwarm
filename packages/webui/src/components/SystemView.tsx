@@ -46,7 +46,7 @@ export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
 const SECTION_SUBTITLES: Record<SystemSection, string> = {
   agents: 'Agent workspaces, inheritance and memory.',
   sessions: 'Session state, placement and usage, and how sessions work together.',
-  nodes: 'Connected nodes, their status and new node setup.',
+  nodes: 'Connected nodes and how to add more.',
   timers: 'Scheduled messages and scripts, their next runs and recent results.',
   webhooks: 'Events from outside services, where they go and what arrived recently.',
   usage: 'Model requests, tokens and estimated cost across the installation.',
@@ -567,8 +567,7 @@ export default function SystemView({
   const sessionLoadMore = (
     <>
       <div className="flex items-center justify-between border-t border-fw-border-muted px-3 py-2 text-xs text-fw-text-muted" data-system-session-count>
-        <span>{visibleSessions.length} of {sessions.length} loaded sessions</span>
-        <span>{summary.sessionCount} total</span>
+        <span>{visibleSessions.length} of {sessions.length} loaded sessions · {summary.sessionCount} in total</span>
       </div>
       {rootCursor ? <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full border-t border-fw-border-muted px-3 py-2.5 text-sm font-medium text-fw-accent hover:bg-fw-section">Load 50 more root sessions…</button> : null}
     </>

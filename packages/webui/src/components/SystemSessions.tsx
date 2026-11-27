@@ -9,7 +9,8 @@ import type { WebUiNodeTarget } from '../nodeTargets'
 import Select from './Select'
 import { getRuntimeStateSummary, getSessionRuntimeStateName, isRuntimeStateInactiveName } from '../sessionRuntimeState'
 import { getArchitectureSessionModel, getArchitectureSessionNodeId, type ArchitectureStatusFilter } from '../architectureOperations'
-import { UsagePie, formatBusyDuration, formatRelativeTime, formatTokenCount, getStatusTone, renderMetaBadge } from './SystemShared'
+import { UsagePie, formatBusyDuration, formatTokenCount, getStatusTone, renderMetaBadge } from './SystemShared'
+import { formatActivityTime } from '../activityTime'
 
 /** A Session's display name without its Agent's prefix. */
 export const sessionShortName = (session: Session) => {
@@ -59,7 +60,7 @@ export function SessionRows({ sessions, selectedId, currentId, now, nodeLabels, 
                   </div>
                   <div className="mt-0.5 truncate text-[11px] text-fw-text-muted">{[session.agent || 'main', nodeId !== 'master' ? `on ${nodeLabels.get(nodeId) || nodeId}` : '', session.parentSessionId ? 'child' : ''].filter(Boolean).join(' · ')}</div>
                 </div>
-                <span className="shrink-0 text-[11px] tabular-nums text-fw-text-muted">{formatRelativeTime(session.lastMessageTime)}</span>
+                <span className="shrink-0 text-[11px] tabular-nums text-fw-text-muted">{session.lastMessageTime ? formatActivityTime(session.lastMessageTime) : '—'}</span>
                 <button type="button" aria-label={`Open ${session.id}`} title="Open session" onClick={event => { event.stopPropagation(); onOpen(session.id) }} className="rounded-md p-1 text-fw-text-muted opacity-60 hover:bg-fw-surface hover:text-fw-text focus:opacity-100 group-hover:opacity-100"><ExternalLink className="h-3.5 w-3.5" /></button>
               </div>
             </li>
@@ -182,7 +183,7 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
           <dl className="mt-1">
             <InspectorField label="Messages" value={String(session.messageCount || 0)} />
-            <InspectorField label="Updated" value={formatRelativeTime(session.lastMessageTime)} />
+            <InspectorField label="Updated" value={session.lastMessageTime ? formatActivityTime(session.lastMessageTime) : 'No messages yet'} />
             <InspectorField label="Tokens" value={formatTokenCount(totalTokens)} />
             {tokenUsage.cost !== undefined ? <InspectorField label="Estimated cost" value={formatUsdCost(tokenUsage.cost)} /> : null}
             <InspectorField label="Cached" value={formatTokenCount(tokenUsage.cachedTokens)} />
