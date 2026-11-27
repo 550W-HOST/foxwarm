@@ -261,6 +261,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const [searchNavigation, setSearchNavigation] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchAppliedNavigationRef = useRef(0)
+  // An exec-link jump that waits for its counterpart to mount owns the position, as a Search
+  // navigation does: the commit that mounts the counterpart is not a reading-row prepend.
+  const execJumpPendingRef = useRef(false)
   const searchHistoryRef = useRef<string[]>([])
   const searchHistoryIndexRef = useRef<number | null>(null)
   const searchHistoryDraftRef = useRef('')
@@ -658,6 +661,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
     currentViewportGeometryRef.current = null
+    // Reader input supersedes an exec-link jump still waiting for its counterpart.
+    execJumpPendingRef.current = false
   }, [])
 
   const handleBottomNavigation = useCallback(() => {
@@ -776,7 +781,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   const captureHistoryCommit = useCallback(() => {
     if (shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pendingScrollToTrueTopRef.current
-      || pendingContextScrollbarNavigationRef.current || searchAppliedNavigationRef.current !== searchNavigation) return
+      || pendingContextScrollbarNavigationRef.current || searchAppliedNavigationRef.current !== searchNavigation || execJumpPendingRef.current) return
     const container = messagesContainerRef.current
     const timeline = committedTimelineRef.current
     if (!container || !timeline || !timeline.querySelector('[data-search-row], [data-chat-message-anchor-key]')) return
@@ -1309,6 +1314,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     if (!(target === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId)) return
     leaveBottomFollow()
     if (revealExecLink(execId, target)) return
+    execJumpPendingRef.current = true
     let match: SessionSearchMatch | null = null
     if (timelineView !== 'conversation') {
       const query = `[${execId}]`
@@ -1331,9 +1337,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   }, [activeMessages, execLinkIndex, historyMode, leaveBottomFollow, messages, revealExecLink, showCommentary, showFullTimeline, showInterAgentMessages, showTimelineAround, timelineView])
   useLayoutEffect(() => {
     if (!execJump || execJump.navigation === execJumpAppliedRef.current) return
-    if (revealExecLink(execJump.execId, execJump.role)) execJumpAppliedRef.current = execJump.navigation
+    if (revealExecLink(execJump.execId, execJump.role)) {
+      execJumpAppliedRef.current = execJump.navigation
+      execJumpPendingRef.current = false
+    }
   }, [execJump, revealExecLink, timelineMessages, showFullTimeline, timelineWindow])
-  useLayoutEffect(() => { setExecJump(null) }, [sessionId, searchOpen, timelineView])
+  useLayoutEffect(() => {
+    setExecJump(null)
+    execJumpPendingRef.current = false
+  }, [sessionId, searchOpen, timelineView])
   const execLinkController = useMemo<ExecLinkController>(() => ({
     hasCounterpart: (execId, role) => (counterpartRole(role) === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId),
     jump: jumpToExec,

@@ -26,6 +26,9 @@ const TOOL_CALLS = 60
 // An old Task exchange among the plain turns: a sent assignment (call and result) and a received completion.
 const TASK_AFTER = 40
 const TASK_MESSAGES = 3
+// An old background command receipt (call and result) whose completion event arrives just before the final reply.
+const RECEIPT_AFTER = 10
+const RECEIPT_MESSAGES = 2
 
 async function buildFixtureBundle() {
   const source = `
@@ -42,6 +45,10 @@ async function buildFixtureBundle() {
     for (let index = 0; index < ${PLAIN_BEFORE_TOOLS}; index++) {
       if (index % 2 === 0) push('user', [{ text: 'Question ' + index + ' about WINDOW_MARKER_' + index }])
       else push('model', [{ text: 'Answer ' + index + ' with **Markdown** and a list:\\n\\n- one\\n- two\\n\\nWINDOW_MARKER_' + index }])
+      if (index === ${RECEIPT_AFTER}) {
+        push('model', [{ functionCall: { id: 'call-background', name: 'exec', args: { command: 'npm test', summary: 'Run the suite' } } }])
+        push('tool', [{ functionResponse: { name: 'exec', tool_use_id: 'call-background', response: { output: '[brave-fox] Still running after 15s, moved to background. Output so far:\\nRUNNING_SUITE\\n---\\nNode: \`master\`\\nLog file: /tmp/exec/fixture/output.log' } } }])
+      }
       if (index === ${TASK_AFTER}) {
         const assignment = 'You have been assigned a task: task_window01 — Window review\\nStatus: active\\nTASK_WINDOW_DESCRIPTION'
         push('model', [{ functionCall: { id: 'task-window', name: 'task', args: { action: 'create', title: 'Window review', ownerSessionId: 'fixture/worker', notifySession: true } } }])
@@ -54,6 +61,7 @@ async function buildFixtureBundle() {
       push('model', [{ functionCall: { id: 'call-' + index, name: 'exec', args: { command: 'echo ' + index } } }])
       push('tool', [{ functionResponse: { name: 'exec', tool_use_id: 'call-' + index, response: { output: 'out ' + index } } }])
     }
+    push('user', [{ system: '<foxwarm-system kind="event" type="background-process-finished">\\n[brave-fox] Finished: exit code 0, 2m 4s\\nCommand: \`npm test\`\\nNode: \`master\`\\nSUITE_TAIL\\n---\\nLog file: /tmp/exec/fixture/output.log\\n</foxwarm-system>' }])
     push('model', [{ text: 'Final reply after the tools, LAST_MARKER' }])
 
     window.fetch = async input => {
@@ -137,7 +145,7 @@ after(async () => {
   await new Promise(resolve => server ? server.close(resolve) : resolve())
 })
 
-const TOTAL_MESSAGES = PLAIN_BEFORE_TOOLS + TASK_MESSAGES + 1 + TOOL_CALLS * 2 + 1
+const TOTAL_MESSAGES = PLAIN_BEFORE_TOOLS + RECEIPT_MESSAGES + TASK_MESSAGES + 1 + TOOL_CALLS * 2 + 2
 
 async function openChat(view = 'detailed') {
   const page = await browser.newPage()
@@ -200,19 +208,56 @@ test('Conversation counts rendered rows, so a folded tool run does not crowd out
     const opening = await mounted(page)
     // The tool run (120 source messages) is one Activity row; the window still reaches the
     // ordinary turns before it.
-    assert.ok(opening.includes(`seq-local-${PLAIN_BEFORE_TOOLS + TASK_MESSAGES}`), `the turn before the tool run is mounted: ${opening.slice(0, 3)}`)
+    assert.ok(opening.includes(`seq-local-${PLAIN_BEFORE_TOOLS + RECEIPT_MESSAGES + TASK_MESSAGES}`), `the turn before the tool run is mounted: ${opening.slice(0, 3)}`)
     assert.ok(!opening.includes('seq-local-1'), 'the window is still bounded')
     assert.ok((await position(page)).distanceFromBottom <= 2)
   } finally { await page.close() }
 })
+
+// Enters the whole query as one input, so no partial query navigates first.
+async function search(page, query) {
+  await page.focus('[aria-label="Search messages"]')
+  await page.keyboard.sendCharacter(query)
+}
+
+// Samples the target's offset in the Chat viewport on every frame until the target has landed
+// and held for `holdFrames` frames and `holdMs` ms (or `timeoutMs` elapses without landing).
+async function trackJump(page, selector, jump, { holdFrames = 20, holdMs = 400, timeoutMs = 6000 } = {}) {
+  await page.evaluate((selector, holdFrames, holdMs, timeoutMs) => {
+    const samples = window.jumpSamples = []
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const start = performance.now()
+    let landedAt = null, landedFrames = 0
+    const sample = () => {
+      const now = performance.now()
+      const rect = container.querySelector(selector)?.getBoundingClientRect(), viewport = container.getBoundingClientRect()
+      const offset = rect && rect.bottom > viewport.top && rect.top < viewport.bottom ? rect.top - viewport.top : null
+      samples.push({ elapsed: now - start, offset })
+      if (offset !== null && landedAt === null) landedAt = now
+      if (landedAt !== null) landedFrames += 1
+      const done = landedAt !== null ? landedFrames >= holdFrames && now - landedAt >= holdMs : now - start >= timeoutMs
+      if (!done) requestAnimationFrame(sample)
+      else window.jumpSamplesDone = true
+    }
+    window.jumpSamplesDone = false
+    requestAnimationFrame(sample)
+  }, selector, holdFrames, holdMs, timeoutMs)
+  await jump()
+  await page.waitForFunction(() => window.jumpSamplesDone, { timeout: timeoutMs + holdMs + 15_000 })
+  const samples = await page.evaluate(() => window.jumpSamples)
+  const landed = samples.findIndex(sample => sample.offset !== null)
+  assert.ok(landed >= 0, `the jump shows ${selector}`)
+  const moves = samples.slice(landed).map(sample => sample.offset === null ? Infinity : Math.abs(sample.offset - samples[landed].offset))
+  return { landedAfterMs: samples[landed].elapsed, framesAfterLanding: moves.length, largestMove: Math.max(...moves) }
+}
 
 test('a Search jump to an old row mounts it and shows it', async () => {
   const page = await openChat()
   try {
     assert.ok(!(await mounted(page)).includes('seq-local-3'))
     await page.click('[aria-label="Find in chat"]')
-    await page.type('[aria-label="Search messages"]', 'Question 2 about')
-    await page.waitForSelector('[data-chat-message-anchor-key="seq-local-3"]')
+    const jump = await trackJump(page, '[data-chat-message-anchor-key="seq-local-3"]', () => search(page, 'Question 2 about'))
+    assert.ok(jump.framesAfterLanding > 10 && jump.largestMove <= 1, `the target holds its position after landing: ${JSON.stringify(jump)}`)
     await page.waitForFunction(() => {
       const container = document.querySelector('.foxwarm-chat-messages')
       const row = container.querySelector('[data-chat-message-anchor-key="seq-local-3"]')
@@ -230,6 +275,23 @@ test('a Search jump to an old row mounts it and shows it', async () => {
       const container = document.querySelector('.foxwarm-chat-messages')
       return container.scrollHeight - container.scrollTop - container.clientHeight <= 2
     })
+  } finally { await page.close() }
+})
+
+test('an exec link jump to an unmounted counterpart lands on it and holds it there', async () => {
+  const page = await openChat()
+  try {
+    const receipt = '[data-exec-link][data-exec-ref="brave-fox"][data-exec-role="receipt"]'
+    const completion = '[data-exec-link][data-exec-ref="brave-fox"][data-exec-role="completion"]'
+    assert.equal(await page.$(receipt), null, 'the old receipt is outside the opening window')
+    await page.waitForFunction(selector => {
+      const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
+      const link = document.querySelector(selector)?.getBoundingClientRect()
+      return !!link && link.top >= viewport.top && link.bottom <= viewport.bottom
+    }, {}, completion)
+    // Revealing the full active history with the jump must not restore the previous reading row over it.
+    const jump = await trackJump(page, receipt, () => page.click(completion))
+    assert.ok(jump.framesAfterLanding > 10 && jump.largestMove <= 1, `the receipt holds its position after landing: ${JSON.stringify(jump)}`)
   } finally { await page.close() }
 })
 
@@ -255,8 +317,9 @@ test('old Task cards are ordinary window rows: they mount on approach and a Sear
   try {
     await page.click('[aria-label="Find in chat"]')
     // The lead line is outside the collapsed preview; Search finds it in the full body, mounts the row and reveals it.
-    await page.type('[aria-label="Search messages"]', 'Task completed: task_window01')
     const target = '[data-session-communication="received"][data-task-event="completed"]'
+    const jump = await trackJump(page, target, () => search(page, 'Task completed: task_window01'))
+    assert.ok(jump.framesAfterLanding > 10 && jump.largestMove <= 1, `the Task card holds its position after landing: ${JSON.stringify(jump)}`)
     await page.waitForFunction(selector => {
       const container = document.querySelector('.foxwarm-chat-messages')
       const card = container.querySelector(selector)
