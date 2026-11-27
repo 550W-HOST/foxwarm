@@ -43,7 +43,8 @@ internal sealed partial class SessionToolExecutor
                         ),
                     ScriptBudget,
                     hosted,
-                    BroadMcpServerVisible(sessions, hosted)
+                    BroadMcpServerVisible(sessions, hosted),
+                    visible
                 );
             case CtlToolHelp toolHelp:
             {

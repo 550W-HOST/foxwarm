@@ -15,7 +15,9 @@ internal static partial class UnifiedTools
         Func<string, string, string?, bool>? visible = null,
         Foxwarm.ToolScript.ToolScriptDataBudget? budget = null,
         SessionOwner? owner = null,
-        Func<string, bool>? broadServerVisible = null
+        Func<string, bool>? broadServerVisible = null,
+        // Whether a ctl command is listed, given its fixed arguments; as `ctl --help` decides.
+        Func<CtlCommand, bool>? commandVisible = null
     )
     {
         ToolRegistry.Keys(args, ["query", "sources", "server", "nodeId", "limit", "includeSchema"]);
@@ -97,7 +99,11 @@ internal static partial class UnifiedTools
                 && !visible(entry.Source, name, nodeTool ? currentNode : null)
             )
                 continue;
-            var commands = nodeTool ? [] : CommandMatches(query, name).ToArray();
+            var commands = nodeTool
+                ? []
+                : CommandMatches(query, name)
+                    .Where(match => commandVisible?.Invoke(match.Command) ?? true)
+                    .ToArray();
             if (commands.Length > 0 || !nodeTool && CtlRegistry.ForTarget("builtin", name).Any())
             {
                 foreach (var (command, commandScore) in commands)
