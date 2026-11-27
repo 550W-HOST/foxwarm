@@ -85,6 +85,16 @@ internal sealed class PgDatabase : IAsyncDisposable
     internal ValueTask<NpgsqlConnection> OpenAsync(CancellationToken token) =>
         source.OpenConnectionAsync(token);
 
+    /// <summary>A cluster operation, without a tenant or lease. Its database role grants only the cluster operations it owns.</summary>
+    internal async Task<T> ClusterAsync<T>(Func<PgTx, CancellationToken, Task<T>> body, CancellationToken token)
+    {
+        await using var connection = await OpenAsync(token).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+        var result = await body(new PgTx(connection, transaction, 0), token).ConfigureAwait(false);
+        await transaction.CommitAsync(token).ConfigureAwait(false);
+        return result;
+    }
+
     /// <summary>Closes the pool's idle connections; connections in use close when returned.</summary>
     internal void ClearPool() => source.Clear();
 
