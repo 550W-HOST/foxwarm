@@ -55,7 +55,7 @@ internal static class HostedAgentImport
                         var files = new JsonArray();
                         foreach (var agent in store.Agents().Prepend((string?)null))
                             foreach (var file in store.Tree(agent, "").Where(file => !file.IsDirectory))
-                                files.Add((agent is null ? "" : agent + "/") + file.Path);
+                                files.Add((JsonNode?)((agent is null ? "" : agent + "/") + file.Path));
                         report.Root["filesInPlace"] = files;
                         // Report the inventory to the operator before reactivating the tenant.
                         await output.WriteLineAsync("Agent files in place: " + files.ToJsonString());
