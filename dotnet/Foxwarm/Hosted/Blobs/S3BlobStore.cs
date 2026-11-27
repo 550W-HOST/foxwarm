@@ -17,6 +17,8 @@ namespace Foxwarm.Hosted.Blobs;
 /// </summary>
 internal sealed class S3BlobStore : IBlobStore
 {
+    // One end-to-end PUT deadline, including SDK retries, matching HttpClient's default.
+    private static readonly TimeSpan PutDeadline = TimeSpan.FromSeconds(100);
     private const int ConflictAttempts = 5;
 
     private readonly IAmazonS3 client;
@@ -54,17 +56,18 @@ internal sealed class S3BlobStore : IBlobStore
         ReadOnlyMemory<byte> content,
         bool keepExisting,
         CancellationToken token
-    ) => CreateAsync(key, content, keepExisting, static () => { }, token);
+    ) => CreateAsync(key, content, keepExisting, static _ => { }, token);
 
     public async Task<bool> CreateAsync(
         string key,
         ReadOnlyMemory<byte> content,
         bool keepExisting,
-        Action uncertain,
+        Action<long?> uncertain,
         CancellationToken token
     )
     {
         var name = root + key;
+        long deadline = 0;
 
         try
         {
@@ -86,7 +89,7 @@ internal sealed class S3BlobStore : IBlobStore
                     case PutOutcome.Exists:
                         // Quota callers already checked for an existing object before reserving.
                         // A 412 now can be an SDK retry after a committed PUT lost its reply.
-                        uncertain();
+                        uncertain(deadline);
                         // A retried PUT whose first attempt stored the object finds it existing,
                         // whether the SDK or the interrupted-transfer check retried it; the same
                         // bytes under the key are this write.
@@ -113,15 +116,18 @@ internal sealed class S3BlobStore : IBlobStore
         async Task<PutOutcome> DispatchPutAsync(bool conditional)
         {
             token.ThrowIfCancellationRequested();
+            using var dispatch = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline = Environment.TickCount64 + (long)PutDeadline.TotalMilliseconds;
+            dispatch.CancelAfter(PutDeadline);
             try
             {
-                return await PutAsync(name, content, conditional, token).ConfigureAwait(false);
+                return await PutAsync(name, content, conditional, dispatch.Token).ConfigureAwait(false);
             }
             catch (Exception error) when (error is IOException or HttpRequestException or OperationCanceledException
                 || error is AmazonS3Exception s3 && (s3.StatusCode == 0 || (int)s3.StatusCode >= 500))
             {
                 // The remote object may exist even when this client lost the acknowledgement.
-                uncertain();
+                uncertain(deadline);
                 if (conditional && !token.IsCancellationRequested && await HeadExistsAsync(name, token).ConfigureAwait(false))
                     return PutOutcome.Exists;
                 throw;

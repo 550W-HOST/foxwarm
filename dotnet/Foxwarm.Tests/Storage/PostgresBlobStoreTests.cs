@@ -54,6 +54,32 @@ public sealed class PostgresBlobStoreTests
     }
 
     [Fact]
+    public async Task AnUnverifiableCommitMarksBlobUsageForRemeasurement()
+    {
+        var (database, tenant) = await OpenAsync();
+        await using var lifetime = database;
+        await using var proxy = PgTcpProxy.For(database.AppConnectionString);
+        var routed = new NpgsqlConnectionStringBuilder(proxy.Route(database.AppConnectionString))
+        { Pooling = false, CommandTimeout = 1, Timeout = 2 }.ConnectionString;
+        var store = new PgBlobStore(new TenantDb(database.OpenApp(routed), tenant.TenantId, tenant.Epoch), "images");
+        int measures = 0;
+        var quota = new Foxwarm.Limits.BlobQuota(100, async token =>
+        {
+            measures++;
+            return await store.StoredBytesAsync(token);
+        });
+        store.BeforeCommit = proxy.Partition;
+        try
+        {
+            await Assert.ThrowsAsync<CommitOutcomeUnknownException>(() =>
+                quota.Apply(store).CreateAsync("unverified", new byte[10], false, default));
+        }
+        finally { proxy.SeverAll(); proxy.Heal(); }
+        await quota.UsedAsync(default);
+        Assert.Equal(2, measures);
+    }
+
+    [Fact]
     public async Task A_lost_COMMIT_is_resolved_by_the_object_row_in_both_directions()
     {
         var (database, tenant) = await OpenAsync();
