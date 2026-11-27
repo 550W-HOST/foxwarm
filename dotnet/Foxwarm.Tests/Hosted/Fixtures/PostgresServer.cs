@@ -316,6 +316,18 @@ internal sealed class HostedTestDatabase : IAsyncDisposable
     internal async Task<int> TenantIdAsync(string tenant = PostgresServer.Tenant) =>
         (int)(await ScalarAsync("SELECT tenant_id FROM tenants WHERE name = $1", tenant))!;
 
+    // Low-level lease tests stand in for registered replica processes. Preserve a row
+    // explicitly installed by a test (including tests simulating an older binary).
+    internal async Task RegisterBootsAsync(params string[] replicas)
+    {
+        await using var connection=new NpgsqlConnection(OwnerConnectionString);
+        await connection.OpenAsync();
+        await using var command=new NpgsqlCommand("INSERT INTO replicas(replica_id,binary_level,reader_version) SELECT id,$2,2 FROM unnest($1::text[]) id ON CONFLICT DO NOTHING",connection);
+        command.Parameters.Add(PgTx.Parameter(replicas));
+        command.Parameters.Add(PgTx.Parameter(SchemaMigrator.BinaryLevel));
+        await command.ExecuteNonQueryAsync();
+    }
+
     /// <summary>
     /// Takes the tenant lease the way a takeover does: waits for writers of the current epoch
     /// (FOR UPDATE), then raises the epoch. Returns the new epoch.
@@ -326,6 +338,7 @@ internal sealed class HostedTestDatabase : IAsyncDisposable
         TimeSpan? ttl = null
     )
     {
+        await RegisterBootsAsync(owner);
         await using var connection = new NpgsqlConnection(OwnerConnectionString);
         await connection.OpenAsync();
         await using var transaction = await connection.BeginTransactionAsync();

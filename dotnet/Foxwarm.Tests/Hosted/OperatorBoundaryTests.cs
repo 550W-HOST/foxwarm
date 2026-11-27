@@ -50,6 +50,10 @@ public sealed class OperatorBoundaryTests
                         "foxwarm_require_lease",
                         "foxwarm_provision_key",
                         "foxwarm_redeem_setup",
+                        "foxwarm_raise_reader_version",
+                        "foxwarm_set_wakeup",
+                        "foxwarm_clear_wakeup",
+                        "foxwarm_wakeup_backoff",
                     }
                 )
                     Assert.True(
@@ -66,6 +70,24 @@ public sealed class OperatorBoundaryTests
                     )
                         is true
                 );
+                foreach (
+                    var (function, target) in new[]
+                    {
+                        ("foxwarm_raise_reader_version", "tenants"),
+                        ("foxwarm_set_wakeup", "tenant_wakeups"),
+                        ("foxwarm_clear_wakeup", "tenant_wakeups"),
+                        ("foxwarm_wakeup_backoff", "tenant_wakeups"),
+                    }
+                )
+                    Assert.True(
+                        await db.ScalarAsync(
+                            "SELECT position(current_schema() || '.' || $2 in prosrc)>0 FROM pg_proc WHERE oid=$1::regproc",
+                            function,
+                            target
+                        )
+                            is true,
+                        function
+                    );
                 // A positive write under a real grant must find its installation's active lease.
                 var tenantId = await db.TenantIdAsync();
                 var epoch = await db.TakeLeaseAsync(tenantId);
@@ -196,6 +218,7 @@ public sealed class OperatorBoundaryTests
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         var lease = new TenantLease(db.OpenApp(), PostgresServer.Tenant, 2, ReplicaRoles.General);
+        await db.RegisterBootsAsync("single");
         var grant = (
             await lease.TryAcquireAsync(
                 "single",
@@ -213,7 +236,9 @@ public sealed class OperatorBoundaryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task APre1200HeartbeatPostponesCredentialOperations(bool rotate)
+    public async Task AnUnexpiredIncompatibleOrUnknownGrantPostponesCredentialOperations(
+        bool rotate
+    )
     {
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync(migrated: false);
@@ -258,12 +283,120 @@ public sealed class OperatorBoundaryTests
                 : store.CreateAsync("fresh", "hosted", "fresh.test", default);
         Assert.Equal(409, (await Assert.ThrowsAsync<OperatorProblem>(Issue)).Status);
         await db.ExecuteOwnerAsync("UPDATE replicas SET heartbeat_at=now()-interval '1 hour'");
+        Assert.Equal(409, (await Assert.ThrowsAsync<OperatorProblem>(Issue)).Status);
+        var legacy = new TenantLease(db.OpenApp(), PostgresServer.Tenant, 2);
+        Assert.True(
+            await legacy.RenewAsync(
+                new LeaseGrant(id, PostgresServer.Tenant, "old/boot", 1),
+                TimeSpan.FromSeconds(30),
+                default
+            )
+        );
+        await registry.RemoveAsync("old/boot", default);
+        Assert.Equal(409, (await Assert.ThrowsAsync<OperatorProblem>(Issue)).Status);
+        await db.ExecuteOwnerAsync("UPDATE tenant_leases SET expires_at=now()-interval '1 second'");
         Assert.NotNull((await Issue())["setupToken"]);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheOperatorReservesCanonicalHostnamesIncludingTheP1Tenant(bool collision)
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var db = await server.CreateDatabaseAsync();
+        using var root = new TempDirectory();
+        var keyPath = Path.Combine(root.Path, "kek");
+        var kek = KeyEncryptionKey.From(InstanceKeys.OpenOrCreate(keyPath));
+        var config = Path.Combine(root.Path, "deployment.yaml");
+        var host = collision ? "DEFAULT.test." : "ops.test.";
+        await File.WriteAllTextAsync(
+            config,
+            $"url: 'https://{{slug}}.test/app/'\nhealth: {{port: 3002}}\nblobs: {{backend: postgres}}\noperator: {{url: 'https://{host}', port: 3003}}\n"
+        );
+        if (collision)
+        {
+            Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM tenant_hostnames"));
+            var bootstrap = new HostedBootstrap(
+                db.OperatorConnectionString,
+                null,
+                PostgresServer.Tenant,
+                PostgresServer.AppRole,
+                DeploymentConfigPath: config,
+                KekFile: keyPath,
+                Role: ReplicaRoles.Operator
+            );
+            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            var refusal = await Assert.ThrowsAsync<HostedBootstrapException>(() =>
+                OperatorServer.ServeAsync(bootstrap, bound.Token)
+            );
+            Assert.Contains("hostname", refusal.Message);
+        }
+        else
+        {
+            await using var op = new PgDatabase(db.OperatorConnectionString, "operator-test");
+            var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+            context.Response.Body = new MemoryStream();
+            context.Request.Method = "GET";
+            context.Request.Path = OperatorServer.Path + "/tenants";
+            context.Request.Headers.Origin = "https://ops.test";
+            context.Request.Host = new Microsoft.AspNetCore.Http.HostString("Ops.Test");
+            var listener = OperatorListener.From(DeploymentConfiguration.Load(config));
+            await OperatorServer.Dispatch(context, new OperatorStore(op, kek), listener);
+            Assert.Equal(401, context.Response.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task StandbysNeedACompatibleRegistrationToAcquireNewStyleTenants()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var db = await server.CreateDatabaseAsync();
+        Assert.True(
+            await db.ScalarAsync(
+                "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='tenant_leases'::regclass AND tgname='foxwarm_require_serving_version')"
+            )
+                is true
+        );
+        var app = db.OpenApp();
+        var registry = new ReplicaRegistry(app);
+        await registry.RegisterAsync("standby", null, 1100, 2, default);
+        await db.ExecuteOwnerAsync("UPDATE replicas SET heartbeat_at=now()-interval '1 hour'");
+        var lease = new TenantLease(app, PostgresServer.Tenant, 2);
+        foreach (var replica in new[] { "standby", "unregistered" })
+            Assert.Null(
+                await lease.TryAcquireAsync(
+                    replica,
+                    TimeSpan.FromMinutes(1),
+                    TimeSpan.FromSeconds(2),
+                    default
+                )
+            );
+        await db.ExecuteOwnerAsync("UPDATE tenants SET object_identity=NULL, credential_version=1");
+        Assert.Null(
+            await lease.TryAcquireAsync(
+                "standby",
+                TimeSpan.FromMinutes(1),
+                TimeSpan.FromSeconds(2),
+                default
+            )
+        );
+        await registry.RegisterAsync("current", null, 1200, 2, default);
+        Assert.NotNull(
+            await lease.TryAcquireAsync(
+                "current",
+                TimeSpan.FromMinutes(1),
+                TimeSpan.FromSeconds(2),
+                default
+            )
+        );
     }
 
     [Theory]
     [InlineData("exchange")]
     [InlineData("reserved-path")]
+    [InlineData("mounted-path")]
+    [InlineData("dotted-host")]
     public async Task TheHeadlessFrontKeepsTenantAndOperatorRoutesSeparate(string action)
     {
         await using var harness = await ReplicaProcessHarness.CreateAsync();
@@ -280,7 +413,7 @@ public sealed class OperatorBoundaryTests
             "general",
             new Dictionary<string, string> { ["FOXWARM_KEK_FILE"] = file },
             webUi: false,
-            extraConfig: "url: 'https://{slug}.test'\noperator: {url: 'https://ops.test', port: 3003}\n"
+            extraConfig: "url: 'https://{slug}.test/app/{slug}'\noperator: {url: 'https://ops.test.', port: 3003}\n"
         );
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false });
         if (action == "exchange")
@@ -303,9 +436,10 @@ public sealed class OperatorBoundaryTests
         }
         else
         {
+            var prefix = action == "mounted-path" ? "/app/alpha" : "";
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,
-                $"http://127.0.0.1:{replica.FrontPort}/operator/v1/tenants"
+                $"http://127.0.0.1:{replica.FrontPort}{prefix}/operator/v1/tenants"
             );
             request.Headers.Host = "alpha.test";
             using var result = await client.SendAsync(request);
@@ -317,7 +451,10 @@ public sealed class OperatorBoundaryTests
                 $"INSERT INTO tenant_hostnames(hostname,tenant_id,kind) VALUES ('ops.test',{id},'custom')"
             );
             await Assert.ThrowsAsync<HostedBootstrapException>(() =>
-                store.RequireOperatorHostnameAsync("ops.test", default)
+                store.RequireOperatorHostnameAsync(
+                    action == "dotted-host" ? "Ops.TeSt." : "ops.test",
+                    default
+                )
             );
             using var reservedHost = new HttpRequestMessage(
                 HttpMethod.Get,

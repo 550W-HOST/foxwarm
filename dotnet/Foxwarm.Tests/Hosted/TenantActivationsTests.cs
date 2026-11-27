@@ -167,6 +167,51 @@ public sealed class TenantActivationsTests
         }
     }
 
+    [Fact]
+    public async Task TheFirstObservationOfATrackedGrantIsNotLostBeforeRegistration()
+    {
+        await using var f=await CreateAsync();
+        var entered=Fixture.Closed();
+        var observed=Fixture.Closed();
+        f.Activations.AfterTrack=grant=>
+        {
+            _=Task.Run(()=>
+            {
+                entered.SetResult();
+                f.Activations.SettingsChanged(grant,false);
+                observed.SetResult();
+            });
+            entered.Task.GetAwaiter().GetResult();
+            // If slot ownership is unsynchronized the observation finishes here and is lost.
+            observed.Task.Wait(TimeSpan.FromMilliseconds(200));
+        };
+        f.Activations.BeforeRegister=()=>observed.Task;
+        await Assert.ThrowsAsync<LeaseRefusedException>(()=>f.Activations.ActivateAsync(Tenant));
+        Assert.Null(f.Activations.Current(Tenant));
+        Assert.Equal("released",await f.LeaseStateAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStaleBuildHasOneStopBoundAcrossStartAndDisposal(bool stuckInStart)
+    {
+        await using var f = await CreateAsync(drainBound:TimeSpan.FromMilliseconds(400));
+        var behavior = f.For(Tenant);
+        behavior.StartGate = Fixture.Closed();
+        behavior.StartIgnoresCancellation = true;
+        behavior.DisposeGate = Fixture.Closed();
+        var starting = f.Activations.ActivateAsync(Tenant);
+        await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var grant=Assert.Single(f.Activations.Grants());
+        f.Activations.SettingsChanged(grant,false);
+        if (!stuckInStart) behavior.StartGate.TrySetResult();
+        await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("active",await f.LeaseStateAsync());
+        behavior.StartGate.TrySetResult(); behavior.DisposeGate.TrySetResult();
+        await Assert.ThrowsAnyAsync<Exception>(()=>starting);
+    }
+
     private const string Second = "beta";
 
     private static async Task<Fixture> CreateAsync(
@@ -180,6 +225,7 @@ public sealed class TenantActivationsTests
         var timings = leaseTimings ?? LeaseTimings.Default;
         var server = await PostgresServer.SharedAsync();
         var database = await server.CreateDatabaseAsync();
+        await database.RegisterBootsAsync(Replica);
         if (second)
             await database.ExecuteOwnerAsync(
                 $"INSERT INTO tenants (name) VALUES ('{Second}');"

@@ -187,7 +187,12 @@ internal sealed class TenantActivations : IAsyncDisposable
         lock (gate)
         {
             if (!slots.TryGetValue(grant.Tenant, out var slot) || slot.Grant?.Grant != grant) return;
-            slot.StaleEpoch = grant.Epoch;
+            if (slot.StaleEpoch != grant.Epoch)
+            {
+                slot.StaleEpoch = grant.Epoch;
+                if (slot.Building is { } building)
+                    _ = BoundStaleBuildAsync(building);
+            }
             current = slot.Current;
             current?.Gate.Latch(AdmissionLatch.Stop);
             if (rotated) revoke = (current ?? slot.Retiring)?.Runtime;
@@ -195,6 +200,21 @@ internal sealed class TenantActivations : IAsyncDisposable
         revoke?.CredentialRotated();
         if (current is not null)
             _ = RetireForPlacementAsync(current.Id, $"Tenant {grant.Tenant}'s settings or placement changed");
+    }
+
+    // The first observation starts one fixed countdown, regardless of later renewals
+    // or whether the factory, start, or disposal is in progress. Loss hands the same
+    // unsettled generation to its existing fence supervisor; the lease is not released.
+    private async Task BoundStaleBuildAsync(TenantGeneration building)
+    {
+        try
+        {
+            await building.Stopped.WaitAsync(supervisor.DrainBound).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            renewer.Lose(building.Handle, $"Tenant {building.Id.Tenant}'s obsolete startup didn't stop within the drain bound.");
+        }
     }
 
     /// <summary>The tenant's published generation, or null.</summary>
@@ -436,6 +456,9 @@ internal sealed class TenantActivations : IAsyncDisposable
     /// </summary>
     internal Func<Task>? BeforeRegister { get; set; }
 
+    // Test barrier at the moment a renewal can first observe a new handle.
+    internal Action<LeaseGrant>? AfterTrack { get; set; }
+
     private Slot SlotOf(string tenant)
     {
         if (!slots.TryGetValue(tenant, out var slot))
@@ -461,6 +484,8 @@ internal sealed class TenantActivations : IAsyncDisposable
             fence.Refused += error => renewer.Lose(held, "A write was refused by the tenant lease fence: " + error.Message);
             generation.Obligation = supervisor.Watch(id.ToString(), () => held.HardStop(supervisor.DrainTicks), generation.Stopped);
             slot.Building = generation;
+            if (slot.StaleEpoch == held.Grant.Epoch)
+                _ = BoundStaleBuildAsync(generation);
         }
         generation.Stopped.ContinueWith(
             task =>
@@ -544,11 +569,12 @@ internal sealed class TenantActivations : IAsyncDisposable
                 }
                 if (acquired is null)
                     throw new TenantHeldElsewhereException(slot.Lease.Tenant);
-                held = renewer.Track(acquired);
-                held.OnLoss(OnGrantLost);
                 PendingRelease? late = null;
                 lock (gate)
                 {
+                    held = renewer.Track(acquired);
+                    AfterTrack?.Invoke(acquired);
+                    held.OnLoss(OnGrantLost);
                     if (disposed)
                         late = BeginRelease(slot, held);
                     else if (held.IsCurrent(clock()))

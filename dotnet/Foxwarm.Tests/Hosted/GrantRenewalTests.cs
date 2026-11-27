@@ -25,6 +25,7 @@ public sealed class GrantRenewalTests
     {
         var server = await PostgresServer.SharedAsync();
         var database = await server.CreateDatabaseAsync();
+        await database.RegisterBootsAsync(Replica);
         var tenants = new List<string> { PostgresServer.Tenant };
         for (var index = 0; index < extra; index++)
         {

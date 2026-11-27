@@ -34,11 +34,29 @@ internal sealed record OperatorListener(Uri Origin, IPEndPoint Endpoint, Deploym
         return new(uri, new(deployment.PublicEndpoint.Address, (int)port), deployment);
     }
 
-    internal void CheckHostname(string slug, string hostname)
+    internal static string CanonicalHost(string host) => host.TrimEnd('.').ToLowerInvariant();
+
+    internal string Host => CanonicalHost(Origin.IdnHost);
+
+    internal bool MatchesOrigin(string origin) =>
+        Uri.TryCreate(origin, UriKind.Absolute, out var value)
+        && value.GetLeftPart(UriPartial.Authority).Equals(origin,StringComparison.OrdinalIgnoreCase)
+        && value.UserInfo.Length == 0 && value.Scheme == Origin.Scheme && value.Port == Origin.Port
+        && CanonicalHost(value.IdnHost) == Host;
+
+    internal void CheckSingleTenant(string slug)
     {
-        var expected = new Uri(Deployment.TenantOrigin(slug)).IdnHost;
-        if (hostname != expected || string.Equals(hostname, Origin.IdnHost, StringComparison.OrdinalIgnoreCase))
+        if (CanonicalHost(new Uri(Deployment.TenantOrigin(slug)).IdnHost) == Host)
+            throw new HostedBootstrapException("The operator hostname is already assigned to a tenant.");
+    }
+
+    internal string CheckHostname(string slug, string hostname)
+    {
+        var expected = CanonicalHost(new Uri(Deployment.TenantOrigin(slug)).IdnHost);
+        var name = CanonicalHost(hostname);
+        if (name != expected || name == Host)
             throw new OperatorProblem(400, $"The primary hostname must be the tenant's subdomain, {expected}.");
+        return name;
     }
 }
 
@@ -49,11 +67,13 @@ internal static class OperatorServer
     internal static async Task ServeAsync(HostedBootstrap bootstrap, CancellationToken token)
     {
         var listener = OperatorListener.From(bootstrap.RequireDeployment());
+        if (Environment.GetEnvironmentVariable("FOXWARM_HOSTED_TOPOLOGY") != "tenants")
+            listener.CheckSingleTenant(bootstrap.Tenant);
         await using var database = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm-operator");
         await SchemaMigrator.RequireCompatibleAsync(database, token: token);
         var store = new OperatorStore(database, bootstrap.RequireKeks().Current);
         await store.CheckRoleAsync(token);
-        await store.RequireOperatorHostnameAsync(listener.Origin.IdnHost, token);
+        await store.RequireOperatorHostnameAsync(listener.Host, token);
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.UseKestrel(server =>
@@ -73,7 +93,7 @@ internal static class OperatorServer
         var response = context.Response;
         var ct = context.RequestAborted;
         response.Headers.CacheControl = "no-store";
-        if (!string.Equals(request.Host.Host, listener.Origin.IdnHost, StringComparison.OrdinalIgnoreCase)
+        if (OperatorListener.CanonicalHost(request.Host.Host) != listener.Host
             || (request.Host.Port ?? (listener.Origin.Scheme == "https" ? 443 : 80)) != listener.Origin.Port
             || !request.Path.StartsWithSegments(Path, out var remaining))
         {
@@ -89,7 +109,7 @@ internal static class OperatorServer
         }
         try
         {
-            if (request.Headers.Origin.Count != 0 && !string.Equals(request.Headers.Origin, listener.Origin.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
+            if (request.Headers.Origin.Count != 0 && !listener.MatchesOrigin(request.Headers.Origin.ToString()))
                 throw new OperatorProblem(403, "Requests must come from the operator origin.");
             if (!AuthenticationHeaderValue.TryParse(request.Headers.Authorization, out var header)
                 || !string.Equals(header.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase) || header.Parameter is not { Length: 69 } bearer
@@ -111,17 +131,19 @@ internal static class OperatorServer
                     var name = Text(create["slug"], "slug");
                     if (!TenantSlugs.IsValid(name)) throw new OperatorProblem(400, "Tenant slug must be " + TenantSlugs.Rule + ".");
                     var hostname = Text(create["primaryHostname"], "primaryHostname");
-                    listener.CheckHostname(name, hostname);
+                    hostname = listener.CheckHostname(name, hostname);
                     result = await store.CreateAsync(name, Profile(Text(create["profile"], "profile")), hostname, ct);
                     response.StatusCode = 201;
                     break;
                 case ("PATCH", ["tenants", var slug]):
                     var edits = await Body(request, ct);
+                    if (edits.TryGetPropertyValue("primaryHostname", out var hostnameEdit))
+                        edits["primaryHostname"] = listener.CheckHostname(slug, Text(hostnameEdit, "primaryHostname"));
                     foreach (var (field, value) in edits)
                         switch (field)
                         {
                             case "profile": Profile(Text(value, field)); break;
-                            case "primaryHostname": listener.CheckHostname(slug, Text(value, field)); break;
+                            case "primaryHostname": break;
                             case "limits" when value is JsonObject limits: TenantLimits.RequireKnown(limits); break;
                             case "journal" when value is JsonObject: TenantSettings.Parse(new JsonObject { ["journal"] = value.DeepClone() }); break;
                             case "ceiling": ValidateCeiling(value); break;

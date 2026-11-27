@@ -30,7 +30,7 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
             ? true : throw new HostedBootstrapException("The operator service must connect as the database's operator role."), token);
 
     internal Task RequireOperatorHostnameAsync(string host, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
-        await Scalar(tx, "SELECT 1 FROM tenant_hostnames WHERE hostname=$1", ct, host) is int
+        await Scalar(tx, "SELECT 1 FROM tenant_hostnames WHERE hostname=$1", ct, OperatorListener.CanonicalHost(host)) is int
             ? throw new HostedBootstrapException("The operator hostname is already assigned to a tenant.") : true, token);
 
     internal static Task<string> IssueAsync(PgDatabase owner, CancellationToken token) => owner.ClusterAsync(async (tx, ct) =>
@@ -87,6 +87,12 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
 
     internal Task<JsonObject> RotateAsync(string slug, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
     {
+        // Placement edits lock tenant then lease. The first rotation must be ordered with
+        // an old boot acquiring this legacy tenant: it either sees that owner in the guard,
+        // or the acquisition sees a versioned tenant after the rotation commits.
+        if (await Scalar(tx, "SELECT tenant_id FROM tenants WHERE name=$1 AND state='active' FOR UPDATE", ct, slug) is not int target)
+            throw Missing();
+        await Scalar(tx, "SELECT 1 FROM tenant_leases WHERE tenant_id=$1 FOR UPDATE", ct, target);
         await RequireCurrentReplicas(tx, ct);
         int id;
         long version;
@@ -103,7 +109,7 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
 
     private static async Task RequireCurrentReplicas(PgTx tx, CancellationToken ct)
     {
-        if (await Scalar(tx, "SELECT 1 FROM replicas WHERE binary_level<1200 AND heartbeat_at>now()-make_interval(secs=>$1) LIMIT 1", ct, Lease.LeaseTimings.Default.Ttl.TotalSeconds) is int)
+        if (await Scalar(tx, "SELECT 1 FROM tenant_leases l LEFT JOIN replicas r ON r.replica_id=l.owner_replica WHERE l.state='active' AND l.expires_at>clock_timestamp() AND (r.binary_level IS NULL OR r.binary_level<1200) LIMIT 1", ct) is int)
             throw new OperatorProblem(409, "Finish upgrading all live replicas before creating a tenant or rotating its access token.");
     }
 

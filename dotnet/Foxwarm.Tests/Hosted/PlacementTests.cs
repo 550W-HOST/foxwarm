@@ -122,6 +122,7 @@ public sealed class PlacementAcquisitionTests
         await using (var command = new Npgsql.NpgsqlCommand($"UPDATE tenants SET profile = 'hosted' WHERE tenant_id = {tenant}", edit, second))
             await command.ExecuteNonQueryAsync();
         var app = database.OpenApp();
+        await database.RegisterBootsAsync(Replica);
         var acquisition = new TenantLease(app, PostgresServer.Tenant, 2, ReplicaRoles.MasterHost)
             .TryAcquireAsync(Replica, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5), CancellationToken.None);
         await Task.Delay(500);
@@ -142,6 +143,7 @@ public sealed class PlacementAcquisitionTests
                 + " INSERT INTO tenant_leases (tenant_id) SELECT tenant_id FROM tenants WHERE name IN ('ops', 'pinned')"
         );
         var app = database.OpenApp();
+        await database.RegisterBootsAsync(Replica);
         Task<LeaseGrant?> Acquire(string tenant, string role) =>
             new TenantLease(app, tenant, 2, role).TryAcquireAsync(Replica, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1), CancellationToken.None);
 

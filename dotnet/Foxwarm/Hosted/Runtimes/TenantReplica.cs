@@ -42,6 +42,8 @@ internal sealed record TenantReplicaOptions(
     /// <summary>How often published tenants are checked for idle release.</summary>
     internal TimeSpan IdleScan { get; init; } = TimeSpan.FromSeconds(30);
 
+    internal System.Text.RegularExpressions.Regex? MountedOperatorPath { get; init; }
+
     internal string? OperatorHostname { get; init; }
 
     /// <summary>Transactions in flight per tenant (<see cref="TenantDb"/>'s statement cap).</summary>
@@ -277,8 +279,10 @@ internal sealed class TenantReplica
         Action<string> log
     )
     {
-        if (context.Request.Path.StartsWithSegments(Operator.OperatorServer.Path)
-            || string.Equals(context.Request.Host.Host.TrimEnd('.'),options.OperatorHostname, StringComparison.OrdinalIgnoreCase))
+        var path = context.Request.Path;
+        if (path.StartsWithSegments(Operator.OperatorServer.Path)
+            || options.MountedOperatorPath?.IsMatch(path.Value ?? "") == true
+            || Operator.OperatorListener.CanonicalHost(context.Request.Host.Host) == options.OperatorHostname)
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
@@ -662,7 +666,7 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
 
     internal async Task<string?> ResolveAsync(string host, CancellationToken token)
     {
-        var key = host.ToLowerInvariant();
+        var key = Operator.OperatorListener.CanonicalHost(host);
         while (true)
         {
             long started;

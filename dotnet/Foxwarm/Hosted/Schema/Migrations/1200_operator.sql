@@ -14,6 +14,30 @@ BEGIN
 END $$;
 CREATE TRIGGER foxwarm_set_object_identity BEFORE INSERT ON tenants FOR EACH ROW EXECUTE FUNCTION foxwarm_set_object_identity();
 
+-- Standbys can resume without rechecking the schema. Reject their acquisition at the
+-- same lease row they lock, even when an older binary issued the update. A renewal
+-- changes only expires_at. The migration role's import and the operator's transactional
+-- bootstrap are not serving grants.
+DO $$
+BEGIN
+    EXECUTE format($ddl$
+        CREATE FUNCTION %1$I.foxwarm_require_serving_version() RETURNS trigger
+        LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog,%1$I,pg_temp AS $body$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM %1$I.tenants WHERE tenant_id=NEW.tenant_id AND state='active'
+                          AND (credential_version>0 OR object_identity IS NOT NULL))
+               AND NOT EXISTS (SELECT 1 FROM %1$I.replicas WHERE replica_id=NEW.owner_replica AND binary_level>=1200) THEN
+                RETURN NULL;
+            END IF;
+            RETURN NEW;
+        END
+        $body$
+    $ddl$,current_schema());
+END $$;
+CREATE TRIGGER foxwarm_require_serving_version BEFORE UPDATE OF epoch,owner_replica,state ON tenant_leases
+    FOR EACH ROW WHEN (NEW.state='active' AND (OLD.epoch<>NEW.epoch OR OLD.state<>NEW.state OR OLD.owner_replica IS DISTINCT FROM NEW.owner_replica))
+    EXECUTE FUNCTION foxwarm_require_serving_version();
+
 -- No replica table grants. Its owner can read the active lease's access verifier through
 -- the scoped snapshot, never the setup digest. The operator can replace a setup token,
 -- but only the migration identity can issue operator credentials.

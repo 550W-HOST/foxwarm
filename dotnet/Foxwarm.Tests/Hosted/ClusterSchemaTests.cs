@@ -127,6 +127,7 @@ public sealed class ClusterSchemaTests
 
         var occurrence = new JsonObject { ["timer"] = "daily", ["generation"] = 3, ["at"] = "2026-11-28T09:00:00Z" };
         var due = new DateTimeOffset(2026, 11, 28, 8, 58, 0, TimeSpan.Zero);
+        await database.RegisterBootsAsync("r1/0001");
         var first = (await Acquire(lease))!;
         Assert.True(await lease.ReleaseWithWakeupAsync(first, new WakeupDue(due, occurrence), default));
         Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));

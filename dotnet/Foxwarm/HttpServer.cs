@@ -210,7 +210,7 @@ internal sealed class HttpServer
             app.Use(async (context,next) =>
             {
                 if (context.Request.Path.StartsWithSegments(Hosted.Operator.OperatorServer.Path)
-                    || string.Equals(context.Request.Host.Host.TrimEnd('.'),reservedOperatorHost,StringComparison.OrdinalIgnoreCase))
+                    || Hosted.Operator.OperatorListener.CanonicalHost(context.Request.Host.Host) == reservedOperatorHost)
                     context.Response.StatusCode=404;
                 else await next();
             });
