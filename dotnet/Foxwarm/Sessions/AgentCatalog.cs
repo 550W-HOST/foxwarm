@@ -158,7 +158,7 @@ internal sealed partial class AgentCatalog
     internal static void ValidateNewName(string name)
     {
         if (name.Length > MaxNewNameLength)
-            throw new InvalidDataException($"Agent name must be at most {MaxNewNameLength} characters.");
+            throw new InvalidDataException($"Agent names can be at most {MaxNewNameLength} characters.");
     }
 
     public bool Exists(string name)

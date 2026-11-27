@@ -229,7 +229,7 @@ internal sealed partial class AgentCatalog
                 _ = AgentStorePaths.PolicyRoot(root, agent, out var refused);
                 if (refused)
                     throw new InvalidDataException(
-                        $"Rule `{SessionWait.Text(rule["id"]) ?? "?"}`: the path root `{root}` can't be decided over Agent files."
+                        $"Rule `{SessionWait.Text(rule["id"]) ?? "?"}`: `{root}` isn't a path inside this Agent's folder."
                     );
             }
         }

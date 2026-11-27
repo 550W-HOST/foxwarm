@@ -136,9 +136,10 @@ public sealed class PostgresAgentFilesEdgeTests
         var (database, tenant) = await PostgresAgentFilesTests.OpenAsync();
         await using var _ = database;
         var store = PostgresAgentFilesTests.Store(tenant);
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
+        var tooLong = await Assert.ThrowsAsync<InvalidDataException>(() =>
             store.CreateAgentAsync(new string('a', AgentCatalog.MaxNewNameLength + 1), [], [], None)
         );
+        Assert.Equal("Agent names can be at most 128 characters.", tooLong.Message);
         Assert.Throws<InvalidDataException>(() => AgentCatalog.ValidateName("alpha\n"));
         Assert.Throws<InvalidDataException>(() => SessionIdentity.Build("alpha\n", "main"));
         // An existing longer name stays readable.

@@ -111,7 +111,7 @@ public sealed partial class HostedAgentStoreTests
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
                 fixture.Manager.CreateAgentAsync("boxed", createMainSession: false, rules: rules)
             );
-            Assert.Contains("can't be decided over Agent files", error.Message);
+            Assert.Equal($"Rule `outside`: `{root}` isn't a path inside this Agent's folder.", error.Message);
             Assert.False(fixture.Manager.AgentMetadata.ContainsKey("boxed"));
         }
         // Equivalent spellings of a store root are accepted and canonical.
