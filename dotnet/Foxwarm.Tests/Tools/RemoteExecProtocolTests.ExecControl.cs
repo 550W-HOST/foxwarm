@@ -17,6 +17,7 @@ public sealed partial class RemoteExecProtocolTests
         Assert.Equal(id, row.Id);
         Assert.Equal("remote", row.NodeId);
         Assert.Equal("owned-effect", row.Command);
+        Assert.Null(row.Summary);
 
         var (result, node, resident) = await fixture.Manager.StopExecAsync(fixture.Owner, id, default);
         Assert.Equal(SessionManager.ExecStopResult.Unsupported, result);
@@ -98,5 +99,19 @@ public sealed partial class RemoteExecProtocolTests
             SessionManager.ExecStopResult.AlreadyRequested,
             (await fixture.Manager.StopExecAsync(fixture.Owner, id, default)).Result
         );
+    }
+
+    [Fact]
+    public async Task Listed_CLI_command_carries_the_exec_call_summary()
+    {
+        await using var fixture = new Fixture();
+        await fixture.Start();
+        var request = await fixture.StartBackground("Run the  owned\n effect");
+        var row = Assert.Single(fixture.Manager.RunningExecs(fixture.Owner));
+        Assert.Equal(request["backgroundExecId"]!.GetValue<string>(), row.Id);
+        Assert.Equal("Run the owned effect", row.Summary);
+        var listed = SessionManager.ExecRow(row, row.StartedAt);
+        Assert.Equal("Run the owned effect", listed["summary"]!.GetValue<string>());
+        Assert.Equal("owned-effect", listed["command"]!.GetValue<string>());
     }
 }

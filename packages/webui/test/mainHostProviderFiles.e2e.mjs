@@ -58,7 +58,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open in System › Nodes').click())
   await page.waitForSelector('[data-node-surface]')
   await page.waitForFunction(() => document.querySelector('[data-node-surface]')?.innerText.includes('external/target'))
-  const card = await page.evaluate(() => [...document.querySelectorAll('[data-node-surface] article')].find(item => item.textContent.includes('external/target'))?.textContent)
+  const card = await page.evaluate(() => [...document.querySelectorAll('[data-node-surface] [data-system-node-id]')].find(item => item.textContent.includes('external/target'))?.textContent)
   assert(card?.includes('external/target'), card)
   assert(!card.includes('vscode-'), card)
   assert.equal((await fixture.api('POST', route + '/message', { text: 'Write the provider file.' })).status, 202)

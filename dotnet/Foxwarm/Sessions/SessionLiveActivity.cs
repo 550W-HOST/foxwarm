@@ -114,6 +114,7 @@ internal static partial class SessionLiveActivity
             || Flag(meta?["optimistic"])
             || Flag(meta?["queuedPreview"])
             || meta?["contextBlock"] is not null
+            || EffortChangeRecord.Is(message)
         )
             return false;
         var parts = Parts(message);

@@ -7,7 +7,7 @@ import { once } from 'node:events'
 import { spawn } from 'node:child_process'
 import { watch } from 'node:fs'
 
-const require = createRequire(path.join(process.env.FOXWARM_TS_ROOT, 'package.json'))
+const require = createRequire(path.join(process.env.FOXWARM_REPO_ROOT, 'package.json'))
 const { Client } = await import(pathToFileURL(require.resolve('@modelcontextprotocol/sdk/client/index.js')))
 const { StreamableHTTPClientTransport } = await import(pathToFileURL(require.resolve('@modelcontextprotocol/sdk/client/streamableHttp.js')))
 const args = process.argv.slice(2)

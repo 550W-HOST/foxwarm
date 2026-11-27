@@ -10,6 +10,7 @@ import CodeLaunchButton from './CodeLaunchButton'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
+import { RunningTerminalCount, type TerminalListOptions } from './TerminalList'
 
 type HomeTab = 'sessions' | 'tasks' | 'search' | 'setup'
 interface SessionListProps {
@@ -38,6 +39,7 @@ interface SessionListProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
+  terminalList?: TerminalListOptions
   onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
@@ -68,6 +70,7 @@ export default function SessionList({
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  terminalList,
   onCreateAgent,
   onCreateSession,
   idleNotificationModes,
@@ -104,7 +107,7 @@ export default function SessionList({
   const moreEntries: ContextMenuEntry[] = [
     { key: 'agents', label: 'System', icon: <Network size={16} />, onSelect: onSelectArchitecture },
     { key: 'code', label: 'Code', icon: <Code2 size={16} />, onSelect: () => setUtility('code') },
-    { key: 'terminal', label: 'Terminal', icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
+    { key: 'terminal', label: <span className="flex min-w-0 items-center gap-2" data-workspace-tool="terminal"><span className="min-w-0 truncate">Terminal</span><RunningTerminalCount terminals={terminalList?.terminals} className="ml-auto" /></span>, icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
     ...(onSelectLogs ? [{ key: 'logs', label: 'Logs', icon: <FileText size={16} />, onSelect: onSelectLogs }] : []),
   ]
   const navClass = 'flex min-h-12 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-2 text-xs hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring'
@@ -161,7 +164,8 @@ export default function SessionList({
             onOpen={(node, path) => {setUtility(null); onOpenCode(node, path)}} onNodeChange={onCodeNodeChange} onPathChange={onCodePathChange}
             onOpenInNewWindowChange={onCodeOpenInNewWindowChange} onRefreshNodeTargets={onRefreshNodeTargets} />
             : <CreateTabButton inlineOptions onCancel={() => setUtility(null)} defaultNodeId={defaultNodeId} defaultPath={defaultPath}
-              onCreate={options => {setUtility(null); onCreateTerminalTab(options)}} nodeTargets={nodeTargets} nodeTargetsError={nodeTargetsError} onRefreshNodeTargets={onRefreshNodeTargets} />}
+              onCreate={options => {setUtility(null); onCreateTerminalTab(options)}} nodeTargets={nodeTargets} nodeTargetsError={nodeTargetsError} onRefreshNodeTargets={onRefreshNodeTargets}
+              terminalList={terminalList && { ...terminalList, onOpen: terminal => {setUtility(null); terminalList.onOpen(terminal)} }} />}
         </dialog>, document.body)}
     </div>
   )

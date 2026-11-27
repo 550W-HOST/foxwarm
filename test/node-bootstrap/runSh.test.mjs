@@ -1,0 +1,552 @@
+import testEnvironment from '../../scripts/test/test-process-env.cjs';
+testEnvironment.initializeTestEnvironment();
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// The `/node/source.tar.gz` payload of managed Main (NodeBootstrap.Sources plus the sandbox start script).
+const NODE_SOURCE_FILES = ['packages/shared', 'packages/cli-node', 'packages/cli-node-runtime', 'scripts/start-sandbox-node.sh'];
+const NODE_SOURCE_TAR_EXCLUDES = ['packages/shared/node_modules', 'packages/cli-node/node_modules', 'packages/cli-node-runtime/node_modules'];
+
+const shellQuote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
+
+// The literal commands managed Main returns for these options (NodeBootstrap.Commands without a launch
+// profile): download a template and pipe it to bash with quoted host, credential, Node ID and directory.
+function buildNodeBootstrapCommands({ baseUrl, pairingToken, authToken, nodeId, installDir }) {
+  const download = name => `curl -fsSL ${shellQuote(`${baseUrl}/node/${name}`)} | bash -s --`;
+  const args = ` --host=${shellQuote(baseUrl)}`
+    + (authToken ? ` --auth-token=${shellQuote(authToken)}` : ` --pairing=${shellQuote(pairingToken)}`)
+    + ` --node-id=${shellQuote(nodeId)}`;
+  return {
+    bareMetal: `${download('run.sh')} --dir=${shellQuote(installDir)}${args}`,
+    bareMetalInstall: `${download('run.sh')} --dir=${shellQuote(installDir)}${args} --install`,
+    docker: `${download('run-docker.sh')}${args}`,
+    interactive: `${download('run-interactive.sh')}${args}`,
+  };
+}
+
+const execFileAsync = promisify(execFile);
+const RUN_SH = path.resolve(__dirname, '../../templates/node/run.sh');
+
+async function writeExecutable(filePath, content) {
+  await fs.writeFile(filePath, content, { mode: 0o755 });
+}
+
+async function makeFixture(options = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-run-sh-'));
+  const bin = path.join(root, 'bin');
+  const calls = path.join(root, 'calls');
+  await fs.ensureDir(bin);
+  await fs.ensureDir(calls);
+
+  // Exercise retained non-native delivery regardless of the test host architecture.
+  await writeExecutable(path.join(bin, 'uname'), '#!/bin/sh\necho Darwin\n');
+  await writeExecutable(path.join(bin, 'curl'), '#!/bin/sh\nexit 0\n');
+  await writeExecutable(path.join(bin, 'tar'), `#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then shift; target="$1"; fi
+  shift
+done
+mkdir -p "$target/packages/cli-node/dist"
+: > "$target/packages/cli-node/dist/client.bundle.js"
+: > "$target/packages/cli-node/dist/tui.bundle.js"
+`);
+  await writeExecutable(path.join(bin, 'node'), '#!/bin/sh\nexec /bin/sleep 30\n');
+
+  if (options.tmux) {
+    await writeExecutable(path.join(bin, 'tmux'), `#!/bin/sh
+set -eu
+case "$1" in
+  has-session) test -f "$MOCK_TMUX_STATE" ;;
+  new-session) printf '%s\\n' "$*" >> "$MOCK_CALLS/tmux"; : > "$MOCK_TMUX_STATE" ;;
+  display-message) echo 4242 ;;
+  *) exit 2 ;;
+esac
+`);
+  }
+
+  if (options.userSystemd) {
+    await writeExecutable(path.join(bin, 'id'), `#!/bin/sh
+case "\${1-}" in
+  -u) echo 1000 ;;
+  -un) echo tester ;;
+  *) echo tester ;;
+esac
+`);
+    await writeExecutable(path.join(bin, 'systemctl'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$MOCK_CALLS/systemctl"
+exit 0
+`);
+    await writeExecutable(path.join(bin, 'loginctl'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$MOCK_CALLS/loginctl"
+case "$1" in show-user) echo yes ;; esac
+exit 0
+`);
+  }
+
+  if (options.isolatedPath) {
+    const commands = ['awk', 'cat', 'chmod', 'cksum', 'cp', 'gzip', 'hostname', 'mkdir', 'nohup', 'rm', 'sed', 'sleep'];
+    for (const command of commands) {
+      const real = (process.env.PATH || '').split(path.delimiter)
+        .map(dir => path.resolve(dir, command)).find(candidate => fs.existsSync(candidate));
+      assert.ok(real, `missing test utility ${command}`);
+      await fs.symlink(real, path.join(bin, command));
+    }
+  }
+
+  const runtimeDir = path.join(root, 'runtime');
+  await fs.mkdir(runtimeDir, { mode: 0o700 });
+  const env = {
+    ...process.env,
+    PATH: options.isolatedPath ? bin : `${bin}:${process.env.PATH}`,
+    MOCK_CALLS: calls,
+    MOCK_TMUX_STATE: path.join(root, 'tmux-state'),
+    HOME: path.join(root, 'home with spaces'),
+    XDG_CONFIG_HOME: path.join(root, 'config with spaces'),
+    XDG_RUNTIME_DIR: runtimeDir,
+    USER: 'tester',
+  };
+
+  return { root, bin, calls, env };
+}
+
+async function runScript(args, env) {
+  return execFileAsync('/bin/sh', [RUN_SH, ...args], { env, timeout: 15_000 });
+}
+
+test('run.sh requires an explicit --dir before doing bootstrap work', async () => {
+  const fixture = await makeFixture();
+  try {
+    await assert.rejects(
+      runScript(['--host=http://master', '--pairing=TOKEN'], fixture.env),
+      (error) => {
+        assert.match(error.stderr, /--dir is required/);
+        return true;
+      },
+    );
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('run.sh prepares every local artifact beneath --dir and supports spaces', async () => {
+  const fixture = await makeFixture();
+  const installDir = path.join(fixture.root, "install root's");
+  try {
+    const result = await runScript([
+      `--dir=${installDir}`,
+      '--host=http://master/base',
+      '--pairing=token with spaces',
+      '--node-id=node with spaces',
+      '--prepare-only',
+    ], fixture.env);
+
+    assert.match(result.stdout, /Preparation complete/);
+    assert.equal(await fs.pathExists(path.join(installDir, 'data/state')), true);
+    assert.equal(await fs.pathExists(path.join(installDir, 'foxwarm-node/packages/cli-node/dist/client.bundle.js')), true);
+    assert.equal(await fs.pathExists(path.join(installDir, '.env')), true);
+    assert.equal(await fs.pathExists(path.join(installDir, 'run-node-client.sh')), true);
+    assert.equal(await fs.pathExists(path.join(installDir, 'systemd')), true);
+
+    const launcher = await fs.readFile(path.join(installDir, 'run-node-client.sh'), 'utf8');
+    assert.match(launcher, /--token 'token with spaces'/);
+    assert.match(launcher, /--id 'node with spaces'/);
+    assert.match(launcher, /install root.*data\/state\/node_credentials\.json/);
+    await execFileAsync('/bin/sh', ['-n', path.join(installDir, 'run-node-client.sh')]);
+    const envFile = await fs.readFile(path.join(installDir, '.env'), 'utf8');
+    assert.match(envFile, /NODE_INSTALL_DIR='.*install root/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('Linux ARM retains the JavaScript delivery path', async () => {
+  const fixture = await makeFixture();
+  const installDir = path.join(fixture.root, 'arm-install');
+  try {
+    await writeExecutable(path.join(fixture.bin, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Linux;; *) echo aarch64;; esac\n');
+    await runScript([
+      `--dir=${installDir}`, '--host=http://master', '--auth-token=fixture',
+      '--node-id=arm-node', '--prepare-only',
+    ], fixture.env);
+    const launcher = await fs.readFile(path.join(installDir, 'run-node-client.sh'), 'utf8');
+    assert.match(launcher, /client\.bundle\.js/);
+    assert.doesNotMatch(launcher, /Foxwarm\.CliNode/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('four launchers accept per-node auth tokens without using a global pairing token', async () => {
+  const fixture = await makeFixture();
+  const installDir = path.join(fixture.root, 'direct-auth');
+  const host = "https://example.invalid/fox'base";
+  try {
+    const prepared = await runScript([
+      `--dir=${installDir}`, `--host=${host}`, '--auth-token=direct-fixture', '--node-id=direct-node', '--prepare-only',
+    ], fixture.env);
+    assert.match(prepared.stdout, /Preparation complete/);
+    const launcher = await fs.readFile(path.join(installDir, 'run-node-client.sh'), 'utf8');
+    assert.match(launcher, /--auth-token 'direct-fixture'/);
+    assert.doesNotMatch(launcher, /--token /);
+    assert.match(launcher, /fox'"'"'base/);
+    assert.equal((await fs.stat(path.join(installDir, '.env'))).mode & 0o077, 0);
+    await execFileAsync('/bin/sh', ['-n', path.join(installDir, 'run-node-client.sh')]);
+
+    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$MOCK_CALLS/node"\n');
+    const interactive = await execFileAsync('/bin/sh', [path.resolve(__dirname, '../../templates/node/run-interactive.sh'),
+      `--host=${host}`, `--state-dir=${path.join(fixture.root, 'interactive-state')}`,
+      `--source-dir=${path.join(fixture.root, 'interactive-source')}`,
+      '--node-id=direct-node', '--auth-token=direct-fixture',
+    ], { env: fixture.env, timeout: 15_000 });
+    assert.match(interactive.stdout, /Using per-node auth token/);
+    const args = await fs.readFile(path.join(fixture.calls, 'node'), 'utf8');
+    assert.match(args, /--auth-token\ndirect-fixture/);
+    assert.match(args, /fox'base/);
+    assert.doesNotMatch(args, /--token\n/);
+
+    await writeExecutable(path.join(fixture.bin, 'docker'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$MOCK_CALLS/docker"
+exit 0
+`);
+    const dockerDir = path.join(fixture.root, 'docker-run');
+    await fs.ensureDir(dockerDir);
+    const docker = await execFileAsync('/bin/sh', [path.resolve(__dirname, '../../templates/node/run-docker.sh'),
+      `--host=${host}`, '--node-id=direct-node', '--auth-token=direct-fixture', '-d',
+    ], { cwd: dockerDir, env: fixture.env, timeout: 15_000 });
+    assert.match(docker.stdout, /Docker-based node client started/);
+    const dockerEnv = await fs.readFile(path.join(dockerDir, '.env'), 'utf8');
+    assert.match(dockerEnv, /NODE_AUTH_TOKEN='direct-fixture'/);
+    assert.match(dockerEnv, /NODE_PAIRING_TOKEN=''\n/);
+    assert.match(dockerEnv, /NODE_HOST='https:\/\/example.invalid\/fox\\'base'/);
+    assert.equal((await fs.stat(path.join(dockerDir, '.env'))).mode & 0o077, 0);
+
+    const ps = await fs.readFile(path.resolve(__dirname, '../../templates/node/run.ps1'), 'utf8');
+    assert.match(ps, /\[string\]\$AuthToken = ""/);
+    assert.match(ps, /\$nodeArgs \+= @\("--auth-token", \$AuthToken\)/);
+    assert.match(ps, /if \(\$Pairing -and \$AuthToken\)/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('generated pairing and token commands reach the real Linux, systemd, interactive and Docker consumers', async () => {
+  const fixture = await makeFixture({ userSystemd: true });
+  const templateDir = path.resolve(__dirname, '../../templates/node');
+  const host = "https://example.invalid/deploy'path/$literal";
+  const token = "fixture'token/$literal";
+  try {
+    // Only external effects are stubbed: generated commands download the actual
+    // launchers, which prepare files and call the client/service/container boundary.
+    await writeExecutable(path.join(fixture.bin, 'curl'), `#!/bin/sh
+out=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) out=$2; shift 2 ;; http*) url=$1; shift ;; *) shift ;; esac
+done
+case "$url" in
+  */source.tar.gz) exit 0 ;;
+  *) file="$TEMPLATE_DIR/\${url##*/}" ;;
+esac
+if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
+`);
+    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\0" "$@" > "$MOCK_CALLS/node"\nprintf "%s\\0" "$FOXWARM_NODE_LAUNCH_METHOD" "$FOXWARM_NODE_LAUNCH_DIR" "$FOXWARM_NODE_LAUNCH_SERVICE_SCOPE" > "$MOCK_CALLS/launch"\n');
+    await writeExecutable(path.join(fixture.bin, 'docker'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOCK_CALLS/docker"\n');
+    const env = { ...fixture.env, TEMPLATE_DIR: templateDir };
+    for (const authToken of [undefined, token]) {
+      const mode = authToken ? 'direct' : 'pairing';
+      const installDir = path.join(fixture.root, `${mode} install's $literal`);
+      const commands = buildNodeBootstrapCommands({ baseUrl: host, pairingToken: token, authToken, nodeId: 'generated-node', installDir });
+      const assertClientArgs = async () => {
+        const args = (await fs.readFile(path.join(fixture.calls, 'node'), 'utf8')).split('\0');
+        assert.ok(args.includes(host));
+        assert.ok(args.includes('generated-node'));
+        assert.ok(args.includes(authToken ? '--auth-token' : '--token'));
+        assert.ok(!args.includes(authToken ? '--token' : '--auth-token'));
+        assert.ok(args.includes(token));
+      };
+      for (const method of ['bareMetal', 'bareMetalInstall', 'interactive', 'docker']) {
+        const cwd = path.join(fixture.root, `${mode}-${method}`);
+        await fs.ensureDir(cwd);
+        await execFileAsync('/bin/sh', ['-c', commands[method]], { cwd, env, timeout: 5000 });
+        if (method === 'bareMetalInstall') {
+          const unit = await fs.readFile(path.join(installDir, 'systemd/foxwarm-node-generated-node.service'), 'utf8');
+          assert.ok(unit.includes('run-node-client.sh'));
+          await execFileAsync('/bin/sh', [path.join(installDir, 'run-node-client.sh')], { env, timeout: 5000 });
+          await assertClientArgs();
+        } else if (method === 'docker') {
+          const envFile = await fs.readFile(path.join(cwd, '.env'), 'utf8');
+          assert.ok(envFile.includes(`NODE_AUTH_TOKEN='${authToken ? "fixture\\'token/$literal" : ''}'`));
+          assert.ok(envFile.includes(`NODE_PAIRING_TOKEN='${authToken ? '' : "fixture\\'token/$literal"}'`));
+          assert.equal((await fs.stat(path.join(cwd, '.env'))).mode & 0o077, 0);
+        } else await assertClientArgs();
+        if (method === 'docker') {
+          const envFile = await fs.readFile(path.join(cwd, '.env'), 'utf8');
+          assert.ok(envFile.includes(`NODE_LAUNCH_DIR='${cwd}'`));
+          assert.match(await fs.readFile(path.join(fixture.calls, 'docker'), 'utf8'), /--env-file \.\/\.env -f \.\/docker-compose.yaml up -d --build/);
+        } else {
+          const launch = (await fs.readFile(path.join(fixture.calls, 'launch'), 'utf8')).split('\0');
+          assert.equal(launch[0], method);
+          assert.equal(launch[1], method === 'interactive' ? cwd : installDir);
+          if (method === 'bareMetalInstall') assert.equal(launch[2], 'user');
+        }
+      }
+    }
+  } finally { await fs.remove(fixture.root); }
+});
+
+test('Docker Node startup skips global token-file wait with credentials or direct auth', async () => {
+  const fixture = await makeFixture();
+  const launcher = path.resolve(__dirname, '../../scripts/start-sandbox-node.sh');
+  try {
+    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$MOCK_CALLS/node"\n');
+    const credentials = path.join(fixture.root, 'node-credentials.json');
+    await fs.writeJson(credentials, { nodeId: 'fixture-node', authToken: 'old' });
+    const env = {
+      ...fixture.env, NODE_URL: 'https://example.invalid/fox', NODE_ID: 'fixture-node',
+      NODE_TOKEN_FILE: path.join(fixture.root, 'no-global-token'), NODE_CREDENTIALS_FILE: credentials,
+      NODE_TOKEN: '', NODE_AUTH_TOKEN: '',
+    };
+    await execFileAsync('/bin/sh', [launcher], { env, timeout: 2000 });
+    assert.doesNotMatch(await fs.readFile(path.join(fixture.calls, 'node'), 'utf8'), /--token\n/);
+    await fs.remove(credentials);
+    await execFileAsync('/bin/sh', [launcher], { env: { ...env, NODE_AUTH_TOKEN: 'new-direct-token' }, timeout: 2000 });
+    assert.match(await fs.readFile(path.join(fixture.calls, 'node'), 'utf8'), /--auth-token\nnew-direct-token/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('run.sh -d prefers tmux and records session, pid, log, and stop guidance', async () => {
+  const fixture = await makeFixture({ tmux: true });
+  const installDir = path.join(fixture.root, 'tmux install');
+  try {
+    const result = await runScript([
+      '--dir', installDir,
+      '--host', 'http://master',
+      '--pairing', 'TOKEN',
+      '--node-id', 'tmux-node',
+      '-d',
+    ], fixture.env);
+
+    assert.match(result.stdout, /Background supervisor: tmux session/);
+    assert.match(result.stdout, /tmux kill-session/);
+    assert.equal((await fs.readFile(path.join(installDir, 'data/node.pid'), 'utf8')).trim(), '4242');
+    assert.match(await fs.readFile(path.join(installDir, 'data/node.mode'), 'utf8'), /^tmux:/);
+    assert.equal(await fs.pathExists(path.join(installDir, 'data/logs/node.log')), true);
+    const tmuxCall = await fs.readFile(path.join(fixture.calls, 'tmux'), 'utf8');
+    assert.match(tmuxCall, /new-session -d/);
+    assert.match(tmuxCall, /run-node-client\.sh/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('run.sh -d falls back to nohup when tmux is unavailable', async () => {
+  const fixture = await makeFixture({ isolatedPath: true });
+  const installDir = path.join(fixture.root, 'nohup install');
+  let pid;
+  try {
+    const result = await runScript([
+      `--dir=${installDir}`,
+      '--host=http://master',
+      '--pairing=TOKEN',
+      '--node-id=nohup-node',
+      '--detach',
+    ], fixture.env);
+
+    assert.match(result.stdout, /Background supervisor: nohup/);
+    assert.match(result.stdout, /Stop: kill/);
+    pid = Number((await fs.readFile(path.join(installDir, 'data/node.pid'), 'utf8')).trim());
+    assert.ok(Number.isInteger(pid) && pid > 0);
+    assert.equal((await fs.readFile(path.join(installDir, 'data/node.mode'), 'utf8')).trim(), 'nohup');
+    process.kill(pid, 0);
+  } finally {
+    if (pid) {
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+    }
+    await fs.remove(fixture.root);
+  }
+});
+
+test('run.sh starts the real prebuilt node bundle from a clean source archive without host node_modules', async () => {
+  const fixture = await makeFixture({ isolatedPath: true });
+  const installDir = path.join(fixture.root, 'clean distribution');
+  const archivePath = path.join(fixture.root, 'source.tar.gz');
+  const repoRoot = path.resolve(__dirname, '../..');
+  let nodePid;
+  let server;
+  try {
+    await execFileAsync('tar', [
+      '-czf', archivePath,
+      ...NODE_SOURCE_TAR_EXCLUDES.map(relPath => `--exclude=${relPath}`),
+      ...NODE_SOURCE_FILES,
+    ], { cwd: repoRoot });
+    const archiveListing = (await execFileAsync('tar', ['-tzf', archivePath])).stdout;
+    assert.match(archiveListing, /packages\/shared\/dist\/codeHelperIpc\.js/);
+    assert.doesNotMatch(archiveListing, /node_modules/);
+
+    for (const command of ['curl', 'tar', 'node']) {
+      await fs.remove(path.join(fixture.bin, command));
+    }
+    const realCurl = ['/usr/bin/curl', '/bin/curl'].find(candidate => fs.existsSync(candidate));
+    const realTar = ['/usr/bin/tar', '/bin/tar'].find(candidate => fs.existsSync(candidate));
+    assert.ok(realCurl, 'curl is required for the clean distribution test');
+    assert.ok(realTar, 'tar is required for the clean distribution test');
+    await fs.symlink(realCurl, path.join(fixture.bin, 'curl'));
+    await fs.symlink(realTar, path.join(fixture.bin, 'tar'));
+    await fs.symlink(process.execPath, path.join(fixture.bin, 'node'));
+    await writeExecutable(path.join(fixture.bin, 'npm'), '#!/bin/sh\nexit 0\n');
+
+    server = http.createServer((req, res) => {
+      if (req.url === '/node/source.tar.gz') {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/gzip');
+        fs.createReadStream(archivePath).pipe(res);
+        return;
+      }
+      res.statusCode = 404;
+      res.end('not found');
+    });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const port = server.address().port;
+    const result = await runScript([
+      `--dir=${installDir}`,
+      `--host=http://127.0.0.1:${port}`,
+      '--pairing=TOKEN',
+      '--node-id=clean-bundle-node',
+      '--detach',
+    ], { ...fixture.env, NODE_PATH: '' });
+
+    assert.match(result.stdout, /Using bundled node client from source archive; skipping npm install/);
+    assert.match(result.stdout, /Background supervisor: nohup/);
+    nodePid = Number((await fs.readFile(path.join(installDir, 'data/node.pid'), 'utf8')).trim());
+    assert.ok(Number.isInteger(nodePid) && nodePid > 0);
+    process.kill(nodePid, 0);
+    const log = await fs.readFile(path.join(installDir, 'data/logs/node.log'), 'utf8');
+    assert.doesNotMatch(log, /Cannot find module 'fs-extra'/);
+    assert.match(log, /Connecting to foxwarm master/);
+  } finally {
+    if (nodePid) {
+      try { process.kill(nodePid, 'SIGTERM'); } catch {}
+    }
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    await fs.remove(fixture.root);
+  }
+});
+
+test('run.sh --install selects a user service for non-root and starts foreground under systemd', async () => {
+  const fixture = await makeFixture({ userSystemd: true });
+  const installDir = path.join(fixture.root, "service $ % install's");
+  try {
+    const result = await runScript([
+      `--dir=${installDir}`,
+      '--host=http://master',
+      '--pairing=TOKEN',
+      '--node-id=service-node',
+      '--install',
+    ], fixture.env);
+
+    assert.match(result.stdout, /started as a user systemd service/);
+    assert.match(result.stdout, /does\s+not create a second tmux\/nohup daemon layer/);
+    const unitName = 'foxwarm-node-service-node.service';
+    const generated = path.join(installDir, 'systemd', unitName);
+    const installed = path.join(fixture.env.XDG_CONFIG_HOME, 'systemd/user', unitName);
+    assert.equal(await fs.pathExists(generated), true);
+    assert.equal(await fs.pathExists(installed), true);
+    const unit = await fs.readFile(generated, 'utf8');
+    const systemdPath = value => value
+      .replace(/ /g, '\\x20')
+      .replace(/\$/g, '\\x24')
+      .replace(/%/g, '\\x25')
+      .replace(/'/g, '\\x27');
+    assert.match(unit, /^Type=simple$/m);
+    assert.match(unit, new RegExp(`^WorkingDirectory=${systemdPath(path.join(installDir, 'foxwarm-node')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+    assert.match(unit, /^ExecStart=\/bin\/sh ".*service \$\$ %% install's\/run-node-client\.sh"$/m);
+    assert.match(unit, new RegExp(`^StandardOutput=append:${systemdPath(path.join(installDir, 'data', 'logs', 'node.log')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+    assert.match(unit, /\\x24/);
+    assert.match(unit, /\\x27/);
+    assert.match(unit, /^Restart=always$/m);
+    assert.match(unit, /^WantedBy=default\.target$/m);
+    assert.doesNotMatch(unit, /--detach|tmux|nohup/);
+    const systemdAnalyze = ['/usr/bin/systemd-analyze', '/bin/systemd-analyze'].find(candidate => fs.existsSync(candidate));
+    if (systemdAnalyze) {
+      await execFileAsync(systemdAnalyze, ['--user', 'verify', generated], { env: fixture.env });
+    }
+
+    const calls = await fs.readFile(path.join(fixture.calls, 'systemctl'), 'utf8');
+    assert.match(calls, /^--user show-environment$/m);
+    assert.match(calls, /^--user daemon-reload$/m);
+    assert.match(calls, /^--user enable foxwarm-node-service-node\.service$/m);
+    assert.match(calls, /^--user restart foxwarm-node-service-node\.service$/m);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+for (const status of ['200', '404', '503']) {
+  test(`Apple Silicon native bootstrap handles package HTTP ${status}`, async () => {
+    const fixture = await makeFixture();
+    const install = path.join(fixture.root, 'apple silicon');
+    try {
+      await writeExecutable(path.join(fixture.bin, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Darwin;; -m) echo arm64;; esac\n');
+      await writeExecutable(path.join(fixture.bin, 'curl'), `#!/bin/sh
+case "$*" in
+  *NATIVE_CLI_OSX_URL*)
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-o" ]; then shift; : > "$1"; fi
+      shift
+    done
+    printf '${status}'
+    ;;
+  *) exit 0 ;;
+esac
+`);
+      await writeExecutable(path.join(fixture.bin, 'tar'), `#!/bin/sh
+native=0
+case "$*" in *native-cli-node.tar.gz*) native=1;; esac
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then shift; target="$1"; fi
+  shift
+done
+if [ "$native" = 1 ]; then
+  mkdir -p "$target/native-cli-node-osx-arm64"
+  printf '#!/bin/sh\\nexit 0\\n' > "$target/native-cli-node-osx-arm64/Foxwarm.CliNode"
+  chmod +x "$target/native-cli-node-osx-arm64/Foxwarm.CliNode"
+else
+  mkdir -p "$target/packages/cli-node/dist"
+  : > "$target/packages/cli-node/dist/client.bundle.js"
+fi
+`);
+      const args = [`--dir=${install}`, '--host=http://master/base', '--auth-token=direct token', '--node-id=apple', '--prepare-only'];
+      if (status === '503') {
+        await assert.rejects(runScript(args, fixture.env), (error) => {
+          assert.match(error.stderr, /HTTP 503/);
+          return true;
+        });
+        assert.equal(await fs.pathExists(path.join(install, 'run-node-client.sh')), false);
+      } else {
+        await runScript(args, fixture.env);
+        const launcher = await fs.readFile(path.join(install, 'run-node-client.sh'), 'utf8');
+        assert.equal(launcher.includes('native-cli-node-osx-arm64/Foxwarm.CliNode'), status === '200');
+        assert.equal(launcher.includes('client.bundle.js'), status === '404');
+        assert.match(launcher, /--auth-token 'direct token'/);
+      }
+    } finally {
+      await fs.remove(fixture.root);
+    }
+  });
+}

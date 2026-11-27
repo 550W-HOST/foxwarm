@@ -14,7 +14,8 @@ namespace Foxwarm.Desktop;
 /// <summary>
 /// Custom window frame: the WebUI extends into the title bar. The page learns the caption
 /// buttons' insets through <c>window.foxwarmFrame</c> and reports its drag surfaces through
-/// the one-way <c>frame-regions</c> message, which become the window's caption regions.
+/// the one-way <c>frame-regions</c> message, which become the window's caption regions. The
+/// brand row's one-way <c>instance-menu</c> message opens the host's instance menu.
 /// WinUI's WebView2 control ignores CSS app-region, and the default caption band would
 /// swallow clicks on the page's controls, so explicit caption rectangles are always set.
 /// </summary>
@@ -24,8 +25,9 @@ internal sealed class DesktopFrame
     private readonly WebView2 view;
     private readonly Func<string, bool> isAppUri;
     private readonly bool codeWindow;
+    private readonly Action<FrameRect>? instanceMenu;
     private CoreWebView2? core;
-    private string origin = "";
+    private Uri? scope;
     private string? scriptId;
     private string state = "";
     private DesktopFrameRegions? regions;
@@ -35,12 +37,14 @@ internal sealed class DesktopFrame
         Window window,
         WebView2 view,
         Func<string, bool> isAppUri,
-        DesktopWindowFrame frameKind = DesktopWindowFrame.WebUi
+        DesktopWindowFrame frameKind = DesktopWindowFrame.WebUi,
+        Action<FrameRect>? instanceMenu = null
     )
     {
         this.window = window;
         this.view = view;
         this.isAppUri = isAppUri;
+        this.instanceMenu = instanceMenu;
         codeWindow = frameKind == DesktopWindowFrame.Code;
         var bar = window.AppWindow.TitleBar;
         bar.ExtendsContentIntoTitleBar = true;
@@ -62,8 +66,13 @@ internal sealed class DesktopFrame
         };
     }
 
+    /// <summary>Whether the page last reported a dark color scheme; native menus and dialogs follow it.</summary>
+    internal bool Dark => regions?.Dark ?? lastDark;
+
+    private bool lastDark;
+
     /// <summary>Installs the document-start state and the message handler before the first navigation.</summary>
-    internal async Task InstallAsync(CoreWebView2 core, Uri origin)
+    internal async Task InstallAsync(CoreWebView2 core, Uri scope)
     {
         this.core = core;
         core.Settings.IsWebMessageEnabled = true;
@@ -82,8 +91,14 @@ internal sealed class DesktopFrame
             }
             var message = DesktopFrameRegions.Parse(json);
             if (message is null)
+            {
+                // Only while the window is active, so a page in the background can't pop it up.
+                if (active && instanceMenu is not null && DesktopInstanceMenuRequest.Parse(json) is { } request)
+                    instanceMenu(request.Anchor);
                 return;
+            }
             regions = message;
+            lastDark = message.Dark;
             ApplyButtonColors(message.Dark);
             ApplyRegions();
         };
@@ -113,7 +128,7 @@ internal sealed class DesktopFrame
                 // The web view is closing.
             }
         };
-        this.origin = origin.GetLeftPart(UriPartial.Authority);
+        this.scope = scope;
         view.XamlRoot.Changed += (_, _) => Update();
         state = StateJson();
         if (codeWindow)
@@ -153,13 +168,21 @@ internal sealed class DesktopFrame
         }.ToJsonText();
     }
 
-    // Top-level documents of the owned origin only; frames and other origins see nothing.
+    // Top-level documents of the selected instance only; frames and other pages see nothing.
     private string DocumentScript(string json) =>
-        "if (window === window.top && location.origin === "
-        + JsonValue.Create(origin)!.ToJsonText()
-        + ") window.foxwarmFrame = "
-        + json
-        + ";";
+        "if (" + DesktopNavigation.ScopeCondition(scope!) + ") window.foxwarmFrame = " + json + ";";
+
+    /// <summary>Moves the document-start state to another instance's scope before navigating there.</summary>
+    internal async Task SetScopeAsync(Uri next)
+    {
+        if (core is null || scope == next)
+            return;
+        scope = next;
+        var previous = scriptId;
+        scriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(DocumentScript(state));
+        if (previous is not null)
+            core.RemoveScriptToExecuteOnDocumentCreated(previous);
+    }
 
     private async void Update()
     {

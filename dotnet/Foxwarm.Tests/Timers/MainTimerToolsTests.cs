@@ -55,7 +55,7 @@ public sealed class MainTimerToolsTests
                         713
                     );
                 var sourceRoot =
-                    Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+                    Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
                     ?? throw new InvalidOperationException("Source checkout is required.");
                 f.Manager = new(
                     f.Data,

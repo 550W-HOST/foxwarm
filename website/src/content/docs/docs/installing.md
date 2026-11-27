@@ -185,18 +185,20 @@ Foxwarm.app runs Foxwarm inside a window and keeps its data under `~/Library/App
 Use the sign-in link printed by the installer, typically:
 
 ```text
-http://localhost:3001/#token=...
+http://127.0.0.1:3001/#token=...
 ```
 
-If you no longer have it, read `state/token` in your data directory, for example `cat foxwarm-data/state/token` or `Get-Content .\foxwarm-data\state\token`. Treat the token and the link like a password.
+If you no longer have it, print it again with `./foxwarm/foxwarmctl link` (`.\foxwarm\foxwarmctl.cmd link` on Windows), or read the token from `state/token` in your data directory. Treat the token and the link like a password.
 
-Foxwarm listens on port 3001 on all network addresses. To change this, set `bot.httpPort` and `bot.httpHost` in `state/config.yaml` and restart:
+A new installation listens on port 3001 of this computer only: the installer writes `bot.httpHost: 127.0.0.1` into `state/config.yaml`. To let other devices connect, set `httpHost` to `0.0.0.0` and restart:
 
 ```yaml
 bot:
   httpPort: 3001
-  httpHost: 127.0.0.1   # only this computer; the default 0.0.0.0 accepts other devices
+  httpHost: 0.0.0.0   # also accept other devices; 127.0.0.1 accepts only this computer
 ```
+
+Without a `bot.httpHost` setting, Foxwarm listens on all network addresses (`0.0.0.0`). Installations created by earlier installers and the Docker image work this way; updating an installation never changes its address or its `config.yaml`. Anyone who can reach the port still needs the token.
 
 `httpHost` takes an IPv4 or IPv6 address of this computer, such as `127.0.0.1`, `::1` or one of its LAN addresses. Host names, including `localhost`, are not accepted. The desktop app ignores both settings.
 
@@ -212,6 +214,7 @@ The installer places `foxwarmctl` in the program directory:
 | Stop | `./foxwarm/foxwarmctl stop` | `.\foxwarm\foxwarmctl.cmd stop` |
 | Restart | `./foxwarm/foxwarmctl restart` | `.\foxwarm\foxwarmctl.cmd restart` |
 | Status | `./foxwarm/foxwarmctl status` | `.\foxwarm\foxwarmctl.cmd status` |
+| Print the sign-in link | `./foxwarm/foxwarmctl link` | `.\foxwarm\foxwarmctl.cmd link` |
 | Update to the latest release | `./foxwarm/foxwarmctl update` | `.\foxwarm\foxwarmctl.cmd update` |
 | Watch the console | `./foxwarm/foxwarmctl attach` | logs under `state\logs` |
 | Run in the foreground | `./foxwarm/foxwarmctl run` | `.\foxwarm\foxwarmctl.cmd run` |

@@ -37,7 +37,7 @@
     },
     {
       "name": "skill",
-      "summary": "List and load skills.",
+      "summary": "List, load, copy and run skills.",
       "copy": {
         "user": "List skills and show their instructions."
       }
@@ -329,7 +329,9 @@
     {
       "path": "session archive",
       "summary": "Archive a Session.",
+      "help": "Archiving changes only the Session list, which shows an archived Session dimmed and after the others. The Session keeps working: it still receives messages and runs its timers. `ctl session unarchive` reverses it.",
       "ingress": [
+        "model",
         "user"
       ],
       "user": {
@@ -337,21 +339,35 @@
         "session": "optional"
       },
       "target": {
-        "local": "user"
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "archive"
+        }
       },
       "params": [
         {
           "name": "sessionId",
           "type": "string",
           "kind": "positional",
-          "help": "Session to archive. Defaults to this conversation's Session."
+          "help": "Session to archive. Defaults to this Session."
         }
-      ]
+      ],
+      "copy": {
+        "user": {
+          "help": "",
+          "params": {
+            "sessionId": "Session to archive. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session unarchive",
       "summary": "Unarchive a Session.",
+      "help": "Shows an archived Session among the others in the Session list again.",
       "ingress": [
+        "model",
         "user"
       ],
       "user": {
@@ -359,16 +375,28 @@
         "session": "optional"
       },
       "target": {
-        "local": "user"
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "unarchive"
+        }
       },
       "params": [
         {
           "name": "sessionId",
           "type": "string",
           "kind": "positional",
-          "help": "Session to unarchive. Defaults to this conversation's Session."
+          "help": "Session to unarchive. Defaults to this Session."
         }
-      ]
+      ],
+      "copy": {
+        "user": {
+          "help": "",
+          "params": {
+            "sessionId": "Session to unarchive. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session view",
@@ -864,7 +892,7 @@
     {
       "path": "session model",
       "summary": "Show or switch the model and effort of this Session or a descendant Session.",
-      "help": "A change applies from the Session's next model request, including later requests of a turn already in progress, and starts a new prompt cache.",
+      "help": "A change applies from the Session's next model request, including later requests of a turn already in progress, and starts a new prompt cache. On a model with perMessageEffort, an effort-only change keeps the prompt cache, and the provider may apply it only from the Session's next input rather than within a running tool loop.",
       "ingress": [
         "model",
         "user"
@@ -2485,7 +2513,8 @@
     },
     {
       "path": "skill load",
-      "summary": "Read a skill's instructions and resource list.",
+      "summary": "Read a skill's instructions and resource list, or one of its resources.",
+      "help": "Resources are read from wherever the skill is installed, so this works from any Node. Large files are shown as excerpts with their size; give a line range to read a section.",
       "ingress": [
         "model",
         "user"
@@ -2504,6 +2533,33 @@
           "kind": "positional",
           "help": "Skill to read.",
           "required": true
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "kind": "positional",
+          "ingress": [
+            "model"
+          ],
+          "help": "Resource to read, relative to the skill directory, such as references/guide.md. A directory lists its files. Omit to read the skill's instructions and resource list."
+        },
+        {
+          "name": "startLine",
+          "type": "number",
+          "kind": "flag",
+          "ingress": [
+            "model"
+          ],
+          "help": "First line of the resource to read, counting from 1."
+        },
+        {
+          "name": "endLine",
+          "type": "number",
+          "kind": "flag",
+          "ingress": [
+            "model"
+          ],
+          "help": "Last line of the resource to read."
         },
         {
           "name": "agentName",
@@ -2530,6 +2586,116 @@
           "ingress": [
             "user"
           ]
+        }
+      ]
+    },
+    {
+      "path": "skill copy",
+      "summary": "Copy a skill or some of its files to a Node.",
+      "help": "Copies from wherever the skill is installed, so it works from any Node. Give --path to copy one resource file or directory; omit it to copy the whole skill. The destination is checked like any write on that Node. Run copied scripts there with exec.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "skill",
+        "fixed": {
+          "action": "copy"
+        }
+      },
+      "params": [
+        {
+          "name": "skillName",
+          "type": "string",
+          "kind": "positional",
+          "help": "Skill to copy from.",
+          "required": true
+        },
+        {
+          "name": "targetPath",
+          "type": "string",
+          "kind": "positional",
+          "help": "Destination: a file when --path names a file, otherwise a directory that receives the files. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes).",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "kind": "flag",
+          "help": "Resource file or directory to copy, relative to the skill directory. Omit to copy the whole skill."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node that receives the files. Defaults to the current Node."
+        },
+        {
+          "name": "overwrite",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Allow replacement of existing destination files. Defaults to false."
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent whose available skills to use. Defaults to this Session's Agent."
+        }
+      ]
+    },
+    {
+      "path": "skill run",
+      "summary": "Run a skill's entry script without loading the skill.",
+      "help": "Without --script, only a skill listed with a `<run>` element can be run; `ctl skill run <name> --help` shows what running it does and the arguments --args takes. --script runs another ToolScript file of the skill instead, and its --args are passed unchecked. Either way it runs as an ordinary ToolScript run: it returns the script's result, pauses for `continue_script` at its time budget, and each tool call it makes is checked as yours.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "run_skill"
+      },
+      "params": [
+        {
+          "name": "skillName",
+          "type": "string",
+          "kind": "positional",
+          "help": "Skill to run.",
+          "required": true
+        },
+        {
+          "name": "args",
+          "type": "object",
+          "kind": "flag",
+          "help": "Arguments for the skill, usually @args. `ctl skill run <name> --help` lists them."
+        },
+        {
+          "name": "mode",
+          "type": "enum",
+          "values": [
+            "foreground",
+            "background"
+          ],
+          "kind": "flag",
+          "help": "Run mode. Defaults to the skill's own mode for its entry, otherwise foreground."
+        },
+        {
+          "name": "timeoutSecs",
+          "type": "number",
+          "kind": "flag",
+          "help": "Time budget in seconds, as for run_script. Defaults to the skill's own budget for its entry, otherwise 30."
+        },
+        {
+          "name": "script",
+          "type": "string",
+          "kind": "flag",
+          "help": "ToolScript file of the skill to run instead of its entry, relative to the skill directory, such as examples/report.py."
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent whose available skills to use. Defaults to this Session's Agent."
         }
       ]
     },
@@ -3954,7 +4120,7 @@
     {
       "path": "tool call",
       "summary": "Call an MCP or Node tool by its tool ID.",
-      "help": "Give a <tool-id> from `ctl tool search`, or identify the tool with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. `ctl tool call <tool-id> --help` shows the tool's description and arguments. The target tool's normal checks apply.",
+      "help": "Give a <tool-id> from `ctl tool search`, or identify the tool with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. `ctl tool call <tool-id> --help` shows the tool's description and arguments. The target tool's normal checks apply. In ToolScript, call a tool ID directly with `call_tool(\"<tool-id>\", args)`.",
       "ingress": [
         "model",
         "external"

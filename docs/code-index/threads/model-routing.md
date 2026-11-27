@@ -26,7 +26,7 @@ A virtual entry uses `targets`, containing model lookup keys that resolve strict
 
 Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `maxOutput`, `providerImageOutputFormat`, `imageInput`, `effort`, `historyReasoningField`, `asyncCompact`, `idleCompactMinutes`, `idleCompactMinContextPercent`, or `disallowEmptyResponse`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
 
-The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object also accepts `imageInput` and `retryIntervalsMs`. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/src-config.md#model-resolution).
+The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object also accepts `imageInput` and `retryIntervalsMs`. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/model-configuration.md).
 
 Concrete leaves also resolve the optional [idle compaction](./context-compaction.md#d-context-idle-compaction) settings from model/provider/`defaults` scopes; the idle scheduler checks the currently selected concrete leaf.
 
@@ -110,17 +110,11 @@ The [response-usability behavior](../behaviors/models-and-requests.md#routing-an
 - Model-facing `create_child_session` and `create_session` schemas expose optional strict `forceModel: { modelId?, effort? }` for visibly intentional current-session overrides and, in the C# backend, an advisory `model: { modelId?, effort? }` with the same shape ([resolution](../behaviors/sessions-and-agents.md#prospective-model-and-effort-are-a-pair)). Omission or `{}` keeps existing inheritance/default behavior, while removed top-level keys are rejected. `set_session_child_model` sets or clears future-child model and effort defaults without introducing another overlapping settings tool. [2026-11-19, user] The model may also switch the current model and effort of its own Session or a descendant Session: `session model` gained model ingress through the hidden `set_session_model` builtin. It uses the same settings mutation and normalization as `/session model` (configured keys only, `default` clears the model, `default`/`unset` clears effort), refuses other Sessions in the handler, and is authorized as `session.control(settings)` of the target, so policy can only narrow it. A self switch is adopted at the next request of the running turn through the existing live-selection notice. Shared session status reports raw/effective current and child effort.
 - The one-shot model CLI lists and accepts virtual keys while reusing production routing.
 - Raw model readers that need concrete credentials, such as the bundled web-search helper, skip virtual entries and inspect concrete providers only.
-- The active models file follows [D-config-models-data-path](../units/src-config.md#d-config-models-data-path); the packaged template is only a missing-file read fallback.
+- The active models file follows [D-config-models-data-path](../units/model-configuration.md#d-config-models-data-path); the packaged template is only a missing-file read fallback.
 
 ## Modules and units
 
-- [LLM module](../modules/llm.md)
-- [src-config](../units/src-config.md)
-- [src-model-routing](../units/src-model-routing.md)
-- [src-llm](../units/src-llm.md)
-- [src-channels-webui](../units/src-channels-webui.md)
 - [model-cli](../units/model-cli.md)
-- [src-skills](../units/src-skills.md)
 - Prefix lifecycle: [D-lifecycle-prefix-lineage](./session-lifecycle.md#d-lifecycle-prefix-lineage)
 - Retry presentation: [D-pipeline-display-only-retries](./message-processing-pipeline.md#d-pipeline-display-only-retries)
 
@@ -212,4 +206,4 @@ Configured selection surfaces retain the virtual key. Successful results and pro
 
 The comparison is per physical attempt and never uses the configured virtual key, session selection, provider type, upstream aliases, or inferred legacy identity. Canonical session history remains unchanged, and internal message metadata is not serialized to providers. Ordered OpenAI Responses hosted output items and URL annotations use the same captured compatibility rule: an incompatible destination drops only those provider-specific artifacts while retaining ordinary assistant text and tool history.
 
-For a history-compatible Chat Completions message, the destination leaf's current `historyReasoningField` selects exactly one wire key, `reasoning_content` by default or `reasoning` when configured. The field name is provider configuration rather than persisted message metadata, is not inferred from response spelling, and changes the route configuration fingerprint. Canonical configuration ownership: [D-config-chat-history-reasoning-field](../units/src-config.md#d-config-chat-history-reasoning-field).
+For a history-compatible Chat Completions message, the destination leaf's current `historyReasoningField` selects exactly one wire key, `reasoning_content` by default or `reasoning` when configured. The field name is provider configuration rather than persisted message metadata, is not inferred from response spelling, and changes the route configuration fingerprint. Canonical configuration ownership: [D-config-chat-history-reasoning-field](../units/model-configuration.md#d-config-chat-history-reasoning-field).

@@ -31,23 +31,18 @@ import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference,
 import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
-import { useChatPreferences } from './chatPreferences'
+import type { TerminalListOptions } from './components/TerminalList'
+import { parseTerminalRegistry, requestTerminalKill, terminalKillConfirmation, type TerminalRegistryRecord } from './terminalRegistry'
+import { reloadInstallationChatDefaults, useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
+import { FoxwarmMark } from './components/FoxwarmMark'
 import { FoxPaneLoader } from './components/FoxLoaders'
+import type { SetupTab } from './components/SetupView'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
 // systemSection carries a section route (#nodes, #timers, #webhooks, #usage, #activity) into the System tab's section.
 type RouteState = { view: 'tab'; tabId: string | null; systemSection?: SystemSection }
-
-type TerminalRegistryRecord = {
-  id: string
-  cwd: string
-  nodeId: string
-  shell: string
-  pid: number
-  createdAt: number
-}
 
 type WebUiSettings = {
   instanceName: string
@@ -84,6 +79,7 @@ const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
+const TERMINAL_REGISTRY_POLL_MS = 30_000
 const mainHost = document.querySelector('meta[name="foxwarm-host"]')?.getAttribute('content') === 'dotnet'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
 
@@ -491,6 +487,7 @@ function App() {
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
+  const [setupTabRequest, setSetupTabRequest] = useState<{ tab: SetupTab; nonce: number } | null>(null)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   // Under a window frame every pane's tab strip is a title row, so a sole tab keeps it.
@@ -554,11 +551,11 @@ function App() {
   const pendingRouteTabIdRef = useRef<string | null>(null)
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
   const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
-  const movedOutTerminalIdsRef = useRef<Set<string>>(new Set())
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const allTabs = useMemo(() => Object.values(tabsById), [tabsById])
+  const openTerminalIds = useMemo(() => new Set(allTabs.flatMap((tab) => tab.type === 'terminal' && tab.terminalId ? [tab.terminalId] : [])), [allTabs])
   const paneNodes = useMemo(() => getPaneNodes(root), [root])
   const paneIds = useMemo(() => getPaneIds(root), [root])
   const flattenedTabIds = useMemo(() => getFlattenedTabIds(root), [root])
@@ -721,8 +718,15 @@ function App() {
   }
 
   const setupOobeRef = useRef(false)
-  // First-run Setup creates the default `main` Session with a welcome. Place it next to
-  // Setup so closing Setup lands in the conversation instead of an empty pane.
+  // A first-run save receipt names the welcome Session; it opens once status confirms that setup is done.
+  const firstRunReceiptRef = useRef<{ sessionId: string | null } | null>(null)
+  const [welcomeSessionId, setWelcomeSessionId] = useState<string | null>(null)
+  const handleModelsSaved = useCallback((receipt: { firstSessionId?: unknown }) => {
+    if (!setupOobeRef.current || !('firstSessionId' in receipt)) return
+    firstRunReceiptRef.current = { sessionId: typeof receipt.firstSessionId === 'string' && receipt.firstSessionId ? receipt.firstSessionId : null }
+  }, [])
+  // A first-run save without a welcome Session in its receipt: if `main` exists anyway, place
+  // it next to Setup so closing Setup lands in a conversation instead of an empty pane.
   const openFirstRunSession = async () => {
     try {
       const res = await fetch(`${API_BASE_PATH}/sessions/main/state`)
@@ -744,7 +748,17 @@ function App() {
       const completedFirstRun = setupOobeRef.current && !isOobe
       setupOobeRef.current = isOobe
       setSetupOobe(isOobe)
-      if (completedFirstRun) void openFirstRunSession()
+      if (completedFirstRun) {
+        void reloadInstallationChatDefaults()
+        const welcome = firstRunReceiptRef.current?.sessionId
+        firstRunReceiptRef.current = null
+        if (welcome) setWelcomeSessionId(welcome)
+        else {
+          // No welcome was created: ordinary Setup takes over, still on Models.
+          setFocusModelsRequest((current) => current + 1)
+          void openFirstRunSession()
+        }
+      }
       if (isOobe && route.tabId !== SETUP_TAB_ID) {
         setRoute({ view: 'tab', tabId: SETUP_TAB_ID })
         window.location.hash = SETUP_HASH
@@ -754,19 +768,51 @@ function App() {
     }
   }
 
+  // After the first save, the welcome Session replaces Setup: the user lands in the conversation.
+  useEffect(() => {
+    if (setupOobe || !welcomeSessionId) return
+    setWelcomeSessionId(null)
+    const existing = Object.values(useWorkbenchStore.getState().tabsById).find(tab => isChatTab(tab) && tab.sessionId === welcomeSessionId)
+    const tab = existing || makeChatTab(welcomeSessionId, welcomeSessionId)
+    upsertTab(isChatTab(tab) ? { ...tab, preview: false } : tab, { activate: true })
+    if (useWorkbenchStore.getState().tabsById[SETUP_TAB_ID]) {
+      if (currentRouteTabIdRef.current === SETUP_TAB_ID) closingRouteTabIdsRef.current.add(SETUP_TAB_ID)
+      removeTab(SETUP_TAB_ID)
+    }
+    navigateToTab(tab.id)
+    void fetchSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setupOobe, welcomeSessionId])
+
+  // Lifecycle refreshes and the background poll can overlap; only the latest request applies.
+  const terminalFetchSequence = useRef(0)
   const fetchActiveTerminals = async () => {
+    const sequence = ++terminalFetchSequence.current
     try {
       const res = await fetch(`${API_BASE_PATH}/terminals`)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         throw new Error(data.error || 'Failed to fetch terminals')
       }
-      setActiveTerminals(Array.isArray(data.terminals) ? data.terminals : [])
+      if (sequence === terminalFetchSequence.current) setActiveTerminals(parseTerminalRegistry(data))
     } catch (error) {
       console.error('Failed to fetch terminals:', error)
-      setActiveTerminals([])
+      if (sequence === terminalFetchSequence.current) setActiveTerminals(current => current ?? [])
     }
   }
+
+  // This window's own lifecycle events refresh the registry immediately. Terminals started,
+  // killed or exited elsewhere (another window, a detached shell) have no event source, so a
+  // modest poll keeps the sidebar count current while the page is visible.
+  useEffect(() => {
+    const refreshVisible = () => { if (document.visibilityState === 'visible') void fetchActiveTerminals() }
+    const timer = window.setInterval(refreshVisible, TERMINAL_REGISTRY_POLL_MS)
+    document.addEventListener('visibilitychange', refreshVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshVisible)
+    }
+  }, [])
 
   const fetchNodeTargets = async () => {
     try {
@@ -807,61 +853,23 @@ function App() {
     })
   }, [allTabs, sessions])
 
+  // Tabs are views of terminals: the registry refreshes their titles, but neither adds a tab
+  // for every running terminal nor removes a tab whose terminal ended (the view shows that).
   useEffect(() => {
     if (!activeTerminals) return
-
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
-    const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
-    const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
-
-    terminalTabs.forEach((tab) => {
-      if (!tab.terminalId) return
+    allTabs.forEach((tab) => {
+      if (tab.type !== 'terminal' || !tab.terminalId) return
       const terminal = activeTerminalMap.get(tab.terminalId)
-      if (!terminal) {
-        if (tab.createMode === 'new') {
-          return
-        }
-        removeTab(tab.id)
-        return
-      }
-
+      if (!terminal) return
       const nextTitle = formatTerminalTabTitle(terminal.cwd, terminal.nodeId)
-      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId || tab.createMode) {
+      if (tab.title !== nextTitle || tab.cwd !== terminal.cwd || tab.nodeId !== terminal.nodeId) {
         updateTab(tab.id, (current) => current.type === 'terminal'
-          ? {
-              ...current,
-              title: nextTitle,
-              cwd: terminal.cwd,
-              nodeId: terminal.nodeId,
-              terminalId: terminal.id,
-              createMode: undefined,
-            }
+          ? { ...current, title: nextTitle, cwd: terminal.cwd, nodeId: terminal.nodeId }
           : current)
       }
     })
-
-    activeTerminals.forEach((terminal) => {
-      if (movedOutTerminalIdsRef.current.has(terminal.id)) {
-        return
-      }
-      const existing = terminalTabs.find((tab) => tab.terminalId === terminal.id)
-      if (existing) {
-        return
-      }
-
-      const matchingDraft = terminalDraftTabs.find((tab) => (
-        (tab.nodeId || 'master') === terminal.nodeId
-        && (tab.cwd || '/') === terminal.cwd
-      ))
-
-      if (matchingDraft) {
-        return
-      }
-
-      upsertTab(makeTerminalTabFromRecord(terminal), { activate: false })
-    })
-
-  }, [activeTerminals, allTabs, removeTab, upsertTab, updateTab])
+  }, [activeTerminals, allTabs, updateTab])
 
   useEffect(() => {
     const trimmedInstanceName = webUiSettings.instanceName.trim()
@@ -1171,15 +1179,42 @@ function App() {
     return paneTabs[0]
   }
 
-  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
-    if (options?.terminalId) {
-      const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
-      const terminal = activeTerminals?.find((item) => item.id === options.terminalId)
-      const tab = existing || (terminal ? makeTerminalTabFromRecord(terminal) : null)
-      if (tab) {
-        upsertTab(tab, { activate: true })
+  /** Places a new terminal tab: in the pane below the source, as a bottom panel of a tall source pane, or in the source pane. */
+  const placeTerminalTab = (tab: WorkbenchTab, sourcePaneId: string | null, preferPanel?: boolean) => {
+    if (!isMobile && sourcePaneId) {
+      const paneBelow = findPaneBelow(root, sourcePaneId)
+      if (paneBelow) {
+        upsertTab(tab, { paneId: paneBelow.id, activate: true })
         navigateToTab(tab.id)
+        return
       }
+
+      if (preferPanel || getPaneHeight(sourcePaneId) > 700) {
+        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(sourcePaneId)) * 100))
+        const createdPaneId = splitPaneWithNewTab(sourcePaneId, tab, 'bottom', preferPanel ? [100 - panelShare, panelShare] : undefined)
+        if (createdPaneId) {
+          navigateToTab(tab.id)
+          return
+        }
+      }
+    }
+
+    upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
+    navigateToTab(tab.id)
+  }
+
+  const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
+    const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
+
+    if (options?.terminalId) {
+      // One terminal has at most one tab: opening it again focuses that tab.
+      const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
+      if (existing) {
+        navigateToTab(existing.id)
+        return
+      }
+      const terminal = activeTerminals?.find((item) => item.id === options.terminalId)
+      if (terminal) placeTerminalTab(makeTerminalTabFromRecord(terminal), sourcePaneId, options.preferPanel)
       return
     }
 
@@ -1187,36 +1222,44 @@ function App() {
     const nodeId = target.nodeId
     const path = target.cwd
 
-    const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
-
     if (!isMobile && sourcePaneId) {
       const paneBelow = findPaneBelow(root, sourcePaneId)
-      if (paneBelow) {
-        const existingBottomTerminal = getTerminalTabInPane(paneBelow.id, { nodeId, path })
-        if (existingBottomTerminal) {
-          navigateToTab(existingBottomTerminal.id)
-          return
-        }
-        const draftTab = makeTerminalDraftTab(nodeId, path)
-        upsertTab(draftTab, { paneId: paneBelow.id, activate: true })
-        navigateToTab(draftTab.id)
+      const existingBottomTerminal = paneBelow ? getTerminalTabInPane(paneBelow.id, { nodeId, path }) : null
+      if (existingBottomTerminal) {
+        navigateToTab(existingBottomTerminal.id)
         return
-      }
-
-      if (options?.preferPanel || getPaneHeight(sourcePaneId) > 700) {
-        const draftTab = makeTerminalDraftTab(nodeId, path)
-        const panelShare = Math.min(50, Math.max(25, 260 / Math.max(1, getPaneHeight(sourcePaneId)) * 100))
-        const createdPaneId = splitPaneWithNewTab(sourcePaneId, draftTab, 'bottom', options?.preferPanel ? [100 - panelShare, panelShare] : undefined)
-        if (createdPaneId) {
-          navigateToTab(draftTab.id)
-          return
-        }
       }
     }
 
-    const tab = makeTerminalDraftTab(nodeId, path)
-    upsertTab(tab, { paneId: sourcePaneId || undefined, activate: true })
-    navigateToTab(tab.id)
+    placeTerminalTab(makeTerminalDraftTab(nodeId, path), sourcePaneId, options?.preferPanel)
+  }
+
+  /** Kills a terminal's process after confirmation and closes the tab that showed it. */
+  const killTerminal = async (terminal: { id: string; cwd?: string; nodeId?: string }) => {
+    if (!window.confirm(terminalKillConfirmation(terminal))) return
+    try {
+      await requestTerminalKill(terminal.id)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+      return
+    }
+    closeTerminalTabsFor(terminal.id)
+    void fetchActiveTerminals()
+  }
+
+  const terminalListOptions: TerminalListOptions = {
+    terminals: activeTerminals,
+    openTerminalIds,
+    onOpen: (terminal) => openTerminalTab({ terminalId: terminal.id }),
+    onKill: (terminal) => { void killTerminal(terminal) },
+    onRefresh: () => { void fetchActiveTerminals() },
+  }
+
+  const closeTerminalTabsFor = (terminalId: string) => {
+    const current = useWorkbenchStore.getState().tabsById
+    Object.values(current).forEach((tab) => {
+      if (tab.type === 'terminal' && tab.terminalId === terminalId) void closeWorkbenchTab(tab.id)
+    })
   }
 
   const statusTerminalTarget = normalizeTerminalTarget(focusedActiveTab?.type === 'terminal'
@@ -1254,7 +1297,12 @@ function App() {
       }
       return
     }
-    openTerminalTab({ nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd, sourcePaneId: focusedPaneId || undefined, preferPanel: true })
+    // The panel shows a detached terminal of the same target again before starting another.
+    const detached = activeTerminals?.find((terminal) => (
+      !allTabs.some((tab) => tab.type === 'terminal' && tab.terminalId === terminal.id)
+      && findTerminalForTarget([terminal], statusTerminalTarget)
+    ))
+    openTerminalTab({ terminalId: detached?.id, nodeId: statusTerminalTarget.nodeId, path: statusTerminalTarget.cwd, sourcePaneId: focusedPaneId || undefined, preferPanel: true })
   }
 
   const closeWorkbenchTab = async (tabId: string, options?: { deferRoute?: boolean }) => {
@@ -1267,15 +1315,6 @@ function App() {
     const paneBeforeClose = findPaneContainingTab(stateBeforeClose.root, tabId)
     const wasFocusedActiveTab = paneBeforeClose?.activeTabId === tabId
       && stateBeforeClose.focusedPaneId === paneBeforeClose.id
-
-    if (targetTab?.type === 'terminal' && targetTab.terminalId) {
-      try {
-        await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(targetTab.terminalId)}`, { method: 'DELETE' })
-      } catch (error) {
-        console.error('Failed to close terminal:', error)
-      }
-      await fetchActiveTerminals()
-    }
 
     if (targetTab?.type === 'vscode') {
       closeCodeFrame(targetTab.nodeId)
@@ -1358,9 +1397,6 @@ function App() {
     if (targetTab.type === 'vscode') {
       closeCodeFrame(targetTab.nodeId)
     }
-    if (targetTab.type === 'terminal' && targetTab.terminalId) {
-      movedOutTerminalIdsRef.current.add(targetTab.terminalId)
-    }
     if (currentRouteTabIdRef.current === tabId) {
       closingRouteTabIdsRef.current.add(tabId)
     }
@@ -1442,11 +1478,10 @@ function App() {
   }
 
   const handleTerminalReady = (draftTabId: string, terminal: { id: string; cwd: string; nodeId?: string }) => {
-    // Keep createMode='new' until activeTerminals reconciliation sees this terminal id,
-    // so the missing-terminal cleanup path does not immediately remove the just-opened tab.
     updateTab(draftTabId, (current) => current.type === 'terminal'
       ? {
           ...current,
+          createMode: undefined,
           terminalId: terminal.id,
           nodeId: terminal.nodeId || 'master',
           cwd: terminal.cwd,
@@ -1476,11 +1511,10 @@ function App() {
     window.addEventListener('mouseup', handleMouseUp)
   }
 
-  const handleTerminalClosed = (terminalId: string) => {
-    const target = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === terminalId)
-    if (target) {
-      void closeWorkbenchTab(target.id)
-    }
+  // A shell that exits normally (`exit`, Ctrl+D) closes its tab; any other ending stays
+  // visible in the tab with its exit code.
+  const handleTerminalClosed = (terminalId: string, exitCode: number | null) => {
+    if (exitCode === 0) closeTerminalTabsFor(terminalId)
     void fetchActiveTerminals()
   }
 
@@ -1592,8 +1626,10 @@ function App() {
     openAgentsView()
   }
 
-  const openSetupView = (options?: { focusModels?: boolean }) => {
+  const openSetupView = (options?: { focusModels?: boolean; tab?: SetupTab }) => {
     if (options?.focusModels) setFocusModelsRequest((current) => current + 1)
+    const requestedTab = options?.tab
+    if (requestedTab) setSetupTabRequest(current => ({ tab: requestedTab, nonce: (current?.nonce || 0) + 1 }))
     const tab = tabsById[SETUP_TAB_ID] || makeSetupTab()
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
@@ -1751,6 +1787,7 @@ function App() {
             agentRequest={agentSettingsRequest}
             sessionsRequest={sessionsFilterRequest}
             usageRequest={usageRequest}
+            onOpenSetupAuthorization={() => openSetupView({ tab: 'authorization' })}
             onOpenAgentMemory={(memoryRoot: string, filePath?: string) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
@@ -1768,7 +1805,9 @@ function App() {
             forced={setupOobe}
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
+            onModelsSaved={handleModelsSaved}
             focusModelsRequest={focusModelsRequest}
+            tabRequest={setupTabRequest}
             onFocusModelsRequestHandled={handleFocusModelsRequestHandled}
             webUiSettings={webUiSettings}
             onInstanceNameChange={saveWebUiInstanceName}
@@ -1794,6 +1833,7 @@ function App() {
           onSessionsChanged={() => { void fetchActiveTerminals() }}
           onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
           onTerminalClosed={handleTerminalClosed}
+          onTerminalKilled={(terminalId) => { closeTerminalTabsFor(terminalId); void fetchActiveTerminals() }}
         />
       </Suspense>
     )
@@ -2167,6 +2207,31 @@ function App() {
     </DndContext>
   )
 
+  // First run is a single step: connecting a model. Nothing else of the workbench is shown,
+  // so nothing can be started before the first save creates the welcome Session.
+  if (setupOobe) {
+    const firstRun = (
+      <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
+        <SetupView
+          forced
+          showBrand={!windowFramed}
+          onSetupChanged={() => { void fetchSetupStatus() }}
+          onModelsSaved={handleModelsSaved}
+        />
+      </Suspense>
+    )
+    if (windowFramed) {
+      return <div data-first-run-surface data-foxwarm-popup-framed="" className="foxwarm-fixed-viewport-shell flex h-full min-h-0 flex-col overflow-hidden">
+        <header className="foxwarm-popup-title-row" data-frame-row="column" data-frame-drag>
+          <FoxwarmMark className="h-4 w-4 shrink-0" />
+          <span className="foxwarm-popup-title">Foxwarm</span>
+        </header>
+        <div className="foxwarm-popup-card min-h-0 flex-1 overflow-hidden bg-fw-canvas">{firstRun}</div>
+      </div>
+    }
+    return <div data-first-run-surface className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">{firstRun}</div>
+  }
+
   if (isMobile) {
     const mobilePaneProps = mobilePaneId ? getPaneProps(mobilePaneId) : undefined
     const showHome = showSessionList || !mobilePaneProps
@@ -2198,6 +2263,7 @@ function App() {
           onCodePathChange={updateCodePath}
           onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
           onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
+          terminalList={terminalListOptions}
           onCreateAgent={handleCreateAgent}
           onCreateSession={handleCreateSession}
           idleNotificationModes={idleNotificationModes}
@@ -2246,6 +2312,7 @@ function App() {
             onCodePathChange={updateCodePath}
             onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
             onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
+            terminalList={terminalListOptions}
             onCreateAgent={handleCreateAgent}
             onCreateSession={handleCreateSession}
             onToggleCollapsed={() => setSidebarCollapsed(true)}
@@ -2254,6 +2321,7 @@ function App() {
             unreadSessionIds={unreadSessionIds}
             onToggleIdleNotificationMode={toggleIdleNotificationMode}
             bounded={boundedPresentation}
+            branding={webUiSettings}
           />
           <div
             className="foxwarm-sidebar-resize absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"

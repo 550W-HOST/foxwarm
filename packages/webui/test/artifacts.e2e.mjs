@@ -7,10 +7,20 @@ import {readFile,readdir,mkdir,mkdtemp,rm} from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {createRequire} from 'node:module'
+import {execFile} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
 import {build} from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 const require=createRequire(import.meta.url)
-const {prepareArtifact}=require('../../../lib/artifacts/prepare.js')
+// React documents are compiled by the same artifact runtime managed Main runs for publication.
+const prepareArtifact=document=>new Promise((resolve,reject)=>{
+ const child=execFile(process.execPath,[fileURLToPath(new URL('../../artifact-runtime/dist/managedPrepare.js',import.meta.url))],{maxBuffer:8*1024*1024},(error,stdout)=>{
+  let value;try{value=JSON.parse(stdout)}catch{return reject(error||new Error('Invalid artifact runtime output'))}
+  if(error||typeof value.compiled!=='string')return reject(new Error(value.error||String(error)))
+  resolve({compiled:value.compiled})
+ })
+ child.stdin.end(JSON.stringify({action:'react',document}))
+})
 let server,browser,url
 const records=new Map()
 const receipt=(id,type,title)=>({protocolVersion:1,artifactId:`art_${id.repeat(32)}`,revision:1,sessionId:'demo/main',type,title})
@@ -35,7 +45,7 @@ before(async()=>{
  records.set('hostile',{receipt:refs[1],document:hostile,...await prepareArtifact(hostile)})
  const css=(await readdir(new URL('../dist/assets/',import.meta.url))).find(n=>/^index-.*\.css$/.test(n))
  const styles=await readFile(new URL('../dist/assets/'+css,import.meta.url),'utf8')
- const bundle=await build({stdin:{contents:`import React,{useState}from'react';import{createRoot}from'react-dom/client';import ChatTimeline from './src/components/ChatTimeline';import{initializeThemeRuntime}from'./src/theme';initializeThemeRuntime();const initial=${JSON.stringify(messages)};function Fixture(){const [messages,set]=useState(initial),[view,setView]=useState('conversation');window.fixture={setView,setMessages:set,inline:()=>set([{role:'user',parts:[{text:'Inline examples'}],__meta:{seq:10}},{role:'tool',parts:[{functionResponse:{name:'artifact',response:{preparedArtifact:${JSON.stringify(imageRef)},marker:${JSON.stringify(marker(imageRef))}}}}],__meta:{seq:11}},{role:'model',parts:[{text:${JSON.stringify(inlineText)}}],__meta:{seq:12}}]),finish:()=>set([...initial.slice(0,-1),{role:'model',parts:[{text:'Updated final text.'}],__meta:{seq:6}}])};return <ChatTimeline sessionId="demo/main" messages={messages} historyMessages={messages} timelineView={view} showUsageBadge={false} showTimeDividers={false} isMobile={innerWidth<768}/>};createRoot(document.getElementById('root')).render(<Fixture/>);`,loader:'tsx',resolveDir:new URL('..',import.meta.url).pathname},bundle:true,platform:'browser',format:'esm',write:false,jsx:'automatic'})
+ const bundle=await build({stdin:{contents:`import React,{useState}from'react';import{createRoot}from'react-dom/client';import ChatTimeline from './src/components/ChatTimeline';import{initializeThemeRuntime}from'./src/theme';import{initializeWindowFrame}from'./src/windowFrame';initializeThemeRuntime();initializeWindowFrame();const initial=${JSON.stringify(messages)};function Fixture(){const [messages,set]=useState(initial),[view,setView]=useState('conversation');window.fixture={setView,setMessages:set,inline:()=>set([{role:'user',parts:[{text:'Inline examples'}],__meta:{seq:10}},{role:'tool',parts:[{functionResponse:{name:'artifact',response:{preparedArtifact:${JSON.stringify(imageRef)},marker:${JSON.stringify(marker(imageRef))}}}}],__meta:{seq:11}},{role:'model',parts:[{text:${JSON.stringify(inlineText)}}],__meta:{seq:12}}]),finish:()=>set([...initial.slice(0,-1),{role:'model',parts:[{text:'Updated final text.'}],__meta:{seq:6}}])};return <ChatTimeline sessionId="demo/main" messages={messages} historyMessages={messages} timelineView={view} showUsageBadge={false} showTimeDividers={false} isMobile={innerWidth<768}/>};createRoot(document.getElementById('root')).render(<Fixture/>);`,loader:'tsx',resolveDir:new URL('..',import.meta.url).pathname},bundle:true,platform:'browser',format:'esm',write:false,jsx:'automatic'})
  server=createServer((req,res)=>{
   if(req.url==='/nested/fixture.css'){res.setHeader('Content-Type','text/css');return res.end(styles)}
   if(req.url==='/nested/fixture.js'){res.setHeader('Content-Type','text/javascript');return res.end(bundle.outputFiles[0].text)}
@@ -175,4 +185,40 @@ test('user/tool/fenced references are inert and a split stream marker mounts onl
   await page.evaluate(m=>window.fixture.setMessages([{role:'model',parts:[{text:'Before.\n\n'+m+'\n\nAfter.'}],__meta:{seq:23}}]),marker(refs[0]));await page.waitForSelector('.artifact-chart-plot svg')
   assert.equal((await page.$$('[data-artifact-id]')).length,1)
  }finally{await page.close()}
+})
+
+test('under a Desktop frame the expanded artifact is a full-window layer whose header is the title row',async()=>{
+ const zone=(host,width)=>[{left:0,top:0,right:host.left,bottom:host.top},{left:width-host.right,top:0,right:width,bottom:host.top}].filter(box=>box.right>box.left)
+ const hit=(a,b)=>Math.min(a.right,b.right)-Math.max(a.left,b.left)>=1&&Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>=1
+ for(const [host,width] of [[{platform:'windows',left:0,right:144,top:48},1200],[{platform:'macos',left:78,right:0,top:38},1200],[{platform:'windows',left:0,right:144,top:48},700]]){
+  const label=`${host.platform} ${width}px`
+  const page=await browser.newPage();await page.setViewport({width,height:900})
+  await page.evaluateOnNewDocument(host=>{window.__frameMessages=[];window.chrome={webview:{postMessage:message=>window.__frameMessages.push(JSON.parse(JSON.stringify(message)))}};window.foxwarmFrame=host},host)
+  try{
+   await page.goto(url);await page.waitForSelector('.artifact-chart-plot svg')
+   const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,50)))))
+   await settle()
+   const before=await page.evaluate(()=>window.__frameMessages.at(-1)?.regions??null)
+   await page.click('.artifact-view [aria-label="Expand artifact"]');await settle()
+   const state=await page.evaluate(()=>{
+    const box=el=>{const r=el.getBoundingClientRect();return{left:r.left,top:r.top,right:r.right,bottom:r.bottom}}
+    const dialog=document.querySelector('dialog:modal'),header=dialog.querySelector('header')
+    return{dialog:box(dialog),header:box(header),title:box(header.querySelector('h3')),body:box(dialog.querySelector('.artifact-body')),buttons:[...header.querySelectorAll('button')].map(button=>({name:button.getAttribute('aria-label'),...box(button)})),regions:window.__frameMessages.at(-1).regions}
+   })
+   assert.deepEqual([state.dialog.left,state.dialog.top,state.dialog.right,state.dialog.bottom],[0,0,width,900],`${label}: the expanded view fills the window`)
+   assert.deepEqual([state.header.top,state.header.bottom],[0,Math.max(host.top,36)],`${label}: its header is the title row`)
+   for(const control of[state.title,...state.buttons])for(const z of zone(host,width))assert.ok(!hit(control,z),`${label}: ${control.name||'title'} is under the window controls`)
+   assert.ok(state.title.left>=(host.left?host.left+6:14),`${label}: the title starts a gap after the controls`)
+   assert.ok(state.regions.length>0)
+   for(const region of state.regions){
+    const [x,y,w,h]=region
+    assert.ok(y+h<=state.header.bottom,`${label}: region ${region} is outside the artifact's title row`)
+    for(const button of state.buttons)assert.ok(!hit({left:x,top:y,right:x+w,bottom:y+h},button),`${label}: region ${region} covers ${button.name}`)
+   }
+   assert.deepEqual([state.body.top,state.body.left,width-state.body.right,900-state.body.bottom],[state.header.bottom,8,8,8],`${label}: the body is a card below the title row`)
+   if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_DIR+`/artifact-expanded-${host.platform}-${width}.png`})}
+   await page.keyboard.press('Escape');await settle()
+   assert.deepEqual(await page.evaluate(()=>window.__frameMessages.at(-1)?.regions??null),before,`${label}: collapsing restores the page's regions`)
+  }finally{await page.close()}
+ }
 })

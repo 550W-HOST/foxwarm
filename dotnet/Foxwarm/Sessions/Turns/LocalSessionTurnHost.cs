@@ -16,6 +16,7 @@ public sealed partial class LocalSessionTurnHost
     private readonly int maxToolIterations;
     private readonly Func<long> clock;
     private readonly Func<string?>? parentSessionResolver;
+    private readonly Func<string, string, Task>? childReportMissing;
     private int releaseCommits;
     private readonly Action? assertCanContinue;
     private readonly Func<bool>? closing;
@@ -45,7 +46,8 @@ public sealed partial class LocalSessionTurnHost
         Func<ChatResult, Func<Func<Task>, Task>, CancellationToken, Task>? beforeContinuation =
             null,
         Action? assertCanContinue = null,
-        Func<bool>? closing = null
+        Func<bool>? closing = null,
+        Func<string, string, Task>? childReportMissing = null
     )
     {
         this.entry = entry;
@@ -63,6 +65,7 @@ public sealed partial class LocalSessionTurnHost
         this.beforeContinuation = beforeContinuation;
         this.assertCanContinue = assertCanContinue;
         this.closing = closing;
+        this.childReportMissing = childReportMissing;
     }
 
     internal Task SafePointAsync() => safePoint?.Invoke() ?? Task.CompletedTask;
@@ -255,10 +258,7 @@ public sealed partial class LocalSessionTurnHost
                     if (tools is SessionToolExecutor batchTools)
                         batchTools.BeginBatch(appended[^1]);
                     var toolParts = await ExecuteToolBatchAsync(
-                            ToolCallControls.Plan(
-                                calls,
-                                tools is SessionToolExecutor mode && mode.HandoffConfirmationEnabled
-                            ),
+                            ToolCallControls.Plan(calls),
                             registered.Token
                         )
                         .ConfigureAwait(false);
@@ -427,7 +427,7 @@ public sealed partial class LocalSessionTurnHost
         JsonObject? externalRuntime = null
     )
     {
-        if (message is not null && store is PersistentSessionAuthorityStore persistent)
+        if (message is not null && store is ISessionAuthority persistent)
             await persistent.Images.ExternalizeMessageAsync(message);
         var rows = await entry
             .SaveLane.CommitCanonicalAppendWithResultAsync(state =>
@@ -459,8 +459,10 @@ public sealed partial class LocalSessionTurnHost
     internal async Task FinalizeAssistantControlsAsync(JsonObject? assistant)
     {
         var parts = assistant?["parts"]?.AsArray() ?? [];
+        // Reasoning text is not the response, so a marker there does not count.
         var noAction = parts.Any(part =>
-            SessionBoundary.IsNoAction(SessionWait.Text(part?["text"]))
+            part?["thinking"] is null
+            && SessionBoundary.IsNoAction(SessionWait.Text(part?["text"]))
         );
         var finalText = string.Join(
             "",
@@ -477,12 +479,42 @@ public sealed partial class LocalSessionTurnHost
             && !noAction
             && !finalText.TrimStart().StartsWith("Error:", StringComparison.Ordinal)
         )
-            await entry
-                .SaveLane.QueueChildReminderAsync(
-                    parent,
-                    tools is SessionToolExecutor toolMode && toolMode.HandoffConfirmationEnabled
-                )
-                .ConfigureAwait(false);
+        {
+            var envelope = entry.Snapshot().AuthorityEnvelope;
+            if (
+                SessionBoundary.ConsecutiveChildReminders(envelope)
+                < SessionBoundary.MaxConsecutiveChildReminders
+            )
+                await entry.SaveLane.QueueChildReminderAsync(parent).ConfigureAwait(false);
+            else if (!SessionBoundary.ChildReminderCapNotified(envelope))
+                await NotifyParentOfMissingReportAsync(parent, parts).ConfigureAwait(false);
+        }
+    }
+
+    // The reminder cap ends the turn idle with the boundary still open; the parent learns
+    // once per reminder run, so the coordinator is not left waiting for a report.
+    private async Task NotifyParentOfMissingReportAsync(string parent, JsonArray parts)
+    {
+        await entry.SaveLane.MarkChildReminderCapNotifiedAsync().ConfigureAwait(false);
+        if (childReportMissing is null)
+            return;
+        var reply = string.Join(
+            "",
+            parts
+                .OfType<JsonObject>()
+                .Where(part => part["thinking"] is null)
+                .Select(part => SessionWait.Text(part["text"]) ?? "")
+        );
+        try
+        {
+            await childReportMissing(parent, reply).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            Console.Error.WriteLine(
+                $"Missing-report notice for parent Session {parent} failed: {error.Message}"
+            );
+        }
     }
 
     private async Task ContinueAfterResultAsync(ChatResult result, CancellationToken token)
@@ -768,7 +800,9 @@ public sealed partial class LocalSessionTurnHost
             stats["lastUsage"] = usage.DeepClone();
         }
         foreach (var item in selectedItems)
-            SessionBoundary.ApplyChildHandoff(stagedEnvelope, item);
+            SessionBoundary.ApplyConsumedInput(stagedEnvelope, item);
+        foreach (var message in canonicalMessages)
+            SessionBoundary.ApplyModelMessage(stagedEnvelope, message);
         JsonNode? previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
         var hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
         if (updateLastMessageTime)
@@ -906,10 +940,7 @@ public sealed partial class LocalSessionTurnHost
         {
             ["system"] =
                 $"<foxwarm-system kind=\"session\" currentSessionId=\"{EscapeFoxwarmAttribute(state.Id)}\""
-                + SessionBoundary.Placement(
-                    SessionManager.ResolveExecutionNode(state.AuthorityEnvelope),
-                    SessionWait.Text(state.AuthorityEnvelope["cwd"])
-                )
+                + SessionBoundary.Placement(state)
                 + " />",
         };
 

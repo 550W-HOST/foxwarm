@@ -1,17 +1,16 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { access, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
 import { requireReceiptExecId } from './execReceipt.mjs'
 import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('exec-parallel'), records = [], errors = [], scripts = new Map(), hostPids = fixture.hostPids, shellPids = [], releases = new Set()
 Object.assign(process.env, testEnvironment.isolatedApplicationEnv(fixture.data))
-const { SessionCatalogStore } = await import('../../../lib/session/catalogStore.js')
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const exists = path => access(path).then(() => true, () => false)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
@@ -45,10 +44,8 @@ const percent = 'x%2Fy'
 await mkdir(join(fixture.data, 'state/sessions'), { recursive: true })
 const legacy = { sessionStateVersion: 1, id: percent, agent: 'main', model: 'local', currentNode: 'master', verbose: false, busy: false, history: [], queue: [], stats: {}, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: 'retained-percent-identity', persistentMemorySnapshot: 'Retained fixture identity.' }
 await writeFile(join(fixture.data, 'state/sessions', percent + '.json'), JSON.stringify(legacy))
-const catalog = new SessionCatalogStore(join(fixture.data, 'state/catalog.sqlite'))
-catalog.initializeEmpty(); catalog.replaceAll([{ id: percent, agent: 'main', model: 'local', currentNode: 'master', busy: false, queueLength: 0, meta: legacy.meta }]); catalog.close()
-const seed = join(fixture.root, 'legacy-seed.json'); await writeFile(seed, JSON.stringify([{ id: percent }]))
-execFileSync(process.execPath, ['dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs', fixture.data, seed], { env: { ...process.env, FOXWARM_TS_ROOT: process.cwd() } })
+await seedCatalog(fixture.data, [{ id: percent, agent: 'main', model: 'local', currentNode: 'master', busy: false, queueLength: 0, meta: legacy.meta }])
+seedArchiveBranches(fixture.data, [{ id: percent }])
 let stopped = true
 async function start() { await fixture.start(); stopped = false }
 async function create(name, agent = 'team') { const result = await fixture.api('POST', '/api/sessions', { agentId: agent, sessionId: name }); assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body.sessionId }

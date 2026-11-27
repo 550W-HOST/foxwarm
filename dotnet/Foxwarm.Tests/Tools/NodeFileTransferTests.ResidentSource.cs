@@ -49,8 +49,8 @@ public sealed partial class NodeFileTransferTests
     )
     {
         var root =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required for Source reads");
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
+            ?? throw new InvalidOperationException("FOXWARM_REPO_ROOT is required for Source reads");
         var info = new ProcessStartInfo("node")
         {
             RedirectStandardInput = true,

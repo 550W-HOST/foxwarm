@@ -15,7 +15,10 @@ const unix = { skip: process.platform !== 'linux' && 'Linux fixture process chec
 const linux = { skip: unix.skip || (!hasTmux && 'tmux is not installed') };
 
 // The fixture Main reads its installation root, records its PID and token, and stops on
-// SIGTERM unless the installation contains `fake-ignore-term`.
+// SIGTERM unless the installation contains `fake-ignore-term`. With `fake-startup-failure`
+// it reports that file's text as a fatal startup failure, like Main: on stderr and in the
+// FOXWARM_STARTUP_FAILURE_LOG file. `fake-lost-output` then erases the pane, as tmux does
+// with output it had not read when the pane's process exited.
 const fakeMain = `#!/bin/bash
 root="$2"; shift 2
 if [ "$1" = --inspect-upgrade ]; then
@@ -24,8 +27,11 @@ if [ "$1" = --inspect-upgrade ]; then
   exit
 fi
 data="$(cat "$root/data_dir")"
-if [ -e "$root/fake-bind-failure" ]; then
-  echo "Main fatal startup failure at host start: IOException / AddressInUseException / AddressAlreadyInUse" >&2
+if [ -e "$root/fake-startup-failure" ]; then
+  line="Main fatal startup failure at host start: $(cat "$root/fake-startup-failure")"
+  echo "$line" >&2
+  [ -z "\${FOXWARM_STARTUP_FAILURE_LOG:-}" ] || echo "$line" >> "$FOXWARM_STARTUP_FAILURE_LOG"
+  [ ! -e "$root/fake-lost-output" ] || printf '\\033c\\033[3J' >&2
   exit 1
 fi
 mkdir -p "$data/state"
@@ -37,6 +43,11 @@ echo "Main HTTP listening: http://0.0.0.0:3001"
 [ -e "$root/fake-ignore-term" ] && trap '' TERM || trap 'exit 0' TERM
 while :; do sleep 0.1; done
 `;
+
+const fixtureTemplate = '# Fixture application settings.\nsessionAutoTitle: true\n';
+// What a new installation's config.yaml holds: the release's initial settings and loopback.
+const loopbackConfig = `${fixtureTemplate}\nbot:\n  # 127.0.0.1 accepts only this computer; 0.0.0.0 also accepts other devices.\n  httpHost: 127.0.0.1\n`;
+const loopbackHint = /Only this computer can connect\. To allow other devices, set bot\.httpHost to 0\.0\.0\.0 in '.*\/state\/config\.yaml' and run '.*\/foxwarmctl' restart\./;
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm release '));
@@ -63,6 +74,8 @@ function fixture(t) {
     let control = fs.readFileSync(path.join(__dirname, 'foxwarmctl'), 'utf8');
     if (stopSeconds) control = control.replace('STOP_SECONDS=60', `STOP_SECONDS=${stopSeconds}`);
     fs.writeFileSync(path.join(payload, 'foxwarmctl'), control, { mode: 0o755 });
+    fs.mkdirSync(path.join(payload, 'templates'), { recursive: true });
+    fs.writeFileSync(path.join(payload, 'templates/config.example.yaml'), fixtureTemplate);
     fs.writeFileSync(path.join(payload, 'release.json'), JSON.stringify({
       version, target: `linux-x64${suffix}`, kind: 'server', rid: 'linux-x64', selfContained: true,
       ...(variant === 'native' ? { native: true } : {}), asset: `foxwarm-linux-x64${suffix}.tar.gz`,
@@ -102,6 +115,8 @@ function fixture(t) {
   }
   return { root, makePackage, install, control, run, tmux, withoutTmux };
 }
+
+const bindFailure = 'IOException / AddressInUseException / AddressAlreadyInUse';
 
 function waitFor(condition, ms = 5000) {
   const end = Date.now() + ms;
@@ -543,9 +558,10 @@ test('start reports a port conflict and leaves nothing running when Main cannot 
   const f = fixture(t);
   const dir = path.join(f.root, 'foxwarm');
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
-  fs.writeFileSync(path.join(dir, 'fake-bind-failure'), '');
+  fs.writeFileSync(path.join(dir, 'fake-startup-failure'), bindFailure);
   fs.mkdirSync(path.join(f.root, 'foxwarm-data/state'), { recursive: true });
-  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'bot:\n  httpPort: 3456\n');
+  // Main ignores a top-level httpPort; the conflict is on bot.httpPort.
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'httpPort: 3011\nbot:\n  httpPort: 3456\n');
   const tmux = f.control(dir, 'start');
   assert.equal(tmux.status, 1);
   assert.match(tmux.stderr, /port 3456 is already in use/);
@@ -556,6 +572,58 @@ test('start reports a port conflict and leaves nothing running when Main cannot 
   assert.equal(background.status, 1);
   assert.match(background.stderr, /port 3456 is already in use/);
   assert.doesNotMatch(background.stdout, /Started/);
+});
+
+// tmux closes the terminal of a pane whose process has exited, discarding output it has not
+// read yet, so an immediate failure can be missing from the pane. Main also records it in the
+// error log named by FOXWARM_STARTUP_FAILURE_LOG, and start reports any fatal failure.
+test('start reports the startup failure that the pane lost, and any other fatal failure', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  fs.writeFileSync(path.join(dir, 'fake-lost-output'), '');
+  fs.writeFileSync(path.join(dir, 'fake-startup-failure'), bindFailure);
+  fs.mkdirSync(path.join(f.root, 'foxwarm-data/state'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'bot:\n  httpPort: 3456\n');
+  const lost = f.control(dir, 'start');
+  assert.equal(lost.status, 1);
+  assert.match(lost.stderr, /port 3456 is already in use/);
+  assert.doesNotMatch(f.tmux('capture-pane', '-p', '-J', '-S', '-', '-t', '=release-fixture:=foxwarm'), /AddressInUse/);
+
+  const locked = 'InstallationLockedException: Another Foxwarm Main is already running with data directory /data.';
+  fs.writeFileSync(path.join(dir, 'fake-startup-failure'), locked);
+  const tmux = f.control(dir, 'start');
+  assert.equal(tmux.status, 1);
+  assert(tmux.stderr.includes(`Foxwarm exited during startup. Main fatal startup failure at host start: ${locked}`), tmux.stderr);
+
+  f.withoutTmux();
+  const background = f.control(dir, 'start');
+  assert.equal(background.status, 1);
+  assert(background.stderr.includes(locked), background.stderr);
+  assert.doesNotMatch(background.stdout, /Started/);
+});
+
+// Until the detached launch chain (subshell, nohup, bash, env) has reached Main, the recorded
+// PID belongs to a launcher process that does not look like this installation's Main.
+test('without tmux, start waits while the launch chain has not reached Main yet', unix, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  const bin = f.withoutTmux();
+  // nohup continues only after start has inspected the recorded PID's command once.
+  const checked = path.join(f.root, 'ownership-checked');
+  for (const name of ['nohup', 'ps']) {
+    const real = fs.readlinkSync(path.join(bin, name));
+    fs.rmSync(path.join(bin, name));
+    const script = name === 'ps'
+      ? `[ "$1" != -ww ] || : > '${checked}'\nexec '${real}' "$@"`
+      : `while [ ! -e '${checked}' ]; do sleep 0.02; done\nexec '${real}' "$@"`;
+    fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${script}\n`, { mode: 0o755 });
+  }
+  const started = ok(f.control(dir, 'start'));
+  assert.match(started.stdout, /Started 0\.9\.0 in the background/);
+  assert.equal(fs.readFileSync(path.join(dir, 'foxwarm.pid'), 'utf8'), `${mainPid(dir)}\n`);
+  ok(f.control(dir, 'stop'));
 });
 
 test('restart checks that Main can be launched before stopping the running one', linux, t => {
@@ -582,7 +650,9 @@ test('rerunning the installer on a stopped installation prints the sign-in link'
   ok(f.control(path.join(f.root, 'foxwarm'), 'stop'));
   const rerun = ok(f.install(['--package', pkg]));
   assert.match(rerun.stdout, /already installed/);
-  assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  assert.match(rerun.stdout, /WebUI: http:\/\/127\.0\.0\.1:3001\/#token=fixture-token/);
+  assert.doesNotMatch(rerun.stdout, loopbackHint);
+  assert.match(rerun.stdout, /foxwarmctl' status \| stop \| restart \| update \| attach \| link$/m);
   // A specific listen address is the only one Main answers on.
   for (const [host, shown] of [['127.0.0.1', '127.0.0.1'], ["'::1'", '[::1]'], ['0.0.0.0', 'localhost']]) {
     fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), `bot:\n  httpPort: 3005\n  httpHost: ${host}\n`);
@@ -684,4 +754,83 @@ test('a release without the recorded asset fails with that reason and leaves the
   const fresh = f.install(['--no-start', '--dir', 'other', '--version', '0.9.9'], server);
   assert.equal(fresh.status, 1);
   assert.match(fresh.stderr, /Release 0\.9\.9 has no foxwarm-linux-x64-native\.tar\.gz\./);
+});
+
+test('a new installation listens on this computer only and says how to open it to other devices', linux, t => {
+  const f = fixture(t);
+  const pkg = f.makePackage('0.9.0');
+  const dir = path.join(f.root, 'foxwarm');
+  const config = path.join(f.root, 'foxwarm-data/state/config.yaml');
+  const fresh = ok(f.install(['--package', pkg]));
+  assert.match(fresh.stdout, /WebUI: http:\/\/127\.0\.0\.1:3001\/#token=fixture-token/);
+  assert.match(fresh.stdout, loopbackHint);
+  assert.equal(fs.readFileSync(config, 'utf8'), loopbackConfig);
+  assert.equal(ok(f.control(dir, 'link')).stdout, 'http://127.0.0.1:3001/#token=fixture-token\n');
+
+  // Without starting, the hint is shown once too, and link waits for the first start.
+  const later = path.join(f.root, 'later');
+  const unstarted = ok(f.install(['--package', pkg, '--dir', 'later', '--data-dir', 'later-data', '--no-start']));
+  assert.match(unstarted.stdout, loopbackHint);
+  assert.equal(fs.readFileSync(path.join(f.root, 'later-data/state/config.yaml'), 'utf8'), loopbackConfig);
+  const tokenless = f.control(later, 'link');
+  assert.equal(tokenless.status, 1);
+  assert.match(tokenless.stderr, /no sign-in token in .*later-data\/state\/token yet.*foxwarmctl' start/);
+
+  // Data that has a config.yaml, or that Main has already used, keeps its binding.
+  for (const [name, file, text] of [['configured', 'config.yaml', 'bot:\n  httpHost: 0.0.0.0\n'], ['used', 'token', 'used-token']]) {
+    fs.mkdirSync(path.join(f.root, `${name}-data/state`), { recursive: true });
+    fs.writeFileSync(path.join(f.root, `${name}-data/state`, file), text);
+    const result = ok(f.install(['--package', pkg, '--dir', name, '--data-dir', `${name}-data`, '--no-start']));
+    assert.doesNotMatch(result.stdout, loopbackHint);
+    assert.deepEqual(fs.readdirSync(path.join(f.root, `${name}-data/state`)), [file]);
+    assert.equal(fs.readFileSync(path.join(f.root, `${name}-data/state`, file), 'utf8'), text);
+  }
+  assert.equal(ok(f.control(path.join(f.root, 'used'), 'link')).stdout, 'http://localhost:3001/#token=used-token\n');
+});
+
+test('updating an installation never changes its binding or its config.yaml', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  const config = path.join(f.root, 'foxwarm-data/state/config.yaml');
+  // An installation that listens on all addresses, as installers before loopback created.
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  const wildcard = '# kept as written\nbot:\n  httpHost: 0.0.0.0   # every device\n  httpPort: 3001\n';
+  fs.writeFileSync(config, wildcard);
+  ok(f.control(dir, 'start'));
+  const rerun = ok(f.install(['--package', f.makePackage('0.9.1')]));
+  assert.doesNotMatch(rerun.stdout, loopbackHint);
+  assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  ok(f.control(dir, 'update', '--package', f.makePackage('0.9.2')));
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.2');
+  assert.equal(fs.readFileSync(config, 'utf8'), wildcard);
+
+  // An installation without a config.yaml keeps Main's default.
+  fs.rmSync(config);
+  const bare = ok(f.install(['--package', f.makePackage('0.9.3')]));
+  assert.doesNotMatch(bare.stdout, loopbackHint);
+  assert.match(bare.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.3');
+  assert(!fs.existsSync(config));
+  assert.equal(ok(f.control(dir, 'link')).stdout, 'http://localhost:3001/#token=fixture-token\n');
+});
+
+test('the installer and link read bot.httpPort and bot.httpHost as Main does', linux, t => {
+  const f = fixture(t);
+  const pkg = f.makePackage('0.9.0');
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', pkg]));
+  const config = path.join(f.root, 'foxwarm-data/state/config.yaml');
+  for (const [text, link] of [
+    // Main ignores keys outside the top-level bot mapping.
+    ['httpPort: 3011\nhttpHost: 10.0.0.9\n', 'localhost:3001'],
+    ['httpPort: 3011\nbot:\n  httpHost: 127.0.0.1\n', '127.0.0.1:3001'],
+    ['bot:\n  nested:\n    httpPort: 4000\n  httpPort: 3005 # chosen\n  httpHost: "::1"\nother:\n  httpPort: 9\n', '[::1]:3005'],
+    ["# settings\nbot:   # server\r\n    httpHostname: 10.0.0.1\r\n\r\n    httpHost: '10.0.0.5'\r\n    httpPort: 3007\r\n", '10.0.0.5:3007'],
+    ['bot:\n  httpPort:\n  httpHost: 0.0.0.0\n', 'localhost:3001'],
+    ['', 'localhost:3001'],
+  ]) {
+    fs.writeFileSync(config, text);
+    assert.equal(ok(f.control(dir, 'link')).stdout, `http://${link}/#token=fixture-token\n`, text);
+    assert.match(ok(f.install(['--package', pkg])).stdout, new RegExp(`^WebUI: http://${link.replace(/[[\].]/g, '\\$&')}/#token=fixture-token$`, 'm'), text);
+  }
 });

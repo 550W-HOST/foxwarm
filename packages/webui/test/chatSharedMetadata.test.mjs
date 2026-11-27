@@ -35,6 +35,7 @@ const {
   getSystemMessagePreviewDescriptor,
   parseFoxwarmMetadataLine,
   isInternalTimelineMessage,
+  isEffortChangeMessage,
 } = await import(pathToFileURL(bundledPath).href)
 
 test('foxwarm metadata tags are recognized as system-like small metadata lines', () => {
@@ -283,4 +284,15 @@ test('internal runtime rows are recognized for timeline omission', () => {
   const onlyTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }] }
   const unflaggedReminder = { ...taskReminder, __meta: { seq: 9 } }
   for (const message of [childBoundary, userText, event, welcome, onlyTime, unflaggedReminder]) assert.equal(isInternalTimelineMessage(message), false)
+})
+
+test('recorded effort changes are recognized only in their persisted non-context shape', () => {
+  const change = { role: 'user', modelVisible: false, parts: [{ effortChange: { modelId: 'a/b', previousEffort: 'high', effort: 'low' } }], __meta: { seq: 5 } }
+  assert.equal(isEffortChangeMessage(change), true)
+  for (const message of [
+    { ...change, modelVisible: undefined },
+    { ...change, role: 'model' },
+    { ...change, parts: [...change.parts, { text: 'more' }] },
+    { role: 'user', modelVisible: false, parts: [{ text: 'effortChange' }] },
+  ]) assert.equal(isEffortChangeMessage(message), false)
 })

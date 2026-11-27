@@ -5,8 +5,9 @@
 #   modules -ProcessId N   the loaded module names
 #   close   -ProcessId N   the window's close request (WM_CLOSE)
 #   open    -ProcessId N   a double-click notification from the icon
-#   exit    -ProcessId N   opens the icon's menu and clicks its Exit item with the mouse
-# Prints one JSON object.
+#   exit    -ProcessId N   opens the icon's menu and clicks its Exit item with the mouse; reports the
+#                          menu's items in order, a separator as null
+# Prints one JSON object in ASCII, non-ASCII characters as \u escapes.
 param(
   [Parameter(Mandatory = $true)][ValidateSet('window', 'tray', 'modules', 'close', 'open', 'exit')][string]$Action,
   [Parameter(Mandatory = $true)][int]$ProcessId
@@ -33,6 +34,7 @@ public static class FoxwarmDesktopWindow
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetMenuString(IntPtr menu, uint item, StringBuilder text, int size, uint flags);
+    [DllImport("user32.dll")] public static extern uint GetMenuState(IntPtr menu, uint item, uint flags);
     [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr hwnd, IntPtr menu, uint item, out Rect rect);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern uint SendInput(uint count, Input[] inputs, int size);
@@ -99,7 +101,13 @@ public static class FoxwarmDesktopWindow
 }
 '@
 
-function Write-Result($value) { $value | ConvertTo-Json -Compress -Depth 4 }
+# Windows PowerShell encodes redirected output in the console code page, which replaces characters
+# outside it with look-alikes (the menu's U+2026 arrived as '.'). Escaped, the JSON is exact in any
+# code page.
+function Write-Result($value) {
+  $json = $value | ConvertTo-Json -Compress -Depth 4
+  [regex]::Replace($json, '[^\x00-\x7F]', { param($match) '\u{0:x4}' -f [int][char]$match.Value })
+}
 
 # The main window keeps existing while it is hidden in the tray.
 function Get-MainWindow {
@@ -130,9 +138,13 @@ switch ($Action) {
     $menu = [FoxwarmDesktopWindow]::SendMessage($popup, 0x01E1, [IntPtr]::Zero, [IntPtr]::Zero) # MN_GETHMENU
     $items = @()
     for ($i = 0; $i -lt [FoxwarmDesktopWindow]::GetMenuItemCount($menu); $i++) {
-      $text = New-Object System.Text.StringBuilder 64
-      [void][FoxwarmDesktopWindow]::GetMenuString($menu, $i, $text, 64, 0x400)
-      $items += $text.ToString()
+      if ([FoxwarmDesktopWindow]::GetMenuState($menu, $i, 0x400) -band 0x800) { # MF_BYPOSITION, MF_SEPARATOR
+        $items += $null
+      } else {
+        $text = New-Object System.Text.StringBuilder 64
+        [void][FoxwarmDesktopWindow]::GetMenuString($menu, $i, $text, 64, 0x400)
+        $items += $text.ToString()
+      }
     }
     $index = [array]::IndexOf($items, 'Exit')
     if ($index -lt 0) { throw "The menu has no Exit item: $($items -join ', ')" }

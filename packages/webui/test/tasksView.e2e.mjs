@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { readFile, readdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { chooseSelectOption, readSelectOptions } from './selectDriver.mjs'
 
 const statuses = ['open', 'active', 'completed', 'cancelled']
 const timestamp = 1_780_000_000_000
@@ -52,7 +53,7 @@ before(async () => {
   assert.ok(cssName, 'Build the WebUI before running its browser fixtures.')
   const css = (await Promise.all([cssName, ...(await readdir(assets)).filter(name => /^TasksView-.*\.css$/.test(name))].map(name => readFile(new URL(name, assets), 'utf8')))).join('\n')
   const bundle = await build({
-    stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import TasksView from './src/components/TasksView'; import { initializeThemeRuntime } from './src/theme'; initializeThemeRuntime(); createRoot(document.getElementById('root')).render(React.createElement(TasksView));`, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'tasks-fixture.tsx' },
+    stdin: { contents: `import React from 'react'; import { createRoot } from 'react-dom/client'; import TasksView from './src/components/TasksView'; import { initializeThemeRuntime } from './src/theme'; import { initializeWindowFrame } from './src/windowFrame'; initializeThemeRuntime(); initializeWindowFrame(); createRoot(document.getElementById('root')).render(React.createElement(TasksView));`, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'tasks-fixture.tsx' },
     bundle: true, outfile: '/tmp/tasks-fixture.js', format: 'iife', platform: 'browser', target: 'chrome120', write: false,
     define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent',
   })
@@ -161,16 +162,16 @@ test('Tasks reads bounded status windows, switches Table/Board, and shows bounde
   assert.ok(await page.$eval('[data-task-row="task-active"] td:nth-child(3)', cell => cell.getBoundingClientRect().width <= 400), 'owner cell stays bounded')
   assert.match(await page.$eval('[data-task-summary]', element => element.textContent), /2 tasks.*Work.*Open 1.*Active 1/)
   assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /2 additional tasks not loaded/)
-  assert.match(await page.$eval('[data-task-filters]', element => element.textContent), /Agent/)
-  assert.deepEqual(await page.$$eval('[data-task-agent-filter] option', options => options.map(option => option.value)), ['', 'creator', 'worker'])
-  await page.select('[data-task-agent-filter]', 'worker')
+  assert.ok(await page.$('[data-task-filters] [role="combobox"][aria-label="Agent"]'))
+  assert.deepEqual((await readSelectOptions(page, '[data-task-agent-filter]')).map(option => option.value), ['', 'creator', 'worker'])
+  await chooseSelectOption(page, '[data-task-agent-filter]', 'worker')
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 1)
   await page.click('[aria-label="Relationship filter"]')
-  await page.select('[data-task-agent-relation]', 'creator')
+  await chooseSelectOption(page, '[data-task-agent-relation]', 'creator')
   assert.equal(await page.$$eval('[data-task-row]', rows => rows.length), 0)
-  await page.select('[data-task-agent-relation]', 'owner')
+  await chooseSelectOption(page, '[data-task-agent-relation]', 'owner')
   assert.match(await page.$eval('[data-task-secondary-summary]', element => element.textContent), /1 hidden by filters.*2 additional tasks not loaded/)
-  await page.select('[data-task-agent-filter]', '')
+  await chooseSelectOption(page, '[data-task-agent-filter]', '')
   assert.deepEqual(requests.filter(request => request.status).map(request => [request.status, request.limit]), statuses.map(status => [status, '50']))
   assert.ok(requests.every(request => request.method === 'GET' && request.pathname.startsWith('/prefix/ui/api/tasks')))
   await click('All')
@@ -401,4 +402,41 @@ test('WebUI creates, comments, and changes task owners through user routes', asy
   assert.equal(await page.$eval('[data-task-warning="detail"]', node => node.textContent), 'Task assigned, but the owner notification could not be delivered.')
   await page.locator('[aria-label="Close task details"]').click()
   await page.setViewport({ width: 1400, height: 900 })
+})
+
+test('under a Desktop frame window-wide details are a full-window layer whose heading row is the title row', async () => {
+  for (const [host, width] of [[{ platform: 'windows', left: 0, right: 144, top: 48 }, 900], [{ platform: 'macos', left: 78, right: 0, top: 38 }, 900], [{ platform: 'windows', left: 0, right: 144, top: 48 }, 600]]) {
+    const label = `${host.platform} ${width}px`
+    const framed = await browser.newPage()
+    try {
+      await framed.setViewport({ width, height: 800 })
+      await framed.evaluateOnNewDocument(host => { window.__frameMessages = []; window.chrome = { webview: { postMessage: message => window.__frameMessages.push(JSON.parse(JSON.stringify(message))) } }; window.foxwarmFrame = host }, host)
+      await framed.goto(fixtureUrl)
+      await framed.waitForSelector('[data-tasks-view][aria-busy="false"]')
+      await framed.waitForSelector('[data-task-row="task-active"] button, [data-task-card="task-active"]')
+      const settle = () => framed.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50)))))
+      await settle()
+      const before = await framed.evaluate(() => window.__frameMessages.at(-1)?.regions ?? null)
+      await framed.click('[data-task-row="task-active"] button, [data-task-card="task-active"]')
+      await framed.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'active task')
+      await settle()
+      const state = await framed.evaluate(() => {
+        const box = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }
+        const panel = document.querySelector('[data-task-details]'), head = panel.querySelector('.tasks-detail-head')
+        return { head: box(head), heading: box(head.querySelector('h3')), close: box(panel.querySelector('[aria-label="Close task details"]')), regions: window.__frameMessages.at(-1).regions, layer: panel.hasAttribute('data-frame-layer') }
+      })
+      assert.equal(state.layer, true)
+      assert.deepEqual([state.head.top, state.head.bottom], [0, Math.max(host.top, 36)], `${label}: the heading row is the title row`)
+      assert.ok(state.heading.left >= (host.left ? host.left + 6 : 20), `${label}: the heading starts a gap after the controls`)
+      for (const control of [state.heading, state.close]) assert.ok(control.left >= host.left && control.right <= width - host.right, `${label}: ${JSON.stringify(control)} clears the window controls`)
+      assert.ok(state.regions.length > 0)
+      for (const [x, y, w, h] of state.regions) {
+        assert.ok(y + h <= state.head.bottom, `${label}: only the details' title row drags`)
+        assert.ok(Math.min(x + w, state.close.right) - Math.max(x, state.close.left) < 1 || Math.min(y + h, state.close.bottom) - Math.max(y, state.close.top) < 1, `${label}: Close stays clickable`)
+      }
+      await framed.click('[aria-label="Close task details"]')
+      await settle()
+      assert.deepEqual(await framed.evaluate(() => window.__frameMessages.at(-1)?.regions ?? null), before, `${label}: closing restores the page's regions`)
+    } finally { await framed.close() }
+  }
 })

@@ -63,7 +63,8 @@ test('generated first-run YAML is the OpenAI preset with an API key placeholder 
   assert.equal(reading.ok, true)
   assert.deepEqual(reading.form.models, ids('gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna'))
   assert.equal(presetFor(reading.form).id, 'openai')
-  assert.equal(validateModelSetupForm(reading.form), 'Replace the placeholder API key with your key.')
+  // The form hides the placeholder, so the empty-looking field asks for the key.
+  assert.equal(validateModelSetupForm(reading.form), 'Enter your API key.')
 })
 
 test('form output round-trips exactly through YAML for every API type and incomplete drafts', () => {
@@ -208,7 +209,8 @@ test('validation names the first problem that blocks saving', () => {
   assert.equal(validateModelSetupForm(form()), null)
   assert.match(validateModelSetupForm(form({ providerId: 'a/b' })), /provider name/)
   assert.match(validateModelSetupForm(form({ baseUrl: 'api.example.test' })), /API base URL/)
-  assert.equal(validateModelSetupForm(form({ apiKey: 'replace-with-your-key' })), 'Replace the placeholder API key with your key.')
+  assert.equal(validateModelSetupForm(form({ apiKey: 'replace-with-your-key' })), 'Replace the placeholder API key, or remove it.')
+  assert.equal(validateModelSetupForm(form({ apiKey: 'replace-with-your-key', baseUrl: 'https://api.openai.com/v1' })), 'Enter your API key.')
   assert.equal(validateModelSetupForm(form({ apiKey: '', baseUrl: 'https://api.openai.com/v1' })), 'Enter your API key.')
   assert.equal(validateModelSetupForm(form({ apiKey: '', baseUrl: 'http://localhost:11434/v1' })), null)
   assert.equal(validateModelSetupForm(form({ apiKey: '', baseUrl: 'https://gateway.example.test/v1' })), null)

@@ -2,14 +2,16 @@
 import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, readdir, access } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import WebSocket from 'ws'
 import sharp from 'sharp'
 import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
+import { restoreStateSnapshot, stateSnapshot } from './stateSeeds.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
 options.cwd = host.root
@@ -47,9 +49,7 @@ await writeFile(host.modelPath, JSON.stringify({ default: 'local', providers: { 
 await mkdir(join(host.work, 'memory'), { recursive: true }); await writeFile(join(host.work, 'memory/ONBOOT.md'), ' \n'); await writeFile(join(host.work, 'memory/MEMORY.md'), 'PRIVATE-PROMPT-SNAPSHOT')
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 20, g: 110, b: 180, alpha: 1 } } }).png().toBuffer()
 await writeFile(join(host.work, 'reference.png'), png)
-await writeFile(join(host.work, 'unreferenced.png'), await sharp({ create: { width: 2, height: 3, channels: 4, background: { r: 180, g: 20, b: 110, alpha: 1 } } }).png().toBuffer())
-const seeded = execFileSync(process.execPath, [resolve('dotnet/Foxwarm.Tests/Fixtures/continuous-history-fixture-ts.mjs'), host.data, join(host.work, 'reference.png'), join(host.work, 'unreferenced.png')], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
-const seed = JSON.parse(seeded.split('\n').find(line => line.startsWith('CONTINUOUS_FIXTURE:')).slice('CONTINUOUS_FIXTURE:'.length))
+const seed = await restoreStateSnapshot(stateSnapshot('continuous-history-unreferenced'), host.data)
 const config = (token = aliceToken, extra = {}) => ({
   url: host.origin + '/nested/app', bot: { httpPort: host.port }, llm: { maxOutput: 713, compactKeepPercent: 0.3 }, channels: { webui: {} },
   access: { identities: { alice: { token, surfaces: { webui: { sessions: ['continuous-alias', 'chat'] }, mcp: {} } }, bob: { token: 'synthetic-bob', surfaces: { webui: { sessions: ['main/*'] } } }, ...extra } },
@@ -213,11 +213,11 @@ try {
   const context = await browser.createBrowserContext(), page = await context.newPage()
   page.on('pageerror', error => browserErrors.push(error.message)); page.on('request', request => { if (new URL(request.url()).pathname.includes('/api/')) scopedRequests.push(new URL(request.url()).pathname) })
   await page.goto(host.origin + '/nested/app/#setup', { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', aliceToken); await page.click('button[type="submit"]')
-  await page.waitForSelector('[data-webui-role="webui"] .foxwarm-chat-root')
+  await page.waitForSelector('[data-webui-role="webui"] .foxwarm-chat-root'); await waitForWebUiReady(page)
   assert.equal(await page.$('#setup-tab-config'), null); assert.equal(await page.$('.foxwarm-model-selector-trigger'), null)
-  await page.select('select[aria-label="Session"]', moved)
-  await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.select('select[aria-label="Session"]', moved)
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
+  await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page)
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
   await page.waitForSelector('[data-continuous-history]')
   await page.evaluate(() => { const element = document.querySelector('.foxwarm-chat-messages'); element.scrollTop = 0; element.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); element.dispatchEvent(new Event('scroll')) })
   await page.waitForFunction(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))
@@ -246,7 +246,7 @@ try {
   await context.close()
   const administrator = await host.openApp()
   await administrator.evaluate(() => window.foxwarmTest.switchToSession('chat'))
-  await administrator.waitForFunction(() => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session chat'))
+  await administrator.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId?.startsWith('chat'))
   await administrator.waitForSelector('.foxwarm-model-selector-trigger')
   assert.equal(await administrator.$('[data-webui-role="webui"]'), null)
   await host.stop()

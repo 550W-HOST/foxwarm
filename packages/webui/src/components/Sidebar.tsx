@@ -4,13 +4,14 @@ import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
-import { FoxwarmMark } from './FoxwarmMark'
+import InstanceBrand, { type InstanceBranding } from './InstanceBrand'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { useState } from 'react'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
+import type { TerminalListOptions } from './TerminalList'
 
 interface SidebarProps {
   sessions: Session[]
@@ -42,6 +43,7 @@ interface SidebarProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
+  terminalList?: TerminalListOptions
   onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
@@ -50,7 +52,11 @@ interface SidebarProps {
   unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void
   bounded?: BoundedSessionListPresentationProps
+  /** The instance's emoji and name from the WebUI settings; empty fields show the Foxwarm logo and name. */
+  branding?: InstanceBranding
 }
+
+const DEFAULT_BRANDING: InstanceBranding = { instanceName: '', tabIcon: '' }
 
 export default function Sidebar({
   sessions,
@@ -80,6 +86,7 @@ export default function Sidebar({
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  terminalList,
   onCreateAgent,
   onCreateSession,
   onToggleCollapsed,
@@ -88,6 +95,7 @@ export default function Sidebar({
   unreadSessionIds,
   onToggleIdleNotificationMode,
   bounded,
+  branding = DEFAULT_BRANDING,
 }: SidebarProps) {
   const [creationRequest, setCreationRequest] = useState<SessionCreationRequest | null>(null)
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
@@ -99,8 +107,8 @@ export default function Sidebar({
     <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col" data-frame-row="column">
       <div className="foxwarm-sidebar-brand-row shrink-0 px-3 pt-3" data-frame-drag>
         <div className="mb-2 flex items-center justify-between gap-2 pl-1" data-sidebar-brand>
-          <h1 className="flex items-center gap-2 text-xl font-bold text-fw-text-strong"><FoxwarmMark className="h-6 w-6 shrink-0" /><span className="foxwarm-sidebar-wordmark">Foxwarm</span></h1>
-          <div className="flex items-center gap-1">
+          <InstanceBrand branding={branding} />
+          <div className="flex shrink-0 items-center gap-1">
             <GlobalUiSettingsMenu
               menuAlign="end"
               menuSide="bottom"
@@ -146,6 +154,7 @@ export default function Sidebar({
               nodeTargets={nodeTargets}
               nodeTargetsError={nodeTargetsError}
               onRefreshNodeTargets={onRefreshNodeTargets}
+              terminalList={terminalList}
             />
           </nav>
         </div>

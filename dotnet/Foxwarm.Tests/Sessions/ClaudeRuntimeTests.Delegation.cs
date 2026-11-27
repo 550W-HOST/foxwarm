@@ -333,7 +333,7 @@ public sealed partial class ClaudeRuntimeTests
             start.ArgumentList.Add(bootstrap);
             start.ArgumentList.Add(
                 Path.Combine(
-                    Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!,
+                    Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!,
                     "packages",
                     "cli-node",
                     "dist",

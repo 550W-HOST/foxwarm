@@ -5,8 +5,8 @@ import { createRequire } from 'node:module'
 import ts from 'typescript'
 
 // Execute behavioral Source with explicit owned storage/provider seams. No application imports.
-const repository = process.env.FOXWARM_TS_ROOT
-if (!repository) throw new Error('FOXWARM_TS_ROOT is required')
+const repository = process.env.FOXWARM_REPO_ROOT
+if (!repository) throw new Error('FOXWARM_REPO_ROOT is required')
 const require = createRequire(path.join(repository, 'package.json'))
 let raw = ''; for await (const chunk of process.stdin) raw += chunk
 const input = JSON.parse(raw)

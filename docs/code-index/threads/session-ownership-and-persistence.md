@@ -28,6 +28,8 @@ HTTP/WebUI or command ingress
 
 If the authority file is missing while Archive rows exist, `PersistentSessionAuthorityStore.LoadAsync` throws an integrity error: Archive is not a substitute source for active Session history. If no authority and no Archive rows exist, the store returns `null`; the caller then decides whether this is a permitted new lifetime. `SessionManager.Admission` rejects an already catalog-registered/member lifetime with `Cataloged Session authority is missing` and preserves existing identity reservations rather than creating an empty Session.
 
+Domain code reaches this authority only through the [Session authority backend](../units/storage-context.md): owners open bound stores through it, and Main's other readers (Task anchor, debug view, identity reservation, deletion, identity move and recovery) use its read, move and delete operations. A database-backed hosted mode stores the same value as a head plus immutable history segments ([D-session-authority-representations](../units/storage-context.md#d-session-authority-representations)); file mode keeps complete documents.
+
 ## Ordered save lane
 
 **Derived ownership design.** Serialization implements the [active authority](#active-json-authority) contract and the directly selected requirement that admitted input survive busy turns. Existing hot-first and strict callers establish different failure semantics; the save lane is not a blanket promise that every returned operation was durably committed.
@@ -75,7 +77,6 @@ Identity move and Archive reservation code use [Archive identity](../units/archi
 
 - `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`
 - `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`
-- `dotnet/Foxwarm.Tests/Sessions/SessionCatalogSourceTests.cs`
 - `dotnet/Foxwarm.Tests/Sessions/SessionIdentityRecoveryTests.cs`
 - `dotnet/Foxwarm.Tests/Sessions/SessionIdentityMoveTests.cs`
 - `dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`
@@ -84,7 +85,7 @@ Identity move and Archive reservation code use [Archive identity](../units/archi
 
 ## Current boundary
 
-The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on owning saves, persisted Task reminder rows, and compaction progress checkpoint calls. A due reminder is appended through the canonical append path immediately before the normal request that consumes it and does not enqueue work or wake a Session ([D-tasks-reminder-history](../units/src-session-task-context.md#d-tasks-reminder-history)). Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.
+The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on owning saves, persisted Task reminder rows, and compaction progress checkpoint calls. A due reminder is appended through the canonical append path immediately before the normal request that consumes it and does not enqueue work or wake a Session ([D-tasks-reminder-history](../units/tasks-timers.md#d-tasks-reminder-history)). Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.
 
 ## External Node placement
 

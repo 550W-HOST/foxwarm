@@ -36,6 +36,9 @@ internal sealed record CtlCall(CtlCommand Command, JsonObject Descriptor) : CtlI
 // `tool call <tool-id> --help`: the arguments and description of the tool a descriptor names.
 internal sealed record CtlToolHelp(CtlCommand Command, JsonObject Descriptor) : CtlInvocation;
 
+// `skill run <name> --help`: the command's help plus that skill's effect, mode and arguments.
+internal sealed record CtlSkillHelp(CtlCommand Command, JsonObject Args) : CtlInvocation;
+
 // A command handled by its ingress itself (Local names it), with normalized arguments.
 internal sealed record CtlLocal(CtlCommand Command, string Local, JsonObject Args) : CtlInvocation;
 
@@ -403,11 +406,16 @@ internal static partial class CtlParser
 
     private static CtlInvocation ParseCore(JsonObject args, string ingress)
     {
+        // summary is display metadata of the call (ToolActivity); it never reaches the command.
         foreach (var key in args.Select(pair => pair.Key))
-            if (key is not ("command" or "values" or "valuesJson"))
+            if (key is not ("command" or "values" or "valuesJson" or "summary"))
                 throw new InvalidDataException(
-                    "Unsupported ctl argument `" + key + "`; use command, values or valuesJson."
+                    "Unsupported ctl argument `"
+                        + key
+                        + "`; use command, values, valuesJson or summary."
                 );
+        if (args.ContainsKey("summary") && SessionWait.Text(args["summary"]) is null)
+            throw new InvalidDataException("summary must be a string.");
         var command =
             SessionWait.Text(args["command"])
             ?? throw new InvalidDataException("command must be a string.");
@@ -666,6 +674,14 @@ internal static partial class CtlParser
                     if (assigned.TryGetPropertyValue(parameter.Name, out var value))
                         SetPath(identity, parameter.Arg, value?.DeepClone());
                 return new CtlToolHelp(command, Descriptor(identity));
+            }
+            if (command is { Source: "builtin", Name: "run_skill" } && assigned.ContainsKey("skillName"))
+            {
+                var skill = new JsonObject();
+                foreach (var parameter in command.Parameters.Where(parameter => parameter.Name is "skillName" or "agentName"))
+                    if (assigned.TryGetPropertyValue(parameter.Name, out var value))
+                        SetPath(skill, parameter.Arg, value?.DeepClone());
+                return new CtlSkillHelp(command, skill);
             }
             return new CtlHelpRequest(command.Noun, command.Verb);
         }

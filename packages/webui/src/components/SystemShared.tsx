@@ -5,17 +5,12 @@ import type { Session } from './SessionListCore'
 import UsageDetails, { formatUsageNumber as usageNumber, type TokenUsage } from './TokenUsageDetails'
 import { getSessionRuntimeTone } from '../sessionRuntimeState'
 
-export const formatRelativeTime = (timestamp?: number) => {
-  if (!timestamp) return 'No messages yet'
-  const diff = Math.max(0, Date.now() - timestamp)
-  const minute = 60 * 1000
-  const hour = 60 * minute
-  const day = 24 * hour
-  if (diff < minute) return 'just now'
-  if (diff < hour) return `${Math.floor(diff / minute)}m ago`
-  if (diff < day) return `${Math.floor(diff / hour)}h ago`
-  return `${Math.floor(diff / day)}d ago`
-}
+/**
+ * First column of the Usage tables. Below md the table keeps its natural layout inside a
+ * horizontal scroller: this column takes the space the figures leave, truncates its labels,
+ * keeps a readable minimum and stays in view while the figures scroll.
+ */
+export const USAGE_TABLE_FIRST_COLUMN = 'max-md:sticky max-md:left-0 max-md:z-[1] max-md:w-full max-md:min-w-[7rem] max-md:max-w-0 max-md:bg-fw-surface'
 
 export const formatBusyDuration = (startedAt?: number | null, now: number = Date.now()) => {
   if (!startedAt) return '—'
@@ -49,20 +44,6 @@ export const getStatusTone = (session: Session) => {
   const tone = getSessionRuntimeTone(session)
   return tone === 'muted' ? 'bg-fw-border-strong dark:bg-fw-text' : `bg-fw-${tone}`
 }
-
-export type LoadedUsage = TokenUsage & { count: number }
-
-export function addLoadedUsage(total: LoadedUsage, session: Session) {
-  if (!session.tokenUsage) return total
-  total.cachedTokens += session.tokenUsage.cachedTokens || 0
-  total.inputTokens += session.tokenUsage.inputTokens || 0
-  total.outputTokens += session.tokenUsage.outputTokens || 0
-  if (session.tokenUsage.cost !== undefined) total.cost = (total.cost ?? 0) + session.tokenUsage.cost
-  total.count += 1
-  return total
-}
-
-export const emptyLoadedUsage = (): LoadedUsage => ({ cachedTokens: 0, inputTokens: 0, outputTokens: 0, count: 0 })
 
 export function UsagePie({ usage, loaded = false, global = false }: { usage?: TokenUsage; loaded?: boolean; global?: boolean }) {
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null)

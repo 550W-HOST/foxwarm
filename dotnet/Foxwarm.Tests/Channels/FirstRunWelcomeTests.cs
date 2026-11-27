@@ -152,6 +152,45 @@ public sealed class FirstRunWelcomeTests
         Assert.Empty(await HistoryAsync(host.Client, "existing"));
     }
 
+    [Fact]
+    public async Task First_models_save_records_Enter_as_the_installation_send_key_default()
+    {
+        using var temp = new TempDirectory();
+        await using var host = await StartAsync(temp.Path);
+        var client = host.Client;
+        async Task<JsonObject> SettingsAsync() =>
+            (await client.GetFromJsonAsync<JsonObject>("/api/webui/settings"))!["settings"]!.AsObject();
+
+        // An installation without the record keeps Ctrl/Cmd+Enter.
+        Assert.Equal("modEnter", (await SettingsAsync())["sendKeyDefault"]!.GetValue<string>());
+        var named = await client.PostAsJsonAsync("/api/webui/settings", new { instanceName = "Den" });
+        Assert.Equal(HttpStatusCode.OK, named.StatusCode);
+        Assert.Equal("modEnter", (await SettingsAsync())["sendKeyDefault"]!.GetValue<string>());
+
+        var raw =
+            "default: local/wire\nproviders:\n  local: {providerType: openai-responses, baseUrl: 'http://127.0.0.1:1', models: [wire]}\n";
+        var saved = await client.PostAsJsonAsync("/api/setup/models", new { yaml = raw });
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        var settings = await SettingsAsync();
+        Assert.Equal("enter", settings["sendKeyDefault"]!.GetValue<string>());
+        Assert.Equal("Den", settings["instanceName"]!.GetValue<string>());
+
+        // Branding saves keep the record, and the field is not writable through the settings route.
+        var icon = await client.PostAsJsonAsync("/api/webui/settings", new { tabIcon = "🦊" });
+        Assert.Equal(HttpStatusCode.OK, icon.StatusCode);
+        Assert.Equal("enter", (await SettingsAsync())["sendKeyDefault"]!.GetValue<string>());
+        var rejected = await client.PostAsJsonAsync("/api/webui/settings", new { sendKeyDefault = "modEnter" });
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+
+        // A later models save is not a first run and leaves the default alone.
+        File.WriteAllText(
+            Path.Combine(temp.Path, "state", "webui.json"),
+            "{\"instanceName\":\"Den\",\"tabIcon\":\"\",\"sendKeyDefault\":\"modEnter\"}"
+        );
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/setup/models", new { yaml = raw })).StatusCode);
+        Assert.Equal("modEnter", (await SettingsAsync())["sendKeyDefault"]!.GetValue<string>());
+    }
+
     private static async Task<JsonArray> HistoryAsync(HttpClient client, string sessionId) =>
         (await client.GetFromJsonAsync<JsonObject>(
             "/api/sessions/" + Uri.EscapeDataString(sessionId) + "/history"

@@ -9,7 +9,8 @@ namespace Foxwarm.Desktop;
 /// <summary>
 /// Custom window frame: the WebUI extends under a transparent, compact title bar. The page
 /// learns the traffic lights' zone through <c>window.foxwarmFrame</c> and reports its drag
-/// surfaces through the one-way <c>foxwarmFrame</c> script message. A transparent view above
+/// surfaces through the one-way <c>foxwarmFrame</c> script message, which also carries the
+/// brand row's one-way request for the host's instance menu. A transparent view above
 /// the web view turns presses inside those surfaces into native window drags, because
 /// WKWebView has no app-region and <c>performDrag</c> must run inside the native mouse-down.
 /// </summary>
@@ -18,18 +19,24 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
     internal const string HandlerName = "foxwarmFrame";
     private readonly NSWindow window;
     private readonly bool codeWindow;
+    private readonly Action<WKWebView, FrameRect>? instanceMenu;
     private readonly NSToolbar toolbar = new("FoxwarmFrame") { ShowsBaselineSeparator = false };
     private readonly List<NSObject> observers = [];
     private WKWebView? view;
     private FrameDragView? dragView;
-    private Uri? origin;
+    private Uri? scope;
     private string state = "";
     private DesktopFrameRegions? regions;
     private bool fullScreen;
 
-    internal DesktopFrame(NSWindow window, DesktopWindowFrame frameKind = DesktopWindowFrame.WebUi)
+    internal DesktopFrame(
+        NSWindow window,
+        DesktopWindowFrame frameKind = DesktopWindowFrame.WebUi,
+        Action<WKWebView, FrameRect>? instanceMenu = null
+    )
     {
         this.window = window;
+        this.instanceMenu = instanceMenu;
         codeWindow = frameKind == DesktopWindowFrame.Code;
         window.StyleMask |= NSWindowStyle.FullSizeContentView;
         window.TitlebarAppearsTransparent = true;
@@ -66,9 +73,9 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
         observers.Add(NSNotificationCenter.DefaultCenter.AddObserver(name, _ => action(), window));
 
     /// <summary>Adds the document-start state and the message handler to a configuration.</summary>
-    internal void Configure(WKWebViewConfiguration configuration, Uri endpoint)
+    internal void Configure(WKWebViewConfiguration configuration, Uri scope)
     {
-        origin = endpoint;
+        this.scope = scope;
         state = StateJson();
         configuration.UserContentController.AddUserScript(DocumentScript(state));
         configuration.UserContentController.AddScriptMessageHandler(this, HandlerName);
@@ -92,6 +99,20 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
         ApplyRegions();
     }
 
+    /// <summary>Moves the document-start state to another instance's scope before navigating there.</summary>
+    internal void SetScope(Uri next)
+    {
+        if (view is null || scope == next)
+            return;
+        scope = next;
+        var controller = view.Configuration.UserContentController;
+        controller.RemoveAllUserScripts();
+        controller.AddUserScript(DocumentScript(state));
+    }
+
+    /// <summary>Whether the page last reported a dark color scheme; native menus and dialogs follow it.</summary>
+    internal bool Dark { get; private set; }
+
     /// <summary>Forgets the previous document's surfaces when a new one starts loading.</summary>
     internal void ResetRegions()
     {
@@ -102,7 +123,13 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
     [Export("userContentController:didReceiveScriptMessage:")]
     public void DidReceiveScriptMessage(WKUserContentController controller, WKScriptMessage message)
     {
-        if (message.Name != HandlerName || message.FrameInfo is not { MainFrame: true } frame || !IsOwnOrigin(frame.SecurityOrigin))
+        if (
+            message.Name != HandlerName
+            || message.FrameInfo is not { MainFrame: true } frame
+            || scope is null
+            || !DesktopNavigation.IsApp(scope, frame.Request?.Url?.AbsoluteString)
+            || !IsOwnOrigin(frame.SecurityOrigin)
+        )
             return;
         var body = message.Body;
         if (body is not NSDictionary)
@@ -110,20 +137,32 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
         var data = NSJsonSerialization.Serialize(body, 0, out var error);
         if (error is not null || data is null)
             return;
-        var parsed = DesktopFrameRegions.Parse(NSString.FromData(data, NSStringEncoding.UTF8)?.ToString());
+        var json = NSString.FromData(data, NSStringEncoding.UTF8)?.ToString();
+        var parsed = DesktopFrameRegions.Parse(json);
         if (parsed is null)
+        {
+            // Only while the window is key, so a page in the background can't pop it up.
+            if (
+                window.IsKeyWindow
+                && instanceMenu is not null
+                && message.WebView is { } webView
+                && DesktopInstanceMenuRequest.Parse(json) is { } request
+            )
+                instanceMenu(webView, request.Anchor);
             return;
+        }
         regions = parsed;
+        Dark = parsed.Dark;
         window.Appearance = NSAppearance.GetAppearance(parsed.Dark ? NSAppearance.NameDarkAqua : NSAppearance.NameAqua);
         ApplyRegions();
     }
 
     private bool IsOwnOrigin(WKSecurityOrigin? security) =>
-        origin is not null
+        scope is not null
         && security is not null
-        && security.Protocol == origin.Scheme
-        && security.Host == origin.Host
-        && security.Port == origin.Port;
+        && security.Protocol == scope.Scheme
+        && string.Equals(security.Host, scope.Host, StringComparison.OrdinalIgnoreCase)
+        && (security.Port == scope.Port || (security.Port == 0 && scope.IsDefaultPort));
 
     /// <summary>The traffic lights' zone in window points, top-left origin; empty in full screen.</summary>
     private (double Left, double Top) ControlZone()
@@ -155,12 +194,9 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
         }.ToJsonText();
     }
 
+    // Top-level documents of the selected instance only; frames and other pages see nothing.
     private string Script(string json) =>
-        "if (window === window.top && location.origin === "
-        + JsonValue.Create(origin!.GetLeftPart(UriPartial.Authority))!.ToJsonText()
-        + ") window.foxwarmFrame = "
-        + json
-        + ";";
+        "if (" + DesktopNavigation.ScopeCondition(scope!) + ") window.foxwarmFrame = " + json + ";";
 
     private WKUserScript DocumentScript(string json) =>
         new(new NSString(Script(json)), WKUserScriptInjectionTime.AtDocumentStart, true);
@@ -168,7 +204,7 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
     private void Update()
     {
         ApplyRegions();
-        if (view is null || origin is null)
+        if (view is null || scope is null)
             return;
         var next = StateJson();
         if (next == state)

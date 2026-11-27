@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('system-timers', options)
@@ -50,12 +51,12 @@ try {
   assert.match(await page.$eval('[data-system-summary="timers"]', element => element.textContent), /3 timers · 0 paused · 1 failing/)
 
   // Filters and search.
-  await page.select('select[aria-label="Filter timers by action"]', 'toolscript')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by action"]', 'toolscript')
   await until(async () => (await listed(page)).join() === 'script1', 'action filter')
-  await page.select('select[aria-label="Filter timers by action"]', '')
-  await page.select('select[aria-label="Filter timers by state"]', 'failing')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by action"]', '')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by state"]', 'failing')
   await until(async () => (await listed(page)).join() === 'script1', 'state filter')
-  await page.select('select[aria-label="Filter timers by state"]', 'all')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter timers by state"]', 'all')
   await page.type('input[aria-label="Search timers"]', 'nightly')
   await until(async () => (await listed(page)).join() === 'once1', 'search')
   await page.click('input[aria-label="Search timers"]', { clickCount: 3 }); await page.keyboard.press('Backspace')
@@ -85,7 +86,7 @@ try {
   // Edit: schedule and message, validated by the server.
   await page.locator('[data-system-timer-inspector="msg1"] button::-p-text(Edit)').click()
   await page.waitForSelector('[data-system-timer-editor]')
-  await page.select('[data-system-timer-editor] select[aria-label="Schedule"]', 'cron')
+  await chooseSelectOption(page, '[data-system-timer-editor] [role="combobox"][aria-label="Schedule"]', 'cron')
   const cron = await page.$('[data-system-timer-editor] input[aria-label="Cron schedule"]')
   await cron.click({ clickCount: 3 }); await cron.type('not a cron')
   await page.click('[data-system-timer-editor] button[type="submit"]')
@@ -123,22 +124,23 @@ try {
   await page.evaluate(() => { location.hash = 'timers' })
   await page.waitForSelector('[data-system-section="timers"] [data-system-timers]')
 
-  // Narrow layout keeps the list and inspector usable.
+  // On a phone a row opens its details as a page with Back to the list.
   // Changing to a mobile viewport reloads the page.
   await page.setViewport({ width: 390, height: 844, isMobile: true })
   await page.waitForSelector('[data-fox-splash]', { hidden: true })
   await page.evaluate(() => { location.hash = 'timers' })
   await page.waitForSelector('[data-system-timer-id="script1"]', { visible: true })
-  await page.click('[data-system-timer-id="script1"]')
-  await page.waitForSelector('[data-system-timer-inspector="script1"]')
-  await page.waitForSelector('[data-system-timer-id="script1"][data-system-timer-selected="true"]')
-  assert.equal(await page.$('[data-system-timer-id="msg1"][data-system-timer-selected]'), null)
-  const overflow = await page.evaluate(() => document.querySelector('[data-system-timers]').scrollWidth - document.querySelector('[data-system-timers]').clientWidth)
-  assert.ok(overflow <= 1, `no horizontal overflow (${overflow}px)`)
+  const overflow = async () => page.evaluate(() => { const root = document.querySelector('[data-system-timers]'); return root.scrollWidth - root.clientWidth })
+  assert.ok(await overflow() <= 1, `no horizontal overflow (${await overflow()}px)`)
   await new Promise(done => setTimeout(done, 300)) // Let row color transitions settle.
   await shot(page, 'system-timers-narrow.png')
-  await page.$eval('[data-system-timer-inspector="script1"]', element => element.scrollIntoView())
+  await page.click('[data-system-timer-id="script1"]')
+  await page.waitForSelector('[data-system-split-layout="detail"] [data-system-timer-inspector="script1"]')
+  assert.equal(await page.$('[data-system-timer-id="msg1"]'), null, 'the detail page replaces the list')
+  assert.ok(await overflow() <= 1, `no horizontal overflow (${await overflow()}px)`)
   await shot(page, 'system-timers-narrow-inspector.png')
+  await page.click('[data-system-split-back]')
+  await page.waitForSelector('[data-system-split-layout="list"] [data-system-timer-id="msg1"]')
 
   assert.deepEqual(browserErrors, [])
   console.log('system timers e2e passed')

@@ -24,9 +24,7 @@ public sealed partial class AgentRulesTreeTests
                 .Concat(UnifiedToolDefinitions.All().OfType<JsonObject>())
                 .Concat(ToolScriptToolDefinitions.Definitions().OfType<JsonObject>())
         )
-            definitions.Add(
-                HandoffConfirmation.Definition(item, f.Manager.HandoffConfirmationEnabled)
-            );
+            definitions.Add(item.DeepClone());
         f.Registry = SessionToolExecutor.CreateRegistry(
             definitions,
             f.Manager.OutboundMcp,

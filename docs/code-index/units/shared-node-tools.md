@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/unifiedEdit.ts, packages/shared/src/unifiedEdit.test.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/toolResponseFormatting.fixtures.json, packages/shared/src/toolResponseYaml.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/unifiedEdit.ts, packages/shared/src/unifiedEdit.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/toolResponseFormatting.fixtures.json, packages/shared/src/toolResponseYaml.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
@@ -43,14 +43,12 @@ Provides shared file system tools, shell execution and utility functions used by
   nested-text helper preserves line boundaries. Root channel descriptors and
   prompt wrappers consume the built shared module, while WebUI optimistic
   previews consume the same source implementation. The attachment grammar
-  itself is canonical in [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
+  itself is canonical in [D-channel-file-descriptor](./dotnet-external-channels.md#d-channel-file-descriptor).
 
 ## Function Index
 
 | Function | Lines (approx) | Description |
 |----------|----------------|-------------|
-| `escapeRegExp(text)` (exactReplacement, private) | helper | Escapes special regex characters in literal search text |
-| `applyExactReplacement(content, searchText, replaceText, label)` (exactReplacement) | pure transformation | Replaces one non-overlapping regex match or throws with the caller label; preserves JavaScript replacement-string substitutions |
 | `nativeFileOperations` (fileOperations) | complete file | Native stat, offset/count read, directory metadata, whole-write, mkdir, and remove implementation |
 | `readWholeFile(operations, filePath)` (fileOperations) | helper | Repeats bounded 64 KiB ranged reads until EOF; an optional total byte bound reads at most one extra byte to detect source growth |
 | `requireToolFilePath(filePath, toolName)` (fileToolCore) | required-path validation | Rejects missing or blank read/edit paths before wrapper path resolution without trimming valid paths |
@@ -119,10 +117,10 @@ Provides shared file system tools, shell execution and utility functions used by
 - `initializeNodeToolExecRecovery()` discovers persisted per-agent exec registries at authenticated node startup and initializes their managers, including already-finished entries; recovery does not wait for a later tool call.
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
 - `read` and `edit` reject missing or blank `filePath` values before path resolution with `read requires filePath.` or `edit requires filePath.`; valid paths retain the existing resolution and operation behavior.
-- Current `edit` uses `unifiedEdit` literal replacement semantics described below. The older `exactReplacement` helper retains its memory-tool behavior and serves legacy compatibility tests.
+- Current `edit` uses `unifiedEdit` literal replacement semantics described below.
 - File existence checks treat only canonical `ENOENT` as missing; permission, protocol, malformed-provider, and other stat failures propagate so patch Add cannot overwrite an existing target after an indeterminate lookup.
 - `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. The native backend retains `w`/`wx` behavior, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
-- Shared cached-write retry formatting emits the executable `write({ ... })` call for the failing path, states that the scoped ref may use another independently authorized `filePath`, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus the desired path and required flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./src-tools.md#d-tools-write-contentref-retry-guidance).
+- Shared cached-write retry formatting emits the executable `write({ ... })` call for the failing path, states that the scoped ref may use another independently authorized `filePath`, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus the desired path and required flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./tools-local-io.md#d-tools-write-contentref-retry-guidance).
 
 ## Design Decisions
 
@@ -147,7 +145,7 @@ Request-prefix consequence, accepted once (user decision 2026-11-19): already pe
 - `formatToolArguments(args, { singleLine })` (C# `ToolResponseFormatting.FormatArguments`) is the one formatter. A sole argument shows only its value and an empty argument object shows nothing, as both previews did before. A value is a string as it is, otherwise YAML flow (`formatToolArgumentValue`).
 - Two variants of the layout in the shared emitter. `arguments` (expanded views) writes a top-level multi-line string as a literal block (`message: |-`). `argumentsLine` (one-line surfaces) is exactly `flowLevel 1`: such a string is a double-quoted escaped scalar, and a sole multi-line string value is escaped the same way, so line breaks in one-line text only separate arguments. The two variants are equal whenever no top-level string has a line break.
 - Scalars, quoting and key order follow the shared emitter, so the C# text equals the TypeScript text; the `arguments` cases of `toolResponseFormatting.fixtures.json` run against both, and the TypeScript test checks `argumentsLine` against js-yaml.
-- Main server previews (`SessionToolExecutor.ToolArgsPreview`, and the retained TypeScript `buildToolArgsPreview`) use the one-line variant for tools without a special case. They feed runtime status and the Inspector `Arguments` field, approval `summary`, activity summaries and the verbose channel `🛠 [tool]: ...` notice, which include one-line surfaces. Their special cases (exec/run_script/call_tool/ctl purpose or command, edit/write file path or patch text, read path and range, `add_secret` name only) and the 200-character cap are unchanged.
+- Main server previews (`SessionToolExecutor.ToolArgsPreview`) use the one-line variant for tools without a special case. They feed runtime status and the Inspector `Arguments` field, approval `summary`, activity summaries and the verbose channel `🛠 [tool]: ...` notice, which include one-line surfaces. Their special cases (exec/run_script/call_tool/ctl purpose or command, where a `ctl` call follows [D-ctl-summary](./ctl-command-registry.md#d-ctl-summary), edit/write file path or patch text, read path and range, `add_secret` name only) and the 200-character cap are unchanged.
 - WebUI surfaces are listed with the timeline: [argument text](./webui-tool-timeline.md#d-webui-tool-call-argument-text). Approval review of the full arguments and the JSON inspector stay exact JSON.
 
 ### D-unified-edit
@@ -156,7 +154,7 @@ Request-prefix consequence, accepted once (user decision 2026-11-19): already pe
 
 Replacement search and output are literal. `oldText` must be nonempty; empty `newText` deletes. Missing matches fail even with `replaceAll:true`; default/false requires one nonoverlapping match, while true replaces all nonoverlapping matches. Every batch item matches the original source, not preceding replacements. Ranges from different items must not overlap; adjacency is valid. Validate the complete batch before one file write. No fuzzy matching, sequential batch effects or rollback is added. Patch parsing, add/update/delete, operation order and partial-file effects retain the existing patch executor.
 
-The shared TypeScript implementation owns validation, matching and catalog/schema projection for retained Main, CLI and primitive providers; `UnifiedEdit` in NodePrimitives supplies the same semantics to managed Main and CLI. Native successful-path metadata, path expansion, physical authorization and approval remain wrapper-owned. All patch headers become authorization path facts under the `apply_patch` argument. The standalone model `apply_patch` registration is removed; the [legacy resident wire adapter](../threads/node-communication.md#d-node-thread-unified-edit) owns rolling upgrades.
+The shared TypeScript implementation owns validation, matching and catalog/schema projection for the TypeScript CLI Node and primitive providers; `UnifiedEdit` in NodePrimitives supplies the same semantics to managed Main and CLI. Native successful-path metadata, path expansion, physical authorization and approval remain wrapper-owned. All patch headers become authorization path facts under the `apply_patch` argument. The standalone model `apply_patch` registration is removed; the [legacy resident wire adapter](../threads/node-communication.md#d-node-thread-unified-edit) owns rolling upgrades.
 
 ### D-file-read-raster-classification
 
@@ -185,11 +183,10 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - `nodeTools` object is the primary interface invoked by the node runtime when dispatching tool calls
 - `execCwd` utilities are used by `exec` to resolve and validate working directories before spawning processes
 - `nodeFileTransfer` supports inter-node file transfer operations (read/write with base64 encoding and SHA-256 verification)
-- `toolResponseFormatting` produces the tool-result text for the retained TypeScript providers and the WebUI full-result view; the C# Main port (`ToolResponseFormatting`/`ToolResponseYaml`) produces the same text for every C# provider serializer and the external Claude runtime ([D-tool-result-text](#d-tool-result-text))
+- `toolResponseFormatting` produces the tool-result text for the TypeScript CLI Node and the WebUI full-result view; the C# Main port (`ToolResponseFormatting`/`ToolResponseYaml`) produces the same text for every C# provider serializer and the external Claude runtime ([D-tool-result-text](#d-tool-result-text))
 - `webuiToolRendering` supplies pure, testable helper logic for WebUI session-link text parsing and streaming partial tool-call guards
 - `foxwarmMarkup` supplies one attribute/nested-text escaping and attachment-tag implementation to root channel code and WebUI previews.
 - `estimateTokenCount` is shared across master and node packages for context budget management
 - Re-exported from `index.ts` as the public API surface of the `shared` package
-- Master-side `src/tools/helpers.ts` imports `fileToolCore` from `packages/shared/dist/fileToolCore`, so the root build must build `packages/shared` before compiling `src`.
 
 Browser automation is not part of this package: the `browser_*` tools are owned by the [managed browser host](./browser-host.md), and the package has no browser dependency.

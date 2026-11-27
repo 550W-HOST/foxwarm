@@ -22,6 +22,12 @@ The WebUI file-delivery adapter remains registered during ApplicationStopping so
 
 Path downloads retain regular-file/open-handle checks and streaming disposal. Filename overrides sanitize separators/control characters and limit the disposition name to 255 characters. Path previews are inline only for PNG/JPEG/GIF/WebP extensions; active/unknown files remain attachment/octet-stream. Blob display retains safe-raster MIME, immutable caching and existing authenticated URLs; explicit `preview=0` requests an attachment with the original name, while legacy authenticated `download=1` remains readable. GET/HEAD preserve content length and `nosniff`, without an authentication redirect. Relative issuance responses preserve nested deployment prefixes.
 
+## Design decisions
+
+### D-webui-channel-workspace-removal
+
+Removed browser workspace routes stay removed. File downloads support explicit tool/file actions but do not recreate a general browser filesystem editor.
+
 ## Tests
 
 `AsrRoutesTests.Uploads.cs` covers actual temporary upload/preparation, the actual chunked 1 GiB file and next-byte boundary, header-only early rejection, scoped ownership and incomplete-body revocation; `WebUiUploadedFilesTests.cs`; `ImagePipelineTests.cs`; `ImageCodecTests.cs`; `ImageIdentityGuidanceTests.cs`; file-delivery and upload limit tests; `packages/webui/test/mainHostNodeFiles.e2e.mjs` qualifies original remote picker ingress, canonical images and tool-row downloads through real hosts/CLI clients.

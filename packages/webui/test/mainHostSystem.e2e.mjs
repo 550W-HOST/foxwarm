@@ -1,9 +1,10 @@
-// System page over a real C# Main: Agents | Sessions | Nodes | Timers | Webhooks | Usage and the entry points of the former pages.
+// System page over a real C# Main: Agents | Sessions | Nodes | Timers | Usage | Activity (Webhooks once one exists) and the entry points of the former pages.
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('system-page', options)
@@ -27,15 +28,15 @@ try {
   // Sidebar entry is "System" and opens on Sessions.
   await page.click('button[title="Open System"]')
   await page.waitForSelector('h1::-p-text(System)')
-  assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage', 'Activity'])
+  assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Usage', 'Activity'])
   await page.waitForSelector('[data-system-section="sessions"] [data-architecture-session-id="worker"]')
   assert.deepEqual(await page.$$eval('[data-system-summary]', items => items.map(item => item.getAttribute('data-system-summary'))), ['sessions'])
   assert.match(await page.$eval('[data-system-summary="sessions"]', element => element.textContent), /0 active.*0 waiting.*0 queued/)
   // No global summary-card row and no Topology surface.
   assert.equal(await page.evaluate(() => document.body.innerText.includes('Execution topology') || document.body.innerText.includes('in loaded window')), false)
-  for (const label of ['Filter by status', 'Filter by agent', 'Filter by node', 'Filter by model']) assert.ok(await page.$(`select[aria-label="${label}"]`), label)
+  for (const label of ['Filter by status', 'Filter by agent', 'Filter by node', 'Filter by model']) assert.ok(await page.$(`[role="combobox"][aria-label="${label}"]`), label)
   assert.ok(await page.$('button[aria-label="Global token usage"]'))
-  await page.select('select[aria-label="Filter by node"]', 'master')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Filter by node"]', 'master')
   await until(async () => (await page.$$('[data-architecture-session-id]')).length === 3, 'master holds every Session')
   await page.type('input[aria-label="Search sessions, models, tools"]', 'review')
   await until(async () => (await page.$$eval('[data-architecture-session-id]', rows => rows.map(row => row.getAttribute('data-architecture-session-id')))).join() === 'reviewer', 'search narrows the list')
@@ -45,18 +46,28 @@ try {
 
   await page.click('[data-system-tab="agents"]')
   await page.waitForSelector('[data-architecture-agent-id="main"]')
-  assert.match(await page.$eval('[data-system-summary="agents"]', element => element.textContent), /\d+ agents/)
+  // Only main exists: the count reads in the singular.
+  assert.equal(await page.$eval('[data-system-summary="agents"]', element => element.textContent), '1 agent')
   assert.equal((await state(page)).workbench.tabsById['system:agents'].section, 'agents')
   await shot(page, 'system-agents.png')
 
-  // Nodes lists the Sessions placed on each Node; a Session opens in the Sessions inspector.
+  // Nodes is a table without Session lists; a Node's count opens Sessions filtered to it.
   await page.click('[data-system-tab="nodes"]')
-  await page.waitForSelector('[data-node-surface] [data-system-node-id="master"] [data-system-node-session="worker"]')
+  await page.waitForSelector('[data-node-surface] table[data-system-node-table="table"] [data-system-node-id="master"]')
   assert.match(await page.$eval('[data-system-summary="nodes"]', element => element.textContent), /Online 1 · Total 1/)
-  assert.match(await page.$eval('[data-system-node-id="master"]', element => element.textContent), /3 sessions here/)
+  assert.equal(await page.$('[data-system-node-session], [data-system-node-sessions]'), null)
+  assert.equal(await page.$eval('[data-node-sessions-link="master"]', element => element.textContent), '3')
+  // The Node's label appears once, and its service versions wait behind its details.
+  assert.equal(await page.$eval('[data-system-node-id="master"]', element => element.textContent.match(/master/g).length), 1)
+  assert.equal(await page.$('[data-node-details="master"]'), null)
+  await page.click('[data-system-node-id="master"] button[aria-expanded="false"]')
+  await page.waitForSelector('[data-node-details="master"]')
   await shot(page, 'system-nodes.png')
-  await page.click('[data-system-node-session="worker"]')
-  await page.waitForSelector('[data-system-section="sessions"] [data-architecture-inspector-session-id="worker"]')
+  await page.click('[data-node-sessions-link="master"]')
+  await page.waitForSelector('[data-system-section="sessions"] [data-architecture-session-id="worker"]')
+  assert.equal(await page.$eval('[role="combobox"][aria-label="Filter by node"]', element => element.textContent.trim().startsWith('master')), true)
+  await page.click('[data-architecture-session-id="worker"]')
+  await page.waitForSelector('[data-architecture-inspector-session-id="worker"]')
   assert.ok(await page.$('[data-architecture-session-id="worker"][data-architecture-session-selected="true"]'))
 
   // Former entry points open System on the right section.

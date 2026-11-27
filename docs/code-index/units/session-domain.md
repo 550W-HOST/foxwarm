@@ -21,11 +21,15 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 
 These are value/domain boundaries, not persistence writers. JSON authority owns active history/queue/wait semantic instances; catalog owns Main identity/topology/presentation summaries. Agent memory selection can affect a prompt but does not mutate Session history until a turn save commits its canonical result.
 
+`AgentMemory.BuildAsync` ends the memory blocks with the skill catalog: a fixed introduction, then one `<skill>` line per listed skill with its XML-escaped name, description and source type. A skill with a valid [`run` block](./skills.md#runnable-skills) gains `<run>` with its escaped effect after `<source>`, followed, when the block declares `args`, by `<args>` with the escaped compact JSON Schema (`SkillRun.ArgsText`, user decision 2026-11-25). When at least one listed skill is runnable, `AgentMemory.RunnableSkillsSentence` (approved copy, revised 2026-11-25) goes between the `ctl skill load` sentence and the line that introduces the list. A catalog without a runnable skill keeps its earlier bytes exactly, so adding the feature changes no existing prompt ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)); a Session that lists one sees the change once, at its next snapshot rebuild.
+
+**Catalog filter (2026-11-25).** The catalog follows the caller's `skill` and `run_skill` rules ([skill access](./skills.md#skill-access)). `SessionManager` passes `AgentMemory` a delegate (`skillAccess`, so `AgentMemory` holds no authorization types) that returns one `SkillAccess` filter per build, from one `ToolVisibilityContext` of the Agent and the real Session ID. A skill is listed when `skill load` of it is visible and keeps `<run>`/`<args>` only when `run_skill` of it is visible; `RunnableSkillsSentence` follows the filtered list. The filter is evaluated only when the snapshot is built, never per request, so an Agent that sees every skill keeps its bytes and a restricted Agent sees one change at its next rebuild. Unreadable Agent rule layers list nothing. When the global policy is unavailable, the build lists every skill unfiltered and writes one warning (user decision 2026-11-25, U6): listing grants nothing, and every call fails closed meanwhile.
+
 Session metadata, DTOs, status and bounded global/descendant summaries project optional recorded cost with presence-aware live overlays; the end-to-end contract is [D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost).
 
 ## Metadata search lowercasing
 
-`SessionListQueries.MetadataMatcher` is the shared metadata keyword matcher for WebUI `Search` and the model-facing `session` list `query` ([D-session-tool-list-scope](./src-tools-session-agent.md#d-session-tool-list-scope)). It lowercases both query and metadata candidates through `SourceStringLower`. Its generated mapping, Cased and Case_Ignorable tables use Unicode 17.0 data from Node 24.21.0, including supplementary case pairs and contextual final sigma. Original metadata remains unchanged; candidate normalization happens at query time. The existing generator and full-scalar Source oracle require Unicode 17.0 input, while ordinary managed execution uses the checked-in tables independently of the host Node runtime. `SessionCatalogSourceTests` retains full-scalar and contextual comparison, and `WebUiStartupTests.UnicodeSearch.cs` covers authenticated creation/name-setting/search with new case pairs, contextual sigma, existing casing controls and an absent query.
+`SessionListQueries.MetadataMatcher` is the shared metadata keyword matcher for WebUI `Search` and the model-facing `session` list `query` ([D-session-tool-list-scope](./session-manager-operations.md#d-session-tool-list-scope)). It lowercases both query and metadata candidates through `SourceStringLower`. Its generated mapping, Cased and Case_Ignorable tables use Unicode 17.0 data from Node 24.21.0, including supplementary case pairs and contextual final sigma. Original metadata remains unchanged; candidate normalization happens at query time. The existing generator and the full-scalar `String.prototype.toLowerCase` oracle (`Fixtures/lowercase-oracle.mjs`) require Unicode 17.0 input, while ordinary managed execution uses the checked-in tables independently of the host Node runtime. `SourceStringLowerParityTests` retains full-scalar and contextual comparison, and `WebUiStartupTests.UnicodeSearch.cs` covers authenticated creation/name-setting/search with new case pairs, contextual sigma, existing casing controls and an absent query.
 
 ## Tool argument parsing
 
@@ -89,7 +93,23 @@ Compaction builds a new root while retaining unchanged immutable records; preser
 
 Agent removal has two catalog outcomes after exact Session cleanup: operator command deletion retains the metadata row, while WebUI deletion removes it. Retained non-main membership is removed in either case using the existing v2 writer. Directory removal precedes the metadata write, and a later writer failure remains a real partial effect. Canonical main has its exclusive directory; command deletion of main in the retained shared-workspace layout refuses before any Session/file effects. Identity recovery's owned-destination cleanup remains a separate authority.
 
+## Design decisions
+
+- [2026-07-06/2026-07-07] Inter-session source headers use a single `<foxwarm-message type="inter-agent" ...>raw body</foxwarm-message>` system part instead of literal `[SYSTEM:]` text or split body parts. Attribute values are escaped, but the message body is intentionally left raw per user decision; existing `[SYSTEM:]` histories remain compatible.
+- [2026-07-07] Child-session missing-handoff reminders should be structured as `kind="child-reminder" event="missing-handoff"` metadata with the human reminder in the same foxwarm-system body, not as `<foxwarm-system hint="Reminder: ..." />` or a split `systemPayload` part.
+- The persisted reminder-boundary contract is canonical in [D-pipeline-persisted-child-handoff-boundary](../threads/message-processing-pipeline.md#d-pipeline-persisted-child-handoff-boundary).
+
+### D-session-channels-read-old-write-current
+
+Persisted attachment compatibility belongs in normalization. Runtime APIs expose only current names, and canonical writes remove legacy fields.
+
+### D-session-channels-source-reader
+
+Best-channel selection keeps narrow readers for persisted source wrappers while every new inbound message uses the current channel wrapper.
+
 ## Tests
+
+`RunnableSkillTests` holds the catalog prefix guard (the exact text of a catalog without a runnable skill, including one with an invalid `run` block) and checks the `<run>` and `<args>` elements, their escaping (including non-ASCII kept unescaped in the JSON), the absence of `<args>` without `run.args`, an over-limit schema and the sentence's single placement. `SkillAccessTests` checks the filter through real snapshots: exact bytes for unrestricted Agents and for a policy allowing both tools, the shipped `restricted-worker` rules (`<run>` for its own skills except `advisor`) and `channel-assistant` rules (listed without `<run>` or the sentence), each agreeing with load, run and `skill run --help`, a name deny, an ask, run rules on unknown arguments, unreadable layers and the unavailable-policy fallback.
 
 `AgentDeletionTests*.cs` covers deletion layouts, retained selection/membership and reopen behavior. `CanonicalPathsTests.cs` covers frozen Source metadata, Session serialization and directory membership, unknown fields, missing-only bootstrap after an explicit Agents-root change, fallback memory, retained physical layouts and exact identity recovery. `dotnet/Foxwarm.Tests/Sessions/*` (including `SessionHistoryOwnershipTests.cs`); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `ConditionalMemoryTests.cs`; presentation/list/identity tests.
 

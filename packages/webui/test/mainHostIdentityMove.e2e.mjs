@@ -37,7 +37,7 @@ try {
   const owned = await fixture('identity-move-app'); await owned.start()
   assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
   const page = await owned.openApp(); await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
-  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('session main'))
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main')
   assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'parent' })).status, 200)
   const sameBytes = await readFile(join(owned.data, 'state/sessions/main.json'), 'utf8')
   const same = await owned.api('POST', route('main') + '/message', { text: '/session move --new-session-id main --parent-session-id parent' }); assert.equal(same.status, 409)

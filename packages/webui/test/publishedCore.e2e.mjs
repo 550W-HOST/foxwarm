@@ -12,7 +12,7 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { until } from './mainHostFixture.mjs'
 import { publishedToolOutcomes } from './publishedToolOutcomes.mjs'
 import { browserEnvironment } from '../../browser-host/test/fixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesHistory, responsesSystemPrompt } from './ctlModelCalls.mjs'
 
 const payload = process.env.FOXWARM_PUBLISHED_CORE
 assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
@@ -118,10 +118,11 @@ try {
     assert.equal(bundle.status, 200); assert((await bundle.text()).length > 0)
   }
   const models = JSON.stringify({ default: 'fixture', providers: { fixture: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], asyncCompact: false } } }, null, 2) + '\n'
-  await page.evaluate(() => { location.hash = 'setup' })
-  await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
-  // First-run Models opens in the form view; this proof writes exact YAML through the editor.
-  await page.waitForSelector('[data-models-view="yaml"]'); await page.click('[data-models-view="yaml"]')
+  // A new installation offers only the first-run Models step, which opens in the form view;
+  // this proof writes exact YAML through the editor.
+  await page.waitForSelector('[data-first-run-surface] [data-setup-first-run]')
+  assert.equal(await page.$('#setup-tab-models'), null)
+  await page.waitForSelector('[data-setup-first-run] [data-models-view="yaml"]'); await page.click('[data-setup-first-run] [data-models-view="yaml"]')
   const editor = '[aria-label="Models YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor)
   await page.evaluate(async value => {
@@ -133,11 +134,14 @@ try {
     editor.getModel().setValue(value)
   }, models)
   const saved = page.waitForResponse(response => response.url().endsWith('/api/setup/models') && response.request().method() === 'POST')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models')?.click())
+  await page.evaluate(() => [...document.querySelectorAll('[data-setup-first-run] button')].find(button => button.textContent === 'Save and continue')?.click())
   const saveResponse = await saved
   assert.equal(saveResponse.status(), 200, await saveResponse.text())
   await until(async () => (await readFile(join(data, 'state/models.yaml'), 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === models, 'original setup saves model configuration')
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, false)
+  // The save's welcome Session replaces the first-run surface.
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main'
+    && !document.querySelector('[data-first-run-surface]'), { timeout: 15000 })
   assert.equal(requests.length, 0)
   const created = await api('POST', '/api/sessions', {})
   assert.equal(created.status, 200)
@@ -150,8 +154,8 @@ try {
     return JSON.stringify(qualificationHistory).includes('PACKAGED-NATIVE-DONE')
   }, 'packaged native/browser/image/artifact turn', 60_000)
   assert.equal(requests.length, 5)
-  assert.match(JSON.stringify(requests[2].input), /Packaged browser/)
-  assert.match(JSON.stringify(requests[3].input), /input_image/)
+  assert.match(JSON.stringify(responsesHistory(requests[2])), /Packaged browser/)
+  assert.match(JSON.stringify(responsesHistory(requests[3])), /input_image/)
   const history = (await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body
   const artifactIds = [...new Set(JSON.stringify(history).match(/art_[a-f0-9]{32}/g) || [])]
   assert.equal(artifactIds.length, 1)
@@ -172,8 +176,8 @@ try {
   assert.equal((await fetch(origin + blob)).status, 401)
   const bytes = Buffer.from(await (await fetch(origin + blob, { headers: { authorization: 'Bearer ' + token } })).arrayBuffer())
   assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a')
-  const effects = JSON.stringify(requests[1].input)
-  assert(requests.some(body => String(body.instructions || '').includes('You are running in Foxwarm')))
+  const effects = JSON.stringify(responsesHistory(requests[1]))
+  assert(requests.some(body => responsesSystemPrompt(body).includes('You are running in Foxwarm')))
   assert.match(effects, /completed/); assert.match(effects, /42/); assert.match(effects, /Source: global/); assert.match(effects, /INITIALIZATION.md/)
   assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
   assert(!(await readdir(join(data, 'state'))).includes('db'), 'Disabled Vector stays lazy')

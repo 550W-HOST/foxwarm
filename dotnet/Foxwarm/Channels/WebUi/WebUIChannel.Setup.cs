@@ -113,6 +113,8 @@ internal sealed partial class WebUIChannel
         );
         RegisterWeixinSetupRoutes(app, configuration);
         RegisterSecretRoutes(app, configuration);
+        RegisterAuthorizationSetupRoutes(app, configuration);
+        RegisterMcpSetupRoutes(app, configuration);
         app.MapPost(
             "/api/setup/models",
             async (HttpRequest request) =>
@@ -133,10 +135,13 @@ internal sealed partial class WebUIChannel
                     installation["models"] = configuration.Diagnostics();
                     installation["payload"] = WebUiContract.Models(sessions.Models);
                     if (firstRun)
+                    {
                         installation["firstSessionId"] = await EnsureFirstRunSessionAsync(
                             locale,
                             request.Headers.AcceptLanguage.ToString()
                         );
+                        await RecordFirstRunWebUiDefaultsAsync();
+                    }
                     return Results.Ok(JsonData.WebNode(installation));
                 }
                 catch (Exception error)

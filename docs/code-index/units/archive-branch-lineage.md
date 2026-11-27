@@ -28,8 +28,16 @@ Block reads, exact replay and compensation accept legacy block-backed ascending 
 
 `ArchiveBlockRecord.FrictionScore` is nullable and part of immutable block identity, duplicate-write comparison, and compensation. Initialization adds the nullable `friction_score` column to an otherwise valid old block schema; read-only old-schema readers project a missing column as null without migrating it. Owned/effective reads preserve scores, including zero, through cumulative fork caps and restart. Context metadata and rendered summaries expose a score only when present.
 
+## Design decisions
+
+### D-archive-lineage-caps
+
+Archive inheritance is resolved at read time and capped at each fork boundary; a child never copies or sees post-fork parent rows.
+
+Existing SQLite branches are authoritative during legacy cleanup. Parent metadata heuristics may infer a missing branch but never rewrite an established branch.
+
 ## Tests
 
 The Source lifecycle fixture binds its owned `state/config.yaml` before application imports through the shared process-harness environment contract. Its Agent, skill, model and state paths stay under the supplied fixture root, and optional workers, Vector and listeners are disabled. `scripts/test/test-isolation.test.mjs` checks direct race, seed and independent-process reopen entries against synthetic caller configuration, including the legacy override.
 
-`dotnet/Foxwarm.Tests/Storage/ArchiveSchemaCompatibilityTests.cs` and `dotnet/Foxwarm.Tests/Fixtures/archive-schema-fixture-ts.mjs` cover Source open/fork/read, managed write/reopen, retained branch columns/rows, cumulative history and ordinary Source reopening. `dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`; `ArchiveFrictionTests.cs`; `PersistencePrimitiveTests.cs`; `dotnet/Foxwarm.Tests/Sessions/LifecycleTransitionTests.cs` and `dotnet/Foxwarm.Tests/Fixtures/lifecycle-transition-fixture-ts.mjs` (real fork failure concurrent with parent move, exact compensation and Source identity-lock control); `dotnet/Foxwarm.Tests/Sessions/ForkClearLifecycleTests.cs`; `LegacyBlockAuthorityTests.cs` and `dotnet/Foxwarm.Tests/Fixtures/legacy-block-fixture-ts.mjs` (actual Source seed, mandatory managed owner startup, preserved legacy provenance, inherited expansion, unchanged candidate exclusion, normal compact commit and managed cold reopen).
+`dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`; `ArchiveFrictionTests.cs`; `PersistencePrimitiveTests.cs`; `dotnet/Foxwarm.Tests/Sessions/LifecycleTransitionTests.cs` and `dotnet/Foxwarm.Tests/Fixtures/lifecycle-transition-fixture-ts.mjs` (real fork failure concurrent with parent move, exact compensation and Source identity-lock control); `dotnet/Foxwarm.Tests/Sessions/ForkClearLifecycleTests.cs`; `LegacyBlockAuthorityTests.cs` (immutable legacy range replay, malformed and serialized-null source provenance).

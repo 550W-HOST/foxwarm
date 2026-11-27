@@ -617,6 +617,31 @@ public sealed partial class CompactLifecycleTests
         Assert.False(fixture.Owner.Entry.Snapshot().Busy);
     }
 
+    [Theory]
+    [InlineData(false, "currentNode=\"master\"")]
+    [InlineData(true, "currentNode=\"build/worker\" cwd=\"/src/a  &amp; b\"")]
+    public async Task Completion_records_the_owner_placement_at_commit(bool switchNode, string placement)
+    {
+        await using var fixture = await CompactFixture.CreateAsync();
+        await fixture.SeedAsync();
+        await fixture.Owner.Compactor.StartManualAsync();
+        await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (switchNode)
+        {
+            await fixture.Owner.Entry.SaveLane.CommitNodeAsync("build/worker");
+            await fixture.Owner.UpdateCwdAsync("/src/a  & b");
+        }
+        fixture.Peer.ReleasePlan();
+        await fixture.Owner.Compactor.DrainAsync();
+        await fixture.Owner.DrainForegroundAsync();
+
+        var stored = (await fixture.Store.LoadAsync("s"))!;
+        var row = Assert.Single(stored.History.Materialize(), CompactCandidateBuilder.Completion);
+        var marker = row["parts"]![0]!["system"]!.GetValue<string>();
+        Assert.Contains($" currentSessionId=\"s\" {placement} time=", marker);
+        Assert.Equal(marker, OpenAIRequestText.System(marker));
+    }
+
     [Fact]
     public async Task Failed_ready_planner_concludes_only_itself_and_preserves_followup_input()
     {
@@ -1448,7 +1473,7 @@ public sealed partial class CompactLifecycleTests
             {
                 Interlocked.Increment(ref PlannerRequests);
                 PlanRequestModel = SessionWait.Text(owned["model"]);
-                PlanInstructions = SessionWait.Text(owned["instructions"]);
+                PlanInstructions = ResponsesRequestShape.SystemPrompt(owned);
                 PlanReached.TrySetResult();
                 await plan.Task.WaitAsync(cancellationToken);
                 if (FailPlan)

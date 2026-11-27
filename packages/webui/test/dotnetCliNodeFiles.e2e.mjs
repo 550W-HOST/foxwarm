@@ -8,15 +8,15 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import sharp from 'sharp'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
-import { functionCallFor } from './ctlModelCalls.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
 let call
 const dll = resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')
-for (const runtime of ['source', 'dotnet']) {
-  call = functionCallFor(runtime)
+for (const runtime of ['dotnet']) {
+  call = functionCall
   const env = {}, fixture = await createHostFixture('native-cli-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const plans = new Map(), rounds = new Map(), requests = [], errors = [], processes = []
@@ -39,7 +39,7 @@ for (const runtime of ['source', 'dotnet']) {
     } catch (error) { errors.push(error.stack); response.writeHead(500); response.end(String(error)) }
   })
   model.listen(0, '127.0.0.1'); await once(model, 'listening')
-  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: native-cli-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: native-cli-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
   await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, asyncCompact: false, effort: { allowed: ['none'], default: 'none' }, models: ['wire'] } } }))
   async function online() { return until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.find(node => node.id === 'native-files' && node.online), runtime + ' native Node online', 22000) }
@@ -93,7 +93,7 @@ for (const runtime of ['source', 'dotnet']) {
     assert(!JSON.stringify(good(state, 'read')).includes('__foxwarmResolvedToolPaths'))
     assert(state.history.some(row => JSON.stringify(row).includes('nested/data.txt')))
 
-    const mainRoot = runtime === 'source' ? join(fixture.data, 'agents/main') : fixture.work
+    const mainRoot = fixture.work
     await mkdir(mainRoot, { recursive: true })
     const binary = Buffer.alloc(1024 * 1024 + 7, 0x97); await writeFile(join(mainRoot, 'source.bin'), binary)
     state = await turn(id, 'transfer', [[
@@ -101,7 +101,7 @@ for (const runtime of ['source', 'dotnet']) {
       call('to-main', 'copy_between_nodes', { sourceNode: 'native-files', sourcePath: 'transfer.bin', targetNode: 'master', targetPath: 'returned.bin' }),
     ]])
     good(state, 'to-node'); good(state, 'to-main'); // The retained TypeScript Main still resolves relative transfer paths against the Agent directory; the C# Main uses the Session cwd on the current Node.
-    assert.deepEqual(await readFile(join(runtime === 'source' ? agent : cwd, 'transfer.bin')), binary); assert.deepEqual(await readFile(join(mainRoot, 'returned.bin')), binary)
+    assert.deepEqual(await readFile(join(cwd, 'transfer.bin')), binary); assert.deepEqual(await readFile(join(mainRoot, 'returned.bin')), binary)
     state = await turn(id, 'programmatic', [[call('programmatic', 'run_script', { code: "r = call_tool('read', {'filePath': 'nested/data.txt'})\nreturn {'content': r['content'], 'truncated': r['truncated'], 'selectedBytes': r['selectedBytes']}" })]])
     assert.deepEqual(good(state, 'programmatic').result, { content: 'FIRST\r\nSECOND\r\nlast', truncated: false, selectedBytes: 19 })
     const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 120, g: 25, b: 90, alpha: 1 } } }).png().toBuffer()

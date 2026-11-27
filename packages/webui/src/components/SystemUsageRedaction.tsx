@@ -1,4 +1,5 @@
 import { ShieldCheck } from 'lucide-react'
+import { USAGE_TABLE_FIRST_COLUMN as STICKY_FIRST } from './SystemShared'
 import { formatUsageNumber } from './TokenUsageDetails'
 import { usageGroupLabel, type UsageGroup, type UsageReport } from '../usageOverview'
 import {
@@ -58,14 +59,15 @@ export default function SystemUsageRedaction({ report, groupingLabel }: { report
         <Counts label="Detection failures by reason" values={redaction.failures} format={formatRedactionFailure} tone="warning" />
       </div>
       {groups.length ? (
-        <table className="w-full table-fixed border-t border-fw-border-muted text-xs" data-usage-redaction-groups>
+        <div className="overflow-x-auto rounded-b-xl border-t border-fw-border-muted" data-usage-table-scroll>
+        <table className="w-full min-w-[20rem] text-xs md:table-fixed" data-usage-redaction-groups>
           <thead className="border-b border-fw-border-muted text-left text-[10px] text-fw-text-muted">
             <tr>
-              <th className="px-4 py-2 font-medium">{groupingLabel}</th>
-              <th className="w-24 px-2 py-2 text-right font-medium">Requests</th>
-              <th className="w-28 px-2 py-2 text-right font-medium">Replacements</th>
-              <th className="hidden w-28 px-2 py-2 text-right font-medium sm:table-cell">Detection</th>
-              <th className="w-24 px-4 py-2 text-right font-medium">Failures</th>
+              <th className={`${STICKY_FIRST} px-4 py-2 font-medium`}>{groupingLabel}</th>
+              <th className="whitespace-nowrap px-2 py-2 text-right font-medium md:w-24">Requests</th>
+              <th className="whitespace-nowrap px-2 py-2 text-right font-medium md:w-28">Replacements</th>
+              <th className="hidden whitespace-nowrap px-2 py-2 text-right font-medium sm:table-cell md:w-28">Detection</th>
+              <th className="whitespace-nowrap py-2 pl-2 pr-4 text-right font-medium md:w-24 md:pl-4">Failures</th>
             </tr>
           </thead>
           <tbody>
@@ -76,16 +78,17 @@ export default function SystemUsageRedaction({ report, groupingLabel }: { report
               const labelTitle = entries(item.labels).map(([label, value]) => `${formatRedactionLabel(label)} ${value}`).join(', ')
               return (
                 <tr key={`${group.kind}:${group.key ?? ''}`} className="border-b border-fw-border-muted last:border-0" data-usage-redaction-row={group.key ?? ''}>
-                  <td className="truncate px-4 py-2 font-medium text-fw-text-strong" title={group.key ?? undefined}>{usageGroupLabel(group)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums text-fw-text">{item.attempts.toLocaleString('en')}</td>
-                  <td className="px-2 py-2 text-right tabular-nums text-fw-text" title={labelTitle || undefined}>{formatUsageNumber(item.replacements)}</td>
-                  <td className="hidden px-2 py-2 text-right tabular-nums text-fw-text sm:table-cell" title="Per request">{item.attempts ? formatDetectionTime(averageDetection(item)) : '—'}</td>
-                  <td className={`px-4 py-2 text-right tabular-nums ${groupFailures ? 'text-fw-warning' : 'text-fw-text-muted'}`} title={failureTitle || undefined}>{groupFailures.toLocaleString('en')}</td>
+                  <td className={`${STICKY_FIRST} truncate px-4 py-2 font-medium text-fw-text-strong`} title={group.key ?? undefined}>{usageGroupLabel(group)}</td>
+                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-fw-text">{item.attempts.toLocaleString('en')}</td>
+                  <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-fw-text" title={labelTitle || undefined}>{formatUsageNumber(item.replacements)}</td>
+                  <td className="hidden whitespace-nowrap px-2 py-2 text-right tabular-nums text-fw-text sm:table-cell" title="Per request">{item.attempts ? formatDetectionTime(averageDetection(item)) : '—'}</td>
+                  <td className={`whitespace-nowrap py-2 pl-2 pr-4 text-right tabular-nums md:pl-4 ${groupFailures ? 'text-fw-warning' : 'text-fw-text-muted'}`} title={failureTitle || undefined}>{groupFailures.toLocaleString('en')}</td>
                 </tr>
               )
             })}
           </tbody>
         </table>
+        </div>
       ) : null}
     </section>
   )

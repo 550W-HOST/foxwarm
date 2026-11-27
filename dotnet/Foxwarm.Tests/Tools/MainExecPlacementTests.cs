@@ -120,6 +120,15 @@ public sealed class MainExecPlacementTests
         Assert.Equal(Path.Combine(work, "child"), nested["sessionCwd"]!.GetValue<string>());
         Assert.Equal(work, nested["finalCwd"]!.GetValue<string>());
 
+        // Each response records the Session placement its call left for later file links,
+        // including a cwd the call changed directly or through a script.
+        var afterDirect = responses[0]["__meta"]!["placementAfter"]!;
+        Assert.Equal("master", afterDirect["node"]!.GetValue<string>());
+        Assert.Equal(Path.Combine(work, "child"), afterDirect["cwd"]!.GetValue<string>());
+        var afterScript = responses[1]["__meta"]!["placementAfter"]!;
+        Assert.Equal("master", afterScript["node"]!.GetValue<string>());
+        Assert.Equal(work, afterScript["cwd"]!.GetValue<string>());
+
         // Display metadata never reaches the model request.
         var projected = (JsonObject)row.DeepClone();
         ConcreteRequestHistory.ProjectDisplayMetadata(projected);

@@ -12,7 +12,7 @@ internal static class SessionSettingsDefinitions
   {
     "type": "function",
     "name": "set_session_model",
-    "description": "Inspect or switch the model and effort of this Session or one of its descendant Sessions. Without model or effort, shows the current selection and the configured models. A change applies from the target's next model request, including later requests of a turn already in progress, and starts a new prompt cache.",
+    "description": "Inspect or switch the model and effort of this Session or one of its descendant Sessions. Without model or effort, shows the current selection and the configured models. A change applies from the target's next model request, including later requests of a turn already in progress, and starts a new prompt cache. On a model with perMessageEffort, an effort-only change keeps the prompt cache, and the provider may apply it only from the Session's next input rather than within a running tool loop.",
     "strict": false,
     "parameters": {
       "type": "object",

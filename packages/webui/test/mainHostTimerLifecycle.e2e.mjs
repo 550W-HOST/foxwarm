@@ -2,11 +2,11 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 const options = { env: {} }, fixture = await createHostFixture('timer-lifecycle', options), requests = [], failures = [], rounds = new Map(), held = new Map()
@@ -40,14 +40,8 @@ async function send(task, id = 'main') { assert.equal((await fixture.api('POST',
 const timer = (id, sessionId, message, extra) => ({ id, sessionId, message, createdAt: 1, ...extra })
 const catalogRow = id => ({ id, agent: 'main', busy: false, queueLength: 0, meta: { messageCount: 0, lastMessageTime: 0 } })
 async function seed(rows) {
-  const file = join(fixture.root, 'catalog-seed.json')
   const projected = rows.map(row => Object.fromEntries(Object.entries(row).filter(([, value]) => value !== null)))
-  await writeFile(file, JSON.stringify(projected))
-  execFileSync(join(process.env.DOTNET_ROOT, 'dotnet'), [
-    resolve('dotnet/Foxwarm.DevTools/bin/Debug/net10.0/Foxwarm.DevTools.dll'),
-    'catalog-fixture', 'replace', fixture.data, file,
-  ], { stdio: 'pipe' })
-  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, file], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  await seedCatalog(fixture.data, projected); seedArchiveBranches(fixture.data, projected)
 }
 async function put(id, extra = {}) { await writeFile(join(fixture.data, 'state/sessions', id + '.json'), JSON.stringify({ sessionStateVersion: 1, id, agent: 'main', busy: false, history: [], queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0 }, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: randomUUID(), persistentMemorySnapshot: 'Existing dormant owner snapshot.', ...extra })) }
 try {

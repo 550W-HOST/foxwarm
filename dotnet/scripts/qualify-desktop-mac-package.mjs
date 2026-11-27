@@ -39,7 +39,7 @@ async function validateBundle() {
   assert((await stat(executable)).mode & 0o111, 'The bundle executable is not executable')
   for (const file of [
     packName, 'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
-    'skills/code-index/SKILL.md', 'packages/cli-node/dist/client.bundle.js', 'lib/artifacts/managedPrepare.js',
+    'skills/code-index/SKILL.md', 'packages/cli-node/dist/client.bundle.js', 'packages/artifact-runtime/dist/managedPrepare.js',
     'ToolScript/native/monty', 'liblancedb_ffi.dylib', 'libfoxwarm-pty.dylib',
     'node_modules/esbuild/lib/main.js', 'node_modules/sharp/lib/index.js',
     'node_modules/@img/sharp-darwin-arm64/lib/sharp-darwin-arm64.node', 'foxwarm-pty-helper',
@@ -186,7 +186,11 @@ const sql = async (statement, parameters = []) => JSON.parse((await run('python3
 const mapped = async pid => (await run('lsof', ['-p', String(pid), '-Fn'], { maxBuffer: 16 << 20 })).stdout
 const gone = pid => { try { process.kill(pid, 0); return false } catch (error) { if (error.code !== 'ESRCH') throw error; return true } }
 
-async function start() {
+// A new installation renders the first-run surface (the Models step alone); a configured one the
+// workbench, whose sidebar offers "Open setup".
+const FIRST_RUN = { label: 'first-run surface', test: texts => texts.includes('Connect a model') && texts.includes('Save and continue') && !texts.includes('Open setup') }
+const WORKBENCH = { label: 'workbench', test: texts => texts.includes('Open setup') && !texts.includes('Connect a model') }
+async function start(surface) {
   child = spawn(executable, [], { cwd, env, stdio: ['ignore', 'ignore', 'pipe'] })
   let stderr = ''
   child.stderr.on('data', bytes => { stderr = (stderr + bytes).slice(-8000) })
@@ -203,14 +207,14 @@ async function start() {
     token = (await readFile(join(data, 'state/token'), 'utf8')).trim()
     return (await api('GET', '/health').catch(() => null))?.body.status === 'ready'
   }, 'extracted Desktop loopback startup')
-  // The web view navigates only to the owned origin. The original WebUI renders its application
-  // (with the sidebar's "Open setup") only after /api/auth/session accepted the native cookie;
-  // without it the page offers "Sign in again".
+  // The web view navigates only to the owned origin. The original WebUI renders its application,
+  // the first-run surface or the workbench, only after /api/auth/session accepted the native
+  // cookie; without it the page offers "Sign in again".
   let last
   const view = await until(async () => {
     last = await readWindow(child.pid)
-    return last.texts?.includes('Open setup') ? last : null
-  }, 'signed-in WebUI in the native window', 120_000).catch(error => {
+    return last.texts && surface.test(last.texts) ? last : null
+  }, `signed-in WebUI (${surface.label}) in the native window`, 120_000).catch(error => {
     throw new Error(`${error.message}; last window: ${JSON.stringify(last)?.slice(0, 3000)}`)
   })
   console.log(`Native window: ${view.texts.length} accessible texts`)
@@ -237,7 +241,7 @@ try {
   assert.equal((await require('sharp')(png).metadata()).width, 2)
 
   stage = 'Desktop startup and native sign-in'
-  await start()
+  await start(FIRST_RUN)
   const mainPid = child.pid
   assert.equal((await fetch(origin + '/api/auth/session')).status, 401)
   await access(join(agents, 'main/memory'))
@@ -324,7 +328,7 @@ try {
   assert.match(await readFile(join(data, 'state/logs/foxwarm.log'), 'utf8'), /Main stopped\./)
 
   stage = 'restart with retained data'
-  await start()
+  await start(WORKBENCH)
   assert(origin === savedOrigin, 'Desktop did not retain its origin')
   assert(token === savedToken, 'Desktop did not retain its administrator token')
   assert.equal(await readFile(join(data, 'state/models.yaml'), 'utf8'), savedModels)

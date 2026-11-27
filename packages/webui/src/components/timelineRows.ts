@@ -5,6 +5,7 @@ import {
   formatToolLabel,
   getLlmErrorMessageDetails,
   getToolResponseStatus,
+  isEffortChangeMessage,
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
   parseFoxwarmMetadataLine,
@@ -293,7 +294,7 @@ const getConversationInputKind = (message: Message): 'activity' | 'user' | 'lega
 
 /** Select a retry/error from complete active history, never a viewport or nested slice. */
 export function getHistoryTailLlmError(messages: readonly Message[]): Message | undefined {
-  const tail = messages.findLast(message => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview)
+  const tail = messages.findLast(message => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview && !isEffortChangeMessage(message))
   return tail && getLlmErrorMessageDetails(tail) ? tail : undefined
 }
 

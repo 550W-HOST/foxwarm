@@ -8,7 +8,7 @@ CLI/browser/Android/sandbox Node
   -> authenticated transport/proxy/service framing
   -> Node-local file/exec/tab/device/worktree operation
   -> correlated result/event/ack
-  -> current TypeScript Main or package consumer
+  -> managed Main or package consumer
 ```
 
 These remain real repository components. The .NET host now connects the external Node tool/exec and authenticated Session-event paths below, while the broader Source protocol remains a compatibility reference rather than a blanket runtime-support claim.
@@ -56,7 +56,7 @@ Current CLI/browser writers use structured image result fields; any old source-s
 
 ## Current gaps
 
-Session Worker hosting remains excluded. Executable-provider files, process primitives and lifecycle now connect through the [.NET provider owner](../units/dotnet-node-providers.md), independently of resident Node protocols. Root package startup/build selects managed Main through the [source entry](../units/source-main-entry.md); retained TypeScript Main is an explicit reference build. Configured Vector admission/search belongs to the [Vector owner](../units/vector-owner.md). See [delivery scope](../overview.md#d-dotnet-delivery-scope) for the remaining platform boundaries.
+Session Worker hosting remains excluded. Executable-provider files, process primitives and lifecycle now connect through the [.NET provider owner](../units/dotnet-node-providers.md), independently of resident Node protocols. Root package startup/build selects managed Main through the [source entry](../units/source-main-entry.md). Configured Vector admission/search belongs to the [Vector owner](../units/vector-owner.md). See [delivery scope](../overview.md#d-dotnet-delivery-scope) for the remaining platform boundaries.
 
 ## Canonical units and tests
 

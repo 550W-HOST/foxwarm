@@ -196,11 +196,17 @@ public sealed partial class SessionSaveLane
     public Task CommitInterSessionAsync(QueueItem item) => AdmitAsync(item, SaveKind.Strict);
 
     internal Task ResolveChildHandoffAsync() =>
+        UpdateChildHandoffAsync(SessionBoundary.ResolveChildHandoff);
+
+    internal Task MarkChildReminderCapNotifiedAsync() =>
+        UpdateChildHandoffAsync(SessionBoundary.MarkChildReminderCapNotified);
+
+    private Task UpdateChildHandoffAsync(Func<JsonObject, bool> change) =>
         EnqueueOperationAsync(async () =>
         {
             var snapshot = entry.Snapshot();
             var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-            if (!SessionBoundary.ResolveChildHandoff(envelope))
+            if (!change(envelope))
                 return;
             var staged = snapshot with { AuthorityEnvelope = envelope };
             staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
@@ -226,10 +232,7 @@ public sealed partial class SessionSaveLane
             PublishGoalOnly(staged);
         });
 
-    internal Task QueueChildReminderAsync(
-        string parentSessionId,
-        bool handoffConfirmation = false
-    ) =>
+    internal Task QueueChildReminderAsync(string parentSessionId) =>
         AdmitAsync(
             new QueueItem(
                 QueueItemType.Background,
@@ -238,7 +241,6 @@ public sealed partial class SessionSaveLane
                     {
                         ["system"] = SessionBoundary.ChildReminder(
                             parentSessionId,
-                            handoffConfirmation,
                             externalRuntime: entry.WithState(state =>
                                 ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
                             )

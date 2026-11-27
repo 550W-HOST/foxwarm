@@ -280,6 +280,7 @@ internal sealed partial class NodeConnectionHub
                 request["backgroundExecId"] = claim.ExecId;
                 request["completionCapability"] = claim.Grant;
                 claim.Command = SessionWait.Text(args["command"]);
+                claim.Summary = ToolActivity.CaptionSummary("exec", args);
                 claim.DispatchedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             }
             if (currentNode == connection.Id && cwd is not null)

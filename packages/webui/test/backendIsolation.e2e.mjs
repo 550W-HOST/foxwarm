@@ -10,9 +10,9 @@ import { fileURLToPath } from 'node:url'
 const execFileAsync = promisify(execFile)
 const repo = fileURLToPath(new URL('../../..', import.meta.url))
 
-// These real browser entries load the backend in-process and in an ordinary
-// OAuth child respectively. Exercise direct invocation without the batch preload.
-for (const file of ['orderedResponsesDraft.e2e.mjs', 'authorizations.e2e.mjs']) {
+// This real browser entry starts an owned managed Main child and a model peer.
+// Exercise direct invocation without the batch preload.
+for (const file of ['mainHostOrderedDraft.e2e.mjs']) {
   test(`${file} owns direct-entry backend state, including its children`, { timeout: 180_000 }, async t => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-browser-install-canary-'))
     t.after(() => fs.rm(root, { recursive: true, force: true }))

@@ -111,11 +111,13 @@ public sealed partial class RemoteExecProtocolTests
             Assert.Equal("registered", (await Read())["type"]!.GetValue<string>());
         }
 
-        internal Task<JsonNode?> Exec(CancellationToken token = default) =>
+        internal Task<JsonNode?> Exec(CancellationToken token = default, string? summary = null) =>
             Manager.Nodes.ExecuteAsync(
                 "remote",
                 "exec",
-                new JsonObject { ["command"] = "owned-effect" },
+                summary is null
+                    ? new JsonObject { ["command"] = "owned-effect" }
+                    : new JsonObject { ["summary"] = summary, ["command"] = "owned-effect" },
                 Owner.Id,
                 Owner.Agent,
                 "remote",
@@ -175,9 +177,9 @@ public sealed partial class RemoteExecProtocolTests
                 }
             );
 
-        internal async Task<JsonObject> StartBackground()
+        internal async Task<JsonObject> StartBackground(string? summary = null)
         {
-            var execution = Exec();
+            var execution = Exec(summary: summary);
             var request = await Read();
             Assert.Equal(Owner.Id, request["sessionId"]!.GetValue<string>());
             Assert.Equal("C:\\remote\\cwd", request["sessionCwd"]!.GetValue<string>());
@@ -347,7 +349,7 @@ public sealed partial class RemoteExecProtocolTests
         Assert.Single(fixture.Owner.Entry.Snapshot().Queue);
         Assert.Equal(1, fixture.Wakes);
         var saved = JsonNode.Parse(
-            await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath)
+            await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath())
         )!;
         Assert.Contains(
             "remote-exec-completion:" + id,

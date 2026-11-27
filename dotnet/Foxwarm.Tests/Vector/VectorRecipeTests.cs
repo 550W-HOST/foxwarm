@@ -265,12 +265,7 @@ public sealed class VectorRecipeTests
         };
         var inputPath = Path.Combine(f.Temp.Path, "input.json");
         await File.WriteAllTextAsync(inputPath, EcmaJson.Stringify(input));
-        var source = await VectorFixture.SourceAsync(
-            "recipes",
-            Path.Combine(f.Temp.Path, "source"),
-            inputPath,
-            Path.Combine(f.Temp.Path, "source.json")
-        );
+        var source = await VectorFixture.RecordedSourceAsync("recipes", inputPath);
         var malformed = new string(
             new[] { (char)0xd800, 'A', (char)0xdc00, (char)0xd83e, (char)0xdd8a, (char)0 }
         );

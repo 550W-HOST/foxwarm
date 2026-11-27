@@ -20,8 +20,8 @@ Tool catalogs remain independent of memory snapshots. The [canonical default dec
 
 ## Source assembly
 
-- [src-conditional-memory](../units/src-conditional-memory.md) owns the pure conditional grammar and current-model header format.
-- [Session prompt state](../units/src-session-prompt.md) applies conditional filtering independently to each selected source body before adding provenance wrappers. The framework base (bundled template or retained edited replacement) and the installation addition remain raw-content sources, so frontmatter-looking bytes stay model-visible; ordinary inherited, current-agent, and configured custom memory files retain Session frontmatter parsing before conditional filtering.
+- [src-conditional-memory](../units/conditional-memory.md) owns the pure conditional grammar and current-model header format.
+- [Session prompt state](./conditional-memory-snapshots.md) applies conditional filtering independently to each selected source body before adding provenance wrappers. The framework base (bundled template or retained edited replacement) and the installation addition remain raw-content sources, so frontmatter-looking bytes stay model-visible; ordinary inherited, current-agent, and configured custom memory files retain Session frontmatter parsing before conditional filtering.
 - Skill catalog text, generated directory/recall guidance, tool instructions, and chat history are not scanned for conditional blocks.
 - Each body is also filtered for the Session runtime (`foxwarm` or `claude-code`); the [condition grammar](../units/conditional-memory.md#grammar) owns attribute and list semantics. Claude Code snapshots omit the model marker and use the CLI-reported model name.
 - A materialized snapshot always starts with the exact canonical concrete model identity. Snapshot construction does not select a virtual route.
@@ -31,7 +31,7 @@ Tool catalogs remain independent of memory snapshots. The [canonical default dec
 - The existing model-routing loop selects one concrete `ModelConfigEntry` and derives its canonical identity through the same concrete attribution helper used for assistant metadata.
 - Immediately before concrete request-plan construction, a narrow optional prompt resolver receives that selected identity. Fixed low-level, CLI, and setup callers omit the resolver and keep their supplied prompt unchanged.
 - Memory-backed `chat` compares the selected identity with the snapshot's first-line marker. A match reuses the exact bytes without rereading memory files, persisting the snapshot again, or rotating the cache key. Normal effective-selection metadata persistence is independent of snapshot materialization. A missing or different marker rebuilds from the configured memory sources for that concrete identity.
-- The original TypeScript `src/llm.ts` `chat` resolver passes the matching snapshot directly as `systemPrompt`; `src/session/history.ts` `buildCompactJobSnapshot`/`runCompactJob` reuses that caller with the older history prefix and a later planning message. The C# entry points are `SessionChatService.ChatCoreAsync`, `SessionCompactor.PlanAsync`, and `SessionManager.RunBtwAsync`.
+- The entry points are `SessionChatService.ChatCoreAsync`, `SessionCompactor.PlanAsync`, and `SessionManager.RunBtwAsync`.
 - The first selected attempt's effective prompt becomes the request journal prompt. Later attempts pass their effective prompt to the existing optional per-attempt prompt reference boundary. Routing selection, retries, request identity, and assistant attribution remain one logical request.
 
 ## Ownership and detached work
@@ -57,7 +57,7 @@ Tool catalogs remain independent of memory snapshots. The [canonical default dec
 
 `AgentMemory.BuildAsync` appends one advisory line only when the newly built snapshot exceeds the threshold and writes one Main diagnostic identifying Agent, Session, byte count and estimated tokens. The advisory uses the snapshot size before adding its own line. Matching snapshots reuse their exact bytes without another log; refresh timing, model/runtime filtering, detached ownership, first-line identity and cache lineage are unchanged. This warning never trims or blocks memory. Default source discovery still includes only top-level `memory/*.md` across the inheritance chain; reference subdirectories are not injected.
 
-`MemorySize` also measures the saved snapshot for authenticated WebUI history responses. The context overview shows its UTF-8 KB and estimated tokens, with an over-limit highlight; these display estimates include an existing advisory line. Scoped identity responses omit these memory details with the snapshot. Request failures separately expose [fixed-prefix estimates](./context-compaction.md#request-size-failure-diagnostics), without changing the reusable prefix. Retained TypeScript Main is a reference target, not a second maintained request path for this feature.
+`MemorySize` also measures the saved snapshot for authenticated WebUI history responses. The context overview shows its UTF-8 KB and estimated tokens, with an over-limit highlight; these display estimates include an existing advisory line. Scoped identity responses omit these memory details with the snapshot. Request failures separately expose [fixed-prefix estimates](./context-compaction.md#request-size-failure-diagnostics), without changing the reusable prefix.
 
 ## Journal linkage
 

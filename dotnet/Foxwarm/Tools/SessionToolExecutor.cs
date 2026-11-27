@@ -277,7 +277,6 @@ internal sealed partial class SessionToolExecutor(
     private readonly List<string> handoffTargets = [];
     internal SessionOwner Hosted => hosted;
     internal MainBrowserTools Browser => sessions.Browser;
-    internal bool HandoffConfirmationEnabled => sessions.HandoffConfirmationEnabled;
     private SessionManager Manager => sessions;
     private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
 
@@ -356,6 +355,9 @@ internal sealed partial class SessionToolExecutor(
         if (invocation.Value is { ExecPlacement: null } current)
             current.ExecPlacement = RemoteExecPlacement(resolved, null);
     }
+
+    /// <summary>The Session's current Node and cwd as later calls will use them.</summary>
+    internal (string Node, string? Cwd) SessionPlacement => sessions.ExecutionPlacement(hosted);
 
     internal bool ToolScriptExecution => invocation.Value?.ToolScriptSubCalls is not null;
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
@@ -1165,7 +1167,10 @@ internal sealed partial class SessionToolExecutor(
             // Only a direct model call is visible as such in the Session's own history.
             !unattended && !Programmatic
                 ? invocation.Value?.CallId
-                : null
+                : null,
+            // A call of an attended script that has not detached runs under the model call
+            // that started the script, which is still the last row of the history.
+            !unattended && !ScriptDetached ? scriptScope.Value?.RootCallId : null
         );
         if (
             !unattended
@@ -1319,7 +1324,6 @@ internal sealed partial class SessionToolExecutor(
                 "create_child_session",
                 "send_to_session",
                 "refresh_session_snapshot",
-                "skill",
                 "set_agent_inherit",
                 "set_agent_rules",
                 "session",
@@ -1344,6 +1348,8 @@ internal sealed partial class SessionToolExecutor(
         )
             handlers[name] = (owner, args, token) =>
                 owner.ExecuteToolScriptAsync(name, args, token);
+        handlers["run_skill"] = (owner, args, token) => owner.ExecuteRunSkillAsync(args, token);
+        handlers["skill"] = (owner, args, token) => owner.ExecuteSkillAsync(args, token);
         foreach (
             var name in new[] { "create_timer", "list_timers", "update_timer", "delete_timer" }
         )

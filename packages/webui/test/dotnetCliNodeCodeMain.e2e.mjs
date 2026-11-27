@@ -8,13 +8,13 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
-import { functionCallFor } from './ctlModelCalls.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
-for (const runtime of ['source', 'dotnet']) {
-  const workbenchDir = runtime === 'source' ? resolve('packages/vscode-web/assets/vscode-web') : resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
+for (const runtime of ['dotnet']) {
+  const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
   const assets = await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js')).then(() => true, () => false)
   const env = {}, fixture = await createHostFixture('cli-code-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
@@ -36,7 +36,7 @@ for (const runtime of ['source', 'dotnet']) {
     for (const [source, target] of [[downstream, upstream], [upstream, downstream]]) { source.on('close', () => { sockets.delete(source); if (target.readyState === WebSocket.OPEN) target.close() }); source.on('error', () => {}) }
   })
   let round = 0, page, cli, cliOutput = ''
-  const call = functionCallFor(runtime)
+  const call = functionCall
   const model = createServer(async (request, response) => {
     try {
       let raw = ''; for await (const bytes of request) raw += bytes
@@ -46,7 +46,7 @@ for (const runtime of ['source', 'dotnet']) {
     } catch (error) { errors.push(error.stack); response.writeHead(500); response.end(String(error)) }
   })
   model.listen(0, '127.0.0.1'); await once(model, 'listening')
-  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: cli-code-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: cli-code-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
   await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, asyncCompact: false, effort: { allowed: ['none'], default: 'none' }, models: ['wire'] } } }))
   const online = () => until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.find(row => row.id === 'code-cli' && row.online), 'real CLI Code services online', 22000)
@@ -81,15 +81,15 @@ for (const runtime of ['source', 'dotnet']) {
     assert.equal((await rawApi('GET', gitUrl('content') + '&path=renamed.txt&ref=' + commit)).bytes.toString(), 'first\nselected second\nselected third\nlast\n')
     const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'code-owner' }); assert.equal(created.status, 200); const id = created.body.sessionId
     page = await fixture.openApp(); page.on('pageerror', error => errors.push(error.message))
-    await page.evaluate(id => { window.codePreviousHelper = window.foxwarmTest; window.codeAlreadySelected = [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(id)); window.foxwarmTest.switchToSession(id) }, id)
-    await page.waitForFunction(id => [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(id)) && (window.codeAlreadySelected || window.foxwarmTest !== window.codePreviousHelper), {}, id)
+    await page.evaluate(id => { window.codePreviousHelper = window.foxwarmTest; window.codeAlreadySelected = [...document.querySelectorAll('.foxwarm-chat-root')].some(root => root.dataset.chatSessionId?.includes(id)); window.foxwarmTest.switchToSession(id) }, id)
+    await page.waitForFunction(id => [...document.querySelectorAll('.foxwarm-chat-root')].some(root => root.dataset.chatSessionId?.includes(id)) && (window.codeAlreadySelected || window.foxwarmTest !== window.codePreviousHelper), {}, id)
     await page.evaluate(() => window.foxwarmTest.sendMessage('CLI-CODE'))
     await until(async () => { const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')); return state.history.some(row => row.parts?.some(part => part.text?.includes('CLI-CODE-DONE'))) }, 'normal model remote file turn', 30000)
     await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
     await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-    await page.waitForSelector('button[title$="renamed.txt in Code"]')
+    await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'renamed.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'renamed.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); await page.waitForSelector('a.foxwarm-code-link[title$="renamed.txt in Code"]')
     if (assets) {
-      await page.click('button[title$="renamed.txt in Code"]'); let code = await codeFrame()
+      await page.click('a.foxwarm-code-link[title$="renamed.txt in Code"]'); let code = await codeFrame()
       await code.waitForSelector('.editor-instance .view-lines', { timeout: 45000 }); await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
       await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nSaved through native-capable CLI Code service'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
       await until(async () => (await readFile(join(repo, 'renamed.txt'), 'utf8')).includes('Saved through native-capable CLI Code service'), 'official FS extension saved remotely')

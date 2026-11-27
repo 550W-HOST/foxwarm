@@ -503,3 +503,22 @@ test('incomplete citations inside code are literal even while streaming', () => 
     assert.doesNotMatch(citationHtml(source, [], true), /data-web-search-ref|FOXWARMCITATION/)
   }
 })
+
+test('assistant file links render through the supplied resolver; other links keep their rendering', () => {
+  const seen = []
+  const fileLink = (href) => {
+    seen.push(href)
+    if (href.startsWith('https:')) return undefined
+    if (href === 'unknown.txt') return null
+    return { href: 'https://host/vscode-web/?openFilePath=%2Fw%2Fa.ts', attributes: { 'data-code-path': '/w/a.ts', 'data-code-label': href } }
+  }
+  const html = renderAssistantMarkdownSegmentsWithSanitizer('See [**a.ts**](src/a.ts#L3 "t"), [docs](https://example.com) and [gone](unknown.txt).', identitySanitizer, undefined, false, fileLink)
+    .map(segment => segment.html).join('')
+  assert.deepEqual(seen, ['src/a.ts#L3', 'https://example.com', 'unknown.txt'])
+  assert.match(html, /<a target="_blank" rel="noopener noreferrer" href="https:\/\/host\/vscode-web\/\?openFilePath=%2Fw%2Fa\.ts" class="foxwarm-code-link" data-code-path="\/w\/a\.ts" data-code-label="src\/a\.ts#L3"><strong>a\.ts<\/strong><\/a>/)
+  assert.match(html, /<a target="_blank" rel="noopener noreferrer" href="https:\/\/example\.com">docs<\/a>/)
+  assert.match(html, /and gone\./)
+  // Without a resolver, links render as before.
+  const plain = renderAssistantMarkdownSegmentsWithSanitizer('[gone](unknown.txt)', identitySanitizer, undefined, false)[0].html
+  assert.match(plain, /<a target="_blank" rel="noopener noreferrer" href="unknown\.txt">gone<\/a>/)
+})

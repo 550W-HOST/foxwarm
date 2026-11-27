@@ -183,18 +183,20 @@ Foxwarm.app 在窗口中运行 Foxwarm，数据保存在 `~/Library/Application 
 使用安装脚本输出的登录链接，通常是：
 
 ```text
-http://localhost:3001/#token=...
+http://127.0.0.1:3001/#token=...
 ```
 
-如果找不到链接，读取数据目录下的 `state/token`，例如 `cat foxwarm-data/state/token` 或 `Get-Content .\foxwarm-data\state\token`。请像对待密码一样保管 token 和链接。
+如果找不到链接，运行 `./foxwarm/foxwarmctl link`（Windows 上是 `.\foxwarm\foxwarmctl.cmd link`）重新输出，或者读取数据目录下 `state/token` 中的 token。请像对待密码一样保管 token 和链接。
 
-Foxwarm 默认在所有网络地址的 3001 端口上监听。要修改，在 `state/config.yaml` 中设置 `bot.httpPort` 和 `bot.httpHost`，然后重启：
+新安装只允许本机访问 3001 端口：安装脚本会在 `state/config.yaml` 中写入 `bot.httpHost: 127.0.0.1`。要允许其他设备访问，把 `httpHost` 改为 `0.0.0.0`，然后重启：
 
 ```yaml
 bot:
   httpPort: 3001
-  httpHost: 127.0.0.1   # 只允许本机访问；默认的 0.0.0.0 允许其他设备访问
+  httpHost: 0.0.0.0   # 也允许其他设备访问；127.0.0.1 只允许本机访问
 ```
+
+没有设置 `bot.httpHost` 时，Foxwarm 在所有网络地址（`0.0.0.0`）上监听。早期安装脚本创建的安装和 Docker 镜像就是这样；更新安装不会改变它的监听地址，也不会改动 `config.yaml`。能访问到该端口的人仍然需要 token 才能登录。
 
 `httpHost` 填写本机的 IPv4 或 IPv6 地址，例如 `127.0.0.1`、`::1` 或某个局域网地址，不接受主机名（包括 `localhost`）。桌面版忽略这两项设置。
 
@@ -210,6 +212,7 @@ bot:
 | 停止 | `./foxwarm/foxwarmctl stop` | `.\foxwarm\foxwarmctl.cmd stop` |
 | 重启 | `./foxwarm/foxwarmctl restart` | `.\foxwarm\foxwarmctl.cmd restart` |
 | 查看状态 | `./foxwarm/foxwarmctl status` | `.\foxwarm\foxwarmctl.cmd status` |
+| 输出登录链接 | `./foxwarm/foxwarmctl link` | `.\foxwarm\foxwarmctl.cmd link` |
 | 更新到最新版本 | `./foxwarm/foxwarmctl update` | `.\foxwarm\foxwarmctl.cmd update` |
 | 查看控制台 | `./foxwarm/foxwarmctl attach` | 日志在 `state\logs` |
 | 前台运行 | `./foxwarm/foxwarmctl run` | `.\foxwarm\foxwarmctl.cmd run` |

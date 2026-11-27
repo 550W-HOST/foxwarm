@@ -77,14 +77,49 @@ internal sealed partial class SessionManager
         }
     }
 
+    // Commands in skill output name the same Agent as the call they answer.
+    private static string AgentFlag(JsonObject args) =>
+        args["agentName"] is { } raw && SessionWait.Text(raw)?.Trim() is { Length: > 0 } agent
+            ? " --agent-name " + agent
+            : "";
+
+    // The commands that reach this skill's files, each named only when the caller might be
+    // allowed to use it for this skill (the visibility help uses), as one sentence.
+    private string ResourceCommands(SessionOwner source, string skill, JsonObject args)
+    {
+        var flag = AgentFlag(args);
+        JsonObject Known(JsonObject value)
+        {
+            if (args["agentName"] is { } agent)
+                value["agentName"] = agent.DeepClone();
+            return value;
+        }
+        var clauses = new List<string> { $"Read a resource with `ctl skill load {skill} <path>{flag}`" };
+        if (ToolVisible(source, "builtin", "skill", fixedArgs: Known(new() { ["action"] = "copy", ["skillName"] = skill })))
+            clauses.Add($"copy files to a Node with `ctl skill copy {skill} <target-path> --path <path>{flag}`");
+        if (ToolVisible(source, "builtin", "run_skill", fixedArgs: Known(new() { ["skillName"] = skill })))
+            clauses.Add($"run a ToolScript file with `ctl skill run {skill} --script <path>{flag}`");
+        return (
+            clauses.Count == 1 ? clauses[0]
+            : string.Join(", ", clauses.Take(clauses.Count - 1)) + " and " + clauses[^1]
+        ) + ".";
+    }
+
     internal async Task<JsonObject> SkillAsync(SessionOwner source, JsonObject args)
     {
-        Keys(args, ["action", "skillName", "agentName"], ["action"]);
+        Keys(args, ["action", "skillName", "agentName", "startLine", "endLine"], ["action"]);
+        if (args.ContainsKey("startLine") || args.ContainsKey("endLine"))
+            throw new InvalidDataException("startLine and endLine apply only to a resource path.");
         var agent = Skills.RequestedAgent(OptionalString(args, "agentName"), source.Agent);
         var action = RequiredString(args, "action").Trim().ToLowerInvariant();
         if (action == "list")
         {
-            var list = await skills.ListAsync(agent);
+            // Filtered like the catalog, from the caller's live context; an unavailable policy
+            // fails this call as it fails every call.
+            var access = SkillAccessFor(VisibilityFor(source), OptionalString(args, "agentName"));
+            var list = (await skills.ListAsync(agent))
+                .Where(info => access(info) != SkillAccess.Hidden)
+                .ToArray();
             return new JsonObject
             {
                 ["agent"] = agent,
@@ -105,15 +140,18 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("skill.action must be \"list\" or \"load\".");
         var name = RequiredString(args, "skillName");
         var (info, content) = await skills.LoadAsync(name, agent);
+        // Resources are reached through the skill subsystem from any Node; the Main server path
+        // is shown only where Node tools resolve it (user decision 2026-11-25, U8).
         var output =
             $"Skill: {info.Name}"
             + (string.IsNullOrEmpty(info.Description) ? "" : $"\nDescription: {info.Description}")
-            + $"\nSource: {info.SourceLabel}\nMetadata: {info.MetadataPath}\nSkill directory: {info.Directory}\nRelative paths in this skill are relative to the skill directory.";
+            + $"\nSource: {info.SourceLabel}\nPaths in this skill are relative to its directory. {ResourceCommands(source, info.Name, args)}"
+            + (CurrentNode(source) == "master" ? $"\nOn master, the skill directory is {info.Directory}." : "");
         if (info.Resources.Length > 0)
             output +=
                 "\n\nSkill resources (supporting files, not eagerly loaded):\n"
                 + string.Join('\n', info.Resources.Select(path => "- " + path))
                 + (info.ResourcesTruncated ? "\n- ... (resource listing truncated)" : "");
-        return Output(output + $"\n\nFILE: {info.MetadataPath}\n{content}\n");
+        return Output(output + $"\n\nFILE: {info.Name}/SKILL.md\n{content}\n");
     }
 }

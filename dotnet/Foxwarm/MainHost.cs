@@ -24,6 +24,10 @@ internal sealed class MainHost : IAsyncDisposable
     internal bool HttpEnabled => host is WebApplication;
     internal SessionManager Sessions => sessions;
 
+    /// <summary>Main-local Sessions with a running turn (the Desktop's stop confirmation).</summary>
+    internal int RunningSessionCount() =>
+        sessions.LocalProjections().Count(row => SessionCatalog.Flag(row["busy"]));
+
     internal async Task StartAsync()
     {
         try

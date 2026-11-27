@@ -71,6 +71,9 @@ internal static class AnthropicSearchHistory
         for (var index = 0; index < history.Length; index++)
         {
             var message = history[index].Message;
+            // A recorded effort change is neither user input nor a response.
+            if (EffortChangeRecord.Is(message))
+                continue;
             if (SessionWait.Text(message["role"]) == "user")
             {
                 foreach (var (start, part) in pending.Values)

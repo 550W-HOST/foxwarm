@@ -142,6 +142,53 @@ public sealed partial class LiveActivityTests
     }
 
     [Fact]
+    public void A_ctl_summary_is_the_activity_unless_the_tool_it_runs_states_its_own()
+    {
+        JsonObject Ctl(string command, JsonObject? args, string? summary)
+        {
+            var call = new JsonObject { ["command"] = command };
+            if (args is not null)
+                call["values"] = new JsonObject { ["args"] = args.DeepClone() };
+            if (summary is not null)
+                call["summary"] = summary;
+            return call;
+        }
+        var mcp = new JsonObject { ["repo"] = "octo-org/demo", ["state"] = "open" };
+        Assert.Equal(
+            "List open issues",
+            ToolActivity.CaptionSummary("ctl", Ctl("tool call mcp:github/list_issues --args @args", mcp, " List open\nissues "))
+        );
+        Assert.Equal("Show the timers", ToolActivity.CaptionSummary("ctl", Ctl("timer list", null, "Show the timers")));
+        // Help and unparsable commands still state their purpose.
+        Assert.Equal("Look up flags", ToolActivity.CaptionSummary("ctl", Ctl("node --help", null, "Look up flags")));
+        Assert.Null(ToolActivity.CaptionSummary("ctl", Ctl("tool call mcp:github/list_issues --args @args", mcp, null)));
+        Assert.Null(ToolActivity.CaptionSummary("ctl", Ctl("timer list", null, "  ")));
+        Assert.Null(ToolActivity.CaptionSummary("exec", new JsonObject { ["command"] = "true" }));
+
+        // Only one summary is shown: that of the exec the command runs, as a direct exec shows it.
+        var exec = new JsonObject { ["command"] = "make", ["summary"] = "Build the project" };
+        Assert.Equal(
+            "Build the project",
+            ToolActivity.CaptionSummary("ctl", Ctl("tool call node:worker/exec --args @args", exec, "Run make on the worker"))
+        );
+        Assert.Equal(
+            "Run make on the worker",
+            ToolActivity.CaptionSummary(
+                "ctl",
+                Ctl("tool call node:worker/exec --args @args", new JsonObject { ["command"] = "make" }, "Run make on the worker")
+            )
+        );
+        // An MCP tool's own summary argument isn't a stated summary; the ctl one is shown.
+        Assert.Equal(
+            "Ask the server",
+            ToolActivity.CaptionSummary(
+                "ctl",
+                Ctl("tool call mcp:server/exec --args @args", new JsonObject { ["summary"] = "MCP text" }, "Ask the server")
+            )
+        );
+    }
+
+    [Fact]
     public void Summaries_come_from_exec_and_run_script_directly_or_through_ctl_and_call_tool_but_not_mcp()
     {
         JsonObject Summary(string summary) => new() { ["summary"] = summary, ["command"] = "true" };

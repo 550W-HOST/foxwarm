@@ -144,6 +144,7 @@ public sealed class SessionTurnRunner
     {
         var turnScope = entry.EnterTurnScope();
         var claimed = false;
+        var ranTurn = false;
         var failed = false;
         var interrupted = false;
         var turnSelected = retry;
@@ -174,7 +175,20 @@ public sealed class SessionTurnRunner
             var host = hosts.For(entry);
             claimed = await host.TryClaimBusyAsync(continuing: retry).ConfigureAwait(false);
             if (!claimed)
+            {
+                // A Stop that no running turn observed: it arrived after this processor was
+                // admitted but before it claimed busy, or after a previous turn last checked for
+                // it. This processor holds the only claim, so it finalizes the Stop as a turn
+                // would; otherwise Stopping refuses every later claim while runnable input
+                // retriggers processors without end.
+                if (
+                    entry.WithState(state => state.Stopping && !state.Busy)
+                    && !await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)
+                )
+                    await host.FinalizeStoppedAsync().ConfigureAwait(false);
                 return;
+            }
+            ranTurn = true;
             admitted?.Invoke();
             var retryPending =
                 retry
@@ -393,7 +407,19 @@ public sealed class SessionTurnRunner
                 try
                 {
                     if (claimed && !interrupted)
-                        await hosts.For(entry).ReleaseBusyAsync(llmFailed).ConfigureAwait(false);
+                    {
+                        var host = hosts.For(entry);
+                        // A Stop accepted after the loop last checked for it (for example at the
+                        // final safe point) is finished as the loop would have finished it.
+                        if (
+                            !failed
+                            && entry.WithState(state => state.Stopping)
+                            && !await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)
+                        )
+                            await host.FinalizeStoppedAsync().ConfigureAwait(false);
+                        else
+                            await host.ReleaseBusyAsync(llmFailed).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception error)
                 {
@@ -423,11 +449,16 @@ public sealed class SessionTurnRunner
                 }
                 try
                 {
+                    // A Stop that arrived after the checks above, while the claim was still held,
+                    // goes to a new processor, which finalizes it. A processor that only tried to
+                    // finalize a Stop and failed does not retrigger itself.
                     if (
                         !closing
-                        && !failed
                         && entry.WithState(state => !state.Busy)
-                        && registry.HasRunnableWork(entry)
+                        && (
+                            (!failed && registry.HasRunnableWork(entry))
+                            || ((!failed || ranTurn) && entry.HasUnobservedStop)
+                        )
                     )
                         registry.Trigger(sessionId);
                 }

@@ -22,7 +22,7 @@ const options = { onPage: page => page.setViewport({ width: 1440, height: 1000 }
 const fixture = await createHostFixture('node-code', options)
 if (normalRuntime) {
   Object.assign(options.env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
-  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: terminal-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: terminal-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
 }
 const home = join(fixture.root, 'home'), runtime = join(fixture.root, 'cli'), repo = join(runtime, 'repository')
@@ -246,7 +246,7 @@ try {
     await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
     await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
     await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-    await page.waitForSelector('button[title$="renamed.txt in Code"]'); await page.click('button[title$="renamed.txt in Code"]')
+    await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'renamed.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'renamed.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); await page.waitForSelector('a.foxwarm-code-link[title$="renamed.txt in Code"]'); await page.click('a.foxwarm-code-link[title$="renamed.txt in Code"]')
     let code = await codeFrame(); await code.waitForSelector('.editor-instance .view-lines', { timeout: 45000 }); await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
     await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nSaved remotely in original Code'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
     await until(async () => (await readFile(join(repo, 'renamed.txt'), 'utf8')).includes('Saved remotely in original Code'), 'official browser FS provider saved remotely')

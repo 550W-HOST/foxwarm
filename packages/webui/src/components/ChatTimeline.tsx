@@ -5,11 +5,13 @@ import SessionMessageCard from './SessionMessageCard'
 import { AskUserToolCard, isQuestionAnswerMarker, isStructuredQuestionAnswer, QuestionAnswerBubble } from './QuestionCard'
 import SystemEventCard from './SystemEventCard'
 import { getImageGenerationNotice, getSessionNotice } from '../sessionNotices'
-import ReplyFileGrid from './ReplyFileGrid'
-import { buildReplyFileGroups } from './replyFiles'
+import ReplyFileGrid, { replyFileGalleryEntry } from './ReplyFileGrid'
+import { buildReplyFileGroups, type ReplyFileGroup } from './replyFiles'
+import { ImageGalleryContext, useImageGalleryStore, type ImageGalleryEntry } from './imageGallery'
+import { isSafeImagePreviewMime } from './ImagePreviewDialog'
 import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
 import { getMessageViewportAnchorKey, getMessageStableKey } from '../chatViewportState'
-import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from 'react'
+import { memo, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from 'react'
 import { File as FileIcon, Image as ImageIcon, Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight } from 'lucide-react'
 import {
   IconToggleButton,
@@ -33,7 +35,7 @@ import {
   type OpenAIResponsesAnnotation,
   type ViewMode,
 } from './chatShared'
-import ImageParts, { ImageItem } from './ImageParts'
+import ImageParts, { ImageItem, imagePartMimeType, imagePartSource, isImagePart, WebUiImageSessionContext } from './ImageParts'
 import ReasoningCard from './ReasoningCard'
 import { getReasoningRuns, type ReasoningRunPart, type ReasoningBadgeInfo, type ReasoningPresentation } from './reasoningParts'
 import ReasoningTokenBadge from './ReasoningTokenBadge'
@@ -54,6 +56,8 @@ import {
   ToolResponsesBlock,
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
+import { CodeLinkBaseProvider, codeFileLinkRenderer, handleRenderedCodeLinkClick, useCodeLinkBase, useHasCodeLinkBases } from './CodeFileLink'
+import type { CodeLinkBase } from '../codeFileLinks'
 import { withLeadingExecLink } from './execLinks'
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
@@ -379,10 +383,15 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
   )
 })
 
-const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming, citations }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean; citations?: CitationRenderOptions | false }) {
-  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations), [text, artifactSessionId, streaming, citations])
+const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming, citations, linkBase, onOpenCodeFile }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean; citations?: CitationRenderOptions | false; linkBase?: CodeLinkBase; onOpenCodeFile?: OpenCodeFileHandler }) {
+  // File links need the app's Code handler; without one, links keep their ordinary rendering.
+  const fileLinks = !!onOpenCodeFile
+  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations, fileLinks ? codeFileLinkRenderer(linkBase) : undefined), [text, artifactSessionId, streaming, citations, fileLinks, linkBase])
+  const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!handleRenderedCodeLinkClick(event, onOpenCodeFile)) handleMarkdownLinkClick(event)
+  }, [onOpenCodeFile])
   return (
-    <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
+    <div className={`min-w-0 max-w-full ${className}`} onClick={handleClick}>
       {segments.map((segment) => {
         if (segment.kind === 'artifact') return artifactSessionId ? <div key={`markdown-token-${segment.tokenIndex}-${segment.reference.artifactId}-${segment.reference.revision}`} data-search-exclude className="not-prose"><ArtifactView reference={segment.reference} sessionId={artifactSessionId} /></div> : null
         if (segment.kind === 'html') {
@@ -819,8 +828,9 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessionId, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex, conversation = false, reasoningBadges }: { reasoningBadges?: readonly ReasoningBadgeInfo[]; conversation?: boolean; text: string; message: Message; sessionId: string; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessionId, annotations, onOpenCodeCommit, onOpenCodeFile, searchReveal = false, searchPartIndex, conversation = false, reasoningBadges }: { reasoningBadges?: readonly ReasoningBadgeInfo[]; conversation?: boolean; text: string; message: Message; sessionId: string; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; onOpenCodeFile?: OpenCodeFileHandler; searchReveal?: boolean; searchPartIndex?: number }) {
   const mobileUi = useMobileChatViewport()
+  const linkBase = useCodeLinkBase(message)
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const displayedViewMode = searchReveal ? 'rendered' : viewMode
   const [copied, setCopied] = useState(false)
@@ -898,6 +908,8 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessi
                 citations={segment.citations}
                 artifactSessionId={sessionId}
                 streaming={!!message.__meta?.streaming}
+                linkBase={linkBase}
+                onOpenCodeFile={onOpenCodeFile}
                 className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
               />
             ) : segment.kind === 'commit' ? (
@@ -1124,7 +1136,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={getPartWebSearchAnnotations(part)} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={getPartWebSearchAnnotations(part)} onOpenCodeCommit={onOpenCodeCommit} onOpenCodeFile={onOpenCodeFile} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
@@ -1284,7 +1296,7 @@ const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expa
         <ChevronRight size={13} className="-rotate-90" aria-hidden="true"/>Collapse activity
       </button>}
       {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0">
-        <AssistantTextCard sessionId={rowProps.sessionId} conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
+        <AssistantTextCard sessionId={rowProps.sessionId} conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} onOpenCodeFile={rowProps.onOpenCodeFile} />
       </div>}
     </div>
   )
@@ -1299,6 +1311,94 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
+const NO_GALLERY_ENTRIES: readonly ImageGalleryEntry[] = []
+
+type MessageImage = { part: Message['parts'][number]; index: number; title: string }
+const messageImageCache = new WeakMap<Message, MessageImage[]>()
+/**
+ * A message's images in display order with their labels, cached per message object: a user
+ * message's attachment grid first (named), then its other images, numbered like ImageParts
+ * within the message's own images and within each tool's.
+ */
+function messageImages(message: Message): MessageImage[] {
+  const cached = messageImageCache.get(message)
+  if (cached) return cached
+  const images: MessageImage[] = []
+  const associated = new Set<object>()
+  if (message.role === 'user') {
+    for (const item of findAttachmentCorrelations(message.parts).values()) {
+      if (!item.imagePart) continue
+      associated.add(item.imagePart)
+      if (!isOmittedAttachmentPreview(item.imagePart)) images.push({ part: item.imagePart, index: message.parts.indexOf(item.imagePart), title: item.name })
+    }
+  }
+  const counters = new Map<string, number>()
+  message.parts.forEach((part, index) => {
+    if (!isImagePart(part) || associated.has(part)) return
+    const group = part.toolUseId || ''
+    const number = (counters.get(group) || 0) + 1
+    counters.set(group, number)
+    images.push({ part, index, title: `Image ${number}` })
+  })
+  messageImageCache.set(message, images)
+  return images
+}
+
+/**
+ * Every image the timeline presents, in display order, for the full-screen viewer to switch
+ * between ([D-fullscreen-image-preview]). Built from the row model rather than the DOM, so
+ * images in collapsed tool cards, collapsed groups and folded Conversation activity count,
+ * while rows the view mode omits don't. Within a row: a user message's attachment grid,
+ * then its other images, then the images of the tool responses its call card renders; each
+ * reply-file grid follows the row it is placed after. Only loaded history and formats the
+ * viewer renders inline are included.
+ */
+function buildTimelineImageGallery(messages: readonly Message[], groupedRows: readonly TimelineGroupRows[], replyFileSlots: ReadonlyMap<number, readonly ReplyFileGroup[]>, webUiSessionId: string | null) {
+  const entries: ImageGalleryEntry[] = []
+  const keys = new WeakMap<object, string>()
+  const taken = new Set<object>()
+  const indices = new Map(messages.map((message, index) => [message, index]))
+  const addPart = (message: Message, { part, index, title }: MessageImage) => {
+    if (taken.has(part)) return
+    taken.add(part)
+    const mimeType = imagePartMimeType(part)
+    const src = imagePartSource(part, webUiSessionId)
+    if (!src || !isSafeImagePreviewMime(mimeType)) return
+    const key = `part:${getMessageStableKey(message, indices.get(message) ?? -1)}:${index}`
+    keys.set(part, key)
+    entries.push({ key, src, mimeType, title })
+  }
+  const addMessage = (message: Message, only?: number) => {
+    for (const image of messageImages(message)) {
+      if (only === undefined || image.index === only && !image.part.toolUseId && !image.part.functionResponse) addPart(message, image)
+    }
+  }
+  const replies = new Set<string>()
+  const addReplyFiles = (slot: number) => {
+    for (const group of replyFileSlots.get(slot) || []) {
+      for (const file of group.files) {
+        const entry = replyFileGalleryEntry(file)
+        if (!entry || replies.has(entry.key)) continue
+        replies.add(entry.key)
+        entries.push(entry)
+      }
+    }
+  }
+  addReplyFiles(-1)
+  groupedRows.forEach((item, slot) => {
+    for (const row of item.rows) {
+      if (row.communication || row.question) continue
+      if (row.activity) for (const message of row.activity.sources || row.activity.messages) addMessage(message)
+      else {
+        addMessage(row.msg, row.msg.role === 'user' ? undefined : row.conversationPartIndex)
+        if (row.pairedToolResponse && row.conversationPartIndex === undefined) addMessage(row.pairedToolResponse)
+      }
+    }
+    addReplyFiles(slot)
+  })
+  return { entries, keys }
+}
+
 const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, liveTiming = true, renderMessageFooter }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
@@ -1306,6 +1406,14 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
   const activityMembersRef = useRef(new Map<object | string, string>())
   const [clockTick, setClockTick] = useState(0)
+  const hasLinkBases = useHasCodeLinkBases()
+  // File links resolve against the complete loaded history, plus any visible draft rows.
+  const linkBaseMessages = useMemo(() => {
+    if (!historyMessages) return messages
+    const loaded = new Set(historyMessages)
+    const extra = messages.filter(message => !loaded.has(message))
+    return extra.length ? [...historyMessages, ...extra] : historyMessages
+  }, [historyMessages, messages])
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number, overrideView?: TimelineView, nestedSearchTarget?: SessionSearchMatch | null) => (
     <ChatTimeline
@@ -1448,13 +1556,19 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   }, [messages, groupedRows, sessionId, nestedDepth, activityDetails])
   const renderArtifacts = (slot: number) => (artifactSlots.get(slot) || []).flatMap(group => group.artifacts.map(receipt => <ArtifactView key={`artifact:${receipt.artifactId}:${receipt.revision}`} receipt={receipt} />))
 
+  // The top-level timeline owns the Session's image sequence; nested timelines open into it.
+  const ownsImageGallery = nestedDepth === 0 && !activityDetails
+  const webUiImageSessionId = useContext(WebUiImageSessionContext)
+  const imageGallery = useMemo(() => ownsImageGallery ? buildTimelineImageGallery(messages, groupedRows, replyFileSlots, webUiImageSessionId) : null, [ownsImageGallery, messages, groupedRows, replyFileSlots, webUiImageSessionId])
+  const imageGalleryStore = useImageGalleryStore(imageGallery?.entries ?? NO_GALLERY_ENTRIES, imageGallery?.keys)
+
   const lastGroup = groupedRows[groupedRows.length - 1]
   const lastRow = lastGroup?.rows[lastGroup.rows.length - 1]
   const footerAlignment = lastRow?.msg.role === 'user' && !lastRow.systemLikeMessage && !lastRow.activity && !lastGroup.group ? 'right' : 'left'
 
   const rowProps = { hideMetrics, conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
-  return (
+  const timeline = (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
       {renderReplyFiles(-1)}
       {renderArtifacts(-1)}
@@ -1471,6 +1585,9 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
       {renderMessageFooter?.(footerAlignment)}
     </div>
   )
+  const content = ownsImageGallery ? <ImageGalleryContext.Provider value={imageGalleryStore}>{timeline}</ImageGalleryContext.Provider> : timeline
+  // Nested timelines read the bases of the enclosing complete timeline.
+  return hasLinkBases ? content : <CodeLinkBaseProvider messages={linkBaseMessages}>{content}</CodeLinkBaseProvider>
 })
 
 const ChatTimeline = memo(function ChatTimeline(props: ChatTimelineProps) {

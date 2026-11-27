@@ -123,8 +123,8 @@ async function waitForSnapshot(page, version) {
 
 async function openDebug(page) {
   await page.click('button[title="Session options"]')
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'debug info'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Debug info'))
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Debug info')?.click())
 }
 
 async function closeDebug(page) {

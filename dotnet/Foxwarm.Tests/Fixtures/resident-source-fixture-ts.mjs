@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const root = process.env.FOXWARM_TS_ROOT
-if (!root) throw new Error('FOXWARM_TS_ROOT is required')
+const root = process.env.FOXWARM_REPO_ROOT
+if (!root) throw new Error('FOXWARM_REPO_ROOT is required')
 const ts = require(path.join(root, 'node_modules/typescript'))
 require.extensions['.ts'] = (module, filename) => {
   const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {

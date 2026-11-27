@@ -31,17 +31,13 @@ Foxwarm 把 **agent**、**session**、**child session** 明确区分开来，这
 create_child_session({
   suffix: 'analysis',
   fork: true,
-  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Review the latest diff and summarize risks.',
-  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.'
 })
 
 create_child_session({
   suffix: 'test',
   fork: true,
-  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Run smoke tests in the test environment.',
-  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.'
 })
 ```
 
@@ -50,9 +46,7 @@ create_child_session({
 ```ts
 send_to_session({
   sessionId: 'main_analysis',
-  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Check README and docs for outdated branding.',
-  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.'
 })
 ```
 
@@ -70,7 +64,6 @@ send_to_session({
 {
   suffix: string,
   fork?: boolean,
-  handoffRecall?: string,
   message?: string,
   currentSessionTurnAction?: 'continue' | 'end_turn' | 'wait',
   node?: string,
@@ -78,7 +71,6 @@ send_to_session({
     modelId?: string,
     effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max',
   },
-  handoffConfirmation?: string,
 }
 ```
 
@@ -88,32 +80,26 @@ send_to_session({
 - `currentSessionTurnAction` 控制当前 Session 在创建及初始消息发送后的回合：`continue` 继续当前回合（默认），`end_turn` 结束本回合并进入 idle，`wait` 结束并等待 child 后续活动；`wait` 需要 `taskId` 或非空 `message`
 - `node` 可让 child session 绑定到特定 node
 - 只有明确需要覆盖继承/default 行为时才传 `forceModel`；`forceModel: {}` 等同于不覆盖
-- Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
 
 ### `send_to_session`
 
 ```ts
 {
   sessionId: string,
-  handoffRecall?: string,
   message: string,
   currentSessionTurnAction?: 'continue' | 'end_turn' | 'wait',
-  handoffConfirmation?: string,
 }
 ```
 
 用于跨 session 协作、测试交接、结果回报等。
-Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
 
-Child 完成任务并向 Parent 发送最终报告时，应使用 `finish`：
+Child 完成任务并向 Parent 发送最终报告时，应使用 `currentSessionTurnAction: 'end_turn'`：
 
 ```ts
 send_to_session({
   sessionId: 'main_analysis',
-  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Review complete.',
   currentSessionTurnAction: 'end_turn',
-  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.',
 })
 ```
 

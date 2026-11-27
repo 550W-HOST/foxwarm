@@ -68,8 +68,8 @@ async function view(name) {
 async function debugSnapshot(sessionId) {
   const before = await page.evaluate(() => window.fixtureDebugCaptures.length)
   await page.click('[aria-label="Open session options"]')
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'debug info'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Debug info'))
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Debug info')?.click())
   await page.waitForFunction((count, id) => window.fixtureDebugCaptures.slice(count).some(text => JSON.parse(text).sessionId === id && JSON.parse(text).resolvedSessionFilePath), {}, before, sessionId)
   const capture = await page.evaluate((count, id) => window.fixtureDebugCaptures.slice(count).map(text => JSON.parse(text)).filter(value => value.sessionId === id && value.resolvedSessionFilePath).at(-1), before, sessionId)
   await page.click('[data-json-inspector-dialog] button[title="Close"]')

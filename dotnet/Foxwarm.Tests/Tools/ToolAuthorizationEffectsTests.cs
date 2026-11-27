@@ -582,7 +582,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         using var temp = new TempDirectory();
         await Seed(temp.Path);
         var repository =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? throw new InvalidOperationException("Source checkout is required.");
         var peer = Path.Combine(temp.Path, "peer");
         Directory.CreateDirectory(peer);

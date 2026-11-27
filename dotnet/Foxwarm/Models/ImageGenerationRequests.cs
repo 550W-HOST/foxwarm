@@ -73,7 +73,9 @@ internal static class ImageGenerationRequests
             options.HistoryCompatibility
         );
         // Provider extensions may tune transport/output options, not replace this request's
-        // bounded input, image-only tools, or reasoning-free ownership contract.
+        // bounded input (led by its own developer prompt), image-only tools, or reasoning-free
+        // ownership contract. Blocking `instructions` keeps an ordinary prompt override from
+        // adding a second system prompt beside that developer item.
         if (options.ExtraFields is not null)
             foreach (var (key, value) in options.ExtraFields)
                 if (

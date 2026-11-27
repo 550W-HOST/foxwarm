@@ -44,8 +44,8 @@ test('real source builds, failed update, restart, old output removal and delayed
   fs.mkdirSync(bin);
   fs.mkdirSync(path.join(data, 'state'), { recursive: true });
   const excluded = new Set(['node_modules', 'bin', 'obj', 'dist', '.temp', '.cache']);
-  for (const name of ['dotnet', 'src', 'scripts', 'skills', 'templates', 'packages',
-    'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.artifacts.json', 'LICENSE']) {
+  for (const name of ['dotnet', 'scripts', 'skills', 'templates', 'packages',
+    'package.json', 'package-lock.json', 'LICENSE']) {
     fs.cpSync(path.join(repository, name), path.join(app, name), {
       recursive: true, filter: source => !path.relative(repository, source).split(path.sep).some(part => excluded.has(part)),
     });

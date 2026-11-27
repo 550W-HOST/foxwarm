@@ -12,13 +12,25 @@ internal sealed record SkillInfo(
     string SourceType,
     string? SourceAgent,
     string[] Resources,
-    bool ResourcesTruncated
+    bool ResourcesTruncated,
+    // The validated `run` block of a runnable skill; RunError says why a present block is not.
+    SkillRun? Run = null,
+    string? RunError = null
 )
 {
     internal string SourceLabel =>
         SourceType == "global" ? "global"
         : SourceType == "agent-local" ? $"agent:{SourceAgent}"
         : $"inherited:{SourceAgent}";
+}
+
+// What a skill listing shows of one skill: nothing, the skill, or the skill with its run entry.
+// A projection of the caller's rules; load and run are still authorized at dispatch.
+internal enum SkillAccess
+{
+    Hidden,
+    Load,
+    Run,
 }
 
 // Knowledge discovery only: entry documents are loaded on demand, never executable tool registration.
@@ -29,7 +41,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
     internal static string RequestedAgent(string? agentName, string callerAgent) =>
         string.IsNullOrWhiteSpace(agentName) ? callerAgent : agentName.Trim();
 
-    private static readonly HashSet<string> Skip = new(StringComparer.Ordinal)
+    private static readonly IReadOnlySet<string> Skip = new HashSet<string>(StringComparer.Ordinal)
     {
         ".git",
         "build",
@@ -89,7 +101,22 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         return result.Values.OrderBy(info => info.Name, StringComparer.CurrentCulture).ToArray();
     }
 
-    internal async Task<(SkillInfo Info, string Content)> LoadAsync(string name, string agent)
+    internal async Task<(SkillInfo Info, string Content)> LoadAsync(string name, string agent) =>
+        await FindAsync(
+            name,
+            agent,
+            true,
+            async info => (info, await File.ReadAllTextAsync(info.MetadataPath))
+        );
+
+    // Resolution shared by load and run: Agent-local, inherited, then global; the first valid
+    // match wins.
+    private async Task<T> FindAsync<T>(
+        string name,
+        string agent,
+        bool resources,
+        Func<SkillInfo, Task<T>> read
+    )
     {
         ValidateName(name);
         Exception? last = null;
@@ -99,8 +126,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
                 continue;
             try
             {
-                var info = await BuildAsync(name, root, true);
-                return (info, await File.ReadAllTextAsync(info.MetadataPath));
+                return await read(await BuildAsync(name, root, resources));
             }
             catch (Exception error)
                 when (error
@@ -165,7 +191,9 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         var entry = Path.Combine(dir, "SKILL.md");
         if (!File.Exists(entry))
             throw new InvalidDataException($"Skill '{name}' not found. Expected: {entry}.");
-        var description = Description(await File.ReadAllTextAsync(entry));
+        var content = await File.ReadAllTextAsync(entry);
+        var description = Description(content);
+        var (run, runError) = Run(content, dir);
         var (files, truncated) = resources ? Resources(dir) : (Array.Empty<string>(), false);
         return new SkillInfo(
             name,
@@ -175,11 +203,20 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
             root.Type,
             root.Agent,
             files,
-            truncated
+            truncated,
+            run,
+            runError
         );
     }
 
-    private static (string[] Files, bool Truncated) Resources(string root)
+    // The skill `name` resolves to, as load and run resolve it; the caller reads inside it.
+    internal Task<SkillInfo> ResolveAsync(string name, string agent) =>
+        FindAsync(name, agent, false, Task.FromResult);
+
+    // Files under `start` (the skill directory or a directory inside it) as paths relative to
+    // the skill directory: links and Skip directories are left out, and so is the root SKILL.md.
+    // Stops after 200 files.
+    internal static (string[] Files, bool Truncated) Resources(string root, string? start = null)
     {
         var files = new List<string>();
         var truncated = false;
@@ -227,7 +264,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
                 }
             }
         }
-        Walk(root);
+        Walk(start ?? root);
         return (files.ToArray(), truncated);
     }
 

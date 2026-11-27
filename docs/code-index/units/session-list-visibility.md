@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Sessions/SessionManager.SessionVisibility.cs`
 
 Secondary files: `dotnet/Foxwarm/Sessions/SessionObservation.cs`, `dotnet/Foxwarm/Sessions/AgentMemory.Manifest.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.Rules.cs`
 
-The model-facing `session(action:"list")`, the "Recent child sessions" of `session` status and `list_agents` use the projection below. It follows the [Node list visibility](./node-list-visibility.md) pattern and reuses its `ToolVisibilityContext` and the known-argument `Visible` overload in [tool authorization](./tool-authorization.md). The list scope contract is [D-session-tool-list-scope](./src-tools-session-agent.md#d-session-tool-list-scope).
+The model-facing `session(action:"list")`, the "Recent child sessions" of `session` status and `list_agents` use the projection below. It follows the [Node list visibility](./node-list-visibility.md) pattern and reuses its `ToolVisibilityContext` and the known-argument `Visible` overload in [tool authorization](./tool-authorization.md). The list scope contract is [D-session-tool-list-scope](./session-manager-operations.md#d-session-tool-list-scope).
 
 ## Contract
 

@@ -11,9 +11,40 @@ internal sealed partial class AgentMemory(
     Skills skills,
     string? frameworkTemplatePath = null,
     HostModels? models = null,
-    Action<string>? warning = null
+    Action<string>? warning = null,
+    // What the catalog may show of each skill for (Agent, Session), evaluated once per build;
+    // null, or a null result, lists every skill as it is.
+    Func<string, string, Func<SkillInfo, SkillAccess>?>? skillAccess = null
 )
 {
+    // The framework prompt file that applies: a legacy copy still present at startup was edited
+    // and keeps replacing the bundled base.
+    private string? FrameworkSourcePath() =>
+        File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
+        : File.Exists(agents.MainFallbackSystemPath) ? agents.MainFallbackSystemPath
+        : File.Exists(frameworkTemplatePath) ? frameworkTemplatePath
+        : null;
+
+    /// <summary>
+    /// The framework prompt text an Agent's Sessions receive for <paramref name="modelId"/>, as
+    /// <see cref="BuildAsync"/> places it before the installation additions. Null when there is none.
+    /// </summary>
+    internal async Task<(string Text, bool ModelDependent)?> FrameworkPromptAsync(
+        string modelId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (FrameworkSourcePath() is not { } path)
+            return null;
+        var source = await File.ReadAllTextAsync(path, cancellationToken);
+        var text = ConditionalMemory.FilterConditionalMemorySource(source, modelId);
+        // Model conditions are `<foxwarm-if model-id="...">` blocks; runtime-only blocks are not.
+        return (
+            text,
+            Regex.IsMatch(source, "<foxwarm-if[^>]* model-id=\"", RegexOptions.CultureInvariant)
+        );
+    }
+
     public async Task<string> BuildAsync(
         string agentName,
         string sessionId,
@@ -37,13 +68,7 @@ internal sealed partial class AgentMemory(
             );
         else
         {
-            // A legacy copy still present at startup was edited and keeps replacing the bundled base.
-            var replacement =
-                File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
-                : File.Exists(agents.MainFallbackSystemPath) ? agents.MainFallbackSystemPath
-                : null;
-            var frameworkPath =
-                replacement ?? (File.Exists(frameworkTemplatePath) ? frameworkTemplatePath : null);
+            var frameworkPath = FrameworkSourcePath();
             if (frameworkPath is not null)
                 AppendBlock(
                     blocks,
@@ -110,14 +135,32 @@ internal sealed partial class AgentMemory(
                     }
             }
         }
-        var catalog = await skills.ListAsync(agentName);
+        var listed = await skills.ListAsync(agentName);
         cancellationToken.ThrowIfCancellationRequested();
-        if (catalog.Count > 0)
+        var access = listed.Count > 0 ? skillAccess?.Invoke(agentName, sessionId) : null;
+        var catalog = listed
+            .Select(skill => (Skill: skill, Access: access?.Invoke(skill) ?? SkillAccess.Run))
+            .Where(entry => entry.Access != SkillAccess.Hidden)
+            .Select(entry =>
+                entry.Access == SkillAccess.Run || entry.Skill.Run is null
+                    ? entry.Skill
+                    : entry.Skill with { Run = null }
+            )
+            .ToArray();
+        if (catalog.Length > 0)
         {
             blocks.Append(
-                "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, run `ctl skill load <name>`\nto load its full instructions and resource list.\nRead listed resources only when the loaded skill or current task needs them:\n<available_skills>\n"
+                "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, run `ctl skill load <name>`\nto load its full instructions and resource list.\n"
+            );
+            // Only a catalog that lists a runnable skill gains the sentence and <run>/<args> elements;
+            // any other catalog keeps its bytes (D-request-prefix-stability).
+            if (catalog.Any(skill => skill.Run is not null))
+                blocks.Append(RunnableSkillsSentence).Append('\n');
+            blocks.Append(
+                "Read listed resources only when the loaded skill or current task needs them:\n<available_skills>\n"
             );
             foreach (var skill in catalog)
+            {
                 blocks
                     .Append("  <skill><name>")
                     .Append(Xml(skill.Name))
@@ -125,7 +168,15 @@ internal sealed partial class AgentMemory(
                     .Append(Xml(skill.Description ?? ""))
                     .Append("</description><source>")
                     .Append(skill.SourceType)
-                    .Append("</source></skill>\n");
+                    .Append("</source>");
+                if (skill.Run is { } run)
+                {
+                    blocks.Append("<run>").Append(Xml(run.Effect)).Append("</run>");
+                    if (run.ArgsText is { } args)
+                        blocks.Append("<args>").Append(Xml(args)).Append("</args>");
+                }
+                blocks.Append("</skill>\n");
+            }
             blocks.Append("</available_skills>\n");
         }
         var directory = $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}";
@@ -144,6 +195,9 @@ internal sealed partial class AgentMemory(
         );
         return snapshot + "\n\n" + size.Notice();
     }
+
+    internal const string RunnableSkillsSentence =
+        "A skill with a `<run>` element can also be run directly, without loading it, with `ctl skill run <name> --args @args` and the arguments object in `values.args`. `<run>` says what running it does; `<args>` is the JSON Schema of its arguments, and a skill without `<args>` takes none.";
 
     private static string Xml(string value) =>
         value

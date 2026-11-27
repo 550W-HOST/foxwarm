@@ -6,22 +6,28 @@ import { createServer } from 'node:http'
 import { readFile, readdir, mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { createRequire } from 'node:module'
-import express from 'express'
+import { createHash } from 'node:crypto'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { createHostFixture } from './mainHostFixture.mjs'
+import { createMainHostProxy } from './mainHostProxy.mjs'
+import { restoreStateSnapshot, stateSnapshot } from './stateSeeds.mjs'
 
-const require=createRequire(import.meta.url)
-const {HttpServer}=require('../../../lib/httpServer.js')
-const {registerWebUiFileDownloads,registerWebUiBlobDownloads}=require('../../../lib/channels/webuiFileDownloads.js')
-const {resolveImageBlobPath}=require('../../../lib/imageBlobs.js')
+// The ImageParts component runs against an owned managed Main behind a recording proxy. Its Archive
+// holds one referenced PNG at continuous-parent seq 150, which a scoped identity may read only there.
+const fixture = await createHostFixture('image-parts')
+const seed = await restoreStateSnapshot(stateSnapshot('continuous-history'), fixture.data)
+const scopedSession = seed.parent, archiveSeq = '150'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const imagePartsEntry = new URL('../src/components/ImageParts.tsx', import.meta.url).pathname
-const pngId = `${'a'.repeat(64)}.png`
-const svgId = `${'b'.repeat(64)}.svg`
+const pngId = seed.image.blobId
+const svgBytes = Buffer.from('<svg/>')
+const svgId = createHash('sha256').update(svgBytes).digest('hex') + '.svg'
 const missingId = `${'c'.repeat(64)}.png`
-const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+const blobPath = id => path.join(fixture.data, 'state/image-blobs', id.slice(0, 2), id)
+const pngBytes = await readFile(blobPath(pngId))
+const pngWidth = seed.image.width
 
 async function buildFixtureBundle() {
   const source = `
@@ -36,7 +42,7 @@ async function buildFixtureBundle() {
         React.createElement(ImageParts, { imageParts: [{ inlineDataRef: ref }], keyPrefix: id }))
     )
     render('safe', { blobId: '${pngId}', imageId: 'safe', mimeType: 'image/png', apiPath: '/blobs/${pngId}' })
-    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}?archiveSeq=2' }, 'reader/main')
+    render('scoped', { blobId: '${pngId}', imageId: 'scoped', mimeType: 'image/png', apiPath: '/blobs/${pngId}?archiveSeq=${archiveSeq}' }, '${scopedSession}')
     render('unsafe', { blobId: '${svgId}', imageId: 'unsafe', mimeType: 'image/svg+xml', apiPath: '/blobs/${svgId}' })
     render('missing', { blobId: '${missingId}', imageId: 'missing', mimeType: 'image/png', apiPath: '/blobs/${missingId}' })
     window.renderLargeImage = () => {
@@ -65,51 +71,32 @@ async function buildFixtureBundle() {
 
 test('ImageParts uses authenticated deployment-relative blob URLs and never renders active formats inline', async () => {
   const bundle = await buildFixtureBundle()
-  const requests = []
   const assets = new URL('../dist/assets/', import.meta.url)
   const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
   const css = await readFile(new URL(cssName, assets), 'utf8')
-  const backend=new HttpServer(0,'fixture-token')
-  backend.setWebUiIdentityVerifier(token=>token==='scoped-image-token'?{role:'webui',identityId:'reader',sessionIds:['reader/main']}:null)
-  const signRequests=[]
-  const archiveAuthorizationInputs=[]
-  backend.app.use((request,_response,next)=>{
-    if(request.path.includes('/blobs/'))requests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
-    if(request.path.endsWith('/download'))signRequests.push({url:request.originalUrl,cookie:request.headers.cookie||''})
-    next()
-  })
-  const signatures=registerWebUiFileDownloads(backend,'fixture-token')
-  registerWebUiBlobDownloads(backend,signatures,async(req,res,sessionId,blobId)=>{
-    const auth=await backend.getAuthContext(req)
-    const archiveSeq=req.query.archiveSeq??req.body?.archiveSeq
-    archiveAuthorizationInputs.push({method:req.method,archiveSeq})
-    if(auth?.role==='admin'||(auth?.role==='webui'&&sessionId==='reader/main'&&blobId===pngId&&archiveSeq==='2'))return true
-    res.status(auth?403:401).json({error:'Forbidden'});return false
-  })
-  for(const [id,bytes]of[[pngId,pngBytes],[svgId,Buffer.from('<svg/>')]]){
-    const file=resolveImageBlobPath(id);await mkdir(path.dirname(file),{recursive:true});await writeFile(file,bytes)
-  }
-  const app=express();app.use('/nested',backend.app)
-  app.use((request,response)=>{
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><div id="safe"></div><div id="scoped"></div><div id="unsafe"></div><div id="missing"></div><div id="large"></div><script>${bundle}</script></body></html>`)
-  })
-  const server=createServer(app)
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  const origin = `http://127.0.0.1:${server.address().port}`
+  await mkdir(path.dirname(blobPath(svgId)), { recursive: true }); await writeFile(blobPath(svgId), svgBytes)
+  const proxy = await createMainHostProxy({ target: fixture.origin, prefix: '/nested', page: () => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><div id="safe"></div><div id="scoped"></div><div id="unsafe"></div><div id="missing"></div><div id="large"></div><script>${bundle}</script></body></html>` })
+  await writeFile(path.join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: proxy.origin + '/nested', bot: { httpPort: fixture.port, enableTrigger: false }, vector: { enabled: false },
+    access: { identities: { reader: { token: 'scoped-image-token', surfaces: { webui: { sessions: [scopedSession] } } } } } }))
+  await fixture.start()
+  const blobRequests = () => proxy.requests.filter(request => request.path.includes('/blobs/'))
+  const requests = { some: check => blobRequests().some(check), findLast: check => blobRequests().findLast(check) }
+  const signRecords = () => proxy.requests.filter(request => request.path.endsWith('/download'))
+  const signRequests = { get length() { return signRecords().length }, at: index => signRecords().at(index) }
+  const origin = proxy.origin
   let browser
   try {
     browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
     const page = await browser.newPage()
-    await page.setCookie({ name: 'foxwarm_token', value: 'fixture-token', url: `${origin}/nested/` })
+    await page.setCookie({ name: 'foxwarm_token', value: fixture.token, url: `${origin}/nested/` })
     await page.goto(`${origin}/nested/`, { waitUntil: 'load' })
-    await page.waitForFunction(() => {
+    await page.waitForFunction(width => {
       const image = document.querySelector('#safe img')
-      return image?.complete && image.naturalWidth === 1 && document.querySelector('#missing')?.textContent?.includes('Image unavailable')
-    })
+      return image?.complete && image.naturalWidth === width && document.querySelector('#missing')?.textContent?.includes('Image unavailable')
+    }, {}, pngWidth)
 
     assert.equal(await page.$$('#safe img').then(nodes => nodes.length), 1)
-    assert.equal(requests.some(request => request.url === `/nested/api/blobs/${pngId}` && request.cookie.includes('foxwarm_token=fixture-token')), true)
+    assert.equal(requests.some(request => request.url === `/nested/api/blobs/${pngId}` && request.cookie.includes('foxwarm_token=' + fixture.token)), true)
     assert.equal(await page.$$('#unsafe img').then(nodes => nodes.length), 0)
     assert.match(await page.$eval('#missing', element => element.textContent || ''), /Image unavailable/)
     assert.equal(await page.$eval('#unsafe button', button => button.type==='button'&&!button.disabled), true)
@@ -120,7 +107,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await page.evaluate(() => window.scrollTo(0,0))
       await page.click('#safe button')
       await page.waitForSelector('[data-image-preview][open]')
-      await page.waitForFunction(() => document.querySelector('[data-image-preview] img')?.naturalWidth === 1)
+      await page.waitForFunction(width => document.querySelector('[data-image-preview] img')?.naturalWidth === width, {}, pngWidth)
       const geometry = await page.$eval('[data-image-preview]', dialog => {
         const box=dialog.getBoundingClientRect(),image=dialog.querySelector('img').getBoundingClientRect(),header=dialog.querySelector('header').getBoundingClientRect()
         return {full:box.x===0&&box.y===0&&Math.abs(box.width-innerWidth)<1&&Math.abs(box.height-innerHeight)<1,contained:image.left>=0&&image.right<=innerWidth&&image.top>=header.bottom&&image.bottom<=innerHeight,focus:dialog.contains(document.activeElement),locked:document.documentElement.style.overflow==='hidden'}
@@ -147,7 +134,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await network.send('Fetch.continueRequest',{requestId:event.requestId})
     })
     try{
-      for(const [id,token]of[['safe','fixture-token'],['scoped','scoped-image-token']]){
+      for(const [id,token]of[['safe',fixture.token],['scoped','scoped-image-token']]){
         await page.setCookie({name:'foxwarm_token',value:token,url:origin+'/nested/'})
         const completed=new Promise((resolve,reject)=>{
           const timer=setTimeout(()=>reject(new Error('Image download did not finish')),10000)
@@ -163,9 +150,9 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
         // The non-secret theme cookie is path-scoped and may accompany any same-path request; no other cookie, in particular no login token, may.
         assert.ok(downloaded);assert.deepEqual(downloaded.cookie.split(';').map(part=>part.split('=')[0].trim()).filter(name=>name&&name!=='foxwarm_canvas'),[])
         if(id==='scoped'){
-          assert.ok(downloaded.url.startsWith('/nested/api/sessions/reader%2Fmain/blobs/'))
-          assert.ok(requests.some(request=>request.url.includes('/sessions/reader%2Fmain/blobs/')&&request.url.includes('archiveSeq=2')))
-          assert.ok(archiveAuthorizationInputs.some(input=>input.method==='POST'&&input.archiveSeq==='2'),'Archive proof reaches signature issuance')
+          assert.ok(downloaded.url.startsWith(`/nested/api/sessions/${encodeURIComponent(scopedSession)}/blobs/`))
+          assert.ok(requests.some(request=>request.url.includes(`/sessions/${encodeURIComponent(scopedSession)}/blobs/`)&&request.url.includes('archiveSeq='+archiveSeq)))
+          assert.ok(signRecords().some(input=>input.method==='POST'&&JSON.parse(input.body||'{}').archiveSeq===archiveSeq),'Archive proof reaches signature issuance')
         }
         await page.click('[aria-label="Close image preview"]')
       }
@@ -174,7 +161,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await client.send('Browser.setDownloadBehavior',{behavior:'default'});await client.detach()
       await rm(downloads,{recursive:true,force:true})
     }
-    await page.setCookie({name:'foxwarm_token',value:'fixture-token',url:origin+'/nested/'})
+    await page.setCookie({name:'foxwarm_token',value:fixture.token,url:origin+'/nested/'})
     await page.evaluate(()=>{HTMLAnchorElement.prototype.click=function(){window.downloaded={url:this.href,name:this.download}}})
     await page.click('#safe button');await page.waitForSelector('[data-image-preview][open]')
     await page.click('[aria-label="Download Image 1"]');await page.waitForFunction(()=>!!window.downloaded)
@@ -366,8 +353,216 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
     } finally { await touch.detach() }
   } finally {
     await browser?.close()
-    for(const id of[pngId,svgId])await rm(resolveImageBlobPath(id),{force:true})
-    server.closeAllConnections?.()
-    await new Promise(resolve => server.close(resolve))
+    await proxy.close()
+    await fixture.cleanup()
+  }
+})
+
+// Viewer interactions on a gallery of local images: no Main is needed, so the page is static.
+async function buildGalleryBundle() {
+  const source = `
+    import React from 'react'
+    import { createRoot } from 'react-dom/client'
+    import { ImageItem } from ${JSON.stringify(imagePartsEntry)}
+    import { ImageGalleryContext, useImageGalleryStore } from './src/components/imageGallery'
+    import { initializeThemeRuntime } from './src/theme/runtime'
+    initializeThemeRuntime()
+    const image = (width, height, label, color) => {
+      const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height
+      const context = canvas.getContext('2d'); context.fillStyle = color; context.fillRect(0, 0, width, height)
+      context.fillStyle = '#ffffff'
+      for (let x = 0; x < width; x += 100) context.fillRect(x, 0, 2, height)
+      for (let y = 0; y < height; y += 100) context.fillRect(0, y, width, 2)
+      context.font = 'bold 72px sans-serif'; context.fillText(label, 60, 120)
+      return { inlineData: { mimeType: 'image/png', data: canvas.toDataURL('image/png').split(',')[1] } }
+    }
+    // The third entry cannot be decoded: its error must stay inside the viewer.
+    const parts = [image(1600, 1000, 'First', '#3a7588'), image(640, 480, 'Second', '#8a4f7d'), { inlineData: { mimeType: 'image/png', data: 'AAAA' } }, image(1200, 900, 'Fourth', '#5f8a3a')]
+    const titles = ['First', 'Second', 'Broken', 'Fourth']
+    const entries = parts.map((part, index) => ({ key: 'g' + index, src: 'data:image/png;base64,' + part.inlineData.data, mimeType: 'image/png', title: titles[index] }))
+    const keys = new WeakMap(parts.map((part, index) => [part, 'g' + index]))
+    function Gallery() {
+      const store = useImageGalleryStore(entries, keys)
+      return React.createElement(ImageGalleryContext.Provider, { value: store },
+        [0, 1, 3].map(index => React.createElement('div', { key: index, id: 'g' + index }, React.createElement(ImageItem, { part: parts[index], label: titles[index] }))))
+    }
+    createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode, null, React.createElement(Gallery)))
+  `
+  const result = await build({ stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'image-gallery-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
+  return result.outputFiles[0].text
+}
+
+test('the viewer zooms at the pointer, pans with the mouse and switches images with keys, buttons and swipes', async () => {
+  const bundle = await buildGalleryBundle()
+  const assets = new URL('../dist/assets/', import.meta.url)
+  const css = await readFile(new URL((await readdir(assets)).find(name => /^index-.*\.css$/.test(name)), assets), 'utf8')
+  const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><div id="root"></div><script>${bundle.replaceAll('</script', '<\\/script')}</script></body></html>`
+  const server = createServer((request, response) => { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(html) })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  try {
+    const page = await browser.newPage()
+    const errors = []
+    page.on('pageerror', error => errors.push(String(error)))
+    await page.setViewport({ width: 1200, height: 800 })
+    await page.goto(`${origin}/`)
+    await page.waitForFunction(() => document.querySelectorAll('#root img').length === 3 && [...document.querySelectorAll('#root img')].every(img => img.complete && img.naturalWidth), { timeout: 5000 }).catch(error => { throw new Error(`${error.message}: ${errors.join('; ')}: ${page.url()}`) })
+    const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const view = () => page.evaluate(() => {
+      const dialog = document.querySelector('[data-image-preview]')
+      const stage = dialog?.querySelector('.image-preview-stage'), image = stage?.querySelector('img')
+      const box = image?.getBoundingClientRect()
+      return {
+        open: !!dialog?.open, title: dialog?.querySelector('h2')?.textContent, position: dialog?.querySelector('[data-image-preview-position]')?.textContent ?? null,
+        actual: !!stage?.hasAttribute('data-actual-size'), status: stage?.querySelector('[role=status]')?.textContent ?? null,
+        previous: dialog?.querySelector('[data-direction=previous]')?.disabled, next: dialog?.querySelector('[data-direction=next]')?.disabled,
+        focus: dialog?.contains(document.activeElement) ? document.activeElement.dataset.previewControl ?? document.activeElement.className : null,
+        width: box?.width, left: box?.left, top: box?.top, height: box?.height, scrollLeft: stage?.scrollLeft, scrollTop: stage?.scrollTop,
+        natural: image?.naturalWidth, pageScale: visualViewport.scale, dpr: devicePixelRatio,
+      }
+    })
+    const ready = width => page.waitForFunction(width => {
+      const image = document.querySelector('[data-image-preview] .image-preview-stage img'), control = document.querySelector('[data-preview-control="size"]')
+      return image?.naturalWidth === width && control && !control.disabled && image.getBoundingClientRect().width > 0
+    }, {}, width)
+
+    // Keys: ←/→ walk the sequence from the opener's own position and stop at both ends.
+    await page.click('#g1 button'); await ready(640)
+    assert.deepEqual(await view().then(v => [v.title, v.position, v.previous, v.next]), ['Second', '2 / 4', false, false])
+    await page.keyboard.press('ArrowRight'); await settle()
+    let state = await view()
+    assert.deepEqual([state.title, state.position, state.status, state.open], ['Broken', '3 / 4', 'Image unavailable', true], 'a decode error stays inside the viewer')
+    await page.keyboard.press('ArrowRight'); await ready(1200)
+    assert.deepEqual(await view().then(v => [v.title, v.position, v.next]), ['Fourth', '4 / 4', true])
+    await page.keyboard.press('ArrowRight'); await settle()
+    assert.equal((await view()).position, '4 / 4', 'the last image stays')
+    for (const expected of ['3 / 4', '2 / 4', '1 / 4']) { await page.keyboard.press('ArrowLeft'); await settle(); assert.equal((await view()).position, expected) }
+    await ready(1600)
+    assert.equal((await view()).previous, true)
+    await page.keyboard.press('ArrowLeft'); await settle()
+    assert.equal((await view()).position, '1 / 4', 'the first image stays')
+
+    // Buttons: visible on hover, focus stays on the pressed control, and switching resets the view.
+    await page.click('[aria-label="Actual size"]'); await settle()
+    assert.equal((await view()).actual, true)
+    await page.mouse.move(600, 400)
+    assert.equal(await page.$eval('[data-direction=next]', button => getComputedStyle(button).opacity), '1', 'hovering the image area shows the buttons')
+    await page.click('[data-direction=next]'); await ready(640)
+    state = await view()
+    assert.deepEqual([state.position, state.actual, state.focus], ['2 / 4', false, 'next'], 'a switched-to image opens at fit')
+    await page.click('[data-direction=previous]'); await ready(1600)
+    state = await view()
+    assert.equal(state.position, '1 / 4')
+    assert.ok(state.focus, 'focus stays in the viewer when the pressed button disappears at the end')
+
+    // Ctrl + wheel zooms continuously around the pointer; the page itself never zooms.
+    const fit = await view()
+    // Whole pixels, as mouse events report them.
+    const pointer = { x: Math.round(fit.left + fit.width * 0.4), y: Math.round(fit.top + fit.height * 0.45) }
+    const imagePoint = () => page.$eval('[data-image-preview] .image-preview-stage img', (img, pointer) => { const r = img.getBoundingClientRect(); return { x: (pointer.x - r.left) / r.width, y: (pointer.y - r.top) / r.height, width: r.width } }, pointer)
+    await page.mouse.move(pointer.x, pointer.y)
+    const anchored = await imagePoint()
+    await page.keyboard.down('Control')
+    const steps = []
+    for (let step = 0; step < 4; step++) { await page.mouse.wheel({ deltaY: -100 }); await settle(); steps.push(await imagePoint()) }
+    // A trackpad pinch arrives in Chromium as many small ctrl + wheel deltas.
+    for (let step = 0; step < 12; step++) { await page.mouse.wheel({ deltaY: -4 }); await settle() }
+    steps.push(await imagePoint())
+    await page.keyboard.up('Control')
+    state = await view()
+    assert.equal(state.actual, true)
+    assert.ok(steps.at(-1).width > anchored.width * 2, `wheel zoom grows the image: ${anchored.width} → ${steps.at(-1).width}`)
+    for (const step of steps) {
+      assert.ok(Math.abs(step.x - anchored.x) * step.width < 1.5 && Math.abs(step.y - anchored.y) * step.width < 1.5, `the point under the pointer stays: ${JSON.stringify([anchored, step])}`)
+    }
+    assert.deepEqual([state.pageScale, state.dpr], [1, 1], 'ctrl + wheel never zooms the page')
+    // A plain wheel scrolls the enlarged image natively.
+    const scrolled = state.scrollTop
+    await page.mouse.wheel({ deltaY: 120 }); await page.waitForFunction(top => document.querySelector('.image-preview-stage').scrollTop > top, {}, scrolled)
+    assert.ok(Math.abs((await view()).width - state.width) < 0.5, 'a plain wheel does not zoom')
+
+    // The left button drags an enlarged image one-to-one; the drag's click does not toggle the size.
+    state = await view()
+    await page.mouse.move(600, 420); await page.mouse.down()
+    for (let step = 1; step <= 10; step++) await page.mouse.move(600 - step * 6, 420 - step * 4)
+    await page.mouse.up(); await settle()
+    const dragged = await view()
+    assert.ok(Math.abs(dragged.scrollLeft - state.scrollLeft - 60) <= 1 && Math.abs(dragged.scrollTop - state.scrollTop - 40) <= 1, `mouse pan is 1:1: ${dragged.scrollLeft - state.scrollLeft}, ${dragged.scrollTop - state.scrollTop}`)
+    assert.equal(dragged.actual, true, 'the click ending a drag does not return to fit')
+    assert.equal(await page.evaluate(() => getSelection().toString()), '')
+    // Keys keep native scrolling while the enlarged image is wider than the stage.
+    await page.focus('.image-preview-stage'); await page.keyboard.press('ArrowRight'); await settle()
+    assert.equal((await view()).position, '1 / 4')
+    // Zooming out stops at fit, and a deliberate click still toggles.
+    await page.keyboard.down('Control')
+    for (let step = 0; step < 40; step++) await page.mouse.wheel({ deltaY: 100 })
+    await page.keyboard.up('Control'); await settle()
+    state = await view()
+    assert.ok(!state.actual && Math.abs(state.width - fit.width) < 1, 'wheel zoom-out ends at fit')
+    await page.keyboard.down('Control')
+    for (let step = 0; step < 60; step++) await page.mouse.wheel({ deltaY: -100 })
+    await page.keyboard.up('Control'); await settle()
+    assert.ok(Math.abs((await view()).width - fit.width * 8) < 1, 'wheel zoom stops at eight times fit')
+    await page.mouse.click(600, 420); await settle()
+    assert.equal((await view()).actual, false, 'a click without a drag still toggles the size')
+
+    // WebKit gesture events (Safari, the macOS Desktop host) cannot be produced by Chromium;
+    // synthetic events with WebKit's fields check the handling: cumulative scale around the point.
+    const gesture = await page.$eval('.image-preview-stage', (stage, pointer) => {
+      const fire = (type, scale) => {
+        const event = new UIEvent(type, { bubbles: true, cancelable: true })
+        Object.defineProperties(event, { scale: { value: scale }, clientX: { value: pointer.x }, clientY: { value: pointer.y } })
+        stage.dispatchEvent(event)
+        return event.defaultPrevented
+      }
+      const image = stage.querySelector('img'), at = () => { const r = image.getBoundingClientRect(); return { x: (pointer.x - r.left) / r.width, y: (pointer.y - r.top) / r.height, width: r.width } }
+      const before = at()
+      const prevented = [fire('gesturestart', 1), fire('gesturechange', 1.5), fire('gesturechange', 2.5)]
+      const after = at()
+      prevented.push(fire('gestureend', 2.5))
+      return { before, after, prevented }
+    }, pointer)
+    assert.deepEqual(gesture.prevented, [true, true, true, true], 'WebKit page zoom is suppressed')
+    assert.ok(Math.abs(gesture.after.width / gesture.before.width - 2.5) < 0.01, 'the gesture scale is cumulative from its start')
+    assert.ok(Math.abs(gesture.after.x - gesture.before.x) * gesture.after.width < 1.5 && Math.abs(gesture.after.y - gesture.before.y) * gesture.after.width < 1.5, 'the gesture keeps the point under the pointer')
+    await page.click('[aria-label="Fit image"]'); await settle()
+
+    // Closing returns focus to the original opener, after any number of switches.
+    await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('[data-image-preview]'))
+    assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#g1 button')), true)
+    assert.equal(await page.evaluate(() => document.documentElement.style.overflow), '')
+
+    // Touch (the viewport change reloads the page): a horizontal swipe at fit switches; a
+    // vertical one, or one on an enlarged image, does not.
+    await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true })
+    await page.waitForFunction(() => [...document.querySelectorAll('#root img')].filter(img => img.complete && img.naturalWidth).length === 3)
+    await page.tap('#g0 button'); await ready(1600)
+    assert.equal(await page.$eval('[data-direction=next]', button => getComputedStyle(button).opacity), '1', 'buttons stay visible on touch screens')
+    const touch = await page.createCDPSession()
+    const swipe = async (from, to) => {
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: from[0], y: from[1] }] })
+      for (let step = 1; step <= 6; step++) await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: from[0] + (to[0] - from[0]) * step / 6, y: from[1] + (to[1] - from[1]) * step / 6 }] })
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await settle()
+    }
+    try {
+      await swipe([200, 420], [330, 430]); assert.equal((await view()).position, '1 / 4', 'no image before the first')
+      await swipe([300, 420], [120, 430]); await ready(640); assert.equal((await view()).position, '2 / 4')
+      await swipe([200, 300], [210, 520]); assert.equal((await view()).position, '2 / 4', 'a vertical swipe does not switch')
+      await swipe([120, 420], [300, 410]); await ready(1600); assert.equal((await view()).position, '1 / 4')
+      assert.equal((await view()).open, true, 'swipes neither close the viewer nor toggle the size')
+      await page.click('[aria-label="Actual size"]'); await settle()
+      await swipe([300, 420], [120, 430])
+      state = await view()
+      assert.deepEqual([state.position, state.actual], ['1 / 4', true], 'an enlarged image pans instead of switching')
+    } finally { await touch.detach() }
+
+    await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('[data-image-preview]'))
+    assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#g0 button')), true)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+    server.close()
   }
 })

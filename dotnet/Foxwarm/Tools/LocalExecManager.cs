@@ -60,7 +60,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         string? ProviderId = null,
         string? Reference = null,
         string? CompletionCapability = null,
-        long? StopRequestedAt = null
+        long? StopRequestedAt = null,
+        string? Summary = null
     )
     {
         internal ExecObservation Observation { get; init; } = new();
@@ -105,6 +106,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 value["completionCapability"] = CompletionCapability;
             if (StopRequestedAt is not null)
                 value["stopRequestedAt"] = StopRequestedAt;
+            if (Summary is not null)
+                value["summary"] = Summary;
             return value;
         }
     }
@@ -257,7 +260,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 SessionWait.Number(raw["stopRequestedAt"]) is double stopped
                 && double.IsFinite(stopped)
                     ? (long)stopped
-                    : null
+                    : null,
+                Text(raw, "summary")
             );
             record.Observation.Cwd = Text(raw, "resolvedCwd");
             pending[id] = record;
@@ -510,6 +514,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     },
                     hardCancellation
                 );
+            // The call's stated purpose, kept for the running-command list.
+            record = record with { Summary = ToolActivity.CaptionSummary("exec", args) };
             await TrackAsync(() => pending[record.Id] = record);
         }
         finally

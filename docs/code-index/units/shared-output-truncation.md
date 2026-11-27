@@ -22,7 +22,7 @@ Provides the shared text excerpt builder used by tool-output guarding and persis
 
 ## Integration
 
-- `src/toolOutputGuard.ts` uses the helper for unified model-facing tool output excerpts, preserving the existing structured result shape and saved full-output metadata.
+- `dotnet/Foxwarm/Tools/ToolOutputGuard.cs` ports the helper for unified model-facing tool output excerpts, preserving the existing structured result shape and saved full-output metadata.
 - `packages/shared/src/persistentExec.ts` uses the helper for foreground exec display output and composes its own `--- / Exit code` footer.
 
 ## Design Decisions

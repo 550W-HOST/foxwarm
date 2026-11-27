@@ -37,11 +37,6 @@ internal static class AppConfigurationRules
         );
         VectorMaintenance(app["vectorMaintenance"], app.ContainsKey("vectorMaintenance"));
         AccessConfiguration.Normalize(app["access"], app.ContainsKey("access"));
-        Boolean(
-            app["handoffConfirmation"],
-            "app config `handoffConfirmation`",
-            app.ContainsKey("handoffConfirmation")
-        );
         _ = Foxwarm.Telemetry.OtlpConfiguration.Capture(app);
         _ = SessionAutoTitle(app);
         _ = AgentDefaultNode(app);

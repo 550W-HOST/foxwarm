@@ -53,7 +53,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         foreach (var generator in new[] { 1, 2 })
         {
             using var temp = new TempDirectory();
-            var layer = generator == 1 ? GeneratorOneLayer(MigrationIsolation) : LayerFor(MigrationIsolation);
+            var layer = generator == 1 ? GeneratorOneLayer(MigrationIsolation) : GeneratorTwoLayer(MigrationIsolation);
             var digest = Digest(layer);
             var edited = generator == 1 ? new JsonArray() : layer.DeepClone().AsArray();
             if (generator == 2)
@@ -97,7 +97,7 @@ public sealed partial class ToolAuthorizationEffectsTests
     public async Task Startup_keeps_an_edited_layer_that_still_ends_in_a_deny_and_reports_it_once()
     {
         using var temp = new TempDirectory();
-        var layer = LayerFor(MigrationIsolation);
+        var layer = GeneratorTwoLayer(MigrationIsolation);
         var edited = layer.DeepClone().AsArray();
         edited.Insert(
             0,
@@ -108,7 +108,13 @@ public sealed partial class ToolAuthorizationEffectsTests
         {
             await manager.LoadAsync();
             var entry = SingleEntry(manager);
-            Assert.Equal("edited", entry["outcome"]!.GetValue<string>());
+            // A generator 2 layer is upgraded to 3 without the skill rules it lacks.
+            Assert.Equal("upgraded", entry["outcome"]!.GetValue<string>());
+            Assert.NotNull(entry["reason"]);
+            Assert.Equal(
+                IsolationMigrationRules.GeneratorVersion,
+                Row(manager)["legacyIsolation"]!["generator"]!.GetValue<int>()
+            );
             Assert.True(JsonNode.DeepEquals(edited, Row(manager)["rules"]));
             var (masterExec, boundExec, otherExec) = await NodeExecAuthority(manager, temp.Path);
             Assert.False(masterExec);
@@ -175,7 +181,7 @@ public sealed partial class ToolAuthorizationEffectsTests
     public async Task Startup_keeps_the_layer_when_an_older_release_cleared_the_fence()
     {
         using var temp = new TempDirectory();
-        var layer = LayerFor(MigrationIsolation);
+        var layer = GeneratorTwoLayer(MigrationIsolation);
         var row = MigratedRow("bound-node", layer, "bound-node", 2, Digest(layer));
         row["isolated"] = false;
         row.Remove("isolatedNode");

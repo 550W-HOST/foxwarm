@@ -366,7 +366,7 @@ public sealed class ForkClearLifecycleTests
                 )
         );
         var persisted = JsonNode.Parse(
-            await File.ReadAllTextAsync(parent.AuthorityStore.AuthorityPath)
+            await File.ReadAllTextAsync(parent.AuthorityStore.AuthorityPath())
         )!;
         Assert.Equal(
             committed,

@@ -15,7 +15,6 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
 
     internal static async Task<ClaudeRuntimeFixture> CreateAsync(
         JsonObject? peer = null,
-        bool handoffConfirmation = false,
         bool startHttpServer = true,
         bool webUiEnabled = false
     )
@@ -32,9 +31,9 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             );
             f.configured = true;
             var root =
-                Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+                Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
                 ?? throw new InvalidOperationException(
-                    "FOXWARM_TS_ROOT is required for the controlled peer and installed MCP SDK."
+                    "FOXWARM_REPO_ROOT is required for the controlled peer and installed MCP SDK."
                 );
             var launcher = Path.Combine(f.Temp.Path, "claude-peer");
             await File.WriteAllTextAsync(
@@ -53,7 +52,6 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             );
             await f.PeerAsync(peer ?? new JsonObject());
             var app = InboundMcpFixture.App();
-            app["handoffConfirmation"] = handoffConfirmation;
             app["claudeCode"] = new JsonObject
             {
                 ["executable"] = launcher,

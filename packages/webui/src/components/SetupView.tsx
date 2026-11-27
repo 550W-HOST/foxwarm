@@ -1,10 +1,11 @@
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, {type ContextMenuAnchorRect} from './ContextMenu'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
+import { Bell, Bot, CheckCircle2, KeyRound, Palette, Plug, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelSetupYaml, defaultModelsYaml, formFromPreset, readModelSetupForm, validateModelSetupForm, type ModelSetupForm } from '../setupModels'
 import ModelSetupFormPanel from './ModelSetupFormPanel'
+import { FoxwarmMark } from './FoxwarmMark'
 import { refreshModelOptions } from '../modelOptionsLoader'
 import { APP_CONFIG_YAML_MODEL_URI, MODELS_YAML_MODEL_URI } from '../yamlConfigSchemas'
 import ContentHeader from './ContentHeader'
@@ -14,6 +15,8 @@ import ThemeManager from './ThemeManager'
 import FoxLoaderPreview from './FoxLoaderPreview'
 import NotificationSettings from './NotificationSettings'
 import SecretsPanel from './SecretsPanel'
+import ToolAuthorizationPanel from './ToolAuthorizationPanel'
+import McpServersPanel from './McpServersPanel'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
 
 type SetupStatus = {
@@ -56,7 +59,13 @@ interface SetupViewProps {
   forced?: boolean
   onClose?: () => void
   onSetupChanged?: () => void
+  /** Receives each successful Models save receipt; a first-run save carries `firstSessionId`. */
+  onModelsSaved?: (receipt: { firstSessionId?: unknown }) => void
+  /** First run only: show the Foxwarm mark above the title (a window frame's title row shows it instead). */
+  showBrand?: boolean
   focusModelsRequest?: number
+  /** Opens this Setup tab; a new nonce repeats the request. */
+  tabRequest?: { tab: SetupTab; nonce: number } | null
   onFocusModelsRequestHandled?: (request: number) => void
   webUiSettings?: WebUiBrandingSettingsValue
   onInstanceNameChange?: (name: string) => Promise<void> | void
@@ -98,9 +107,9 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config' | 'secrets' | 'notifications'
+export type SetupTab = 'appearance' | 'models' | 'config' | 'authorization' | 'mcp' | 'secrets' | 'notifications'
 type ModelsView = 'form' | 'yaml'
-const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'secrets', 'notifications']
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorization', 'mcp', 'secrets', 'notifications']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -127,10 +136,13 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, onModelsSaved, showBrand = true, focusModelsRequest = 0, tabRequest, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   // First-run Setup exists to add a model, so it starts on Models; ordinary Setup starts on Appearance.
   const [activeTab, setActiveTab] = useState<SetupTab>(forced ? 'models' : 'appearance')
+  // MCP loads on first open and then stays mounted, keeping an open form across tab switches.
+  const [mcpOpened, setMcpOpened] = useState(false)
+  useEffect(() => { if (activeTab === 'mcp') setMcpOpened(true) }, [activeTab])
   const [mobileOptions, setMobileOptions] = useState<ContextMenuAnchorRect | null>(null)
   const mobileOptionsRef = useRef<HTMLButtonElement>(null)
 
@@ -153,10 +165,10 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // Secrets loads its own data; the Setup Refresh action reloads it too.
-  const [secretsRefreshRequest, setSecretsRefreshRequest] = useState(0)
+  // Authorization, MCP and Secrets load their own data; the Setup Refresh action reloads them too.
+  const [panelRefreshRequest, setPanelRefreshRequest] = useState(0)
   const refreshSetup = () => {
-    setSecretsRefreshRequest((current) => current + 1)
+    setPanelRefreshRequest((current) => current + 1)
     void loadStatus()
   }
 
@@ -176,6 +188,8 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const appearanceTabRef = useRef<HTMLButtonElement | null>(null)
   const notificationsTabRef = useRef<HTMLButtonElement | null>(null)
   const secretsTabRef = useRef<HTMLButtonElement | null>(null)
+  const authorizationTabRef = useRef<HTMLButtonElement | null>(null)
+  const mcpTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -191,8 +205,6 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const modelsReading = useMemo(() => readModelSetupForm(rawModelsYaml), [rawModelsYaml])
 
   const modelConfigured = !!status?.models.exists
-  const channelAvailable = (status?.channels || []).some((channel) => channel.running) || true // WebUI itself is available when this page is open.
-  const canLeave = !forced || (modelConfigured && channelAvailable)
   const channelRows = useMemo(() => status?.channels || [], [status])
   const configTabStatus = useMemo(() => {
     const enabledChannels = channelRows.filter((channel) => channel.enabled)
@@ -282,6 +294,10 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   }, [forced])
 
   useEffect(() => {
+    if (tabRequest && !forced) setActiveTab(tabRequest.tab)
+  }, [tabRequest?.tab, tabRequest?.nonce])
+
+  useEffect(() => {
     // Wait for the saved configuration: it decides whether the form or the YAML editor receives focus.
     if (focusModelsRequest <= 0 || activeTab !== 'models' || !status) return
     // The owner clears this one-shot request after it is consumed, so a later remount or ordinary Setup activation cannot replay it.
@@ -293,7 +309,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
-    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef, secrets: secretsTabRef, notifications: notificationsTabRef })[tab].current?.focus())
+    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, authorization: authorizationTabRef, mcp: mcpTabRef, appearance: appearanceTabRef, secrets: secretsTabRef, notifications: notificationsTabRef })[tab].current?.focus())
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -337,6 +353,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to save models (${res.status})`)
       refreshModelOptions()
+      onModelsSaved?.(data)
       if (saveGeneration !== modelsSaveGenerationRef.current) return
       const submissionIsCurrent = modelsRevisionRef.current === submittedRevision && rawModelsYamlRef.current === submittedYaml
       if (submissionIsCurrent) {
@@ -386,7 +403,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
         const message = data.notApplied?.length ? 'Saved. Some changes could not be applied.'
           : data.restartRequired?.length ? 'Saved. Restart to apply the remaining changes.'
           : startedChannels ? `Config saved. Active channels refreshed: ${startedChannels}.`
-          : data.reload?.available === false ? 'Configuration saved. Some settings take effect after a server restart.'
+          : data.reload?.available === false ? 'Configuration saved. Some settings take effect after Foxwarm restarts.'
           : 'Config saved.'
         setConfigSaveResult({ kind: 'success', message })
         if (typeof data.rawYaml === 'string') updateConfigYaml(data.rawYaml)
@@ -477,13 +494,107 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
     }
   }
 
+  const modelsBody = (
+    <div className={modelsView === 'yaml' && !forced ? 'foxwarm-setup-editor-section' : 'flex flex-col'}>
+      <div className={`flex shrink-0 flex-wrap items-start gap-3 ${forced ? 'justify-end' : 'justify-between'}`}>
+        {!forced && <div className="min-w-0">
+          <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
+          <p className="mt-1 text-sm text-fw-text">{modelsView === 'form'
+            ? 'Connect the service that runs your models.'
+            : 'Configure model providers, routing, and your default model in YAML.'}</p>
+        </div>}
+        <div role="group" aria-label="Model settings view" className="inline-flex shrink-0 rounded-lg border border-fw-border p-0.5 dark:border-fw-border">
+          {(['form', 'yaml'] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              aria-pressed={modelsView === view}
+              data-models-view={view}
+              onClick={() => {
+                setModelsView(view)
+                setModelsSaveResult(null)
+              }}
+              className={`rounded-md px-3 py-1 text-sm font-medium ${modelsView === view ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface' : 'text-fw-text hover:bg-fw-hover'}`}
+            >
+              {view === 'form' ? 'Form' : 'YAML'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {modelsView === 'form' && (
+        <div className="mt-5" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
+          {modelsReading.ok ? (
+            <ModelSetupFormPanel
+              form={modelsReading.form}
+              focusRequest={modelsFormFocusRequest}
+              onChange={(next: ModelSetupForm) => updateModelsYaml(buildModelSetupYaml(next))}
+            />
+          ) : (
+            <div data-models-form-unavailable className="max-w-2xl rounded-lg border border-fw-border-muted bg-fw-surface-sunken/40 p-4 text-sm text-fw-text">
+              <p>{modelsReading.reason === 'invalid'
+                ? 'The YAML has an error, so the form can’t show it. Fix it in YAML.'
+                : 'This configuration uses settings the form can’t show, such as comments, several providers, aliases, failover or other model options. Edit it in YAML so nothing is lost.'}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" onClick={() => setModelsView('yaml')} className="rounded-lg bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:bg-fw-accent">Edit in YAML</button>
+                {!modelConfigured && (
+                  <button type="button" onClick={() => updateModelsYaml(buildModelSetupYaml(formFromPreset('openai')))} className="rounded-lg border border-fw-border px-3 py-1.5 text-sm font-medium text-fw-text hover:bg-fw-hover">Start over with the form</button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`${modelsView === 'yaml' ? '' : 'hidden'} mt-4 min-h-72 ${forced ? 'h-[60vh]' : 'flex-1'}`} onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
+        <SimpleCodeEditor
+          value={rawModelsYaml}
+          onChange={updateModelsYaml}
+          language="yaml"
+          height="100%"
+          modelUri={MODELS_YAML_MODEL_URI}
+          focusRequest={modelsEditorFocusRequest}
+          ariaLabel="Models YAML editor"
+        />
+      </div>
+
+      <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
+        <button disabled={savingModels || (modelsView === 'form' && !modelsReading.ok)} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : forced ? 'Save and continue' : 'Save models'}</button>
+        <SaveFeedback section="models" result={modelsSaveResult} />
+      </div>
+    </div>
+  )
+
+  // First run: only the Models step, on its own surface without the Setup rail.
+  if (forced) {
+    return (
+      <div ref={setupRootRef} data-setup-first-run className="foxwarm-setup-root flex h-full min-h-0 flex-col overflow-y-auto bg-fw-canvas">
+        <div className="mx-auto flex w-full max-w-2xl flex-col px-4 py-8 sm:px-6 md:py-12">
+          {showBrand && (
+            <div className="flex items-center gap-2 text-lg font-semibold text-fw-text-strong">
+              <FoxwarmMark className="h-7 w-7 shrink-0" />
+              <span>Foxwarm</span>
+            </div>
+          )}
+          <h1 id="setup-first-run-title" className={`${showBrand ? 'mt-6' : ''} text-2xl font-semibold text-fw-text-strong`}>Connect a model</h1>
+          <p className="mt-2 text-sm text-fw-text">Choose a service and add your API key. You can change this later in Setup.</p>
+          {loading && !status && <div className="mt-6 text-sm text-fw-text-muted">Loading…</div>}
+          {error && <div className="mt-4 rounded-xl border border-fw-danger-border bg-fw-danger-surface p-4 text-sm text-fw-danger">{error}</div>}
+          <section ref={modelsSectionRef} id="setup-panel-models" aria-labelledby="setup-first-run-title" data-setup-section="models" className="mt-6 flex flex-col">
+            {modelsBody}
+          </section>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div ref={setupRootRef} className={`foxwarm-setup-root flex h-full min-h-0 flex-col bg-fw-canvas ${mobileHome ? 'mobile-page-root mobile-setup-page' : ''}`}>
       {mobileHome ? <MobilePageHeader title="Settings" actions={<button ref={mobileOptionsRef} type="button" className="mobile-header-circle" aria-label="Settings sections" aria-haspopup="menu" aria-expanded={!!mobileOptions} onClick={() => setMobileOptions(mobileOptionsRef.current!.getBoundingClientRect())}><SlidersHorizontal size={20} /></button>} /> : (
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
-        title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
-        subtitle={forced ? 'Add your model settings to continue.' : 'Manage models, channels, app settings, secrets, appearance, and notifications.'}
+        title="Foxwarm Setup"
+        subtitle="Manage models, configuration, tool authorization, MCP servers, secrets, appearance and notifications."
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -493,7 +604,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
             >
               <RefreshCw className="h-4 w-4" /> Refresh
             </button>
-            {!tabHeader && !forced && onClose && (
+            {!tabHeader && onClose && (
               <button
                 type="button"
                 onClick={onClose}
@@ -510,6 +621,8 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
         {key:'appearance',label:'Appearance',checked:activeTab==='appearance',selection:'radio',icon:<Palette size={16}/>,onSelect:()=>activateTab('appearance')},
         {key:'models',label:'Models',checked:activeTab==='models',selection:'radio',icon:<Bot size={16}/>,onSelect:()=>activateTab('models')},
         {key:'config',label:'Config',checked:activeTab==='config',selection:'radio',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
+        {key:'authorization',label:'Authorization',checked:activeTab==='authorization',selection:'radio',icon:<ShieldCheck size={16}/>,onSelect:()=>activateTab('authorization')},
+        {key:'mcp',label:'MCP',checked:activeTab==='mcp',selection:'radio',icon:<Plug size={16}/>,onSelect:()=>activateTab('mcp')},
         {key:'secrets',label:'Secrets',checked:activeTab==='secrets',selection:'radio',icon:<KeyRound size={16}/>,onSelect:()=>activateTab('secrets')},
         {key:'notifications',label:'Notifications',checked:activeTab==='notifications',selection:'radio',icon:<Bell size={16}/>,onSelect:()=>activateTab('notifications')},
         {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:refreshSetup},
@@ -581,6 +694,38 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
                 </button>
                 <button
+                  ref={authorizationTabRef}
+                  id="setup-tab-authorization"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'authorization'}
+                  aria-controls="setup-panel-authorization"
+                  tabIndex={activeTab === 'authorization' ? 0 : -1}
+                  data-setup-tab="authorization"
+                  onClick={() => activateTab('authorization')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'authorization' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong'}`}
+                >
+                  <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>Authorization</span>
+                </button>
+                <button
+                  ref={mcpTabRef}
+                  id="setup-tab-mcp"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'mcp'}
+                  aria-controls="setup-panel-mcp"
+                  tabIndex={activeTab === 'mcp' ? 0 : -1}
+                  data-setup-tab="mcp"
+                  onClick={() => activateTab('mcp')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'mcp' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong'}`}
+                >
+                  <Plug className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>MCP</span>
+                </button>
+                <button
                   ref={secretsTabRef}
                   id="setup-tab-secrets"
                   type="button"
@@ -626,80 +771,19 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
             </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
-              <div className={modelsView === 'yaml' ? 'foxwarm-setup-editor-section' : 'flex flex-col'}>
-                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
-                    <p className="mt-1 text-sm text-fw-text">{modelsView === 'form'
-                      ? 'Connect the service that runs your models.'
-                      : 'Configure model providers, routing, and your default model in YAML.'}</p>
-                  </div>
-                  <div role="group" aria-label="Model settings view" className="inline-flex shrink-0 rounded-lg border border-fw-border p-0.5 dark:border-fw-border">
-                    {(['form', 'yaml'] as const).map((view) => (
-                      <button
-                        key={view}
-                        type="button"
-                        aria-pressed={modelsView === view}
-                        data-models-view={view}
-                        onClick={() => {
-                          setModelsView(view)
-                          setModelsSaveResult(null)
-                        }}
-                        className={`rounded-md px-3 py-1 text-sm font-medium ${modelsView === view ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface' : 'text-fw-text hover:bg-fw-hover'}`}
-                      >
-                        {view === 'form' ? 'Form' : 'YAML'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              {modelsBody}
+            </section>
 
-                {modelsView === 'form' && (
-                  <div className="mt-5" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
-                    {modelsReading.ok ? (
-                      <ModelSetupFormPanel
-                        form={modelsReading.form}
-                        focusRequest={modelsFormFocusRequest}
-                        onChange={(next: ModelSetupForm) => updateModelsYaml(buildModelSetupYaml(next))}
-                      />
-                    ) : (
-                      <div data-models-form-unavailable className="max-w-2xl rounded-lg border border-fw-border-muted bg-fw-surface-sunken/40 p-4 text-sm text-fw-text">
-                        <p>{modelsReading.reason === 'invalid'
-                          ? 'The YAML has an error, so the form can’t show it. Fix it in YAML.'
-                          : 'This configuration uses settings the form can’t show, such as comments, several providers, aliases, failover or other model options. Edit it in YAML so nothing is lost.'}</p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button type="button" onClick={() => setModelsView('yaml')} className="rounded-lg bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:bg-fw-accent">Edit in YAML</button>
-                          {!modelConfigured && (
-                            <button type="button" onClick={() => updateModelsYaml(buildModelSetupYaml(formFromPreset('openai')))} className="rounded-lg border border-fw-border px-3 py-1.5 text-sm font-medium text-fw-text hover:bg-fw-hover">Start over with the form</button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className={`${modelsView === 'yaml' ? '' : 'hidden'} mt-4 min-h-72 flex-1`} onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
-                  <SimpleCodeEditor
-                    value={rawModelsYaml}
-                    onChange={updateModelsYaml}
-                    language="yaml"
-                    height="100%"
-                    modelUri={MODELS_YAML_MODEL_URI}
-                    focusRequest={modelsEditorFocusRequest}
-                    ariaLabel="Models YAML editor"
-                  />
-                </div>
-
-                <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                  <button disabled={savingModels || (modelsView === 'form' && !modelsReading.ok)} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
-                  <SaveFeedback section="models" result={modelsSaveResult} />
-                  {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
-                </div>
+            <section id="setup-panel-mcp" role="tabpanel" aria-labelledby="setup-tab-mcp" data-setup-section="mcp" hidden={activeTab !== 'mcp'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+              <div className="mx-auto w-full max-w-5xl">
+                {/* Mounted once opened, so an open form survives tab switches. */}
+                {mcpOpened && <McpServersPanel refreshRequest={panelRefreshRequest} />}
               </div>
             </section>
 
             <section id="setup-panel-secrets" role="tabpanel" aria-labelledby="setup-tab-secrets" data-setup-section="secrets" hidden={activeTab !== 'secrets'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
               <div className="mx-auto w-full max-w-5xl">
-                {activeTab === 'secrets' && <SecretsPanel refreshRequest={secretsRefreshRequest} />}
+                {activeTab === 'secrets' && <SecretsPanel refreshRequest={panelRefreshRequest} />}
               </div>
             </section>
 
@@ -745,16 +829,21 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   {status.capabilities.externalChannelMessage || 'External chat channels are unavailable on this server.'}
                 </p>
               )}
-              {status?.capabilities?.managedChannels !== false && <div data-setup-config-last="weixin" className="mt-6 shrink-0 border-t border-fw-border pt-5 dark:border-fw-border-muted">
-                <h3 className="font-medium text-fw-text-strong">Weixin login</h3>
-                <p className="mt-1 text-sm text-fw-text">Connect Weixin by scanning a QR code.</p>
+              {status?.capabilities?.managedChannels !== false && <details data-setup-config-last="weixin" className="mt-6 shrink-0 border-t border-fw-border pt-5 dark:border-fw-border-muted">
+                <summary className="cursor-pointer select-none font-medium text-fw-text-strong">Connect Weixin</summary>
+                <p className="mt-1 text-sm text-fw-text">Scan a QR code with Weixin to sign in.</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
                   <button disabled={weixinBusy || !weixinSessionKey} onClick={() => void waitWeixinLogin()} className="rounded-lg border border-fw-border px-4 py-2 text-sm font-medium text-fw-text hover:bg-fw-hover disabled:opacity-60 dark:border-fw-border dark:text-fw-text-strong dark:hover:bg-fw-hover">Check login</button>
                 </div>
                 {weixinMessage && <div className="mt-3 text-sm text-fw-text">{weixinMessage}</div>}
                 {weixinQrSrc && <img src={weixinQrSrc} alt="Weixin login QR code" className="mt-4 h-56 w-56 rounded-lg border border-fw-border bg-fw-surface object-contain p-2 dark:border-fw-border" />}
-              </div>}
+              </details>}
+            </section>
+
+            <section id="setup-panel-authorization" role="tabpanel" aria-labelledby="setup-tab-authorization" data-setup-section="authorization" hidden={activeTab !== 'authorization'} className={`${activeTab === 'authorization' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto p-4 md:p-5`}>
+              {/* Stays mounted like the other editors, so unsaved policy edits survive tab switches. */}
+              <ToolAuthorizationPanel active={activeTab === 'authorization'} refreshRequest={panelRefreshRequest} />
             </section>
 
           </div>

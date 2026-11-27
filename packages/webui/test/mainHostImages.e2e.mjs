@@ -65,7 +65,7 @@ try {
   assert.equal((await fixture.api('POST', '/api/sessions', { sessionId: 'main' })).status, 200)
   const page = await fixture.openApp(); page.on('framenavigated', () => {}); page.on('response', async response => { if (response.url().endsWith('/api/upload')) frames.push({ upload: await response.json() }) })
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
-  await page.waitForFunction(() => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session main'))
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main')
   const devtools = await page.createCDPSession(); await devtools.send('Network.enable'); devtools.on('Network.webSocketFrameReceived', frame => frames.push({ realtime: frame.response.payloadData }))
   await page.type('[role="textbox"][aria-label="Message"]', 'IMAGES:responses ')
   await page.$eval('#file-upload', (input, data) => { const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(atob(data), char => char.charCodeAt(0))], 'original.png', { type: 'image/png' })); Object.defineProperty(input, 'files', { configurable: true, value: transfer.files }); input.dispatchEvent(new Event('change', { bubbles: true })) }, png.toString('base64'))
@@ -85,7 +85,7 @@ try {
     assert.equal((await fixture.api('POST', route(id) + '/message', { text: 'IMAGES:' + key + '-next' })).status, 202); await done(id, key + '-next')
     assert(!JSON.stringify(await authority(id)).includes(png.toString('base64')))
   }
-  const heic = await readFile(resolve('src/testFixtures/synthetic-alpha-3x2.heic')), heicUpload = await upload(heic, 'input.heic', ''); assert.equal(heicUpload.status, 200)
+  const heic = await readFile(resolve('dotnet/Foxwarm.Tests/Images/Fixtures/synthetic-alpha-3x2.heic')), heicUpload = await upload(heic, 'input.heic', ''); assert.equal(heicUpload.status, 200)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'IMAGES:heic-next', uploadedFiles: [heicUpload.body] })).status, 202); await done('main', 'heic-next')
   const heicRef = imageRefs(await authority('main')).at(-1).inlineDataRef, heicBlob = await fetch(fixture.origin + '/api/blobs/' + heicRef.blobId, { headers }); assert.equal(heicBlob.headers.get('content-type'), 'application/octet-stream'); assert(heicBlob.headers.get('content-disposition').includes('attachment')); assert.deepEqual(Buffer.from(await heicBlob.arrayBuffer()), heic)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'IMAGES:corrupt' })).status, 202); await done('main', 'corrupt')

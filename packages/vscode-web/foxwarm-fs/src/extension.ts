@@ -2,7 +2,7 @@ import { codeWorkspaceNode } from '../../../shared/src/codeWorkspace';
 import * as vscode from 'vscode';
 import { FoxwarmFileSystemProvider } from './provider';
 import { buildFoxwarmNodeUriString, parseFoxwarmUri } from './foxwarmUri';
-import { normalizeFoxwarmOpenRequest, type FoxwarmOpenRequest } from './openRequest';
+import { normalizeFoxwarmOpenRequest, type FoxwarmOpenRequest, type NormalizedFoxwarmOpenRequest } from './openRequest';
 import { registerFoxwarmConfigSchemas } from './configSchemas';
 import {
   normalizeWorkspaceRootsResponse,
@@ -160,17 +160,35 @@ async function addExplorerFolderToWorkspace(uri: vscode.Uri): Promise<void> {
   await addFoxwarmFolder({ kind: 'addFolder', nodeId: target.nodeId, path: target.realPath });
 }
 
+// A file request that names a directory shows it in Explorer. An uncovered directory joins the
+// workspace through its containing cwd, or as its own root.
+async function revealFoxwarmDirectory(
+  request: Extract<NormalizedFoxwarmOpenRequest, { kind: 'openFile' }>,
+): Promise<{ status: 'revealed'; uri: string }> {
+  const uri = vscode.Uri.parse(buildFoxwarmNodeUriString(request.nodeId, request.path));
+  const covered = (await loadedWorkspaceFolders()).some(folder => {
+    try {
+      const root = parseFoxwarmUri(folder.uri);
+      return root.nodeId === request.nodeId && containsPath(root.realPath, request.path);
+    } catch { return false; }
+  });
+  if (!covered) {
+    const path = request.cwd && containsPath(request.cwd, request.path) ? request.cwd : request.path;
+    await addFoxwarmFolder({ kind: 'addFolder', nodeId: request.nodeId, path });
+  }
+  await revealWorkspaceRoot(uri);
+  return { status: 'revealed', uri: uri.toString(true) };
+}
+
 async function openFoxwarmFile(
   request: FoxwarmOpenRequest,
   provider: FoxwarmFileSystemProvider,
-): Promise<{ status: 'opened'; uri: string }> {
+): Promise<{ status: 'opened' | 'revealed'; uri: string }> {
   const normalized = normalizeFoxwarmOpenRequest(request);
   if (normalized.kind !== 'openFile') throw new Error('Expected an openFile request.');
   const uri = vscode.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
   const stat = await vscode.workspace.fs.stat(uri);
-  if ((stat.type & vscode.FileType.Directory) !== 0) {
-    throw new Error(`${normalized.path} is a directory, not a file.`);
-  }
+  if ((stat.type & vscode.FileType.Directory) !== 0) return revealFoxwarmDirectory(normalized);
 
   const covered = vscode.workspace.workspaceFolders?.some(folder => {
     try {

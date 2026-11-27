@@ -475,6 +475,29 @@ public sealed class SessionAuthorityDocument
                     "Session authority childHandoffState.resolved must be boolean.",
                     "childHandoffState.resolved"
                 );
+            if (
+                handoff.ContainsKey("consecutiveReminders")
+                && (
+                    handoff["consecutiveReminders"] is not JsonValue reminders
+                    || !reminders.TryGetValue<int>(out var count)
+                    || count < 0
+                )
+            )
+                throw SessionAuthorityErrors.Invalid(
+                    "Session authority childHandoffState.consecutiveReminders must be a nonnegative integer.",
+                    "childHandoffState.consecutiveReminders"
+                );
+            if (
+                handoff.ContainsKey("parentNotified")
+                && (
+                    handoff["parentNotified"] is not JsonValue notified
+                    || !notified.TryGetValue<bool>(out _)
+                )
+            )
+                throw SessionAuthorityErrors.Invalid(
+                    "Session authority childHandoffState.parentNotified must be boolean.",
+                    "childHandoffState.parentNotified"
+                );
         }
         else if (root.ContainsKey("childHandoffState"))
             throw SessionAuthorityErrors.Invalid(

@@ -14,7 +14,7 @@ One configured identity may declare both `webui` and `mcp` with the same token. 
 
 ## Configuration
 
-Resolve the installation's data directory and app configuration first; load [foxwarm-maintenance](../../foxwarm-maintenance/SKILL.md) when that location is unknown. The default app file is `state/config.yaml` under the data directory. Preserve the existing app settings and identities when merging this example:
+Resolve the installation's data directory and app configuration first; load the `foxwarm-maintenance` skill when that location is unknown. The default app file is `state/config.yaml` under the data directory. Preserve the existing app settings and identities when merging this example:
 
 ```yaml
 access:
@@ -61,7 +61,7 @@ Unknown fields are rejected. These tokens are explicit YAML values, not environm
 
 For webhook senders (GitHub, Cloudflare, scripts), verification choices and response codes, see the public Webhooks documentation page; send noisy or untrusted public events to a Session whose Agent has only the tools it needs.
 
-For inbound endpoint/client configuration, follow [mcp-management](../../mcp-management/SKILL.md) and its [inbound reference](../../mcp-management/references/inbound.md).
+For inbound endpoint/client configuration, follow the `mcp-management` skill and its inbound reference (`ctl skill load mcp-management references/inbound.md`).
 
 ## Restricted WebUI behavior
 
@@ -69,7 +69,7 @@ The identity uses the normal WebUI login flow but receives a restricted chat roo
 
 Exact bindings resolve through committed old-to-current Session aliases. A completed move preserves exact-bound access through the old/new IDs when both resolve to the same live Session, including a move to another Agent. Agent scopes instead use the resolved Session's actual current Agent: a move out removes that scope's access, and an old ID prefix does not retain it. Missing or ambiguous references grant nothing. Binding one exact Session does not bind its siblings. Image access also requires a reference in the selected Session's committed history; arbitrary filesystem downloads are not granted.
 
-A WebUI binding is not a safe substitute for limiting the bound Agent's tool policy or environment. If a visitor should not see a secret, do not send it to that Session or let its tools return it. Creating a dedicated Agent/Session or restricting its rules and default Node is an [agent-management](../../agent-management/SKILL.md) workflow.
+A WebUI binding is not a safe substitute for limiting the bound Agent's tool policy or environment. If a visitor should not see a secret, do not send it to that Session or let its tools return it. Creating a dedicated Agent/Session or restricting its rules and default Node is an `agent-management` skill workflow.
 
 ## Troubleshooting
 

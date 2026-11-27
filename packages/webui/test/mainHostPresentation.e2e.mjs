@@ -2,13 +2,12 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 
 const fixture = await createHostFixture('presentation-app'), route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -40,10 +39,7 @@ await seed('foreign', { currentNode: 'unsupported-node' }, { currentNode: 'unsup
 await seed('self', { parentSessionId: 'self' }); await seed('x', { parentSessionId: 'y' }); await seed('y', { parentSessionId: 'x' })
 await seed('A'); await seed('B', { aliases: ['A', 'shared'] }); await seed('C', { aliases: ['shared'] }); await seed('alias-child', { parentSessionId: 'A' }); await seed('ambiguous-child', { parentSessionId: 'shared' })
 for (let index = 0; index < 1000; index++) await seed('cold-' + String(index).padStart(4, '0'), { parentSessionId: 'root', archived: index === 500, pinned: index === 700 })
-const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
-const catalog = new catalogModule.SessionCatalogStore(join(state, 'catalog.sqlite')); catalog.initializeEmpty(); catalog.replaceAll(rows); catalog.close()
-const seedFile = join(fixture.root, 'seed.json'); await writeFile(seedFile, JSON.stringify(rows))
-execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedFile], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+await seedCatalog(fixture.data, rows); seedArchiveBranches(fixture.data, rows)
 const database = join(state, 'catalog.sqlite')
 function sql(text, args = []) { const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare(text).all(...args) } finally { db.close() } }
 function retained() { const db = new DatabaseSync(join(state, 'archive-store.sqlite'), { readOnly: true }); try { return ['archive_messages', 'archive_blocks', 'archive_branches'].map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY 1,2').all()) } finally { db.close() } }
@@ -90,7 +86,7 @@ try {
   assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=3')).body.presentationRevision, revision)
   blocker.exec('ROLLBACK'); blocker.close(); blocker = null
   await action('root', 'archive', { archived: false }); await action('ui-child', 'archive', { archived: false })
-  page = await fixture.openApp(); await page.setViewport({ width: 1440, height: 1200 }); page.on('response', async response => { if (/\/descendants\//.test(response.url())) console.log('Original UI descendants: ' + response.status() + ' ' + await response.text().catch(() => '')) }); page.on('request', request => { if (/\/(archive|pin|move|promote)$/.test(request.url())) console.log('Original UI action: ' + request.url().slice(fixture.origin.length) + ' ' + (request.postData() || '')) }); await page.evaluate(() => window.foxwarmTest.switchToSession('live')); await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('session live')); await sleep(350)
+  page = await fixture.openApp(); await page.setViewport({ width: 1440, height: 1200 }); page.on('response', async response => { if (/\/descendants\//.test(response.url())) console.log('Original UI descendants: ' + response.status() + ' ' + await response.text().catch(() => '')) }); page.on('request', request => { if (/\/(archive|pin|move|promote)$/.test(request.url())) console.log('Original UI action: ' + request.url().slice(fixture.origin.length) + ' ' + (request.postData() || '')) }); await page.evaluate(() => window.foxwarmTest.switchToSession('live')); await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'live'); await sleep(350)
   const commandHistory = await readFile(join(sessions, 'live.json'), 'utf8'), commandAudit = retained()
   await page.evaluate(() => window.foxwarmTest.sendMessage('/session archive target'))
   await until(async () => (await page.evaluate(() => document.body.innerText)).includes('target') && (await page.evaluate(() => document.body.innerText)).includes('archived.'), 'real Chat temporary command response')
@@ -102,7 +98,7 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(node => node.textContent.trim() === 'Archive session')); await page.evaluate(() => { const modal = [...document.querySelectorAll('button')].find(node => node.textContent.trim() === 'Archive session').parentElement.parentElement; modal.querySelector('input[type=checkbox]').click() }); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(node => /^Archive \d+ sessions$/.test(node.textContent.trim()))); await page.evaluate(() => [...document.querySelectorAll('button')].find(node => /^Archive \d+ sessions$/.test(node.textContent.trim())).click()); await until(async () => (await dto('root')).archived, 'Sidebar explicit recursive archive committed')
   await action('root', 'archive', { archived: false }); await action('root', 'pin', { pinned: false }); await action('ui-child', 'archive', { archived: false })
   await action('target', 'archive', { archived: false }); await page.evaluate(() => window.foxwarmTest.switchToSession('ui-child'))
-  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('session ui-child'))
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'ui-child')
   await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-system-tab'); await page.waitForSelector('[data-session-id="ui-child"]')
   await page.click('button[aria-label="Session display options"]'); await page.waitForSelector('[role="menu"]'); await page.evaluate(() => [...document.querySelectorAll('[role="menu"] button')].find(button => button.textContent.trim() === 'Time').click()); await page.waitForSelector('[data-session-list-mode="time"]')
   await sleep(500)

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import ts from 'typescript'
 
 const [root, input, output] = process.argv.slice(2)
-const repository = process.env.FOXWARM_TS_ROOT
+const repository = process.env.FOXWARM_REPO_ROOT
 if (!repository || !root || !input || !output) throw new Error('Explicit source and owned fixture paths are required')
 const source = execFileSync('git', ['show', 'b9c6f93f93d3e8d45f8256245a903f200d0bd8c2:src/taskStore.ts'], { cwd: repository, encoding: 'utf8' })
 const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText

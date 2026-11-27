@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ExternalLink, ListFilter, X } from 'lucide-react'
 import { useLocalDay, useUsageReport } from '../useUsageReport'
+import { useMobileChatViewport } from '../chatPreferences'
 import { formatUsdCost } from '../usageCost'
 import TokenUsageDetails, { formatUsageNumber } from './TokenUsageDetails'
 import SystemUsageRedaction from './SystemUsageRedaction'
+import Select from './Select'
+import { USAGE_TABLE_FIRST_COLUMN as STICKY_FIRST } from './SystemShared'
 import {
   MAX_USAGE_DAYS, USAGE_GROUPINGS, USAGE_PERIODS, toDateInput, usageBucketLabel, usageGroupDetail,
   usageGroupLabel, usageMetricValue, usageQuery, usageRange, usageRecordsBegin, usageSeries, usageTokens,
@@ -28,11 +31,12 @@ const formatDay = (time: number) => new Date(time).toLocaleDateString(undefined,
 const seriesColor = (id: string, index: number) => id === 'other' ? OTHER_COLOR : SERIES_COLORS[index % SERIES_COLORS.length]
 
 function UsageChart({ report, unit, metric }: { report: UsageReport; unit: 'hour' | 'day'; metric: UsageMetric }) {
+  const phone = useMobileChatViewport()
   const series = useMemo(() => usageSeries(report, metric), [report, metric])
   const totals = report.buckets.map((_, index) => series.reduce((sum, item) => sum + item.values[index], 0))
   const max = Math.max(0, ...totals)
   const format = (value: number) => metric === 'cost' ? formatUsdCost(value) : `${formatUsageNumber(value)} tokens`
-  const labelEvery = Math.max(1, Math.ceil(report.buckets.length / 12))
+  const labelEvery = Math.max(1, Math.ceil(report.buckets.length / (phone ? 6 : 12)))
   return (
     <div data-usage-chart>
       <div className="flex h-40 items-end gap-px border-b border-fw-border-muted" role="img" aria-label={`${metric === 'cost' ? 'Estimated cost' : 'Tokens'} per ${unit}`}>
@@ -44,7 +48,7 @@ function UsageChart({ report, unit, metric }: { report: UsageReport; unit: 'hour
           </div>
         ))}
       </div>
-      <div className="mt-1 flex gap-px text-[10px] text-fw-text-muted">
+      <div className="mt-1 flex gap-px overflow-hidden text-[10px] text-fw-text-muted">
         {report.buckets.map((_, index) => (
           <span key={index} className="min-w-0 flex-1 whitespace-nowrap">{index % labelEvery === 0 ? usageBucketLabel(report.boundaries[index], unit) : ''}</span>
         ))}
@@ -112,7 +116,6 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
   const groupingLabel = USAGE_GROUPINGS.find(item => item.id === (shown?.report.groupBy || grouping))!.label
 
   const segment = (active: boolean) => `rounded-md px-3 py-1 text-xs font-medium ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
-  const select = 'h-9 min-w-0 rounded-lg border border-transparent bg-transparent px-3 text-xs font-medium text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border'
   const dateInput = 'h-9 rounded-lg border border-fw-border bg-fw-surface px-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border'
   const card = 'rounded-xl border border-fw-border bg-fw-surface p-4'
   const coverage = current?.coverage
@@ -124,7 +127,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
     <div className="space-y-4" data-system-usage data-usage-period={period} data-usage-grouping={grouping}>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Usage period">
+          <div className="inline-flex h-9 items-stretch rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Usage period">
             {USAGE_PERIODS.map(item => (
               <button key={item.id} type="button" aria-pressed={period === item.id} data-usage-period-option={item.id} onClick={() => setPeriod(item.id)} className={segment(period === item.id)}>{item.label}</button>
             ))}
@@ -138,9 +141,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
           ) : null}
           <label className="flex items-center gap-1 text-xs text-fw-text-muted">
             <span>Group by</span>
-            <select aria-label="Group usage by" value={grouping} onChange={event => setGrouping(event.target.value as UsageGrouping)} className={select}>
-              {USAGE_GROUPINGS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
+            <Select variant="toolbar" aria-label="Group usage by" value={grouping} onChange={value => setGrouping(value as UsageGrouping)} options={USAGE_GROUPINGS.map(item => ({ value: item.id, label: item.label }))} />
           </label>
           {agent ? (
             <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-fw-accent-surface px-2.5 py-1 text-xs text-fw-accent" data-usage-agent-filter={agent}>
@@ -155,7 +156,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
       {error ? <div className="flex items-center justify-between gap-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger"><span>{error}</span><button type="button" onClick={() => { void reload() }} className="font-medium underline">Retry</button></div> : null}
 
       {shown ? <div className={`space-y-4 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale} data-usage-stale={stale || undefined}>
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <section className={card} data-usage-summary="cost">
             <div className="text-[10px] text-fw-text-muted">Estimated cost</div>
             <strong className="mt-1 block text-2xl font-semibold tabular-nums text-fw-text-strong" data-usage-total-cost>{shown.report.total.cost !== undefined ? formatUsdCost(shown.report.total.cost) : '—'}</strong>
@@ -189,13 +190,14 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
         </section>
 
         <section className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface" data-usage-groups>
-          <table className="w-full table-fixed text-xs">
+          <div className="overflow-x-auto" data-usage-table-scroll>
+          <table className="w-full min-w-[20rem] text-xs md:table-fixed">
             <thead className="border-b border-fw-border-muted text-left text-[10px] text-fw-text-muted">
               <tr>
-                <th className="px-4 py-2 font-medium">{groupingLabel}</th>
-                <th className="w-24 px-2 py-2 text-right font-medium">Requests</th>
-                <th className="w-24 px-2 py-2 text-right font-medium">Tokens</th>
-                <th className="w-32 px-2 py-2 text-right font-medium">Estimated cost</th>
+                <th className={`${STICKY_FIRST} px-4 py-2 font-medium`}>{groupingLabel}</th>
+                <th className="whitespace-nowrap px-2 py-2 text-right font-medium md:w-24">Requests</th>
+                <th className="whitespace-nowrap px-2 py-2 text-right font-medium md:w-24">Tokens</th>
+                <th className="whitespace-nowrap px-2 py-2 text-right font-medium md:w-32"><span className="md:hidden">Cost</span><span className="hidden md:inline">Estimated cost</span></th>
                 <th className="hidden w-40 px-4 py-2 font-medium md:table-cell"><span className="sr-only">Share</span></th>
               </tr>
             </thead>
@@ -207,7 +209,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
                 const drill = group.kind === 'agent' && group.key
                 return (
                   <tr key={`${group.kind}:${group.key ?? ''}`} className="border-b border-fw-border-muted last:border-0" data-usage-row={group.key ?? ''} data-usage-row-kind={group.kind}>
-                    <td className="px-4 py-2">
+                    <td className={`${STICKY_FIRST} px-4 py-2`}>
                       <div className="flex min-w-0 items-center gap-1.5">
                         {drill ? (
                           <button type="button" onClick={() => { setAgent(group.key); setGrouping('tree') }} title={`Show session trees in ${group.key}`} className="min-w-0 truncate text-left font-medium text-fw-accent hover:underline">{label}</button>
@@ -216,9 +218,9 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
                       </div>
                       {detail ? <div className="truncate text-[11px] text-fw-text-muted" title={detail}>{detail}</div> : null}
                     </td>
-                    <td className="px-2 py-2 text-right tabular-nums text-fw-text">{group.usage.requests.toLocaleString('en')}</td>
-                    <td className="px-2 py-2 text-right tabular-nums text-fw-text" title={`${usageTokens(group.usage).toLocaleString('en')} tokens`}>{formatUsageNumber(usageTokens(group.usage))}</td>
-                    <td className="px-2 py-2 text-right tabular-nums text-fw-text-strong"><CostValue usage={group.usage} /></td>
+                    <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-fw-text">{group.usage.requests.toLocaleString('en')}</td>
+                    <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-fw-text" title={`${usageTokens(group.usage).toLocaleString('en')} tokens`}>{formatUsageNumber(usageTokens(group.usage))}</td>
+                    <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-fw-text-strong"><CostValue usage={group.usage} /></td>
                     <td className="hidden px-4 py-2 md:table-cell">
                       <div className="h-1.5 overflow-hidden rounded-full bg-fw-border-muted">
                         <div className="h-full rounded-full" style={{ width: `${shareMax > 0 ? shares[index] / shareMax * 100 : 0}%`, background: group.buckets ? seriesColor('', index) : OTHER_COLOR }} />
@@ -230,6 +232,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
               {!shown.report.groups?.length ? <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-fw-text-muted">No model requests in this period.</td></tr> : null}
             </tbody>
           </table>
+          </div>
           {shown.report.groupCount !== undefined && shown.report.groups && shown.report.groupCount > shown.report.groups.length ? (
             <div className="border-t border-fw-border-muted px-4 py-2 text-xs text-fw-text-muted">Showing the top {shown.report.groups.length} of {shown.report.groupCount}.</div>
           ) : null}

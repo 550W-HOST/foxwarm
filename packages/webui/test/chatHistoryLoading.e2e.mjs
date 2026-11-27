@@ -232,7 +232,7 @@ test('history snapshot is lazy-debug independent and a delayed response preserve
   assert.equal(await page.evaluate(() => window.fixtureRequests.some(url => url.includes('/debug-file'))), false)
 
   await page.click('button[title="Session options"]')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Debug info')?.click())
   await page.waitForFunction(() => window.fixtureRequests.some(url => url.includes('/debug-file')))
   assert.equal(await page.evaluate(() => window.fixtureRequests.filter(url => url.includes('/debug-file')).length), 1)
   await page.close()

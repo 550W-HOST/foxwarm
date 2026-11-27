@@ -8,15 +8,15 @@ import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { consoleClient } from './cliNodeConsoleFixture.mjs'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
-import { functionCallFor } from './ctlModelCalls.mjs'
+import { functionCall as callFor } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
 let functionCall
 const exists = path => access(path).then(() => true, () => false)
-for (const runtime of ['source', 'dotnet']) {
-  functionCall = functionCallFor(runtime)
+for (const runtime of ['dotnet']) {
+  functionCall = callFor
   const env = {}, fixture = await createHostFixture('cli-console-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'), execCwd = join(cwd, 'agents/main'); await mkdir(execCwd, { recursive: true })
@@ -36,7 +36,7 @@ for (const runtime of ['source', 'dotnet']) {
     } catch (error) { failures.push(error.stack); response.writeHead(500); response.end(String(error)) }
   })
   model.listen(0, '127.0.0.1'); await once(model, 'listening')
-  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: cli-console-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: cli-console-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
   await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, asyncCompact: false, effort: { allowed: ['none'], default: 'none' }, models: ['wire'] } } }))
   const proxyHttp = createServer(), proxy = new WebSocketServer({ server: proxyHttp })
@@ -108,23 +108,17 @@ for (const runtime of ['source', 'dotnet']) {
     assert.equal(stat.status, 200); assert(ui.screen().includes('Tool call pending for ' + actor))
     ui.write('n'); await reply(held); await finish(actor, 'busy-first')
     const stopped = await pending(actor, 'stop-before', 'exec', { command: 'touch stop-before-never', timeout: 30 })
-    assert.equal((await fixture.api('POST', route(actor) + (runtime === 'source' ? '/message' : '/stop'), runtime === 'source' ? { text: '/stop' } : {})).status, 200)
+    assert.equal((await fixture.api('POST', route(actor) + '/stop', {})).status, 200)
     await until(() => wire.some(row => row.frame.type === 'tool_call_cancel' && row.frame.callId === stopped.callId), 'real Stop exact call')
     assert.equal((await reply(stopped)).execStarted, false)
     await ui.wait(handle => !handle.screen().includes('Tool call pending'), 'Stop clears native approval'); ui.write('Y'); await sleep(80); ui.write('\x7f'); await sleep(80)
     assert(!await exists(join(execCwd, 'stop-before-never')))
     const launched = await pending(other, 'stop-after', 'exec', { command: 'printf start > stop-after; sleep 2; printf done >> stop-after', timeout: 30 })
     ui.write('Y'); await until(() => exists(join(execCwd, 'stop-after')), 'actual launch before Stop')
-    assert.equal((await fixture.api('POST', route(other) + (runtime === 'source' ? '/message' : '/stop'), runtime === 'source' ? { text: '/stop' } : {})).status, 200)
+    assert.equal((await fixture.api('POST', route(other) + '/stop', {})).status, 200)
     const launchedReply = await reply(launched); assert.equal(launchedReply.type, 'tool_call_response'); assert.match(launchedReply.result.output, /not killed/)
     await until(async () => (await saved(other)).meta.acceptedExternalEventIds?.includes('remote-exec-completion:' + launched.backgroundExecId), 'real completion ACK after Stop')
     assert.equal(await readFile(join(execCwd, 'stop-after'), 'utf8'), 'startdone')
-    if (runtime === 'source') {
-      const timed = await pending(actor, 'normal-timeout', 'exec', { command: 'touch normal-timeout-never' }), start = Date.now()
-      const timedReply = await until(() => wire.find(row => row.from === 'cli' && row.frame.callId === timed.callId)?.frame, 'real server-derived approval timeout', 65000)
-      assert.equal(timedReply.execStarted, false); assert.match(timedReply.error.message, /timed out waiting/); assert(Date.now() - start >= 59000 && Date.now() - start < 62000)
-      assert(!await exists(join(execCwd, 'normal-timeout-never'))); await finish(actor, 'normal-timeout')
-    }
     const shutting = await pending(actor, 'shutdown-pending', 'write', writeArgs('shutdown-never'))
     await ui.signal(); await ui.stopped(); assert(!await exists(join(cwd, 'shutdown-never')))
     assert(!wire.some(row => row.from === 'cli' && row.frame.callId === shutting.callId && row.frame.type === 'tool_call_response'))

@@ -41,7 +41,7 @@ public sealed class SessionBootstrapTests
             ["session"] = session.DeepClone(),
         };
         var repo =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? throw new InvalidOperationException("Owned source fixture root is required.");
         using var process = Process.Start(
             new ProcessStartInfo("node")

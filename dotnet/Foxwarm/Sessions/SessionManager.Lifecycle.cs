@@ -103,7 +103,9 @@ internal sealed partial class SessionManager
         string? initialNode = null,
         string? creatorCallId = null,
         bool instructed = false,
-        JsonObject? suggestedModel = null
+        JsonObject? suggestedModel = null,
+        // The model call whose script created this fork, when a script did (D-lifecycle-fork-dual-return).
+        string? scriptRootCallId = null
     )
     {
         ClaudeRuntimeState.RequireFoxwarm(parent, "Fork");
@@ -135,6 +137,12 @@ internal sealed partial class SessionManager
                 ? Array.FindIndex(tailCalls, call => SessionWait.Text(call["id"]) == creatorCallId)
                 : -1;
         var callVisible = creator >= 0;
+        // A script's create call is not a model call; the script's own call is closed with a
+        // result that says the script created this fork. Its instruction arrives as a message.
+        var scriptRoot =
+            creator < 0 && childMode && !userInitiated && !string.IsNullOrEmpty(scriptRootCallId)
+                ? Array.FindIndex(tailCalls, call => SessionWait.Text(call["id"]) == scriptRootCallId)
+                : -1;
         CreationModelPlan? modelPlan = null;
         var created = await WithCreationIdentityAsync(
             id,
@@ -245,6 +253,11 @@ internal sealed partial class SessionManager
                                                                             taskId,
                                                                             instructed
                                                                         )
+                                                                    : index == scriptRoot
+                                                                        ? SessionBoundary.ForkScriptCall(
+                                                                            parent.Id,
+                                                                            id
+                                                                        )
                                                                         : SessionBoundary.ForkSkippedCall(
                                                                             parent.Id
                                                                         ),
@@ -274,11 +287,7 @@ internal sealed partial class SessionManager
                             userInitiated || !childMode
                                 ? $"This session was manually forked by the user from session `{parent.Id}`. Your current session ID is `{id}`. The parent relationship records the source of the inherited context; it does not itself assign work or require a completion report. Follow the user's instructions in this session."
                                 : $"You are a child session forked from parent session `{parent.Id}`. Your current session ID is `{id}`. "
-                                    + SessionBoundary.Completion(
-                                        parent.Id,
-                                        HandoffConfirmationEnabled,
-                                        taskId
-                                    )
+                                    + SessionBoundary.Completion(parent.Id, taskId)
                         )
                     );
                     await AppendOwnedRowsAsync(owner, suffixRows);
@@ -324,7 +333,7 @@ internal sealed partial class SessionManager
     }
 
     private async Task CompensateCreatedBranchAsync(
-        PersistentSessionAuthorityStore store,
+        ISessionAuthority store,
         ArchiveBranch? branch
     )
     {

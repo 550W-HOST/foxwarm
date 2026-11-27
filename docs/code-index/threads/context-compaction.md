@@ -33,9 +33,6 @@ The [memory warning](./conditional-memory-snapshots.md#d-memory-size-warning) id
 
 ## Modules and units
 
-- [src-session-history](../units/src-session-history.md)
-- [src-session-compact-plan](../units/src-session-compact-plan.md)
-- [src-session-layered-context](../units/src-session-layered-context.md)
 
 ## Invariants
 
@@ -66,11 +63,11 @@ Only a response paired by `tool_use_id` with a unique persisted builtin `skill` 
 
 ### D-context-compact-completion
 
-Compact completion is a single self-closing `<foxwarm-system kind="session-boundary" event="compact-completed" ... />` marker. Additional continuation text and compacted-skill guidance are escaped into its `hint` attribute. There is no tag body, separate payload part, or leading `Compaction completed.` line.
+Compact completion is a single self-closing `<foxwarm-system kind="session-boundary" event="compact-completed" ... />` marker. It records the Session's execution Node (`currentNode`) and working directory (`cwd`, when set) at commit time, using the same escaping as the opening marker. Additional continuation text and compacted-skill guidance are escaped into its `hint` attribute. There is no tag body, separate payload part, or leading `Compaction completed.` line.
 
 Only the newest pure compact-completion notice remains in active model-visible history after a later successful compact. Older current/legacy completion notices are transparent to planning, never become summary text, and are removed from the complete compatible active history at commit time (including force-kept tail items); durable archive records are never rewritten. Other session-boundary events and messages containing real user/tool/content remain protected. Failed or non-committing compaction leaves active history unchanged.
 
-Continuation identity and skill-reload consequences are owned by [conversation and history](../behaviors/conversation-and-history.md#actions-and-consequences). `extractCompactedSkillNames` scans only the consumed snapshot prefix for direct `skill(action:"load")` and persisted legacy `load_skill` calls; arbitrary wrapper output is not skill-load evidence. Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/src-session-history.md). [2026-11-14] The C# owner (`SessionCompactor.CompactedSkillNames`, and the pruning exemption in `SessionCompactor.Prune`) also counts `ctl skill load <name>` calls, resolved through the [command registry](../units/ctl-command-registry.md); the hint tells the model to run `ctl skill load <name>` again.
+Continuation identity and skill-reload consequences are owned by [conversation and history](../behaviors/conversation-and-history.md#actions-and-consequences). `extractCompactedSkillNames` scans only the consumed snapshot prefix for direct `skill(action:"load")` and persisted legacy `load_skill` calls; arbitrary wrapper output is not skill-load evidence. Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/session-compaction.md). [2026-11-14] The C# owner (`SessionCompactor.CompactedSkillNames`, and the pruning exemption in `SessionCompactor.Prune`) also counts `ctl skill load <name>` calls, resolved through the [command registry](../units/ctl-command-registry.md); the hint tells the model to run `ctl skill load <name>` again.
 
 ### D-context-compact-planner-debug
 
@@ -86,7 +83,7 @@ The diagnostics use ordinary Session-history and Archive persistence and the exi
 
 ### D-context-compact-runtime-gate
 
-**Derived design for directly requested file-based correction and general file submission.** Node routing is the engineering choice that makes those operations available through existing authorized file capabilities. It serves economical plan repair under the [shared schema](../modules/llm.md#d-llm-stable-tool-schema), [ordinary authorization](./tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization), and [active-source authority](./context-compaction-and-recall.md#d-context-active-history-authority). Artifact lifecycle and dispatch details below are mechanisms, not additional product restrictions.
+**Derived design for directly requested file-based correction and general file submission.** Node routing is the engineering choice that makes those operations available through existing authorized file capabilities. It serves economical plan repair under the [shared schema](../units/tools-registry.md#d-llm-stable-tool-schema), [ordinary authorization](./tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization), and [active-source authority](./context-compaction-and-recall.md#d-context-active-history-authority). Artifact lifecycle and dispatch details below are mechanisms, not additional product restrictions.
 
 The goal is to submit and correct a compact plan without repeatedly regenerating a large argument object. File input is another representation of the same plan, not a separate validator or an authorization bypass. Normal and compact requests retain the same model-facing tool definitions under [request-prefix stability](./conditional-memory-snapshots.md#d-memory-request-prefix-stability); execution eligibility is checked separately.
 
@@ -94,7 +91,7 @@ The maintained host accepts direct plan fields or `argsFilePath`, with the file 
 
 Dedicated planning permits one plan submission, or an exact pending-file `edit` (including a single-update patch), within its existing round budget. Rejected arguments preserve available raw text, or an identified structured serialization fallback, in an operation-owned artifact on the captured Node. Feedback identifies the error and file; successful replacement staging can replace an earlier rejected artifact. Cleanup is best-effort on that same Node, with no Main fallback or replay of an accepted plan. Ordinary in-context rejection instead produces an ordinary repairable file without a new pending-operation registry; normal file tools repair it before resubmission. Acceptance and application remain distinct, and current active-source validation still applies.
 
-The maintained implementation, failure classifications and supported call paths are in [Session compaction](../units/session-compaction.md#deliberate-in-context-submission). The retained TypeScript implementation still has its older Main-only, invocation-bound descriptor repair path; its [reference unit](../units/src-session-compact-plan.md#reference-repair-file-semantics) describes those mechanics. That reference limitation does not constrain the maintained Node-routed file-input contract.
+The maintained implementation, failure classifications and supported call paths are in [Session compaction](../units/session-compaction.md#deliberate-in-context-submission). That reference limitation does not constrain the maintained Node-routed file-input contract.
 
 ### D-context-log-retention
 
@@ -160,4 +157,4 @@ Durable compact facts belong only in the `memoryFacts` array of their matching `
 
 **Directly selected constraint under [active-history authority](./context-compaction-and-recall.md#d-context-active-history-authority).** [2026-10-29] Candidate ranges and complete tool exchanges follow present active-history order. Valid forward allocation gaps are empty space, not intervening content. Existing display-only and pure compact-completion transparency applies whether those rows are still present or have been removed by ordinary cleanup. Raw identities remain positive, unique and increasing; missing, duplicate or reversed identities, unsequenced exchanges, protected/preserved rows, and block source/level boundaries retain their structural rules.
 
-The maintained engine shares this adjacency rule across candidate segmentation, recent-tail exchange splitting, plan validation and preserved-exchange removal. Preservation expands to actual present members, never an integer interval containing absent IDs. Quotas use candidate tokens/counts, not numeric range width. No Archive read, renumbering or gap record is required. The retained TypeScript reference still has its older numeric-gap segmentation; it is not a second maintained runtime target.
+The maintained engine shares this adjacency rule across candidate segmentation, recent-tail exchange splitting, plan validation and preserved-exchange removal. Preservation expands to actual present members, never an integer interval containing absent IDs. Quotas use candidate tokens/counts, not numeric range width. No Archive read, renumbering or gap record is required.

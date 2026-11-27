@@ -16,7 +16,7 @@ import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import RunningCommands from './RunningCommands'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
-import { isInternalTimelineMessage, type Message } from './chatShared'
+import { isEffortChangeMessage, isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -237,7 +237,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const searchHistoryIndexRef = useRef<number | null>(null)
   const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
-  const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  // The ID line adds something only beside a working directory; the ID itself stays in Copy ID.
+  const sessionHeaderSubtitle = sessionRecord?.cwd?.trim() ? formatSessionHeaderSubtitle(sessionId, sessionRecord.cwd) : null
   const sentVersionEnabled = sessionRecord?.textRedaction === true
   const sentVersion = useMemo(() => ({ sessionId, enabled: sentVersionEnabled }), [sessionId, sentVersionEnabled])
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
@@ -285,6 +286,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const capturedInteractionVersionRef = useRef(0)
   const pendingContentResizeRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>(null)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const attachedRangeRef = useRef<{ scrollHeight: number; clientHeight: number } | null>(null)
   const cardHeightChangesRef = useRef(new Set<object>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
@@ -387,7 +389,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     shouldAutoScrollRef.current = following
     pendingUserLeaveBottomRef.current = pendingUserLeave
     setFollowingBottom(following)
-  }, [])
+    if (following && historyMode === 'continuous') {
+      // A following reader sees the live tail; a window kept while reading would leave later rows unmounted.
+      setContinuousWindowKey(null)
+      setContinuousProtectedRange(null)
+    }
+  }, [historyMode])
 
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
@@ -498,6 +505,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     const state = captureCurrentViewportState()
     if (state) pendingContentResizeRef.current = { state, interactionVersion: userInteractionVersionRef.current }
   }, [captureCurrentViewportState]))
+
+  // An attached reader stays on the latest row before the browser paints any growth,
+  // whether React rendered it or a Composer, image or font resize did. Changed rows or a
+  // changed scroll range pin; a render or scroll that moves no layout leaves the position
+  // alone. Rows are checked as well because a sliding window can keep the range while
+  // native scroll anchoring moves scrollTop. A restore still in progress owns the
+  // position, and a pointer gesture may be starting a scrollbar drag.
+  const keepAttachedBottom = useCallback((rowsChanged = false) => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    const range = { scrollHeight: container.scrollHeight, clientHeight: container.clientHeight }
+    const previous = attachedRangeRef.current
+    attachedRangeRef.current = range
+    if (!rowsChanged && previous?.scrollHeight === range.scrollHeight && previous.clientHeight === range.clientHeight) return
+    if (!shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pointerScrollInteractionRef.current || !isContentLayoutReady()) return
+    if (range.scrollHeight - container.scrollTop - range.clientHeight > 0.5) container.scrollTop = range.scrollHeight
+  }, [isContentLayoutReady])
 
   const applyViewportState = useCallback((state: ChatViewportState): boolean => {
     const container = messagesContainerRef.current
@@ -917,10 +941,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     finally { setModelBusy(false) }
   }, [mergeConfirmedSettings, sessionId])
 
-  useEffect(() => {
-    if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
-    scrollToBottom()
-  }, [messages, scrollToBottom, streamingAssistantDraft])
+  useLayoutEffect(() => keepAttachedBottom())
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
     const snapshotText = webUiIdentityMode || historyMode === 'continuous' ? '' : persistentMemorySnapshot.trim()
@@ -998,11 +1019,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   // Conversation hides model bookkeeping; technical views retain the existing snapshot and rows.
   const timelineMessages = useMemo(() => {
+    const shown = visibleMessages.some(isEffortChangeMessage) ? visibleMessages.filter(message => !isEffortChangeMessage(message)) : visibleMessages
     const baseMessages = timelineView === 'conversation'
-      ? visibleMessages.filter(message => !isInternalTimelineMessage(message))
-      : snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+      ? shown.filter(message => !isInternalTimelineMessage(message))
+      : snapshotSystemMessage ? [snapshotSystemMessage, ...shown] : shown
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [timelineView, snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
+  useLayoutEffect(() => keepAttachedBottom(true), [keepAttachedBottom, timelineMessages, queuedMessages])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
@@ -1352,6 +1375,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     syncScrollbarGutter()
     const observer = new ResizeObserver(() => {
       syncScrollbarGutter()
+      keepAttachedBottom()
       if (resizeRestoreFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeRestoreFrameRef.current)
       }
@@ -1406,7 +1430,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         resizeRestoreFrameRef.current = null
       }
     }
-  }, [applyViewportAnchorCandidates, applyViewportState])
+  }, [applyViewportAnchorCandidates, applyViewportState, keepAttachedBottom])
 
   useLayoutEffect(() => () => {
     // A mode switch has already changed the rendered source by cleanup time.
@@ -1608,13 +1632,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   return (
     <SessionQuestionsContext.Provider value={sessionQuestions}>
-    <div ref={chatRootRef} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} data-chat-session-id={sessionId} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
         compact={mobileUi}
-        subtitle={webUiIdentityMode || mobileUi ? null : (
+        subtitle={webUiIdentityMode || mobileUi || !sessionHeaderSubtitle ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>

@@ -482,7 +482,8 @@ internal sealed partial class SessionSequenceProjection
                 && (failed.TryGetValue<bool>(out var bad) ? bad : failed.ToString() == "1")
                     ? "error"
                 : "ok";
-            var script = name is "run_script" or "start_toolscript_run" or "continue_script";
+            var script =
+                name is "run_script" or "start_toolscript_run" or "continue_script" or "run_skill";
             var callDelivery = SessionManager.BatchDeliverySeq(
                 callSeq,
                 position - 1,

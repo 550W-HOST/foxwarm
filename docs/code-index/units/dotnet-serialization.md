@@ -38,11 +38,11 @@ Frontmatter retains YamlDotNet's original untyped scalar, alias, sequence and ma
 
 ## Integration references
 
-- [Host runtime](host-runtime.md): HTTP JSON options and startup migration envelopes.
-- [Vector owner](vector-owner.md): configuration and result wire DTOs.
-- [Vector indexing](vector-indexing.md): row conversion at native table boundaries.
+- [Host runtime](./host-runtime.md): HTTP JSON options and startup migration envelopes.
+- [Vector owner](./vector-owner.md): configuration and result wire DTOs.
+- [Vector indexing](./vector-indexing.md): row conversion at native table boundaries.
 - `packages/webui/test/mainHostFixture.mjs`: disposable managed/native host selection through `coreExecutable` or `FOXWARM_TEST_MAIN_EXECUTABLE`; the same owned data, listener and lifecycle checks apply. Drivers that spawn their own host use its `mainHostLaunch`, and the full-application harness honours the same variable.
-- `npm run test:native` ([test runner](test-runner.md)): the bounded CI smoke against one NativeAOT publication.
+- `npm run test:native` ([test runner](./test-runner.md)): the bounded CI smoke against one NativeAOT publication.
 
 ## Warning gate
 

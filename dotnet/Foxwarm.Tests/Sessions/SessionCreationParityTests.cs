@@ -21,9 +21,9 @@ public sealed partial class SessionCreationParityTests
     private static async Task<JsonArray> SourceAsync(JsonArray cases)
     {
         var repository =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? throw new InvalidOperationException(
-                "FOXWARM_TS_ROOT is required for the Source allocator."
+                "FOXWARM_REPO_ROOT is required for the Source allocator."
             );
         using var process = Process.Start(
             new ProcessStartInfo("node")
@@ -81,9 +81,7 @@ public sealed partial class SessionCreationParityTests
                 .Concat(KnowledgeToolDefinitions.Definitions())
                 .Concat(UnifiedToolDefinitions.All().OfType<JsonObject>())
         )
-            definitions.Add(
-                HandoffConfirmation.Definition(definition, f.Manager.HandoffConfirmationEnabled)
-            );
+            definitions.Add(definition.DeepClone());
         f.Registry = SessionToolExecutor.CreateRegistry(
             definitions,
             f.Manager.OutboundMcp,

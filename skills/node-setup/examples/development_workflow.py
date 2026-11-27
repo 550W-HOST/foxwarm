@@ -204,13 +204,9 @@ def main(args):
                 state["taskReceipt"] = receipt
                 task_id = receipt["taskId"]
                 state["taskId"] = task_id
-            # Keep real caller-written review fields intact and confirmation last.
-            confirmation = child.pop("handoffConfirmation", None)
             child["taskId"] = task_id
             child["node"] = prepared["nodeId"]
             child["displayName"] = child.get("displayName") or task["title"]
-            if confirmation is not None:
-                child["handoffConfirmation"] = confirmation
             state["stage"] = "create child"
             state["childReceipt"] = builtin("create_child_session", child)
             state["taskState"] = builtin("task", {"action": "get", "taskId": task_id})["task"]

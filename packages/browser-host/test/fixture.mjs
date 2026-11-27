@@ -68,6 +68,13 @@ export async function startSite() {
       return; // never ends: the document keeps loading
     }
     if (request.url === '/stall') return; // never answers
+    if (request.url === '/busy') {
+      // Reaches DOMContentLoaded, then keeps the page's main thread busy for good.
+      response.writeHead(200, { 'content-type': 'text/html' });
+      return response.end(
+        '<!doctype html><title>Busy</title><p>busy</p><script>addEventListener("DOMContentLoaded", () => setTimeout(() => { for (;;) {} }, 0))</script>',
+      );
+    }
     const body = pages[request.url.split('?')[0]];
     if (!body) {
       response.writeHead(404, { 'content-type': 'text/html' });
@@ -96,19 +103,43 @@ export async function startSite() {
 // Environments that cannot create Chromium's sandbox (containers, restricted user namespaces)
 // select a launcher through the standard executable variable. This is test-owned setup; the
 // product never adds sandbox-disabling flags itself.
+//
+// The environment is ready once the selected launcher has started Chromium and rendered a page.
+// The first start on a machine can take tens of seconds while Chromium's files are first read from
+// disk (a fresh CI runner), and the tests' per-call budgets measure work in a browser that has
+// already started once, so that cost belongs to this setup step, with its own bound.
+const STARTUP_MS = 60000;
+
+async function rendersPage(executablePath) {
+  const browser = await puppeteer.launch({
+    executablePath,
+    headless: true,
+    pipe: true,
+    timeout: STARTUP_MS,
+    protocolTimeout: STARTUP_MS,
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><title>Ready</title><p>ready</p>', { timeout: STARTUP_MS });
+    await page.screenshot({ type: 'png' });
+  } finally {
+    await browser.close();
+  }
+}
+
 let environment;
 export async function browserEnvironment() {
   if (environment) return environment;
   const found = locateChromium(process.env);
   if (!found.path) return (environment = { env: process.env, available: false, reason: found.reason });
   try {
-    const browser = await puppeteer.launch({ executablePath: found.path, headless: true, pipe: true });
-    await browser.close();
+    await rendersPage(found.path);
     return (environment = { env: process.env, available: true });
   } catch {
     const directory = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'fw-browser-wrapper-'));
     const wrapper = path.join(directory, 'chromium-wrapper.sh');
     fs.writeFileSync(wrapper, `#!/bin/sh\nexec "${found.path}" --no-sandbox "$@"\n`, { mode: 0o755 });
+    await rendersPage(wrapper);
     return (environment = {
       env: { ...process.env, PUPPETEER_EXECUTABLE_PATH: wrapper },
       available: true,

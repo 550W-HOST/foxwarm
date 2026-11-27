@@ -1836,7 +1836,7 @@ test('single Chat icon owns drag and its existing menu; cancel and Close pointer
   } finally { await page.close() }
 })
 
-test('Terminal single-tab chrome preserves status-row height and closes its backend resource', async () => {
+test('Terminal single-tab chrome preserves status-row height and Close detaches its backend resource', async () => {
   const terminal = { id: 'term-header', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
   const tab = { id: 'terminal:term-header', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
   for (const viewportWidth of [1400, 390]) {
@@ -1867,7 +1867,7 @@ test('Terminal single-tab chrome preserves status-row height and closes its back
       await single.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['terminal:term-header'] && !location.hash).catch(async error => {
         throw new Error(`${error.message}: ${JSON.stringify(await single.evaluate(() => ({ state: JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state, hash: location.hash, deletes: window.__terminalDeletes, header: document.querySelector('[data-terminal-header]')?.textContent, body: document.body.textContent.slice(0, 300) })))}`)
       })
-      assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-header'])
+      assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), [], 'Close detaches; only kill ends the PTY')
       assert.equal((await state(single)).hash, '')
       if (viewportWidth === 1400) {
         await single.click('button[title="Create terminal tab"]')
@@ -1878,7 +1878,7 @@ test('Terminal single-tab chrome preserves status-row height and closes its back
         assert.notEqual(fresh.id, tab.id)
         assert.equal(reopened.hash, `#tab/${fresh.id}`)
         assert.ok(await single.evaluate(() => window.__terminalCreates.length > 0), 'explicit reopen sends a terminal create request')
-        assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-header'])
+        assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), [])
       }
     } finally { await single.close(); if (!multi.isClosed()) await multi.close() }
   }
@@ -1900,7 +1900,7 @@ test('ordinary Terminal close selects another still-open tab rather than restori
     assert.deepEqual((await state(page)).root.tabIds, ['system:agents'])
     // The remaining tab mounts lazily; wait for its content before checking the route result.
     await page.waitForSelector('h1::-p-text(System)')
-    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-fallback'])
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), [], 'Close detaches the PTY')
   } finally { await page.close() }
 })
 
@@ -2317,7 +2317,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-node-surface]')
-    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage', 'Activity'])
+    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Usage', 'Activity'])
     await workbenchScreenshot(page, 'system-tabs.png')
     await page.click('[data-system-tab="agents"]')
     await page.waitForSelector('[data-system-summary="agents"]')
@@ -2509,14 +2509,14 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 1)
     await page.click(`:is([data-pane-id="${terminalPane.id}"], [data-workbench-content-pane="${terminalPane.id}"]) button[aria-label="Close pane"]`)
     await page.waitForFunction(id => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[id], {}, terminalTab.id)
-    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-panel'])
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), [], 'closing the panel detaches its PTY')
     assert.equal((await state(page)).root.kind, 'pane', 'closing the terminal panel leaves only the editor')
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'terminal').length, 0, 'close never moves Terminal into the editor')
-    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'Close does not recreate the just-deleted PTY')
+    assert.deepEqual(await page.evaluate(() => window.__terminalCreates), [], 'Close does not start another PTY')
     await page.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/chat:e2e-a')
     await clickReadyControl(page, control)
-    await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal' && tab.terminalId === 'term-reopened'))
-    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 1, 'a closed PTY is recreated only by explicit reopen')
+    await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal' && tab.terminalId === 'term-panel'))
+    assert.equal(await page.evaluate(() => window.__terminalCreates.length), 0, 'the panel shows its detached PTY again rather than starting another')
     await clickReadyControl(page, control)
     await page.setViewport({ width: 390, height: 844 })
     await page.waitForSelector('[data-workbench-status-bar]', { hidden: true })
@@ -2696,12 +2696,18 @@ test('the initial Code file request survives lazy frame creation and explicit re
   ]
   const page = await openFixture({ tabs: [system, chat('e2e-a', false)], responsiveChat: true, chatMessages, codeNewWindow: false })
   try {
-    const openFile = 'button[aria-label="Open /fixture.txt in Code"]'
+    const openFile = 'a.foxwarm-code-link[title="Open /fixture.txt in Code"]'
+    // File-tool paths open Code from the expanded card.
+    await clickReadyControl(page, '.foxwarm-tool-code-path')
+    await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height));
     await clickReadyControl(page, openFile)
     await page.waitForFunction(() => window.__codeRequests?.some(request => request.kind === 'openFile'))
     assert.deepEqual(await page.evaluate(() => window.__codeRequests.find(request => request.kind === 'openFile')), { kind: 'openFile', nodeId: 'master', cwd: '/', path: '/fixture.txt', startLine: 3, endLine: 8 })
     await page.click('[data-tab-id="vscode-web:master"] button[title="Close tab"]')
     await page.waitForSelector('[data-foxwarm-vscode-web-frame]', { hidden: true })
+    // The returning Chat may remount with the card collapsed again.
+    if (!await page.$(openFile)) await clickReadyControl(page, '.foxwarm-tool-code-path')
+    await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height))
     await clickReadyControl(page, openFile)
     await page.waitForFunction(() => window.__codeRequests?.filter(request => request.kind === 'openFile').length === 2)
     assert.equal(await page.evaluate(() => window.__codeFrameLoads), 2, 'explicit Close creates a fresh frame only on reopening')
@@ -2991,7 +2997,7 @@ test('Appearance Auto keeps independent choices and previews require explicit ap
     await clickReadyControl(page, '[data-theme-preview-mode="light"][data-theme-preview="foxwarm.vector"]')
     assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.default')
     assert.equal(await page.$('[data-theme-preview-dialog] button[aria-label="Delete theme"]'), null)
-    assert.equal(await page.$('[data-theme-manager] select'), null)
+    assert.equal(await page.$('[data-theme-manager] :is(select, [role="combobox"])'), null)
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-theme-preview-close')), true)
     await page.keyboard.down('Shift'); await page.keyboard.press('Tab'); await page.keyboard.up('Shift')
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Use for dark')
@@ -3292,8 +3298,9 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       await page.waitForSelector(`${nodesTrigger}[title="Nodes: 9 online, 15 total"]`)
       assert.equal(await page.$eval(`${nodesTrigger} span:last-child`, element => element.textContent), '9/15')
       assert.match(await page.$eval('[data-node-surface]', element => element.textContent), /Online 9 · Total 15/)
-      assert.equal(await page.$$eval('[data-node-surface] article', cards => cards.length), 15)
-      assert.match(await page.$eval('[data-node-surface] article:nth-child(4)', card => card.textContent), /Online.*Upgrade required/)
+      assert.equal(await page.$$eval('[data-node-surface] [data-system-node-id]', rows => rows.length), 15)
+      // An online Node that needs an upgrade shows both.
+      assert.match(await page.$eval('[data-node-surface] [data-system-node-id="fixture-node-03"]', row => row.textContent), /Online.*Upgrade required/)
       await workbenchScreenshot(page, `nodes-page-${label}.png`)
       const nodePageBadge = await badgePresentation(page, '[data-node-surface] [data-status="online"]')
       assert.deepEqual({ font: nodePageBadge.font, line: nodePageBadge.line, padding: nodePageBadge.padding, radius: nodePageBadge.radius, gap: nodePageBadge.gap, dot: nodePageBadge.dot.slice(0, 3) }, { font: '11px', line: '18px', padding: '3px 7px', radius: '5px', gap: '5px', dot: ['5px', '5px', '50%'] })
@@ -3513,7 +3520,7 @@ test('mobile home is a flat session-first layout and mobile Chats omit desktop t
     await page.click('[role="menu"] button::-p-text(Code)')
     await page.waitForSelector('dialog[open]')
     assert.equal(await page.$eval('dialog', node => node.querySelector('#mobile-tool-title').textContent), 'Code')
-    assert.ok(await page.$('dialog select'))
+    assert.ok(await page.$('dialog [aria-label="Node"]'))
     await workbenchScreenshot(page, 'mobile-code-tools.png')
     await page.keyboard.press('Escape')
     await page.waitForSelector('dialog', {hidden: true})

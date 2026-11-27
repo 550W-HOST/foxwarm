@@ -86,6 +86,7 @@ internal sealed partial class ModelConfiguration
                         "idleCompactMinContextPercent",
                         "disallowEmptyResponse",
                         "keepReasoningOnError",
+                        AnthropicMessageEffort.Option,
                         "sameProviderAs",
                     }
                 )

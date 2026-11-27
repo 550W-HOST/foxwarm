@@ -4,10 +4,10 @@ import { createWriteStream } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { execFile, spawn } from 'node:child_process'
-import { promisify } from 'node:util'
+import { spawn } from 'node:child_process'
 import puppeteer from 'puppeteer-core'
 import { startMockProvider } from './mock-provider.mjs'
+import { ensureBranch, openArchive, writeMessages } from '../../dotnet/Foxwarm.Tests/Fixtures/archive-store-seed.mjs'
 import testEnvironment from '../../scripts/test/test-process-env.cjs'
 import { appRuntimeE2e } from '../../scripts/test/test-inventory.mjs'
 
@@ -90,25 +90,18 @@ async function seedData() {
     }, null, 2))
   }
   await fs.writeFile(path.join(stateRoot, 'sessions.json'), JSON.stringify({ sessions }, null, 2))
-  // Use the retained Source writer as the migration/Archive oracle, not the application under test.
-  await promisify(execFile)(process.execPath, ['-e', `
-    const fs = require('fs-extra');
-    const path = require('node:path');
-    const store = require('./lib/session/archiveStore');
-    (async () => {
-      await store.initArchiveStore();
-      const directory = path.join(process.env.FOXWARM_DATA_DIR, 'state', 'sessions');
-      for (const file of await fs.readdir(directory)) {
-        const sessionId = file.slice(0, -5);
-        const authority = await fs.readJson(path.join(directory, file));
-        await store.ensureSessionBranch(sessionId);
-        await store.writeArchiveMessages(authority.history.map(message => ({
-          v: 1, kind: 'message', sessionId, agent: 'main', seq: message.__meta.seq,
-          timestamp: message.__meta.timestamp, role: message.role, message,
-        })));
-      }
-    })().catch(error => { console.error(error); process.exitCode = 1; });
-  `], { cwd: repoRoot, env: fixtureEnv })
+  // Archive rows in the TypeScript-era format, as the retired backend's writer left them.
+  const archive = openArchive(dataRoot, { reservationLedger: true })
+  try {
+    for (const file of await fs.readdir(path.join(stateRoot, 'sessions'))) {
+      const sessionId = file.slice(0, -5)
+      const authority = JSON.parse(await fs.readFile(path.join(stateRoot, 'sessions', file), 'utf8'))
+      ensureBranch(archive, sessionId)
+      writeMessages(archive, authority.history.map(message => ({
+        sessionId, agent: 'main', seq: message.__meta.seq, timestamp: message.__meta.timestamp, role: message.role, message,
+      })))
+    }
+  } finally { archive.close() }
   await fs.writeFile(path.join(stateRoot, 'token'), token)
   await fs.writeFile(path.join(stateRoot, 'node_token'), 'synthetic-node-token')
   await fs.writeFile(path.join(stateRoot, 'mcp.json'), '{}')
@@ -143,7 +136,7 @@ async function startApplication() {
     throwIfCancelled()
   }
   provider = createdProvider
-  await fs.writeFile(path.join(stateRoot, 'config.yaml'), `bot:\n  name: synthetic-e2e\n  httpPort: ${appPort}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateRoot, 'mcp.json'))}\n`)
+  await fs.writeFile(path.join(stateRoot, 'config.yaml'), `bot:\n  name: synthetic-e2e\n  httpPort: ${appPort}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateRoot, 'mcp.json'))}\n`)
   throwIfCancelled()
   await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n  ws:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws]\n  wsbg:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: true\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws-bg]\n  images:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    imageGeneration:\n      enabled: true\n      outputFormat: png\n    models: [mock-image]\n`)
   throwIfCancelled()

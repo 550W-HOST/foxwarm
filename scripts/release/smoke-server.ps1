@@ -63,7 +63,10 @@ try {
   if ($pointer -ne (Resolve-Path -LiteralPath $Data).Path) { throw "data_dir records '$pointer', not '$Data'" }
   Invoke-Timed start start
   Wait-Http
-  if (-not (Get-Content -LiteralPath (Join-Path $Data 'state\token') -Raw).Trim()) { throw 'No sign-in token was created' }
+  $token = (Get-Content -LiteralPath (Join-Path $Data 'state\token') -Raw).Trim()
+  if (-not $token) { throw 'No sign-in token was created' }
+  $link = (& $Control link | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $link -ne "http://127.0.0.1:$Port/#token=$token") { throw "link printed '$link'" }
   $log = Get-Content -LiteralPath (Join-Path $Data 'state\logs\foxwarm.log') -Raw -Encoding UTF8
   if ($log -notmatch "Main HTTP listening: http://127\.0\.0\.1:$Port\r?\n") { throw 'Main did not listen on its configured address in the data directory' }
   # The control script must resolve the same directory: it writes Main's console logs there.

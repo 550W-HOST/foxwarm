@@ -13,8 +13,12 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Release packages, installers and package controls](../units/release-packages.md)
 - [Desktop packages, installer and qualification](../units/desktop-packages.md)
 - [Host startup, configuration, and HTTP ingress](../units/host-runtime.md)
+- [Installation lock](../units/installation-lock.md): one Main process per data directory.
+- [Skill resolution and runnable skills](../units/skills.md)
 - [Packed and loose HTTP resources](../units/http-assets.md)
+- [Windows Desktop host](../units/desktop-windows.md)
 - [macOS Desktop host](../units/desktop-macos.md)
+- [Desktop instances](../units/desktop-instances.md)
 - [Main JSON and frontmatter serialization](../units/dotnet-serialization.md)
 - [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [Secret store, references and redaction](../units/dotnet-secrets.md)
@@ -25,6 +29,9 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [WeWork callback, WebSocket, streams and media](../units/dotnet-wework.md)
 - [Speech proxy](../units/asr.md)
 - [OTLP tracing](../units/otlp-tracing.md)
+- [Multica bridge CLI](../units/multica-bridge-cli.md)
+- [Repository quality scripts](../units/quality-scripts.md)
+- [Code Index generators](../units/code-index-generators.md)
 
 ## Tests and callers
 

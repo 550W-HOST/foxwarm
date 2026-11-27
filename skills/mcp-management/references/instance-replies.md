@@ -7,11 +7,11 @@ This is an explicit online text-message extension, not a subscription to B's his
 ## Before starting
 
 - B has an existing identity with `mcp: {}` and a private token. Obtain its endpoint/token through the approved secret-handling path; do not invent a token or expose it in chat.
-- B's policy permits that external identity's concrete `builtin:send_to_session` call to the exact intended B Session. See the [send-only policy example](../../access-control/references/tool-policy.md#session-scope). It need not grant history reads or Session listing.
+- B's policy permits that external identity's concrete `builtin:send_to_session` call to the exact intended B Session. See the send-only policy example under "Session scope" in the `access-control` skill (`ctl skill load access-control references/tool-policy.md`). It need not grant history reads or Session listing.
 - A's current internal Session is permitted to configure/call the named MCP server and use `builtin:mcp_notifications`. A's MCP call permission targets `source: mcp`, the configured server name, and `name: foxwarm_session`, not `ctl`.
 - The replying internal Session on B is permitted to use `builtin:send_to_channel`, in addition to its existing structural restrictions. The external identity's send grant does not grant this tool to B's Session.
 
-Load [access-control](../../access-control/SKILL.md) to change policy safely. The temporary MCP reply endpoint has **no Session attachment**. Agents migrated from legacy isolation are denied `send_to_channel` by their generated rules, so this workflow does not work for them unless an administrator changes those rules.
+Load the `access-control` skill to change policy safely. The temporary MCP reply endpoint has **no Session attachment**. Agents migrated from legacy isolation are denied `send_to_channel` by their generated rules, so this workflow does not work for them unless an administrator changes those rules.
 
 ## 1. Configure A's outbound connection to B
 
@@ -65,7 +65,7 @@ sent = call_tool({
 return {"receiver": receiver, "sent": sent}
 ```
 
-Example `run_script` inputs are `args: {"server": "peer", "targetSessionId": "project/review", "message": "Review the change and send an explicit text reply."}`. Load [toolscript-automation](../../toolscript-automation/SKILL.md) if needed. Do not include connection configuration in every send: changing/disable of the server closes its current receivers.
+Example `run_script` inputs are `args: {"server": "peer", "targetSessionId": "project/review", "message": "Review the change and send an explicit text reply."}`. Load the `toolscript-automation` skill if needed. Do not include connection configuration in every send: changing/disable of the server closes its current receivers.
 
 Inspect the `tool call` result: `isError: true` means send failed; a structured-only success is unwrapped, exposing `accepted: true` and the temporary `channelTargetId` directly. ToolScript uses the same shape, for example `sent["accepted"]` and `sent["channelTargetId"]`. This confirms admission, not completion.
 

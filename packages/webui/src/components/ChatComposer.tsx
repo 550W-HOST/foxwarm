@@ -24,7 +24,7 @@ import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineC
 import NodePicker from './NodePicker'
 import ComposerAttachmentGrid from './ComposerAttachmentGrid'
 import { IMAGE_INPUT_UNSUPPORTED_HINT, shouldShowImageInputHint } from '../imageInputSupport'
-import { isImeComposing, isSendKey } from '../sendKey'
+import { isImeComposing, isSendKey, sendShortcutLabel } from '../sendKey'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -1591,7 +1591,7 @@ const ChatComposer = memo(function ChatComposer({
           placeholder={sessionMissing
             ? 'Session not found'
             : answersQuestion ? 'Reply to answer the question'
-            : mobileUi ? '' : webUiIdentityMode ? 'Send a message' : sessionMessageMode ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : mobileUi ? '' : `${webUiIdentityMode ? 'Send a message' : sessionMessageMode ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'} · ${sendShortcutLabel(sendKeyMode)} to send`}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
             setDismissedSlashQuery(null)
@@ -1685,7 +1685,7 @@ const ChatComposer = memo(function ChatComposer({
             className="foxwarm-composer-send-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
             data-composer-action={showStop ? 'stop' : 'send'}
             aria-label={showStop ? 'Stop session' : 'Send message'}
-            title={showStop ? 'Stop session' : 'Send message'}
+            title={showStop ? 'Stop session' : `Send (${sendShortcutLabel(sendKeyMode)})`}
           >
             {showStop ? <Square size={14} fill="currentColor" /> : <ArrowUp size={18} />}
           </button>

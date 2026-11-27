@@ -40,10 +40,11 @@ internal sealed record IsolationMigrationPlan(
 internal static class IsolationMigrationRules
 {
     /// <summary>
-    /// Version of the generated layer, recorded in the migration marker. Version 2 limits
+    /// Version of the generated layer, recorded in the migration marker. Version 3 lets the
+    /// Agent copy and run its own skills (user decision 2026-11-25); version 2 limits
     /// <c>session</c> status to the current Session; version 1 (R1) relied on the legacy check.
     /// </summary>
-    internal const int GeneratorVersion = 2;
+    internal const int GeneratorVersion = 3;
 
     /// <summary>Rule ID prefix of the generated <c>session</c> status allows.</summary>
     internal const string SessionStatusRule = "isolation-session-status";
@@ -337,6 +338,11 @@ internal static class IsolationMigrationRules
         };
         Add("own-agent-sessions", ownSessions);
         Add("structural", Builtin(Names(StructuralBuiltins)), "deny");
+        // The advisor forks its Session, which the structural deny refuses; its instructions
+        // stay loadable.
+        var advisor = Builtin("run_skill");
+        advisor["args"] = new JsonObject { ["skillName"] = "advisor" };
+        Add("advisor-runs", advisor, "deny");
         Add(
             "master-exec",
             new JsonObject
@@ -450,10 +456,14 @@ internal static class IsolationMigrationRules
             var skill = Builtin("skill");
             skill["args"] = new JsonObject
             {
-                ["action"] = Names(["list", "load"]),
+                ["action"] = Names(["list", "load", "copy"]),
                 ["agentName"] = agentName.DeepClone(),
             };
             Add("skill", skill);
+            // Skill scripts run as the Session: every call they make meets this layer.
+            var run = Builtin("run_skill");
+            run["args"] = new JsonObject { ["agentName"] = agentName.DeepClone() };
+            Add("skill-run", run);
         }
         // Status of the current Session only.
         foreach (var action in new JsonNode[] { Absent(), "status" })
@@ -688,6 +698,13 @@ internal static class IsolationMigrationRules
                 "narrowed",
                 "session",
                 "Status of the current Session only; listing and other actions are denied."
+            )
+        );
+        notes.Add(
+            new(
+                "widened",
+                "builtin:skill,run_skill",
+                "The Agent's own skills may be copied to a Node it may write and their ToolScript files run as its Sessions, including model requests; legacy isolation allowed only listing and loading them. The advisor skill, which forks its Session, cannot run."
             )
         );
         notes.Add(

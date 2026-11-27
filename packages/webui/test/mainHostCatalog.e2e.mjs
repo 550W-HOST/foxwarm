@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, rename, access } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 
 const fixture = await createHostFixture('catalog-app'), route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -45,14 +45,9 @@ await seed('pin-child', 400, { parentSessionId: 'root', pinned: true }); await s
 await seed('ordered', 1, { sidebarOrder: 1 }); for (const id of ['\ue000', '𐐀', '😀', 'İ', 'ΟΣ']) await seed(id, 50)
 for (let index = 0; index < 300; index++) await seed('fan-' + String(index).padStart(3, '0'), 300 - index, { parentSessionId: 'root' })
 const legacy = JSON.stringify({ sessions: Object.fromEntries(rows.map(row => [row.id, row])) }); await writeFile(join(fixture.data, 'state/sessions.json'), legacy)
-// Produce the supported catalog-first state through Source's real migration.
+// Produce the supported catalog-first state through the legacy sessions.json migration.
 // Ambiguous presentation aliases are valid catalog data, not committed Archive moves.
-execFileSync('node', ['--input-type=module', '-e', `
-  const { sessionCatalogStore } = await import(${JSON.stringify(new URL('../../../lib/session/catalogStore.js', import.meta.url).href)});
-  await sessionCatalogStore.initialize(); sessionCatalogStore.close();
-`], { env: { ...process.env, FOXWARM_DATA_DIR: fixture.data }, stdio: 'pipe' })
-const seedRows = join(fixture.root, 'rows.json'); await writeFile(seedRows, JSON.stringify(rows))
-execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedRows], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+await seedCatalog(fixture.data, [], 'upsert'); seedArchiveBranches(fixture.data, rows)
 const catalogPath = join(fixture.data, 'state/catalog.sqlite')
 function sql(statement, args = []) { const db = new DatabaseSync(catalogPath, { readOnly: true }); try { return db.prepare(statement).all(...args) } finally { db.close() } }
 function readAuthority(id) { return readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse) }

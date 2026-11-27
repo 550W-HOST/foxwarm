@@ -1,6 +1,6 @@
 # Behavior: conversation and history
 
-For developers and Agents changing history, working instructions, or Chat. This page owns the observable distinction between the current conversation, model context, historical originals, and durable Agent memory, including when instruction changes reach the model. It is not a transcript format specification. [Sessions and Agents](sessions-and-agents.md) owns choosing, creating, and reorganizing the lifetime that uses this context.
+For developers and Agents changing history, working instructions, or Chat. This page owns the observable distinction between the current conversation, model context, historical originals, and durable Agent memory, including when instruction changes reach the model. It is not a transcript format specification. [Sessions and Agents](./sessions-and-agents.md) owns choosing, creating, and reorganizing the lifetime that uses this context.
 
 ## Four things that are not interchangeable
 
@@ -25,11 +25,12 @@ A memory-backed Session uses a retained system-prompt snapshot, not a fresh scan
 | --- | --- | --- |
 | Default memory selection | [Framework prompt](#framework-prompt-sources) followed by inherited/current Agent memory, with applicable Session/model filtering. | Does not insert another Agent's conversation or copy its whole workspace. |
 | Explicit `systemPromptFiles` | Replaces default memory-file selection in listed order. An explicit empty list selects no memory files; omission keeps defaults. Catalog and generated directory/recall guidance remain. | Not an extra-file append to default memory. [Creator authority](#custom-prompt-files-and-creator-authority) governs admission. |
-| Skill catalog in the snapshot | Names, descriptions, and winning sources so the Agent can choose relevant instructions. | Not the full skill bodies, an eager read of resources, or a grant of tool capabilities. |
+| Skill catalog in the snapshot | Names, descriptions, and winning sources so the Agent can choose relevant instructions. A runnable skill's line adds `<run>` with its one-line effect and, when it declares arguments, `<args>` with their compact JSON Schema, and a catalog listing one adds a sentence naming `ctl skill run` ([runnable skills](../units/skills.md#runnable-skills)). A catalog without a runnable skill keeps its exact earlier bytes. | Not the full skill bodies, an eager read of resources, or a grant of tool capabilities. |
 | `skill` with `action: "load"` | The resolved entry document and a bounded listing of supporting resource paths, through the ordinary tool-result path. | Does not automatically load those resources or attach the full skill permanently to every future prompt. |
+| `ctl skill run <name>` | The result of running that skill's entry script as an ordinary ToolScript run ([running a skill entry](./automation-and-scheduled-work.md#run-a-skills-entry)). | Does not load `SKILL.md` into the context. |
 | Read a resource or historical evidence | The selected content returned by that authorized operation. | Not a memory-file write or reinsertion of archived messages into active history. |
 
-Ongoing Agent inheritance selects reusable sources for later snapshots. One-time memory copying initializes independent files and does not keep them synchronized. Ongoing inheritance rejects self/cyclic relationships and source Agents marked `inheritable: false`; copying is a separate choice, not an implicit inheritance relationship or permission grant. Skill resolution uses local over inherited over global sources, with the first matching name winning. A directory containing `SKILL.md` is a skill boundary; nested documents are resources, not automatically additional catalog entries. Exact source order, filtering, and resource bounds remain in [prompt assembly](../units/src-session-prompt.md#source-assembly) and [skills](../units/src-skills.md#behavior).
+Ongoing Agent inheritance selects reusable sources for later snapshots. One-time memory copying initializes independent files and does not keep them synchronized. Ongoing inheritance rejects self/cyclic relationships and source Agents marked `inheritable: false`; copying is a separate choice, not an implicit inheritance relationship or permission grant. Skill resolution uses local over inherited over global sources, with the first matching name winning. A directory containing `SKILL.md` is a skill boundary; nested documents are resources, not automatically additional catalog entries. Exact source order, filtering, and resource bounds remain in [prompt assembly](../threads/conditional-memory-snapshots.md) and [skills](../threads/conditional-memory-snapshots.md).
 
 ### Framework prompt sources
 
@@ -56,7 +57,7 @@ Ongoing Agent inheritance selects reusable sources for later snapshots. One-time
 
 Fresh concrete Sessions can materialize immediately. A never-run virtual selection has no actual concrete identity yet and defers materialization until leaf selection. Forks retain the copied snapshot until actual-use correction; explicit/lifecycle refresh reuses a recorded concrete identity rather than inventing a virtual leaf. The first-line matching, detached ownership, admitted-source reuse, and persistence boundaries remain at [conditional snapshots](../threads/conditional-memory-snapshots.md).
 
-Refreshing available instructions does not retarget an already-dispatched provider request or rewrite old messages. Model-setting adoption is separately owned by [models and requests](models-and-requests.md#switching-takes-effect-at-an-adoption-boundary). An identity/Agent move is not by itself a snapshot refresh; [lifetime changes](sessions-and-agents.md#change-a-label-an-identity-or-a-relationship) retain that distinction.
+Refreshing available instructions does not retarget an already-dispatched provider request or rewrite old messages. Model-setting adoption is separately owned by [models and requests](./models-and-requests.md#switching-takes-effect-at-an-adoption-boundary). An identity/Agent move is not by itself a snapshot refresh; [lifetime changes](./sessions-and-agents.md#change-a-label-an-identity-or-a-relationship) retain that distinction.
 
 ## Source selection and display are independent
 
@@ -89,7 +90,7 @@ This makes current deletion and pruning visible while preserving continuous read
 
 `/session delete-messages N` removes up to N entries from the beginning of active history; a negative N removes that many from its end. Counts are active entries, not rendered bubbles, original Archive rows, or CTX descendants. A CTX is one active entry. The command is not permanent erasure of historical originals.
 
-A clear request against a busy Session can request interruption and return `cleared:false` with a retry requirement instead of completing the reset below. Main-local preparation can drop queued input before that retry; Worker preparation has its own owner boundary. Neither a stop acknowledgement nor dropped input proves active history was cleared. The command reports the actual outcome; [runtime history mutation](../units/src-session-runtime.md) locates these paths.
+A clear request against a busy Session can request interruption and return `cleared:false` with a retry requirement instead of completing the reset below. Main-local preparation can drop queued input before that retry; Worker preparation has its own owner boundary. Neither a stop acknowledgement nor dropped input proves active history was cleared. The command reports the actual outcome; [runtime history mutation](../units/session-turns.md) locates these paths.
 
 | Action | Active/model-context consequence | Conversation consequence | Archive consequence |
 | --- | --- | --- | --- |
@@ -104,7 +105,7 @@ For example, suppose active history is `CTX A (raw 1–4), retained raw 3, raw 5
 
 Compaction replaces selected older context, retaining the compatible recent tail and concurrently appended suffix. Display-only notices retained in that suffix stay visible without becoming provider input. Quoting a lifecycle marker inside ordinary content does not turn that content into a lifecycle event. Completion identifies the Session's actual parent and names recognized skill loads consumed with the old context, so the Agent can reload instructions still needed; it does not reload skills automatically. The [compaction owner](../threads/context-compaction.md#d-context-compact-completion) owns marker recognition and skill-load forms, while [snapshot refresh](../threads/conditional-memory-snapshots.md#lifecycle-refresh) remains separate.
 
-History mutation remains subject to existing command/access authorization and exact-Session ownership. These actions are not Session deletion. [Retiring a lifetime](sessions-and-agents.md#put-work-aside-clear-the-conversation-or-retire-the-lifetime) is separate from clearing it, archiving its list entry, or closing Chat. Successful deletion does not recreate an empty live Session through an old alias; exact retained identity and fork lineage rules remain in [Session lifecycle](../threads/session-lifecycle.md#archive-and-deletion).
+History mutation remains subject to existing command/access authorization and exact-Session ownership. These actions are not Session deletion. [Retiring a lifetime](./sessions-and-agents.md#put-work-aside-clear-the-conversation-or-retire-the-lifetime) is separate from clearing it, archiving its list entry, or closing Chat. Successful deletion does not recreate an empty live Session through an old alias; exact retained identity and fork lineage rules remain in [Session lifecycle](../threads/session-lifecycle.md#archive-and-deletion).
 
 ## Historical reading is bounded and has a different scope from context
 
@@ -126,11 +127,10 @@ Continuous pages reuse current Session/alias/access-identity authorization and e
 
 ## Change and test entry points
 
-- `src/session/promptSnapshot.ts`, `src/session/agentSettings.ts`, `src/session/snapshotRefresh.ts`, and `src/toolsSessionAgent/skills.ts` connect source selection, catalog/load, and refresh to actual requests. `src/session/sessionSystemPromptFiles.test.ts`, `src/skillCatalogSnapshot.test.ts`, `src/session/sessionSnapshotAutoRefresh.test.ts`, and `src/conditionalMemoryRuntime.test.ts` cover those distinct consumers, including concrete snapshot reuse and required-persistence failure.
-- [History/compaction flow](../threads/context-compaction-and-recall.md), [history mutation unit](../units/src-session-history.md), and [Archive retrieval](../threads/archive-and-recall.md) locate the backend owners.
-- [Chat synchronization and viewport](../units/webui-chat.md) and [Timeline](../modules/webui-timeline.md) locate the separate source and renderer responsibilities.
+- [Prompt snapshots](../threads/conditional-memory-snapshots.md) and [conditional memory](../units/conditional-memory.md) connect source selection, catalog/load and refresh to actual requests.
+- [History/compaction flow](../threads/context-compaction-and-recall.md), [Session compaction](../units/session-compaction.md) and [Archive retrieval](../threads/archive-and-recall.md) locate the backend owners.
+- [Chat synchronization and viewport](../units/webui-chat.md) and [Timeline](../modules/webui-timeline.md) locate the separate source and renderer responsibilities; [WebUI history routes](../units/dotnet-webui-history-list.md) owns bounded route reads, access, aliases/fork caps and historical image access.
 - `packages/webui/test/continuousHistory.test.mjs` covers projection, preserved-row overrides, and true CTX membership; `test/app-e2e/conversationHistory.e2e.mjs` covers the real command-to-Chat path, paging, clear/delete, and reading-position behavior.
-- `src/channels/webuiContinuousHistory.test.ts` covers bounded route reads, access, aliases/fork caps, and historical image access. `src/session/historyCompactPlanRetry.test.ts` covers active-authoritative compaction, clear, and block-ID continuity. Use these entry points for the relevant behavior regressions.
 
 ## Custom prompt files and creator authority
 

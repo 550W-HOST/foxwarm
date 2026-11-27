@@ -35,7 +35,7 @@ The compact commit refreshes memory using the recorded live concrete model ident
 
 Retained legacy rows without recorded sequences are local candidate barriers, not inferred Archive sources. An adjacent call/response exchange containing an unsequenced member (including an intervening presentation row) stays outside replacement and preserved-removal candidates as a whole; otherwise a numbered half could be removed while its unaddressable partner remained. Other numbered segments remain eligible. Unknown historical timestamps remain optional block source timestamps. Unsequenced presentation/completion records are retained during automatic cleanup as well as targeted compaction, and cannot alone trigger display-only cleanup. Response pruning continues to require a unique recorded sequence and matching immutable Archive payload; it skips unsequenced responses without a separate legacy path.
 
-Layered replacement drops display-only rows only from the consumed older segment. The current recent/concurrently appended suffix retains its display-only notices. Across the replacement history, only genuine model-visible old compact-completion notices are removed: the opening system wrapper must identify the completion (or match a supported legacy completion prefix), and the row must not also carry conversation, reasoning, tool, or image content. Quoted marker fragments inside inter-Session messages are not lifecycle events. The newly committed boundary uses the live actual parent identity and includes the Source reload hint for distinct trimmed skill names found in consumed direct `skill(action="load")` and persisted legacy `load_skill` calls. This scan neither reloads instructions automatically nor promises discovery through other dispatch forms; immutable Archive originals remain unchanged.
+Layered replacement drops display-only rows only from the consumed older segment. The current recent/concurrently appended suffix retains its display-only notices. Across the replacement history, only genuine model-visible old compact-completion notices are removed: the opening system wrapper must identify the completion (or match a supported legacy completion prefix), and the row must not also carry conversation, reasoning, tool, or image content. Quoted marker fragments inside inter-Session messages are not lifecycle events. The newly committed boundary uses the live actual parent identity and includes the Source reload hint for distinct trimmed skill names found in consumed direct `skill(action="load")` and persisted legacy `load_skill` calls; a load with a `path` is a resource read, not a skill load, and is not listed (2026-11-25). This scan neither reloads instructions automatically nor promises discovery through other dispatch forms; immutable Archive originals remain unchanged.
 
 `CompactRetention.Plan` computes the operations a regular compaction must perform under [D-context-log-retention](../threads/context-compaction.md#d-context-log-retention): normalization groups, the per-level cascade, the region backstop, the operation cap (normalization oldest first, then merges in the order they occur) and the new level-1 block. `CompactCandidateBuilder.Build` stores them in `CompactCandidates.Retention`; `HasWork` gates planning. `CompactPlanValidator.Validate` matches entries to those operations exactly (in-context mode keeps planner-chosen same-segment ranges) and raises `CompactPlanBudgetException` for summaries above 1.25 × budget unless `acceptOverBudget`; `PlanAsync` passes that after two budget rejections and records `overBudget` in the planner diagnostic. The commit keeps non-source rows of each range in order after the new block and retires preserved rows of merged blocks.
 
@@ -77,11 +77,39 @@ Names previews omit argument/result bodies; snippets and full retain their origi
 
 Shared tool previews recognize a non-null root `error` or a retained top-level MCP `isError:true` flag. Failed MCP inspection preserves the protocol result and structured diagnostic instead of selecting an empty `content` array. Nested business fields do not classify a result as failed; success projections and canonical MCP normalization remain unchanged. `OutboundMcpResultsTests` exercises this through the actual SDK peer, turn host and persisted tool result, including a successful nested-business-field control and an existing root error.
 
-Automatic response-only pruning commits only when the reconstructed live history estimate is strictly below 60% of the original estimate; the selected model window is not this decision's denominator. The save-lane commit rechecks that relative bound with concurrently admitted history before accepting the rewrite. Otherwise the existing layered planner runs. Genuine uniquely identified `skill(action=load, skillName=...)` responses, builtin `call_tool` forms, and persisted legacy `load_skill` readers are exempt from pruning. This does not register a live legacy alias. List calls, external dispatch, malformed arguments, ambiguous IDs, and unpaired responses remain eligible.
+Automatic response-only pruning commits only when the reconstructed live history estimate is strictly below 60% of the original estimate; the selected model window is not this decision's denominator. The save-lane commit rechecks that relative bound with concurrently admitted history before accepting the rewrite. Otherwise the existing layered planner runs. Genuine uniquely identified `skill(action=load, skillName=...)` responses without a `path` (a resource read prunes like any read, 2026-11-25), builtin `call_tool` forms, and persisted legacy `load_skill` readers are exempt from pruning. This does not register a live legacy alias. List calls, external dispatch, malformed arguments, ambiguous IDs, and unpaired responses remain eligible.
 
 Manual `/compact --tools` calls `PruneToolsManuallyAsync` on the same response-only pruning owner, bypassing only the automatic 60% reduction requirement. It preserves skill-load exemptions, recent-message boundaries, call arguments, unique-sequence/raw-Archive validation and compatible-prefix/new-suffix commits. Its result reports actual committed response/message counts and before/after estimates. Incompatible manual snapshots report no replacements; authority failures retain the ordinary pre/post-rename truth. It does not claim a model-compaction run, checkpoint Task context or invoke a provider. The existing automatic gate, lifecycle and planner fallback remain unchanged.
 
 Plan operations may carry an integer `frictionScore` from 0 through 100. Missing/invalid scores are omitted without rejecting an otherwise valid plan. Accepted scores flow through immutable Archive block records, active context-block metadata, candidate prompts, exact recall, expansion, and previews; existing unscored blocks remain unscored. This is diagnostic metadata, not a changed pruning or retention policy.
+
+## Design decisions
+
+### D-compact-plan-policy-input
+
+Candidate eligibility and quotas are explicit run policy inputs shared by prompt and validator. The schema does not hide a second set of thresholds.
+
+### D-compact-plan-preserve-exact
+
+Exact raw preservation/removal uses top-level sequence arrays. It never changes immutable archive records or asks the model to manufacture partial raw ranges.
+
+### D-compact-plan-unconfirmed-text
+
+Summary guidance preserves the source range's state without importing outside outcomes, including force-kept context. It retains requester intent, constraints and authorization scope, consequential decisions and reasons, active or blocked work, open questions, and next steps. Confirmed results stay distinct from hypotheses or proposals; important corrections, superseded decisions, and rejected approaches retain their reasons. Unclear terms keep their original wording or explicit uncertainty. Compact, natural summaries support continuation alongside retained context and identify when recall is needed. Evidence pointers may replace recoverable detail, not essential decisions or constraints; no fixed style examples or word-count template is prescribed.
+
+### D-history-compatible-prefix-commit
+
+A compact job may replace only the live history snapshot prefix that still matches its snapshot. Concurrent incompatible change converts the result into a safe non-commit.
+
+### D-history-failed-planning-noncommit
+
+A failed planning request cannot submit or partially apply a compact plan. Provider request error semantics are canonical in [D-llm-request-errors](./model-common-wire.md#d-llm-request-errors).
+
+### D-history-independent-goal-reminder
+
+Historical compact completions and Goal reminders remain separately identifiable structured system parts for read compatibility. New compaction emits only its one lifecycle marker; Task reminders are separate persisted rows under [D-tasks-reminder-history](./tasks-timers.md#d-tasks-reminder-history).
+
+Compact operations publish planning/enqueueing/ready/committing metadata and request retries without acquiring foreground runtime ownership. Owner-safe failure application emits a typed display-only event; temporary planner transcripts are not foreground conversation content.
 
 ## Tests
 
@@ -95,7 +123,7 @@ Plan operations may carry an integer `frictionScore` from 0 through 100. Missing
 
 `ViewSessionTests`, `LiteralRecallTests` and `ViewSessionPolicyTests` cover structural-before-count live selection, post-page filters, logical-call summaries, exact/truncated previews, append versus stale structural boundaries, direct/unified/native ToolScript dispatch, bounded literal hit/no-hit continuation, fork caps and legacy policy/MCP boundaries.
 
-`LegacyHistoryAuthorityTests.Compaction.cs` exercises missing-identity barriers, partial-identity raw/preserved tool exchanges, ordinary pruning and planner commits with retained Source history and immutable Archive controls.
+`LegacyHistoryAuthorityTests.Compaction.cs` exercises missing-identity barriers, partial-identity raw/preserved tool exchanges, ordinary pruning and planner commits with legacy history and immutable Archive controls.
 
 `ContextPreviewFilterTests` exercises the real message observation handler and exact Archive recall with CRLF literal/include/exclude filters, unchanged canonical text and bounded output, plus folded tool-result match notices. `mainHostObservation.e2e.mjs` filters original hidden call arguments and results through a real model turn, follows the compact preview's Archive example to full content, and checks that live/full retrieval leaves the observed history unchanged without locking editorial fold notices.
 

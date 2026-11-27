@@ -294,7 +294,7 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
       row.click()
     }, grandchild)
     await page.waitForFunction(id => (
-      (document.querySelector('.foxwarm-chat-root')?.textContent || '').includes(`session ${id}`)
+      document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === id
     ), { timeout: 5_000 }, grandchild)
     assert.equal(await disclosureExpanded(root), 'true')
 

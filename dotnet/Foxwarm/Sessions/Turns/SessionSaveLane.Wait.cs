@@ -83,7 +83,7 @@ public sealed partial class SessionSaveLane
         {
             using var admission = entry.AdmitMutation();
             item = RedactQueueItem(item);
-            if (store is PersistentSessionAuthorityStore persistent)
+            if (store is ISessionAuthority persistent)
             {
                 item = item.CloneItem();
                 if (item.Message is not null)
@@ -326,7 +326,7 @@ public sealed partial class SessionSaveLane
                     queue.InsertRange(
                         0,
                         deferred.Select(row =>
-                            PersistentSessionAuthorityStore.FromQueueJson(row!.AsObject())
+                            SessionQueueJson.FromJson(row!.AsObject())
                         )
                     );
                 meta.Remove("wait");

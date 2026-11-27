@@ -1,7 +1,7 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import { normalizeCodePath } from '../vscodeWeb'
 import type { ReactNode } from 'react'
-import { Code2, FileJson, Download, Timer, Copy, Check } from 'lucide-react'
+import { FileJson, Download, Timer, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
@@ -39,6 +39,7 @@ import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } 
 import DiffPreview, { getUnifiedDiffSearchText } from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import { withLeadingExecLink } from './execLinks'
+import { CodeFileLink, type OpenCodeFileHandler, type ResolvedCodePath } from './CodeFileLink'
 import ThreadLineButton from './ThreadLineButton'
 import { formatCompactDuration } from '../usageTiming'
 import type { SessionSearchMatch } from './chatSessionSearch'
@@ -52,7 +53,7 @@ import { useSessionQuestionsContext } from '../sessionQuestionsState'
 import { isAskUserCall } from '../sessionQuestions'
 import type { ReasoningBadgeInfo } from './reasoningParts'
 import { SentVersionButton, sentVersionTargets } from './SentVersionDialog'
-import { ctlAsUnified, ctlCommandText, ctlConcrete } from '../ctlCall'
+import { ctlAsUnified, ctlCommandText, ctlConcrete, ctlSummary } from '../ctlCall'
 
 // The same text the model receives for this result (see the shared formatter).
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
@@ -151,7 +152,8 @@ const ExecutionArguments = ({ call }: { call: FunctionCall }) => {
 export const getToolCallSearchText = (stored: FunctionCall): string => {
   const command = ctlCommandText(stored)
   const call = ctlConcrete(stored)
-  if (command && call.name !== 'ctl') return `ctl ${command}\u0000${getToolCallSearchText(call)}`
+  const summary = ctlSummary(stored)
+  if (command && call.name !== 'ctl') return `${summary !== undefined ? `${summary}\u0000` : ''}ctl ${command}\u0000${getToolCallSearchText(call)}`
   if (call.argsParseError && typeof call.rawArgsText === 'string') return call.rawArgsText
   const args = call.args || {}
   if (call.name === 'read') return `${args.filePath || ''}${args.startLine || args.endLine ? ` (lines ${args.startLine || 1}-${args.endLine || 'end'})` : ''}`
@@ -172,7 +174,7 @@ export const getToolCallSearchText = (stored: FunctionCall): string => {
   if (call.name === 'exec' || call.name === 'run_script') return executionArgumentsSearchText(call)
   if (call.name === 'send_to_session') return [args.sessionId, formatToolArgumentValue(args.message)].join('\u0000')
   if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.currentSessionTurnAction ?? args.afterSend, typeof args.model === 'object' ? formatToolArgumentValue(args.model) : args.model, typeof args.forceModel === 'object' ? formatToolArgumentValue(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
-  return formatToolArguments(call.name === 'session' ? call.args || { action: 'status' } : call.args)
+  return formatToolArguments(call.name === 'session' ? call.args || { action: 'status' } : mcpToolArgs(call) ?? call.args)
 }
 
 export const getToolResponseSearchText = (stored: FunctionResponse, call?: FunctionCall): string => {
@@ -332,8 +334,7 @@ const renderTextResult = (text: string, expanded: boolean): ReactNode => (
   <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? text : truncateToolResultPreview(text)}</div>
 )
 
-type ResolvedCodePath = { nodeId: string; resolvedPath: string }
-export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: ResolvedCodePath) => void
+export type { OpenCodeFileHandler } from './CodeFileLink'
 
 type DisplayResolvedPaths = NonNullable<FunctionResponse['__meta']>['resolvedPaths']
 const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown, index = 0): ResolvedCodePath | undefined => {
@@ -344,6 +345,10 @@ const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown,
   return { nodeId: match.nodeId, resolvedPath: match.resolved }
 }
 
+/**
+ * A direct file-tool path. Collapsed headers keep plain text so the whole surface toggles the
+ * card; in an expanded card the path itself is the Code link.
+ */
 const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, target, prefix, collapsed = false }: {
   filePath?: unknown
   lines?: { startLine?: number; endLine?: number }
@@ -354,7 +359,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
 }) {
   const pathFade = useThreadCardOverflowFade<HTMLSpanElement>('right', collapsed)
   const displayPath = typeof filePath === 'string' ? filePath : 'Path unavailable'
-  const canOpenCode = typeof filePath === 'string' && !!onOpenCodeFile && (!!target || !!normalizeCodePath(filePath))
+  const canOpenCode = !collapsed && typeof filePath === 'string' && !!onOpenCodeFile && (!!target || !!normalizeCodePath(filePath))
   const layoutClass = collapsed
     ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
@@ -362,22 +367,13 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
     ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
     : 'foxwarm-tool-code-path whitespace-normal break-words'
   if (!canOpenCode) return <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={`${layoutClass} ${pathClass}`}>{prefix}{displayPath}</span>
+  const definedLines = lines && (lines.startLine !== undefined || lines.endLine !== undefined)
+    ? { ...(lines.startLine !== undefined ? { startLine: lines.startLine } : {}), ...(lines.endLine !== undefined ? { endLine: lines.endLine } : {}) }
+    : undefined
   return (
-    <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-center gap-1' : ''}`}>
+    <span className={layoutClass}>
       {prefix}
-      <button
-        type="button"
-        className={`foxwarm-tool-code-open inline-flex shrink-0 p-0 ${collapsed ? 'self-center' : 'align-text-top'} leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1`}
-        title={`Open ${displayPath} in Code`}
-        aria-label={`Open ${displayPath} in Code`}
-        onClick={(event) => {
-          event.stopPropagation()
-          onOpenCodeFile?.(displayPath, lines, target)
-        }}
-      >
-        <Code2 size={13} aria-hidden="true" />
-      </button>
-      <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={pathClass}>{displayPath}</span>
+      <CodeFileLink label={displayPath} lines={definedLines} target={target} onOpen={onOpenCodeFile} className={pathClass}>{displayPath}</CodeFileLink>
     </span>
   )
 })
@@ -394,6 +390,15 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
+/** The arguments of the MCP tool a unified call names, shown as a direct call shows its own. */
+const mcpToolArgs = (call: FunctionCall): Record<string, unknown> | undefined => {
+  if (call.name !== 'call_tool' || !call.args || typeof call.args !== 'object') return undefined
+  const toolId = typeof call.args.toolId === 'string' ? call.args.toolId.trim() : ''
+  if (!(toolId ? toolId.startsWith('mcp:') : call.args.source === 'mcp')) return undefined
+  const target = toolActivityTarget(call)
+  return target === call ? undefined : target.args ?? {}
+}
+
 const renderToolCallPreview = (original: FunctionCall, options: { partial?: boolean; purposeOnly?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
   const call = options.partial ? original : ctlAsUnified(original)
   if (call.name === 'ctl' && typeof call.args?.command === 'string') {
@@ -405,12 +410,17 @@ const renderToolCallPreview = (original: FunctionCall, options: { partial?: bool
     return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
   }
   if (options.partial) {
-    const argsFormatted = typeof call.args === 'string' ? call.args : formatToolArguments(call.args, { singleLine: true })
+    const argsFormatted = typeof call.args === 'string' ? call.args : formatToolArguments(mcpToolArgs(call) ?? call.args, { singleLine: true })
     const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
     return <span className="truncate break-all text-fw-text-muted">{preview || 'streaming tool call…'}</span>
   }
 
   const target = toolActivityTarget(call)
+  const mcpArgs = mcpToolArgs(call)
+  if (mcpArgs) {
+    const argsFormatted = formatToolArguments(mcpArgs, { singleLine: true })
+    return <span className="truncate break-all">{argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted}</span>
+  }
   if (call.name === 'call_tool' && target.name !== 'call_tool') {
     const summary = target.name === 'exec' || target.name === 'run_script' ? executionCallPreview(target, !!options.purposeOnly) : toolActivitySummary(target)
     if (original.name === 'ctl' && target.name !== 'exec' && target.name !== 'run_script') {
@@ -530,7 +540,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     return <pre className="whitespace-pre-wrap break-all text-xs font-mono text-fw-text-muted">{call.rawArgsText}</pre>
   }
   if (options.partial) {
-    return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : formatToolArguments(call.args)}</pre>
+    return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : formatToolArguments(mcpToolArgs(call) ?? call.args)}</pre>
   }
 
   if (call.name === 'read') {
@@ -662,7 +672,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  return <div className="whitespace-pre-wrap break-all">{formatToolArguments(call.args)}</div>
+  return <div className="whitespace-pre-wrap break-all">{formatToolArguments(mcpToolArgs(call) ?? call.args)}</div>
 }
 
 const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, call?: FunctionCall): ReactNode | null => {
@@ -721,7 +731,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   return renderTextResult(formatToolResponseText(resp), expanded)
 }
 
-const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
+// run_skill (`ctl skill run`) starts an ordinary run, so its card shows the run's subcalls too.
+const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script', 'run_skill'])
 
 const isToolScriptCall = (original: FunctionCall): boolean => {
   const call = ctlAsUnified(original)
@@ -836,6 +847,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 }) {
   // A ctl command renders as the call it runs; the command stays visible beside it.
   const ctlCommand = ctlCommandText(storedCall)
+  // Its own summary, unless the tool it runs states one; shown like an exec purpose.
+  const ctlPurpose = ctlSummary(storedCall)
   const call = useMemo(() => storedCall && ctlConcrete(storedCall), [storedCall])
   const responses = useMemo(
     () => call && ctlCommand ? storedResponses.map(resp => resp.name === 'ctl' ? { ...resp, name: call.name } : resp) : storedResponses,
@@ -936,6 +949,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={displayedDiffViewMode === 'split'} title="Split">Split</MiniToggleButton>
         </div>
       )}
+      {ctlPurpose !== undefined && call.name !== 'ctl' && <div data-ctl-summary className="mb-1 whitespace-pre-wrap break-all">{ctlPurpose}</div>}
       {ctlCommand && call.name !== 'ctl' && <div data-ctl-command className="mb-1 break-all font-mono text-fw-text-muted">ctl {ctlCommand}</div>}
       {renderToolCallExpandedContent(call, displayedDiffViewMode, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}
     </div>
@@ -962,7 +976,9 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       >
         <ToolTag toolCall={!!call || !!primaryResponse} name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         <div className="foxwarm-tool-call-header relative flex min-w-0 flex-1 items-center self-stretch">
-          {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} title={ctlCommand && call.name !== 'ctl' ? `ctl ${ctlCommand}` : undefined} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, purposeOnly: hideCollapsedContent, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
+          {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} title={ctlCommand && call.name !== 'ctl' ? `ctl ${ctlCommand}` : undefined} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{hideCollapsedContent && ctlPurpose !== undefined
+            ? <span className="truncate">{ctlPurpose.replace(/\s+/g, ' ').trim()}</span>
+            : renderToolCallPreview(call, { partial: partialToolCall, purposeOnly: hideCollapsedContent, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
           {viewButtons}
         </div>
         {invocationDurationMs !== null && invocationDurationMs >= 1000 && <span data-tool-execution-time className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}

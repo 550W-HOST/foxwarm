@@ -96,4 +96,40 @@ public sealed class FrameworkPromptTests
         Assert.DoesNotContain("BUNDLED-BASE", prompt);
         Assert.Contains("LOCAL-SHARED", prompt);
     }
+
+    [Fact]
+    public async Task Framework_prompt_view_follows_the_applying_source_and_the_model()
+    {
+        using var temp = new TempDirectory();
+        var agents = Catalog(temp);
+        var template = Path.Combine(temp.Path, "template.md");
+        await File.WriteAllTextAsync(
+            template,
+            "BASE\n<foxwarm-if model-id=\"*gpt*\">\nGPT-ONLY\n</foxwarm-if>\n"
+        );
+        var memory = new AgentMemory(
+            agents,
+            new Skills(agents, Path.Combine(temp.Path, "skills")),
+            template
+        );
+
+        var gpt = await memory.FrameworkPromptAsync("lab/gpt-6");
+        Assert.NotNull(gpt);
+        Assert.True(gpt.Value.ModelDependent);
+        Assert.Contains("GPT-ONLY", gpt.Value.Text);
+        Assert.DoesNotContain("foxwarm-if", gpt.Value.Text);
+        var other = await memory.FrameworkPromptAsync("lab/other");
+        Assert.DoesNotContain("GPT-ONLY", other!.Value.Text);
+        Assert.Contains("BASE", other.Value.Text);
+
+        // An edited legacy copy replaces the bundled base, as in the built prompt.
+        await File.WriteAllTextAsync(agents.FrameworkSystemPath, "EDITED-REPLACEMENT");
+        var edited = await memory.FrameworkPromptAsync("lab/gpt-6");
+        Assert.Equal("EDITED-REPLACEMENT", edited!.Value.Text.Trim());
+        Assert.False(edited.Value.ModelDependent);
+
+        File.Delete(agents.FrameworkSystemPath);
+        File.Delete(template);
+        Assert.Null(await memory.FrameworkPromptAsync("lab/gpt-6"));
+    }
 }

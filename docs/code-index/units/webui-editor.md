@@ -39,7 +39,7 @@ Provides reusable code editing, JSON inspection dialogs, and diff visualization 
 - The shared editor fixture uses Vite's runner config loader, keeping configuration evaluation independent of writable dependency directories while retaining the real worker/asset pipeline.
 - `jsonInspector.e2e.mjs` uses the real Vite worker/asset pipeline to exercise readonly behavior, initial folding/manual unfolding, full-copy snapshots, stream/theme stability, local Find, portal layering, Raw/tool disclosure/scroll retention, two-model disposal, and a Firefox entry/Escape path. The existing standalone rendering fixtures use `browserFixtureBundle.mjs` to select the supported plain-text fallback instead of attempting to bundle Vite-only Monaco assets through esbuild.
 
-- Setup owns the two stable YAML models and supplies a transient focus request when Chat opens model settings.
+- Setup owns the three stable YAML models (models, app config, tool authorization policy) and supplies a transient focus request when Chat opens model settings.
 - `configEditor.test.mjs` validates shared-import parity, current/legacy/custom/backend-tolerant fixtures with Ajv, exact executable Node-provider schema constraints, schema boundaries, local and provider-list completion context/cache/cancellation, last-valid retention and the worker-compatible Monaco pin. Setup browser tests exercise production `pricing` completion and rate diagnostics at model-object and provider-without-models placement, pane-local editor height and stable save geometry, production schema completion, on-demand provider network timing/replacement/isolation/failure/cancellation, forward and reverse selection replacement in both editors (including parent-driven value reset), section-scoped Ctrl/Meta+S saving without duplicate requests, and the savable controlled-textarea fallback.
 - The former full-page WebUI file editor was removed with the custom workspace feature; Code remains the general browser editing integration.
 
@@ -47,7 +47,7 @@ Provides reusable code editing, JSON inspection dialogs, and diff visualization 
 
 ### D-editor-local-yaml-assistance
 
-Models and app-config editing use static frontend-owned schemas and unsaved-document-aware completions. No backend schema API or per-keystroke document upload is introduced. The only remote completion source is the bounded provider model-list route, invoked from Monaco's completion boundary for an exact concrete-provider model scalar and given only that provider's transient connection fields. Monaco diagnostics are advisory, remote schema fetches and automatic formatting stay disabled, and canonical backend validation decides whether Save succeeds.
+Models, app-config and tool authorization policy editing use static frontend-owned schemas and unsaved-document-aware completions. No backend schema API or per-keystroke document upload is introduced. The only remote completion source is the bounded provider model-list route, invoked from Monaco's completion boundary for an exact concrete-provider model scalar and given only that provider's transient connection fields. Monaco diagnostics are advisory, remote schema fetches and automatic formatting stay disabled, and canonical backend validation decides whether Save succeeds.
 
 Completion acceptance replaces the current YAML scalar token, including punctuated model/provider prefixes such as `gpt-5.6` or `openai-`; it must not append the full suggestion after that prefix.
 

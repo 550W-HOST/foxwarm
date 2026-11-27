@@ -16,8 +16,8 @@ Older direct/builtin-dispatched sends require a paired successful response and o
 
 ## Owners and checks
 
-- [Session tools](../units/src-tools-session-agent.md) own actual send and optional local delivery notification.
-- [Tool executor](../units/src-tool-executor.md) and [ToolScript](../units/src-toolscript.md) persist out-of-band presentation data.
+- [Session tools](../units/session-manager-operations.md) own actual send and optional local delivery notification.
+- [Tool executor](../units/tools-registry.md) and [ToolScript](../units/toolscript.md) persist out-of-band presentation data.
 - [Session message rendering](../units/webui-session-messages.md) owns projection, identity and cards.
 - [Timeline](../modules/webui-timeline.md) owns display boundaries, Search and request accounting.
 - `toolExecutorSessionMessages.test.ts` executes real direct, unified and scripted sends with an isolated data root; the frontend pure/native cases check trusted envelopes, failures, viewport cuts, source order, stable DOM and one visible Search match.

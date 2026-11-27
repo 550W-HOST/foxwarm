@@ -5,15 +5,26 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
+    /// <summary>
+    /// Adopts the attempt's effective selection. With <paramref name="messageEffort"/>, an
+    /// effort that differs from the one in force is also recorded once, at this position.
+    /// </summary>
     internal async Task<bool> AdoptEffectiveSelectionAsync(
         EffectiveRequestSelection selection,
-        bool failover
+        bool failover,
+        bool messageEffort = false
     )
     {
         if (
             entry.WithState(state =>
-                EffectiveRequestSelection.Read(state.Meta["lastEffectiveRequest"])
-            ) == selection
+                EffectiveRequestSelection.Read(state.Meta["lastEffectiveRequest"]) == selection
+                && (
+                    !messageEffort
+                    || AnthropicMessageEffort.InForce(state.History, selection.ModelId)
+                        is not { } inForce
+                    || inForce == selection.Effort
+                )
+            )
         )
             return false;
         var appended = false;
@@ -23,14 +34,22 @@ public sealed partial class SessionSaveLane
             await CommitCanonicalAppendWithResultAsync(
                     state =>
                     {
-                        var notice = selection.Notice(
-                            EffectiveRequestSelection.Read(state.Meta["lastEffectiveRequest"]),
-                            failover
+                        var previous = EffectiveRequestSelection.Read(
+                            state.Meta["lastEffectiveRequest"]
                         );
-                        appended = notice is not null;
+                        var notice = selection.Notice(previous, failover);
+                        var change = messageEffort
+                            ? AnthropicMessageEffort.Change(state.History, selection, previous)
+                            : null;
+                        JsonObject[] additions =
+                        [
+                            .. notice is null ? [] : new[] { notice },
+                            .. change is null ? [] : new[] { change.ToRow() },
+                        ];
+                        appended = additions.Length > 0;
                         var operation = LocalSessionTurnHost.PrepareCanonicalAppend(
                             state,
-                            notice is null ? [] : [notice],
+                            additions,
                             [],
                             false,
                             false,

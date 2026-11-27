@@ -120,7 +120,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open in System › Nodes').click())
   await page.waitForSelector('[data-node-surface]')
   await page.waitForFunction(() => document.querySelector('[data-node-surface]')?.textContent.includes('offline-node'))
-  const cards = await page.$$eval('[data-node-surface] article', rows => rows.map(row => row.textContent))
+  const cards = await page.$$eval('[data-node-surface] [data-system-node-id]', rows => rows.map(row => row.textContent))
   assert(cards.some(text => text.includes('owned-cli') && text.includes('Online')))
   assert(cards.some(text => text.includes('offline-node') && text.includes('Offline')))
   assert(cards.some(text => text.includes('upgrade-node') && text.includes('Upgrade required')))

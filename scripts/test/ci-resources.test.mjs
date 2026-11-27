@@ -36,6 +36,19 @@ function digest(inputs) {
   return hash.digest('hex')
 }
 
+test('Android Tests and Release caches cannot restore or save each other’s entries', () => {
+  const cache = job => job.steps.find(step => step.name === 'Cache Gradle dependencies and wrapper')
+  const testCache = cache(jobs.android)
+  const releaseCache = cache(release.jobs.android)
+  for (const step of [testCache, releaseCache]) {
+    assert.match(step.uses, /^actions\/cache@/)
+    assert.ok(step.with.key.startsWith(step.with['restore-keys'].trim()))
+  }
+  for (const [source, other] of [[testCache, releaseCache], [releaseCache, testCache]]) {
+    assert.ok(!source.with.key.startsWith(other.with['restore-keys'].trim()))
+  }
+})
+
 test('resource cache keys change with pins, build inputs and runner/toolchain configuration', async () => {
   const code = await keyInputs(codeProducer)
   const heif = await keyInputs(jobs['native-test-resources'])
@@ -197,7 +210,7 @@ test('Release downloads the original package files, without platform bundles or 
   ]
   const mainPackages = [...Object.keys(TARGETS).map(assetName), 'foxwarm-android-node.apk', codeAssetName]
   const packages = [...mainPackages, ...cliPackages]
-  const derived = ['SHA256SUMS', 'foxwarm-osx-arm64-self-contained.tar.gz', 'foxwarm-win-x64-self-contained.zip']
+  const derived = ['SHA256SUMS']
   const uploads = Object.values(release.jobs).flatMap(job => job.steps ?? [])
     .filter(step => step.uses?.startsWith('actions/upload-artifact@'))
   for (const file of [...mainPackages, ...derived]) {
@@ -258,7 +271,7 @@ test('managed and component jobs preserve the unit environment and diagnostics w
   assert.equal(tests.env.LD_LIBRARY_PATH, '${{ runner.temp }}/heif-test/prefix/lib')
   assert.equal(tests.env.FOXWARM_TEST_ARTIFACT_DIR, '${{ runner.temp }}/foxwarm-test-artifacts')
   for (const job of [core, managed]) {
-    assert.ok(job.steps.some(step => step.run === 'npm run build\nnpm run build:reference\n'))
+    assert.ok(job.steps.some(step => step.run === 'npm run build'))
     assert.equal(job.steps.some(step => step.run === 'npm run test:unit'), false)
   }
   assert.equal(managed.steps.find(step => step.uses?.startsWith('actions/checkout@')).with['fetch-depth'], 0)

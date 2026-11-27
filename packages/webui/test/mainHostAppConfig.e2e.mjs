@@ -12,6 +12,8 @@ let browser
 try {
   const raw = initialRaw(fixture.origin, fixture.port)
   await writeFile(`${fixture.data}/state/config.yaml`, raw)
+  // A configured installation: first run shows only the Models step, without Config.
+  await writeFile(fixture.modelPath, "default: local/wire\nproviders:\n  local: {providerType: openai-completions, baseUrl: 'http://127.0.0.1:1/v1', models: [wire]}\n")
   await fixture.start()
   const api = (path, method = 'GET', body) => fetch(`${fixture.origin}/preview${path}`, {
     method,
@@ -97,6 +99,7 @@ try {
   const editor = '[aria-label="Application config YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor, { visible: true })
   assert.equal(await page.$eval('body', body => body.innerText.includes('External chat channels are unavailable on this server.')), false)
+  await page.click('[data-setup-config-last="weixin"] summary')
   assert.equal(await page.$eval('body', body => body.innerText.includes('Start Weixin login')), true)
   const uiRaw = channelRaw.replace('customChannelField: keep-me', 'customChannelField: ui-edited')
   await page.focus(editor)

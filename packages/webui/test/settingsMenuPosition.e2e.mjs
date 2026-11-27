@@ -236,7 +236,7 @@ test('Escape, outside click, and menu-item selection retain their dismissal beha
 test('global UI settings keeps only the Auto, Light, and Dark color-mode controls', async () => {
   await mountFixture({ width: 900, height: 760, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
   await openMenu()
-  assert.equal(await page.$('select[aria-label="Theme"]'), null)
+  assert.equal(await page.$(':is(select, [role="combobox"])[aria-label="Theme"]'), null)
   assert.equal(await page.$('button::-p-text(Import)'), null)
   const text = await page.$eval('[data-global-ui-settings-menu]', menu => menu.textContent || '')
   for (const movedLabel of ['Input', 'Chat', 'Group tools', 'Show minimap', 'Rename instance', 'tab icon']) {

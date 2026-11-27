@@ -6,6 +6,19 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
 import { webuiReactAliases } from './reactRendererAliases.mjs'
+import { chooseSelectOption, readSelectOptions } from './selectDriver.mjs'
+
+const RUNTIME_SELECT = '[role="combobox"][aria-label="Session runtime"]'
+const claudeOption = async () => (await readSelectOptions(page, RUNTIME_SELECT)).find(option => option.value === 'claude-code')
+async function waitForSelectOption(selector, value, accept = () => true) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const option = (await readSelectOptions(page, selector)).find(item => item.value === value)
+    if (option && accept(option)) return option
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`Select option ${value} did not appear in ${selector}`)
+}
+const waitForClaudeOption = ({ disabled }) => waitForSelectOption(RUNTIME_SELECT, 'claude-code', option => option.disabled === disabled)
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const componentEntry = fileURLToPath(new URL('../src/components/AgentCreationMenu.tsx', import.meta.url))
@@ -122,10 +135,17 @@ async function clickButtonByText(text) {
   await handle.dispose()
 }
 
-async function openSessionDialog() {
+async function openSessionDialog({ moreOptions = true } = {}) {
   await page.click('button[aria-label="New session"]')
   await page.waitForSelector('[role="dialog"]')
   await page.waitForFunction(() => document.querySelector('#creation-dialog-title')?.textContent === 'New session')
+  if (moreOptions) await openMoreOptions()
+}
+
+// Session ID and Runtime sit behind a collapsed More options disclosure.
+async function openMoreOptions() {
+  await page.$eval('[data-creation-more-options]', details => { if (!details.open) details.querySelector('summary').click() })
+  await page.waitForFunction(() => document.querySelector('[data-creation-more-options]')?.open === true)
 }
 
 function availabilityResponse() {
@@ -178,11 +198,14 @@ after(async () => {
 
 test('the shared plus opens New session directly and submits the selected Agent tag', async () => {
   await resetFixture()
-  await openSessionDialog()
+  await openSessionDialog({ moreOptions: false })
 
   assert.equal(await page.$('[role="menu"]'), null)
   assert.equal(await page.$eval('button[title="research"]', button => button.getAttribute('aria-pressed')), 'true')
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('placeholder')?.startsWith('Random ID')), true)
+  // The dialog opens ready to create: optional fields are collapsed and Create has focus.
+  assert.equal(await page.$eval('[data-creation-more-options]', details => details.open), false)
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('type')), 'submit')
+  await openMoreOptions()
 
   await page.click('button[title="main"]')
   await page.type('input[placeholder^="Random ID"]', 'planned-session')
@@ -255,7 +278,7 @@ test('New agent stays in one modal and cancel returns to the preserved session d
 
   await page.click('button[aria-label="New agent"]')
   await page.type('input[placeholder="my-agent"]', 'new_workspace')
-  await page.select('select[data-agent-settings-inherit]', 'main')
+  await chooseSelectOption(page, '[data-agent-settings-inherit]', 'main')
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [
@@ -269,15 +292,15 @@ test('New agent uses the shared Agent settings and names the start location', as
   await page.click('button[aria-label="New agent"]')
   await page.waitForSelector('[data-agent-settings]')
   assert.equal(await page.$('[data-agent-settings-isolation-section]'), null, 'no isolation settings')
-  await page.waitForSelector('select[data-agent-default-node] option[value="build-box"]')
-  assert.equal(await page.$eval('select[data-agent-default-node] option[value=""]', option => option.textContent), 'master (default)')
+  await waitForSelectOption('[data-agent-default-node]', 'build-box')
+  assert.equal((await readSelectOptions(page, '[data-agent-default-node]')).find(option => option.value === '').label, 'master (default)')
   assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on master')
   await page.type('input[placeholder="my-agent"]', 'builder')
-  await page.select('select[data-agent-default-node]', 'build-box')
+  await chooseSelectOption(page, '[data-agent-default-node]', 'build-box')
   assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on Build box')
   await page.type('input[data-agent-default-cwd]', ' /srv/build ')
 
-  assert.equal(await page.$eval('select[data-agent-default-node]', select => [select.disabled, select.value].join()), 'false,build-box')
+  assert.equal(await page.$eval('[data-agent-default-node]', select => [select.disabled, select.value].join()), 'false,build-box')
 
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
@@ -309,11 +332,11 @@ test('an installation default Node separates unset from an explicit master', asy
     await openSessionDialog()
     await page.waitForFunction(() => document.querySelector('[data-creation-start-location]')?.textContent === 'Starts on Build box')
     await page.click('button[aria-label="New agent"]')
-    await page.waitForSelector('select[data-agent-default-node] option[value="master"]')
-    assert.equal(await page.$eval('select[data-agent-default-node] option[value=""]', option => option.textContent), 'Installation default (Build box)')
+    await waitForSelectOption('[data-agent-default-node]', 'master')
+    assert.equal((await readSelectOptions(page, '[data-agent-default-node]')).find(option => option.value === '').label, 'Installation default (Build box)')
     assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on Build box')
     await page.type('input[placeholder="my-agent"]', 'local')
-    await page.select('select[data-agent-default-node]', 'master')
+    await chooseSelectOption(page, '[data-agent-default-node]', 'master')
     await clickButtonByText('Create')
     await page.waitForSelector('[role="dialog"]', { hidden: true })
     assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [
@@ -422,14 +445,14 @@ test('Agent tags wrap without horizontal overflow across themes and narrow scree
 test('creation carries the chosen runtime and each new dialog defaults back to Foxwarm', async () => {
   await resetFixture()
   await openSessionDialog()
-  assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'foxwarm')
-  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
-  await page.select('select[aria-label="Session runtime"]', 'claude-code')
+  assert.equal(await page.$eval('[role="combobox"][aria-label="Session runtime"]', select => select.value), 'foxwarm')
+  await waitForClaudeOption({ disabled: false })
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session runtime"]', 'claude-code')
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls.at(-1)), { type: 'session', agentId: 'research', sessionId: null, runtime: 'claude-code' })
   await openSessionDialog()
-  assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'foxwarm')
+  assert.equal(await page.$eval('[role="combobox"][aria-label="Session runtime"]', select => select.value), 'foxwarm')
 })
 
 
@@ -439,8 +462,8 @@ test('unavailable launchers are disabled without an explanation while Foxwarm cr
   const checked = availabilityResponse()
   await openSessionDialog()
   await checked
-  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
-  assert.match(await page.$eval('option[value="claude-code"]', option => option.textContent), /unavailable/)
+  assert.equal((await claudeOption()).disabled, true)
+  assert.match((await claudeOption()).label, /unavailable/)
   assert.equal(await page.$eval('[role="dialog"]', dialog => dialog.textContent.includes('Install the configured launcher')), false)
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
@@ -448,7 +471,7 @@ test('unavailable launchers are disabled without an explanation while Foxwarm cr
 
   runtimeState = { available: true, reason: null }
   await openSessionDialog()
-  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
+  await waitForClaudeOption({ disabled: false })
   assert.equal(runtimeRequests.length, 2, 'reopening checks changed launcher state')
 })
 
@@ -458,12 +481,12 @@ test('loading, failed requests and absent capability data never enable Claude Co
   runtimeGate = new Promise(resolve => { release = resolve })
   let checked = availabilityResponse()
   await openSessionDialog()
-  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
-  assert.match(await page.$eval('option[value="claude-code"]', option => option.textContent), /unavailable/)
+  assert.equal((await claudeOption()).disabled, true)
+  assert.match((await claudeOption()).label, /unavailable/)
   runtimeStatus = 503
   release()
   await checked
-  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
+  assert.equal((await claudeOption()).disabled, true)
   await page.keyboard.press('Escape')
   runtimeGate = null
   runtimeStatus = 200
@@ -471,7 +494,7 @@ test('loading, failed requests and absent capability data never enable Claude Co
   checked = availabilityResponse()
   await openSessionDialog()
   await checked
-  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
+  assert.equal((await claudeOption()).disabled, true)
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.equal(await page.evaluate(() => window.fixtureCalls.at(-1).runtime), 'foxwarm')
@@ -482,7 +505,7 @@ test('availability requests respect the deployment base path', async () => {
   await page.goto(fixtureUrl + '/preview/', { waitUntil: 'load' })
   await page.waitForFunction(() => !!window.fixture)
   await openSessionDialog()
-  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
+  await waitForClaudeOption({ disabled: false })
   assert.equal(runtimeRequests.at(-1), '/preview/api/setup/status')
 })
 
@@ -490,20 +513,20 @@ test('availability requests respect the deployment base path', async () => {
 test('returning from New agent rechecks a selected Claude runtime and prevents unavailable submission', async () => {
   await resetFixture()
   await openSessionDialog()
-  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
-  await page.select('select[aria-label="Session runtime"]', 'claude-code')
+  await waitForClaudeOption({ disabled: false })
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session runtime"]', 'claude-code')
   await page.click('button[aria-label="New agent"]')
   runtimeState = { available: false, reason: 'The launcher is no longer installed.' }
   const checked = availabilityResponse()
   await clickButtonByText('Cancel')
   await checked
-  assert.match(await page.$eval('option[value="claude-code"]', option => option.textContent), /unavailable/)
-  assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'claude-code')
+  assert.match((await claudeOption()).label, /unavailable/)
+  assert.equal(await page.$eval('[role="combobox"][aria-label="Session runtime"]', select => select.value), 'claude-code')
   assert.equal(await page.$eval('[role="dialog"] button[type="submit"]', button => button.disabled), true)
   await page.focus('input[placeholder^="Random ID"]')
   await page.keyboard.press('Enter')
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [])
-  await page.select('select[aria-label="Session runtime"]', 'foxwarm')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session runtime"]', 'foxwarm')
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.equal(await page.evaluate(() => window.fixtureCalls.at(-1).runtime), 'foxwarm')
@@ -519,13 +542,13 @@ test('a late availability result leaves the dialog controls in place for a nativ
     await openSessionDialog()
     const layout = () => page.evaluate(() => {
       const box = element => { const rect = element.getBoundingClientRect(); return [rect.x, rect.y, rect.width, rect.height] }
-      return { dialog: box(document.querySelector('[role="dialog"]')), newAgent: box(document.querySelector('button[aria-label="New agent"]')), runtime: box(document.querySelector('select[aria-label="Session runtime"]')) }
+      return { dialog: box(document.querySelector('[role="dialog"]')), newAgent: box(document.querySelector('button[aria-label="New agent"]')), runtime: box(document.querySelector('[role="combobox"][aria-label="Session runtime"]')) }
     })
     const before = await layout()
     release()
     await checked
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-    assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), !state.available)
+    assert.equal((await claudeOption()).disabled, !state.available)
     assert.deepEqual(await layout(), before)
     await page.click('button[aria-label="New agent"]')
     await page.waitForSelector('[role="dialog"] input[placeholder="my-agent"]')

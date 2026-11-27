@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { usePrimaryPointerCoarse } from '../pointerQueries'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
 import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ChevronDown, ChevronUp, Copy, SquarePlus } from 'lucide-react'
@@ -486,7 +487,7 @@ function DraggableSessionRow({
 export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarActions, onSearchMessages, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, onStartSession, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
-  const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
+  const primaryPointerCoarse = usePrimaryPointerCoarse()
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [filterText, setFilterText] = useState('')
@@ -532,14 +533,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const autoExpandedCurrentSessionIdRef = useRef<string | undefined>(undefined)
   const manuallyCollapsedSessionsRef = useRef<Set<string>>(new Set())
   const sessionDragEnabled = shouldEnableSessionListDrag(dragEnabled, primaryPointerCoarse)
-
-  useEffect(() => {
-    if (!window.matchMedia) return
-    const mediaQuery = window.matchMedia('(pointer: coarse)')
-    const handleChange = (event: MediaQueryListEvent) => setPrimaryPointerCoarse(event.matches)
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [])
 
   const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
   const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
@@ -761,7 +754,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     if (!bounded) return
     relationGenerationRef.current += 1; setContextMenu(null); setDeleteConfirm(null); setArchiveConfirm(null); setRelationRows(new Map())
     descendantSummaryGenerationRef.current.clear(); setDescendantSummaries(new Map()); setDescendantSummaryLoading(new Set())
-  }, [viewMode, filterText, resolvedCurrentSessionId, boundedOwnershipKey])
+  }, [viewMode, filterText, resolvedCurrentSessionId])
+  // Rows arriving or leaving elsewhere in the list keep an open menu or dialog; only its own row leaving closes it.
+  useEffect(() => {
+    if (!bounded) return
+    const present = new Set(sessions.map(session => session.id))
+    if (contextMenu && !present.has(contextMenu.sessionId)) setContextMenu(null)
+    if (deleteConfirm && !present.has(deleteConfirm)) setDeleteConfirm(null)
+    if (archiveConfirm && !present.has(archiveConfirm)) setArchiveConfirm(null)
+  }, [boundedOwnershipKey])
   useEffect(() => {
     const active = new Set([contextMenu?.sessionId, deleteConfirm, archiveConfirm].filter((id): id is string => !!id))
     if (!contextMenu) { relationGenerationRef.current += 1; setRelationRows(new Map()) }
@@ -771,9 +772,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [contextMenu?.sessionId, deleteConfirm, archiveConfirm])
   useEffect(() => {
     if (!bounded) return
-    descendantSummaryGenerationRef.current.clear()
-    setDescendantSummaries(new Map())
-    setDescendantSummaryLoading(new Set())
+    // Open lifecycle actions reload their totals. The last total stays shown, so the descendant choice survives,
+    // and Delete waits for the reload; the new generation fences answers requested before the invalidation.
     if (contextMenu) void loadDescendantSummary(contextMenu.sessionId)
     if (deleteConfirm) void loadDescendantSummary(deleteConfirm)
     if (archiveConfirm) void loadDescendantSummary(archiveConfirm)

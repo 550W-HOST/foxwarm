@@ -124,7 +124,7 @@ public sealed class ExternalChannelDeliveryContractTests
                 )
         );
         await using var f = await ExternalChannelFixture.CreateAsync(provider: provider.BaseUri);
-        var directory = Path.GetDirectoryName(f.Owner.AuthorityStore.AuthorityPath)!;
+        var directory = Path.GetDirectoryName(f.Owner.AuthorityStore.AuthorityPath())!;
         var mode = File.GetUnixFileMode(directory);
         var sent = new List<string>();
         f.Manager.ChannelRegistry.Register(
@@ -156,7 +156,7 @@ public sealed class ExternalChannelDeliveryContractTests
             Assert.Equal(new[] { "completed-answer" }, sent);
             Assert.True(f.Owner.Entry.BackgroundProcessorFailureCount > 0);
             var disk = JsonNode.Parse(
-                await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath)
+                await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath())
             )!;
             Assert.True(SessionCatalog.Flag(disk["busy"]));
         }

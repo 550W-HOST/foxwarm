@@ -66,11 +66,61 @@ public sealed class ToolActivityPreviewTests
         var text = Preview(rows);
         Assert.Contains("timer list (#1)", text);
         Assert.Contains("session view — main/other (#2)", text);
-        Assert.Contains("session rename (#3)", text);
+        // A command whose path states its fixed arguments shows the rest as the card header does.
+        Assert.Contains("session rename — Release notes (#3)", text);
         Assert.Contains("history recall — msg#1-2 (#4)", text);
-        Assert.Contains("ctl (#5)", text);
+        // Help and other front-end calls show their command.
+        Assert.Contains("ctl — node --help (#5)", text);
         foreach (var concrete in new[] { "list_timers", "view_session", "update-display-name", "Z recall" })
             Assert.DoesNotContain(concrete, text);
+    }
+
+    [Fact]
+    public void Ctl_calls_show_their_summary_otherwise_known_keys_or_inline_arguments()
+    {
+        JsonObject Ctl(string command, JsonObject? args = null, string? summary = null)
+        {
+            var call = new JsonObject { ["command"] = command };
+            if (args is not null)
+                call["values"] = new JsonObject { ["args"] = args };
+            if (summary is not null)
+                call["summary"] = summary;
+            return call;
+        }
+        JsonObject Mcp() => new() { ["repo"] = "octo-org/demo", ["state"] = "open", ["perPage"] = 5 };
+        var exec = new JsonObject { ["command"] = "make", ["summary"] = "Build the project" };
+        var rows = new[]
+        {
+            Call(1, "mcp", "ctl", Ctl("tool call mcp:github/list_issues --args @args", Mcp())),
+            Call(2, "mcp-summary", "ctl", Ctl("tool call mcp:github/list_issues --args @args", Mcp(), "List open issues")),
+            Call(3, "builtin", "ctl", Ctl("skill load code-index")),
+            Call(4, "builtin-summary", "ctl", Ctl("skill load code-index", summary: "Load the index skill")),
+            Call(5, "both", "ctl", Ctl("tool call node:worker/exec --args @args", exec, "Run make on the worker")),
+            Call(6, "no-key", "ctl", Ctl("session list --count 3")),
+            Call(7, "query", "ctl", Ctl("tool call mcp:search/find --args @args", new() { ["query"] = "foxwarm", ["limit"] = 2 })),
+            Call(8, "long", "ctl", Ctl("tool call mcp:github/create --args @args", new() { ["body"] = new string('x', 400) })),
+        };
+        var text = Preview(rows);
+        Assert.Contains("list_issues — repo: octo-org/demo state: open perPage: 5 (#1)", text);
+        Assert.Contains("list_issues — List open issues (#2)", text);
+        Assert.Contains("skill load — code-index (#3)", text);
+        Assert.Contains("skill load — Load the index skill (#4)", text);
+        Assert.Contains("exec — Build the project (#5)", text);
+        Assert.DoesNotContain("Run make on the worker", text);
+        // A sole argument shows only its value, as in the card header.
+        Assert.Contains("session list — 3 (#6)", text);
+        Assert.Contains("find — query: foxwarm limit: 2 (#7)", text);
+        Assert.Matches(@"create — x{190,199}… \(#8\)", text);
+
+        Assert.Equal(
+            "repo: octo-org/demo state: open perPage: 5",
+            SessionToolExecutor.ToolArgsPreview("ctl", Ctl("tool call mcp:github/list_issues --args @args", Mcp()))
+        );
+        Assert.Equal(
+            "List open issues",
+            SessionToolExecutor.ToolArgsPreview("ctl", Ctl("tool call mcp:github/list_issues --args @args", Mcp(), "List open issues"))
+        );
+        Assert.Equal("make", SessionToolExecutor.ToolArgsPreview("ctl", Ctl("tool call node:worker/exec --args @args", new() { ["command"] = "make" })));
     }
 
     [Fact]

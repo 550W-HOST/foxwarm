@@ -36,8 +36,26 @@ Before stripping message `__meta`, concrete preparation projects a positive cano
 
 The shared request repair also delegates abandoned native-search filtering to [AnthropicSearchHistory](./model-anthropic-completions.md#native-hosted-web-search). It modifies only request-owned copies and clears journal provenance for changed rows.
 
+## Design decisions
+
+### D-llm-openai-non-strict-function-tools
+
+[2026-08-13] Every Foxwarm custom function tool sent through OpenAI Responses or Chat Completions explicitly uses non-strict mode. The original JSON Schema `required` list remains the sole provider-facing required-key contract, so optional properties may be omitted; runtime tool validation and defaults remain authoritative. Responses places `strict: false` beside `parameters`, while Chat Completions places it inside the nested `function` object. Hosted provider tools such as Responses `web_search` and Anthropic `input_schema` are unchanged.
+
+### D-tool-args-empty-string
+
+[2026-07-31] An exact empty `rawArgsText` string means the model supplied no tool arguments. Parse it as `{ args: {} }` without retaining raw text or an error so later provider serialization emits `{}`. Whitespace-only strings remain invalid JSON and continue through the structured parse-error path.
+
+### D-llm-system-wrappers
+
+New provider serialization uses canonical Foxwarm wrappers. Compatibility readers may recognize old persisted headers without generating new legacy forms.
+
+### D-llm-request-errors
+
+Request failure is exception-driven at the provider boundary. Router, channel, setup, and CLI boundaries choose presentation.
+
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/RequestPrefixTests.cs` exercises actual Responses ordinary/BTW requests across owner Node selection, cwd and connection changes, plus ordinary-to-compaction leading instructions, final custom/hosted tools and older serialized history under the [Responses hosted-tool contract](./model-responses.md#d-responses-hosted-tool-purpose). Planning submits and commits a validated plan; commit-time memory refresh and cache lineage remain observable controls.
+`dotnet/Foxwarm.Tests/Sessions/RequestPrefixTests.cs` exercises actual Responses ordinary/BTW requests across owner Node selection, cwd and connection changes, plus the ordinary-to-compaction leading [developer prompt](./model-responses.md#d-responses-developer-prompt), final custom/hosted tools and older serialized history under the [Responses hosted-tool contract](./model-responses.md#d-responses-hosted-tool-purpose). Planning submits and commits a validated plan; commit-time memory refresh and cache lineage remain observable controls.
 
 `dotnet/Foxwarm.Tests/Models/CanonicalSequenceCueTests.cs` (all three provider serializers, timing/no-timing, synthetic responses and immutable canonical source); `dotnet/Foxwarm.Tests/Models/NormalLoopJournalTests.cs` (real Task query/tool continuation, physical retry, next-turn reset, journal reconstruction and raw-log iteration); `RetryInputSafePointTests.cs` (changed-input retry keeps iteration before provider-time follow-up advances it); `dotnet/Foxwarm.Tests/Models/JournalHistoryReuseTests.cs`; `dotnet/Foxwarm.Tests/Models/RequestHistoryRepairTests.cs`; `ResponsesClientTests.cs`; `RetryPreparationTests.cs`; `EffectiveSelectionTests.cs`; `HostedResponsesWsImageTests.cs`; `LlmRequestJournalQualificationTests.cs`; `HttpErrorClassificationTests.cs` (long structured errors through real failover, bounded diagnostics and Stop during collection); `ProviderTransportParityTests.cs` (real negotiated compressed success/error, raw deflate, explicit headers, cookie isolation across configured keys and Anthropic single decoding); `HostedImageWatchdogParityTests.cs`.

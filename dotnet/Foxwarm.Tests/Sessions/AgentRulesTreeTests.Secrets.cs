@@ -37,9 +37,7 @@ public sealed partial class AgentRulesTreeTests
                 .Concat(UnifiedToolDefinitions.All().OfType<JsonObject>())
                 .Concat(MainLocalToolDefinitions.Definitions().OfType<JsonObject>())
         )
-            definitions.Add(
-                HandoffConfirmation.Definition(item, f.Manager.HandoffConfirmationEnabled)
-            );
+            definitions.Add(item.DeepClone());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
         definitions.Add(ToolAuthorizationToolDefinition.ExplainDefinition());
         foreach (var item in SecretToolDefinitions.Definitions())

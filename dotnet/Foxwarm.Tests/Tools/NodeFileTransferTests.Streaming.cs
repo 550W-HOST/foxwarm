@@ -69,8 +69,8 @@ public sealed partial class NodeFileTransferTests
     public async Task Large_copy_streams_through_real_TypeScript_and_CSharp_CLI_nodes()
     {
         var repository =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required.");
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
+            ?? throw new InvalidOperationException("FOXWARM_REPO_ROOT is required.");
         await using var f = new Fixture();
         await f.Start();
         var tsCredentials = f.Manager.Nodes.Registry.Create("ts-stream");

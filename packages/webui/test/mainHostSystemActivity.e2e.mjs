@@ -6,6 +6,7 @@ import { once } from 'node:events'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('system-activity', options)
@@ -62,9 +63,9 @@ try {
   await until(async () => (await rows(page)).join() === 'exec,files', 'Changes view hides the read')
   await shot(page, 'system-activity-changes.png')
 
-  await page.select('select[aria-label="Kind of activity"]', 'all')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Kind of activity"]', 'all')
   await until(async () => (await rows(page)).length === 3, 'all calls')
-  await page.select('select[aria-label="Kind of activity"]', 'changes')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Kind of activity"]', 'changes')
   await until(async () => (await rows(page)).length === 2, 'back to changes')
 
   // Details of a call.
@@ -92,7 +93,7 @@ try {
   // Live refresh keeps pages loaded with "Show earlier activity".
   assert.equal((await fixture.api('POST', route(id) + '/message', { text: 'CASE:many' })).status, 202)
   await until(async () => (await activity({ kind: 'all', limit: 200 })).items?.length === 114, 'many calls indexed')
-  await page.select('select[aria-label="Kind of activity"]', 'all')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Kind of activity"]', 'all')
   await until(async () => (await rows(page)).length === 100, 'first page of all calls')
   await page.click('[data-activity-more]')
   await until(async () => (await rows(page)).length === 114, 'earlier page loaded')
@@ -109,7 +110,7 @@ try {
       // The phone layout shows one screen at a time; open the section again.
       await page.evaluate(() => { location.hash = 'activity' })
       await page.waitForSelector('[data-system-activity]', { timeout: 5000 }).catch(() => {})
-      await page.select('select[aria-label="Kind of activity"]', 'all').catch(() => {})
+      await chooseSelectOption(page, '[role="combobox"][aria-label="Kind of activity"]', 'all').catch(() => {})
       await until(async () => (await rows(page)).length > 0, 'rows after reopening')
     }
     if (!await page.$('[data-system-activity]')) {
@@ -155,7 +156,7 @@ try {
   console.log('Activity layouts ' + JSON.stringify(layouts))
   await page.setViewport({ width: 1440, height: 1000 })
   await new Promise(resolve => setTimeout(resolve, 300))
-  await page.select('select[aria-label="Kind of activity"]', 'changes')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Kind of activity"]', 'changes')
   await page.waitForSelector(`${execRow} [data-activity-open]`)
 
   // Opening a call opens its Session.

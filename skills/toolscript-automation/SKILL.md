@@ -17,28 +17,20 @@ Read and adapt:
 Write ordinary top-level code. The `args` input is available throughout the script:
 
 ```python
-base_dir = args["baseDir"].rstrip("/")
+path = args.get("path", "README.md")
 
-listing = call_tool({
-    "source": "node",
-    "name": "read",
-    "args": {"filePath": base_dir},
-})
-print(listing[:200])
+doc = call_tool("read", {"filePath": path})
+print(doc["content"][:200])
 
 label = ask_agent("Reply with a short label")
-return {"label": label, "listingPreview": listing[:200]}
+return {"label": label, "excerpt": doc["content"][:200]}
 ```
 
-Run the bundled file using the absolute skill directory returned by `ctl skill load` in place of `<skill-directory>`. This example assumes the session's current Node is Main, where the bundled resources live:
-
-```text
-run_script({node: "master", filePath: "<skill-directory>/examples/automation_basic.py", args: {baseDir: "<skill-directory>/examples"}})
-```
-
-Resource references above are relative to the skill directory for reading documentation. `run_script.filePath` is instead resolved on its selected source Node using the session working directory; loading a skill does not change that directory. Selecting `node: "master"` reads the source from master but does not change the current Node for nested tools. When running from another current Node, provide `baseDir` for a directory on that Node containing the example's `README.md`, or copy the resources there before running them.
+Run the bundled example with `ctl skill run toolscript-automation --script examples/automation_basic.py`.
 
 Or run a small inline script with the `code` argument. The default mode is `foreground`.
+
+A skill listed with a `<run>` element ships its own entry script: `ctl skill run <name> --args @args` starts it as an ordinary run, so the results, pauses and modes below apply to it unchanged.
 
 ## Recommended workflow
 
@@ -93,39 +85,32 @@ Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", .
 
 ### `call_tool(...)`
 
-Use one bridge for builtin, MCP, and node tools. Environment capabilities such as read/write/edit/exec/browse use `source: "node"`; omitting `nodeId` targets the session current node. The unified descriptor is the clearest form:
+Use one bridge for builtin, MCP, and node tools. Pass the tool as a string: a builtin or declared tool name, or a tool ID from `ctl tool search` for MCP and Node tools:
 
 ```python
-content = call_tool({
-    "source": "node",
-    "name": "read",
-    "args": {"filePath": args["path"]},
-})
+content = call_tool("read", {"filePath": args["path"]})
 
-repos = call_tool({
-    "source": "mcp",
-    "server": "github",
-    "name": "search_repos",
-    "args": {"query": "foxwarm"},
-})
+repos = call_tool("mcp:github/search_repos", {"query": "foxwarm"})
 
+screenshot = call_tool("node:<node-id>/android_screenshot", {"inline": True})
+
+return {"content": content, "repos": repos, "screenshot": screenshot}
+```
+
+Environment capabilities such as `read`, `write`, `edit` and `exec` called by name run on the session's current node. A Node tool ID always names its node, as `ctl tool search` returns it.
+
+When the parts are computed, pass a descriptor instead; omitting `nodeId` targets the session's current node:
+
+```python
 screenshot = call_tool({
     "source": "node",
     "nodeId": args["nodeId"],
     "name": "android_screenshot",
     "args": {"inline": True},
 })
-
-return {"content": content, "repos": repos, "screenshot": screenshot}
 ```
 
-For a simple builtin call, the string form is supported:
-
-```python
-content = call_tool("read", {"filePath": "README.md"})
-```
-
-`ctl(command, values=None)` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage. It is the same call as `call_tool("ctl", {"command": command, "values": values})`, with the same authorization, approvals and Node placement as the tool the command runs.
+`ctl(command, values=None)` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage. It is the same call as `call_tool("ctl", {"command": command, "values": values})`, with the same authorization, approvals and Node placement as the tool the command runs. Call a tool ID from `ctl tool search` with `call_tool(tool_id, args)`, not `ctl("tool call ...")`.
 
 ```python
 ctl("memory edit MEMORY.md --old-text @old --new-text @new", {"old": old, "new": new})
@@ -282,8 +267,6 @@ Follow-up tool calls after `status: "running"`:
 
 Background mode detaches only when a model turn calls `run_script` or `continue_script` itself. Timer and webhook scripts, scripts started from another script, and `start_toolscript_run` keep the foreground slice contract. Agent-input pauses require `continue_script(...)` in either mode.
 
-The managed controller APIs are documented in the `toolscript-managed-controller` skill.
-
 ### Safe-checkpoint timeout
 
 Each foreground `run_script` or `continue_script` slice has a 30-second timeout budget unless `timeoutSecs` is provided. Foxwarm checks this budget at host-call boundaries:
@@ -317,8 +300,6 @@ Run management uses the `ctl script` commands:
 - actionable waiting fields when paused.
 
 Agent-input waits return `waitingReason: "agent"`, `continuationId`, and `question`. Timeout waits return `waitingReason: "timeout"` and `continuationId`. Use `continue_script` for these waits.
-
-Managed-event waits return `waitingReason: "managed_event"` and `waitingFor` identifying the target session, supplied condition, and `autoResume`. Only background managed-event waits resume automatically; these are not `continue_script` waits. Use the managed-controller skill for this flow.
 
 The execution response does not include internal paths, owner/VM details, timestamps, or tool-activity diagnostics. Nested-call activity remains available in the UI, including after reloading history. Fields inside the script's own `result` are preserved.
 

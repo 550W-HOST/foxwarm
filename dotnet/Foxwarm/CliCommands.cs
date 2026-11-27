@@ -24,7 +24,8 @@ internal static class CliCommands
             var input =
                 JsonNode.Parse(await Console.In.ReadLineAsync() ?? "") as JsonObject
                 ?? throw new InvalidDataException("Expected a CLI input document.");
-            var configuration = new ModelConfiguration(HostPaths.Capture(applicationRoot));
+            var paths = HostPaths.Capture(applicationRoot);
+            var configuration = new ModelConfiguration(paths);
             if (command == "--cli-model")
                 await ModelAsync(configuration, input);
             else

@@ -6,8 +6,8 @@ import ts from 'typescript'
 
 // Frozen behavioral Source, with owned dependency seams. No application/config imports.
 const revision = 'cc1bfe7095541bc91df7840571413aea3c61cee7'
-const repository = process.env.FOXWARM_TS_ROOT
-if (!repository) throw new Error('FOXWARM_TS_ROOT is required')
+const repository = process.env.FOXWARM_REPO_ROOT
+if (!repository) throw new Error('FOXWARM_REPO_ROOT is required')
 const require = createRequire(path.join(repository, 'package.json'))
 let raw = ''; for await (const chunk of process.stdin) raw += chunk
 const input = JSON.parse(raw)

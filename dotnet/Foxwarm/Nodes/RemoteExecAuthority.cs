@@ -23,6 +23,7 @@ internal sealed class RemoteExecAuthority
         // Listing facts recorded by Main at dispatch and from the start result's placement
         // record. Remote claims are transient, so these do not survive a Main restart.
         internal string? Command;
+        internal string? Summary;
         internal long DispatchedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         internal string? Cwd;
         internal string? LogPath;

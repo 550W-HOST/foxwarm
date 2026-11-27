@@ -78,7 +78,113 @@ internal static class SessionBoundary
         )
             return false;
         state["resolved"] = true;
+        ResetChildReminders(state);
         return true;
+    }
+
+    /// <summary>Consecutive completion reminders allowed before the parent is told instead.</summary>
+    internal const int MaxConsecutiveChildReminders = 2;
+
+    private const string ChildReminderOpening =
+        "<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\"";
+
+    private const int ChildReplyExcerptLimit = 1200;
+
+    internal static bool IsChildReminder(QueueItem item) =>
+        item.Type == QueueItemType.Background
+        && item.Parts is { Count: > 0 } parts
+        && parts.Any(part =>
+            SessionWait
+                .Text(part["system"])
+                ?.StartsWith(ChildReminderOpening, StringComparison.Ordinal) == true
+        );
+
+    /// <summary>
+    /// Applies one consumed queue item to the boundary in queue order: user and peer input
+    /// replace it, a completion reminder adds to the run of consecutive reminders, and any
+    /// other input ends that run.
+    /// </summary>
+    internal static void ApplyConsumedInput(JsonObject envelope, QueueItem item)
+    {
+        if (ApplyChildHandoff(envelope, item))
+            return;
+        if (envelope["childHandoffState"] is not JsonObject state)
+            return;
+        if (IsChildReminder(item))
+        {
+            if (NeedsChildHandoff(envelope))
+                state["consecutiveReminders"] = ConsecutiveChildReminders(envelope) + 1;
+            return;
+        }
+        if (item.Message is not null || item.Parts is { Count: > 0 })
+            ResetChildReminders(state);
+    }
+
+    /// <summary>A model reply that calls any tool ends the run of unanswered reminders.</summary>
+    internal static void ApplyModelMessage(JsonObject envelope, JsonObject message)
+    {
+        if (
+            envelope["childHandoffState"] is JsonObject state
+            && SessionWait.Text(message["role"]) == "model"
+            && (message["parts"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Any(part => part["functionCall"] is not null)
+        )
+            ResetChildReminders(state);
+    }
+
+    internal static int ConsecutiveChildReminders(JsonObject envelope) =>
+        envelope["childHandoffState"]?["consecutiveReminders"] is JsonValue value
+        && value.TryGetValue<int>(out var count)
+            ? count
+            : 0;
+
+    internal static bool ChildReminderCapNotified(JsonObject envelope) =>
+        envelope["childHandoffState"]?["parentNotified"] is JsonValue value
+        && value.TryGetValue<bool>(out var notified)
+        && notified;
+
+    /// <summary>Records that the parent was told about the current reminder run.</summary>
+    internal static bool MarkChildReminderCapNotified(JsonObject envelope)
+    {
+        if (
+            !NeedsChildHandoff(envelope)
+            || ChildReminderCapNotified(envelope)
+            || envelope["childHandoffState"] is not JsonObject state
+        )
+            return false;
+        state["parentNotified"] = true;
+        return true;
+    }
+
+    private static void ResetChildReminders(JsonObject state)
+    {
+        state.Remove("consecutiveReminders");
+        state.Remove("parentNotified");
+    }
+
+    /// <summary>
+    /// The event the parent receives when its child is no longer reminded. The excerpt is
+    /// the child's own text, so framing look-alikes are neutralized.
+    /// </summary>
+    internal static string ChildReportMissing(string childSessionId, string lastReply)
+    {
+        var reply = lastReply.Trim();
+        if (reply.Length > ChildReplyExcerptLimit)
+        {
+            var end = ChildReplyExcerptLimit;
+            if (char.IsHighSurrogate(reply[end - 1]))
+                end--;
+            reply = reply[..end].TrimEnd() + " […]";
+        }
+        var excerpt =
+            reply.Length == 0
+                ? "Its last reply had no text."
+                : "Its last reply:\n" + NeutralizeFraming(reply);
+        return $"<foxwarm-system kind=\"event\" type=\"child-report-missing\" childSessionId=\"{Escape(childSessionId)}\">\n"
+            + $"Child Session {Escape(childSessionId)} ended its turn twice after completion reminders without reporting to you, completing its Task or replying [NO_ACTION]. It won't be reminded again until it receives new input. Nothing was reported or completed on its behalf.\n"
+            + excerpt
+            + "\n</foxwarm-system>";
     }
 
     internal static bool NeedsChildHandoff(JsonObject envelope) =>
@@ -91,25 +197,17 @@ internal static class SessionBoundary
         && SessionGoal.Trim(text) is { Length: > 0 } trimmed
         && (
             trimmed.Equals("NO_ACTION", StringComparison.Ordinal)
+            || trimmed.StartsWith("[NO_ACTION]", StringComparison.Ordinal)
             || trimmed.EndsWith("[NO_ACTION]", StringComparison.Ordinal)
         );
 
-    internal static string ChildReminder(
-        string parentSessionId,
-        bool handoffConfirmation = false,
-        bool externalRuntime = false
-    )
+    internal static string ChildReminder(string parentSessionId, bool externalRuntime = false)
     {
-        var args = handoffConfirmation
-            ? HandoffConfirmation.GuidanceArgument(
-                parentSessionId,
-                externalRuntime ? "continue" : "end_turn"
-            )
-            : $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
-        var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
+        var args =
+            $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
         if (externalRuntime)
-            return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
-        return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} This reports so the Session becomes idle without a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
+            return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now. Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
+        return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now. This reports so the Session becomes idle without a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
     }
 
     private static string Escape(string value) =>
@@ -264,7 +362,13 @@ internal static class SessionBoundary
     ) =>
         $"<foxwarm-system kind=\"session-boundary\" event=\"{boundary}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\"{Placement(placement.Node, placement.Cwd)} time=\"{LocalTime()}\" />";
 
-    /// <summary>Initial execution placement attributes for a Session's opening marker.</summary>
+    internal static string Placement(SessionState state) =>
+        Placement(
+            SessionManager.ResolveExecutionNode(state.AuthorityEnvelope),
+            SessionWait.Text(state.AuthorityEnvelope["cwd"])
+        );
+
+    /// <summary>Execution placement attributes shared by opening and compaction markers.</summary>
     internal static string Placement(string node, string? cwd) =>
         $" currentNode=\"{PlacementValue(node)}\""
         + (string.IsNullOrEmpty(cwd) ? "" : $" cwd=\"{PlacementValue(cwd)}\"");
@@ -292,23 +396,17 @@ internal static class SessionBoundary
 
     internal static string Completion(
         string parent,
-        bool handoffConfirmation = false,
         string? taskId = null,
         bool externalRuntime = false
     )
     {
         if (taskId is not null)
             return $"This Session is linked to task {Escape(taskId)}. When the work is complete, complete the task with the task tool; completion automatically notifies the task creator. Do not send a separate routine completion message.";
-        var args = handoffConfirmation
-            ? HandoffConfirmation.GuidanceArgument(
-                parent,
-                externalRuntime ? "continue" : "end_turn"
-            )
-            : $"sessionId: `{parent}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
-        var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
+        var args =
+            $"sessionId: `{parent}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
         if (externalRuntime)
-            return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
-        return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
+            return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}). Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
+        return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}). This sends the report and ends the turn idle without creating a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
     }
 
     // The forked child's own result for the creating call; the parent receives a separate result.
@@ -332,6 +430,10 @@ internal static class SessionBoundary
                     : " This call gave you no instruction; act on the next message you receive."
             );
     }
+
+    // The result of the model call whose script created the fork: the script ran in the parent.
+    internal static string ForkScriptCall(string parent, string child) =>
+        $"This call ran a script in the parent session `{parent}`, and the script created this session, `{child}`, as its fork. The script's result went to the parent. Act on the next message you receive.";
 
     internal static string ForkSkippedCall(string parent) =>
         $"Not run in this session: this call runs only in the parent session `{parent}`.";

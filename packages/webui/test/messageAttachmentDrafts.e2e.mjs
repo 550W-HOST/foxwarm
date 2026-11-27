@@ -46,10 +46,12 @@ test('inline attachment refs preserve File identity by Session and clear only af
   const page=await browser.newPage();await page.goto(fixtureUrl,{waitUntil:'load'})
   const editor='[role="textbox"][aria-label="Message"]'
   await page.type(editor,'before after')
-  await page.evaluate(()=>{
-    const root=document.querySelector('[role="textbox"][aria-label="Message"]');const text=[...root.childNodes].find(node=>node.nodeType===Node.TEXT_NODE)
+  // The editor reads a native selection change from the document's selectionchange event.
+  await page.evaluate(()=>new Promise(resolve=>{
+    const root=document.querySelector('[role="textbox"][aria-label="Message"]');const text=root.querySelector('.cm-line').firstChild
+    document.addEventListener('selectionchange',resolve,{once:true})
     const range=document.createRange();range.setStart(text,7);range.collapse(true);const selection=getSelection();selection.removeAllRanges();selection.addRange(range)
-  })
+  }))
   await upload(page,'duplicate.txt','first')
   const firstRef=await page.$eval('.foxwarm-composer-attachment-chip',node=>node.dataset.composerAttachmentRef)
   assert.equal(firstRef,'attachment1')
@@ -92,7 +94,7 @@ test('numbered attachment previews form a grid above the editor on desktop and m
     await page.waitForSelector('[data-composer-action="send"]:not([disabled])')
     const layout=await page.evaluate(()=>{
       const grid=document.querySelector('.composer-attachment-grid'),editor=document.querySelector('[role="textbox"]'),tiles=[...grid.querySelectorAll('[data-attachment-preview-ref]')]
-      return {numbers:[...grid.querySelectorAll('[data-attachment-number]')].map(el=>el.textContent),inline:[...editor.querySelectorAll('.foxwarm-composer-attachment-chip')].map(el=>el.textContent),images:editor.querySelectorAll('img').length,above:grid.getBoundingClientRect().bottom<=editor.getBoundingClientRect().top,grid:getComputedStyle(grid).display,bounded:tiles.every(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth}),refs:tiles.map(el=>el.dataset.attachmentPreviewRef)}
+      return {numbers:[...grid.querySelectorAll('[data-attachment-number]')].map(el=>el.textContent),inline:[...editor.querySelectorAll('.foxwarm-composer-attachment-chip')].map(el=>el.textContent),images:editor.querySelectorAll('img:not(.cm-widgetBuffer)').length,above:grid.getBoundingClientRect().bottom<=editor.getBoundingClientRect().top,grid:getComputedStyle(grid).display,bounded:tiles.every(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth}),refs:tiles.map(el=>el.dataset.attachmentPreviewRef)}
     })
     assert.deepEqual(layout.numbers,['1','2','3']);assert.deepEqual(layout.inline,['FILE 1','FILE 2','FILE 3']);assert.equal(layout.images,0);assert.equal(layout.grid,'grid');assert.ok(layout.above&&layout.bounded,JSON.stringify(layout))
     if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_DIR+'/attachment-grid-'+width+'.png'})}
@@ -117,13 +119,42 @@ test('numbered attachment previews form a grid above the editor on desktop and m
   }
 })
 
+test('a draft image preview switches only among the draft\'s own images', async()=>{
+  const page=await browser.newPage();await page.setViewport({width:900,height:844});await page.goto(fixtureUrl,{waitUntil:'load'})
+  try{
+    await page.waitForSelector('[role="textbox"]')
+    await page.$eval('#file-upload',async input=>{
+      const image=async(width,name,type)=>{const canvas=document.createElement('canvas');canvas.width=width;canvas.height=20;canvas.getContext('2d').fillRect(0,0,width,20);return new File([await new Promise(resolve=>canvas.toBlob(resolve,type))],name,{type})}
+      const files=new DataTransfer()
+      files.items.add(await image(30,'first.png','image/png'))
+      files.items.add(new File(['notes'],'notes.txt',{type:'text/plain'}))
+      files.items.add(await image(40,'second.webp','image/webp'))
+      Object.defineProperty(input,'files',{configurable:true,value:files.files});input.dispatchEvent(new Event('change',{bubbles:true}))
+    })
+    await page.waitForFunction(()=>document.querySelectorAll('[data-attachment-preview-ref]').length===3)
+    const current=()=>page.waitForFunction(()=>document.querySelector('[data-image-preview] .image-preview-stage img')?.naturalWidth>0).then(()=>page.$eval('[data-image-preview]',dialog=>[dialog.querySelector('h2').textContent,dialog.querySelector('[data-image-preview-position]')?.textContent,dialog.querySelector('.image-preview-stage img').naturalWidth,dialog.querySelector('.image-preview-stage img').src.startsWith('blob:')]))
+    const opener='[aria-label="Preview attachment 3: second.webp"]'
+    await page.click(opener);await page.waitForSelector('[data-image-preview][open]')
+    assert.deepEqual(await current(),['second.webp','2 / 2',40,true])
+    await page.keyboard.press('ArrowLeft')
+    assert.deepEqual(await current(),['first.png','1 / 2',30,true],'the text attachment is not part of the sequence')
+    await page.keyboard.press('ArrowLeft')
+    assert.deepEqual(await current(),['first.png','1 / 2',30,true])
+    await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('[data-image-preview]'))
+    assert.equal(await page.evaluate(selector=>document.activeElement===document.querySelector(selector),opener),true)
+    assert.equal(await page.$$eval('[data-attachment-preview-ref]',els=>els.length),3,'previewing leaves the draft unchanged')
+    // Later tests start from an empty draft.
+    for(const name of['first.png','notes.txt','second.webp'])await page.click(`[aria-label="Remove attachment ${name}"]`)
+    await page.waitForFunction(()=>!document.querySelector('[data-attachment-preview-ref]'))
+  }finally{await page.close()}
+})
+
 test('active composition displays Send without committing interim text or accidentally stopping', async()=>{
   const page=await browser.newPage();await page.goto(fixtureUrl,{waitUntil:'load'});await page.waitForSelector('[role="textbox"]')
   await page.evaluate(()=>window.fixtureSetRunning(true));await page.waitForSelector('[data-composer-action="stop"]')
   await page.focus('[role="textbox"]');await page.$eval('[role="textbox"]',el=>{
     el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
-    el.append(document.createTextNode('测试'))
-    el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'测试',isComposing:true}))
+    document.execCommand('insertText',false,'测试')
   })
   await page.waitForSelector('[data-composer-action="send"]:not([disabled])')
   await page.click('[aria-label="Send message"]');await page.waitForFunction(()=>window.sentPayloads.length===1)

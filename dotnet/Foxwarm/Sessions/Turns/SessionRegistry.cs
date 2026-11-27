@@ -18,6 +18,7 @@ public sealed class LocalSessionTurnHostFactory
     private readonly Func<SessionEntry, string?>? parentSessionResolver;
     private readonly Action? assertCanContinue;
     private readonly Func<bool>? closing;
+    private readonly Func<SessionEntry, string, string, Task>? childReportMissing;
     private readonly Func<
         SessionEntry,
         ChatResult,
@@ -43,7 +44,8 @@ public sealed class LocalSessionTurnHostFactory
             Task
         >? beforeContinuation = null,
         Action? assertCanContinue = null,
-        Func<bool>? closing = null
+        Func<bool>? closing = null,
+        Func<SessionEntry, string, string, Task>? childReportMissing = null
     )
     {
         this.store = store;
@@ -57,6 +59,7 @@ public sealed class LocalSessionTurnHostFactory
         this.beforeContinuation = beforeContinuation;
         this.assertCanContinue = assertCanContinue;
         this.closing = closing;
+        this.childReportMissing = childReportMissing;
     }
 
     public LocalSessionTurnHost For(SessionEntry entry) =>
@@ -74,7 +77,10 @@ public sealed class LocalSessionTurnHostFactory
                 ? null
                 : (result, consume, token) => beforeContinuation(entry, result, consume, token),
             assertCanContinue,
-            closing
+            closing,
+            childReportMissing is null
+                ? null
+                : (parent, reply) => childReportMissing(entry, parent, reply)
         );
 }
 
@@ -128,7 +134,9 @@ public sealed class SessionRegistry
                 }
             },
             () => Runner.AssertCanContinue(),
-            () => Runner.Closing
+            () => Runner.Closing,
+            (entry, parent, reply) =>
+                OnChildReportMissing?.Invoke(entry, parent, reply) ?? Task.CompletedTask
         );
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);
@@ -146,6 +154,9 @@ public sealed class SessionRegistry
     internal Func<Exception, bool, Task>? OnTurnFailure { get; set; }
     public Func<SessionEntry, Task>? OnTurnStarting { get; set; }
     public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
+
+    /// <summary>Delivers the missing-report notice to the parent: entry, parent ID, last reply.</summary>
+    internal Func<SessionEntry, string, string, Task>? OnChildReportMissing { get; set; }
     internal Func<SessionEntry, Exception?, bool, bool, Task>? OnProcessorFinalizing { get; set; }
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }
     public Func<SessionEntry, Task>? OnRetrySafePoint { get; set; }

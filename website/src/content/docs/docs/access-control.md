@@ -64,6 +64,22 @@ A matching call waits until someone approves or rejects it in the WebUI. The req
 - External MCP clients cannot wait, so for them a rule that asks counts as a deny.
 - Other Channels receive a notice that a call is waiting; decisions are made in the WebUI.
 
+### Confirm every command
+
+A new installation runs commands without asking. To approve each command first, add this rule to `state/tool-authorization.yaml`, or ask an agent to add it for you:
+
+```yaml
+version: 1
+defaultAction: allow
+rules:
+  - id: confirm-commands
+    tool: { source: node, name: exec }
+    action: ask
+    reason: Confirm commands before they run
+```
+
+File edits and other tools still run directly. Add rules for them the same way.
+
 ## Rules for each Agent
 
 Every Agent can also carry its own rule list. These rules use the same format, minus the caller selectors (`agent`, `session`, `externalId`): they always apply to calls from that Agent.

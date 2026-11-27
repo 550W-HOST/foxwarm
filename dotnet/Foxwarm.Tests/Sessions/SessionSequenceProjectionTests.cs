@@ -18,13 +18,13 @@ public sealed class SessionSequenceProjectionTests
             ["arguments"] = args.ToJsonString(),
         };
 
-    private static JsonObject Final() =>
+    private static JsonObject Final(string text = "done") =>
         new()
         {
             ["type"] = "message",
             ["role"] = "assistant",
             ["content"] = new JsonArray(
-                new JsonObject { ["type"] = "output_text", ["text"] = "done" }
+                new JsonObject { ["type"] = "output_text", ["text"] = text }
             ),
         };
 
@@ -64,7 +64,12 @@ public sealed class SessionSequenceProjectionTests
             async (_, stream, request) =>
                 await Respond(
                     stream,
-                    !request.Body.Contains("deliver everything", StringComparison.Ordinal)
+                    // The created child resolves its handoff, so it gets no completion
+                    // reminders and its parent, the owner, no child-report-missing notice.
+                    request.Body.Contains("child start", StringComparison.Ordinal)
+                    && !request.Body.Contains("deliver everything", StringComparison.Ordinal)
+                        ? new JsonArray(Final("[NO_ACTION]"))
+                    : !request.Body.Contains("deliver everything", StringComparison.Ordinal)
                         ? new JsonArray(Final())
                         : Interlocked.Increment(ref ownerRequests) switch
                         {
@@ -126,8 +131,9 @@ public sealed class SessionSequenceProjectionTests
         await unrelated
             .Registry.Runner.ProcessQueueAsync(unrelated.Id)
             .WaitAsync(TimeSpan.FromSeconds(20));
+        // The idle child leaves the volatile local projections; the catalog keeps it.
         var kid = f
-            .Manager.LocalProjections()
+            .Manager.Catalog.List()
             .Select(row => Text(row["id"])!)
             .Single(id => id.EndsWith("kid", StringComparison.Ordinal));
         await (await f.Manager.RequiredAsync(kid))

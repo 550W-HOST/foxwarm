@@ -48,7 +48,7 @@ public sealed class WebUiAdjacentProjectionTests
             );
         var before = await target.AuthorityStore.LoadAsync(target.Id);
         var canonicalQueue = before!
-            .Queue.Select(PersistentSessionAuthorityStore.ToQueueJson)
+            .Queue.Select(SessionQueueJson.ToJson)
             .ToArray();
         var history = (
             await f.Admin.GetFromJsonAsync<JsonObject>("api/sessions/preview-target/history")
@@ -99,7 +99,7 @@ public sealed class WebUiAdjacentProjectionTests
                     new JsonArray(
                         actual
                             .Queue.Select(item =>
-                                (JsonNode?)PersistentSessionAuthorityStore.ToQueueJson(item)
+                                (JsonNode?)SessionQueueJson.ToJson(item)
                             )
                             .ToArray()
                     )

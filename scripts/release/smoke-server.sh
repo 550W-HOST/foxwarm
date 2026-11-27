@@ -57,6 +57,8 @@ printf 'bot:\n  httpPort: %s\n  httpHost: 127.0.0.1\n' "$port" > "$work/data/sta
 (cd "$work" && /bin/bash "$installer" --package "$package" --dir foxwarm --data-dir data)
 wait_http
 [ -s "$work/data/state/token" ] || { echo "No sign-in token was created" >&2; exit 1; }
+link="$("$control" link)"
+[ "$link" = "http://127.0.0.1:$port/#token=$(cat "$work/data/state/token")" ] || { echo "link printed '$link'" >&2; exit 1; }
 "$control" status
 first="$("$control" status | sed -n 's/.*Running (PID \([0-9]*\)).*/\1/p')"
 [ -n "$first" ]

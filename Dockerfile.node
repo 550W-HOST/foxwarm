@@ -42,7 +42,6 @@ RUN npm ci \
     && npm cache clean --force
 
 # Copy source and build the independent Shared and CLI Node outputs.
-COPY tsconfig.json ./
 COPY templates ./templates
 COPY scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
 COPY packages/shared ./packages/shared

@@ -8,14 +8,14 @@ Cross-module mechanisms from public creation through lazy hydration, queued exec
 
 - `createEmptySession(sessionId?)` is the simple public façade. It returns an existing session when present or lazily creates/saves an empty one and reports `{ session, created }`.
 - Fresh concrete lifetimes materialize a concrete-model memory snapshot; fresh virtual lifetimes defer until actual leaf selection. Forks retain the copied snapshot until actual-use correction. Canonical snapshot behavior: [conditional memory snapshots](./conditional-memory-snapshots.md).
-- `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/effort/parent/prompt-file options. Its optional same-Agent main Node default and caller-specific overrides are described in [named-session Node defaults](../units/src-session-agent-ops.md#named-session-node-defaults); child/fork routing remains separate.
+- `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/effort/parent/prompt-file options. Its optional same-Agent main Node default and caller-specific overrides are described in [named-session Node defaults](../units/session-manager-operations.md); child/fork routing remains separate.
 - `createAgentWithMainSession(options)` owns agent creation plus optional main session.
 - Low-level `createSession(sessionId, sessionData)` accepts a fully constructed session object, ensures its prompt-cache key, installs it in the map, and saves it. It does **not** allocate an ID from an options object.
 - `forkSession` and `createChildSession(parentSessionId, suffix, fork, options)` own fork/non-fork child creation. A child may name another existing Agent only for a fresh non-fork lifetime.
 - New Session leaf names accept only ASCII letters, digits, underscores, and hyphens. Named creation, new-lifetime generic creation, fork/child allocation, and identity-move targets enforce this before target writes. Fork suffixes use the same alphabet; a derived name must also comply, so a legacy nonconforming parent may need a legal rename before creating an append-style child or fork. Existing persisted Sessions, aliases, Archive reads, and startup hydration remain readable without applying this new alphabet to old identities; display names are unaffected.
 - A new session lifetime may use an internal session ID only when the ID is absent from both live persistence and the retained archive. One non-reentrant process-wide identity lock makes check-and-commit atomic across explicit creation, automatic allocation, agent-main creation, forks/children, and internal-ID moves; nested implementation calls use private unlocked helpers rather than ambient lock ownership. Automatic allocators skip reserved IDs; explicit creation returns `SESSION_ID_ARCHIVED` for an archive-only collision.
 
-Canonical façade and child-ID ownership: [session core façade](../modules/session-core.md#d-session-core-facade) and [child identity](../modules/session-core.md#d-session-core-child-identity).
+Canonical façade and child-ID ownership: [session core façade](../modules/dotnet-sessions.md) and [child identity](../units/session-manager-lifecycle-identity.md#d-session-core-child-identity).
 
 ## Persistence and hydration
 
@@ -27,7 +27,7 @@ Canonical façade and child-ID ownership: [session core façade](../modules/sess
 6. The shared metadata file remains a main-owned presentation/list index; the per-session JSON owns full semantic state, including messages, queue, wait/managed metadata, prompt snapshot/cache key, active history provenance, and any session-worker mailbox cursor.
 7. Creation-critical history and metadata writes propagate errors. A known failed creation removes its map/history/archive artifacts so the same uncommitted ID can be retried; ordinary noncritical saves retain best-effort logging behavior.
 
-Canonical data authority: [D-session-core-authoritative-history](../modules/session-core.md#d-session-core-authoritative-history).
+Canonical data authority: [D-session-core-authoritative-history](../units/session-authority-store.md#d-session-core-authoritative-history).
 
 ## Active turn and restart
 
@@ -43,7 +43,7 @@ Canonical turn flow: [message processing pipeline](./message-processing-pipeline
 
 A genuinely completed final, terminal handoff/wait or user Stop retains ordinary idle finalization. A shutdown-owned cancellation or unfinished safe-point yield instead keeps the exact owner's existing busy checkpoint, without a synthetic terminal model error. Startup uses the existing busy/queue recovery mechanism; there is no persisted shutdown marker, history-text classifier or second recovery loop. Foreground cancellation receipts distinguish process shutdown from user Stop without changing persistent exec lifetime.
 
-Dependency teardown waits for local owner drain. If accepted work does not settle within the bounded grace and cancellation phases, Main kills only its own process rather than claiming a successful drain or closing dependencies beneath an advancing runner. Native work can prevent `process.exit()` from completing. Service children retain existing IPC-loss cleanup; independent persistent user execs are not killed. Forced exit has crash-like service semantics, not a cross-Main child-exit acknowledgement: an immediate restart can overlap an old Vector child's final derived-index commit. See [Vector ownership](../units/src-vector.md#process-placement). Session-worker placement keeps its existing generation fences and supervisor drain/handback path and does not receive the Main-local runner shutdown hook.
+Dependency teardown waits for local owner drain. If accepted work does not settle within the bounded grace and cancellation phases, Main kills only its own process rather than claiming a successful drain or closing dependencies beneath an advancing runner. Native work can prevent `process.exit()` from completing. Service children retain existing IPC-loss cleanup; independent persistent user execs are not killed. Forced exit has crash-like service semantics, not a cross-Main child-exit acknowledgement: an immediate restart can overlap an old Vector child's final derived-index commit. See [Vector ownership](../units/vector-owner.md). Session-worker placement keeps its existing generation fences and supervisor drain/handback path and does not receive the Main-local runner shutdown hook.
 
 The .NET console and optional Desktop share this composition through `MainHost`: ApplicationStopping/admin shutdown close admission, then disposal drains Sessions before ASP.NET/terminal and effect dependencies. The console and Desktop observer wait for the stopping notification without ASP.NET's implicit stop/dispose helper. .NET uses `Environment.FailFast` for an unsettled foreground drain, not a POSIX-only signal or a process-tree kill. Its independent journal/Archive writer leases remain pinned until successful owner settlement and final saves. Forced exit retains the existing crash-like Archive/JSON boundary; it is not a cross-database atomicity guarantee or a new remote-process recovery contract.
 
@@ -96,18 +96,6 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 
 ## Modules and units
 
-- [session core](../modules/session-core.md)
-- [session context](../modules/session-context.md)
-- [message routing](../modules/message-routing.md)
-- [LLM](../modules/llm.md)
-- [src-session-prompt](../units/src-session-prompt.md)
-- [src-session-manager](../units/src-session-manager.md)
-- [src-session-deletion](../units/src-session-deletion.md)
-- [src-session-agent-ops](../units/src-session-agent-ops.md)
-- [src-session-metadata-store](../units/src-session-metadata-store.md)
-- [src-session-history](../units/src-session-history.md)
-- [src-session-layered-context](../units/src-session-layered-context.md)
-- [src-session-archive-store](../units/src-session-archive-store.md)
 - [image blob lifecycle](./image-blob-lifecycle.md)
 
 ## Compatibility
@@ -145,7 +133,9 @@ Framework creation paths do not fabricate a model/assistant acknowledgment of un
 
 **User decision (2026-11-02).** `create_child_session(fork: true)` behaves like a process fork: the creating call returns once in the parent and once in the child, and each result states which Session the model is. The parent result keeps the `Child session created:` prefix and says it is the parent. The child's copied tail closes the exact creating call (matched by call ID) with its own child result, which also says that the call's `currentSessionTurnAction` applies only to the parent; sibling calls in that batch say they run only in the parent.
 
-The child sees the creating call, including `message`, so that message is not delivered again. With a message and no Task, the child records the same report-required handoff boundary that parent delivery would have set and continues its copied turn immediately. Without a message or Task it stays idle until it receives a message; it does not start on inferred intent. A Task-linked fork still receives its normal assignment delivery, without the visible message appended. When the child cannot see the call as such, as in ToolScript or unattended execution, the message is delivered as before. User-created forks have no creating call and are unaffected apart from the sibling-call wording.
+The child sees the creating call, including `message`, so that message is not delivered again. With a message and no Task, the child records the same report-required handoff boundary that parent delivery would have set and continues its copied turn immediately. Without a message or Task it stays idle until it receives a message; it does not start on inferred intent. A Task-linked fork still receives its normal assignment delivery, without the visible message appended. When the child cannot see the call as such, as in ToolScript or unattended execution, the message is delivered as before.
+
+[2026-11-23, user (Q6)] A fork created by a script that an attended model call started (and that has not detached) closes that root call with `SessionBoundary.ForkScriptCall`: the call ran a script in the parent, the script created this Session as its fork, the script's result went to the parent, and the child acts on the next message. The root call ID travels from `SessionToolExecutor` (`ScriptScope.RootCallId`, the outermost model call, also for nested runs) through `ExecuteAgentToolAsync` to `ForkLockedAsync`; it is used only when the creating call itself is not in the tail. The message is still delivered once. Detached, timer and webhook runs keep the sibling-call wording. `ForkDualReturnTests` covers the root call of a top-level and a nested run. User-created forks have no creating call and are unaffected apart from the sibling-call wording.
 
 ### D-lifecycle-lazy-hydration
 

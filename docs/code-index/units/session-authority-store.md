@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Sessions/Turns/PersistentSessionAuthorityStore.cs`
 
 ## Purpose
 
-Bridges an ordered `SessionSaveLane` to the two durable authorities: active Session JSON and immutable Archive SQLite. It also hydrates cold owners and publishes Main-owned catalog projections.
+File implementation of `ISessionAuthority`, opened through the [Session authority backend](./storage-context.md). Bridges an ordered `SessionSaveLane` to the two durable authorities: active Session JSON and immutable Archive SQLite. It also hydrates cold owners and publishes Main-owned catalog projections.
 
 ## Stable methods and callers
 
@@ -12,9 +12,10 @@ Bridges an ordered `SessionSaveLane` to the two durable authorities: active Sess
 - `CommitCanonicalAppendAsync` validates, admits exact Archive message rows, prepares/validates/streams authority UTF-8 to a temporary file while persistence is pending, awaits the Archive commit, then publishes active JSON, rolls back only rows inserted by a failed pre-rename attempt, and publishes the projection after JSON publication.
 - `CommitCompactionAsync` performs the corresponding Archive block/message write followed by active JSON write and inserted-row rollback.
 - `LoadAsync` reads only the bound Session JSON through the shared read-only `SessionAuthorityReader`, then externalizes image parts. Missing authority with existing Archive rows is a typed local unavailable error; Archive access errors remain global. When both JSON and Archive are absent it returns `null`; the caller still decides whether that lifetime is creatable. `SessionManager.Admission` rejects a missing authority for an already registered catalog member instead of silently creating an empty Session.
+- Snapshot-to-state preparation, the state-to-snapshot mapping and appended-message Archive records come from the shared `SessionAuthorityCodec`, so every representation stores the same value.
 - `RebindIdentity`, `PersistIdentitySnapshotAsync`, and `Retire` support ordered identity moves and owner shutdown; `CheckWrite` prevents writes after retirement or failed identity authority.
 
-Callers: `SessionSaveLane`, `SessionRegistry.LoadOrAddAsync`, `SessionManager`, and the compaction/fork lifecycle. Consumers receive `SessionSnapshot` or catalog projection callbacks rather than the store mutating Session state itself.
+Callers: `SessionSaveLane`, `SessionRegistry.LoadOrAddAsync`, `SessionManager`, and the compaction/fork lifecycle, all through `ISessionAuthority`. Tests may construct the store directly; `AuthorityPath`, `ArchivePath` and `LastDirectorySyncResult` are file-only inspection members. Consumers receive `SessionSnapshot` or catalog projection callbacks rather than the store mutating Session state itself.
 
 ## Contract and failure behavior
 
@@ -27,6 +28,12 @@ Accepted Archive work is always resolved, including after local JSON preparation
 The store is bound to one `(sessionId, agent)` lifetime. Archive writes require the exact current identity; historical aliases are read-only. Exact replay is idempotent, conflicting same-sequence payloads fail closed. Strict save, canonical append and compaction attempt the Main catalog projection after known JSON publication, including a post-rename durability failure, then report the committed error. This preserves catalog membership for subsequent ordinary WebUI ingress when projection succeeds; it does not guarantee projection success. The file seam covers errors opening/syncing the parent directory after rename (unsupported sync remains a nonfatal result), plus injected post-rename and post-sync faults. Pre-rename failure never publishes the projection. A projection failure after JSON publication becomes `AuthorityCommittedException`, leaving hot state/newer JSON intact and an older catalog projection for a later normal save. If both durability and projection fail, the committed exception retains both causes.
 
 Atomic write-stage and canonical-append callbacks remain direct construction seams. The manager can forward them internally for owning-boundary tests; no filesystem fault protocol or operation-classification scopes select writes. A canonical callback runs after Archive enqueue and authority preparation, before awaiting its receipt and before active JSON publication; reaching it alone does not prove Archive commit.
+
+## Design decisions
+
+### D-session-core-authoritative-history
+
+Per-session JSON is authoritative for full semantic Session state, including busy concurrency/recovery fields. Local busy claim/release persistence commits that authority before updating its catalog projection; a catalog postcommit failure must not roll the live owner behind already committed JSON. The Main-owned catalog may contain UI-only fields intentionally excluded from semantic state. Catalog storage and scaling are canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary); cross-process save-before-mailbox-ack ordering is canonical in [D-process-topology-session-state-authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
 
 ## Tests
 

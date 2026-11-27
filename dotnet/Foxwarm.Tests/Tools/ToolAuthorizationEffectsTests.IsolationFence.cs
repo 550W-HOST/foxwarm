@@ -132,7 +132,8 @@ public sealed partial class ToolAuthorizationEffectsTests
     {
         foreach (var (name, boundExecAllowed, outcome) in new[]
         {
-            ("isolation-r1-apply-unedited", true, "upgraded"),
+            // Generator 3 generates every unedited earlier layer again.
+            ("isolation-r1-apply-unedited", true, "regenerated"),
             ("isolation-r1-toolrules-changed", false, "regenerated"),
         })
         {
@@ -151,12 +152,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             {
                 await manager.LoadAsync();
                 Assert.Equal(outcome, SingleEntry(manager)["outcome"]!.GetValue<string>());
-                // An accepted R1 layer keeps the retired search_tools name as stored; a
-                // regenerated layer no longer lists it.
-                Assert.Equal(
-                    outcome == "upgraded",
-                    Row(manager)["rules"]!.ToJsonString().Contains("\"search_tools\"")
-                );
+                // A regenerated layer no longer lists the retired search_tools name.
+                Assert.DoesNotContain("\"search_tools\"", Row(manager)["rules"]!.ToJsonString());
                 var (masterExec, boundExec, otherExec) = await NodeExecAuthority(manager, temp.Path);
                 Assert.False(masterExec);
                 Assert.Equal(boundExecAllowed, boundExec);

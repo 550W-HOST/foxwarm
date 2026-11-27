@@ -6,12 +6,12 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 
 ## Steps
 
-The default-injected `task` builtin is Main Management-owned for all placements; its closed action contract, atomic claim and context-derived identity are canonical in [src-tasks](../units/src-tasks.md). It never changes Session state.
+The default-injected `task` builtin is Main Management-owned for all placements; its closed action contract, atomic claim and context-derived identity are canonical in [src-tasks](../units/tasks-timers.md). It never changes Session state.
 
-Dedicated compaction uses its own bounded gate rather than the ordinary tool loop. The maintained host routes plan-file effects through ordinary selected-Node authorization; retained TypeScript uses its narrower Main-only repair path. See [D-context-compact-runtime-gate](./context-compaction.md#d-context-compact-runtime-gate).
+Dedicated compaction uses its own bounded gate rather than the ordinary tool loop. The maintained host routes plan-file effects through ordinary selected-Node authorization. See [D-context-compact-runtime-gate](./context-compaction.md#d-context-compact-runtime-gate).
 
 1. The LLM returns one or more tool calls in a `ChatResult`.
-2. Before target resolution, per-call `onToolStart` publication, or tool effect, ordinary model-turn batches consume the reserved top-level cancellation controls. Batch-level returned-call progress/runtime state may already have been published by the turn runner. One `__cancelAllToolsThisTurn:true` returns a canceled response for every call without resolving any of them; `__cancelTool:true` skips only that call. Invalid reserved values fail only their own call. The controls are removed from execution arguments while the canonical assistant call remains unchanged. The controls are not declared in any tool schema; the framework prompt template describes them once (see [D-dispatch-model-tool-cancellation-and-handoff-confirmation](./tool-dispatch-authorization.md#d-dispatch-model-tool-cancellation-and-handoff-confirmation)).
+2. Before target resolution, per-call `onToolStart` publication, or tool effect, ordinary model-turn batches consume the reserved top-level cancellation controls. Batch-level returned-call progress/runtime state may already have been published by the turn runner. One `__cancelAllToolsThisTurn:true` returns a canceled response for every call without resolving any of them; `__cancelTool:true` skips only that call. Invalid reserved values fail only their own call. The controls are removed from execution arguments while the canonical assistant call remains unchanged. The controls are not declared in any tool schema; the framework prompt template describes them once (see [D-dispatch-model-tool-cancellation](./tool-dispatch-authorization.md#d-dispatch-model-tool-cancellation)).
 3. The turn host calls `toolExecutor.executeTools` directly; its typed result separates the canonical tool Message from transient control/post-actions. The executor schedules the remaining batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
    A successful builtin `node` selection takes effect before later exec/file calls in the same model response. Failed selection skips the remaining unstarted calls without resolving them; see [Node selection batch prerequisite](./tool-dispatch-authorization.md#d-dispatch-node-selection-batch-prerequisite).
    The segment carries one process-local ExecRuntime plus the exact current Session persistence hook. Each call keeps all exec lifecycle methods on that runtime; deferred cwd changes replay against the same passed owner in model order.
@@ -28,29 +28,14 @@ Dedicated compaction uses its own bounded gate rather than the ordinary tool loo
 
 ## Modules involved
 
-- [tools and permissions](../modules/tools-and-permissions.md)
-- [llm](../modules/llm.md)
-- [nodes](../modules/nodes.md)
 - [cli-node](../modules/cli-node.md)
 - [shared utilities](../modules/shared-utilities.md)
-- [scripting](../modules/scripting.md)
-- [session core](../modules/session-core.md)
 
 ## Key units
 
-- [src-tool-executor](../units/src-tool-executor.md)
 
-- [src-tools](../units/src-tools.md)
-- Historical: [src-isolated-check](../units/src-isolated-check.md)
-- [src-permissions](../units/src-permissions.md)
-- [src-tool-authorization](../units/src-tool-authorization.md)
-- [src-mcp-client](../units/src-mcp-client.md)
-- [src-mcp-external-service](../units/src-mcp-external-service.md)
-- [src-mcp-inbound-catalog](../units/src-mcp-inbound-catalog.md)
-- [src-nodes-manager](../units/src-nodes-manager.md)
-- [src-node-execution](../units/src-node-execution.md)
+- Historical: [src-isolated-check](../units/isolation-migration.md)
 - [shared-node-tools](../units/shared-node-tools.md)
-- [src-toolscript](../units/src-toolscript.md)
 
 ## Subject threads
 

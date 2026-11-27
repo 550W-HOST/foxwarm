@@ -1,7 +1,7 @@
 # Unit: WebUI token sign-in
 
 Files: packages/webui/src/login.html, packages/webui/src/login.css, packages/webui/src/login.ts, packages/webui/src/browserAuth.ts, packages/webui/build/loginHtml.ts, packages/webui/public/login.html, packages/webui/test/login.e2e.mjs
-Secondary files: packages/webui/vite.config.ts, packages/webui/src/components/foxDrawing.json, packages/webui/src/components/FoxLoaders.css, packages/webui/src/theme/runtime.ts, src/channels/webuiChannel.ts
+Secondary files: packages/webui/vite.config.ts, packages/webui/src/components/foxDrawing.json, packages/webui/src/components/FoxLoaders.css, packages/webui/src/theme/runtime.ts
 
 ## Purpose
 
@@ -12,7 +12,7 @@ Responsive, independent token entry before the authenticated application. The ex
 - `renderLoginHtml` bundles `login.ts`, the real theme runtime/validator and built-in registry into the standalone document. It inlines canonical fox paths/loader CSS and view-specific CSS; no network-loaded script, stylesheet or font is required.
 - `loginHtmlPlugin` atomically refreshes `public/login.html` before Vite copies public assets. The backend can read that checked-in generated file without invoking frontend tools at request time. Vite development middleware renders fresh source at `/login.html`.
 - `mountLogin` owns form state, reveal/mask, bounded authentication, fragment handling and same-directory navigation. There is no application boot splash/minimum-delay gate on this page.
-- `public/login.html` is generated output, not an authoring source. Edit `src/login.*` or shared theme/fox inputs and run the WebUI build. Output is deterministic and does not contain installation configuration or live credentials.
+- `public/login.html` is generated output, not an authoring source. Edit `packages/webui/src/login.*` or shared theme/fox inputs and run the WebUI build. Output is deterministic and does not contain installation configuration or live credentials.
 
 ## D-login-cookie-ownership
 
@@ -24,17 +24,23 @@ Browser cookie scope follows the actual visible login directory, `location.pathn
 
 Recovery never imports a localStorage token. An old Strict-cookie login landing checks `./api/auth/session` using same-origin cookies, migrates only after a valid admin/webui response, then re-enters once. Explicit login pages and hash-token links remain manual. The probe is bounded to five seconds, aborted on user input/submission/departure, and guarded by deployment-scoped sessionStorage against redirect loops; denied storage leaves the manual form usable. Failed/offline/invalid probes preserve credentials. Successful app boot clears the guard.
 
-An existing same-name/domain/path HttpOnly cookie blocks script replacement. The .NET host retains valid old raw/derived cookie reads, but does not automatically migrate browser storage through backend path inference. The separate native Desktop cookie is owned by [host runtime](./host-runtime.md#desktop-boundary), not this frontend flow.
+An existing same-name/domain/path HttpOnly cookie blocks script replacement. The .NET host retains valid old raw/derived cookie reads, but does not automatically migrate browser storage through backend path inference. The separate native Desktop cookie is owned by [host runtime](./desktop-windows.md#desktop-boundary), not this frontend flow.
 
 ## D-login-presentation
 
-[2026-10-16] Token sign-in uses the existing animated fox and a restrained entry animation, a desktop illustration/form split and a stacked mobile layout. The illustration has no orbit, halo or visible brand wordmark. Copy is limited to the field, action and current state/error. Existing browser theme selection, including independent light/dark families and validated imports, governs colors. Reduced motion renders static artwork and skips decorative transitions; no animation blocks form interaction. Touch controls remain at least 44px and inputs remain 16px; short screens scroll instead of clipping the form.
+[2026-10-16] Token sign-in uses the existing animated fox and a restrained entry animation, a desktop illustration/form split and a stacked mobile layout. The illustration has no orbit, halo or visible brand wordmark. Copy is limited to the field, one hint under it, the action and current state/error. The hint (user, 2026-11-26) says where the token comes from: "Use the sign-in link from the installer, or run `foxwarmctl link` on the Foxwarm computer." It is muted 12px text, referenced by the input's `aria-describedby` before the error. Existing browser theme selection, including independent light/dark families and validated imports, governs colors. Reduced motion renders static artwork and skips decorative transitions; no animation blocks form interaction. Touch controls remain at least 44px and inputs remain 16px; short screens scroll instead of clipping the form.
 
 ## Authentication behavior
 
 `POST ./api/auth` remains relative to the deployment prefix and accepts administrator or restricted WebUI tokens without a new role selector. Pending state prevents duplicate submissions and keeps the input read-only. Invalid credentials, server errors, network failures and the 15-second timeout return to an editable form without persisting the attempted token or displaying response bodies. Errors clear when editing resumes.
 
 Successful authentication keeps the existing `foxwarm_token` cookie/local-storage keys under [the cookie ownership contract](#d-login-cookie-ownership). Local-storage denial does not prevent the cookie path from succeeding. Credentials remain masked by default and are cleared from the input after success. Legacy `#token=` links are consumed after handlers exist; the fragment is removed from history before submission, and malformed encoding leaves a usable form. Navigation replaces the current entry with the same directory root, with only a short decorative success fade (none under reduced motion). Page departure aborts an outstanding request.
+
+## Design decisions
+
+### D-http-auth-cookie-name
+
+[2026-08-06] Authenticated browser requests use only the `foxwarm_token` cookie. Bearer-token authentication is unchanged. Removed predecessor cookie aliases are not accepted as compatibility inputs.
 
 ## Verification
 

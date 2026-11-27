@@ -322,7 +322,8 @@ internal sealed partial class SessionManager
         bool userInitiated = false,
         string runtime = "foxwarm",
         string? creatorCallId = null,
-        JsonObject? model = null
+        JsonObject? model = null,
+        string? scriptRootCallId = null
     )
     {
         var instructed = !string.IsNullOrEmpty(initialMessage);
@@ -375,7 +376,8 @@ internal sealed partial class SessionManager
                     initialNode: initialNode,
                     creatorCallId: creatorCallId,
                     instructed: instructed,
-                    suggestedModel: model
+                    suggestedModel: model,
+                    scriptRootCallId: scriptRootCallId
                 );
             else
             {
@@ -426,7 +428,6 @@ internal sealed partial class SessionManager
                         + "\nYou are a child session (new, empty context). "
                         + SessionBoundary.Completion(
                             parentId,
-                            HandoffConfirmationEnabled,
                             taskId,
                             runtime == ClaudeRuntimeState.Kind
                         );
@@ -900,7 +901,7 @@ internal sealed partial class SessionManager
             pending
             || Catalog.Get(id) is not null
             || sessions.ContainsKey(id)
-            || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))
+            || Storage.Authority.Exists(id)
         )
             return true;
         var archive = Path.Combine(root, "state", "archive-store.sqlite");
@@ -911,6 +912,8 @@ internal sealed partial class SessionManager
             {
                 DataSource = archive,
                 Mode = SqliteOpenMode.ReadOnly,
+                // A pool's prune timer would capture this caller's async context.
+                Pooling = false,
             }.ToString()
         );
         await connection.OpenAsync();
@@ -932,7 +935,7 @@ internal sealed partial class SessionManager
         return await command.ExecuteScalarAsync() is not null;
     }
 
-    private PersistentSessionAuthorityStore MakeStore(string id, string agent)
+    private ISessionAuthority MakeStore(string id, string agent)
     {
         IdentitySlot slot;
         lock (lifecycle)
@@ -940,34 +943,27 @@ internal sealed partial class SessionManager
                 identities.GetValueOrDefault(id)
                 ?? throw new InvalidOperationException("Session identity was not claimed.");
 
-        PersistentSessionAuthorityStore store = null!;
-        store = new PersistentSessionAuthorityStore(
-            root,
+        return Storage.Authority.Open(
             id,
             agent,
-            authorityStageHook: authorityStageHook is null
-                ? null
-                : stage => authorityStageHook(store.SessionId, stage),
-            canonicalCommitBarrier: canonicalCommitBarrier is null
-                ? null
-                : (commit, token) => canonicalCommitBarrier(store.SessionId, commit, token),
-            publishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot),
-            mainFields: () => Catalog.Get(store.SessionId),
-            checkLifetime: () =>
-            {
-                lock (lifecycle)
-                    if (
-                        !identities.TryGetValue(store.SessionId, out var current)
-                        || current != slot
-                        || slot.Retired
-                    )
-                        throw new InvalidOperationException(
-                            "Session authority lifetime has retired."
-                        );
-            },
-            archiveCommitted: OnArchiveCommitted
+            new SessionAuthorityCallbacks(
+                PublishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot),
+                MainFields: current => Catalog.Get(current),
+                CheckLifetime: current =>
+                {
+                    lock (lifecycle)
+                        if (
+                            !identities.TryGetValue(current, out var claimed)
+                            || claimed != slot
+                            || slot.Retired
+                        )
+                            throw new InvalidOperationException(
+                                "Session authority lifetime has retired."
+                            );
+                },
+                ArchiveCommitted: OnArchiveCommitted
+            )
         );
-        return store;
     }
 
     private static string Escape(string text) =>

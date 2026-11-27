@@ -24,6 +24,12 @@ Stop is intentionally different from queue admission. `SessionControl.StopAsync`
 
 A committed wait survives restart through active JSON; transient requesting-model/running-tool phases do not become persisted waits. Persisted/internal `waitAll.sessions` accepts a nonempty single-target list, matching Source's existing wait writer and transition contract. Normal hydration, save and reopen preserve the original wait and absent `declarationVersion`; they do not convert it to wait-any or enroll it in current declaration/quiescence semantics. New model-facing wait-all declarations still require at least two distinct accessible non-self targets through `SessionManager.ValidateWait`, separately from persisted-state validation.
 
+## Design decisions
+
+### D-session-wait-transition
+
+All queue insertion uses one wait-state transition path. Compact maintenance is wait-neutral; stale timeout tokens are ignored; listed `waitAllSessions` messages are released together only after every requested source reports.
+
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionAdmissionTests.cs`; `PersistentSessionTurnTests.cs`; `PassiveTaskInputTests.cs`; `RetryNoticeTests.cs`; `WaitLivenessTests.cs`; `LegacyWaitAuthorityTests.cs` with actual Source fixture `dotnet/Foxwarm.Tests/Fixtures/legacy-wait-fixture-ts.mjs`; `dotnet/Foxwarm.Tests/Timers/MainTimerToolsTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionAdmissionTests.cs`; `PersistentSessionTurnTests.cs`; `PassiveTaskInputTests.cs`; `RetryNoticeTests.cs`; `WaitLivenessTests.cs`; `LegacyWaitAuthorityTests.cs`; `dotnet/Foxwarm.Tests/Timers/MainTimerToolsTests.cs`.

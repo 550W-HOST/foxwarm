@@ -22,6 +22,18 @@ History search source messages and exact/earlier/later viewer windows use the [H
 
 Metadata search normalizes queries and candidate fields through the [Unicode lowercase owner](./session-domain.md#metadata-search-lowercasing), retaining substring matching and original metadata.
 
+## Design decisions
+
+### D-webui-sidebar-preview-cursor
+
+[2026-09-25] `/api/session-list/sidebar` omits `nextCursor` inside child previews at its final transport boundary. Root `nextCursor` and `/api/session-list/children` continuation cursors remain; internal child-preview queries and their other API consumers retain their DTOs.
+
+### D-webui-channel-queue-preview
+
+Queued content is returned as a separate render-only array in the normal history payload. It is not a second queue API and is never mixed into committed messages.
+
+Current WebSocket clients also receive one queue-origin `history-append` delta containing the canonical appended rows and the same bounded queue-preview representation. Legacy SSE retains individual `message` frames. Queue previews remain presentation-only and inline attachment bodies are omitted.
+
 ## Tests
 
-`SessionTurnTests.cs`; `SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; bounded replay/list route tests; `WebUiAdjacentProjectionTests` (owned HTTP queue/Debug and converter-to-Archive viewer display/preservation paths), `WebUiMessageTransportVectorTests` (real local Vector History search display projection). `WebUiContinuousHistoryTests` covers reopened cumulative fork pages, exact snapshot bounds, live aliases, image transport and invalid queries; `dotnet/Foxwarm.Tests/Fixtures/continuous-history-fixture-ts.mjs` seeds original rows through Source persistence APIs for `packages/webui/test/mainHostContinuousDownloads.e2e.mjs`, which qualifies real compaction, earlier/newer/reconnect/restored-window reads and an archived image in the built original App.
+`SessionTurnTests.cs`; `SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; bounded replay/list route tests; `WebUiAdjacentProjectionTests` (owned HTTP queue/Debug and converter-to-Archive viewer display/preservation paths), `WebUiMessageTransportVectorTests` (real local Vector History search display projection). `WebUiContinuousHistoryTests` covers reopened cumulative fork pages, exact snapshot bounds, live aliases, image transport and invalid queries; `dotnet/Foxwarm.Tests/Fixtures/snapshots/continuous-history.json.gz` restores original rows recorded from the TypeScript persistence APIs for `packages/webui/test/mainHostContinuousDownloads.e2e.mjs`, which qualifies real compaction, earlier/newer/reconnect/restored-window reads and an archived image in the built original App.

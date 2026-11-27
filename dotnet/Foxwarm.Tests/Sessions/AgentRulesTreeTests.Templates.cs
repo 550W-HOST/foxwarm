@@ -143,6 +143,10 @@ public sealed partial class AgentRulesTreeTests
         await Allow(worker, Call("builtin", "recall", """{"target":"msg#1"}"""));
         await Deny(worker, Call("builtin", "recall", $$"""{"sessionId":"{{peer.Id}}"}"""));
         await Allow(worker, Call("builtin", "skill", """{"action":"list"}"""));
+        await Allow(worker, Call("builtin", "skill", """{"action":"copy","skillName":"node-setup","targetPath":"x"}"""));
+        await Allow(worker, Call("builtin", "run_skill", """{"skillName":"code-index","script":"generate_code_index.py"}"""));
+        await Deny(worker, Call("builtin", "run_skill", """{"skillName":"advisor"}"""));
+        await Deny(worker, Call("builtin", "run_skill", """{"skillName":"code-index","agentName":"main"}"""));
         await Allow(worker, Call("builtin", "wait", """{"waitForInput":true}"""));
     }
 
@@ -184,6 +188,8 @@ public sealed partial class AgentRulesTreeTests
         await Deny(Call("builtin", "node", """{"action":"destroy","nodeId":"assistant-node"}"""));
         await Deny(Call("builtin", "send_to_session", $$"""{"sessionId":"{{f.Owner.Id}}"}"""));
         await Deny(Call("builtin", "write_memory", """{"filePath":"MEMORY.md","content":"x"}"""));
+        await Allow(Call("builtin", "skill", """{"action":"copy","skillName":"data-visualization","targetPath":"x"}"""));
+        await Deny(Call("builtin", "run_skill", """{"skillName":"data-visualization"}"""));
 
         // Inbound files of an Agent without legacy isolation are saved on master under its directory.
         var paths = new WorkspaceTools(f.Manager.IdentityWorkspace(chat).ToolDirectory);

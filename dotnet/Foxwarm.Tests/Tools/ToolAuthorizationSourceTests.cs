@@ -63,7 +63,7 @@ public sealed partial class ToolAuthorizationSourceTests
         using var temp = new TempDirectory();
         var fixtures = new JsonArray();
         var sourceRoot =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")
             ?? throw new InvalidOperationException("Source checkout is required.");
         var normal = Obj(
             """{"principal":"internal","agent":"alpha","session":"opaque","tool":{"source":"node","name":"read"},"targetNode":"master","args":{"filePath":"own","a":null,"list":[1,2]},"paths":[]}"""
@@ -444,7 +444,7 @@ public sealed partial class ToolAuthorizationSourceTests
             }
         )
             info.ArgumentList.Add(arg);
-        info.Environment["FOXWARM_TS_ROOT"] = sourceRoot;
+        info.Environment["FOXWARM_REPO_ROOT"] = sourceRoot;
         using var process = Process.Start(info)!;
         var error = process.StandardError.ReadToEndAsync();
         var stdout = process.StandardOutput.ReadToEndAsync();

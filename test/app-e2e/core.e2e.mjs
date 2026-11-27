@@ -1,5 +1,6 @@
 import { appE2eRuntime } from './runtime.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
+import { responsesHistory, responsesSystemPrompt } from '../../packages/webui/test/ctlModelCalls.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -38,7 +39,7 @@ async function createSession(name) {
 async function openSession(sessionId) {
   scenarioSessions.add(sessionId)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), sessionId)
-  await page.waitForFunction(id => (document.querySelector('.foxwarm-chat-root')?.textContent || '').includes(`session ${id}`), { timeout: 15_000 }, sessionId)
+  await page.waitForFunction(id => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === id, { timeout: 15_000 }, sessionId)
   await page.waitForSelector('[role="textbox"][aria-label="Message"]', { timeout: 15_000 })
 }
 
@@ -98,6 +99,15 @@ async function waitForAuthority(sessionId, predicate, timeout = 20_000) {
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   throw new Error(`Timed out waiting for ${sessionId} authority`)
+}
+
+async function waitForHistory(sessionId, predicate, timeout = 10_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (predicate(await history(sessionId))) return
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`Timed out waiting for ${sessionId} history`)
 }
 
 function assertCommittedCompaction(authority, before, summary) {
@@ -342,6 +352,10 @@ test('Responses WebSocket reuses one completed prefix, reconnects with full repl
   })
   assert.equal(one.connectionId, two.connectionId)
   assert.notEqual(two.connectionId, three.connectionId)
+  // Full requests lead with the system prompt, unchanged across the reconnect; the continuation
+  // sends only its suffix.
+  for (const full of [one, child]) assert.match(responsesSystemPrompt(full.body), /Synthetic full-application E2E system prompt\./)
+  assert.deepEqual(three.body.input[0], one.body.input[0])
   assert.equal(two.body.previous_response_id, 'ws-resp-one')
   assert.equal(two.body.input.length, 1)
   const secondInput = semanticInput(two.body.input[0])
@@ -350,8 +364,8 @@ test('Responses WebSocket reuses one completed prefix, reconnects with full repl
   assert.match(secondInput.text, /APP_E2E_WS_TWO/)
   assert.doesNotMatch(JSON.stringify(two.body.input), /APP_E2E_WS_ONE|ws answer one/)
   assert.equal(three.body.previous_response_id, undefined)
-  assert.equal(three.body.input.length, 5)
-  const replay = three.body.input.map(semanticInput)
+  assert.equal(three.body.input.length, 6)
+  const replay = responsesHistory(three.body).map(semanticInput)
   assert.match(replay[0].text, /APP_E2E_WS_ONE/)
   assert.deepEqual(replay[1], { type: 'message', role: 'assistant', text: 'ws answer one' })
   assert.match(replay[2].text, /APP_E2E_WS_TWO/)
@@ -444,7 +458,8 @@ test('WS compact planning and BTW use purpose-scoped request keys without replac
   const raw = await api(`/api/sessions/${encodeURIComponent(syncId)}/history/continuous`)
   assert.deepEqual(raw.messages.slice(0, 20).map(message => message.__meta.seq), Array.from({ length: 20 }, (_, index) => index + 1))
   assert.equal(raw.messages.some(message => message.__meta?.contextBlock), false)
-  assert.equal((await history(syncId)).messages[0].__meta.contextBlock.id, 1)
+  // The authority file can hold the commit a moment before the history route serves it.
+  await waitForHistory(syncId, value => value.messages[0]?.__meta?.contextBlock?.id === 1)
   assert.equal(await page.$('[aria-label="Expand CTX-BLOCK B#1"]'), null)
   await page.click('[aria-label="Open session options"]')
   await page.$$eval('[role="radio"]', buttons => buttons.find(button => button.textContent === 'Detailed').click())

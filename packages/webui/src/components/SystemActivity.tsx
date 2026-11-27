@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react'
 import { ChevronDown, ChevronRight, ExternalLink, ListFilter, Search, X } from 'lucide-react'
 import { webUiRealtime } from '../realtime'
 import {
@@ -7,6 +7,7 @@ import {
   type ActivityFilters, type ActivityItem, type ActivityPage,
 } from '../activity'
 import { openSessionAtSeq } from '../chatViewportState'
+import Select from './Select'
 
 type ActivityPeriod = 'day' | 'week' | 'month' | 'all'
 
@@ -119,11 +120,14 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
   listRef.current = list
   const container = useRef<HTMLDivElement | null>(null)
 
-  useEffect(() => {
+  // Measured before paint so the first frame already uses the layout that fits.
+  useLayoutEffect(() => {
     const element = container.current
     if (!element) return
-    setWidth(element.clientWidth)
-    const observer = new ResizeObserver(entries => setWidth(entries[0]?.contentRect.width ?? element.clientWidth))
+    // A zero width (detached or hidden for a moment) says nothing about the layout to use.
+    const update = (value: number) => { if (value > 0) setWidth(value) }
+    update(element.clientWidth)
+    const observer = new ResizeObserver(entries => update(entries[0]?.contentRect.width ?? element.clientWidth))
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
@@ -226,27 +230,20 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
   const narrow = (patch: Scope) => setScope(value => ({ ...value, ...patch }))
   const chips = SCOPE_LABELS.filter(entry => typeof scope[entry.key] === 'string' && scope[entry.key])
   const segment = (active: boolean) => `rounded-md px-3 py-1 text-xs font-medium ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
-  const select = 'h-9 min-w-0 rounded-lg border border-transparent bg-transparent px-3 text-xs font-medium text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border'
   const cellLink = 'min-w-0 truncate text-left hover:text-fw-accent hover:underline'
 
   return (
     <div ref={container} className="min-w-0 space-y-4" data-system-activity data-activity-kind={kind} data-activity-layout={stacked ? 'stacked' : 'table'}>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Activity period">
+          <div className="inline-flex h-9 items-stretch rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Activity period">
             {PERIODS.map(item => (
               <button key={item.id} type="button" aria-pressed={period === item.id} data-activity-period={item.id} onClick={() => setPeriod(item.id)} className={segment(period === item.id)}>{item.label}</button>
             ))}
           </div>
-          <select aria-label="Kind of activity" value={kind} onChange={event => setKind(event.target.value as typeof kind)} className={select}>
-            {ACTIVITY_KINDS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-          <select aria-label="Result" value={outcome} onChange={event => setOutcome(event.target.value)} className={select}>
-            {ACTIVITY_OUTCOMES.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-          <select aria-label="Source" value={origin} onChange={event => setOrigin(event.target.value)} className={select}>
-            {ACTIVITY_ORIGINS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
+          <Select variant="toolbar" aria-label="Kind of activity" value={kind} onChange={value => setKind(value as typeof kind)} options={ACTIVITY_KINDS.map(item => ({ value: item.id, label: item.label }))} />
+          <Select variant="toolbar" aria-label="Result" value={outcome} onChange={setOutcome} options={ACTIVITY_OUTCOMES.map(item => ({ value: item.id, label: item.label }))} />
+          <Select variant="toolbar" aria-label="Source" value={origin} onChange={setOrigin} options={ACTIVITY_ORIGINS.map(item => ({ value: item.id, label: item.label }))} />
           <label className="relative flex items-center">
             <Search className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-fw-text-muted" />
             <input type="search" aria-label="Search activity" placeholder="Search" value={text} onChange={event => setText(event.target.value)} className="h-9 w-36 rounded-lg sm:w-44 border border-fw-border bg-fw-surface pl-7 pr-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border" />

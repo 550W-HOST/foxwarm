@@ -291,6 +291,95 @@ test('real auth and lazy root readiness, not entry execution or minimum elapsed 
   } finally { releaseAuth(); releaseRoot(); authGate = rootGate = null; await page.close() }
 })
 
+// Records the page's own startup timeline: readiness, the fade start, removal,
+// and the largest main-thread stall in between (late timers on a loaded runner).
+function recordBootTimeline() {
+  const timeline = window.bootTimeline = { stall: 0 }
+  const drawAnimations = () => document.getAnimations().filter(animation => animation instanceof CSSAnimation && Number.isFinite(animation.effect?.getComputedTiming().endTime)
+    && animation.effect.target?.closest?.('#foxwarm-boot'))
+  let screen = null, probe = 0
+  new MutationObserver(records => {
+    const now = performance.now()
+    screen ||= document.getElementById('foxwarm-boot')
+    if (timeline.ready === undefined && document.documentElement?.hasAttribute('data-foxwarm-boot-ready')) {
+      timeline.ready = now
+      const running = drawAnimations().filter(animation => animation.playState !== 'finished')
+      timeline.drawingAtReady = running.length
+      timeline.rates = [...new Set(running.map(animation => animation.playbackRate))]
+      let last = now
+      probe = setInterval(() => { const tick = performance.now(); timeline.stall = Math.max(timeline.stall, tick - last - 10); last = tick }, 10)
+    }
+    if (timeline.leaving === undefined && screen?.dataset.state === 'leaving') {
+      timeline.leaving = now
+      timeline.unfinishedAtLeaving = drawAnimations().filter(animation => animation.playState !== 'finished').length
+      timeline.offsetAtLeaving = Math.max(...Array.from(screen.querySelectorAll('.fw-fox-draw'), path => Math.abs(parseFloat(getComputedStyle(path).strokeDashoffset))))
+      timeline.inertAtLeaving = getComputedStyle(screen).pointerEvents === 'none'
+    }
+    // A live notice may re-append the same node right after the splash removal.
+    if (timeline.ready !== undefined && timeline.removed === undefined && screen
+      && records.some(record => Array.from(record.removedNodes).includes(screen))) {
+      timeline.removed = now
+      clearInterval(probe)
+    }
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-foxwarm-boot-ready', 'data-state'] })
+}
+
+for (const phase of ['during', 'after']) {
+  test(`readiness ${phase} the draw-in removes the screen within 300ms${phase === 'during' ? ' after a fast-forwarded finish' : ''}`, async () => {
+    const page = await newPage()
+    await page.evaluateOnNewDocument(recordBootTimeline)
+    try {
+      await page.goto(baseUrl + '/deployment/' + (phase === 'during' ? '?earlyReady' : ''))
+      if (phase === 'after') {
+        await page.waitForFunction(() => document.getElementById('foxwarm-boot').getAnimations({ subtree: true })
+          .filter(animation => Number.isFinite(animation.effect.getComputedTiming().endTime)).every(animation => animation.playState === 'finished'))
+        assert.equal(await page.$eval('#foxwarm-boot', node => node.dataset.state), 'shown')
+        await page.evaluate(() => window.fixtureReady())
+      }
+      await page.waitForFunction(() => window.bootTimeline.removed !== undefined)
+      const timeline = await page.evaluate(() => window.bootTimeline)
+      diagnostics.push({ kind: 'boot-timeline', phase, timeline })
+      if (phase === 'during') {
+        assert.ok(timeline.drawingAtReady > 0, JSON.stringify(timeline))
+        assert.equal(timeline.rates.length, 1, JSON.stringify(timeline))
+        assert.ok(timeline.rates[0] > 1, JSON.stringify(timeline))
+      } else assert.equal(timeline.drawingAtReady, 0, JSON.stringify(timeline))
+      assert.equal(timeline.unfinishedAtLeaving, 0, JSON.stringify(timeline))
+      assert.equal(timeline.offsetAtLeaving, 0, JSON.stringify(timeline))
+      assert.equal(timeline.inertAtLeaving, true)
+      // The 300ms budget is the design; only stalls measured on the page itself are excused.
+      assert.ok(timeline.removed - timeline.ready <= 300 + timeline.stall, JSON.stringify(timeline))
+      assert.equal(await page.$('#foxwarm-boot'), null)
+      await page.click('#working-action')
+      assert.equal(await page.evaluate(() => window.actions), 1)
+    } finally { await page.close() }
+  })
+}
+
+test('a build update during the fast exit waits for removal, then shows the live notice', async () => {
+  const page = await newPage()
+  await page.evaluateOnNewDocument(recordBootTimeline)
+  await page.evaluateOnNewDocument(() => {
+    new MutationObserver((_, observer) => {
+      if (!document.documentElement?.hasAttribute('data-foxwarm-boot-ready')) return
+      observer.disconnect()
+      setTimeout(() => {
+        window.foxwarmBoot.update('next-build')
+        window.splashAtUpdate = document.querySelector('#foxwarm-boot[data-fox-splash]')?.dataset.state
+      }, 50)
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ['data-foxwarm-boot-ready'] })
+  })
+  try {
+    await page.goto(baseUrl + '/deployment/?earlyReady')
+    await page.waitForSelector(resourceNotice, { visible: true })
+    const timeline = await page.evaluate(() => window.bootTimeline)
+    assert.equal(await page.evaluate(() => window.splashAtUpdate), 'shown')
+    assert.ok(timeline.removed - timeline.ready <= 300 + timeline.stall, JSON.stringify(timeline))
+    assert.equal(await page.$('[data-fox-splash]'), null)
+    assert.match(await page.$eval('#foxwarm-boot-title', node => node.textContent), /new version/)
+  } finally { await page.close() }
+})
+
 test('the administrator workbench mounts normally while ordinary API failures stay local', async () => {
   admin = true
   const page = await newPage({ reduced: true })

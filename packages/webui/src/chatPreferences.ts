@@ -1,5 +1,6 @@
 import type { HistoryMode } from './continuousHistory'
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { API_BASE_PATH } from './config'
 
 export type SendKeyMode = 'modEnter' | 'enter'
 export type TimelineView = 'detailed' | 'grouped' | 'conversation'
@@ -35,6 +36,34 @@ const CHAT_PREFERENCE_STORAGE_KEYS = new Set([
   SHOW_COMMENTARY_STORAGE_KEY,
 ])
 
+/**
+ * The installation's send key for browsers that never chose one. New installations record
+ * Enter at their first Setup save; installations without that record keep Ctrl/Cmd+Enter.
+ */
+let installationSendKeyDefault: SendKeyMode = 'modEnter'
+const installationDefaultListeners = new Set<() => void>()
+let installationDefaultsLoad: Promise<void> | null = null
+
+/** Loads the installation defaults once per page; a failed request keeps Ctrl/Cmd+Enter. */
+export function loadInstallationChatDefaults(): Promise<void> {
+  installationDefaultsLoad ??= fetch(`${API_BASE_PATH}/webui/settings`)
+    .then(response => response.ok ? response.json() : null)
+    .then((data) => {
+      const mode: SendKeyMode = data?.settings?.sendKeyDefault === 'enter' ? 'enter' : 'modEnter'
+      if (mode === installationSendKeyDefault) return
+      installationSendKeyDefault = mode
+      for (const listener of installationDefaultListeners) listener()
+    })
+    .catch(() => {})
+  return installationDefaultsLoad
+}
+
+/** Reloads after the first Setup save, which records the default for a new installation. */
+export function reloadInstallationChatDefaults(): Promise<void> {
+  installationDefaultsLoad = null
+  return loadInstallationChatDefaults()
+}
+
 const mobileQuery = '(max-width: 767px)'
 function subscribeMobileViewport(notify: () => void) {
   const query = window.matchMedia(mobileQuery)
@@ -46,6 +75,12 @@ export function useMobileChatViewport() {
   return useSyncExternalStore(subscribeMobileViewport, () => window.innerWidth < 768, () => false)
 }
 
+/** The browser's own choice wins; otherwise the installation default applies. */
+function readSendKeyMode(): SendKeyMode {
+  const stored = localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY)
+  return stored === 'enter' || stored === 'modEnter' ? stored : installationSendKeyDefault
+}
+
 export function readChatPreferences(mobile = false): ChatPreferences {
   const storedView = localStorage.getItem(mobile ? MOBILE_TIMELINE_VIEW_STORAGE_KEY : TIMELINE_VIEW_STORAGE_KEY)
   const legacyGrouped = mobile ? null : localStorage.getItem(GROUP_TOOLS_STORAGE_KEY)
@@ -53,7 +88,7 @@ export function readChatPreferences(mobile = false): ChatPreferences {
     ? storedView
     : legacyGrouped === 'true' ? 'grouped' : legacyGrouped === 'false' ? 'detailed' : 'conversation'
   return {
-    sendKeyMode: localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY) === 'enter' ? 'enter' : 'modEnter',
+    sendKeyMode: readSendKeyMode(),
     timelineView,
     showUsageBadge: localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false',
     showUserMessageMetadata: localStorage.getItem(SHOW_USER_MESSAGE_METADATA_STORAGE_KEY) === 'true',
@@ -76,6 +111,13 @@ export function useChatPreferences() {
     }
     window.addEventListener('storage', sync)
     return () => window.removeEventListener('storage', sync)
+  }, [])
+
+  useEffect(() => {
+    const sync = () => setPreferences(readChatPreferences(window.innerWidth < 768))
+    installationDefaultListeners.add(sync)
+    void loadInstallationChatDefaults()
+    return () => { installationDefaultListeners.delete(sync) }
   }, [])
 
   const setSendKeyMode = useCallback((sendKeyMode: SendKeyMode) => {

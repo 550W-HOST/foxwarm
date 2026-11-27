@@ -56,7 +56,7 @@ public sealed partial class SessionCreationParityTests
         );
         var created = await f.Manager.RequiredAsync("retained-copy/main");
         var disk = JsonNode
-            .Parse(await File.ReadAllTextAsync(created.AuthorityStore.AuthorityPath))!
+            .Parse(await File.ReadAllTextAsync(created.AuthorityStore.AuthorityPath()))!
             .AsObject();
         Assert.Equal("local/retained", SessionWait.Text(disk["model"]));
         Assert.Equal(expectedEffort, SessionWait.Text(disk["effort"]));
@@ -121,7 +121,7 @@ public sealed partial class SessionCreationParityTests
         Assert.Equal(
             "local/retained",
             SessionWait.Text(
-                JsonNode.Parse(await File.ReadAllTextAsync(created.AuthorityStore.AuthorityPath))![
+                JsonNode.Parse(await File.ReadAllTextAsync(created.AuthorityStore.AuthorityPath()))![
                     "model"
                 ]
             )
@@ -218,7 +218,7 @@ public sealed partial class SessionCreationParityTests
                 after.AuthorityEnvelope[field]?.ToJsonString()
             );
         var disk = JsonNode.Parse(
-            await File.ReadAllTextAsync(source.AuthorityStore.AuthorityPath)
+            await File.ReadAllTextAsync(source.AuthorityStore.AuthorityPath())
         )!;
         Assert.Equal("converted-isolated", SessionWait.Text(disk["agent"]));
         Assert.Equal("local/retained", SessionWait.Text(disk["model"]));

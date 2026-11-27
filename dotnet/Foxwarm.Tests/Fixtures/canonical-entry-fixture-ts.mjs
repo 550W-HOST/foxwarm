@@ -8,8 +8,8 @@ import ts from 'typescript'
 // Execute frozen Source owners against only caller-owned fixture files. Never import
 // the checkout's generated config or instance state.
 const revision = 'e3b563752bc8db292e0424450f9f3337b043b9a7'
-const repository = process.env.FOXWARM_TS_ROOT
-if (!repository) throw new Error('FOXWARM_TS_ROOT is required')
+const repository = process.env.FOXWARM_REPO_ROOT
+if (!repository) throw new Error('FOXWARM_REPO_ROOT is required')
 const require = createRequire(path.join(repository, 'package.json'))
 let raw = ''; for await (const chunk of process.stdin) raw += chunk
 const input = JSON.parse(raw)

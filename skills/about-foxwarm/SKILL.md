@@ -126,13 +126,13 @@ If models are configured and WebUI is open, the user can ask:
 
 | Goal | Skill |
 | --- | --- |
-| Create or migrate Agents, manage memory/inheritance, or restrict an Agent with local rules | [agent-management](../agent-management/SKILL.md) |
-| Configure entry identities, restrict browser Session scope, or safely update internal/external tool rules | [access-control](../access-control/SKILL.md) |
-| Receive events from GitHub, Cloudflare or monitoring through a webhook identity | [access-control](../access-control/SKILL.md) |
-| Schedule a reminder or a recurring check | [timer-automation](../timer-automation/SKILL.md) |
-| Connect outbound/inbound MCP, discover/call tools, or set up explicit instance replies | [mcp-management](../mcp-management/SKILL.md) |
-| Pair/bootstrap a Node, add disposable container Nodes, or run delegated development work on a Node | [node-setup](../node-setup/SKILL.md) |
-| Coordinate dependent tool calls | [toolscript-automation](../toolscript-automation/SKILL.md) |
+| Create or migrate Agents, manage memory/inheritance, or restrict an Agent with local rules | `agent-management` |
+| Configure entry identities, restrict browser Session scope, or safely update internal/external tool rules | `access-control` |
+| Receive events from GitHub, Cloudflare or monitoring through a webhook identity | `access-control` |
+| Schedule a reminder or a recurring check | `timer-automation` |
+| Connect outbound/inbound MCP, discover/call tools, or set up explicit instance replies | `mcp-management` |
+| Pair/bootstrap a Node, add disposable container Nodes, or run delegated development work on a Node | `node-setup` |
+| Coordinate dependent tool calls | `toolscript-automation` |
 
 These skills own different workflows; their cross-links provide navigation rather than another copy of the same rules. Ask the agent to load the named skill, or run `ctl skill load access-control`.
 

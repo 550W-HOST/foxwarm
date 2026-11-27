@@ -73,18 +73,19 @@ public sealed class ResponsesClientTests
             Assert.NotNull(firstRequest);
             Assert.NotNull(secondRequest);
             Assert.Equal(2, server.RequestCount);
+            Assert.Equal("instructions", ResponsesRequestShape.SystemPrompt(secondRequest!));
             var secondInput = Assert.IsType<JsonArray>(secondRequest!["input"]);
             Assert.Equal(
-                new[] { "message", "function_call", "function_call_output" },
+                new[] { "message", "message", "function_call", "function_call_output" },
                 secondInput.Select(item => item!["type"]!.GetValue<string>())
             );
-            Assert.Equal("call_write", secondInput[1]?["call_id"]?.GetValue<string>());
+            Assert.Equal("call_write", secondInput[2]?["call_id"]?.GetValue<string>());
             Assert.Equal(
                 "{\"fileName\":\"result.txt\",\"content\":\"héllo\"}",
-                secondInput[1]?["arguments"]?.GetValue<string>()
+                secondInput[2]?["arguments"]?.GetValue<string>()
             );
-            Assert.Equal("call_write", secondInput[2]?["call_id"]?.GetValue<string>());
-            var output = Assert.IsType<JsonArray>(secondInput[2]?["output"]);
+            Assert.Equal("call_write", secondInput[3]?["call_id"]?.GetValue<string>());
+            var output = Assert.IsType<JsonArray>(secondInput[3]?["output"]);
             Assert.StartsWith(
                 "<foxwarm-system kind=\"time\"",
                 output[0]?["text"]?.GetValue<string>()
@@ -122,18 +123,6 @@ public sealed class ResponsesClientTests
                 snapshot.History.Materialize().Select(EcmaJson.Stringify),
                 archive.Select(record => record.MessageJson)
             );
-            var replayResult = Path.Combine(root, "actual-ts-replay.json");
-            RunPersistenceOracle("replay-ts", root, replayResult, "s");
-            Assert.Equal(
-                0,
-                JsonNode.Parse(await File.ReadAllTextAsync(replayResult))![
-                    "insertedCount"
-                ]!.GetValue<int>()
-            );
-            var readResult = Path.Combine(root, "actual-ts-read.json");
-            RunPersistenceOracle("read", root, readResult, "s");
-            var actual = JsonNode.Parse(await File.ReadAllTextAsync(readResult))!.AsObject();
-            Assert.Equal(4, actual["rawRows"]!.AsArray().Count);
         }
         finally
         {
@@ -218,7 +207,7 @@ public sealed class ResponsesClientTests
         var requestJson = JsonNode.Parse(request.Body) as JsonObject;
         Assert.NotNull(requestJson);
         Assert.Equal("test-model", requestJson!["model"]?.GetValue<string>());
-        Assert.Equal("instructions", requestJson["instructions"]?.GetValue<string>());
+        Assert.Equal("instructions", ResponsesRequestShape.SystemPrompt(requestJson));
         Assert.Equal(321, requestJson["max_output_tokens"]?.GetValue<int>());
         Assert.True(requestJson["stream"]?.GetValue<bool>());
         Assert.Equal("auto", requestJson["tool_choice"]?.GetValue<string>());
@@ -240,8 +229,9 @@ public sealed class ResponsesClientTests
         Assert.Equal("string", properties["fileName"]?["type"]?.GetValue<string>());
         Assert.Equal("string", properties["content"]?["type"]?.GetValue<string>());
         var requestInput = Assert.IsType<JsonArray>(requestJson["input"]);
-        Assert.Single(requestInput);
-        Assert.Equal(2, Assert.IsType<JsonArray>(requestInput[0]!["content"]).Count);
+        Assert.Equal(2, requestInput.Count);
+        Assert.Equal("user", requestInput[1]!["role"]?.GetValue<string>());
+        Assert.Equal(2, Assert.IsType<JsonArray>(requestInput[1]!["content"]).Count);
 
         Assert.Equal(1, server.RequestCount);
         var snapshot = entry.Snapshot();
@@ -796,32 +786,6 @@ public sealed class ResponsesClientTests
         Assert.Equal(1_234.5, timing["durationMs"]?.GetValue<double>());
     }
 
-    [Fact]
-    public void ActualTypeScriptOrdinarySequenceBuilderPreservesHistoryVersionAndReplacesFalsyTimestamps()
-    {
-        var root = NewTempDirectory();
-        try
-        {
-            var resultPath = Path.Combine(root, "actual-ts-append-metadata.json");
-            RunPersistenceOracle("append-metadata-ts", root, resultPath, "s");
-            var result = JsonNode.Parse(File.ReadAllText(resultPath))!.AsObject();
-            Assert.Equal(9, result["historyVersion"]!.GetValue<int>());
-            Assert.Equal(6, result["nextMessageSeq"]!.GetValue<int>());
-            Assert.Equal(
-                new[] { 4242, 4242, 4242, 4242, 7 },
-                result["timestamps"]!.AsArray().Select(node => node!.GetValue<int>())
-            );
-            Assert.Equal(
-                new[] { 1, 2, 3, 4, 5 },
-                result["seqs"]!.AsArray().Select(node => node!.GetValue<int>())
-            );
-        }
-        finally
-        {
-            Directory.Delete(root, true);
-        }
-    }
-
     private static ResponsesChatService NewService(HttpClient http, Uri baseUri) =>
         new(
             http,
@@ -854,62 +818,6 @@ public sealed class ResponsesClientTests
         var path = Path.Combine(Path.GetTempPath(), $"foxwarm-dotnet-fixture-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
-    }
-
-    internal static void RunPersistenceOracle(
-        string mode,
-        string root,
-        string resultPath,
-        string sessionId
-    )
-    {
-        var foxwarmRoot = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT");
-        if (string.IsNullOrWhiteSpace(foxwarmRoot))
-            throw new InvalidOperationException(
-                "FOXWARM_TS_ROOT must point to the current built TypeScript source tree."
-            );
-        var helper = Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "..",
-            "Fixtures",
-            "session-persistence-fixture-ts.mjs"
-        );
-        helper = Path.GetFullPath(helper);
-        var logPath = Path.Combine(root, $"actual-ts-{mode}.log");
-        var start = new ProcessStartInfo("node")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        start.ArgumentList.Add(helper);
-        start.ArgumentList.Add(mode);
-        start.ArgumentList.Add(root);
-        start.ArgumentList.Add(resultPath);
-        start.ArgumentList.Add("");
-        start.ArgumentList.Add(sessionId);
-        start.Environment["FOXWARM_TS_ROOT"] = foxwarmRoot;
-        using var process =
-            Process.Start(start)
-            ?? throw new InvalidOperationException(
-                "Unable to start actual TypeScript persistence oracle."
-            );
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("Actual TypeScript persistence oracle timed out.");
-        }
-        Task.WaitAll(stdout, stderr);
-        var log = stdout.Result + stderr.Result;
-        File.WriteAllText(logPath, log);
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException(
-                $"Actual TypeScript persistence oracle exited {process.ExitCode}: {log}"
-            );
     }
 
     private static TaskCompletionSource<T> NewSignal<T>() =>

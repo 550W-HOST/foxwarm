@@ -61,7 +61,7 @@ internal sealed partial class SessionOwner
     internal Foxwarm.Tools.ToolApprovalWaiters ApprovalWaiters { get; } = new();
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
     public LocalExecManager Executor { get; set; } = null!;
-    internal PersistentSessionAuthorityStore AuthorityStore { get; set; } = null!;
+    internal ISessionAuthority AuthorityStore { get; set; } = null!;
     internal bool Processing => !running.IsEmpty;
 
     internal void NotifyDeleted()

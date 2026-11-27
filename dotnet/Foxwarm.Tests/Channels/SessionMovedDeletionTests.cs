@@ -52,7 +52,7 @@ public sealed class SessionMovedDeletionTests
         }
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var authority = owner.AuthorityStore.AuthorityPath;
+        var authority = owner.AuthorityStore.AuthorityPath();
         var saved = authority + ".held";
         manager.BeforeDeleteStage = async (stage, _) =>
         {

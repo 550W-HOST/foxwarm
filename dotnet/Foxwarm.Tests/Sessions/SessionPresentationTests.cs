@@ -12,7 +12,7 @@ public sealed class SessionPresentationTests
     public async Task Actual_source_locale_order_and_normal_route_results_match()
     {
         using var temp = new TempDirectory();
-        var repository = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!;
+        var repository = Environment.GetEnvironmentVariable("FOXWARM_REPO_ROOT")!;
         var ids = new[]
         {
             "a",

@@ -134,7 +134,13 @@ internal static class ActivityKinds
         new(
             "script",
             null,
-            ["run_script", "start_toolscript_run", "continue_script", "cancel_toolscript_run"]
+            [
+                "run_script",
+                "start_toolscript_run",
+                "continue_script",
+                "cancel_toolscript_run",
+                "run_skill",
+            ]
         ),
         new("browser", null, ["browser_"], Prefix: true),
     ];

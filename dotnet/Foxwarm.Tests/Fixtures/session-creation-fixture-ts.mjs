@@ -3,8 +3,8 @@ import vm from 'node:vm'
 import ts from 'typescript'
 
 // Execute the actual reference allocator without loading application configuration.
-const repository = process.env.FOXWARM_TS_ROOT
-if (!repository) throw new Error('FOXWARM_TS_ROOT is required')
+const repository = process.env.FOXWARM_REPO_ROOT
+if (!repository) throw new Error('FOXWARM_REPO_ROOT is required')
 const revision = '2a25acd671e85e355d5c4eb57f2e5c146ccaab5e'
 const text = execFileSync('git', ['show', `${revision}:src/sessionManager.ts`], { cwd: repository, encoding: 'utf8' })
 const ast = ts.createSourceFile('sessionManager.ts', text, ts.ScriptTarget.Latest, true)

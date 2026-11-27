@@ -7,6 +7,32 @@ namespace Foxwarm.Tests;
 
 public sealed class ResponsesParityTests
 {
+    [Fact]
+    public void System_prompt_is_the_leading_developer_input_item()
+    {
+        var history = new[]
+        {
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = "question" }),
+            },
+        };
+        var body = ResponsesRequestSerializer.BuildRequest(history, "m", "p/m", "prompt", 100);
+        Assert.False(body.ContainsKey("instructions"));
+        Assert.Equal(
+            """{"type":"message","role":"developer","content":[{"type":"input_text","text":"prompt"}]}""",
+            body["input"]![0]!.ToJsonString()
+        );
+        Assert.Equal(2, body["input"]!.AsArray().Count);
+        Assert.Equal("user", body["input"]![1]!["role"]!.GetValue<string>());
+
+        // An empty prompt adds no empty developer message.
+        var bare = ResponsesRequestSerializer.BuildRequest(history, "m", "p/m", "", 100);
+        Assert.False(bare.ContainsKey("instructions"));
+        Assert.Equal("user", Assert.Single(bare["input"]!.AsArray())!["role"]!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData("openai", false)]
     [InlineData("openai", true)]
@@ -72,9 +98,10 @@ public sealed class ResponsesParityTests
             "prompt",
             100
         );
+        Assert.Equal("prompt", ResponsesRequestShape.SystemPrompt(replay));
         Assert.Equal(
             "synthetic-cipher",
-            replay["input"]![0]!["encrypted_content"]!.GetValue<string>()
+            replay["input"]![1]!["encrypted_content"]!.GetValue<string>()
         );
     }
 

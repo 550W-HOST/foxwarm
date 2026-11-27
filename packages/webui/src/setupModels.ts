@@ -354,7 +354,8 @@ export function validateModelSetupForm(form: ModelSetupForm): string | null {
   if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
     return 'Enter the API base URL, for example https://api.openai.com/v1.'
   }
-  if (isPlaceholderApiKey(form.apiKey)) return 'Replace the placeholder API key with your key.'
+  // The form shows a placeholder key as an empty field, so for keyed services it reads as a missing key.
+  if (isPlaceholderApiKey(form.apiKey)) return requiresApiKey(form.baseUrl) ? 'Enter your API key.' : 'Replace the placeholder API key, or remove it.'
   if (!form.apiKey.trim() && requiresApiKey(form.baseUrl)) return 'Enter your API key.'
   if (form.models.length === 0) return 'Add at least one model.'
   if (!modelIds(form).includes(form.defaultModel)) return 'Choose a default model.'

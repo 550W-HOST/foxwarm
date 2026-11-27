@@ -17,7 +17,8 @@ internal sealed partial class SessionManager
         long StartedAt,
         string? Cwd,
         string? LogPath,
-        bool StopRequested
+        bool StopRequested,
+        string? Summary
     );
 
     internal enum ExecStopResult
@@ -43,7 +44,8 @@ internal sealed partial class SessionManager
                 exec.StartedAt,
                 exec.Cwd,
                 exec.LogPath,
-                exec.StopRequested
+                exec.StopRequested,
+                exec.Summary
             ))
             .Concat(
                 Nodes
@@ -55,7 +57,8 @@ internal sealed partial class SessionManager
                         claim.DispatchedAt,
                         claim.Cwd,
                         claim.LogPath,
-                        claim.StopRequested
+                        claim.StopRequested,
+                        claim.Summary
                     ))
             )
             .OrderBy(exec => exec.StartedAt)
@@ -185,6 +188,7 @@ internal sealed partial class SessionManager
             ["execId"] = exec.Id,
             ["nodeId"] = exec.NodeId,
             ["command"] = exec.Command,
+            ["summary"] = exec.Summary,
             ["startedAt"] = exec.StartedAt,
             ["elapsedMs"] = Math.Max(0, now - exec.StartedAt),
             ["cwd"] = exec.Cwd,

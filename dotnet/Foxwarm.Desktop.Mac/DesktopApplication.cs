@@ -1,29 +1,52 @@
-using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using AppKit;
 using CoreGraphics;
 using Foundation;
-using Foxwarm.Models;
 using WebKit;
 
 namespace Foxwarm.Desktop;
 
+/// <summary>
+/// The application: the main window shows the selected instance ([D-desktop-instances]),
+/// either the local instance, whose Main runs in this process and starts on demand, or a
+/// remote instance the app only browses. A native message with actions replaces the page
+/// while an instance starts, is stopped or can't be reached.
+/// </summary>
 [Register("FoxwarmDesktopApplication")]
 internal sealed partial class DesktopApplication : NSApplicationDelegate
 {
-    private MainHost? host;
     private NSWindow? window;
     private DesktopFrame? frame;
     private WKWebView? view;
     private Navigation? navigation;
     private BrowserUi? browserUi;
+    private DesktopDownloads? downloads;
     private WKContentRuleList? ruleList;
+    private WKContentRuleListStore? rulesStore;
     private readonly List<DesktopPopupWindow> popups = [];
-    private Uri? endpoint;
     private Task startup = Task.CompletedTask;
     private bool exiting;
-    private readonly NSTextField status = NSTextField.CreateLabel("Starting Foxwarm…");
+    private string data = "";
+    private DesktopInstances? instances;
+    // The instance the web view shows: its origin and base path.
+    private Uri? scope;
+    // Incremented by every switch, so that a slower earlier one doesn't navigate afterwards.
+    private int generation;
+    private readonly SemaphoreSlim switching = new(1, 1);
+    private readonly NSStackView placeholder = new()
+    {
+        Orientation = NSUserInterfaceLayoutOrientation.Vertical,
+        Spacing = 16,
+        Alignment = NSLayoutAttribute.CenterX,
+    };
+    private readonly NSTextField status = NSTextField.CreateWrappingLabel("Starting Foxwarm…");
+    private readonly NSStackView actions = new()
+    {
+        Orientation = NSUserInterfaceLayoutOrientation.Horizontal,
+        Spacing = 8,
+    };
+    private readonly List<NSButton> actionButtons = [];
 
     public override void DidFinishLaunching(NSNotification notification)
     {
@@ -46,6 +69,9 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         edit.AddItem(new NSMenuItem("Paste", new ObjCRuntime.Selector("paste:"), "v"));
         edit.AddItem(new NSMenuItem("Select All", new ObjCRuntime.Selector("selectAll:"), "a"));
         menu.AddItem(new NSMenuItem("Edit") { Submenu = edit });
+        // The fallback entry, also for a page without the brand row (an older WebUI, an error page).
+        var instancesMenu = new NSMenu("Instances") { Delegate = new InstancesMenuUpdater(this) };
+        menu.AddItem(new NSMenuItem("Instances") { Submenu = instancesMenu });
         NSApplication.SharedApplication.MainMenu = menu;
         window = new NSWindow(
             new CGRect(0, 0, 1100, 760),
@@ -61,10 +87,20 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             MinSize = new CGSize(640, 440),
         };
         window.ReleaseWhenClosed(false);
-        frame = new DesktopFrame(window);
-        status.Frame = new CGRect(24, 24, 1000, 80);
-        status.AutoresizingMask = NSViewResizingMask.WidthSizable;
-        window.ContentView!.AddSubview(status);
+        frame = new DesktopFrame(window, DesktopWindowFrame.WebUi, (webView, anchor) => ShowInstanceMenu(webView, anchor));
+        status.Alignment = NSTextAlignment.Center;
+        status.PreferredMaxLayoutWidth = 520;
+        placeholder.AddArrangedSubview(status);
+        placeholder.AddArrangedSubview(actions);
+        placeholder.TranslatesAutoresizingMaskIntoConstraints = false;
+        var content = window.ContentView!;
+        content.AddSubview(placeholder);
+        NSLayoutConstraint.ActivateConstraints([
+            placeholder.CenterXAnchor.ConstraintEqualTo(content.CenterXAnchor),
+            placeholder.CenterYAnchor.ConstraintEqualTo(content.CenterYAnchor),
+            placeholder.WidthAnchor.ConstraintLessThanOrEqualTo(content.WidthAnchor, 1, -48),
+        ]);
+        actions.Hidden = true;
         window.Center();
         OpenWindow();
         startup = StartAsync();
@@ -74,7 +110,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
     {
         try
         {
-            var data = Path.GetFullPath(
+            data = Path.GetFullPath(
                 Environment.GetEnvironmentVariable("FOXWARM_DATA_DIR")
                     ?? Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -85,39 +121,10 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
                         "data"
                     )
             );
-            var configuration = new ModelConfiguration(HostPaths.ForDataRoot(data));
-            var dist = HttpAssets.WebUiDirectory(configuration.Paths);
-            if (dist is null)
-                throw new InvalidDataException(
-                    "The WebUI is missing from the Foxwarm application."
-                );
-            var http = await HttpServerSettings.CaptureDesktopAsync(data);
-            host = await Task.Run(async () =>
-            {
-                var result = await MainHost.CreateAsync(
-                    [],
-                    configuration,
-                    http,
-                    dist,
-                    captureDiagnostics: true
-                );
-                try
-                {
-                    await result.StartAsync();
-                    return result;
-                }
-                catch
-                {
-                    await result.DisposeAsync();
-                    throw;
-                }
-            });
-            _ = ObserveHostAsync();
-            endpoint = new Uri(http.Address.BaseUrl);
-            await File.WriteAllTextAsync(
-                Path.Combine(data, "state", "desktop-port"),
-                endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            );
+            instances = DesktopInstances.Load(data);
+            // Local Main starts at launch only when the local instance is selected.
+            if (instances.Selected is null)
+                await EnsureLocalAsync();
             if (exiting)
                 return;
             var webConfiguration = new WKWebViewConfiguration
@@ -126,98 +133,179 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             };
             var rulesDirectory = Path.Combine(data, "webkit-content-rules");
             Directory.CreateDirectory(rulesDirectory);
-            using var rulesStore = WKContentRuleListStore.FromUrl(
-                NSUrl.FromFilename(rulesDirectory)
-            );
-            var rules = new JsonArray(
-                new JsonObject
-                {
-                    ["trigger"] = new JsonObject { ["url-filter"] = "^https?://" },
-                    ["action"] = new JsonObject { ["type"] = "block" },
-                },
-                new JsonObject
-                {
-                    ["trigger"] = new JsonObject
-                    {
-                        ["url-filter"] =
-                            "^" + Regex.Escape(endpoint.GetLeftPart(UriPartial.Authority)) + "/",
-                    },
-                    ["action"] = new JsonObject { ["type"] = "ignore-previous-rules" },
-                }
-            );
-            ruleList = await rulesStore.CompileContentRuleListAsync(
-                "FoxwarmLocalResources",
-                rules.ToJsonText()
-            );
-            if (exiting)
-                return;
-            webConfiguration.UserContentController.AddContentRuleList(ruleList);
+            rulesStore = WKContentRuleListStore.FromUrl(NSUrl.FromFilename(rulesDirectory));
+            // The first switch sets the real scope, with its rules, before the first navigation.
+            scope = new Uri("http://127.0.0.1/");
             // The frame's one-way script message is the only page-to-host channel.
-            frame!.Configure(webConfiguration, endpoint);
+            frame!.Configure(webConfiguration, scope);
             navigation = new Navigation(this, frame, null);
             browserUi = new BrowserUi(this);
+            downloads = new DesktopDownloads(() => window);
             view = new WKWebView(window!.ContentView!.Bounds, webConfiguration)
             {
                 AutoresizingMask =
                     NSViewResizingMask.WidthSizable | NSViewResizingMask.HeightSizable,
                 NavigationDelegate = navigation,
                 UIDelegate = browserUi,
+                Hidden = true,
             };
-            await AuthenticateAsync(http.Token);
-            if (exiting)
-                return;
-            window.ContentView.AddSubview(view);
+            window.ContentView.AddSubview(view, NSWindowOrderingMode.Below, placeholder);
             frame.Attach(view);
-            // Hidden beneath the web view, the startup label would otherwise remain in the
-            // accessibility tree.
-            status.RemoveFromSuperview();
-            view.LoadRequest(new NSUrlRequest(new NSUrl(endpoint.AbsoluteUri)));
+            await SwitchAsync(instances.Selected, retry: false);
         }
         catch (Exception error)
         {
             Console.Error.WriteLine(error);
-            status.StringValue = "Foxwarm could not start.\n\n" + error.Message;
-            if (host is not null)
-            {
-                var failedHost = host;
-                host = null;
-                await failedHost.DisposeAsync();
-            }
+            if (!exiting)
+                ShowMessage("Foxwarm could not start.\n\n" + error.Message);
+            await StopLocalHostAsync();
         }
     }
 
-    private async Task AuthenticateAsync(string token)
+    /// <summary>
+    /// Shows the selected instance: starts local Main on demand, closes the previous
+    /// instance's app windows and moves the scope and its resource rules before navigating.
+    /// </summary>
+    private async Task SwitchAsync(Uri? remote, bool retry = true)
     {
-        using var handler = new HttpClientHandler
+        if (exiting || view is null || frame is null || instances is null || rulesStore is null)
+            return;
+        var current = ++generation;
+        await switching.WaitAsync();
+        try
         {
-            UseCookies = false,
-            AllowAutoRedirect = false,
-            UseProxy = false,
-        };
-        using var client = new HttpClient(handler) { BaseAddress = endpoint };
-        using var response = await client.PostAsJsonAsync(
-            "api/auth",
-            new JsonObject { ["token"] = token },
-            MainJsonContext.Text.JsonObject
+            if (current != generation || exiting)
+                return;
+            instances.Select(remote);
+            CloseAppWindows();
+            Uri target;
+            if (remote is null)
+            {
+                if (local is null)
+                    ShowMessage("Starting Foxwarm…");
+                var endpoint = await EnsureLocalAsync(retry);
+                if (current != generation || exiting)
+                    return;
+                if (endpoint is null)
+                {
+                    ShowMessage(
+                        "Foxwarm could not start.\n\n" + localError,
+                        ("Try Again", () => _ = SwitchAsync(null)),
+                        ("Switch Instance", null)
+                    );
+                    return;
+                }
+                target = endpoint;
+            }
+            else
+                target = remote;
+            if (scope != target || view.Hidden)
+                ShowMessage(IsLocal(target) ? "Opening Foxwarm…" : "Opening " + DesktopInstances.Label(target) + "…");
+            if (scope != target || ruleList is null)
+            {
+                var rules = await CompileRulesAsync(target);
+                if (current != generation || exiting)
+                    return;
+                var controller = view.Configuration.UserContentController;
+                controller.RemoveAllContentRuleLists();
+                controller.AddContentRuleList(rules);
+                ruleList = rules;
+            }
+            scope = target;
+            frame.SetScope(target);
+            view.LoadRequest(new NSUrlRequest(new NSUrl(target.AbsoluteUri)));
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException or NSErrorException)
+        {
+            if (current == generation && !exiting)
+                ShowMessage(
+                    "Foxwarm could not open.\n\n" + error.Message,
+                    ("Try Again", () => _ = SwitchAsync(instances.Selected)),
+                    ("Switch Instance", null)
+                );
+        }
+        finally
+        {
+            switching.Release();
+        }
+    }
+
+    /// <summary>Blocks HTTP(S) loads outside the scope, in every window of the app.</summary>
+    private async Task<WKContentRuleList> CompileRulesAsync(Uri target)
+    {
+        var prefix = target.GetLeftPart(UriPartial.Authority) + target.AbsolutePath;
+        var rules = new JsonArray(
+            new JsonObject
+            {
+                ["trigger"] = new JsonObject { ["url-filter"] = "^https?://" },
+                ["action"] = new JsonObject { ["type"] = "block" },
+            },
+            Allow("^" + Regex.Escape(prefix))
         );
-        response.EnsureSuccessStatusCode();
-        using var properties = new NSMutableDictionary
+        // A base path without its trailing slash is the instance's root too. Content-rule
+        // filters have no alternation, so each form is its own rule.
+        if (target.AbsolutePath != "/")
         {
-            [NSHttpCookie.KeyName] = new NSString("foxwarm_token"),
-            [NSHttpCookie.KeyValue] = new NSString(Uri.EscapeDataString(token)),
-            [NSHttpCookie.KeyDomain] = new NSString(endpoint!.Host),
-            [NSHttpCookie.KeyPath] = new NSString(endpoint.AbsolutePath),
-            [NSHttpCookie.KeyExpires] = NSDate.FromTimeIntervalSinceNow(365 * 24 * 60 * 60),
-            [NSHttpCookie.KeySameSitePolicy] = NSHttpCookie.KeySameSiteStrict,
-            [new NSString("HttpOnly")] = new NSString("TRUE"),
-        };
-        using var cookie = new NSHttpCookie(properties);
-        await view!.Configuration.WebsiteDataStore.HttpCookieStore.SetCookieAsync(cookie);
+            var bare = Regex.Escape(prefix.TrimEnd('/'));
+            rules.Add((JsonNode)Allow("^" + bare + "$"));
+            rules.Add((JsonNode)Allow("^" + bare + "\\?"));
+        }
+        return await rulesStore!.CompileContentRuleListAsync("FoxwarmInstanceResources", rules.ToJsonText());
+
+        static JsonObject Allow(string filter) =>
+            new()
+            {
+                ["trigger"] = new JsonObject { ["url-filter"] = filter },
+                ["action"] = new JsonObject { ["type"] = "ignore-previous-rules" },
+            };
+    }
+
+    /// <summary>Replaces the page with a message and optional actions; an action without a callback opens the instance menu.</summary>
+    private void ShowMessage(string text, params (string Label, Action? Action)[] buttons)
+    {
+        if (view is not null)
+            view.Hidden = true;
+        frame?.ResetRegions();
+        status.StringValue = text;
+        foreach (var button in actionButtons)
+        {
+            actions.RemoveView(button);
+            button.Dispose();
+        }
+        actionButtons.Clear();
+        foreach (var (label, action) in buttons)
+        {
+            NSButton? created = null;
+            created = NSButton.CreateButton(label, () =>
+            {
+                if (action is not null)
+                    action();
+                else
+                    ShowInstanceMenu(created!);
+            });
+            actionButtons.Add(created);
+            actions.AddArrangedSubview(created);
+        }
+        actions.Hidden = buttons.Length == 0;
+        placeholder.Hidden = false;
+    }
+
+    private void ShowPage()
+    {
+        placeholder.Hidden = true;
+        if (view is not null)
+            view.Hidden = false;
+    }
+
+    private void CloseAppWindows()
+    {
+        foreach (var popup in popups.ToArray())
+            popup.Window.Close();
     }
 
     /// <summary>
-    /// Opens a same-origin or blank new-window request as an app window. Its web view must
-    /// be built from WebKit's configuration, which keeps the opener relationship.
+    /// Opens a new-window request in the scope as an app window. Its web view must be built
+    /// from WebKit's configuration, which keeps the opener relationship.
     /// </summary>
     private WKWebView OpenWindow(
         WKWebView opener,
@@ -231,11 +319,12 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             opener.Window,
             configuration,
             ruleList!,
-            endpoint!,
-            DesktopNavigation.FrameFor(endpoint!, url),
+            scope!,
+            DesktopNavigation.FrameFor(scope!, url),
             target == DesktopTarget.Blank,
             features,
-            closed => popups.Remove(closed)
+            closed => popups.Remove(closed),
+            (webView, anchor) => ShowInstanceMenu(webView, anchor)
         );
         var policy = new Navigation(this, popup.Frame, popup);
         popup.Navigation = policy;
@@ -270,23 +359,13 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
     public override bool ApplicationShouldTerminateAfterLastWindowClosed(NSApplication sender) =>
         false;
 
-    private async Task ObserveHostAsync()
-    {
-        await host!.WaitForShutdownAsync();
-        NSApplication.SharedApplication.BeginInvokeOnMainThread(() =>
-        {
-            if (!exiting && host is not null)
-                NSApplication.SharedApplication.Terminate(null);
-        });
-    }
-
     public override NSApplicationTerminateReply ApplicationShouldTerminate(NSApplication sender)
     {
         if (!exiting)
         {
             exiting = true;
-            foreach (var popup in popups.ToArray())
-                popup.Window.Close();
+            downloads?.Close();
+            CloseAppWindows();
             _ = StopAsync(sender);
         }
         return NSApplicationTerminateReply.Later;
@@ -298,8 +377,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         {
             await startup;
             view?.StopLoading();
-            if (host is not null)
-                await host.DisposeAsync();
+            await StopLocalHostAsync();
         }
         finally
         {
@@ -316,13 +394,55 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         public override void DidStartProvisionalNavigation(WKWebView webView, WKNavigation navigation) =>
             frame?.ResetRegions();
 
+        public override void DidFinishNavigation(WKWebView webView, WKNavigation navigation)
+        {
+            if (popup is null && !owner.exiting && !DesktopNavigation.IsBlank(webView.Url?.AbsoluteString))
+                owner.ShowPage();
+        }
+
+        public override void DidFailProvisionalNavigation(WKWebView webView, WKNavigation navigation, NSError error) =>
+            Failed(error);
+
+        public override void DidFailNavigation(WKWebView webView, WKNavigation navigation, NSError error) =>
+            Failed(error);
+
+        // The main window's document could not load: the instance isn't reachable.
+        private void Failed(NSError error)
+        {
+            if (popup is not null || owner.exiting || owner.scope is not { } scope)
+                return;
+            // A navigation replaced by another one, or refused by the navigation policy.
+            if (
+                (error.Domain == NSError.NSUrlErrorDomain.ToString() && error.Code == (long)NSUrlError.Cancelled)
+                || (error.Domain == "WebKitErrorDomain" && error.Code == 102)
+            )
+                return;
+            owner.ShowMessage(
+                owner.IsLocal(scope) ? "Foxwarm could not open." : DesktopInstances.Label(scope) + " could not be reached.",
+                ("Try Again", () => _ = owner.SwitchAsync(owner.instances?.Selected)),
+                ("Switch Instance", null)
+            );
+        }
+
         public override void DecidePolicy(
             WKWebView webView,
             WKNavigationAction action,
             Action<WKNavigationActionPolicy> decisionHandler
         )
         {
-            var target = DesktopNavigation.Classify(owner.endpoint!, action.Request.Url?.AbsoluteString);
+            var url = action.Request.Url?.AbsoluteString;
+            // A link with the download attribute, including blob: and data: links that pages
+            // build; any other download request falls through to the navigation policy.
+            if (
+                action.ShouldPerformDownload
+                && !owner.exiting
+                && DesktopDownloadPolicy.Allows(owner.scope!, url, webView.Url?.AbsoluteString)
+            )
+            {
+                decisionHandler(WKNavigationActionPolicy.Download);
+                return;
+            }
+            var target = DesktopNavigation.Classify(owner.scope!, url);
             var mainFrame = action.TargetFrame?.MainFrame != false;
             if (target is DesktopTarget.App or DesktopTarget.Blank)
             {
@@ -337,6 +457,52 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             if (target == DesktopTarget.Browser)
                 OpenExternal(action.Request.Url);
             popup?.LeftApp();
+        }
+
+        // A response marked as an attachment, or one WebKit can't show, is a download.
+        public override void DecidePolicy(
+            WKWebView webView,
+            WKNavigationResponse navigationResponse,
+            Action<WKNavigationResponsePolicy> decisionHandler
+        )
+        {
+            var response = navigationResponse.Response;
+            if (
+                navigationResponse.CanShowMimeType
+                && !DesktopDownloadPolicy.IsAttachment(Header(response, "Content-Disposition"))
+            )
+            {
+                decisionHandler(WKNavigationResponsePolicy.Allow);
+                return;
+            }
+            decisionHandler(
+                !owner.exiting
+                && DesktopDownloadPolicy.Allows(owner.scope!, response.Url?.AbsoluteString, webView.Url?.AbsoluteString)
+                    ? WKNavigationResponsePolicy.Download
+                    : WKNavigationResponsePolicy.Cancel
+            );
+        }
+
+        public override void NavigationActionDidBecomeDownload(
+            WKWebView webView,
+            WKNavigationAction navigationAction,
+            WKDownload download
+        ) => owner.downloads!.Start(download);
+
+        public override void NavigationResponseDidBecomeDownload(
+            WKWebView webView,
+            WKNavigationResponse navigationResponse,
+            WKDownload download
+        ) => owner.downloads!.Start(download);
+
+        private static string? Header(NSUrlResponse response, string name)
+        {
+            if (response is not NSHttpUrlResponse http)
+                return null;
+            foreach (var (key, value) in http.AllHeaderFields)
+                if (string.Equals(key.ToString(), name, StringComparison.OrdinalIgnoreCase))
+                    return value.ToString();
+            return null;
         }
     }
 
@@ -406,7 +572,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         )
         {
             var url = action.Request.Url?.AbsoluteString;
-            var target = DesktopNavigation.Classify(owner.endpoint!, url);
+            var target = DesktopNavigation.Classify(owner.scope!, url);
             if (owner.exiting || target is DesktopTarget.Browser or DesktopTarget.Ignore)
             {
                 // Returning no web view makes window.open return null.

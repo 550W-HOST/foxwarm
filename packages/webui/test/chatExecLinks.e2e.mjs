@@ -42,7 +42,11 @@ before(async () => {
       row('model', [{ text: 'Reference answer' }]),
     ]
     let runtimeState = { state: 'idle', busy: false, queueLength: 0 }
-    let execs = [{ execId: 'quiet-owl', nodeId: 'master', command: 'sleep 600', startedAt: Date.now() - 65000, elapsedMs: 65000, cwd: '/work', logPath: '/tmp/exec/q/output.log', stopRequested: false }]
+    const report = "cd /work && python3 - <<'PY'\\nimport json\\nprint(json.dumps({'ok': True}))\\nPY\\necho done"
+    let execs = [
+      { execId: 'quiet-owl', nodeId: 'master', command: 'sleep 600', startedAt: Date.now() - 65000, elapsedMs: 65000, cwd: '/work', logPath: '/tmp/exec/q/output.log', stopRequested: false },
+      { execId: 'warm-lynx', nodeId: 'gpu-1', command: report, summary: 'Generate the nightly report', startedAt: Date.now() - 125000, elapsedMs: 125000, cwd: '/work', logPath: '/tmp/exec/w/output.log', stopRequested: false },
+    ]
     const session = () => ({ id: 'fixture/execs', busy: false, runtimeState, queueLength: 0, messageCount: messages.length, historyVersion: 1, runningExecs: execs.length })
     window.stopRequests = []
     window.fixtureStopOutcome = 'stopped'
@@ -156,23 +160,103 @@ test('in the grouped view a link reveals a counterpart inside a collapsed group'
 test('the status row lists running commands and stops one', async () => {
   await mount()
   const control = await page.waitForSelector('[data-running-commands-control] button')
-  assert.equal(await control.evaluate(element => element.textContent), '1 running command')
+  assert.equal(await control.evaluate(element => element.textContent), '2 running commands')
   await control.click()
   await page.waitForSelector('[data-running-command="quiet-owl"]')
   assert.match(await page.$eval('[data-running-command="quiet-owl"]', element => element.textContent), /sleep 600/)
   await screenshot('running-commands')
 
+  const stop = '[data-running-command="quiet-owl"] [data-running-command-stop]'
   await page.evaluate(() => { window.fixtureStopOutcome = 'unsupported' })
-  await page.click('[data-running-command-stop]')
+  await page.click(stop)
   await page.waitForSelector('[data-running-command="quiet-owl"] [role="alert"]')
-  assert.equal(await page.$eval('[data-running-command-stop]', element => element.disabled), false, 'a refused stop can be retried')
+  assert.equal(await page.$eval(stop, element => element.disabled), false, 'a refused stop can be retried')
 
   await page.evaluate(() => { window.fixtureStopOutcome = 'stopped' })
-  await page.click('[data-running-command-stop]')
-  await page.waitForFunction(() => document.querySelector('[data-running-command-stop]')?.textContent === 'Stopping…')
+  await page.click(stop)
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent === 'Stopping…', {}, stop)
   assert.deepEqual(await page.evaluate(() => window.stopRequests.map(url => new URL(url, location.href).pathname.replace(/^.*\/sessions\//, ''))), [
     'fixture%2Fexecs/execs/quiet-owl/stop', 'fixture%2Fexecs/execs/quiet-owl/stop',
   ])
   await page.evaluate(() => window.fixture.finishAll())
   await page.waitForFunction(() => !document.querySelector('[data-running-commands-control]'))
+})
+
+const commandRow = execId => page.$eval(`[data-running-command="${execId}"]`, row => {
+  const label = row.querySelector('[data-running-command-label]')
+  const text = row.querySelector('[data-running-command-text]')
+  return {
+    label: label.textContent,
+    kind: label.dataset.runningCommandLabel,
+    expanded: row.querySelector('[data-running-command-toggle]').getAttribute('aria-expanded'),
+    text: text?.textContent ?? null,
+    heredoc: text ? [...text.querySelectorAll('span')].filter(span => span.className.includes('bg-fw-info-surface')).map(span => span.textContent) : [],
+    keywords: text ? [...text.querySelectorAll('.text-fw-syntax-keyword')].map(span => span.textContent) : [],
+  }
+})
+
+test('running command rows show the summary; expanding shows the highlighted command with its heredoc', async () => {
+  await mount()
+  await page.click('[data-running-commands-control] button')
+  await page.waitForSelector('[data-running-command="warm-lynx"]')
+  assert.deepEqual(await commandRow('warm-lynx'), { label: 'Generate the nightly report', kind: 'summary', expanded: 'false', text: null, heredoc: [], keywords: [] })
+  assert.match(await page.$eval('[data-running-command="warm-lynx"]', row => row.textContent), /gpu-1.*2m/)
+  // Without a summary the row falls back to the command's first line.
+  assert.deepEqual(await commandRow('quiet-owl'), { label: 'sleep 600', kind: 'command', expanded: 'false', text: null, heredoc: [], keywords: [] })
+
+  await page.click('[data-running-command="warm-lynx"] [data-running-command-toggle]')
+  const expanded = await commandRow('warm-lynx')
+  assert.equal(expanded.expanded, 'true')
+  assert.equal(expanded.label, 'Generate the nightly report', 'the summary stays as the row heading')
+  assert.equal(expanded.text, "cd /work && python3 - <<'PY'\nimport json\nprint(json.dumps({'ok': True}))\nPY\necho done")
+  assert.deepEqual(expanded.heredoc, ["import json\nprint(json.dumps({'ok': True}))\n"], 'the heredoc body is marked like the exec card')
+  assert.ok(expanded.keywords.includes('import'), 'the heredoc body is highlighted as Python')
+  assert.equal(await page.$eval('[data-running-command="warm-lynx"] [data-running-command-stop]', element => element.disabled), false, 'Stop stays available')
+  await screenshot('running-commands-expanded')
+
+  // On a phone a tap expands and collapses a row; Stop is a visible control, not a hover one.
+  await page.setViewport({ width: 390, height: 760, isMobile: true, hasTouch: true, deviceScaleFactor: 2 })
+  await page.goto(`${fixtureUrl}/?view=detailed`, { waitUntil: 'load' })
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('Reference answer'))
+  await page.tap('[data-running-commands-control] button')
+  await page.waitForSelector('[data-running-command="warm-lynx"]')
+  await page.tap('[data-running-command="warm-lynx"] [data-running-command-toggle]')
+  await page.waitForSelector('[data-running-command="warm-lynx"] [data-running-command-text]')
+  const sizes = await page.$eval('[data-running-command="warm-lynx"]', row => [row.querySelector('[data-running-command-toggle]'), row.querySelector('[data-running-command-stop]')].map(button => Math.round(button.getBoundingClientRect().height)))
+  assert.ok(sizes.every(height => height >= 40), JSON.stringify(sizes))
+  await screenshot('running-commands-expanded-mobile')
+  await page.tap('[data-running-command="warm-lynx"] [data-running-command-toggle]')
+  assert.equal((await commandRow('warm-lynx')).text, null, 'a tap collapses the row again')
+})
+
+// The popover stays inside the viewport on phones in portrait and landscape, collapsed and with a
+// row expanded, also when the trigger sits at the right edge of the status row.
+test('the running commands popover stays inside a phone viewport', async () => {
+  const bounds = () => page.$eval('[data-running-commands-control] [role="dialog"]', element => {
+    const rect = element.getBoundingClientRect()
+    return { left: Math.round(rect.left), right: Math.round(rect.right), top: Math.round(rect.top), bottom: Math.round(rect.bottom), width: innerWidth, height: innerHeight, visible: getComputedStyle(element).visibility }
+  })
+  const inside = async label => {
+    await wait(100)
+    const box = await bounds()
+    await screenshot(`running-commands-mobile-${label.replace(' ', '-')}`)
+    assert.equal(box.visible, 'visible', label)
+    assert.ok(box.left >= 0 && box.right <= box.width && box.top >= 0 && box.bottom <= box.height, `${label}: ${JSON.stringify(box)}`)
+  }
+  for (const [name, viewport] of [['portrait', { width: 360, height: 780 }], ['landscape', { width: 844, height: 390 }]]) {
+    await page.setViewport({ ...viewport, isMobile: true, hasTouch: true, deviceScaleFactor: 2 })
+    await page.goto(`${fixtureUrl}/?view=detailed`, { waitUntil: 'load' })
+    await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('Reference answer'))
+    // Push the trigger to the right edge, where a long runtime caption can leave it.
+    await page.$eval('[data-running-commands-control]', element => {
+      element.style.position = 'relative'
+      element.style.left = `${innerWidth - element.getBoundingClientRect().right - 4}px`
+    })
+    await page.tap('[data-running-commands-control] button')
+    await page.waitForSelector('[data-running-command="warm-lynx"]')
+    await inside(`${name} collapsed`)
+    await page.tap('[data-running-command="warm-lynx"] [data-running-command-toggle]')
+    await page.waitForSelector('[data-running-command="warm-lynx"] [data-running-command-text]')
+    await inside(`${name} expanded`)
+  }
 })

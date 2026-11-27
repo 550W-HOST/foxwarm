@@ -211,6 +211,22 @@ public sealed class SessionEntry
     public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
 
     /// <summary>
+    /// A Stop that its turn or processor did not observe before releasing the claim. Read after
+    /// the release: <see cref="BeginStop(bool, out bool)"/> decides under the same gate, so a Stop
+    /// either sees the claim released and leaves no mark, or its mark is visible here.
+    /// </summary>
+    internal bool HasUnobservedStop
+    {
+        get
+        {
+            lock (stateGate)
+                return State.Stopping
+                    && !State.Busy
+                    && Volatile.Read(ref processorClaim) == 0;
+        }
+    }
+
+    /// <summary>
     /// Runs the release observer once the releasing owner has finished its own bookkeeping, so the
     /// observer never widens the window in which a new processor could claim this entry while the
     /// previous one is still registered. Observer failures are recorded, not propagated.
@@ -354,10 +370,24 @@ public sealed class SessionEntry
             handle.Dispose();
     }
 
-    internal CancellationHandle? BeginStop(bool runQueued = false)
+    internal CancellationHandle? BeginStop(bool runQueued = false) => BeginStop(runQueued, out _);
+
+    /// <summary>
+    /// Marks the Session stopping for its running turn or the admitted processor about to claim it.
+    /// With neither (<paramref name="idle"/>), nothing would observe the mark, so none is left:
+    /// stopping without busy is not a valid persisted state and would block later input.
+    /// </summary>
+    internal CancellationHandle? BeginStop(bool runQueued, out bool idle)
     {
         lock (stateGate)
         {
+            // A history mutation holds the processor claim without running a turn.
+            idle =
+                !State.Busy
+                && activeCancellation is null
+                && (Volatile.Read(ref processorClaim) == 0 || historyMutation != 0);
+            if (idle)
+                return null;
             State.Stopping = true;
             if (runQueued)
                 State.Meta["runQueuedAfterStop"] = true;

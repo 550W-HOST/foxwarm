@@ -15,7 +15,8 @@ internal sealed partial class LocalExecManager
         long StartedAt,
         string? Cwd,
         string LogPath,
-        bool StopRequested
+        bool StopRequested,
+        string? Summary
     );
 
     internal enum StopOutcome
@@ -56,7 +57,8 @@ internal sealed partial class LocalExecManager
                 record.StartedAt,
                 record.Observation.Cwd ?? record.Cwd,
                 record.LogPath,
-                record.StopRequestedAt is not null
+                record.StopRequestedAt is not null,
+                record.Summary
             ))
             .ToArray();
 

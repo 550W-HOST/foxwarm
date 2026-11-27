@@ -2,14 +2,13 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, unlink, access } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { seedArchiveBranches, seedCatalog } from './stateSeeds.mjs'
 import { requireReceiptExecId } from './execReceipt.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
@@ -51,10 +50,7 @@ await unlink(join(sessions, 'missing.json')); await writeFile(join(sessions, 'co
 for (const [id, patch] of [['unsupported', { sessionStateVersion: 99 }], ['busy', { busy: true, busyStartedAt: 1 }], ['stopping', { stopping: true }]]) await writeFile(join(sessions, id + '.json'), JSON.stringify(authority(id, patch)))
 // This is an existing crash-style authority/projection mismatch fixture, not a fault-reachability claim.
 await seed('lost-hint', { queue: [{ type: 'user', parts: [{ text: 'CASE:lost-hint' }] }] })
-const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
-const sourceCatalog = new catalogModule.SessionCatalogStore(join(state, 'catalog.sqlite')); sourceCatalog.initializeEmpty(); sourceCatalog.replaceAll(rows); sourceCatalog.close()
-const seedFile = join(fixture.root, 'seed-rows.json'); await writeFile(seedFile, JSON.stringify(rows))
-execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedFile], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+await seedCatalog(fixture.data, rows); seedArchiveBranches(fixture.data, rows)
 const database = join(state, 'catalog.sqlite')
 function sql(statement, parameters = []) { const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare(statement).all(...parameters) } finally { db.close() } }
 function updateCatalog(id, patch) {

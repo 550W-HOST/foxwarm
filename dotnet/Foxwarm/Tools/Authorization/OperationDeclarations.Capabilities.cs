@@ -105,6 +105,13 @@ internal static partial class OperationDeclarations
             [SelfBranch("call", null, "continues a run owned by the caller")],
             [Primary(), Nested("each call_tool or ctl() call under its own gate"), ModelRequest()]
         ),
+        // A runnable skill's entry: the skill subsystem reads it (as `skill load` reads
+        // SKILL.md), then it runs as the caller's inline script.
+        Declare(
+            "builtin:run_skill",
+            [Call(Op("agent.view", "targetAgent=skill-agent"))],
+            [Primary(), Nested("each call_tool or ctl() call under its own gate"), ModelRequest()]
+        ),
         Declare(
             "builtin:list_toolscript_runs",
             [SelfBranch("call", null, "lists runs owned by the caller")],
@@ -277,6 +284,17 @@ internal static partial class OperationDeclarations
                     "update-display-name",
                     Op("session.control", "targetSession=target-session", "with.change==rename")
                 ),
+                // Archiving is presentation of the Session list, controlled like its name.
+                Branch(
+                    "archive",
+                    "archive",
+                    Op("session.control", "targetSession=target-session", "with.change==archive")
+                ),
+                Branch(
+                    "unarchive",
+                    "unarchive",
+                    Op("session.control", "targetSession=target-session", "with.change==archive")
+                ),
                 Branch(
                     "set-parent",
                     "update-parent",
@@ -359,8 +377,19 @@ internal static partial class OperationDeclarations
             [
                 Branch("list", "list", Op("agent.view", "targetAgent=skill-agent")),
                 Branch("load", "load", Op("agent.view", "targetAgent=skill-agent")),
+                // The skill subsystem discloses the files; their destinations are the
+                // target-write sub-requests, checked like any write on that Node.
+                Branch("copy", "copy", Op("agent.view", "targetAgent=skill-agent")),
             ],
-            [Primary()]
+            [
+                Primary(),
+                Sub(
+                    "target-write",
+                    "node:write",
+                    "write of each destination file on the target Node",
+                    "action:copy"
+                ) with { PathArg = "targetPath" },
+            ]
         ) with
         {
             Normalize = ActionNormalization.TrimLower,

@@ -148,13 +148,13 @@ internal sealed partial class SessionManager
             // Creation compensation owns only this unused candidate, not general exec cleanup.
             await RetireDeletionOwnerAsync(operation, id, owner);
             await DeleteStageAsync(operation, "json-unlink", id);
-            UnlinkActive(owner.AuthorityStore.AuthorityPath, () => operation.JsonRemoved.Add(id));
+            Storage.Authority.DeleteAuthority(
+                owner.AuthorityStore.SessionId,
+                () => operation.JsonRemoved.Add(id)
+            );
             operation.JsonDurable.Add(id);
             await DeleteStageAsync(operation, "frontier-unlink", id);
-            UnlinkActive(
-                Path.Combine(root, "state", "sessions", id + ".frontier.json"),
-                () => operation.FrontierRemoved.Add(id)
-            );
+            Storage.Authority.DeleteLegacyArtifacts(id, () => operation.FrontierRemoved.Add(id));
             operation.FrontierDurable.Add(id);
             await DeleteStageAsync(operation, "channels", id);
             deletionChannels.Detach(id);

@@ -75,13 +75,9 @@ Use `TOP_DOWN_CHILD.md` as the prompt for a child/subagent session assigned to t
 
 ## Method 1 Details: Batch Generator
 
-There are two supported batch runners. The standalone Python runner is:
+There are two supported batch runners. The standalone Python runner is the skill's `generate_code_index_standalone.py`.
 
-```text
-skills/code-index/generate_code_index_standalone.py
-```
-
-It calls models via the production `foxwarm model` CLI (no Foxwarm server process is required). Run it directly with `python3`. The existing `generate_code_index.py` remains the Foxwarm ToolScript-compatible runner for `run_script`; the standalone runner is an additional shell/background-friendly path, not a replacement for existing ToolScript automation or ordinary targeted maintenance through the skill.
+It calls models via the production `foxwarm model` CLI (no Foxwarm server process is required). Run it directly with `python3`. The existing `generate_code_index.py` remains the Foxwarm ToolScript runner (`ctl skill run code-index --script generate_code_index.py`); the standalone runner is an additional shell/background-friendly path, not a replacement for existing ToolScript automation or ordinary targeted maintenance through the skill.
 
 ### Prerequisites
 
@@ -103,21 +99,23 @@ Design decisions are not extracted by the generator. Add only user-confirmed dec
 
 The runners retain their legacy `~/code-index/{project}/` default for existing automation. For a new repository-local index, pass `--output /path/to/project/docs/code-index` (or the equivalent ToolScript `output` argument) explicitly.
 
+Copy the generator to the Node where it runs: `ctl skill copy code-index <dir>/generate_code_index_standalone.py --path generate_code_index_standalone.py`.
+
 ```bash
 # Full generation
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44
+python3 <dir>/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44
 
 # Single phase (resume from cached groupings)
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units
+python3 <dir>/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units
 
 # Test with specific files only
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units --files src/main.ts,src/server.ts
+python3 <dir>/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units --files src/main.ts,src/server.ts
 
 # Override output directory
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --output /custom/index/path
+python3 <dir>/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --output /custom/index/path
 
 # Explicitly regenerate existing documents (may replace manual edits/Design Decisions)
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --force
+python3 <dir>/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --force
 ```
 
 Options:
@@ -134,7 +132,7 @@ Options:
 For large projects the script can take a long time (each unit ~60s). Run it in the background and check the log:
 
 ```bash
-python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/project --model gpu44 > /tmp/code-index.log 2>&1 &
+python3 <dir>/generate_code_index_standalone.py --project my-project --source /path/to/project --model gpu44 > /tmp/code-index.log 2>&1 &
 ```
 
 The script is resumable: it reuses `_work/groupings.json` only when its fingerprint matches the current source/file selection/project/model/CLI/timeout. Existing non-empty units are resumed individually; an existing module, thread, or overview phase is retained as a whole unless `--force` is explicit, which avoids mixing a new model plan into curated docs. Empty or failed model responses are never written. Absolute paths, parent traversal, files outside the scanned allowlist, unsafe output-directory symlinks, and unsafe model-generated names are rejected. Use a separate output directory for experiments; use `--force` only after reviewing what it may replace.
@@ -143,9 +141,11 @@ The script is resumable: it reuses `_work/groupings.json` only when its fingerpr
 
 Existing Foxwarm automation can continue using the original ToolScript entry:
 
-```python
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project", "output": "/path/to/my-project/docs/code-index"})
 ```
+ctl skill run code-index --script generate_code_index.py --args @args
+```
+
+with `args` `{"project": "my-project", "source": "/path/to/my-project", "output": "/path/to/my-project/docs/code-index"}`. The generator's model requests run as this Session.
 
 It uses ToolScript host APIs such as `call_tool(...)` and `request_model_without_context(...)`; do not run that compatibility entry with ordinary Python. Prefer the standalone runner when you need strict path/output validation, fingerprinted resume state, or a long-running shell/background job.
 

@@ -141,7 +141,17 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
-  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>; approval?: ToolApprovalMeta }
+  __meta?: {
+    resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>
+    toolScriptSubCalls?: ToolScriptSubCall[]
+    sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>
+    approval?: ToolApprovalMeta
+    /** What the call resolved to; `node` is its execution Node for `source: 'node'`. */
+    target?: { source?: string; name?: string; node?: string }
+    exec?: { nodeId?: string; cwd?: string; sessionCwd?: string; finalCwd?: string }
+    /** The Session's Node and cwd once the call settled, as later file links resolve. */
+    placementAfter?: { node?: string; cwd?: string }
+  }
   name: string
   response: any
 }
@@ -193,6 +203,8 @@ export interface MessagePart {
   phase?: 'commentary' | 'final_answer'
   text?: string
   system?: string
+  /** Request bookkeeping replayed by per-message-effort models; never displayed. */
+  effortChange?: { modelId: string; previousEffort: string; effort: string }
   thinking?: string
   providerMeta?: MessagePartProviderMeta
   functionCall?: FunctionCall
@@ -468,6 +480,11 @@ const isInternalSystemPart = (part: MessagePart): boolean => {
   return tag.attrs.kind === 'session-settings-changed'
     || (tag.attrs.kind === 'session-boundary' && tag.attrs.event === 'first-run')
 }
+
+/** A recorded effort change renders nothing for the model and has no timeline row in any view. */
+export const isEffortChangeMessage = (message: Message): boolean => (
+  message.role === 'user' && message.modelVisible === false && message.parts.length === 1 && !!message.parts[0].effortChange
+)
 
 export const isInternalTimelineMessage = (message: Message): boolean => {
   if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true

@@ -208,7 +208,7 @@ html.dark {
 .foxwarm-chat-md-label,
 .foxwarm-chat-lg-label { display: none; }
 
-.foxwarm-chat-root[data-compact-composer="true"] .foxwarm-inline-composer-editor {
+.foxwarm-chat-root[data-compact-composer="true"] .foxwarm-inline-composer-editor .cm-content {
   min-height: 35px;
 }
 
@@ -804,6 +804,28 @@ input, textarea, select { touch-action: manipulation; }
     color: inherit;
   }
 
+  /* Reply file links and expanded file-tool paths: one Code link style. */
+  a.foxwarm-code-link {
+    color: var(--foxwarm-color-accent);
+    font-weight: inherit;
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+
+  a.foxwarm-code-link:hover {
+    text-decoration-style: solid;
+  }
+
+  a.foxwarm-code-link:focus-visible {
+    outline: 1px solid var(--foxwarm-color-focus-ring);
+    outline-offset: 1px;
+    border-radius: 2px;
+  }
+
   .foxwarm-tool-call-summary {
     min-width: 0;
     max-width: 100%;
@@ -984,7 +1006,8 @@ html[data-foxwarm-component-treatment="console"] :is(
   button,
   input,
   textarea,
-  select
+  select,
+  .foxwarm-select
 ) {
   font-family: var(--foxwarm-console-font) !important;
 }
@@ -999,7 +1022,7 @@ html[data-foxwarm-component-treatment="console"] :is(
   font-family: var(--foxwarm-console-code-font-family) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] :is(button, input, select) {
+html[data-foxwarm-component-treatment="console"] :is(button, input, select, .foxwarm-select) {
   font-size: var(--foxwarm-console-font-control);
   line-height: var(--foxwarm-console-line-ui);
 }
@@ -1429,12 +1452,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   line-height: var(--foxwarm-console-line-ui) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea::placeholder {
-  color: var(--foxwarm-console-text-dim) !important;
-  opacity: 0.8;
-}
-
-.foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
+.foxwarm-inline-composer-editor .cm-content[data-empty="true"]::before {
   color: var(--foxwarm-color-text-muted);
   content: attr(data-placeholder);
   pointer-events: none;
@@ -1443,17 +1461,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   top: 0.5rem;
 }
 
-.foxwarm-composer-caret-anchor {
-  display: inline-block;
-  width: 0.25rem;
-  margin-inline-start: -0.25rem;
-  min-height: 1em;
-  overflow: hidden;
-  vertical-align: text-bottom;
-  white-space: nowrap;
-}
-
-html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
+html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor .cm-content[data-empty="true"]::before {
   color: var(--foxwarm-console-text-dim) !important;
   opacity: 0.8;
 }
@@ -1883,7 +1891,7 @@ html[data-foxwarm-component-treatment="console"][data-foxwarm-header-treatment="
 html[data-foxwarm-control-treatment="plain"] { --foxwarm-effective-control-radius: 2px; }
 html[data-foxwarm-control-treatment="pill"] { --foxwarm-effective-control-radius: 999px; }
 
-:is([data-theme-control], [data-tool-tag-tone], input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
+:is([data-theme-control], [data-tool-tag-tone], input:not([type="checkbox"]):not([type="radio"]), textarea, select, .foxwarm-select) {
   border-radius: var(--foxwarm-effective-control-radius) !important;
 }
 
@@ -2279,6 +2287,13 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 .foxwarm-workbench-tab-toolbar button { width: 28px; height: 28px; border-color: transparent; background: transparent; border-radius: 6px; }
 .foxwarm-workbench-tab-toolbar button:hover { background: var(--foxwarm-color-hover); }
 @media (pointer: coarse) { .foxwarm-workbench-tab-close { opacity: 1; } }
+@media (pointer: coarse) {
+  .foxwarm-terminal-kill { width: 28px; height: 28px; }
+  .foxwarm-terminal-list-open { min-height: 44px; }
+  .foxwarm-terminal-list-kill { width: 44px; height: 44px; }
+  .foxwarm-running-command-toggle { min-height: 40px; }
+  .foxwarm-running-command-stop { height: 40px; }
+}
 
 /* Full width only removes the Timeline cap, not the shared outer gutters. */
 .foxwarm-chat-messages-content[data-full-width="true"] {
@@ -2351,12 +2366,14 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 }
 @container foxwarm-setup (max-width: 699px) {
   .foxwarm-setup-navigation { padding: 4px 4px 0; overflow-x: auto; }
-  .foxwarm-setup-section-list [role="tab"] { padding: 10px 12px; font-size: 12px; }
+  /* Labels keep their width and the row scrolls, so a status icon never overlaps the next label. */
+  .foxwarm-setup-section-list { width: max-content; }
+  .foxwarm-setup-section-list [role="tab"] { flex-shrink: 0; gap: 6px; padding: 10px 12px; font-size: 12px; white-space: nowrap; }
 }
 
-/* Text-entry controls share compact, legible workbench typography. The code
+/* Text-entry controls and the Select trigger share compact, legible workbench typography. The code
  * editor and its fallback retain their independent code-font contract. */
-html[data-foxwarm-theme] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea):not(.monaco-editor *):not([data-editor-fallback] *) {
+html[data-foxwarm-theme] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea, .foxwarm-select):not(.monaco-editor *):not([data-editor-fallback] *) {
   border-radius: min(4px, var(--foxwarm-control-radius-px)) !important;
   font-size: var(--foxwarm-control-font-size-px) !important;
   font-weight: 400;
@@ -2374,6 +2391,7 @@ html[data-foxwarm-theme] .foxwarm-chat-composer-textarea {
   html[data-foxwarm-theme] :is(input, select, textarea, .foxwarm-chat-composer-textarea):not(.monaco-editor *):not([data-editor-fallback] *) { font-size: max(16px, var(--foxwarm-control-font-size-px)) !important; }
 }
 
+.foxwarm-select-sizer::before { content: attr(data-label); }
 .foxwarm-sidebar-frame { z-index: 40; }
 .status-badge { display: inline-flex; align-items: center; flex-shrink: 0; gap: 5px; border-radius: 5px; padding: 3px 7px; font-size: 11px; line-height: 18px; white-space: nowrap; color: var(--foxwarm-color-text-muted); background: var(--foxwarm-color-canvas); }
 .status-badge > span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; flex: none; background: currentColor; }
@@ -2651,6 +2669,10 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 
 .mobile-tasks-page .tasks-main, .mobile-history-page > [data-history-search-view], .mobile-setup-page [data-setup-section] { padding-top: calc(var(--mobile-page-header-height, 64px) + 8px); }
 .mobile-setup-page .foxwarm-setup-navigation { display: none; }
+/* System on phones: content scrolls under the floating header and clears the bottom safe band. */
+.mobile-system-page [data-system-scroll] { padding-top: calc(var(--mobile-page-header-height, 64px) + 8px); padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 24px); }
+.mobile-system-tabs { scrollbar-width: none; }
+.mobile-system-tabs::-webkit-scrollbar { display: none; }
 .mobile-history-page form { border: 0; background: transparent; padding: 0; }
 .mobile-header-circle[data-filtered]::after { content: ""; width: 5px; height: 5px; position: absolute; top: 6px; right: 6px; border-radius: 50%; background: var(--foxwarm-color-accent); }
 
@@ -2694,15 +2716,50 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .image-preview-action:hover { background: var(--foxwarm-color-hover); }
 .image-preview-action:disabled { opacity: .4; cursor: default; }
 .image-preview-action:focus-visible { outline: 2px solid var(--foxwarm-color-focus-ring); outline-offset: -2px; }
+.image-preview-position { flex: none; margin-right: 8px; color: var(--foxwarm-color-text-muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.image-preview-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .image-preview-stage { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
 .image-preview-surface { position: relative; }
 .image-preview-stage img { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: block; max-width: none; max-height: none; object-fit: contain; cursor: zoom-in; }
 .image-preview-stage[data-actual-size] { overflow: auto; }
 .image-preview-stage[data-actual-size] img { cursor: zoom-out; }
+.image-preview-stage[data-dragging], .image-preview-stage[data-dragging] img { cursor: grabbing; }
+/* Previous/next sit at the sides of the image area: shown on hover or focus, always on touch screens. */
+.image-preview-nav {
+  position: absolute; top: 50%; z-index: 1; display: inline-flex; width: 44px; height: 64px; margin-top: -32px; align-items: center; justify-content: center;
+  border: 1px solid var(--foxwarm-color-border); border-radius: 10px; color: var(--foxwarm-color-text);
+  background: color-mix(in srgb, var(--foxwarm-color-surface) 88%, transparent); box-shadow: 0 2px 8px rgb(0 0 0 / .12);
+  opacity: 0; transition: opacity 120ms ease-out;
+}
+.image-preview-nav[data-direction="previous"] { left: max(12px, env(safe-area-inset-left)); }
+.image-preview-nav[data-direction="next"] { right: max(12px, env(safe-area-inset-right)); }
+.image-preview-body:hover .image-preview-nav, .image-preview-nav:focus-visible { opacity: 1; }
+.image-preview-nav:hover { background: var(--foxwarm-color-surface); }
+.image-preview-nav:focus-visible { outline: 2px solid var(--foxwarm-color-focus-ring); outline-offset: 2px; }
+.image-preview-nav:disabled { visibility: hidden; }
+@media (hover: none) { .image-preview-nav { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .image-preview-nav { transition: none; } }
 .image-preview-stage > [role="status"] { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
 .image-preview-loading { position: absolute; color: var(--foxwarm-color-text-muted); font-size: 14px; }
 .image-preview-error { flex: none; padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); color: var(--foxwarm-color-warning); font-size: 12px; }
-@media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action { border: 1px solid ButtonText; } }
+@media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action, .image-preview-nav { border: 1px solid ButtonText; } .image-preview-nav { background: Canvas; } }
+/* Under a window frame the viewer is a full-window layer ([D-window-frame]): its header is the
+ * window's title row on the chrome, clear of the window controls and a drag surface around its
+ * controls, and the image area is one card below it, as in popup leaves. */
+html[data-foxwarm-frame] .image-preview-dialog { background: var(--foxwarm-color-canvas-edge); }
+html[data-foxwarm-frame] .image-preview-header {
+  gap: 2px; min-height: 0; height: var(--foxwarm-frame-title-height);
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 8px) 0 var(--foxwarm-frame-layer-start);
+  border-bottom: 0; background: transparent;
+}
+html[data-foxwarm-frame] .image-preview-header h2 { font-size: 12.5px; color: var(--foxwarm-color-text-strong); }
+html[data-foxwarm-window~="inactive"] .image-preview-header h2 { color: var(--foxwarm-color-text-muted); }
+html[data-foxwarm-frame] .image-preview-position { font-size: 12px; }
+html[data-foxwarm-frame] .image-preview-action { width: 32px; height: 32px; border-radius: 6px; }
+html[data-foxwarm-frame] .image-preview-action:hover:not(:disabled) { background: color-mix(in srgb, var(--foxwarm-color-text-strong) 9%, transparent); }
+html[data-foxwarm-frame] .image-preview-body { margin: 0 var(--foxwarm-frame-gutter) var(--foxwarm-frame-gutter); overflow: hidden; border: 1px solid var(--foxwarm-color-border); border-radius: 10px; background: var(--foxwarm-color-canvas); }
+html[data-foxwarm-frame] .image-preview-error { padding-top: 0; }
+@media (forced-colors: active) { html[data-foxwarm-frame] .image-preview-body { border-color: CanvasText; } }
 
 /* Window frame (windowFrame.ts). Inputs: html[data-foxwarm-frame] and
  * --foxwarm-frame-left/right/top, set by a Desktop host or, in an installed PWA's
@@ -2749,9 +2806,11 @@ html[data-foxwarm-frame] :is([data-frame-row][data-frame-in-band] [data-frame-dr
   app-region: drag; -webkit-app-region: drag; user-select: none; -webkit-user-select: none;
 }
 html[data-foxwarm-frame] [data-frame-drag] :is(button, a[href], input, select, textarea, summary, label, iframe, [contenteditable], [role="button"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]),
-html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag], .foxwarm-frame-hole) {
+html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag], [data-frame-layer], .foxwarm-frame-hole) {
   app-region: no-drag; -webkit-app-region: no-drag;
 }
+/* A full-window layer ([data-frame-layer]) owns the title row while it is open, narrow windows included. */
+html[data-foxwarm-frame-layer] .foxwarm-frame-strip { display: none; }
 @media (forced-colors: active) { .foxwarm-frame-strip { background: Canvas; } }
 
 /* While a dnd-kit drag is active (tab, pane or session) the cursor stays `grabbing` over every
@@ -2775,6 +2834,9 @@ html[data-foxwarm-frame] {
   --foxwarm-frame-strip-height: 40px;
   --foxwarm-frame-status-height: 30px;
   --foxwarm-frame-gutter: 8px;
+  /* Where a full-window layer's title starts: 14 px from the window edge or, after controls at the
+   * top left, where the brand row's emoji or logo starts (its menu button's 6 px padding). */
+  --foxwarm-frame-layer-start: max(14px, calc(var(--foxwarm-frame-left, 0px) + 6px));
 }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell {
   padding: 0 var(--foxwarm-frame-gutter) 0 0;
@@ -2789,8 +2851,16 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail-
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel [data-session-list-toolbar] { background: transparent; }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-frame { gap: 0; padding-left: 2px; }
 
+/* The instance's emoji in place of the logo, as tall as the logo. */
+.foxwarm-sidebar-brand-icon {
+  display: inline-block; max-width: 3em; overflow: hidden; white-space: nowrap;
+  font-size: 20px; line-height: 24px; font-weight: 400;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
 /* Brand row: one title row tall. Controls at the top left (macOS lights): it starts after
- * them and shows the logo only; the app name is in the menu bar. */
+ * them and shows the logo only, as the app name is in the menu bar; an instance's own
+ * emoji and name stay, the name only while it fits. */
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row {
   display: flex; align-items: center;
   height: var(--foxwarm-frame-title-height);
@@ -2798,9 +2868,20 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand
 }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] { flex: 1; min-width: 0; height: 100%; margin: 0; padding-left: 0; }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] h1 { gap: 8px; font-size: 15px; }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] h1 > svg { width: 20px; height: 20px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] .foxwarm-sidebar-brand-mark { width: 20px; height: 20px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-sidebar-brand] .foxwarm-sidebar-brand-icon { font-size: 17px; line-height: 20px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-instance-menu] { height: 32px; border-radius: 6px; border-color: transparent; background-color: transparent; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-instance-menu]:hover { background-color: color-mix(in srgb, var(--foxwarm-color-text-strong) 9%, transparent); }
 html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row { padding-left: max(12px, var(--foxwarm-frame-left, 0px)); }
-html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-wordmark { display: none; }
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-wordmark[data-brand-default] { display: none; }
+/* A configured name that doesn't fit (InstanceBrand marks the heading) leaves the icon alone
+ * instead of truncating: out of the flow, so the freed width drags, and clipped rather than
+ * hidden, so it still names the heading or the menu button. */
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell [data-instance-brand][data-brand-overflow] .foxwarm-sidebar-wordmark {
+  position: absolute; clip-path: inset(50%); pointer-events: none;
+}
+/* Its hover fill stays clear of the lights. */
+html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell [data-instance-menu] { margin-left: 0; }
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-nav { padding-top: 6px; }
 
 /* Rail: the expand toggle is the rail's title row; after the lights when they sit at the top left. */
@@ -2913,7 +2994,7 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-status-bar { 
 .foxwarm-popup-title-row {
   display: flex; flex-shrink: 0; align-items: center; gap: 8px;
   height: var(--foxwarm-frame-title-height);
-  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 12px) 0 max(14px, var(--foxwarm-frame-left, 0px));
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 12px) 0 var(--foxwarm-frame-layer-start);
 }
 .foxwarm-popup-title {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

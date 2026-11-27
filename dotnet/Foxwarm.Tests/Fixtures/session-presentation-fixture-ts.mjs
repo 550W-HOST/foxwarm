@@ -1,13 +1,17 @@
+// Execute the original TypeScript sidebar order and relation functions, pinned to the final TypeScript
+// revision. Needs full Git history.
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
-import path from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 
 const [inputPath, outputPath] = process.argv.slice(2)
-const root = process.env.FOXWARM_TS_ROOT
+const root = process.env.FOXWARM_REPO_ROOT
 if (!root || !inputPath || !outputPath) throw new Error('Source root and owned fixture paths are required')
-const source = await fs.readFile(path.join(root, 'src/channels/webuiChannel.ts'), 'utf8')
-const managerSource = await fs.readFile(path.join(root, 'src/sessionManager.ts'), 'utf8')
+const revision = '80f740477c25d3b42165bb0d201e74ebc5fd4479'
+const show = file => execFileSync('git', ['show', `${revision}:${file}`], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+const source = show('src/channels/webuiChannel.ts')
+const managerSource = show('src/sessionManager.ts')
 const file = ts.createSourceFile('source.ts', source, ts.ScriptTarget.Latest, true)
 const manager = ts.createSourceFile('manager.ts', managerSource, ts.ScriptTarget.Latest, true)
 const names = ['getWebUiSidebarOrder', 'getSessionTreeParentId', 'compareWebUiSidebarSessions', 'getWebUiSidebarSiblings', 'writeWebUiSidebarOrder', 'resolveOptionalSessionId', 'assertNoSidebarParentCycle']
@@ -17,7 +21,7 @@ const functions = names.map(name => {
   return node.getText(file)
 }).join('\n')
 const archive = manager.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'archiveSessions').getText(manager).replace(/^export\s+/, '')
-const relationText = await fs.readFile(path.join(root, 'src/session/relations.ts'), 'utf8')
+const relationText = show('src/session/relations.ts')
 const relationFile = ts.createSourceFile('relations.ts', relationText, ts.ScriptTarget.Latest, true)
 const relationFunctions = ['SessionRelationCycleError', 'buildCanonicalChildMap', 'collectSessionDescendants', 'assertNoParentCycle', 'resolveSessionParentId', 'setSessionParent'].map(name => {
   const node = relationFile.statements.find(node => (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name?.text === name)

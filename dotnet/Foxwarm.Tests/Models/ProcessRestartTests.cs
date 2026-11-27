@@ -166,9 +166,18 @@ public sealed class ProcessRestartTests
             var thirdRequest = JsonNode
                 .Parse((await server.RequestAt(2).WaitAsync(TimeSpan.FromSeconds(5))).Body)!
                 .AsObject();
+            ResponsesRequestShape.SystemPrompt(thirdRequest);
             var thirdInput = thirdRequest["input"]!.AsArray();
             Assert.Equal(
-                new[] { "message", "function_call", "function_call_output", "message", "message" },
+                new[]
+                {
+                    "message",
+                    "message",
+                    "function_call",
+                    "function_call_output",
+                    "message",
+                    "message",
+                },
                 thirdInput.Select(item => item!["type"]!.GetValue<string>())
             );
             var thirdJson = thirdInput.ToJsonString();
@@ -185,21 +194,6 @@ public sealed class ProcessRestartTests
             Assert.False(final.Busy);
             Assert.Empty(final.Queue);
             Assert.Equal(6, persisted.Archive.ReadMessages().Count);
-            var replayResult = Path.Combine(resultsRoot, "actual-ts-final-replay.json");
-            ResponsesClientTests.RunPersistenceOracle("replay-ts", stateRoot, replayResult, "s");
-            Assert.Equal(
-                0,
-                JsonNode.Parse(await File.ReadAllTextAsync(replayResult))![
-                    "insertedCount"
-                ]!.GetValue<int>()
-            );
-            var readResult = Path.Combine(resultsRoot, "actual-ts-final-read.json");
-            ResponsesClientTests.RunPersistenceOracle("read", stateRoot, readResult, "s");
-            var tsRead = JsonNode.Parse(await File.ReadAllTextAsync(readResult))!.AsObject();
-            var tsAuthority = tsRead["authority"]!.AsObject();
-            Assert.Equal(6, tsAuthority["history"]!.AsArray().Count);
-            Assert.Equal(7, tsAuthority["nextMessageSeq"]!.GetValue<int>());
-            Assert.Equal(6, tsRead["rawRows"]!.AsArray().Count);
 
             foreach (var invalid in new[] { "missing", "corrupt" })
             {

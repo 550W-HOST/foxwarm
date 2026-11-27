@@ -28,6 +28,7 @@ This bundled Foxwarm version is adapted from the MIT-licensed upstream **Agent S
 
 - A skill's automatic entry point is `SKILL.md`.
 - Extra documentation belongs in ordinary companion files such as `references/*.md`, `scripts/*.py`, or `assets/*`, and must be linked from `SKILL.md`.
+- Refer to a skill's own files by paths relative to its directory. Readers open them with `ctl skill load <name> <path>`; ToolScript files run with `ctl skill run <name> --script <path>`; other scripts run with `exec` after `ctl skill copy`.
 - Generated Foxwarm skills should avoid private paths, credentials, machine-specific assumptions, and one-off project history.
 - If the user wants an agent's long-term operating rules, put those in that agent's memory; if the user wants reusable procedure/knowledge, package it as a skill.
 
@@ -162,16 +163,18 @@ Minimum requirements:
 
 For executable skills, prefer one clear command or script entry point. If several scripts must run in order, add an orchestrator such as `scripts/run_pipeline.py` rather than making the agent sequence steps from prose.
 
+A ToolScript entry can be declared runnable when it is one self-contained file that reaches one stated outcome from its arguments alone, with bounded side effects and no `ask_agent`. Declare it in the frontmatter as `run:` with `entry`, a one-line `effect`, optional `mode` and `timeoutSecs`, and an `args` JSON Schema using `type`, `properties`, `required`, `enum`, `items`, `description` and `additionalProperties`. Agents then run it with `ctl skill run <name>` without loading `SKILL.md`, and `ctl skill run <name> --help` shows whether the block is valid. The catalog shows the effect and the `args` schema, which may take at most 1000 characters as compact JSON, so keep its descriptions brief.
+
 ## Validation
 
 Validate the changed behavior and structure. For description or documentation edits, check frontmatter, relevant links, and the intended activation scope. For executable changes, run the affected script or representative end-to-end path. Reuse valid results from the same revision and environment; repeat or broaden checks only for changed behavior, a required gate, or unresolved evidence.
 
-For a new or substantially changed skill, available checks include:
+For a new or substantially changed skill, available checks include the following. The validators import sibling modules, so copy the whole `scripts` directory to the Node where you run them: `ctl skill copy agent-skill-creator <dir> --path scripts`, then run them from there.
 
 ```bash
-python3 scripts/validate.py path/to/skill
-python3 scripts/security_scan.py path/to/skill
-python3 scripts/check_pipeline.py path/to/skill
+python3 <dir>/validate.py path/to/skill
+python3 <dir>/security_scan.py path/to/skill
+python3 <dir>/check_pipeline.py path/to/skill
 ```
 
 Select the bundled checks relevant to the change. If a necessary check cannot run, perform an appropriate manual check where possible and report the remaining limitation. A documentation-only edit does not require executing unrelated pipelines.

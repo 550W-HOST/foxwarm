@@ -942,9 +942,55 @@ public sealed class CtlCommandTests
         var ctl = f.Manager.ModelDefinitions(f.Owner).Single(definition => definition!["name"]!.GetValue<string>() == "ctl")!;
         Assert.Equal(["command"], ctl["parameters"]!["required"]!.AsArray().Select(value => value!.GetValue<string>()));
         Assert.Equal(
-            ["command", "values", "valuesJson"],
+            ["command", "values", "valuesJson", "summary"],
             ctl["parameters"]!["properties"]!.AsObject().Select(pair => pair.Key)
         );
+        Assert.Equal("string", ctl["parameters"]!["properties"]!["summary"]!["type"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Summary_is_display_metadata_that_never_reaches_the_target_or_its_policy()
+    {
+        await using var f = await ScriptFixture.Create();
+        JsonObject With(JsonObject args, JsonNode? summary)
+        {
+            var copy = (JsonObject)args.DeepClone();
+            copy["summary"] = summary;
+            return copy;
+        }
+        var mcp = Args("tool call mcp:github/list_issues --args @a", new() { ["a"] = new JsonObject { ["repo"] = "octo-org/demo" } });
+        foreach (var args in new[] { Args("skill list"), mcp, Args("tool call builtin:skill --args @a", new() { ["a"] = new JsonObject { ["action"] = "list" } }) })
+        {
+            var plain = f.Manager.ToolRegistry.Resolve("ctl", args);
+            var described = f.Manager.ToolRegistry.Resolve("ctl", With(args, "Check the list"));
+            Assert.Equal(plain.Source, described.Source);
+            Assert.Equal(plain.Name, described.Name);
+            Assert.Equal(plain.Command, described.Command);
+            Assert.Equal(plain.Args.ToJsonString(), described.Args.ToJsonString());
+            Assert.False(described.Args.ContainsKey("summary"));
+        }
+        // The command grammar is unchanged: a non-string summary is a call error.
+        Assert.Equal("summary must be a string.", Assert.IsType<CtlError>(CtlParser.Parse(With(Args("skill list"), 3))).Message);
+
+        await f.Manager.Authorization.InstallAsync(
+            Encoding.UTF8.GetBytes(
+                """
+                version: 1
+                rules:
+                - id: no-summary
+                  action: deny
+                  tool: {source: builtin, name: skill}
+                  args: {summary: {equals: List the skills}}
+                """
+            ),
+            default
+        );
+        var tools = Executor(f);
+        var direct = await Run(tools, "skill", new JsonObject { ["action"] = "list" });
+        var command = await Run(tools, "ctl", With(Args("skill list"), "List the skills"));
+        Assert.Null((command.Response as JsonObject)?["error"]);
+        Assert.Equal(direct.Response!.ToJsonString(), command.Response!.ToJsonString());
+        Assert.DoesNotContain("List the skills", command.Target!.ToJsonString());
     }
 
     private static SessionToolExecutor Executor(ScriptFixture f)

@@ -16,15 +16,15 @@ Tool routing rules are not OS, network or resource isolation. A Provider label, 
 
 **Choose where work runs.** For disposable environments, register the [container Provider](../examples/container/README.md) with a profile whose image has the project's toolchain plus Git and Python 3; each assignment then gets its own container. For existing Linux machines, the [SSH adapter guide](../examples/linux-ssh/README.md) supplies private connection configuration and `nodeProviders` registration; those hosts are shared between assignments and have no lifecycle. Any other authenticated non-master Node also works. No Provider is registered by default.
 
-**Create the worker Agent once.** Use one worker Agent for all assignments and restrict it with an Agent-local allowlist, starting from agent-management's [restricted-worker rules](../../agent-management/references/memory-templates/restricted-worker.rules.json):
+**Create the worker Agent once.** Use one worker Agent for all assignments and restrict it with an Agent-local allowlist, starting from the `agent-management` skill's restricted-worker rules (`ctl skill load agent-management references/memory-templates/restricted-worker.rules.json`):
 
 ```text
 create_agent({agentName:"developer-worker", createMainSession:false, rules:<contents of restricted-worker.rules.json>})
 ```
 
-Then write the matching [memory template](../../agent-management/references/memory-templates/restricted-worker.md) to the new Agent's `memory/MEMORY.md`. Agent folders are siblings, so use the absolute path `<parent of your agent_folder>/developer-worker/memory/MEMORY.md` and read it back once. The layer keeps the worker's tools on its current Node, lets it report through its Task and ask its parent through a parent-owned Task, and denies `master`, memory writes and everything else. These rules govern Foxwarm tools only, so also give the worker Agent a model without built-in web search or image generation. [Restrict an Agent](../../agent-management/references/OPERATIONS.md#restrict-an-agent) explains each rule.
+Then write the matching memory template (`ctl skill load agent-management references/memory-templates/restricted-worker.md`) to the new Agent's `memory/MEMORY.md`. Agent folders are siblings, so use the absolute path `<parent of your agent_folder>/developer-worker/memory/MEMORY.md` and read it back once. The layer keeps the worker's tools on its current Node, lets it report through its Task and ask its parent through a parent-owned Task, and denies `master`, memory writes and everything else. These rules govern Foxwarm tools only, so also give the worker Agent a model without built-in web search or image generation. "Restrict an Agent" in the `agent-management` skill (`ctl skill load agent-management references/OPERATIONS.md`) explains each rule.
 
-**Let the global policy pass these calls.** A local layer only narrows. With the default `defaultAction: allow` and no conflicting rules, nothing more is needed. If the instance policy denies by default, merge reviewed allows for the coordinator and the worker Agent; [access-control's policy reference](../../access-control/references/tool-policy.md) is the canonical syntax. This is a **fragment**, not a replacement policy:
+**Let the global policy pass these calls.** A local layer only narrows. With the default `defaultAction: allow` and no conflicting rules, nothing more is needed. If the instance policy denies by default, merge reviewed allows for the coordinator and the worker Agent; the `access-control` policy reference (`ctl skill load access-control references/tool-policy.md`) is the canonical syntax. This is a **fragment**, not a replacement policy:
 
 ```yaml
 rules:
@@ -34,17 +34,11 @@ rules:
     action: allow   # narrowed by developer-worker's local layer
 ```
 
-The coordinator rule is intentionally powerful; use the installation's trusted coordinator identity, and review earlier matching rules first. If the coordinator is restricted instead, remember that Provider-wide `create` and `ensure` have no concrete Node target and need their own rules, that cross-Node copy allows must cover both endpoints, and that `run_script` is a separate grant. Do not generate exact Node or Task rules per assignment, and do not let this helper edit authorization.
+The coordinator rule is intentionally powerful; use the installation's trusted coordinator identity, and review earlier matching rules first. If the coordinator is restricted instead, remember that Provider-wide `create` and `ensure` have no concrete Node target and need their own rules, that cross-Node copy allows must cover both endpoints, and that `run_skill` is a separate grant. Do not generate exact Node or Task rules per assignment, and do not let this helper edit authorization.
 
 ## Load the runnable example
 
-The self-contained ToolScript is `examples/development_workflow.py`. Resolve `<skill-directory>` from `ctl skill load node-setup`. It runs from an installed/copied skill directory without importing a source checkout or sibling Python modules:
-
-```text
-run_script({node:"master", filePath:"<skill-directory>/examples/development_workflow.py", args:{...}})
-```
-
-Choose the source Node that actually holds the script. This `node` argument controls the script's **source file**, not nested tool routing. The coordinator must be allowed to read that source. The helper explicitly routes every exec/read/copy leg. Load `toolscript-automation` for Monty execution, `continue_script`, and native result contracts. The JSON objects below are `run_script.args`; preserve the returned **script result**, not the outer run wrapper, between phases.
+The self-contained ToolScript is `examples/development_workflow.py`. Run it with `ctl skill run node-setup --script examples/development_workflow.py --args @args`; it needs no source checkout or sibling Python modules. The helper routes every exec, read and copy leg explicitly. Load `toolscript-automation` for Monty execution, `continue_script`, and native result contracts. The JSON objects below are `run_script.args`; preserve the returned **script result**, not the outer run wrapper, between phases.
 
 ### 0. Provision a fresh Node (Providers that create Nodes)
 
@@ -108,7 +102,7 @@ Pass that completed result in place of `PREPARED_RESULT`:
 
 The worker Agent's rules allow its tools only on the Node the child starts on, so the child is created directly on the prepared Node.
 
-`prepared` is an object, not the literal explanatory string above. The helper adds Node, workspace, base and material paths to the new Task, then creates the child with its actual Task ID and Node. `displayName` is the Task title unless explicitly supplied in `child`. It does not infer model/effort overrides. Supply any handoff recall/review fields required by the active child tool schema yourself; the helper forwards them, preserves `handoffConfirmation` last and never fabricates approval text. Do not copy obsolete confirmation-field examples from another skill. Omit `currentSessionTurnAction` to let the helper inspect the actual Task notification state before returning.
+`prepared` is an object, not the literal explanatory string above. The helper adds Node, workspace, base and material paths to the new Task, then creates the child with its actual Task ID and Node. `displayName` is the Task title unless explicitly supplied in `child`. It does not infer model/effort overrides. Omit `currentSessionTurnAction` to let the helper inspect the actual Task notification state before returning.
 
 The native Task and child receipts are retained. Successful creation with an unconfirmed assignment returns `needs-verification`, not a claim the worker started. A failure after Task creation retains `taskId`; inspect actual Task/Session state before retrying. An intentional retry of child creation can pass that existing `taskId` instead of `task`, but must first ensure no child/assignment already succeeded and that the existing Task description has the full brief. Reusing an existing worker is an ordinary `task(assign, ownerSessionId, notifySession:true)` operation, not another new child or a redundant message.
 

@@ -85,7 +85,7 @@ timers remain outside this catalog.
   per-agent page by default when policy lets the caller list every Session in
   scope; restricted callers read only their explicit candidate set. Its scope
   contract is owned by
-  [D-session-tool-list-scope](../units/src-tools-session-agent.md#d-session-tool-list-scope).
+  [D-session-tool-list-scope](../units/session-manager-operations.md#d-session-tool-list-scope).
 - Ordered pages use an indexed recent-rank key and keyset cursors where the
   caller supports them. Compatibility offset callers still execute against the
   same ordered index and never force a table sort.
@@ -296,7 +296,11 @@ focus paths, busy-descendant badges, search, Architecture, Tasks and lifecycle.
 - Storage. Agent counts reuse `catalog_parent_agent_count` (top-level) and
   `catalog_agent_count` (all); Node counts use the maintained
   `catalog_node_count` (all and top-level rows per Node). Both subtract the small
-  pinned partition at read time. Tree-mode group pages are keyset reads through
+  pinned partition at read time. The System view reads the same tables without
+  that subtraction: `/session-list/architecture` carries `agentCounts` and
+  `nodeCounts` (`{node, count}` for every Session per stored current Node), and the
+  Agent list's `lastActivity` is each Agent's `MIN(recent_rank)` over
+  `session_catalog`. Tree-mode group pages are keyset reads through
   the additive partial `idx_session_catalog_{agent,node}_root_activity[_default]`
   indexes ([D-sidebar-tree-activity](#d-sidebar-tree-activity)); Flat group pages use
   `idx_session_catalog_agent_time` and `idx_session_catalog_node_time`. The earlier
@@ -318,6 +322,6 @@ focus paths, busy-descendant badges, search, Architecture, Tasks and lifecycle.
 - Upgrade. The catalog stays at schema version 3 (additive, like [D-sidebar-groups](#d-sidebar-groups)). On open the column and `subtree_rank` are added when missing and every row is backfilled in the same transaction; indexes and triggers are `IF NOT EXISTS`. Reopen is a no-op. Additive indexes: `idx_session_catalog_parent_subtree` (maintenance and sibling maxima), `idx_session_catalog_{root,parent}_activity[_default]`, and the partial `idx_session_catalog_{agent,node}_root_activity[_default]`; Sidebar tree queries use no other index for their ordering. The base recency indexes stay for Flat, Architecture and the other readers.
 - Initial child window. Sidebar previews (`childWindow=recent` on `/api/session-list/sidebar` and `/group-pages`) and first child pages (`window: "recent"` on a `/api/session-list/children` parent without a cursor) hold as many children as are active within the last 24 hours, clamped to `min(3, limit)`..`min(limit, 5)` (fewer only when fewer children exist). A child is active by the same subtree activity, and pinned and archived children are not counted. The count is one bounded indexed seek per parent that stops at the maximum. `total`, continuation cursors and `Show N more` (10 per step) are unchanged; a request with a cursor is never windowed. Without the flag, and for the collapsed rail and Architecture, `limit` applies as before.
 - Client. A branch target of `INITIAL_BRANCH_WINDOW` (0) means "the server's initial window". The server sizes it on every replay, so previews and default branches follow current activity; any explicit count (after `Show N more`) replaces it, replays with that count and is never shrunk by a refresh. Collapsing a branch discards its target.
-- Source oracle. The retained TypeScript catalog orders by each row's own time, and this ordering is an intentional behavioral extension. The oracle comparison is scoped rather than extended: its schema comparison excludes the additive objects and its comparison data keeps ancestors at least as new as descendants, while the new behavior has dedicated C# tests. This avoids backporting a feature into a compatibility source that no longer serves runtime traffic.
+- Source oracle. This ordering intentionally extends ordering by each row's own time. The oracle comparison is scoped rather than extended: its schema comparison excludes the additive objects and its comparison data keeps ancestors at least as new as descendants, while the new behavior has dedicated C# tests. This avoids backporting a feature into a compatibility source that no longer serves runtime traffic.
 
 Open questions: whether an initial window should be latched so it cannot shrink as activity ages out within a mounted Sidebar; whether archived children should count toward the window (they currently do not).

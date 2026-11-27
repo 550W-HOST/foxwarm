@@ -18,8 +18,7 @@ let sidebarSecondarySessionId
 
 async function waitForChat(sessionId) {
   await page.waitForFunction((expected) => {
-    const subtitle = document.querySelector('.foxwarm-chat-root header')?.textContent || document.querySelector('.foxwarm-chat-root')?.textContent || ''
-    return subtitle.includes(`session ${expected}`)
+    return document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === expected
   }, { timeout: 15_000 }, sessionId)
   await page.waitForSelector('.foxwarm-chat-messages', { timeout: 15_000 })
 }

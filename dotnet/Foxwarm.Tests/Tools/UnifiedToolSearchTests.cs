@@ -156,13 +156,10 @@ public sealed class UnifiedToolSearchTests
         var (registry, mcp, temp) = await Registry();
         using var _ = temp;
         await using var __ = mcp;
-        var definition = HandoffConfirmation.Definition(
-            AgentToolDefinitions
-                .Definitions()
-                .OfType<JsonObject>()
-                .Single(item => item["name"]!.GetValue<string>() == "create_child_session"),
-            true
-        );
+        var definition = AgentToolDefinitions
+            .Definitions()
+            .OfType<JsonObject>()
+            .Single(item => item["name"]!.GetValue<string>() == "create_child_session");
         registry.Register(
             definition,
             "builtin",
