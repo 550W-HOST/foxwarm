@@ -515,11 +515,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const keepAttachedBottom = useCallback((rowsChanged = false) => {
     const container = messagesContainerRef.current
     if (!container) return
+    // Decide before reading geometry: the read lays out the document synchronously, and only
+    // an attached reader whose position may be pinned needs it.
+    if (!shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pointerScrollInteractionRef.current || !isContentLayoutReady()) return
     const range = { scrollHeight: container.scrollHeight, clientHeight: container.clientHeight }
     const previous = attachedRangeRef.current
     attachedRangeRef.current = range
     if (!rowsChanged && previous?.scrollHeight === range.scrollHeight && previous.clientHeight === range.clientHeight) return
-    if (!shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pointerScrollInteractionRef.current || !isContentLayoutReady()) return
     if (range.scrollHeight - container.scrollTop - range.clientHeight > 0.5) container.scrollTop = range.scrollHeight
   }, [isContentLayoutReady])
 
