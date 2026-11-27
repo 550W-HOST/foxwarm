@@ -20,6 +20,10 @@ internal sealed record PendingToolApproval(
 internal sealed class ToolApprovalNotPendingException(string message)
     : InvalidOperationException(message);
 
+// The deciding identity isn't admitted by the approval requirements in effect now.
+internal sealed class ToolApprovalNotAllowedException()
+    : InvalidOperationException("You are not an approver for this request.");
+
 internal sealed partial class SessionManager
 {
     // The arguments approvers see. add_secret's value is not stored yet, so masking cannot hide
@@ -151,7 +155,11 @@ internal sealed partial class SessionManager
         record["approvers"] = new JsonArray(
             options.Approvers.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
         );
-        var waiter = owner.ApprovalWaiters.Register(id, (JsonObject)shown.DeepClone());
+        var waiter = owner.ApprovalWaiters.Register(
+            id,
+            (JsonObject)shown.DeepClone(),
+            token => CurrentApproversAsync(owner, required, token)
+        );
         int? full = null;
         string? committed;
         try
@@ -313,6 +321,14 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 $"note is longer than {SessionApprovals.MaxNoteLength} characters."
             );
+        // A scoped identity decides only when the requirements in effect now admit it: a policy
+        // change while the question was pending may have narrowed who may approve.
+        if (
+            SessionWait.Text(decidedBy["kind"]) == "identity"
+            && owner.ApprovalWaiters.Approvers(approvalId) is { } current
+            && !(await current(CancellationToken.None)).Contains(SessionWait.Text(decidedBy["id"]) ?? "")
+        )
+            throw new ToolApprovalNotAllowedException();
         string? failure = null;
         var missing = false;
         JsonObject? final = null;
@@ -343,6 +359,29 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException("The Session is stopping.");
         owner.ApprovalWaiters.Complete(approvalId, final);
         return final;
+    }
+
+    // The identities the current policy admits to decide an approval for these checks: each
+    // check's assessed request evaluated again against the effective layers, combined as when
+    // the question was asked. No asking layer left admits no identity; the administrator
+    // still decides.
+    private async Task<IReadOnlyList<string>> CurrentApproversAsync(
+        SessionOwner owner,
+        ToolApprovalRequiredException required,
+        CancellationToken token
+    )
+    {
+        var layers = EffectiveLayers(owner.Agent, await authorization.LoadAsync(token));
+        var asking = required
+            .Checks.SelectMany(check =>
+                layers.Select(layer => new AuthorizationLayerDecision(
+                    layer.Name,
+                    layer.Policy,
+                    ToolAuthorizationEvaluation.Evaluate(layer.Policy, check.Assessment.Request)
+                ))
+            )
+            .Where(layer => layer.Decision.Effect == ToolAuthorizationEffect.Ask);
+        return ToolApprovalOptions.Combine(asking).Approvers;
     }
 
     /// <summary>Model-facing outcome of a final record that did not approve the call.</summary>

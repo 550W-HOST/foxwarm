@@ -256,15 +256,26 @@ internal sealed class ToolApprovalWaiters
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Waiter> waiters =
         new(StringComparer.Ordinal);
 
-    internal sealed record Waiter(TaskCompletionSource<JsonObject> Decision, JsonObject Args);
+    // Approvers: the identities the current policy admits to decide this approval, evaluated
+    // when a decision arrives rather than when the question was asked.
+    internal sealed record Waiter(
+        TaskCompletionSource<JsonObject> Decision,
+        JsonObject Args,
+        Func<CancellationToken, Task<IReadOnlyList<string>>>? Approvers = null
+    );
 
-    internal Waiter Register(string id, JsonObject args)
+    internal Waiter Register(
+        string id,
+        JsonObject args,
+        Func<CancellationToken, Task<IReadOnlyList<string>>>? approvers = null
+    )
     {
         var waiter = new Waiter(
             new TaskCompletionSource<JsonObject>(
                 TaskCreationOptions.RunContinuationsAsynchronously
             ),
-            args
+            args,
+            approvers
         );
         if (!waiters.TryAdd(id, waiter))
             throw new InvalidOperationException("Duplicate approval waiter.");
@@ -273,6 +284,9 @@ internal sealed class ToolApprovalWaiters
 
     internal JsonObject? Args(string id) =>
         waiters.TryGetValue(id, out var waiter) ? waiter.Args : null;
+
+    internal Func<CancellationToken, Task<IReadOnlyList<string>>>? Approvers(string id) =>
+        waiters.TryGetValue(id, out var waiter) ? waiter.Approvers : null;
 
     internal void Complete(string id, JsonObject record)
     {
