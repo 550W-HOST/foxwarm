@@ -23,6 +23,9 @@ let fixtureUrl
 
 const PLAIN_BEFORE_TOOLS = 120
 const TOOL_CALLS = 60
+// An old Task exchange among the plain turns: a sent assignment (call and result) and a received completion.
+const TASK_AFTER = 40
+const TASK_MESSAGES = 3
 
 async function buildFixtureBundle() {
   const source = `
@@ -39,6 +42,12 @@ async function buildFixtureBundle() {
     for (let index = 0; index < ${PLAIN_BEFORE_TOOLS}; index++) {
       if (index % 2 === 0) push('user', [{ text: 'Question ' + index + ' about WINDOW_MARKER_' + index }])
       else push('model', [{ text: 'Answer ' + index + ' with **Markdown** and a list:\\n\\n- one\\n- two\\n\\nWINDOW_MARKER_' + index }])
+      if (index === ${TASK_AFTER}) {
+        const assignment = 'You have been assigned a task: task_window01 — Window review\\nStatus: active\\nTASK_WINDOW_DESCRIPTION'
+        push('model', [{ functionCall: { id: 'task-window', name: 'task', args: { action: 'create', title: 'Window review', ownerSessionId: 'fixture/worker', notifySession: true } } }])
+        push('tool', [{ functionResponse: { name: 'task', tool_use_id: 'task-window', response: { taskId: 'task_window01', status: 'active', sentNotifications: 1 }, __meta: { sessionMessages: [{ id: 'task-window', targetSessionId: 'fixture/worker', message: assignment, task: { taskId: 'task_window01', event: 'assigned', title: 'Window review', recipient: 'owner' } }] } } }])
+        push('user', [{ system: '<foxwarm-message type="task" taskId="task_window01" event="completed" recipient="creator" sourceSessionId="fixture/worker">\\nTask completed: task_window01 — Window review\\nStatus: completed\\nTASK_WINDOW_RESULT\\n</foxwarm-message>' }])
+      }
     }
     push('user', [{ text: 'Run the tools please' }])
     for (let index = 0; index < ${TOOL_CALLS}; index++) {
@@ -128,7 +137,7 @@ after(async () => {
   await new Promise(resolve => server ? server.close(resolve) : resolve())
 })
 
-const TOTAL_MESSAGES = PLAIN_BEFORE_TOOLS + 1 + TOOL_CALLS * 2 + 1
+const TOTAL_MESSAGES = PLAIN_BEFORE_TOOLS + TASK_MESSAGES + 1 + TOOL_CALLS * 2 + 1
 
 async function openChat(view = 'detailed') {
   const page = await browser.newPage()
@@ -191,7 +200,7 @@ test('Conversation counts rendered rows, so a folded tool run does not crowd out
     const opening = await mounted(page)
     // The tool run (120 source messages) is one Activity row; the window still reaches the
     // ordinary turns before it.
-    assert.ok(opening.includes(`seq-local-${PLAIN_BEFORE_TOOLS}`), `the turn before the tool run is mounted: ${opening.slice(0, 3)}`)
+    assert.ok(opening.includes(`seq-local-${PLAIN_BEFORE_TOOLS + TASK_MESSAGES}`), `the turn before the tool run is mounted: ${opening.slice(0, 3)}`)
     assert.ok(!opening.includes('seq-local-1'), 'the window is still bounded')
     assert.ok((await position(page)).distanceFromBottom <= 2)
   } finally { await page.close() }
@@ -221,6 +230,46 @@ test('a Search jump to an old row mounts it and shows it', async () => {
       const container = document.querySelector('.foxwarm-chat-messages')
       return container.scrollHeight - container.scrollTop - container.clientHeight <= 2
     })
+  } finally { await page.close() }
+})
+
+const taskCards = page => page.$$eval('[data-chat-timeline="committed"] [data-session-communication][data-task-event]', nodes => nodes.map(node => ({
+  event: node.getAttribute('data-task-event'), title: node.querySelector('[data-task-title]')?.textContent ?? null,
+  body: node.querySelector('[data-search-surface="communication"]').textContent, inActivity: !!node.closest('[data-timeline-activity]'),
+})))
+
+test('old Task cards are ordinary window rows: they mount on approach and a Search jump mounts and reveals them', async () => {
+  let page = await openChat('conversation')
+  try {
+    assert.deepEqual(await taskCards(page), [], 'the old Task exchange is outside the opening window')
+    await page.mouse.move(500, 300)
+    for (let step = 0; step < 400 && (await taskCards(page)).length < 2; step++) {
+      await page.mouse.wheel({ deltaY: -400 })
+      await settle(page)
+    }
+    const cards = await taskCards(page)
+    assert.deepEqual(cards.map(card => [card.event, card.title, card.inActivity]), [['assigned', 'Window review', false], ['completed', 'Window review', false]])
+    assert.ok(cards[0].body.startsWith('TASK_WINDOW_DESCRIPTION') && cards[1].body.startsWith('TASK_WINDOW_RESULT'), JSON.stringify(cards))
+  } finally { await page.close() }
+  page = await openChat('conversation')
+  try {
+    await page.click('[aria-label="Find in chat"]')
+    // The lead line is outside the collapsed preview; Search finds it in the full body, mounts the row and reveals it.
+    await page.type('[aria-label="Search messages"]', 'Task completed: task_window01')
+    const target = '[data-session-communication="received"][data-task-event="completed"]'
+    await page.waitForFunction(selector => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const card = container.querySelector(selector)
+      if (!card || !card.querySelector('[data-search-surface="communication"]').textContent.startsWith('Task completed:')) return false
+      const viewport = container.getBoundingClientRect(), rect = card.getBoundingClientRect()
+      return rect.bottom > viewport.top && rect.top < viewport.bottom
+    }, {}, target)
+    // The match is highlighted inside the card's body surface.
+    assert.ok(await page.evaluate(selector => {
+      const surface = document.querySelector(selector + ' [data-search-surface="communication"]')
+      return [...CSS.highlights.values()].some(highlight => [...highlight].some(range => surface.contains(range.startContainer)))
+    }, target))
+    assert.ok((await mounted(page)).length < TOTAL_MESSAGES, 'the target window is bounded')
   } finally { await page.close() }
 })
 

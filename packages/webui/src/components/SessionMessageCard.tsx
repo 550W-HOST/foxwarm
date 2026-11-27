@@ -49,7 +49,7 @@ export default function SessionMessageCard({ communication, children, renderPrev
           onClick={() => openTask(task.taskId)}>{task.taskId}</button>}
       </span>}
     </header>
-    <div id={bodyId} ref={fade.ref} {...fade.overflowFadeProps} data-search-surface="communication" className={`min-w-0 max-w-full ${revealed ? '' : '[&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1'}`}
+    <div id={bodyId} ref={fade.ref} {...fade.overflowFadeProps} data-search-surface="communication" data-search-part-index="0" className={`min-w-0 max-w-full ${revealed ? '' : '[&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1'}`}
       style={revealed ? undefined : { ...clampContentStyle(3), ...fade.overflowFadeProps.style }} data-task-preview={preview ? '' : undefined}>{preview ?? children}</div>
     {(expanded !== null || revealed || preview || fade.overflowFadeProps['data-overflow-fade']) && <button type="button" aria-expanded={revealed} aria-controls={bodyId}
       aria-label={revealed ? 'Collapse message' : 'Expand message'}
