@@ -55,10 +55,17 @@ export default function SystemNodes({ nodes, error, sessions, sessionCounts, pho
     return [...nodes, ...unknown]
   }, [nodes, sessionCounts])
   const online = nodes.filter(node => node.online).length
-  const status = (node: WebUiNodeTarget) => node.unavailable ? <StatusBadge tone="warning" title="Not in the node directory.">Unavailable</StatusBadge>
-    : node.protocolStatus === 'upgrade-required' ? <StatusBadge tone="warning">Upgrade required</StatusBadge>
-    : node.availability === 'error' || node.availability === 'unavailable' ? <StatusBadge tone="warning">Unavailable</StatusBadge>
-    : <NodeStatusBadge online={node.online} />
+  // Connectivity is always shown; a Provider's unavailability and a required upgrade are separate
+  // warnings beside it.
+  const status = (node: WebUiNodeTarget) => node.unavailable ? <StatusBadge tone="warning" title="Not in the node directory.">Unavailable</StatusBadge> : (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <NodeStatusBadge online={node.online} />
+      {node.availability === 'error' || node.availability === 'unavailable' ? <StatusBadge tone="warning">Unavailable</StatusBadge> : null}
+      {node.protocolStatus === 'upgrade-required' ? <StatusBadge tone="warning">Upgrade required</StatusBadge> : null}
+    </span>
+  )
+  // A protocol explanation stays visible on the row, not only in its details.
+  const protocolNote = (node: WebUiNodeTarget) => node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <div className="mt-0.5 text-xs text-fw-warning" data-node-protocol-message>{node.protocolMessage}</div> : null
   // A Node is named once: its ID only when it differs from the display name, its type only when it
   // differs from both.
   const nodeId = (node: WebUiNodeTarget) => node.id !== node.displayName ? node.id : ''
@@ -86,7 +93,6 @@ export default function SystemNodes({ nodes, error, sessions, sessionCounts, pho
       {Object.entries(node.services || {}).map(([name, version]) => <span key={name} className="rounded bg-fw-surface-sunken px-2 py-0.5 font-mono text-[11px] text-fw-text-muted">{name} v{version}</span>)}
       {node.lastSeenAt ? <span className="text-xs text-fw-text-muted">Last seen {new Date(node.lastSeenAt).toLocaleString()}</span> : null}
       {node.unavailable ? <span className="text-xs text-fw-text-muted">Not in the node directory.</span> : null}
-      {node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <span className="text-xs text-fw-warning">{node.protocolMessage}</span> : null}
     </div>
   ) : null
   return (
@@ -106,7 +112,7 @@ export default function SystemNodes({ nodes, error, sessions, sessionCounts, pho
               <li key={node.id} className="px-3 py-2.5" data-system-node-id={node.id}>
                 <div className="flex items-center gap-2">
                   {toggle(node)}
-                  <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-fw-text-strong">{node.displayName}</div><div className="mt-0.5 truncate text-xs text-fw-text-muted">{[nodeId(node), nodeType(node), lastSeen(node)].filter(Boolean).join(' · ')}</div></div>
+                  <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-fw-text-strong">{node.displayName}</div><div className="mt-0.5 truncate text-xs text-fw-text-muted">{[nodeId(node), nodeType(node), lastSeen(node)].filter(Boolean).join(' · ')}</div>{protocolNote(node)}</div>
                   {status(node)}{actions(node)}
                 </div>
                 <div className="mt-1 pl-6 text-xs text-fw-text-muted">Sessions {sessionsCell(node)}</div>
@@ -123,7 +129,7 @@ export default function SystemNodes({ nodes, error, sessions, sessionCounts, pho
               {rows.map(node => (
                 <Fragment key={node.id}>
                   <tr className="align-middle hover:bg-fw-hover/50" data-system-node-id={node.id}>
-                    <td className="px-4 py-2"><div className="flex items-center gap-1.5">{toggle(node)}<span className="text-sm font-medium text-fw-text-strong">{node.displayName}</span>{nodeId(node) ? <span className="font-mono text-[11px] text-fw-text-muted">{node.id}</span> : null}</div></td>
+                    <td className="px-4 py-2"><div className="flex items-center gap-1.5">{toggle(node)}<span className="text-sm font-medium text-fw-text-strong">{node.displayName}</span>{nodeId(node) ? <span className="font-mono text-[11px] text-fw-text-muted">{node.id}</span> : null}</div>{protocolNote(node) ? <div className="pl-6">{protocolNote(node)}</div> : null}</td>
                     <td className="px-3 py-2">{status(node)}</td>
                     <td className="px-3 py-2 text-fw-text-muted">{nodeType(node)}</td>
                     <td className="px-3 py-2 text-fw-text-muted">{lastSeen(node)}</td>

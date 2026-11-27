@@ -3298,8 +3298,9 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       await page.waitForSelector(`${nodesTrigger}[title="Nodes: 9 online, 15 total"]`)
       assert.equal(await page.$eval(`${nodesTrigger} span:last-child`, element => element.textContent), '9/15')
       assert.match(await page.$eval('[data-node-surface]', element => element.textContent), /Online 9 · Total 15/)
-      assert.equal(await page.$$eval('[data-node-surface] article', cards => cards.length), 15)
-      assert.match(await page.$eval('[data-node-surface] article:nth-child(4)', card => card.textContent), /Online.*Upgrade required/)
+      assert.equal(await page.$$eval('[data-node-surface] [data-system-node-id]', rows => rows.length), 15)
+      // An online Node that needs an upgrade shows both.
+      assert.match(await page.$eval('[data-node-surface] [data-system-node-id="fixture-node-03"]', row => row.textContent), /Online.*Upgrade required/)
       await workbenchScreenshot(page, `nodes-page-${label}.png`)
       const nodePageBadge = await badgePresentation(page, '[data-node-surface] [data-status="online"]')
       assert.deepEqual({ font: nodePageBadge.font, line: nodePageBadge.line, padding: nodePageBadge.padding, radius: nodePageBadge.radius, gap: nodePageBadge.gap, dot: nodePageBadge.dot.slice(0, 3) }, { font: '11px', line: '18px', padding: '3px 7px', radius: '5px', gap: '5px', dot: ['5px', '5px', '50%'] })
