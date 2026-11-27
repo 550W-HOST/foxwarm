@@ -48,7 +48,7 @@ internal sealed partial class WebUIChannel
                 }
                 try
                 {
-                    using var use = await AdmitRouteMutationAsync(request, id);
+                    using var use = await UseRouteOwnerAsync(request, id, admitMutation: true);
                     if (use is null)
                         return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                     hosted = use.Owner;

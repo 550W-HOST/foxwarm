@@ -157,6 +157,8 @@ internal sealed partial class SessionManager
                         var selectedSource = sourceId is null
                             ? source
                             : await ResolveAgentCreationSourceAsync(sourceId, source);
+                        using var sourceUse = TryUseOwner(selectedSource) ?? await UseRequiredAsync(selectedSource.Id);
+                        selectedSource = sourceUse.Owner;
                         // Agent conversion is authorized above. Source enters identity rename
                         // directly, not ordinary move_session policy.
                         await RenameIdentityAsync(
@@ -198,7 +200,10 @@ internal sealed partial class SessionManager
                     if (inherit is not null)
                         await SetAgentInheritAsync(nameValue, inherit);
                     if (mainId is not null && inherit is not null)
-                        await RefreshSnapshotAsync(await RequiredAsync(mainId));
+                    {
+                        using var use = await UseRequiredAsync(mainId);
+                        await RefreshSnapshotAsync(use.Owner);
+                    }
                     return (
                         Output(
                             mainId is null
@@ -461,9 +466,8 @@ internal sealed partial class SessionManager
                 {
                     Keys(args, ["sessionId"], []);
                     var targetId = OptionalString(args, "sessionId");
-                    var target = string.IsNullOrEmpty(targetId)
-                        ? source
-                        : await RequiredAsync(targetId);
+                    using var use = string.IsNullOrEmpty(targetId) ? null : await UseRequiredAsync(targetId);
+                    var target = use?.Owner ?? source;
                     var model = await RefreshSnapshotAsync(target);
                     return (
                         Output(

@@ -85,7 +85,7 @@ internal sealed partial class WebUIChannel
                     var node = SessionWait.Text(body?["nodeId"])?.Trim();
                     if (string.IsNullOrEmpty(node))
                         throw new InvalidDataException("nodeId is required.");
-                    using var use = await AdmitRouteMutationAsync(request, id);
+                    using var use = await UseRouteOwnerAsync(request, id, admitMutation: true);
                     if (use is null)
                         return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                     owner = use.Owner;

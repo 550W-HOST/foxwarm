@@ -14,6 +14,41 @@ public sealed partial class TenantLimitAdmissionTests
     private static long OneOwner => HotOwnerBudget.Estimate(0) * 3 / 2;
 
     [Fact]
+    public async Task AnAcceptedCreationPublishingAfterBudgetClosureReturnsItsCharge()
+    {
+        var replica = new ReplicaLimits(long.MaxValue);
+        await using var f = await Fixture.Create(Limits, replica);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Manager.BeforeCreationPublication = async _ => { reached.SetResult(); await resume.Task; };
+        var creation = f.Manager.CreateNamedAsync("main", "late", null, null);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        f.Manager.BeginShutdown();
+        f.Manager.DisposeAdmission();
+        resume.SetResult();
+        Assert.Equal("late", (await creation).Id);
+        Assert.Equal(0, f.Manager.Admission!.HotOwners.UsedBytes);
+        Assert.Equal(0, replica.HotOwners.Used);
+    }
+
+    [Fact]
+    public async Task ASubscriberInstalledDuringTheIdleCheckKeepsReceivingEvents()
+    {
+        await using var f = await Fixture.Create(null);
+        var owner = await f.Manager.CreateNamedAsync("main", "stream", null, null);
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        (long Id, System.Threading.Channels.ChannelReader<SessionRuntimeEvent> Reader) subscribed = default;
+        f.Manager.IdleReleaseChecked = current => subscribed = current.Subscribe();
+        Assert.Equal(0, f.Manager.ReleaseIdleOwners());
+        try
+        {
+            owner.PublishStateChanged();
+            Assert.Equal(SessionEventKind.StateChanged, (await subscribed.Reader!.ReadAsync()).Kind);
+        }
+        finally { owner.Unsubscribe(subscribed.Id); }
+    }
+
+    [Fact]
     public async Task HostShutdownReturnsItsShareOfTheReplicaAfterAFailedSave()
     {
         using var temp = new TempDirectory();

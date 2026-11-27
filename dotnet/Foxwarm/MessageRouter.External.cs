@@ -51,6 +51,10 @@ internal sealed partial class MessageRouter
             await source.Reply(error.Message);
             return;
         }
+        // Selection (including guest provisioning) is finished. Pin that identity before media
+        // materialization; after that first effect, neither selection nor delivery is replayed.
+        using var ownerUse = runtime.Manager.TryUseOwner(owner) ?? await runtime.Manager.UseRequiredAsync(owner.Id);
+        owner = ownerUse.Owner;
         IReadOnlyList<JsonObject> parts = message.BindReceivedFiles is { } bind ? await bind(owner) : message.Parts;
         if (authorizedAtIngress && message.MaterializeParts is { } materialize)
             try

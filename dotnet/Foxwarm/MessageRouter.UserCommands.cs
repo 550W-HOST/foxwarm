@@ -17,10 +17,23 @@ internal sealed partial class MessageRouter
         ExternalChannelContext source,
         CtlUser call,
         SessionOwner? selected
-    )
+    ) : IDisposable
     {
         private SessionOwner? current = selected;
-        private bool resolved = selected is not null;
+        private readonly List<SessionManager.OwnerUse> uses = [];
+        public void Dispose()
+        {
+            foreach (var use in uses)
+                use.Dispose();
+        }
+        internal async Task<SessionOwner?> ResolveAsync(string id)
+        {
+            var use = await runtime.Manager.UseExistingAsync(id);
+            if (use is not null)
+                uses.Add(use);
+            return use?.Owner;
+        }
+        private bool resolved;
 
         internal ExternalChannelContext Source => source;
         internal CtlUser Call => call;
@@ -40,10 +53,13 @@ internal sealed partial class MessageRouter
             if (!resolved)
             {
                 resolved = true;
-                var id = SessionWait.Text(
-                    runtime.Manager.ChannelBinding(source.Target)?["sessionId"]
-                );
-                current = id is null ? null : await runtime.GetOwnerAsync(id);
+                if (current is not null && runtime.Manager.TryUseOwner(current) is { } use)
+                    uses.Add(use);
+                else
+                {
+                    var id = current?.Id ?? SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["sessionId"]);
+                    current = id is null ? null : await ResolveAsync(id);
+                }
             }
             return current;
         }
@@ -59,7 +75,7 @@ internal sealed partial class MessageRouter
         internal async Task<SessionOwner> TargetAsync(string option = "sessionId")
         {
             if (Text(option) is { } id)
-                return await runtime.GetOwnerAsync(id)
+                return await ResolveAsync(id)
                     ?? throw new UserCommandException($"❌ Session `{id}` not found.");
             return await CurrentAsync()
                 ?? throw new UserCommandException("❌ No active session.");
@@ -157,7 +173,8 @@ internal sealed partial class MessageRouter
                     await source.Reply("❌ " + CtlHelp.Error(error, _ => true, UserCommands.Ingress));
                     break;
                 case CtlUser call:
-                    await RunUserCommandAsync(new UserCommand(runtime, source, call, selectedOwner));
+                    using (var userCommand = new UserCommand(runtime, source, call, selectedOwner))
+                        await RunUserCommandAsync(userCommand);
                     break;
             }
         }

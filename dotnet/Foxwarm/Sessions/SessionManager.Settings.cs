@@ -11,7 +11,8 @@ internal sealed partial class SessionManager
     private async Task<JsonObject> SessionModelAsync(SessionOwner source, JsonObject args)
     {
         Keys(args, ["sessionId", "model", "effort"], []);
-        var owner = await RequiredAsync(OptionalString(args, "sessionId") ?? source.Id);
+        using var ownerUse = await UseRequiredAsync(OptionalString(args, "sessionId") ?? source.Id);
+        var owner = ownerUse.Owner;
         if (owner.Id != source.Id && !IsDescendantSession(owner.Id, source.Id))
             throw new InvalidOperationException(
                 $"Session `{owner.Id}` is not this Session or one of its descendants."
@@ -95,7 +96,8 @@ internal sealed partial class SessionManager
             []
         );
         var id = OptionalString(args, "sessionId") ?? source.Id;
-        var owner = await RequiredAsync(id);
+        using var ownerUse = await UseRequiredAsync(id);
+        var owner = ownerUse.Owner;
         if (!child)
             ClaudeRuntimeState.RequireFoxwarm(owner, "Foxwarm context settings");
         var clear = OptionalBool(args, "clear") == true;

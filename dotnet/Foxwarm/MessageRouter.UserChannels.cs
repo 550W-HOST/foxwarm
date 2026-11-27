@@ -10,7 +10,7 @@ internal sealed partial class MessageRouter
     {
         var id = command.Text("sessionId")!;
         var target =
-            await runtime.GetOwnerAsync(id)
+            await command.ResolveAsync(id)
             ?? throw new UserCommandException("❌ Session `" + id + "` not found.");
         command.Attach(target);
         await command.Reply(

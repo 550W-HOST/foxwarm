@@ -116,6 +116,31 @@ public sealed class TenantLimitHttpTests
         Assert.Equal(1, f.Manager.Admission!.Turns.InUse);
     }
 
+    [Theory]
+    [InlineData("refresh-memory")]
+    [InlineData("stream")]
+    public async Task PublicEffectsReacquireTheCurrentOwnerBeforeStarting(string route)
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults);
+        var original = (await f.Manager.GetExistingAsync("uploads"))!;
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        f.Manager.OwnerLookupReturned = owner =>
+        {
+            f.Manager.OwnerLookupReturned = null;
+            Assert.Same(original, owner);
+            Assert.Equal(1, f.Manager.ReleaseIdleOwners());
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var request = new HttpRequestMessage(route == "stream" ? HttpMethod.Get : HttpMethod.Post,
+            "api/sessions/uploads/" + route);
+        using var response = await f.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+        response.EnsureSuccessStatusCode();
+        Assert.True(original.Entry.Retired);
+        var current = Assert.Single(f.Manager.Owners());
+        Assert.NotSame(original, current);
+        if (route == "stream") Assert.True(current.HasSubscribers);
+    }
+
     [Fact]
     public async Task CwdChangeResolvesTheOwnerAfterReadingItsBody()
     {

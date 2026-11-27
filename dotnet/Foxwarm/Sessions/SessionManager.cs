@@ -1007,7 +1007,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     // transparent to the parent's own report boundary and wakes an idle parent.
     private async Task DeliverChildReportMissingAsync(string childId, string parentId, string reply)
     {
-        var parent = await RequiredAsync(parentId);
+        using var parentUse = await UseRequiredAsync(parentId);
+        var parent = parentUse.Owner;
         var item = new QueueItem(
             QueueItemType.Background,
             [new JsonObject { ["system"] = SessionBoundary.ChildReportMissing(childId, reply) }]

@@ -24,6 +24,7 @@ internal sealed partial class SessionManager
         // which orders admissions within one clock tick; both change under lifecycle.
         internal long LastUse = Environment.TickCount64;
         internal long Uses;
+        internal int ActiveUses;
 
         // When the owner was published (monotonic milliseconds): the start of its publication
         // grace against memory pressure, which lookups don't renew.
@@ -66,6 +67,7 @@ internal sealed partial class SessionManager
     internal Action<string>? AdmissionReadObserved { get; set; }
 
     // Observes a cold load starting to read its history, after its owner admission.
+    internal Action<SessionOwner>? OwnerLookupReturned { get; set; }
     internal Action<string>? HistoryReadStarting { get; set; }
 
     internal async Task<SessionOwner?> GetExistingAsync(
@@ -107,6 +109,7 @@ internal sealed partial class SessionManager
                 var owner = await slot.Owner.Task.WaitAsync(cancellationToken);
                 await WaitForIdentityMutationAsync(owner.Id, cancellationToken);
                 owner.Entry.RequireIdentityAuthority();
+                OwnerLookupReturned?.Invoke(owner);
                 return owner;
             }
             // Main identity resolution may read SQLite. It never runs under the owner registry gate.
@@ -155,6 +158,7 @@ internal sealed partial class SessionManager
             var admitted = await slot!.Owner.Task.WaitAsync(cancellationToken);
             await WaitForIdentityMutationAsync(admitted.Id, cancellationToken);
             admitted.Entry.RequireIdentityAuthority();
+            OwnerLookupReturned?.Invoke(admitted);
             return admitted;
         }
     }
@@ -165,6 +169,48 @@ internal sealed partial class SessionManager
     ) =>
         await GetExistingAsync(id, cancellationToken)
         ?? throw new InvalidDataException($"Session `{id}` not found.");
+
+    // A short-lived use prevents idle retirement across lookup and effect. Deletion, identity
+    // moves and shutdown retain their own admission rules; none wait for this residency lease.
+    internal sealed class OwnerUse(SessionOwner owner, Action release) : IDisposable
+    {
+        private Action? end = release;
+        internal SessionOwner Owner => owner;
+        public void Dispose() => Interlocked.Exchange(ref end, null)?.Invoke();
+    }
+
+    internal OwnerUse? TryUseOwner(SessionOwner owner)
+    {
+        lock (lifecycle)
+        {
+            if (!IsCurrentOwner(owner) || !identities.TryGetValue(owner.Id, out var slot))
+                return null;
+            slot.ActiveUses++;
+            return new(owner, () =>
+            {
+                bool lastUse;
+                lock (lifecycle)
+                    lastUse = --slot.ActiveUses == 0;
+                if (lastUse)
+                    admission?.HotOwners.OwnerMayBeIdle();
+            });
+        }
+    }
+
+    internal async Task<OwnerUse?> UseExistingAsync(string id, CancellationToken token = default,
+        bool acceptedTimer = false)
+    {
+        while (await GetExistingAsync(id, token, acceptedTimer: acceptedTimer) is { } owner)
+        {
+            token.ThrowIfCancellationRequested();
+            if (TryUseOwner(owner) is { } use)
+                return use;
+        }
+        return null;
+    }
+
+    internal async Task<OwnerUse> UseRequiredAsync(string id, CancellationToken token = default) =>
+        await UseExistingAsync(id, token) ?? throw new InvalidDataException($"Session `{id}` not found.");
 
     private async Task LoadOwnerAsync(string id, IdentitySlot slot, bool acceptedTimer = false)
     {

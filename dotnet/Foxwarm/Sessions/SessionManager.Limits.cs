@@ -9,6 +9,7 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionManager
 {
     private TenantAdmission? admission;
+    private bool admissionDisposed;
 
     // Resident owners' hot-owner charges, released when the owner leaves memory; hosted only.
     private readonly ConcurrentDictionary<SessionOwner, HotOwnerBudget.Charge>? hotCharges;
@@ -22,11 +23,12 @@ internal sealed partial class SessionManager
         {
             if (admission is null && Capabilities.Limits is { } limits)
                 lock (lifecycle)
-                    admission ??= new TenantAdmission(
-                        limits,
-                        ReplicaLimits ?? Foxwarm.Limits.ReplicaLimits.Process,
-                        new HotOwners(this)
-                    );
+                    if (!admissionDisposed)
+                        admission ??= new TenantAdmission(
+                            limits,
+                            ReplicaLimits ?? Foxwarm.Limits.ReplicaLimits.Process,
+                            new HotOwners(this)
+                        );
             return admission;
         }
     }
@@ -73,7 +75,7 @@ internal sealed partial class SessionManager
 
     private void RecordHotCharge(SessionOwner owner, HotOwnerBudget.Charge? charge)
     {
-        if (charge is not null && !hotCharges!.TryAdd(owner, charge))
+        if (charge is not null && (admissionDisposed || !hotCharges!.TryAdd(owner, charge)))
             charge.Dispose();
     }
 
@@ -99,10 +101,17 @@ internal sealed partial class SessionManager
 
     internal void DisposeAdmission()
     {
-        if (hotCharges is not null)
-            foreach (var owner in hotCharges.Keys.ToArray())
+        if (hotCharges is null)
+            return;
+        lock (lifecycle)
+        {
+            if (admissionDisposed)
+                return;
+            admissionDisposed = true;
+            foreach (var owner in hotCharges.Keys)
                 ReleaseHotCharge(owner);
-        admission?.Dispose();
+            admission?.Dispose();
+        }
     }
 
     /// <summary>

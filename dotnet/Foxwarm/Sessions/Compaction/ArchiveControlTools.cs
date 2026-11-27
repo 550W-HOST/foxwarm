@@ -160,8 +160,9 @@ internal static class ArchiveControlTools
             throw new InvalidDataException("stop_session requires sessionId.");
 
         var targetId = manager.ResolveSessionReference(source, SessionGoal.Trim(requested));
+        using var use = await manager.UseExistingAsync(targetId, token);
         var target =
-            await manager.GetExistingAsync(targetId, token)
+            use?.Owner
             ?? throw new InvalidDataException(
                 $"Session `{SessionGoal.Trim(requested)}` not found."
             );

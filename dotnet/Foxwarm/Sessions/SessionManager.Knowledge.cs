@@ -35,7 +35,8 @@ internal sealed partial class SessionManager
                 .ToArray();
             foreach (var id in selected)
             {
-                var owner = await RequiredAsync(id);
+                using var ownerUse = await UseRequiredAsync(id);
+                var owner = ownerUse.Owner;
                 if (Stale(owner, now))
                     continue; // Catalog recency selects candidates; validated JSON can prove an older current state.
                 await RefreshSnapshotAsync(owner);

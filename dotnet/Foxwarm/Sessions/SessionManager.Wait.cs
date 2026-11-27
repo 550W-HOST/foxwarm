@@ -207,7 +207,8 @@ internal sealed partial class SessionManager
             )
         )
             return;
-        var owner = await GetExistingAsync(sessionId);
+        using var use = await UseExistingAsync(sessionId);
+        var owner = use?.Owner;
         if (owner is null)
             return;
         bool admitted;

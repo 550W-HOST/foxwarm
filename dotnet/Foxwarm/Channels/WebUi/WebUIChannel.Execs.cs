@@ -33,7 +33,8 @@ internal sealed partial class WebUIChannel
             "/api/sessions/{id}/execs/{execId}/stop",
             async (string id, string execId, HttpRequest request) =>
             {
-                var hosted = await FindRouteAsync(request, id);
+                using var use = await UseRouteOwnerAsync(request, id, admitMutation: true);
+                var hosted = use?.Owner;
                 if (hosted is null)
                     return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var (result, _, _) = await sessions.StopExecAsync(

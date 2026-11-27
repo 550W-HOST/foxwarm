@@ -497,7 +497,8 @@ internal sealed partial class SessionManager
         {
             try
             {
-                var owner = await RequiredAsync(id);
+                using var use = await UseRequiredAsync(id);
+                var owner = use.Owner;
                 var current = await MaterializeCurrentNodeAsync(owner, node, token);
                 if (current is null)
                     materialized.Add((JsonNode?)id);

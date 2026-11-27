@@ -66,7 +66,8 @@ internal sealed partial class SessionManager
     {
         if (sourceId is null)
         {
-            var target = await RequiredAsync(targetId);
+            using var targetUse = await UseRequiredAsync(targetId);
+            var target = targetUse.Owner;
             var now = DateTimeOffset.Now;
             var offset = now.ToString("zzz").Replace(":", "", StringComparison.Ordinal);
             var time = now.ToString("yyyy-MM-dd HH:mm:ss") + " " + offset;
@@ -89,7 +90,8 @@ internal sealed partial class SessionManager
                 target.Registry.Trigger(target.Id);
             return;
         }
-        var source = await RequiredAsync(sourceId);
+        using var sourceUse = await UseRequiredAsync(sourceId);
+        var source = sourceUse.Owner;
         await SendAsync(
             source,
             targetId,

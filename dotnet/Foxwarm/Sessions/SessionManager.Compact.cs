@@ -10,7 +10,8 @@ internal sealed partial class SessionManager
         var targetId = SessionWait.Text(args["sessionId"]);
         if (string.IsNullOrEmpty(targetId))
             targetId = source.Id;
-        var target = await RequiredAsync(targetId);
+        using var targetUse = await UseRequiredAsync(targetId);
+        var target = targetUse.Owner;
         var snapshot = target.Entry.Snapshot();
         if (target != source && (snapshot.Busy || snapshot.Queue.Any(SessionCompactor.Ordinary)))
             throw new InvalidOperationException(

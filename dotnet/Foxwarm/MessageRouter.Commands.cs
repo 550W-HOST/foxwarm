@@ -67,9 +67,10 @@ internal sealed partial class MessageRouter
                 presentation.Text("parentSessionId")
             );
         }
+        using var use = attachmentOwner is null ? await runtime.Manager.UseExistingAsync(context.SessionId) : null;
         var owner =
             attachmentOwner
-            ?? await runtime.GetOwnerAsync(context.SessionId)
+            ?? use?.Owner
             ?? throw new InvalidDataException("Session not found.");
         if (parsed is CtlUser { Command.UserHandler: "session-delete" } delete)
             return await HandleDeleteCommandAsync(context, delete.Text("sessionId")!, owner);
