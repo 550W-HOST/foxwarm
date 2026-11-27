@@ -131,13 +131,25 @@ public sealed class TenantLimitHttpTests
     public async Task AnUploadOverTheTenantsLimitIsRefused()
     {
         await using var f = await Fixture.Create(TenantLimits.Defaults with { UploadBytes = 1024 * 1024 });
-        using var refused = await f.Client.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 + 1));
-        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, refused.StatusCode);
-        // The declared length is refused before the body is read, with the limit's text.
-        var body = (await refused.Content.ReadFromJsonAsync<JsonObject>())!;
+        // A declared length past the limit and its multipart framing is refused before the body
+        // is read.
+        using var declared = await f.Client.PostAsync("api/upload?sessionId=uploads", Upload(2 * 1024 * 1024 + 1));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, declared.StatusCode);
+        var body = (await declared.Content.ReadFromJsonAsync<JsonObject>())!;
         Assert.Equal("This file is larger than the 1 MiB upload limit.", body["error"]!.GetValue<string>());
         Assert.Equal(1024 * 1024, body["maxBytes"]!.GetValue<long>());
-        using var accepted = await f.Client.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 - 4096));
+        // A file just over the limit is refused by its own size, with the same text.
+        using var file = new HttpClient { BaseAddress = f.Base };
+        file.DefaultRequestHeaders.Authorization = new("Bearer", Token);
+        using var refused = await file.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 + 1));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, refused.StatusCode);
+        Assert.Equal(
+            "This file is larger than the 1 MiB upload limit.",
+            (await refused.Content.ReadFromJsonAsync<JsonObject>())!["error"]!.GetValue<string>()
+        );
+        using var fresh = new HttpClient { BaseAddress = f.Base };
+        fresh.DefaultRequestHeaders.Authorization = new("Bearer", Token);
+        using var accepted = await fresh.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 - 4096));
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
     }
 
@@ -179,5 +191,22 @@ public sealed class TenantLimitHttpTests
         fresh.DefaultRequestHeaders.Authorization = new("Bearer", Token);
         using var accepted = await fresh.PostAsync("api/upload?sessionId=uploads", smallContent);
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+    }
+
+    [Fact]
+    public async Task AFileJustUnderTheLimitIsntRefusedForItsMultipartFraming()
+    {
+        const int limit = 64 * 1024;
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { UploadBytes = limit });
+        // The file fits; its multipart body, with boundaries and part headers, doesn't.
+        using var multipart = Upload(limit - 100);
+        Assert.True(multipart.Headers.ContentLength > limit);
+        using var accepted = await f.Client.PostAsync("api/upload?sessionId=uploads", multipart);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        // The limit itself still holds for the file.
+        using var fresh = new HttpClient { BaseAddress = f.Base };
+        fresh.DefaultRequestHeaders.Authorization = new("Bearer", Token);
+        using var refused = await fresh.PostAsync("api/upload?sessionId=uploads", Upload(limit + 1));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, refused.StatusCode);
     }
 }

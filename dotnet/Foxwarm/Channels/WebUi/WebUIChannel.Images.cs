@@ -43,7 +43,9 @@ internal sealed partial class WebUIChannel
                     limit.MaxRequestBodySize = sessions.Capabilities.Limits is null
                         ? null
                         : uploadLimit + UploadOverheadBytes;
-                if (context.Request.ContentLength > uploadLimit)
+                // The declared length includes the multipart framing; the file itself is held to
+                // the exact limit below.
+                if (context.Request.ContentLength > uploadLimit + UploadOverheadBytes)
                     return Results.Json(
                         new JsonObject
                         {

@@ -164,11 +164,13 @@ public sealed partial class AsrRoutesTests
         }
     }
 
+    // A declared length past the 1 GiB file limit and its 1 MiB of multipart framing is refused
+    // from the headers alone.
     [Theory]
     [InlineData("synthetic-alice", "", 1000000, 400)]
     [InlineData("synthetic-alice", "?sessionId=other", 1000000, 403)]
-    [InlineData("synthetic-alice", "?sessionId=chat", 1073741825, 413)]
-    [InlineData(Fixture.Token, "", 1073741825, 413)]
+    [InlineData("synthetic-alice", "?sessionId=chat", 1074790401, 413)]
+    [InlineData(Fixture.Token, "", 1074790401, 413)]
     public async Task Upload_rejects_headers_without_consuming_any_multipart_body_or_creating_files(
         string token,
         string query,
