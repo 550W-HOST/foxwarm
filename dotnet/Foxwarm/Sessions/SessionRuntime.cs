@@ -111,12 +111,16 @@ internal sealed class SessionRuntime(SessionManager manager)
         remove => manager.TopologyChanged -= value;
     }
 
-    public async Task ContinueAsync(string id) =>
-        await (await manager.RequiredAsync(id)).StartProcessing(retry: true);
+    public async Task ContinueAsync(string id)
+    {
+        using var use = await manager.UseRequiredAsync(id);
+        await use.Owner.StartProcessing(retry: true);
+    }
 
     public async Task SubmitAndRunAsync(string id, QueueItem item)
     {
-        var owner = await manager.RequiredAsync(id);
+        using var use = await manager.UseRequiredAsync(id);
+        var owner = use.Owner;
         await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
     }
 
@@ -168,7 +172,8 @@ internal sealed class SessionRuntime(SessionManager manager)
         Func<IReadOnlyList<QueueItem>, QueueItem, QueueItem?>? shape = null
     )
     {
-        var owner = await manager.RequiredAsync(id);
+        using var use = await manager.UseRequiredAsync(id);
+        var owner = use.Owner;
         await RequireExternalOwnerAsync(owner);
         return await owner.Registry.Ingress.EnqueueWebhookAsync(
             owner.Id,
@@ -212,8 +217,11 @@ internal sealed class SessionRuntime(SessionManager manager)
             );
     }
 
-    public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) =>
-        await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
+    public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings)
+    {
+        using var use = await manager.UseRequiredAsync(id);
+        return await use.Owner.UpdateModelAsync(settings);
+    }
 
     internal Task<PresentationChange> ChangePresentationAsync(
         Func<ISessionCatalogStore, Task<PresentationChange>> action
@@ -232,12 +240,16 @@ internal sealed class SessionRuntime(SessionManager manager)
 
     public Task UpdateDisplayNameAsync(string id, string? name) => manager.RenameAsync(id, name);
 
-    public async Task<string?> RefreshSnapshotAsync(string id) =>
-        await manager.RefreshSnapshotAsync(await manager.RequiredAsync(id));
+    public async Task<string?> RefreshSnapshotAsync(string id)
+    {
+        using var use = await manager.UseRequiredAsync(id);
+        return await manager.RefreshSnapshotAsync(use.Owner);
+    }
 
     public async Task<StopResult> StopAsync(string id)
     {
-        var owner = await manager.RequiredAsync(id);
+        using var use = await manager.UseRequiredAsync(id);
+        var owner = use.Owner;
         if (owner.Compactor.Standalone)
             return new(false, false);
         var result = await owner.Registry.Control.StopAsync(owner.Id);
@@ -245,15 +257,22 @@ internal sealed class SessionRuntime(SessionManager manager)
         return result;
     }
 
-    public async Task<ClearHistoryResult> ClearHistoryAsync(string id) =>
-        await manager.ClearAsync(await manager.RequiredAsync(id));
+    public async Task<ClearHistoryResult> ClearHistoryAsync(string id)
+    {
+        using var use = await manager.UseRequiredAsync(id);
+        return await manager.ClearAsync(use.Owner);
+    }
 
-    public async Task<SessionOwner> ForkAsync(string id, string? suffix = null) =>
-        await manager.ForkAsync(await manager.RequiredAsync(id), suffix);
+    public async Task<SessionOwner> ForkAsync(string id, string? suffix = null)
+    {
+        using var use = await manager.UseRequiredAsync(id);
+        return await manager.ForkAsync(use.Owner, suffix);
+    }
 
     public async Task<SessionOwner> ForkCommandAsync(string id, string suffix, string? message)
     {
-        var parent = await manager.RequiredAsync(id);
+        using var use = await manager.UseRequiredAsync(id);
+        var parent = use.Owner;
         var child = await manager.ForkAsync(parent, suffix, childMode: true);
         var delivered = false;
         if (message is not null)
@@ -292,7 +311,8 @@ internal sealed class SessionRuntime(SessionManager manager)
 
     public async Task<DequeueResult> DequeueAsync(string id)
     {
-        var owner = await manager.RequiredAsync(id);
+        using var use = await manager.UseRequiredAsync(id);
+        var owner = use.Owner;
         return await owner.Registry.Control.DequeueAsync(owner.Id);
     }
 }

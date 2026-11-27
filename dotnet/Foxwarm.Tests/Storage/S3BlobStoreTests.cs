@@ -12,7 +12,7 @@ namespace Foxwarm.Tests.Storage;
 [Trait("Backend", "s3")]
 public sealed class S3BlobStoreTests
 {
-    private sealed class LosePutResponse(Amazon.S3.IAmazonS3 inner, CancellationTokenSource? cancel)
+    private sealed class LosePutResponse(Amazon.S3.IAmazonS3 inner, CancellationTokenSource? cancel, bool beforeCommit = false)
         : Amazon.S3.AmazonS3Client("synthetic", "synthetic", Amazon.RegionEndpoint.USEast1)
     {
         public override Task<Amazon.S3.Model.GetObjectMetadataResponse> GetObjectMetadataAsync(
@@ -23,7 +23,7 @@ public sealed class S3BlobStoreTests
             Amazon.S3.Model.PutObjectRequest request, CancellationToken cancellationToken = default
         )
         {
-            await inner.PutObjectAsync(request, cancellationToken);
+            if (!beforeCommit) await inner.PutObjectAsync(request, cancellationToken);
             cancel?.Cancel();
             cancellationToken.ThrowIfCancellationRequested();
             throw new IOException("The response was lost after the object was stored.");
@@ -55,6 +55,26 @@ public sealed class S3BlobStoreTests
         await Assert.ThrowsAsync<Foxwarm.Limits.TenantLimitException>(() => limited.CreateAsync("b", new byte[1], true, default));
         Assert.Equal(2, measures);
         Assert.Equal(600, await quota.UsedAsync(default));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnAbsentHeadBeforeTheDispatchedPutsDeadlineKeepsItsBytes(bool conditional)
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        using var stop = new CancellationTokenSource();
+        using var client = new LosePutResponse(bucket.Client, stop, beforeCommit: true);
+        var store = new S3BlobStore(client, bucket.Name, S3TestBucket.Tenant, "images", conditionalWrites: conditional);
+        var quota = new Foxwarm.Limits.BlobQuota(100, async token => await store.ExistsAsync("late", token) ? 100 : 0);
+        var limited = quota.Apply(store);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => limited.CreateAsync("late", new byte[100], true, stop.Token));
+        Assert.False(await store.ExistsAsync("late", default));
+        Assert.Equal(100, await quota.UsedAsync(default));
+        await Assert.ThrowsAsync<Foxwarm.Limits.TenantLimitException>(() => limited.CreateAsync("next", new byte[1], true, default));
+        // The remote side finally commits the original bytes; its positive HEAD now settles the charge.
+        await bucket.Store("images", conditional).CreateAsync("late", new byte[100], true, default);
+        Assert.Equal(100, await quota.UsedAsync(default));
     }
 
     [Fact]

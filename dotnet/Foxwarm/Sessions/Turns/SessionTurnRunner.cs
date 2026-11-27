@@ -135,7 +135,7 @@ public sealed class SessionTurnRunner
 
     // Waits for a busy-turn slot under the Session's cancellation registration, so Stop and
     // shutdown cancel the wait as they cancel a running turn; null when either ended it.
-    private static async Task<IDisposable?> AdmitTurnAsync(
+    private async Task<IDisposable?> AdmitTurnAsync(
         SessionEntry entry,
         Func<CancellationToken, ValueTask<IDisposable>> admit
     )
@@ -153,7 +153,17 @@ public sealed class SessionTurnRunner
         }
         try
         {
-            return await admit(handle.Token).ConfigureAwait(false);
+            var slot = admit(handle.Token);
+            if (!slot.IsCompleted)
+                try
+                {
+                    registry.TurnAdmissionWaiting?.Invoke();
+                }
+                catch (Exception error)
+                {
+                    entry.RecordBestEffortFailure(error);
+                }
+            return await slot.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (handle.Token.IsCancellationRequested)
         {

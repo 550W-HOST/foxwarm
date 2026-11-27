@@ -14,6 +14,62 @@ public sealed partial class TenantLimitAdmissionTests
     private static long OneOwner => HotOwnerBudget.Estimate(0) * 3 / 2;
 
     [Fact]
+    public async Task ACommandReplyPinsTheResidentEmitterWithoutHydratingAColdOwner()
+    {
+        await using var f = await Fixture.Create(null);
+        var owner = await f.Manager.CreateNamedAsync("main", "reply", null, null);
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        var releaseDuringEmission = -1;
+        owner.Changed += value =>
+        {
+            if (value.Kind == SessionEventKind.CommandReply) releaseDuringEmission = f.Manager.ReleaseIdleOwners();
+        };
+        var replies = new List<SessionRuntimeEvent>();
+        f.Manager.Changed += value => { if (value.Kind == SessionEventKind.CommandReply) replies.Add(value); };
+        f.Manager.ReplyToCommand(owner.Id, "first");
+        Assert.Equal(0, releaseDuringEmission);
+        Assert.Equal(1, f.Manager.ReleaseIdleOwners());
+        f.Manager.ReplyToCommand(owner.Id, "second");
+        Assert.Empty(f.Manager.Owners());
+        Assert.Equal(new[] { "first", "second" }, replies.Select(value => value.Data!["parts"]![0]!["text"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task AnAcceptedCreationPublishingAfterBudgetClosureReturnsItsCharge()
+    {
+        var replica = new ReplicaLimits(long.MaxValue);
+        await using var f = await Fixture.Create(Limits, replica);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Manager.BeforeCreationPublication = async _ => { reached.SetResult(); await resume.Task; };
+        var creation = f.Manager.CreateNamedAsync("main", "late", null, null);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        f.Manager.BeginShutdown();
+        f.Manager.DisposeAdmission();
+        resume.SetResult();
+        Assert.Equal("late", (await creation).Id);
+        Assert.Equal(0, f.Manager.Admission!.HotOwners.UsedBytes);
+        Assert.Equal(0, replica.HotOwners.Used);
+    }
+
+    [Fact]
+    public async Task ASubscriberInstalledDuringTheIdleCheckKeepsReceivingEvents()
+    {
+        await using var f = await Fixture.Create(null);
+        var owner = await f.Manager.CreateNamedAsync("main", "stream", null, null);
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        (long Id, System.Threading.Channels.ChannelReader<SessionRuntimeEvent> Reader) subscribed = default;
+        f.Manager.IdleReleaseChecked = current => subscribed = current.Subscribe();
+        Assert.Equal(0, f.Manager.ReleaseIdleOwners());
+        try
+        {
+            owner.PublishStateChanged();
+            Assert.Equal(SessionEventKind.StateChanged, (await subscribed.Reader!.ReadAsync()).Kind);
+        }
+        finally { owner.Unsubscribe(subscribed.Id); }
+    }
+
+    [Fact]
     public async Task HostShutdownReturnsItsShareOfTheReplicaAfterAFailedSave()
     {
         using var temp = new TempDirectory();

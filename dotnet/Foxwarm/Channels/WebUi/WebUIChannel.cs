@@ -140,7 +140,7 @@ internal sealed partial class WebUIChannel(
                 {
                     return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
-                using var use = await AdmitRouteMutationAsync(request, id);
+                using var use = await UseRouteOwnerAsync(request, id, admitMutation: true);
                 if (use is null)
                     return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 hosted = use.Owner;
@@ -163,7 +163,7 @@ internal sealed partial class WebUIChannel(
                     var body =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Model settings must be an object.");
-                    using var use = await AdmitRouteMutationAsync(request, id);
+                    using var use = await UseRouteOwnerAsync(request, id, admitMutation: true);
                     if (use is null)
                         return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                     hosted = use.Owner;
@@ -201,7 +201,7 @@ internal sealed partial class WebUIChannel(
                     var body =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Child settings must be an object.");
-                    using var use = await AdmitRouteMutationAsync(request, id);
+                    using var use = await UseRouteOwnerAsync(request, id, admitMutation: true);
                     if (use is null)
                         return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                     hosted = use.Owner;
@@ -377,7 +377,9 @@ internal sealed partial class WebUIChannel(
                 try
                 {
                     SessionOwner? ingressOwner = null;
-                    if (MessageRouter.IsPresentationCommand(text))
+                    var presentation = MessageRouter.IsPresentationCommand(text);
+                    using var ingressUse = presentation ? null : await UseRouteOwnerAsync(request, id);
+                    if (presentation)
                     {
                         if (canonical is null)
                             return Results.NotFound(
@@ -386,7 +388,7 @@ internal sealed partial class WebUIChannel(
                     }
                     else
                     {
-                        var owner = await FindRouteAsync(request, id);
+                        var owner = ingressUse?.Owner;
                         if (owner is null)
                             return Results.NotFound(
                                 new JsonObject { ["error"] = "Session not found" }
@@ -430,6 +432,10 @@ internal sealed partial class WebUIChannel(
                     sessions.AttachWebUi(canonical!, ingressOwner);
                     if (ingressOwner is not null)
                         canonical = ingressOwner.Id;
+                    // Ordinary commands have no materialized input tied to the source. Target
+                    // resolution can need the source's memory; the router pins its actual operand.
+                    if (!hasUploads && scoped is null && MessageRouter.IsKnownCommand(text))
+                        ingressUse?.Dispose();
                     var result = await router.HandleMessageAsync(
                         new ChannelContext(canonical, "webui"),
                         new ChannelMessage(
@@ -544,7 +550,8 @@ internal sealed partial class WebUIChannel(
             "/api/sessions/{id}/stream",
             async (string id, HttpContext context) =>
             {
-                var hosted = await FindRouteAsync(context.Request, id);
+                using var use = await UseRouteOwnerAsync(context.Request, id);
+                var hosted = use?.Owner;
                 if (hosted is null)
                 {
                     context.Response.StatusCode = 404;
@@ -560,6 +567,7 @@ internal sealed partial class WebUIChannel(
                     app.Lifetime.ApplicationStopping
                 );
                 var (subscriptionId, reader) = hosted.Subscribe();
+                use!.Dispose(); // The installed subscriber now blocks retirement.
                 try
                 {
                     await SendSse(context, new JsonObject { ["type"] = "connected" });
@@ -695,20 +703,22 @@ internal sealed partial class WebUIChannel(
         return owner;
     }
 
-    private sealed record RouteMutation(SessionOwner Owner, IDisposable Admission) : IDisposable
+    private sealed record RouteOwnerUse(SessionOwner Owner, IDisposable Lease) : IDisposable
     {
-        public void Dispose() => Admission.Dispose();
+        public void Dispose() => Lease.Dispose();
     }
 
-    // Resolve after reading the body. If release won the race, resolve again before doing any
-    // work. Once admitted, even a multi-step effect runs exactly once on a current owner.
-    private async Task<RouteMutation?> AdmitRouteMutationAsync(HttpRequest request, string id)
+    // Resolve after reading the body. Retry only the unused lookup if retirement won.
+    // Ordinary mutations also register with deletion/shutdown; SSE and command dispatch
+    // only need residency here and manage their own subscription or operation lifetimes.
+    private async Task<RouteOwnerUse?> UseRouteOwnerAsync(HttpRequest request, string id, bool admitMutation = false)
     {
         while (await FindRouteAsync(request, id) is { } owner)
         {
             request.HttpContext.RequestAborted.ThrowIfCancellationRequested();
-            if (sessions.AdmitCurrentOwner(owner) is { } admission)
-                return new(owner, admission);
+            IDisposable? lease = admitMutation ? sessions.AdmitCurrentOwner(owner) : sessions.TryUseOwner(owner);
+            if (lease is not null)
+                return new(owner, lease);
         }
         return null;
     }

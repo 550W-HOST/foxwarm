@@ -171,9 +171,8 @@ internal sealed class McpInboundSessions(
                 )
             ).Acquire()
             : null;
-        var owner =
-            await runtime.GetOwnerAsync(id, token)
-            ?? throw new McpInboundSafeException("Session is unavailable.");
+        using var use = await runtime.Manager.UseExistingAsync(id, token);
+        var owner = use?.Owner ?? throw new McpInboundSafeException("Session is unavailable.");
         void Check()
         {
             token.ThrowIfCancellationRequested();

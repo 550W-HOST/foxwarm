@@ -230,7 +230,8 @@ internal sealed partial class SessionManager
     {
         using var operation = TrackCreation();
         // The parent is stored by its canonical ID, as its authorization target names it.
-        var parent = parentSessionId is null ? null : await RequiredAsync(parentSessionId);
+        using var parentUse = parentSessionId is null ? null : await UseRequiredAsync(parentSessionId);
+        var parent = parentUse?.Owner;
         parentSessionId = parent?.Id;
         using var parentMutation = parent is null ? null : BeginOwnerMutation(parent);
         while (true)
@@ -525,7 +526,8 @@ internal sealed partial class SessionManager
     )
     {
         var targetId = ResolveSessionReference(source, requestedTarget);
-        var target = await RequiredAsync(targetId);
+        using var targetUse = await UseRequiredAsync(targetId);
+        var target = targetUse.Owner;
         if (toolArgs is not null)
             await AuthorizeToolAsync(
                 source,

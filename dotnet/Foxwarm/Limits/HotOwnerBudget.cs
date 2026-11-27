@@ -174,7 +174,8 @@ internal sealed class HotOwnerBudget : IDisposable
     /// <summary>Reserves an owner's estimate, releasing idle owners or waiting for room.</summary>
     internal async Task<Charge> ReserveAsync(long bytes, CancellationToken token = default)
     {
-        var deadline = Environment.TickCount64 + (noWait.Value ? 0 : (long)Wait.TotalMilliseconds);
+        var deadline = Environment.TickCount64 + (long)Wait.TotalMilliseconds;
+        var immediateReleases = 0;
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -185,9 +186,13 @@ internal sealed class HotOwnerBudget : IDisposable
                 return charge;
             var remaining = deadline - Environment.TickCount64;
             if (remaining <= 0)
-                throw Exhausted();
+                throw Exhausted(bytes);
+            if (noWait.Value && immediateReleases++ >= ReleaseAttempts)
+                throw Exhausted(bytes);
             if (ReleaseFor(bytes))
                 continue;
+            if (noWait.Value)
+                throw Exhausted(bytes);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             await Task.WhenAny(
                     tenantChanged,
@@ -199,6 +204,29 @@ internal sealed class HotOwnerBudget : IDisposable
                 )
                 .ConfigureAwait(false);
             timeout.Cancel();
+        }
+    }
+
+    // Recovery has already measured each deferred owner. Recheck the smallest rejected
+    // reservation against the live budget; an unchanged blocker must not reread the backlog.
+    internal async Task WaitForCapacityAsync(long bytes, Func<bool> alreadyResident, CancellationToken token)
+    {
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            if (alreadyResident())
+                return;
+            var tenantChanged = tenant.Changed;
+            var replicaChanged = replica?.Changed ?? tenantChanged;
+            lock (Gate)
+                if (!Over(bytes))
+                    return;
+            if (ReleaseFor(bytes))
+                continue;
+            // A publication grace can expire or a subscriber can leave without reducing bytes.
+            using var delay = CancellationTokenSource.CreateLinkedTokenSource(token);
+            await Task.WhenAny(tenantChanged, replicaChanged, Task.Delay(RecheckInterval, delay.Token));
+            delay.Cancel();
         }
     }
 
@@ -282,11 +310,11 @@ internal sealed class HotOwnerBudget : IDisposable
         return false;
     }
 
-    private TenantLimitException Exhausted() =>
+    private static TenantLimitException Exhausted(long bytes) =>
         new(
             "hotOwnerBytes",
             "Too many Sessions are active right now. Try again when one has finished."
-        );
+        ) { RequestedBytes = bytes };
 
     public void Dispose()
     {

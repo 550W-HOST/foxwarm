@@ -54,6 +54,20 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
             token: token
         );
 
+    public async Task<bool> CreateAsync(string key, ReadOnlyMemory<byte> content, bool keepExisting,
+        Action<long?> uncertain, CancellationToken token)
+    {
+        try
+        {
+            return await CreateAsync(key, content, keepExisting, token).ConfigureAwait(false);
+        }
+        catch (CommitOutcomeUnknownException)
+        {
+            uncertain(null);
+            throw;
+        }
+    }
+
     public async Task<bool> CreateAsync(
         string key,
         ReadOnlyMemory<byte> content,

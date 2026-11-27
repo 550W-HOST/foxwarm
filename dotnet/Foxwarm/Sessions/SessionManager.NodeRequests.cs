@@ -61,7 +61,8 @@ internal sealed partial class SessionManager
             );
         var action = type == "session_history_request" ? "read history for" : "send messages to";
         var catalog = RequireNodeSessionProjection(node, requested, action);
-        var owner = await GetExistingAsync(catalog["id"]!.GetValue<string>(), token);
+        using var use = await UseExistingAsync(catalog["id"]!.GetValue<string>(), token);
+        var owner = use?.Owner;
         requireConnection();
         if (owner is null)
             throw new InvalidDataException($"Target session \"{requested}\" not found.");

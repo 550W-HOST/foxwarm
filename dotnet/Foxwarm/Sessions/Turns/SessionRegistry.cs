@@ -161,6 +161,8 @@ public sealed class SessionRegistry
     /// A busy-turn slot (the tenant's limit) a processor waits for before it claims busy; null
     /// admits at once.
     /// </summary>
+    internal CancellationToken AdmissionClosed { get; set; }
+    internal Action? TurnAdmissionWaiting { get; set; }
     internal Func<CancellationToken, ValueTask<IDisposable>>? TurnAdmission { get; set; }
 
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }

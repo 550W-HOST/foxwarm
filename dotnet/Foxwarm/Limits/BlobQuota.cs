@@ -35,6 +35,9 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
     private long? baseline;
     // Set by a create whose outcome is unknown: the next write measures again.
     private bool stale;
+    private sealed record Unconfirmed(IBlobStore Store, string Key, long Bytes, long Deadline);
+    private readonly Dictionary<(IBlobStore, string), Unconfirmed> unconfirmed = [];
+    private long pendingBytes;
     private long added;
     private long reserved;
     private bool warned;
@@ -80,7 +83,7 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
     {
         await BaselineAsync(token).ConfigureAwait(false);
         lock (gate)
-            return baseline!.Value + added;
+            return baseline!.Value + pendingBytes + added;
     }
 
     // Measures the stores once; a failed measurement isn't kept, so the next write retries.
@@ -94,17 +97,32 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         {
             long counted;
             bool writesInFlight;
+            Unconfirmed[] outstanding;
             lock (gate)
             {
                 if (baseline is long known && !stale)
                     return known;
                 // Content added before this measurement is in it.
+                outstanding = unconfirmed.Values.ToArray();
                 counted = added;
                 writesInFlight = reserved != 0;
             }
             long value;
+            var settled = new List<Unconfirmed>();
+            bool settledAbsent = false;
             try
             {
+                foreach (var item in outstanding)
+                {
+                    var started = Environment.TickCount64;
+                    if (await item.Store.ExistsAsync(item.Key, token).ConfigureAwait(false))
+                        settled.Add(item);
+                    else if (started >= item.Deadline)
+                    {
+                        settled.Add(item);
+                        settledAbsent = true;
+                    }
+                }
                 value = measure is null ? 0 : await measure(token).ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OperationCanceledException)
@@ -125,7 +143,13 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
                 added -= counted;
                 // An overlapping write may already be in the measured bytes. Keep the
                 // conservative charge until a measurement with no writes in flight.
-                stale = writesInFlight || added != 0;
+                foreach (var item in settled)
+                    if (unconfirmed.TryGetValue((item.Store, item.Key), out var current) && ReferenceEquals(current, item))
+                    {
+                        unconfirmed.Remove((item.Store, item.Key));
+                        pendingBytes -= item.Bytes;
+                    }
+                stale = writesInFlight || added != 0 || unconfirmed.Count > 0 || settledAbsent;
             }
             return value;
         }
@@ -145,10 +169,10 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         long total;
         lock (gate)
         {
-            if (!overLimit.Value && baseline!.Value + added + reserved + bytes > Limit)
+            if (!overLimit.Value && baseline!.Value + pendingBytes + added + reserved + bytes > Limit)
                 throw Refused();
             reserved += bytes;
-            total = baseline!.Value + added + reserved;
+            total = baseline!.Value + pendingBytes + added + reserved;
         }
         WarnOnce(total);
         return new Reservation(this, bytes);
@@ -196,14 +220,25 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         private long remaining = bytes;
 
         // Moves this write's bytes from reserved to added.
-        internal void Charge(long amount, bool uncertain = false)
+        internal void Charge(long amount, bool uncertain, IBlobStore store, string key, long? deadline)
         {
             lock (quota.gate)
             {
                 var taken = Math.Min(amount, remaining);
                 remaining -= taken;
                 quota.reserved -= taken;
-                quota.added += amount;
+                if (uncertain && deadline is long until)
+                {
+                    if (quota.unconfirmed.TryGetValue((store, key), out var previous))
+                    {
+                        until = Math.Max(until, previous.Deadline);
+                        quota.pendingBytes -= previous.Bytes;
+                    }
+                    quota.unconfirmed[(store, key)] = new(store, key, amount, until);
+                    quota.pendingBytes += amount;
+                }
+                else
+                    quota.added += amount;
                 quota.stale |= uncertain;
             }
         }
@@ -303,18 +338,19 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         )
         {
             var uncertain = false;
+            long? deadline = null;
             var created = false;
             try
             {
                 created = await inner
-                    .CreateAsync(key, content, keepExisting, () => uncertain = true, token)
+                    .CreateAsync(key, content, keepExisting, until => { uncertain = true; deadline = until; }, token)
                     .ConfigureAwait(false);
                 return created;
             }
             finally
             {
                 if (created || uncertain)
-                    reservation.Charge(content.Length, uncertain);
+                    reservation.Charge(content.Length, uncertain, inner, key, deadline);
             }
         }
 

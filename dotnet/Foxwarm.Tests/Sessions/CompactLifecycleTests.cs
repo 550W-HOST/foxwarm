@@ -56,6 +56,105 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(0, slots.InUse);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedFirstCompactNotificationLeavesNoRegisteredRun(bool limited)
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        if (limited) f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        void Fail(SessionRuntimeEvent _) => throw new IOException("initial compact notification failed");
+        f.Owner.Changed += Fail;
+        try { await Assert.ThrowsAsync<IOException>(() => f.Owner.Compactor.StartManualAsync()); }
+        finally { f.Owner.Changed -= Fail; }
+        Assert.False(f.Owner.Compactor.Active);
+        Assert.False(f.Owner.Entry.HasProcessor);
+        Assert.Equal(0, slots.InUse);
+        await f.Owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedPostcommitBusyClaimIsStrictlyReleasedBeforeCompactionReturns(bool limited)
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        if (limited) f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        f.FailNextBusyCommit = true;
+        var failure = await Assert.ThrowsAsync<AuthorityCommittedException>(() => f.Owner.Compactor.StartManualAsync());
+        Assert.Contains("busy commit", failure.ToString());
+        Assert.False(f.Owner.Metadata().Busy);
+        Assert.False((await f.Store.LoadAsync(f.Owner.Id))!.Busy);
+        Assert.False(f.Owner.Compactor.Active);
+        Assert.False(f.Owner.Entry.HasProcessor);
+        Assert.Equal(0, slots.InUse);
+    }
+
+    [Fact]
+    public async Task ClosingAdmissionEndsAWaitingStandaloneCompact()
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        using var closing = new CancellationTokenSource();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        f.Owner.Registry.AdmissionClosed = closing.Token;
+        f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        using var held = await slots.EnterAsync();
+        var starting = f.Owner.Compactor.StartManualAsync();
+        try
+        {
+            Assert.False(starting.IsCompleted);
+            closing.Cancel();
+            Assert.False((await starting.WaitAsync(TimeSpan.FromSeconds(3))).Started);
+            Assert.False(f.Owner.Entry.HasProcessor);
+        }
+        finally { await f.Owner.Compactor.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task AFailedStandalonePhasePublicationReturnsTheBusyClaimAndSlot()
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        f.Owner.Changed += _ =>
+        {
+            if (f.Owner.Compacting) throw new IOException("phase publication failed");
+        };
+        await Assert.ThrowsAsync<IOException>(() => f.Owner.Compactor.StartManualAsync());
+        Assert.False(f.Owner.Compacting);
+        Assert.False(f.Owner.Metadata().Busy);
+        Assert.False(f.Owner.Entry.HasProcessor);
+        Assert.False(f.Owner.Compactor.Active);
+        Assert.Equal(0, slots.InUse);
+    }
+
+    [Fact]
+    public async Task CancellingAWaitingCompactReschedulesItsQueuedInput()
+    {
+        await using var f = await CompactFixture.CreateAsync(false, false);
+        await f.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        f.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        using var held = await slots.EnterAsync();
+        var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var starting = f.Owner.Compactor.StartManualAsync();
+        f.Owner.Registry.TriggerOverride = _ =>
+        {
+            if (!f.Owner.Entry.HasProcessor) wake.TrySetResult();
+            return Task.CompletedTask;
+        };
+        await f.Owner.Registry.Ingress.EnqueueAsync(f.Owner.Id, QueueItem.UserText("next input"));
+        await f.Owner.Compactor.StopAsync();
+        Assert.False((await starting).Started);
+        await wake.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
     [Fact]
     public void Compact_plan_schema_allows_direct_or_repaired_file_submission()
     {
@@ -1207,6 +1306,7 @@ public sealed partial class CompactLifecycleTests
         internal bool HoldSignal,
             FailHeldStage;
         internal bool HoldIngress;
+        internal bool FailNextBusyCommit;
         internal bool HoldApplyAfterSignal;
         internal readonly TaskCompletionSource ApplyReached = new(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1238,6 +1338,12 @@ public sealed partial class CompactLifecycleTests
                 "s",
                 authorityStageHook: stage =>
                 {
+                    if (FailNextBusyCommit && stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                        && JsonNode.Parse(File.ReadAllText(authorityPath))!["busy"]?.GetValue<bool>() == true)
+                    {
+                        FailNextBusyCommit = false;
+                        throw new IOException("busy commit publication fault");
+                    }
                     if (
                         HoldApplyAfterSignal
                         && stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
@@ -1424,8 +1530,8 @@ public sealed partial class CompactLifecycleTests
             Peer.ReleaseForeground();
             Peer.ReleasePlan();
             if (Owner.Compactor.Active)
-                await Owner.Compactor.StopAsync();
-            await Owner.DrainAsync();
+                await Owner.Compactor.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await Owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
             await AuthorizationManager.DisposeAsync();
             http.Dispose();
             StageRelease.Dispose();

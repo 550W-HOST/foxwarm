@@ -92,11 +92,16 @@ public sealed class TenantLimitHttpTests
         var holder = await f.Manager.CreateNamedAsync("main", "holder", null, null);
         using var slot = await holder.Registry.TurnAdmission!(default);
         var owner = (await f.Manager.GetExistingAsync("uploads"))!;
+        var waitingPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        owner.Changed += _ =>
+        {
+            if (owner.Processing && !owner.Metadata().Busy && owner.Entry.HasProcessor)
+                waitingPublished.TrySetResult();
+        };
         await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("pending input"));
         var waiting = owner.StartProcessing();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!owner.Entry.HasProcessor)
-            await Task.Delay(5, deadline.Token);
+        await waitingPublished.Task.WaitAsync(deadline.Token);
         Assert.False(owner.Metadata().Busy);
         using var response = path switch
         {
@@ -109,6 +114,54 @@ public sealed class TenantLimitHttpTests
         Assert.Empty(owner.Entry.Snapshot().Queue);
         Assert.Contains(owner.History(), row => row.ToJsonString().Contains("pending input"));
         Assert.Equal(1, f.Manager.Admission!.Turns.InUse);
+    }
+
+    [Theory]
+    [InlineData("refresh-memory")]
+    [InlineData("stream")]
+    public async Task PublicEffectsReacquireTheCurrentOwnerBeforeStarting(string route)
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults);
+        var original = (await f.Manager.GetExistingAsync("uploads"))!;
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        f.Manager.OwnerLookupReturned = owner =>
+        {
+            f.Manager.OwnerLookupReturned = null;
+            Assert.Same(original, owner);
+            Assert.Equal(1, f.Manager.ReleaseIdleOwners());
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var request = new HttpRequestMessage(route == "stream" ? HttpMethod.Get : HttpMethod.Post,
+            "api/sessions/uploads/" + route);
+        using var response = await f.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+        response.EnsureSuccessStatusCode();
+        Assert.True(original.Entry.Retired);
+        var current = Assert.Single(f.Manager.Owners());
+        Assert.NotSame(original, current);
+        if (route == "stream") Assert.True(current.HasSubscribers);
+    }
+
+    [Fact]
+    public async Task WebCommandCanReleaseItsSourceToLoadAnExplicitTarget()
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { HotOwnerBytes = 450000 });
+        f.Manager.PressureGraceForTest = TimeSpan.Zero;
+        var target = await f.Manager.CreateNamedAsync("main", "target", null, null);
+        var source = (await f.Manager.GetExistingAsync("uploads"))!;
+        Assert.True(target.Entry.Retired);
+        var reply = new TaskCompletionSource<SessionRuntimeEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Manager.Changed += value =>
+        {
+            if (value.Kind == SessionEventKind.CommandReply) reply.TrySetResult(value);
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var response = await f.Client.PostAsJsonAsync("api/sessions/uploads/message", new { text = "/session status target" }, deadline.Token);
+        response.EnsureSuccessStatusCode();
+        var result = await reply.Task.WaitAsync(deadline.Token);
+        Assert.Equal("uploads", result.SessionId);
+        Assert.Contains("target", result.Data!["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.True(source.Entry.Retired);
+        Assert.Equal("target", Assert.Single(f.Manager.Owners()).Id);
     }
 
     [Fact]

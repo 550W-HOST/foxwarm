@@ -41,7 +41,11 @@ internal sealed partial class SessionManager
         string ownerId,
         string name,
         JsonObject args
-    ) => await ExecuteTimerCommandAsync(await RequiredAsync(ownerId), name, args);
+    )
+    {
+        using var use = await UseRequiredAsync(ownerId);
+        return await ExecuteTimerCommandAsync(use.Owner, name, args);
+    }
 
     /// <summary>Reads the ToolScript run recorded for one of a timer's recent results.</summary>
     internal async Task<JsonObject> ReadTimerRunAsync(
@@ -147,10 +151,11 @@ internal sealed partial class SessionManager
                 return new JsonObject { ["deleted"] = deleted };
             }
             var existing = name == "update_timer" ? timers.Get(id!, requested) : null;
-            var owner = await RequiredAsync(
+            using var targetUse = await UseRequiredAsync(
                 existing is null ? requested : SessionWait.Text(existing["sessionId"])!,
                 token
             );
+            var owner = targetUse.Owner;
             await WaitForIdentityMutationAsync(source.Id, token);
             if (authorizeTool)
                 await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
@@ -252,11 +257,11 @@ internal sealed partial class SessionManager
     {
         if (TimerArguments.Script(timer))
         {
-            var owner =
-                await GetExistingAsync(SessionWait.Text(timer["sessionId"])!, acceptedTimer: true)
+            using var use =
+                await UseExistingAsync(SessionWait.Text(timer["sessionId"])!, acceptedTimer: true)
                 ?? throw new InvalidDataException("Timer owner Session not found.");
             var outcome = await RunOwnerScriptAsync(
-                owner,
+                use.Owner,
                 (JsonObject)timer["script"]!,
                 acceptedTimer: true,
                 "Timer owner lifetime is unavailable.",
@@ -272,11 +277,9 @@ internal sealed partial class SessionManager
                 );
             return outcome;
         }
-        SessionOwner target;
-        if (MainTimers.Flag(timer["newSession"]))
-            target = await CreateTimerSessionAsync(timer);
-        else
-            target = await RequiredAsync(SessionWait.Text(timer["sessionId"])!);
+        using var targetUse = MainTimers.Flag(timer["newSession"]) ? null
+            : await UseRequiredAsync(SessionWait.Text(timer["sessionId"])!);
+        var target = targetUse?.Owner ?? await CreateTimerSessionAsync(timer);
         using var admission = BeginOwnerMutation(target);
         await WaitForIdentityMutationAsync(target.Id);
         target.Entry.RequireIdentityAuthority();
@@ -300,15 +303,18 @@ internal sealed partial class SessionManager
         string sessionId,
         JsonObject script,
         string? webhookId = null
-    ) =>
-        await RunOwnerScriptAsync(
-            await RequiredAsync(sessionId),
+    )
+    {
+        using var use = await UseRequiredAsync(sessionId);
+        return await RunOwnerScriptAsync(
+            use.Owner,
             script,
             acceptedTimer: false,
             "Webhook target lifetime is unavailable.",
             "webhook",
             webhookId
         );
+    }
 
     // Unattended ToolScript owned by one Session, shared by ToolScript timers and webhook handlers.
     private async Task<JsonObject?> RunOwnerScriptAsync(

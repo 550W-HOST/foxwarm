@@ -11,7 +11,8 @@ internal sealed partial class SessionManager
         var grant = SessionWait.Text(message["completionCapability"]);
         if (original is null || id is null || grant is null)
             throw new InvalidDataException("Invalid remote_exec_background message.");
-        var owner = await RequiredAsync(original);
+        using var ownerUse = await UseRequiredAsync(original);
+        var owner = ownerUse.Owner;
         using var admission = BeginOwnerMutation(owner);
         if (!Nodes.ExecClaims.Activate(node, original, id, grant, owner))
             throw new InvalidDataException(
@@ -54,7 +55,8 @@ internal sealed partial class SessionManager
         )
             throw new InvalidDataException("Invalid remote exec completion capability.");
         // Lookup never creates an absent Session. Rename aliases identify the original lifetime.
-        var owner = await RequiredAsync(original);
+        using var ownerUse = await UseRequiredAsync(original);
+        var owner = ownerUse.Owner;
         using var admission = BeginOwnerMutation(owner);
         var claim = hasCompletion ? Nodes.ExecClaims.Exact(node, original, execId!, grant!) : null;
         if (hasCompletion)

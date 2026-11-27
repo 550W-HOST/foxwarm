@@ -37,18 +37,32 @@ internal sealed partial class SessionOwner
         lock (runtimeGate)
             foregroundRuntime = lease;
         Interlocked.Exchange(ref compactPhase, lease);
-        PublishStateChanged();
+        try
+        {
+            PublishStateChanged();
+        }
+        catch
+        {
+            ClearCompactPhase(lease);
+            throw;
+        }
         return lease;
     }
 
     public void EndCompactPhase(object lease)
     {
+        if (ClearCompactPhase(lease))
+            PublishStateChanged();
+    }
+
+    private bool ClearCompactPhase(object lease)
+    {
         if (!ReferenceEquals(Interlocked.CompareExchange(ref compactPhase, null, lease), lease))
-            return;
+            return false;
         lock (runtimeGate)
             if (ReferenceEquals(foregroundRuntime, lease))
                 foregroundRuntime = null;
-        PublishStateChanged();
+        return true;
     }
 
     internal async Task<JsonObject> UpdateCwdAsync(

@@ -181,7 +181,8 @@ internal sealed partial class SessionManager
         var input = SessionGoal.Trim(OptionalString(args, "sessionId") ?? caller.Id);
         if (input.Length == 0)
             input = caller.Id;
-        var owner = await RequiredAsync(input, token);
+        using var use = await UseRequiredAsync(input, token);
+        var owner = use.Owner;
         var old = owner.Id;
         var name = OptionalString(args, "newSessionId");
         var agentName = OptionalString(args, "newAgentName");

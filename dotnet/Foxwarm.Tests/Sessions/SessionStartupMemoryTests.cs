@@ -13,6 +13,157 @@ namespace Foxwarm.Tests;
 public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
 {
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostWaitCleanupReacquiresItsOwnerBeforeWriting(bool deferred)
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        await using var peer = new Peer();
+        await using (var seed = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options)))
+        {
+            await seed.LoadAsync();
+            var owner = await seed.CreateNamedAsync("main", "lost", null, null);
+            await owner.Entry.SaveLane.StartWaitAsync(new JsonObject
+            {
+                ["id"] = "wait", ["declarationVersion"] = 1, ["startedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ["waitExecIds"] = new JsonArray("transfer_lost"),
+            });
+            Assert.NotNull(owner.WaitSnapshot());
+        }
+        await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
+            capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = 450000 } })
+        { PressureGraceForTest = TimeSpan.Zero, IdleReleaseDelay = TimeSpan.Zero };
+        using var pinned = deferred ? manager.Admission!.HotOwners.Force(450000) : null;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.OwnerLookupReturned = owner =>
+        {
+            manager.OwnerLookupReturned = null;
+            Assert.True(SpinWait.SpinUntil(() => manager.ReleaseIdleOwners() == 1, TimeSpan.FromSeconds(2)));
+            retired.SetResult();
+        };
+        await manager.LoadAsync().WaitAsync(deadline.Token);
+        pinned?.Dispose();
+        await retired.Task.WaitAsync(deadline.Token);
+        while (manager.CatalogMetadata("lost")?.Wait is not null)
+            await Task.Delay(20, deadline.Token);
+        Assert.Null((await manager.GetExistingAsync("lost"))!.WaitSnapshot());
+    }
+
+    [Fact]
+    public async Task PinnedRecoveryBacklogDoesNotRereadOwnersBetweenCapacityChanges()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        await using var peer = new Peer();
+        await using (var seed = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options)))
+        {
+            await seed.LoadAsync();
+            await seed.CreateNamedAsync("main", "resident", null, null);
+            foreach (var id in new[] { "cold-a", "cold-b" })
+            {
+                var owner = await seed.CreateNamedAsync("main", id, null, null);
+                owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+                await owner.Registry.Ingress.EnqueueAsync(id, QueueItem.UserText(id));
+            }
+        }
+        await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
+            capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = 450000 } })
+        { PressureGraceForTest = TimeSpan.Zero };
+        var resident = (await manager.GetExistingAsync("resident"))!;
+        var subscription = resident.Subscribe();
+        int reads = 0;
+        manager.AdmissionReadObserved = id => { if (id.StartsWith("cold-")) Interlocked.Increment(ref reads); };
+        try
+        {
+            await manager.LoadAsync();
+            var afterPass = Volatile.Read(ref reads);
+            Assert.True(afterPass >= 2);
+            // More than two grace/eligibility rechecks. Uses of the same subscribed owner
+            // also signal a possible change, but neither wake should reread the deferred IDs.
+            using (await manager.UseRequiredAsync(resident.Id)) { }
+            await Task.Delay(TimeSpan.FromMilliseconds(2300));
+            Assert.Equal(afterPass, Volatile.Read(ref reads));
+        }
+        finally { resident.Unsubscribe(subscription.Id); }
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+        while (peer.Requests.Count < 2) await Task.Delay(20, deadline.Token);
+    }
+
+    [Fact]
+    public async Task ASmallerDeferredOwnerRunsWhileTheFirstStillCannotFit()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        await using var peer = new Peer();
+        await using (var seed = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options)))
+        {
+            await seed.LoadAsync();
+            foreach (var id in new[] { "a-large", "b-small" })
+            {
+                var owner = await seed.CreateNamedAsync("main", id, null, null);
+                owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+                await owner.Registry.Ingress.EnqueueAsync(id, QueueItem.UserText(id == "a-large" ? new string('x', 50000) : "small"));
+            }
+            Assert.Equal(new[] { "a-large", "b-small" }, seed.Catalog.RestartIds());
+        }
+        long Bytes(string id) => Foxwarm.Limits.HotOwnerBudget.Estimate(
+            new FileInfo(Path.Combine(data, "state", "sessions", id + ".json")).Length);
+        var small = Bytes("b-small");
+        var large = Bytes("a-large");
+        Assert.True(large > small);
+        await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
+            capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = large + small } });
+        using var pinned = manager.Admission!.HotOwners.Force(large + small);
+        await manager.LoadAsync().WaitAsync(TimeSpan.FromSeconds(4));
+        Assert.Empty(manager.Owners());
+        pinned.Resize(large); // Room for the smaller persisted owner, still too little for the first.
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (peer.Requests.IsEmpty) await Task.Delay(20, deadline.Token);
+        Assert.Contains("small", peer.Requests.First());
+        Assert.DoesNotContain(manager.Owners(), owner => owner.Id == "a-large");
+    }
+
+    [Fact]
+    public async Task ACompletedExecCanWaitForOwnerSpaceOffTheStartupBarrier()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        var release = Path.Combine(temp.Path, "release");
+        await using var peer = new Peer();
+        try
+        {
+            await using (var seed = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options)))
+            {
+                await seed.LoadAsync();
+                var owner = await seed.CreateNamedAsync("main", "exec-owner", null, null);
+                var started = await owner.Executor.ExecuteAsync(owner.Id, new JsonObject {
+                    ["command"] = $"while [ ! -f '{release}' ]; do sleep .05; done; printf completed", ["timeout"] = 1 }, default);
+                ExecReceipt.Header(started["output"]!.GetValue<string>());
+            }
+            await File.WriteAllTextAsync(release, "finish");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            while (!Directory.EnumerateFiles(temp.Path, "*.exit.json", SearchOption.AllDirectories).Any())
+                await Task.Delay(25, deadline.Token);
+            await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
+                capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = 400000 } });
+            using var pinned = manager.Admission!.HotOwners.Force(400000);
+            await manager.LoadMainHostAsync().WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Empty(manager.Owners());
+            pinned.Dispose();
+            while (peer.Requests.IsEmpty) await Task.Delay(25, deadline.Token);
+            Assert.Contains("background-process-finished", peer.Requests.First());
+        }
+        finally { await File.WriteAllTextAsync(release, "finish"); }
+    }
+
     [Fact]
     public async Task LimitedStartupRunsMoreDurableQueuesThanFitTogether()
     {

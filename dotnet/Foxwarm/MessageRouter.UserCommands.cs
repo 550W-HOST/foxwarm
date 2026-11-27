@@ -16,11 +16,24 @@ internal sealed partial class MessageRouter
         SessionRuntime runtime,
         ExternalChannelContext source,
         CtlUser call,
-        SessionOwner? selected
-    )
+        string? selectedId
+    ) : IDisposable
     {
-        private SessionOwner? current = selected;
-        private bool resolved = selected is not null;
+        private SessionOwner? current;
+        private readonly List<SessionManager.OwnerUse> uses = [];
+        public void Dispose()
+        {
+            foreach (var use in uses)
+                use.Dispose();
+        }
+        internal async Task<SessionOwner?> ResolveAsync(string id)
+        {
+            var use = await runtime.Manager.UseExistingAsync(id);
+            if (use is not null)
+                uses.Add(use);
+            return use?.Owner;
+        }
+        private bool resolved;
 
         internal ExternalChannelContext Source => source;
         internal CtlUser Call => call;
@@ -40,10 +53,8 @@ internal sealed partial class MessageRouter
             if (!resolved)
             {
                 resolved = true;
-                var id = SessionWait.Text(
-                    runtime.Manager.ChannelBinding(source.Target)?["sessionId"]
-                );
-                current = id is null ? null : await runtime.GetOwnerAsync(id);
+                var id = CurrentId;
+                current = id is null ? null : await ResolveAsync(id);
             }
             return current;
         }
@@ -53,13 +64,14 @@ internal sealed partial class MessageRouter
 
         internal string? CurrentId =>
             current?.Id
+            ?? selectedId
             ?? SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["sessionId"]);
 
         // The Session named by the option, or the conversation's Session.
         internal async Task<SessionOwner> TargetAsync(string option = "sessionId")
         {
             if (Text(option) is { } id)
-                return await runtime.GetOwnerAsync(id)
+                return await ResolveAsync(id)
                     ?? throw new UserCommandException($"❌ Session `{id}` not found.");
             return await CurrentAsync()
                 ?? throw new UserCommandException("❌ No active session.");
@@ -120,7 +132,7 @@ internal sealed partial class MessageRouter
         ExternalChannelContext source,
         string command,
         string? rawArgs,
-        SessionOwner? selectedOwner = null
+        string? selectedId = null
     )
     {
         if (!runtime.Manager.Accepting)
@@ -136,7 +148,7 @@ internal sealed partial class MessageRouter
             return true;
         }
         var auth = runtime.Manager.ChannelAuthorization?.Inspect(source);
-        if (selectedOwner is null && auth is null)
+        if (selectedId is null && auth is null)
             throw new InvalidOperationException("External channel ingress is not initialized.");
         if (auth is { Authorized: false })
         {
@@ -157,7 +169,8 @@ internal sealed partial class MessageRouter
                     await source.Reply("❌ " + CtlHelp.Error(error, _ => true, UserCommands.Ingress));
                     break;
                 case CtlUser call:
-                    await RunUserCommandAsync(new UserCommand(runtime, source, call, selectedOwner));
+                    using (var userCommand = new UserCommand(runtime, source, call, selectedId))
+                        await RunUserCommandAsync(userCommand);
                     break;
             }
         }

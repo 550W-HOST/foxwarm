@@ -361,7 +361,8 @@ internal sealed partial class SessionManager
         string runtime = "foxwarm"
     )
     {
-        var parent = await RequiredAsync(parentSessionId);
+        using var parentUse = await UseRequiredAsync(parentSessionId);
+        var parent = parentUse.Owner;
         var child = await CreateNamedAsync(
             agentName,
             sessionName,

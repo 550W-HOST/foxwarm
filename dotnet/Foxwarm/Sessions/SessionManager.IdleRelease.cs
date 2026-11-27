@@ -192,7 +192,7 @@ internal sealed partial class SessionManager
                 )
             )
                 return false;
-            if (owner.Processing || owner.Entry.HasProcessor || owner.Entry.HistoryMutation)
+            if (owner.HasSubscribers || owner.Processing || owner.Entry.HasProcessor || owner.Entry.HistoryMutation)
                 return false;
             // Last: once the lane is retired, a stale reference can no longer persist anything.
             if (!owner.Entry.SaveLane.TryRetireIdle(observed))
@@ -226,6 +226,7 @@ internal sealed partial class SessionManager
             || owner.Entry.Retired
             || !owner.Entry.IdentityAvailable
             || !identities.TryGetValue(owner.Id, out var found)
+            || found.ActiveUses != 0
             || found.Retiring
             || found.Retired
             || !found.Finished.Task.IsCompleted

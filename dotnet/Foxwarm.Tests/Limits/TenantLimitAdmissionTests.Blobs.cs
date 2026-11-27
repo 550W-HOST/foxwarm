@@ -22,6 +22,18 @@ public sealed partial class TenantLimitAdmissionTests
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Exception? Fail;
         internal int Creates;
+        internal long? LostPutDeadline;
+
+        public Task<bool> CreateAsync(string key, ReadOnlyMemory<byte> content, bool keepExisting,
+            Action<long?> uncertain, CancellationToken token)
+        {
+            if (LostPutDeadline is long deadline)
+            {
+                uncertain(deadline);
+                throw new IOException("PUT outcome unknown");
+            }
+            return CreateAsync(key, content, keepExisting, token);
+        }
 
         public bool Exists(string key) => throw new InvalidOperationException("Synchronous existence check.");
 
@@ -48,6 +60,20 @@ public sealed partial class TenantLimitAdmissionTests
         public IReadOnlyList<string> List(string prefix) => inner.List(prefix);
 
         public string? LocalPath(string key) => inner.LocalPath(key);
+    }
+
+    [Fact]
+    public async Task AnAbsentHeadAfterTheDeadlineRefundsAndForcesOneMoreMeasurement()
+    {
+        using var temp = new TempDirectory();
+        var inner = new ControlledStore(new Foxwarm.Images.ImageBlobFiles(temp.Path))
+            { LostPutDeadline = Environment.TickCount64 - 1 };
+        long stored = 0;
+        var quota = new BlobQuota(100, _ => Task.FromResult(stored));
+        await Assert.ThrowsAsync<IOException>(() => quota.Apply(inner).CreateAsync(Key('a'), new byte[100], true, default));
+        Assert.Equal(0, await quota.UsedAsync(default));
+        stored = 100; // A server commit just after the client's final negative observation.
+        Assert.Equal(100, await quota.UsedAsync(default));
     }
 
     [Fact]

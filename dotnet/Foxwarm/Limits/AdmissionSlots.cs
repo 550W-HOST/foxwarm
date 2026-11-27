@@ -8,6 +8,8 @@ internal sealed class TenantLimitException(string limit, string message)
     : InvalidOperationException(message)
 {
     internal string Limit { get; } = limit;
+    // A rejected byte reservation, used to wait for room without rereading its persisted size.
+    internal long RequestedBytes { get; init; }
 }
 
 /// <summary>

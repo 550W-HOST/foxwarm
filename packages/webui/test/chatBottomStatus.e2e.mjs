@@ -358,6 +358,16 @@ test('composer swaps empty running drafts to Stop while text and whitespace reta
   }
 })
 
+test('the composer can stop a processor waiting for busy-turn admission', async () => {
+  await mount(false)
+  await page.evaluate(() => window.fixture.state('idle', { processing: true }))
+  await page.waitForSelector('button[aria-label="Stop session"]:not([disabled])', { timeout: 5000 })
+  await page.click('button[aria-label="Stop session"]')
+  await page.waitForFunction(() => window.commands.includes('/stop'))
+  await page.evaluate(() => window.fixture.state('idle', { processing: false }))
+  await page.waitForSelector('[data-composer-action="send"][disabled]')
+})
+
 test('Stop feedback is correlated, does not insert receipts, and stays Stopping until authoritative state settles', async () => {
   await mount(false,390)
   await page.evaluate(()=>{window.fixture.autoFeedback=false;window.fixture.state('requesting-model')})

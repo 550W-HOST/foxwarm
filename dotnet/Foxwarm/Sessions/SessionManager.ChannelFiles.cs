@@ -19,7 +19,8 @@ internal sealed partial class SessionManager
     )
     {
         var id = SessionWait.Text(ChannelBinding(platform + ":" + conversation)?["sessionId"]);
-        var owner = id is null ? null : await GetExistingAsync(id, token);
+        using var use = id is null ? null : await UseExistingAsync(id, token);
+        var owner = use?.Owner;
         return await SaveInboundChannelFileCoreAsync(
             platform,
             owner,

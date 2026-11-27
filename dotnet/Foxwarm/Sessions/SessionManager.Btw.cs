@@ -145,7 +145,8 @@ internal sealed partial class SessionManager
         }
         var text = "📝 [BTW result]\n" + (payload.Trim().Length == 0 ? "(empty)" : payload.Trim());
         // Resolve the existing identity after the request; moves can retain aliases, deletion cannot recreate it.
-        var target = await RequiredAsync(snapshot.Id);
+        using var targetUse = await UseRequiredAsync(snapshot.Id);
+        var target = targetUse.Owner;
         using var append = BeginOwnerMutation(target);
         var meta = new JsonObject { ["noticeType"] = "btw" };
         if (modelId is not null)
