@@ -504,6 +504,12 @@ internal sealed class FileAgentFiles(AgentCatalog agents) : IAgentFileStore
         );
     }
 
+    /// <summary>
+    /// The physical path of a store path of an Agent, under the same confinement as every
+    /// write here: no existing component below the Agent's directory may be a link.
+    /// </summary>
+    internal string ConfinedPath(string agent, string path) => Resolve(agent, AgentFilePaths.Require(path, allowRoot: true));
+
     // The physical path of a store path. The Agent's directory must exist, and no existing
     // component below it may be a symbolic link, so a write can't leave the directory.
     private string Resolve(string? agent, string path, bool lookup = false)

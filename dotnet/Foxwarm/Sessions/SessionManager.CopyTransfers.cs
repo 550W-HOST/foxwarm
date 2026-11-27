@@ -165,7 +165,7 @@ internal sealed partial class SessionManager
                     files,
                     token
                 );
-                source = await OpenNodeReadAsync(
+                source = await OpenCopySourceAsync(
                     owner,
                     transfer.Source,
                     transfer.SourcePath,
@@ -175,7 +175,7 @@ internal sealed partial class SessionManager
                 );
                 Interlocked.Exchange(ref transfer.Size, source.Length);
                 start = new TransferStartStream(source.Stream);
-                writing = WriteNodeStreamAsync(
+                writing = WriteCopyTargetAsync(
                     owner,
                     transfer.Target,
                     transfer.TargetPath,

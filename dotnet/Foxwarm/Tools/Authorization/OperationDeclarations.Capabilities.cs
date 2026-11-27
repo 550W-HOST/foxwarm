@@ -469,7 +469,7 @@ internal static partial class OperationDeclarations
             [
                 Branch("list", "list", Op("node.list")),
                 Branch("inspect", "inspect", Op("node.view", "node=node-target")),
-                Branch("select", "select", Op("node.select", "node=node-target")),
+                Branch("select", "select", Op("node.select", "node=select-node")),
                 // `node status` views the caller's current Node: the Session's, or an inbound
                 // connection's selected Node.
                 Branch("status", "status", Op("node.view", "node=status-node")),

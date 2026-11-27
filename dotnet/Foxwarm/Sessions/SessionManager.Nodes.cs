@@ -43,6 +43,9 @@ internal sealed partial class SessionManager
     // explicit or inherited placement is kept as given. Null leaves currentNode unset.
     internal string? StartingNode(string placed, bool explicitPlacement)
     {
+        // The Agent folder endpoint is a file endpoint, never a Session's Node.
+        if (placed.Trim() == AgentStorePaths.Endpoint)
+            throw new InvalidDataException("`@agent` names this Agent's folder, not a Node, so a Session can't be placed there.");
         if (Capabilities.MasterNode)
             return placed;
         if (placed == "master")

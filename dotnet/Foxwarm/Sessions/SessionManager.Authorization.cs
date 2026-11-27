@@ -54,6 +54,27 @@ internal sealed partial class SessionManager
         // On master, the Agent folder is a master folder, and its calls are master's.
         if (Capabilities.MasterNode && targets is not null && targets.Contains(AgentStorePaths.Endpoint))
             targets = targets.Select(target => target == AgentStorePaths.Endpoint ? "master" : target).ToArray();
+        // Clearing the Node selection targets what an unset Node is: master in file mode, with
+        // the Node named as a selection names it; no Node otherwise.
+        string? targetNode = node;
+        if (Foxwarm.Nodes.NodeProviderRegistry.ClearsSelection(source, name, args))
+        {
+            targets = Capabilities.MasterNode ? ["master"] : [];
+            targetNode = Capabilities.MasterNode ? "master" : null;
+            if (Capabilities.MasterNode)
+            {
+                args = (JsonObject)args.DeepClone();
+                args["nodeId"] = "master";
+            }
+        }
+        // So are a copy's endpoint arguments, as policy facts; the call keeps its own.
+        if (Capabilities.MasterNode && source == "builtin" && name == "copy_between_nodes")
+            foreach (var key in new[] { "sourceNode", "targetNode" })
+                if (SessionWait.Text(args[key])?.Trim() == AgentStorePaths.Endpoint)
+                {
+                    args = (JsonObject)args.DeepClone();
+                    args[key] = "master";
+                }
         return new(
             source,
             name,
@@ -62,7 +83,7 @@ internal sealed partial class SessionManager
             paths,
             owner.Agent,
             owner.Id,
-            node,
+            targetNode,
             toolWorkspace,
             agents.AuthorizationAgentRoot(owner.Agent),
             agents.AuthorizationMemoryRoot(owner.Agent),

@@ -13,7 +13,7 @@ namespace Foxwarm.Tests.Hosted;
 [Trait("Backend", "postgres")]
 public sealed class HostedAgentFolderTests(ITestOutputHelper output)
 {
-    private static JsonObject Values(JsonObject args) => new() { ["a"] = args };
+    internal static JsonObject Values(JsonObject args) => new() { ["a"] = args };
 
     // Calls by a Session without a Node (hosted) or on master (file mode).
     private static readonly (string Name, JsonObject Args)[] Script =
@@ -38,6 +38,17 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         ),
         ("read", new() { ["filePath"] = "$fw_agentdir/docs/b.md" }),
         ("read", new() { ["filePath"] = "$fw_agentdir/docs/a.md", ["startLine"] = 1, ["endLine"] = 1 }),
+        // A write to an existing directory, a name starting with `$`, and a patch that deletes
+        // a directory.
+        ("write", new() { ["filePath"] = "$fw_agentdir/docs", ["content"] = "d" }),
+        ("write", new() { ["filePath"] = "$fw_agentdir/docs", ["content"] = "d", ["overwrite"] = true }),
+        ("write", new() { ["filePath"] = "$fw_agentdir/$x.md", ["content"] = "dollar\n" }),
+        ("edit", new() { ["filePath"] = "$fw_agentdir/$x.md", ["oldText"] = "dollar", ["newText"] = "cash" }),
+        ("read", new() { ["filePath"] = "$fw_agentdir/$x.md" }),
+        ("write", new() { ["filePath"] = "$fw_agentdir/empty/x", ["content"] = "x", ["createDirs"] = true }),
+        ("edit", new() { ["apply_patch"] = "*** Begin Patch\n*** Delete File: $fw_agentdir/empty/x\n*** End Patch" }),
+        ("edit", new() { ["apply_patch"] = "*** Begin Patch\n*** Delete File: $fw_agentdir/empty\n*** End Patch" }),
+        ("read", new() { ["filePath"] = "$fw_agentdir/empty" }),
         (
             "ctl",
             new() { ["command"] = "tool call node:@agent/read --args @a", ["values"] = Values(new() { ["filePath"] = "docs/b.md" }) }
@@ -69,14 +80,106 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         // Configuration candidates in the Agent folder.
         ("write", new() { ["filePath"] = "$fw_agentdir/rules.yaml", ["content"] = "version: 1\ndefaultAction: allow\nrules:\n  - id: no-exec\n    tool: {source: node, name: exec}\n    action: deny\n" }),
         ("write", new() { ["filePath"] = "$fw_agentdir/bad.yaml", ["content"] = "version: 7\n" }),
-        ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/bad.yaml", ["probes"] = new JsonArray(new JsonObject { ["tool"] = "builtin:list_agents" }) }),
-        ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/missing.yaml", ["probes"] = new JsonArray(new JsonObject { ["tool"] = "builtin:list_agents" }) }),
-        ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/docs", ["probes"] = new JsonArray(new JsonObject { ["tool"] = "builtin:list_agents" }) }),
+        ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/bad.yaml", ["probes"] = Probe() }),
+        ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/missing.yaml", ["probes"] = Probe() }),
+        ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/docs", ["probes"] = Probe() }),
         ("set_config", new() { ["target"] = "tool-rules", ["filePath"] = "$fw_agentdir/bad.yaml" }),
         ("set_config", new() { ["target"] = "tool-rules", ["filePath"] = "$fw_agentdir/missing.yaml" }),
+        // A valid candidate, explained and then installed.
+        ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/rules.yaml", ["probes"] = Probe() }),
+        ("set_config", new() { ["target"] = "tool-rules", ["filePath"] = "$fw_agentdir/rules.yaml" }),
+        ("explain_tool_authorization", new() { ["probes"] = Probe() }),
     ];
 
-    private static string Seen(JsonObject result, SessionManager manager)
+    // An exec of the fixture's Session, which the candidate denies.
+    private static JsonArray Probe() =>
+        new(new JsonObject { ["sessionId"] = "profile", ["source"] = "node", ["name"] = "exec", ["args"] = new JsonObject { ["command"] = "true" } });
+
+    // The policy each call of the script is explained under before it runs: allow, ask and deny
+    // by Node and by path.
+    private const string ProbePolicy = """
+        version: 1
+        defaultAction: allow
+        rules:
+          - id: ask-b
+            tool: {source: node, name: [read, write, edit]}
+            path: {allWithin: "${agent.dir}/docs/b.md"}
+            action: ask
+          - id: deny-notes
+            tool: {source: node}
+            path: {allWithin: "${agent.dir}/notes"}
+            action: deny
+          - id: ask-master-edit
+            tool: {source: node, name: edit}
+            node: {exact: master}
+            action: ask
+        """;
+
+    // What policy decides for a call: the decision, each layer's decision and rule, and the
+    // resolved resources, with folder paths in one spelling for both modes.
+    internal static string Semantics(JsonObject result, SessionManager manager)
+    {
+        if (result.FailureMessage() is { } failure)
+            return "ERROR " + Seen(result, manager);
+        var text = SessionWait.Text(result["output"]);
+        var explained = text is null ? result : JsonNode.Parse(text)!.AsObject();
+        var probe = explained["probes"]![0]!.AsObject();
+        if (probe["error"] is { } error)
+            return "PROBE ERROR " + Normalize(error.ToJsonString(), manager);
+        var decided = probe["active"] ?? probe["candidate"]!;
+        var parts = new List<string> { "decision " + decided["decision"] };
+        foreach (var layer in decided["layers"]!.AsArray())
+            parts.Add($"{layer!["layer"]} {layer["decision"]} {layer["rule"]?["id"] ?? "default"}");
+        foreach (var path in decided["facts"]?["paths"]?.AsArray() ?? [])
+            parts.Add("path " + Resource(SessionWait.Text(path!["node"]), SessionWait.Text(path["resolved"]), manager));
+        foreach (var operation in probe["operations"]?.AsArray() ?? [])
+            parts.Add(
+                $"op {operation!["op"]} "
+                    + Resource(SessionWait.Text(operation["resources"]?["node"]), SessionWait.Text(operation["resources"]?["path"]), manager)
+            );
+        return string.Join("; ", parts);
+    }
+
+    private static string Resource(string? node, string? path, SessionManager manager)
+    {
+        if (node == "@agent" && path is not null)
+            return "folder:" + (path == "main" ? "" : path["main/".Length..]);
+        if (manager.AgentStore is null && node == "master" && path is not null)
+        {
+            var root = Foxwarm.Tools.AuthorizationPaths.CanonicalPotential(manager.AgentDirectory("main"));
+            if (path == root || path.StartsWith(root + "/", StringComparison.Ordinal))
+                return "folder:" + path[root.Length..].TrimStart('/');
+        }
+        return node + ":" + path;
+    }
+
+    private static string Normalize(string text, SessionManager manager) =>
+        manager.AgentStore is null ? text.Replace(manager.AgentDirectory("main"), "$fw_agentdir", StringComparison.Ordinal) : text;
+
+    // The explanation of one call of the script under the probe policy.
+    private static JsonObject ExplainCall(string name, JsonObject args)
+    {
+        var probe = new JsonObject { ["sessionId"] = "profile" };
+        if (name == "ctl")
+        {
+            probe["command"] = args["command"]!.DeepClone();
+            probe["values"] = args["values"]?.DeepClone();
+        }
+        else if (name is "read" or "write" or "edit")
+        {
+            probe["source"] = "node";
+            probe["name"] = name;
+            probe["args"] = args.DeepClone();
+        }
+        else
+        {
+            probe["toolId"] = "builtin:" + name;
+            probe["args"] = args.DeepClone();
+        }
+        return new JsonObject { ["policyFilePath"] = "$fw_agentdir/.probe/rules.yaml", ["probes"] = new JsonArray(probe) };
+    }
+
+    internal static string Seen(JsonObject result, SessionManager manager)
     {
         var text = result.FailureMessage() is { } failure
             ? "ERROR " + failure
@@ -87,16 +190,23 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         return System.Text.RegularExpressions.Regex.Replace(text, @"\d{4}-\d\d-\d\d[ T][0-9:.]+Z?", "<time>");
     }
 
-    private async Task<string[]> RunAsync(HostedCapabilityProfileTests.Fixture fixture)
+    // Each call's explanation under the probe policy, then the call itself.
+    private async Task<(string[] Seen, string[] Decided)> RunAsync(HostedCapabilityProfileTests.Fixture fixture)
     {
+        Assert.Null(
+            (await fixture.Call("write", new() { ["filePath"] = "$fw_agentdir/.probe/rules.yaml", ["content"] = ProbePolicy, ["createDirs"] = true })).FailureMessage()
+        );
         var seen = new List<string>();
+        var decided = new List<string>();
         foreach (var (name, args) in Script)
         {
+            var semantics = Semantics(await fixture.Call("explain_tool_authorization", ExplainCall(name, args)), fixture.Manager);
             var text = Seen(await fixture.Call(name, (JsonObject)args.DeepClone()), fixture.Manager);
-            output.WriteLine($"{name} {args.ToJsonString()}\n  {text}");
+            output.WriteLine($"{name} {args.ToJsonString()}\n  {semantics}\n  {text}");
             seen.Add(text);
+            decided.Add(semantics);
         }
-        return seen.ToArray();
+        return (seen.ToArray(), decided.ToArray());
     }
 
     [Fact]
@@ -107,8 +217,19 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         await using var store = await HostedAgentStoreTests.StoreFixture.Create(store: true);
         var actual = await RunAsync(store.Inner);
         for (var index = 0; index < Script.Length; index++)
-            Assert.True(expected[index] == actual[index], $"call {index}: {Script[index].Name}\nfile:  {expected[index]}\nstore: {actual[index]}");
+        {
+            Assert.True(expected.Decided[index] == actual.Decided[index], $"policy {index}: {Script[index].Name}\nfile:  {expected.Decided[index]}\nstore: {actual.Decided[index]}");
+            Assert.True(expected.Seen[index] == actual.Seen[index], $"call {index}: {Script[index].Name}\nfile:  {expected.Seen[index]}\nstore: {actual.Seen[index]}");
+        }
         Assert.Equal("four\n", await store.Store.ReadTextAsync("main", "docs/a.md", default));
+        Assert.Equal("cash\n", await store.Store.ReadTextAsync("main", "$x.md", default));
+        Assert.True(store.Store.Stat("main", "empty")!.IsDirectory);
+        // The probe policy decided the script with each kind of decision.
+        Assert.Contains(actual.Decided, item => item.StartsWith("decision ask; global ask ask-b", StringComparison.Ordinal));
+        Assert.Contains(actual.Decided, item => item.StartsWith("decision deny; global deny deny-notes", StringComparison.Ordinal));
+        Assert.Contains(actual.Decided, item => item.StartsWith("decision allow;", StringComparison.Ordinal));
+        // The installed candidate is the active policy.
+        Assert.Contains("no-exec", actual.Seen[^1]);
     }
 
     private static string Template(string name) =>
@@ -139,7 +260,7 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         ("write", new() { ["filePath"] = "$fw_agentdir/docs/c.md", ["content"] = "c" }),
     ];
 
-    private static async Task SeedAsync(HostedCapabilityProfileTests.Fixture fixture, string agent)
+    internal static async Task SeedAsync(HostedCapabilityProfileTests.Fixture fixture, string agent)
     {
         if (fixture.Manager.AgentStore is { } store)
         {
@@ -154,7 +275,7 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         await File.WriteAllTextAsync(Path.Combine(root, ".temp", "channel-files", "in.txt"), "in\n");
     }
 
-    private static string Decision(JsonObject result, SessionManager manager) =>
+    internal static string Decision(JsonObject result, SessionManager manager) =>
         result.FailureCode() == "tool_authorization_denied"
             ? "DENIED " + System.Text.RegularExpressions.Regex.Match(result.FailureMessage() ?? "", "Rule `([a-z-]+)`").Groups[1].Value
             : result.FailureMessage() is { } failure ? "ERROR " + Seen(result, manager) : "OK";

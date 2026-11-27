@@ -2010,7 +2010,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Node containing the source file. `@agent` names this Agent's own folder, with paths relative to it."
+          "help": "Node containing the source file. `@@agent` names this Agent's own folder, with paths relative to it."
         },
         {
           "name": "sourcePath",
@@ -2024,7 +2024,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Node that will receive the file. `@agent` names this Agent's own folder, with paths relative to it."
+          "help": "Node that will receive the file. `@@agent` names this Agent's own folder, with paths relative to it."
         },
         {
           "name": "targetPath",
@@ -3805,7 +3805,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Path to the complete candidate YAML file. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+          "help": "Path to the complete candidate YAML file. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected. `$fw_tmp` isn't available where there is no master."
         }
       ]
     },
@@ -3833,7 +3833,7 @@
           "name": "policyFilePath",
           "type": "string",
           "kind": "flag",
-          "help": "Path to a complete candidate tool-rules YAML that replaces the active global policy. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory."
+          "help": "Path to a complete candidate tool-rules YAML that replaces the active global policy. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. `$fw_tmp` isn't available where there is no master."
         },
         {
           "name": "compare",

@@ -107,6 +107,7 @@ internal sealed partial record OperationPlan
             "prospective-session" => ["agentName", "parentSessionId"],
             "creation-runtime" => ["runtime"],
             "node-target" or "node-target?" => ["nodeId", "parentNode", "providerId"],
+            "select-node" => ["nodeId", "none"],
             "provider-node" => ["nodeId", "providerId"],
             "target-session" or "timer-owner" => ["sessionId"],
             "agent-or-caller" => ["agentName"],
@@ -223,6 +224,7 @@ internal sealed partial record OperationPlan
                 return null;
             case "node-target":
             case "node-target?":
+            case "select-node":
             case "provider-node":
             {
                 var source = declaration.Source;

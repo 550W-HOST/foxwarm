@@ -64,6 +64,11 @@ public sealed partial class WorkspaceTools
                     {
                         if (targetFiles is null && !await RegularFileAsync(path, ct))
                             throw new InvalidDataException($"Regular file not found: {path}");
+                        // The Agent folder deletes regular files only, as on master.
+                        if (AgentFolder is not null && await TargetStatAsync(path, ct) is not { Kind: "file" })
+                            throw new InvalidDataException(
+                                $"Regular file not found: {AgentFolderPaths.Variable}/{path}"
+                            );
                         if (targetFiles is not null && await TargetStatAsync(path, ct) is null)
                             throw new InvalidDataException(
                                 $"Cannot delete missing file: {operation.Path}"

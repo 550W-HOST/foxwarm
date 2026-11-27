@@ -429,12 +429,13 @@ public sealed partial class WorkspaceTools
         }
         if (name is "send_file" or "run_script" or "start_toolscript_run" && raw is not null)
             raw = SessionGoal.Trim(raw);
-        if (raw is null || raw.Length == 0)
-            return [];
-        if (AgentFolder is { } folder)
+        // An Agent-folder path, the empty one included, names a folder entry (the root for "").
+        if (AgentFolder is { } folder && raw is not null)
             return name is "read" or "write" or "edit" or "set_config"
                 ? [folder.Fact("filePath", raw, folder.Resolve(raw))]
                 : throw new InvalidDataException("No Agent-folder path resolver for this capability.");
+        if (raw is null || raw.Length == 0)
+            return [];
         var resolved = name switch
         {
             "read" or "set_config" or "send_file" or "run_script" or "start_toolscript_run" =>
@@ -455,33 +456,14 @@ public sealed partial class WorkspaceTools
         ];
     }
 
-    // A candidate in the Agent store: the same checks, over the store's file.
+    // A candidate in the Agent folder: the same checks, over one committed version of the file,
+    // read at once; that one buffer is the candidate.
     private async Task<byte[]> CaptureStoredCandidateAsync(string path, bool policy, CancellationToken token)
     {
-        TargetFileStat stat;
-        try
-        {
-            stat = await targetFiles!.StatAsync(path, token);
-        }
-        catch (Foxwarm.Nodes.NodeProviderException error) when (error.Code == "ENOENT")
-        {
+        if (targetFiles is not AgentStoreFileOperations folder)
             throw new InvalidDataException("Configuration candidate must be a regular file.");
-        }
-        if (stat.Kind != "file")
-            throw new InvalidDataException("Configuration candidate must be a regular file.");
-        if (policy && stat.Size > ToolAuthorizationPolicy.MaxBytes)
-            throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
-        using var output = new MemoryStream();
-        while (true)
-        {
-            var chunk = await targetFiles.ReadAsync(path, output.Length, 1024 * 1024, token);
-            if (chunk.Length == 0)
-                break;
-            if (policy && output.Length + chunk.Length > ToolAuthorizationPolicy.MaxBytes)
-                throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
-            output.Write(chunk);
-        }
-        return output.ToArray();
+        return await folder.ReadCandidateAsync(path, policy ? ToolAuthorizationPolicy.MaxBytes : null, token)
+            ?? throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
     }
 
     internal async Task<byte[]> CaptureConfigCandidateAsync(
@@ -490,7 +472,7 @@ public sealed partial class WorkspaceTools
         CancellationToken token
     )
     {
-        if (AgentFolder is { Store: true } folder)
+        if (AgentFolder is { } folder)
             return await CaptureStoredCandidateAsync(folder.Resolve(raw), policy, token);
         var path = ResolveReadWrite(raw, true);
         if (!RegularFile(path))

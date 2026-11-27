@@ -34,7 +34,9 @@ public sealed class HostedCapabilityProfileTests
             Func<string, Foxwarm.Storage.IStorageContext>? storage = null,
             // The installed layout (Agent folders under the data root, main among them), as a
             // host's paths give it; otherwise the retained layout with main as the workspace.
-            bool installedLayout = false
+            bool installedLayout = false,
+            // The configuration owner over the host's paths; null is the files'.
+            Func<HostPaths, ModelConfiguration>? configuration = null
         )
         {
             var f = new Fixture();
@@ -72,7 +74,7 @@ public sealed class HostedCapabilityProfileTests
                 "default: local/wire\nproviders:\n  local:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    models: [wire]\n"
             );
             var paths = HostPaths.ForDataRoot(f.Data, f.Temp.Path, environment: _ => null);
-            var configuration = new ModelConfiguration(paths);
+            var models = configuration?.Invoke(paths) ?? new ModelConfiguration(paths);
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
                 "wire",
@@ -85,7 +87,7 @@ public sealed class HostedCapabilityProfileTests
                 f.Data,
                 f.Work,
                 options,
-                new HostModels(configuration),
+                new HostModels(models),
                 f.Skills,
                 storage: storage?.Invoke(f.Data),
                 capabilities: capabilities,

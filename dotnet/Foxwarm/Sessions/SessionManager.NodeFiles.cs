@@ -30,25 +30,26 @@ internal sealed partial class SessionManager
 
     // The Agent-folder file tools of a Session: master's file tools confined to its Agent's
     // folder, or the Agent store's files of its Agent.
+    // The file owner of Agent folders: the store, or the folders under the store's rules
+    // (no links, no special names), so the endpoint is confined alike in both modes.
+    // Tests may wrap it.
+    private IAgentFileStore? folderFiles;
+
+    internal IAgentFileStore FolderFiles
+    {
+        get => folderFiles ??= (IAgentFileStore?)AgentStore ?? PhysicalFolderFiles;
+        set => folderFiles = value;
+    }
+
+    private FileAgentFiles? physicalFolderFiles;
+
+    private FileAgentFiles PhysicalFolderFiles => physicalFolderFiles ??= new FileAgentFiles(agents);
+
     internal WorkspaceTools AgentFolderWorkspace(SessionOwner owner)
     {
-        if (agents.PhysicalFolders)
+        return new(new AgentStoreFileOperations(FolderFiles, owner.Agent), pendingWrites, owner.Id, owner.Agent, owner)
         {
-            var directory = agents.AgentDirectory(owner.Agent);
-            return new(directory, pendingWrites, owner.Id, owner.Agent, owner)
-            {
-                AgentFolder = new(owner.Agent, directory),
-            };
-        }
-        return new(
-            new AgentStoreFileOperations(AgentStore!, owner.Agent),
-            pendingWrites,
-            owner.Id,
-            owner.Agent,
-            owner
-        )
-        {
-            AgentFolder = new(owner.Agent, null),
+            AgentFolder = new(owner.Agent, agents.PhysicalFolders ? agents.AgentDirectory(owner.Agent) : null),
         };
     }
 
@@ -126,20 +127,9 @@ internal sealed partial class SessionManager
         string? sessionCwd = null
     )
     {
-        if (node == AgentStorePaths.Endpoint && AgentStore is { } store)
-        {
-            var storePath = AgentFolderPaths.StorePath(raw);
-            if (store.Stat(owner.Agent, storePath) is not { IsDirectory: false })
-                throw new InvalidDataException("Not a regular file: " + raw);
-            var bytes = (await store.ReadAsync(owner.Agent, storePath, token)).Bytes;
-            return new(new MemoryStream(bytes, writable: false), bytes.Length, raw, Path.GetFileName(storePath));
-        }
-        if (node != "master" && node != AgentStorePaths.Endpoint)
+        if (node != "master")
             return await NodeProviders.OpenReadAsync(node, raw, owner, false, token, sessionCwd);
-        var path =
-            node == AgentStorePaths.Endpoint
-                ? AgentFolderPaths.Physical(agents.AgentDirectory(owner.Agent), raw)
-                : MasterFilePath(files, raw);
+        var path = MasterFilePath(files, raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);
         var stream = new FileStream(
@@ -171,9 +161,7 @@ internal sealed partial class SessionManager
         string? sessionCwd = null
     )
     {
-        if (node == AgentStorePaths.Endpoint && AgentStore is { } store)
-            return await WriteAgentStoreStreamAsync(owner, store, raw, input, length, overwrite, token, progress);
-        if (node != "master" && node != AgentStorePaths.Endpoint)
+        if (node != "master")
             return await NodeProviders.WriteStreamAsync(
                 node,
                 raw,
@@ -186,9 +174,21 @@ internal sealed partial class SessionManager
                 progress,
                 sessionCwd
             );
-        var folder = node == AgentStorePaths.Endpoint ? agents.AgentDirectory(owner.Agent) : null;
-        string Resolve() =>
-            folder is null ? MasterFilePath(files, raw) : AgentFolderPaths.Physical(folder, raw);
+        return await WriteMasterStreamAsync(owner, () => MasterFilePath(files, raw), raw, input, length, overwrite, token, progress);
+    }
+
+    // A stream written to a master file, the path resolved again before the rename.
+    private async Task<(string Path, string Sha256)> WriteMasterStreamAsync(
+        SessionOwner owner,
+        Func<string> Resolve,
+        string raw,
+        Stream input,
+        long length,
+        bool overwrite,
+        CancellationToken token,
+        Action<long>? progress
+    )
+    {
         var path = Resolve();
         if (
             Directory.Exists(path)
@@ -329,6 +329,68 @@ internal sealed partial class SessionManager
 
     // A copy into the Agent store: the whole file, within the file limit, created or replaced
     // as `overwrite` says.
+    // Copy endpoints: `@agent` is this Agent's folder, confined by its file owner (the store,
+    // or the folder under the store's rules); any other endpoint is an ordinary Node file.
+    internal async Task<TransferSource> OpenCopySourceAsync(
+        SessionOwner owner,
+        string node,
+        string raw,
+        WorkspaceTools files,
+        CancellationToken token,
+        string? sessionCwd = null
+    )
+    {
+        if (node != AgentStorePaths.Endpoint)
+            return await OpenNodeReadAsync(owner, node, raw, files, token, sessionCwd);
+        var storePath = AgentFolderPaths.StorePath(raw);
+        if (AgentStore is { } store)
+        {
+            if (store.Stat(owner.Agent, storePath) is not { IsDirectory: false })
+                throw new InvalidDataException("Not a regular file: " + raw);
+            var bytes = (await store.ReadAsync(owner.Agent, storePath, token)).Bytes;
+            return new(new MemoryStream(bytes, writable: false), bytes.Length, raw, Path.GetFileName(storePath));
+        }
+        var path = PhysicalFolderFiles.ConfinedPath(owner.Agent, storePath);
+        if (!WorkspaceTools.RegularFile(path))
+            throw new InvalidDataException("Not a regular file: " + raw);
+        var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            65536,
+            FileOptions.Asynchronous | FileOptions.SequentialScan
+        );
+        if (!WorkspaceTools.RegularFileHandle(stream, path))
+        {
+            await stream.DisposeAsync();
+            throw new InvalidDataException("Not a regular file: " + raw);
+        }
+        return new(stream, stream.Length, path, Path.GetFileName(path));
+    }
+
+    internal async Task<(string Path, string Sha256)> WriteCopyTargetAsync(
+        SessionOwner owner,
+        string node,
+        string raw,
+        Stream input,
+        long length,
+        bool overwrite,
+        WorkspaceTools files,
+        CancellationToken token,
+        Action<long>? progress = null,
+        string? sessionCwd = null
+    )
+    {
+        if (node != AgentStorePaths.Endpoint)
+            return await WriteNodeStreamAsync(owner, node, raw, input, length, overwrite, files, token, progress, sessionCwd);
+        var storePath = AgentFolderPaths.StorePath(raw);
+        if (AgentStore is { } store)
+            return await WriteAgentStoreStreamAsync(owner, store, raw, input, length, overwrite, token, progress);
+        var folder = PhysicalFolderFiles;
+        return await WriteMasterStreamAsync(owner, () => folder.ConfinedPath(owner.Agent, storePath), raw, input, length, overwrite, token, progress);
+    }
+
     private static async Task<(string Path, string Sha256)> WriteAgentStoreStreamAsync(
         SessionOwner owner,
         IAgentStore store,

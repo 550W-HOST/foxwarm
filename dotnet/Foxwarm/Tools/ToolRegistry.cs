@@ -404,8 +404,26 @@ internal sealed class ToolRegistry(
             ? SessionGoal.Trim(currentNode)
             : node.Trim();
 
+    // The Agent folder's tools: the standard read, write and edit, whose filePath is a path of
+    // the folder. The same in every profile.
+    internal static JsonArray AgentFolderDefinitions()
+    {
+        var definitions = new JsonArray();
+        foreach (var definition in WorkspaceTools.Definitions().OfType<JsonObject>())
+        {
+            if (SessionWait.Text(definition["name"]) is not ("read" or "write" or "edit"))
+                continue;
+            var copy = (JsonObject)definition.DeepClone();
+            if (copy["parameters"]?["properties"]?["filePath"] is JsonObject filePath)
+                filePath["description"] = "Path inside this Agent's folder: relative to it, or starting with `$fw_agentdir/`.";
+            definitions.Add(copy);
+        }
+        return definitions;
+    }
+
     internal JsonArray NodeDefinitions(string id) =>
-        id == "master" && !MasterNode ? throw RuntimeCapabilities.MasterUnavailable()
+        id == AgentStorePaths.Endpoint ? AgentFolderDefinitions()
+        : id == "master" && !MasterNode ? throw RuntimeCapabilities.MasterUnavailable()
         : id == "master"
             ? new JsonArray(
                 entries
@@ -456,14 +474,33 @@ internal sealed class ToolRegistry(
         }
         if (nodeCapability && target is not ("master" or AgentStorePaths.Endpoint) && invocation != "ctl")
             await RefreshNodeAsync(target, token);
-        var resolved = Resolve(resolvedInvocation, resolvedArgs, currentNode);
-        // Without master, a Session without a Node reaches its Agent folder through
-        // `$fw_agentdir`, as on master.
+        var resolved = Route(Resolve(resolvedInvocation, resolvedArgs, currentNode), currentNode, resolvedInvocation, resolvedArgs);
+        if (!MasterNode && TargetsMaster(resolved))
+            throw currentNode == "master" && !NamesMaster(resolvedInvocation, resolvedArgs, invocation, args, resolved)
+                ? RuntimeCapabilities.NoCurrentNode()
+                : RuntimeCapabilities.MasterUnavailable();
+        // A move from configuration needs what reading the value directly would: a master read
+        // of the file holding it. Without master no tool reads the tenant documents.
+        if (!MasterNode && resolved is { Source: "builtin", Name: "add_secret" } && resolved.Args.ContainsKey("fromConfig"))
+            throw new InvalidDataException(
+                "fromConfig is not available on this server: no tool reads its configuration documents. Give the value with value or filePath."
+            );
+        return resolved;
+    }
+
+    /// <summary>
+    /// Where a resolved call goes without master: pure, so an explanation routes a probe as
+    /// dispatch does. A Session without a Node reaches its Agent folder through
+    /// <c>$fw_agentdir</c>, as on master; a configuration candidate is a file of the folder.
+    /// </summary>
+    internal ResolvedTool Route(ResolvedTool resolved, string currentNode, string invocation, JsonObject args)
+    {
+        var (expanded, expandedArgs, _) = Unwrap(invocation, args);
         if (
             !MasterNode
             && currentNode == "master"
             && resolved is { Source: "node", ExecutionNode: "master", AgentFolder: false, Name: "read" or "write" or "edit" }
-            && !NamesMaster(resolvedInvocation, resolvedArgs, invocation, args, resolved)
+            && !NamesMaster(invocation, args, expanded, expandedArgs, resolved)
             && FolderPaths(resolved) is { Count: > 0 } paths
             && paths.All(AgentFolderPaths.NamesFolder)
         )
@@ -475,16 +512,6 @@ internal sealed class ToolRegistry(
             && resolved.Args.ContainsKey(resolved.Name == "set_config" ? "filePath" : "policyFilePath")
         )
             resolved = resolved with { AgentFolder = true };
-        if (!MasterNode && TargetsMaster(resolved))
-            throw currentNode == "master" && !NamesMaster(resolvedInvocation, resolvedArgs, invocation, args, resolved)
-                ? RuntimeCapabilities.NoCurrentNode()
-                : RuntimeCapabilities.MasterUnavailable();
-        // A move from configuration needs what reading the value directly would: a master read
-        // of the file holding it. Without master no tool reads the tenant documents.
-        if (!MasterNode && resolved is { Source: "builtin", Name: "add_secret" } && resolved.Args.ContainsKey("fromConfig"))
-            throw new InvalidDataException(
-                "fromConfig is not available on this server: no tool reads its configuration documents. Give the value with value or filePath."
-            );
         return resolved;
     }
 

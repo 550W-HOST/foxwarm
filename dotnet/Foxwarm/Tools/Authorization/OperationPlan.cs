@@ -783,6 +783,11 @@ internal sealed partial record OperationPlan(
                         ? context.PairingNodeId?.Invoke(pendingId, SessionWait.Text(args["nodeId"]))
                         : null;
                     return value is not null;
+                // A selection's Node; a cleared selection without master has none, which is known.
+                case "select-node":
+                    value = NodeTarget;
+                    omit = value is null && facts?.NodeTargets is { Count: 0 };
+                    return value is not null || omit;
                 case "node-target":
                 case "node-target?":
                     value = NodeTarget;

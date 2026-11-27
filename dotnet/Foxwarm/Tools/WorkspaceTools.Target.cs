@@ -110,7 +110,9 @@ public sealed partial class WorkspaceTools
                 token
             );
         }
-        catch (NodeProviderException error) when (!overwrite && error.Code == "EEXIST")
+        // An existing directory refuses the write either way, as a physical writer does.
+        catch (NodeProviderException error)
+            when (error.Code == "EEXIST" && (!overwrite || AgentFolder is not null && error.Message.StartsWith("File already exists", StringComparison.Ordinal)))
         {
             return Error(
                 $"File already exists: {display}. Use overwrite=true to overwrite, or use edit to modify it."
@@ -122,7 +124,7 @@ public sealed partial class WorkspaceTools
         {
             var stat = await TargetStatAsync(parent, token);
             // An Agent store's paths are shown as the Agent folder's.
-            var shown = AgentFolder is { Store: true }
+            var shown = AgentFolder is not null
                 ? AgentFolderPaths.Variable + (parent.Length == 0 ? "" : "/" + parent)
                 : parent;
             if (stat is null)

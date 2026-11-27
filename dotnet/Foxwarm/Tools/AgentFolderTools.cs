@@ -93,13 +93,21 @@ internal sealed record AgentFolderScope(string Agent, string? Directory)
 {
     internal bool Store => Directory is null;
 
-    internal string Resolve(string raw) =>
-        Store ? AgentFolderPaths.StorePath(raw) : AgentFolderPaths.Physical(Directory!, raw);
+    // Paths resolve to store paths in both modes; the folder's file owner (the store, or
+    // FileAgentFiles over the physical folder) applies the store's rules, links included.
+    internal string Resolve(string raw) => AgentFolderPaths.StorePath(raw);
 
+    // Facts are store paths on `@agent`, or master's physical paths over folders.
     internal AuthorizationPath Fact(string arg, string raw, string resolved) =>
         Store
             ? new(arg, raw, AgentStorePaths.Fact(Agent, resolved), AgentStorePaths.Endpoint)
-            : new(arg, raw, AuthorizationPaths.CanonicalPotential(resolved));
+            : new(arg, raw, AuthorizationPaths.CanonicalPotential(Physical(resolved)));
+
+    // The master path of a folder path, over folders.
+    internal string Physical(string resolved) =>
+        resolved.Length == 0
+            ? Path.GetFullPath(Directory!)
+            : Path.Combine(Path.GetFullPath(Directory!), resolved.Replace('/', Path.DirectorySeparatorChar));
 }
 
 /// <summary>Whole-file writes, for targets where appending costs a full rewrite.</summary>
@@ -113,7 +121,7 @@ internal interface IWholeTargetFileWrites
 /// <see cref="AgentFolderScope"/> before they get here); missing entries and type clashes fail
 /// with the codes a Node's file primitives use.
 /// </summary>
-internal sealed class AgentStoreFileOperations(IAgentStore store, string agent)
+internal sealed class AgentStoreFileOperations(IAgentFileStore store, string agent)
     : ITargetFileOperations,
         IWholeTargetFileWrites
 {
@@ -136,6 +144,26 @@ internal sealed class AgentStoreFileOperations(IAgentStore store, string agent)
                 path.Length == 0 ? "" : path[(path.LastIndexOf('/') + 1)..]
             )
         );
+    }
+
+    // A configuration candidate: one committed version of a regular file, or null when it is
+    // larger than the limit.
+    internal async Task<byte[]?> ReadCandidateAsync(string path, long? limit, CancellationToken token)
+    {
+        if (store.Stat(agent, path) is not { IsDirectory: false } stat)
+            throw new InvalidDataException("Configuration candidate must be a regular file.");
+        if (stat.Length > limit)
+            return null;
+        AgentFileContent content;
+        try
+        {
+            content = await store.ReadAsync(agent, path, token);
+        }
+        catch (Exception error) when (error is FileNotFoundException or UnauthorizedAccessException or IOException and not AgentFileConflictException)
+        {
+            throw new InvalidDataException("Configuration candidate must be a regular file.");
+        }
+        return content.Bytes.LongLength > limit ? null : content.Bytes;
     }
 
     public async Task<byte[]> ReadAsync(string path, long offset, int count, CancellationToken token)
@@ -228,16 +256,24 @@ internal sealed class AgentStoreFileOperations(IAgentStore store, string agent)
     public Task WriteWholeAsync(string path, byte[] bytes, bool overwrite, CancellationToken token)
     {
         RequireParent(path);
+        // A directory is an existing entry that a file write never replaces, as on a file system.
         if (store.Stat(agent, path) is { IsDirectory: true })
-            throw new NodeProviderException("EISDIR", "Is a directory: " + path);
+            throw new NodeProviderException("EEXIST", "File already exists: " + path);
         return Effect(path, () => store.WriteAsync(agent, path, bytes, overwrite ? null : 0, token));
     }
 
     public Task MakeDirectoryAsync(string path, CancellationToken token) =>
         path.Length == 0 ? Task.CompletedTask : Effect(path, () => store.MakeDirectoryAsync(agent, path, token));
 
+    // Files only: the delete is conditional on the file's generation, so it never removes a
+    // directory or a replacement that took the name.
     public Task RemoveAsync(string path, CancellationToken token) =>
-        Effect(path, () => store.DeleteAsync(agent, path, recursive: false, null, token));
+        store.Stat(agent, path) switch
+        {
+            null => throw Missing(path),
+            { IsDirectory: true } => throw new NodeProviderException("EISDIR", "Is a directory: " + path),
+            var file => Effect(path, () => store.DeleteAsync(agent, path, recursive: false, file.Generation, token)),
+        };
 
     // Store failures as a Node's file primitives report them: the codes callers branch on,
     // with the store's own texts (limits, conflicts) kept.

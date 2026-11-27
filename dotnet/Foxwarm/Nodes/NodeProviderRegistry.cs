@@ -106,6 +106,16 @@ internal sealed partial class NodeProviderRegistry
         );
     }
 
+    // `node select --none`: a select with none set and no Node named.
+    internal static bool ClearsSelection(string source, string name, JsonObject args) =>
+        source == "builtin"
+        && name == "node"
+        && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant() == "select"
+        && !args.ContainsKey("nodeId")
+        && args["none"] is JsonValue none
+        && none.TryGetValue<bool>(out var clear)
+        && clear;
+
     internal IReadOnlyList<string>? AuthorizationTargets(JsonObject args)
     {
         var action = SessionWait.Text(args["action"])?.Trim().ToLowerInvariant();
@@ -121,7 +131,7 @@ internal sealed partial class NodeProviderRegistry
         }
         // Clearing the selection: master where there is one, which an unset Node means; no Node
         // otherwise.
-        if (action == "select" && id is null && args["none"] is JsonValue none && none.TryGetValue<bool>(out var clear) && clear)
+        if (ClearsSelection("builtin", "node", args))
             return native.MasterNode ? ["master"] : [];
         return
             action is "select" or "inspect" or "destroy"

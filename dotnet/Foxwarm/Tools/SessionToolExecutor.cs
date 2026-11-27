@@ -794,9 +794,13 @@ internal sealed partial class SessionToolExecutor(
                         current.Cwd,
                         current.Node
                     );
+                    current.AgentFolderFiles = sessions.AgentFolderWorkspace(hosted);
                 }
-                if (invocation.Value?.Files is { } files)
+                // The invocation's file tools, the Agent folder's included, carry its controls.
+                foreach (var files in new[] { invocation.Value?.Files, invocation.Value?.AgentFolderFiles })
                 {
+                    if (files is null)
+                        continue;
                     files.Programmatic = Programmatic;
                     files.ScriptBudget = ScriptBudget;
                     files.ResolvedPaths = paths =>
@@ -1100,7 +1104,8 @@ internal sealed partial class SessionToolExecutor(
         )!.AsObject();
 
     // This Session's Agent-folder file tools (`node:@agent/<tool>`).
-    private WorkspaceTools AgentFolderFiles => sessions.AgentFolderWorkspace(hosted);
+    private WorkspaceTools AgentFolderFiles =>
+        invocation.Value?.AgentFolderFiles ?? sessions.AgentFolderWorkspace(hosted);
 
     // Where a configuration candidate is read: the Session's files on master, the Agent's folder
     // where there is no master.
@@ -1546,6 +1551,7 @@ internal sealed class TurnToolInvocation(string callId)
     internal string? Cwd { get; set; }
     internal WorkspaceTools? Files { get; set; }
     internal WorkspaceTools? ExecFiles { get; set; }
+    internal WorkspaceTools? AgentFolderFiles { get; set; }
     internal ToolScriptSourcePlacement? ScriptSource { get; set; }
     internal JsonObject? Timing { get; set; }
     internal JsonArray? ResolvedPaths { get; set; }

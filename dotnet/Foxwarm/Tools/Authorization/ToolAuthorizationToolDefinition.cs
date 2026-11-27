@@ -28,7 +28,7 @@ internal static class ToolAuthorizationToolDefinition
                     {
                         ["type"] = "string",
                         ["description"] =
-                            "Path to the complete candidate YAML file. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected.",
+                            "Path to the complete candidate YAML file. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected. `$fw_tmp` isn't available where there is no master.",
                     },
                 },
                 ["required"] = new JsonArray("target", "filePath"),
@@ -79,7 +79,7 @@ internal static class ToolAuthorizationToolDefinition
                       },
                       "policyFilePath": {
                         "type": "string",
-                        "description": "Path to a complete candidate tool-rules YAML that replaces the active global policy. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory."
+                        "description": "Path to a complete candidate tool-rules YAML that replaces the active global policy. It is read on master, or in this Agent's folder where there is no master. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. `$fw_tmp` isn't available where there is no master."
                       },
                       "compare": {
                         "type": "boolean",

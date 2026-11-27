@@ -40,7 +40,8 @@ internal sealed partial class SessionManager
     ) =>
         new(CurrentNode(owner))
         {
-            PolicyPath = authorization.PolicyPath,
+            // The active policy as its read is authorized: by its locator.
+            PolicyPath = authorization.PolicyLocator,
             Subtree = id =>
             {
                 try
