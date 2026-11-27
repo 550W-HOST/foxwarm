@@ -11,7 +11,8 @@ internal static class LeasedImport
     internal static async Task<int> RunAsync(
         PgDatabase app, PgDatabase ownerDatabase, string tenant, long? expectedEpoch, ImportKind kind,
         LeaseTimings timings, BlobSettings? blobs, string work, ImportReport report,
-        Func<PostgresStorageContext, TenantDb, CancellationToken, Task> run, CancellationToken stop, string? agentPlan = null)
+        Func<PostgresStorageContext, TenantDb, CancellationToken, Task> run, CancellationToken stop, string? agentPlan = null,
+        TenantProfile profile = TenantProfile.Hosted, Action? publish = null)
     {
         var state = kind == ImportKind.Full ? "importing" : "importing-agents";
         var lease = new TenantLease(ownerDatabase, tenant, AgentCatalog.ReaderVersion);
@@ -19,7 +20,7 @@ internal static class LeasedImport
         LeaseGrant? grant;
         try
         {
-            grant = await lease.TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind, agentPlan);
+            grant = await lease.TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind, agentPlan, profile);
         }
         catch (LeaseRefusedException error)
         {
@@ -56,11 +57,18 @@ internal static class LeasedImport
                 return HostedImport.Failed;
             }
             cancel.Token.ThrowIfCancellationRequested();
-            await lease.ActivateImportAsync(grant, stop, kind).ConfigureAwait(false);
+            await lease.ActivateImportAsync(grant, stop, kind, publish).ConfigureAwait(false);
             activated = true;
             report.Root["tenant"]!["state"] = "active";
             report.Outcome = "imported";
             return HostedImport.Imported;
+        }
+        catch (ImportRefusedException error)
+        {
+            report.Refuse(error.Message);
+            report.Outcome = "refused";
+            report.Root["tenant"]!["state"] = state;
+            return HostedImport.Refused;
         }
         catch (Exception error) when (Fence(error, monitor))
         {
