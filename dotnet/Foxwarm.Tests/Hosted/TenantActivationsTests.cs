@@ -23,6 +23,11 @@ public sealed class TenantActivationsTests
         internal Action? OnLost;
         internal TaskCompletionSource DisposeGate = Fixture.Open();
         internal Exception? DisposeFailure;
+        // Blocks the thread that calls DisposeAsync until set (a synchronous stall).
+        internal ManualResetEventSlim? DisposeStall;
+        internal Exception? StartFailure;
+        internal TaskCompletionSource FactoryGate = Fixture.Open();
+        internal bool StopIgnoresCancellation;
     }
 
     private sealed class FakeRuntime(ActivationContext context, Fixture owner) : IGenerationRuntime
@@ -42,12 +47,17 @@ public sealed class TenantActivationsTests
                 await Behavior.StartGate.Task;
             else
                 await Behavior.StartGate.Task.WaitAsync(token);
+            if (Behavior.StartFailure is { } failure)
+                throw failure;
         }
 
         public async Task StopProducersAsync(CancellationToken token)
         {
             owner.Events.Enqueue("stop-producers");
-            await owner.StopGate.Task.WaitAsync(token);
+            if (Behavior.StopIgnoresCancellation)
+                await owner.StopGate.Task;
+            else
+                await owner.StopGate.Task.WaitAsync(token);
         }
 
         public Task SettleAsync(CancellationToken token)
@@ -66,6 +76,7 @@ public sealed class TenantActivationsTests
         {
             owner.Events.Enqueue("dispose " + Context.Generation);
             var behavior = Behavior;
+            behavior.DisposeStall?.Wait(TimeSpan.FromSeconds(20));
             await behavior.DisposeGate.Task;
             Disposed.TrySetResult();
             if (behavior.DisposeFailure is { } failure)
@@ -111,18 +122,20 @@ public sealed class TenantActivationsTests
 
         internal static TaskCompletionSource Closed() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        internal Task<IGenerationRuntime> BuildAsync(ActivationContext context, CancellationToken token)
+        internal async Task<IGenerationRuntime> BuildAsync(ActivationContext context, CancellationToken token)
         {
             Interlocked.Increment(ref Builds);
             FactoryEntered.TrySetResult();
             if (BuildFailure is { } failure)
                 throw failure;
+            // A factory that ignores cancellation, as a slow composition can.
+            await For(context.Generation.Tenant).FactoryGate.Task;
             if (For(context.Generation.Tenant).OnLost is { } onLost)
                 context.Fence.Lost.Register(onLost);
             var runtime = new FakeRuntime(context, this);
             lock (Runtimes)
                 Runtimes.Add(runtime);
-            return Task.FromResult<IGenerationRuntime>(runtime);
+            return runtime;
         }
 
         internal FakeRuntime RuntimeOf(string tenant)
@@ -144,7 +157,10 @@ public sealed class TenantActivationsTests
             {
                 behavior.StartGate.TrySetResult();
                 behavior.DisposeGate.TrySetResult();
+                behavior.FactoryGate.TrySetResult();
+                behavior.DisposeStall?.Set();
             }
+            StopGate.TrySetResult();
             await Activations.DisposeAsync();
             await Renewer.DisposeAsync();
             await Database.DisposeAsync();
@@ -153,8 +169,15 @@ public sealed class TenantActivationsTests
 
     private const string Second = "beta";
 
-    private static async Task<Fixture> CreateAsync(TimeSpan? drainBound = null, bool second = false)
+    private static async Task<Fixture> CreateAsync(
+        TimeSpan? drainBound = null,
+        bool second = false,
+        TimeSpan? shutdownBound = null,
+        LeaseTimings? leaseTimings = null,
+        bool renewing = false
+    )
     {
+        var timings = leaseTimings ?? LeaseTimings.Default;
         var server = await PostgresServer.SharedAsync();
         var database = await server.CreateDatabaseAsync();
         if (second)
@@ -164,9 +187,11 @@ public sealed class TenantActivationsTests
             );
         Fixture? fixture = null;
         var control = database.OpenApp();
-        var renewer = new GrantRenewer(control, Replica, LeaseTimings.Default);
+        var renewer = new GrantRenewer(control, control, Replica, timings);
+        if (renewing)
+            renewer.Start();
         var supervisor = new FenceSupervisor(
-            LeaseTimings.Default,
+            timings,
             drainBound ?? TimeSpan.FromSeconds(8),
             code =>
             {
@@ -185,11 +210,14 @@ public sealed class TenantActivationsTests
             control,
             Replica,
             readerVersion: 2,
-            LeaseTimings.Default,
+            timings,
             (context, token) => fixture.BuildAsync(context, token),
             renewer,
             supervisor
-        );
+        )
+        {
+            ShutdownBound = shutdownBound ?? supervisor.DrainBound,
+        };
         return fixture;
     }
 
@@ -220,7 +248,8 @@ public sealed class TenantActivationsTests
         Assert.Equal(1, f.Starts);
         Assert.Equal(before + 1, await f.EpochAsync());
         Assert.Equal(before + 1, first.Id.Epoch);
-        Assert.NotNull(first.Gate.TryEnter());
+        using (var admission = first.Gate.TryEnter())
+            Assert.NotNull(admission);
 
         // A late activation of a live generation joins it: no second acquisition, no self-fence.
         Assert.Same(first, await f.Activations.ActivateAsync(Tenant, ActivationCause.Wakeup));
@@ -450,7 +479,7 @@ public sealed class TenantActivationsTests
     [Fact]
     public async Task AFenceDuringGracefulShutdownEndsTheProcessAtItsDeadlineWithoutWaitingForOtherDrains()
     {
-        await using var f = await CreateAsync(Bound, second: true);
+        await using var f = await CreateAsync(Bound, second: true, shutdownBound: TimeSpan.FromSeconds(20));
         await f.Activations.ActivateAsync(Tenant);
         await f.Activations.ActivateAsync(Second);
         var epoch = await f.EpochAsync();
@@ -477,44 +506,222 @@ public sealed class TenantActivationsTests
     }
 
     [Fact]
-    public async Task AFailedStopEndsTheProcessOnlyWithAdmittedWorkAndNeverReleasesTheGrant()
+    public async Task AFailedStopIsUnconfirmedReleasesNothingAndEndsTheProcessAtItsHardStop()
     {
         await using var f = await CreateAsync(Bound);
         f.For(Tenant).DisposeFailure = new InvalidOperationException("disposal failed");
-
-        // Nothing admitted: the failure is logged, the grant dropped without a release.
-        var quiet = await f.Activations.ActivateAsync(Tenant);
-        Assert.True(await f.Activations.FenceAsync(quiet.Id));
-        Assert.Equal(0, f.Exits);
-        Assert.Equal("active", await f.LeaseStateAsync());
-
-        // Work still admitted when the stop fails: the process ends at the deadline.
-        var busy = await f.Activations.ActivateAsync(Tenant);
-        Assert.Equal(quiet.Id.Epoch + 1, busy.Id.Epoch);
-        using var work = busy.Gate.TryEnter();
+        // An empty gate doesn't make a failed disposal harmless.
+        var generation = await f.Activations.ActivateAsync(Tenant);
         var fencedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        Assert.False(await f.Activations.FenceAsync(busy.Id).WaitAsync(TimeSpan.FromSeconds(10)));
-        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(fencedAt, await f.Exited.Task);
-        Assert.InRange(elapsed, Bound, Bound + Late);
+        Assert.False(await f.Activations.FenceAsync(generation.Id).WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.InRange(System.Diagnostics.Stopwatch.GetElapsedTime(fencedAt, await f.Exited.Task), Bound, Bound + Late);
+        Assert.Equal("active", await f.LeaseStateAsync());
+        // The tenant stays unavailable here: no new acquisition after an unconfirmed stop.
+        await Assert.ThrowsAsync<TenantFencedException>(() => f.Activations.ActivateAsync(Tenant));
+        Assert.Equal(generation.Id.Epoch, await f.EpochAsync());
     }
 
     [Fact]
-    public async Task AnIdleReleaseOrAShutdownWhoseStopFailedReleasesNothing()
+    public async Task AStopIsConfirmedOnlyOnceAdmittedWorkHasEnded()
+    {
+        await using var f = await CreateAsync(Bound);
+        var generation = await f.Activations.ActivateAsync(Tenant);
+        var work = generation.Gate.TryEnter()!;
+        var fence = f.Activations.FenceAsync(generation.Id);
+        await generation.Disposed.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(Bound / 3);
+        Assert.False(fence.IsCompleted);
+        work.Dispose();
+        Assert.True(await fence.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, f.Exits);
+    }
+
+    [Fact]
+    public async Task AnIdleReleaseWhoseStopFailedReleasesNothingAndKeepsTheTenantUnavailable()
     {
         await using var f = await CreateAsync(Bound);
         var first = await f.Activations.ActivateAsync(Tenant);
         f.For(Tenant).DisposeFailure = new InvalidOperationException("disposal failed");
+        var failedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         Assert.Equal(IdleReleaseOutcome.StopFailed, await f.Activations.TryReleaseIdleAsync(first.Id, TimeSpan.Zero));
         Assert.Equal("active", await f.LeaseStateAsync());
         Assert.Null(await f.Database.ScalarAsync("SELECT 1 FROM tenant_wakeups"));
         Assert.True(first.Fence.IsClosed);
-        // The dropped grant is never reused: the next generation acquires anew.
-        var second = await f.Activations.ActivateAsync(Tenant);
-        Assert.Equal(first.Id.Epoch + 1, second.Id.Epoch);
+        // No self-reacquisition after an unconfirmed stop: the process ends at the hard stop.
+        await Assert.ThrowsAsync<TenantFencedException>(() => f.Activations.ActivateAsync(Tenant));
+        Assert.Equal(first.Id.Epoch, await f.EpochAsync());
+        Assert.InRange(System.Diagnostics.Stopwatch.GetElapsedTime(failedAt, await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(5))), Bound, Bound + Late);
         await f.Activations.DisposeAsync();
         Assert.Equal("active", await f.LeaseStateAsync());
-        Assert.Equal(second.Id.Epoch, await f.EpochAsync());
+    }
+
+    // ---- Retirement, confirmation and bounds (review of batch 3) ----
+
+    private static readonly LeaseTimings Short = new(TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(400), TimeSpan.FromMilliseconds(1200));
+
+    [Fact]
+    public async Task DemandWhileAFencedGenerationIsDisposingWaitsForItsConfirmedStop()
+    {
+        await using var f = await CreateAsync(TimeSpan.FromSeconds(5));
+        var first = await f.Activations.ActivateAsync(Tenant);
+        f.For(Tenant).DisposeGate = Fixture.Closed();
+        var fence = f.Activations.FenceAsync(first.Id);
+        await WaitForEventAsync(f, "dispose " + Tenant);
+        var demand = f.Activations.ActivateAsync(Tenant);
+        await Task.Delay(300);
+        // No acquisition while the old generation may still run.
+        Assert.False(demand.IsCompleted);
+        Assert.Equal(first.Id.Epoch, await f.EpochAsync());
+        Assert.Equal(1, f.Starts);
+        f.For(Tenant).DisposeGate.SetResult();
+        Assert.True(await fence.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(first.Id.Epoch + 1, (await demand.WaitAsync(TimeSpan.FromSeconds(5))).Id.Epoch);
+    }
+
+    [Fact]
+    public async Task ALossInsideTheFactoryDisposesTheLateBuildWithoutStartingIt()
+    {
+        await using var f = await CreateAsync(TimeSpan.FromSeconds(5));
+        f.For(Tenant).FactoryGate = Fixture.Closed();
+        var activation = f.Activations.ActivateAsync(Tenant);
+        await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var epoch = await f.EpochAsync();
+        var fence = f.Activations.FenceGrantAsync(Tenant, epoch);
+        f.For(Tenant).FactoryGate.SetResult();
+        await Assert.ThrowsAsync<TenantFencedException>(() => activation);
+        await fence.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, f.Starts);
+        Assert.True(f.RuntimeOf(Tenant).Disposed.Task.IsCompleted);
         Assert.Equal(0, f.Exits);
+        Assert.Equal("active", await f.LeaseStateAsync());
+    }
+
+    [Fact]
+    public async Task AFailedStartWhoseCleanupFailedReleasesNothingAndEndsTheProcess()
+    {
+        await using var f = await CreateAsync(Bound);
+        f.For(Tenant).StartFailure = new InvalidOperationException("start refused");
+        f.For(Tenant).DisposeFailure = new InvalidOperationException("cleanup failed");
+        var failedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        await Assert.ThrowsAnyAsync<Exception>(() => f.Activations.ActivateAsync(Tenant));
+        Assert.Equal("active", await f.LeaseStateAsync());
+        Assert.Null(await f.Database.ScalarAsync("SELECT 1 FROM tenant_wakeups"));
+        await Assert.ThrowsAsync<TenantFencedException>(() => f.Activations.ActivateAsync(Tenant));
+        Assert.InRange(System.Diagnostics.Stopwatch.GetElapsedTime(failedAt, await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(5))), Bound, Bound + Late);
+    }
+
+    [Fact]
+    public async Task AFactoryWhoseOwnCleanupFailedIsAnUnconfirmedStop()
+    {
+        await using var f = await CreateAsync(Bound);
+        f.BuildFailure = new StartupCleanupFailedException(new InvalidOperationException("composition failed"), [new IOException("cleanup failed")]);
+        await Assert.ThrowsAnyAsync<Exception>(() => f.Activations.ActivateAsync(Tenant));
+        Assert.Equal("active", await f.LeaseStateAsync());
+        await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task AnExpiredGrantAdmitsNothingAndItsHardStopNeedsNoLossHandler()
+    {
+        // No renewal and no watchdog: nothing decides the loss but the clock.
+        await using var f = await CreateAsync(Bound, leaseTimings: Short);
+        f.For(Tenant).DisposeGate = Fixture.Closed();
+        var generation = await f.Activations.ActivateAsync(Tenant);
+        var acquired = generation.Grant.AcquisitionStart;
+        while (System.Diagnostics.Stopwatch.GetElapsedTime(acquired) < Short.FenceAfter)
+        {
+            using (var admission = generation.Gate.TryEnter())
+                Assert.NotNull(admission);
+            await Task.Delay(50);
+        }
+        Assert.Null(generation.Gate.TryEnter());
+        Assert.Equal(AdmissionLatch.None, generation.Gate.Latched);
+        // The pre-armed hard stop: the grant's deadline plus the drain bound, counted from the
+        // acquisition, however late any thread runs.
+        var exitedAt = await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.InRange(System.Diagnostics.Stopwatch.GetElapsedTime(acquired, exitedAt), Short.FenceAfter + Bound, Short.FenceAfter + Bound + Late);
+    }
+
+    [Fact]
+    public async Task APublishedGenerationPastItsDeadlineIsntReturnedToAnActivation()
+    {
+        await using var f = await CreateAsync(Bound, leaseTimings: Short);
+        var first = await f.Activations.ActivateAsync(Tenant);
+        await Task.Delay(Short.FenceAfter + TimeSpan.FromMilliseconds(100));
+        var second = await f.Activations.ActivateAsync(Tenant).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.NotSame(first, second);
+        Assert.Equal(AdmissionLatch.Fence, first.Gate.Latched);
+        Assert.True(first.Disposed.IsCompleted);
+        Assert.Equal(first.Id.Epoch + 1, second.Id.Epoch);
+    }
+
+    [Fact]
+    public async Task AStalledIdleReleaseIsBoundedAndHandedToTheSupervisedFence()
+    {
+        await using var f = await CreateAsync(Bound);
+        var first = await f.Activations.ActivateAsync(Tenant);
+        // Producers that stop only when cancelled: the fence cancels them, and the stop confirms.
+        f.StopGate = Fixture.Closed();
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal(IdleReleaseOutcome.Overrun, await f.Activations.TryReleaseIdleAsync(first.Id, TimeSpan.Zero).WaitAsync(TimeSpan.FromSeconds(10)));
+        // The timer may fire a few milliseconds early.
+        Assert.InRange(started.Elapsed, Bound - TimeSpan.FromMilliseconds(20), Bound * 2 + Late);
+        Assert.Equal(0, f.Exits);
+        Assert.True(first.Fence.IsClosed);
+        Assert.True(first.Handle.Lost.IsCompleted);
+        Assert.True(first.Disposed.IsCompleted);
+        Assert.Equal("active", await f.LeaseStateAsync());
+        f.StopGate = Fixture.Open();
+        Assert.Equal(first.Id.Epoch + 1, (await f.Activations.ActivateAsync(Tenant)).Id.Epoch);
+    }
+
+    [Fact]
+    public async Task AFenceDuringAnIdleReleaseJoinsItsStepsAndExitsWhenTheyNeverEnd()
+    {
+        await using var f = await CreateAsync(Bound);
+        var first = await f.Activations.ActivateAsync(Tenant);
+        f.StopGate = Fixture.Closed();
+        f.For(Tenant).StopIgnoresCancellation = true;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var release = f.Activations.TryReleaseIdleAsync(first.Id, TimeSpan.Zero);
+        await WaitForEventAsync(f, "stop-producers");
+        var demand = f.Activations.AdmitAsync(Tenant);
+        var exitedAt = await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // One drain bound for the release, then one from the loss: never the disposal alone.
+        Assert.InRange(System.Diagnostics.Stopwatch.GetElapsedTime(started, exitedAt), Bound * 2, Bound * 2 + Late);
+        Assert.False(first.Disposed.IsCompleted);
+        Assert.Equal(IdleReleaseOutcome.Overrun, await release.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(demand.IsCompleted);
+        Assert.Equal(first.Id.Epoch, await f.EpochAsync());
+        Assert.Equal("active", await f.LeaseStateAsync());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStuckTenantDoesntHoldAHealthySiblingsShutdownOrRelease(bool stuckFirst)
+    {
+        await using var f = await CreateAsync(TimeSpan.FromSeconds(5), second: true, shutdownBound: TimeSpan.FromSeconds(1));
+        var (stuckTenant, healthyTenant) = stuckFirst ? (Tenant, Second) : (Second, Tenant);
+        await f.Activations.ActivateAsync(stuckTenant);
+        var healthy = await f.Activations.ActivateAsync(healthyTenant);
+        // A synchronous stall in one tenant's disposal.
+        using var stall = new ManualResetEventSlim();
+        f.For(stuckTenant).DisposeStall = stall;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var shutdown = f.Activations.ShutdownAsync();
+        await healthy.Disposed.WaitAsync(TimeSpan.FromSeconds(5));
+        while (await f.LeaseStateAsync(healthyTenant) != "released")
+        {
+            Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(600), "the healthy tenant wasn't released promptly");
+            await Task.Delay(20);
+        }
+        Assert.False(await shutdown.WaitAsync(TimeSpan.FromSeconds(5)));
+        // The timer may fire a few milliseconds early.
+        Assert.InRange(started.Elapsed, TimeSpan.FromMilliseconds(980), TimeSpan.FromSeconds(1) + Late);
+        // The stuck tenant lost its grant at the bound, unreleased.
+        Assert.Equal("active", await f.LeaseStateAsync(stuckTenant));
+        stall.Set();
     }
 }
 

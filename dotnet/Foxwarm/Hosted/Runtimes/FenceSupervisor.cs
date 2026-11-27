@@ -70,21 +70,76 @@ internal sealed class GenerationFence
 }
 
 /// <summary>
+/// How a stop ended: whether it is confirmed (it completed successfully; a fault or a
+/// cancellation never confirms) and the <see cref="Stopwatch"/> timestamp when that was decided.
+/// </summary>
+internal readonly record struct StopResult(bool Confirmed, long At)
+{
+    internal static StopResult Now(bool confirmed) => new(confirmed, Stopwatch.GetTimestamp());
+
+    /// <summary>
+    /// The result of <paramref name="stop"/>, timestamped by a continuation that runs inline as
+    /// it completes: a queued continuation can't make a timely stop look late.
+    /// </summary>
+    internal static Task<StopResult> Of(Task stop) =>
+        stop.ContinueWith(
+            task => Now(task.IsCompletedSuccessfully),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+}
+
+/// <summary>
+/// A stop the supervisor decides: confirmed when <see cref="Stopped"/> reports a confirmed stop
+/// before the hard stop, otherwise the process ends at the hard stop.
+/// </summary>
+internal sealed class Obligation
+{
+    private readonly TaskCompletionSource<bool> decided = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal Obligation(string what, Func<long> hardStop, Task<StopResult> stopped)
+    {
+        What = what;
+        HardStop = hardStop;
+        Stopped = stopped;
+    }
+
+    internal string What { get; }
+
+    /// <summary>The <see cref="Stopwatch"/> timestamp the stop must be confirmed before; may move.</summary>
+    internal Func<long> HardStop { get; }
+
+    internal Task<StopResult> Stopped { get; }
+
+    /// <summary>True once the stop was confirmed in time; false once the supervisor escalated.</summary>
+    internal Task<bool> Decided => decided.Task;
+
+    internal bool Decide(bool confirmed) => decided.TrySetResult(confirmed);
+}
+
+/// <summary>
 /// Bounds how long a replica waits for a fenced or failed tenant runtime to stop (plan §2.3).
-/// The deadline is absolute, counted from the fence. A stop that is confirmed in time (the
-/// runtime's disposal completed) ends quietly. An unconfirmed stop at the deadline ends the
-/// process with <see cref="HostedExit.Fenced"/>, directly: from a dedicated thread, without
-/// waiting for other tenants' drains, releases or the pool's disposal, and regardless of a
-/// starved thread pool. That holds for an overrun, for a stop that faulted while work was
-/// still admitted, for a cancellation callback that stalls synchronously, and for a fence
-/// during graceful shutdown. A grant whose stop wasn't confirmed is never released cleanly;
-/// it expires.
+/// Every stop it watches is an <see cref="Obligation"/> with a hard stop: absolute, counted from
+/// the loss (or, while the grant is current, from its deadline), never from when a handler
+/// started. One dedicated thread, independent of the thread pool and armed before anything can
+/// stall, decides each obligation once: a stop confirmed before its hard stop ends quietly; any
+/// other outcome ends the process with <see cref="HostedExit.Fenced"/> at the hard stop,
+/// directly: without waiting for other tenants' drains, releases or the pool's disposal, and
+/// with nothing synchronous ahead of the exit (the log line is queued, best effort). An overdue
+/// confirmation never wins: it is compared with the hard stop by its own timestamp. A process
+/// suspended past a hard stop exits as soon as it runs again; while it is suspended, only the
+/// lease's SQL epoch fence protects commits.
 /// </summary>
 internal sealed class FenceSupervisor
 {
     private readonly Action<int> exit;
     private readonly Action<string>? log;
     private readonly TaskCompletionSource<string> escalated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object gate = new();
+    private readonly List<Obligation> pending = [];
+    private readonly AutoResetEvent signal = new(false);
+    private bool running;
     private int exiting;
 
     /// <param name="drainBound">
@@ -103,36 +158,62 @@ internal sealed class FenceSupervisor
         if (drainBound <= TimeSpan.Zero || timings.FenceAfter + drainBound >= timings.Ttl)
             throw new ArgumentException("The drain bound must be positive and below the lease TTL minus the fence deadline.");
         DrainBound = drainBound;
+        DrainTicks = (long)(drainBound.TotalSeconds * Stopwatch.Frequency);
         this.exit = exit;
         this.log = log;
     }
 
     internal TimeSpan DrainBound { get; }
 
+    /// <summary><see cref="DrainBound"/> in <see cref="Stopwatch"/> ticks.</summary>
+    internal long DrainTicks { get; }
+
     /// <summary>Completes with the reason once the supervisor ended the process.</summary>
     internal Task<string> Escalated => escalated.Task;
 
     /// <summary>
-    /// Fences a generation: latches it, stops its renewal and closes its databases inline, then
-    /// cancels its work and joins its stop off the caller's lane, until the deadline counted
-    /// from <paramref name="fencedAt"/> (a <see cref="Stopwatch"/> timestamp). True when the
-    /// stop was confirmed in time; otherwise the process has been ended at the deadline.
+    /// Watches a stop until <paramref name="hardStop"/> (read again on every decision, so a
+    /// renewal can move it forward and a loss back). Armed on return.
     /// </summary>
-    internal async Task<bool> FenceAsync(
+    internal Obligation Watch(string what, Func<long> hardStop, Task<StopResult> stopped)
+    {
+        var obligation = new Obligation(what, hardStop, stopped);
+        lock (gate)
+        {
+            pending.Add(obligation);
+            if (!running)
+            {
+                running = true;
+                new Thread(Decide) { IsBackground = true, Name = "Foxwarm fence deadline" }.Start();
+            }
+        }
+        // A stop that ends, or a hard stop that moves back, is decided without waiting.
+        stopped.ContinueWith(_ => Wake(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        Wake();
+        return obligation;
+    }
+
+    /// <summary>Makes the deadline thread decide again now (a hard stop moved back).</summary>
+    internal void Wake() => signal.Set();
+
+    /// <summary>
+    /// Fences a runtime (the P1 replica): latches it, stops its renewal and closes its databases
+    /// inline, then cancels its work and runs its stop off the caller's lane, with the hard stop
+    /// <see cref="DrainBound"/> after <paramref name="fencedAt"/> (a <see cref="Stopwatch"/>
+    /// timestamp), armed before any of those steps. True when the stop was confirmed in time;
+    /// otherwise the process has been ended at the hard stop.
+    /// </summary>
+    internal Task<bool> FenceAsync(
         string what,
         long fencedAt,
         Action latch,
         Action stopRenewal,
         GenerationFence? fence,
-        Func<Task> stop,
-        Func<bool> drained
+        Func<Task> stop
     )
     {
-        var deadline = fencedAt + (long)(DrainBound.TotalSeconds * Stopwatch.Frequency);
-        // Armed first: nothing after this point can keep the process past the deadline. The
-        // event isn't disposed: the armed thread may still wait on it after this returns.
-        var confirmed = new ManualResetEventSlim(false);
-        Arm(what, deadline, confirmed);
+        var stopped = new TaskCompletionSource<StopResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var obligation = Watch(what, () => fencedAt + DrainTicks, stopped.Task);
         Guard(latch);
         Guard(stopRenewal);
         fence?.Close();
@@ -141,86 +222,86 @@ internal sealed class FenceSupervisor
             fence?.Cancel();
             await stop().ConfigureAwait(false);
         });
-        return await JoinAsync(what, deadline, stopping, drained, confirmed).ConfigureAwait(false);
+        _ = StopResult.Of(stopping).ContinueWith(result => stopped.TrySetResult(result.Result), TaskScheduler.Default);
+        return obligation.Decided;
     }
 
     /// <summary>
     /// Joins a stop that is already running (a graceful drain the fence overtook, or a
-    /// disposal), until the deadline counted from <paramref name="since"/>.
+    /// disposal), with the hard stop <see cref="DrainBound"/> after <paramref name="since"/>.
     /// </summary>
-    internal async Task<bool> JoinAsync(string what, long since, Task stopping, Func<bool> drained)
-    {
-        var deadline = since + (long)(DrainBound.TotalSeconds * Stopwatch.Frequency);
-        var confirmed = new ManualResetEventSlim(false);
-        Arm(what, deadline, confirmed);
-        return await JoinAsync(what, deadline, stopping, drained, confirmed).ConfigureAwait(false);
-    }
+    internal Task<bool> JoinAsync(string what, long since, Task stopping) =>
+        Watch(what, () => since + DrainTicks, StopResult.Of(stopping)).Decided;
 
-    private async Task<bool> JoinAsync(
-        string what,
-        long deadline,
-        Task stopping,
-        Func<bool> drained,
-        ManualResetEventSlim confirmed
-    )
-    {
-        var remaining = Remaining(deadline);
-        if (remaining > TimeSpan.Zero)
-            await Task.WhenAny(stopping, Task.Delay(remaining)).ConfigureAwait(false);
-        var ok = stopping.IsCompletedSuccessfully || (stopping.IsFaulted && drained());
-        if (stopping.IsFaulted)
-            log?.Invoke($"[hosted] Stopping {what} failed: {stopping.Exception!.GetBaseException().Message}");
-        if (ok)
-        {
-            confirmed.Set();
-            return true;
-        }
-        // A faulted stop with work still admitted waits for the deadline: the work may finish.
-        if (stopping.IsFaulted)
-            while (Remaining(deadline) > TimeSpan.Zero && !drained())
-                await Task.Delay(TimeSpan.FromMilliseconds(20)).ConfigureAwait(false);
-        if (drained() && stopping.IsCompleted)
-        {
-            confirmed.Set();
-            return true;
-        }
-        // The armed thread exits at the deadline; it doesn't depend on this continuation.
-        return false;
-    }
-
-    // A dedicated thread, so a starved thread pool or a stalled callback can't delay the exit.
-    private void Arm(string what, long deadline, ManualResetEventSlim confirmed)
-    {
-        var handle = confirmed.WaitHandle;
-        var thread = new Thread(() =>
-        {
-            // A timed wait can return a little early; never exit before the deadline.
-            for (var remaining = Remaining(deadline); remaining > TimeSpan.Zero; remaining = Remaining(deadline))
-                if (handle.WaitOne(TimeSpan.FromMilliseconds(Math.Ceiling(remaining.TotalMilliseconds))))
-                    return;
-            if (confirmed.IsSet)
-                return;
-            Escalate($"{what} didn't stop within {DrainBound.TotalSeconds:0.#} s of its fence.");
-        })
-        {
-            IsBackground = true,
-            Name = "Foxwarm fence deadline",
-        };
-        thread.Start();
-    }
+    /// <summary>
+    /// Ends the process at <paramref name="deadline"/> unless it has exited by then: for a stop
+    /// that is already known to be unconfirmed, while the caller unwinds.
+    /// </summary>
+    internal void ExitBy(string what, long deadline) =>
+        _ = Watch(what, () => deadline, Task.FromResult(new StopResult(false, 0)));
 
     /// <summary>Ends the process now with <see cref="HostedExit.Fenced"/>.</summary>
     internal void Escalate(string reason)
     {
         if (Interlocked.Exchange(ref exiting, 1) != 0)
             return;
-        log?.Invoke("[hosted] Exiting: " + reason);
         escalated.TrySetResult(reason);
+        if (log is { } write)
+            ThreadPool.UnsafeQueueUserWorkItem(_ => write("[hosted] Exiting: " + reason), null);
         exit(HostedExit.Fenced);
     }
 
-    private static TimeSpan Remaining(long deadline) =>
-        TimeSpan.FromSeconds((double)(deadline - Stopwatch.GetTimestamp()) / Stopwatch.Frequency);
+    // The deadline thread: decides every pending obligation that has a result or has reached its
+    // hard stop, then sleeps until the earliest remaining hard stop or a signal. It never exits
+    // the process before a hard stop, and a confirmation counts only if its own timestamp is
+    // before the hard stop. It ends when nothing is pending.
+    private void Decide()
+    {
+        while (true)
+        {
+            Obligation[] current;
+            lock (gate)
+            {
+                if (pending.Count == 0)
+                {
+                    running = false;
+                    return;
+                }
+                current = [.. pending];
+            }
+            var next = long.MaxValue;
+            foreach (var obligation in current)
+            {
+                var hardStop = obligation.HardStop();
+                var stopped = obligation.Stopped;
+                if (stopped.IsCompletedSuccessfully && stopped.Result.Confirmed && stopped.Result.At < hardStop)
+                    Settle(obligation, confirmed: true);
+                else if (Stopwatch.GetTimestamp() >= hardStop)
+                {
+                    Settle(obligation, confirmed: false);
+                    Escalate($"{obligation.What} didn't confirm its stop by its hard stop.");
+                }
+                else
+                    next = Math.Min(next, hardStop);
+            }
+            if (next == long.MaxValue)
+            {
+                // Nothing with a finite hard stop: wait for a new obligation, a result or a loss.
+                signal.WaitOne();
+                continue;
+            }
+            var wait = (double)(next - Stopwatch.GetTimestamp()) * 1000 / Stopwatch.Frequency;
+            if (wait > 0)
+                signal.WaitOne((int)Math.Min(int.MaxValue, Math.Ceiling(wait)));
+        }
+    }
+
+    private void Settle(Obligation obligation, bool confirmed)
+    {
+        lock (gate)
+            pending.Remove(obligation);
+        obligation.Decide(confirmed);
+    }
 
     private void Guard(Action step)
     {

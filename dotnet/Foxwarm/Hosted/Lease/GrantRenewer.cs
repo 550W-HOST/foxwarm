@@ -8,74 +8,183 @@ namespace Foxwarm.Hosted.Lease;
 /// <see cref="Stopwatch"/> timestamp: the start of the last positive proof (the acquisition, or
 /// a renewal batch's stamp taken before its transaction) plus <see cref="LeaseTimings.FenceAfter"/>.
 /// The grant is current until the deadline or until it is lost, whichever comes first; a lost
-/// handle never becomes current again.
+/// handle never becomes current again. Proof and loss are decided under one lock against the
+/// clock read inside it, so a proof that arrives after the deadline can't extend it. The loss
+/// instant is state recorded by that decision (the deadline itself when the grant expired),
+/// not the time a handler happens to run; every hard stop counts from it.
 /// </summary>
 internal sealed class GrantHandle
 {
+    private readonly object state = new();
     private readonly TaskCompletionSource<string> lost = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly List<Action<GrantHandle>> onLoss = [];
+    private readonly Func<long> clock;
     private long deadline;
+    private long lostAt;
+    private bool isLost;
 
-    internal GrantHandle(LeaseGrant grant, long deadline)
+    internal GrantHandle(LeaseGrant grant, long deadline, Func<long>? clock = null)
     {
         Grant = grant;
         this.deadline = deadline;
+        this.clock = clock ?? Stopwatch.GetTimestamp;
     }
 
     internal LeaseGrant Grant { get; }
 
-    internal long Deadline => Interlocked.Read(ref deadline);
+    internal long Deadline
+    {
+        get
+        {
+            lock (state)
+                return deadline;
+        }
+    }
 
     /// <summary>Completes with the reason once the grant is lost or given up.</summary>
     internal Task<string> Lost => lost.Task;
 
-    internal bool IsCurrent(long now) => !lost.Task.IsCompleted && now < Deadline;
-
-    // Moves the deadline forward only: an older proof never shortens a newer one.
-    internal void Prove(long deadlineFromProof)
+    internal bool IsCurrent(long now)
     {
-        long current;
-        do
-        {
-            current = Interlocked.Read(ref deadline);
-            if (deadlineFromProof <= current)
-                return;
-        } while (Interlocked.CompareExchange(ref deadline, deadlineFromProof, current) != current);
+        lock (state)
+            return !isLost && now < deadline;
     }
 
-    internal bool TryLose(string reason) => lost.TrySetResult(reason);
+    /// <summary>Whether the grant is current now, by the handle's own clock.</summary>
+    internal bool IsCurrent() => IsCurrent(clock());
+
+    /// <summary>
+    /// When the grant stopped being current: the recorded loss instant, or the deadline once it
+    /// has passed; <see cref="long.MaxValue"/> while current.
+    /// </summary>
+    internal long EndedAt(long now)
+    {
+        lock (state)
+            return isLost ? lostAt : now >= deadline ? deadline : long.MaxValue;
+    }
+
+    /// <summary>
+    /// The latest instant anything running under the grant may still run: the loss instant (or,
+    /// while current, the deadline) plus <paramref name="drain"/>, in <see cref="Stopwatch"/> ticks.
+    /// Moves forward only with a positive proof, and back only to a recorded loss.
+    /// </summary>
+    internal long HardStop(long drain)
+    {
+        lock (state)
+            return (isLost ? lostAt : deadline) + drain;
+    }
+
+    /// <summary>
+    /// A positive proof: moves the deadline forward (never back). False, changing nothing, when
+    /// the grant is lost or its deadline has already passed by the clock read under the lock.
+    /// </summary>
+    internal bool Prove(long deadlineFromProof)
+    {
+        lock (state)
+        {
+            if (isLost || clock() >= deadline)
+                return false;
+            if (deadlineFromProof > deadline)
+                deadline = deadlineFromProof;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="hook"/> inline when the grant is lost, on the deciding thread; at
+    /// once when it is already lost. Hooks must not block: they latch and close, nothing more.
+    /// </summary>
+    internal void OnLoss(Action<GrantHandle> hook)
+    {
+        lock (state)
+            if (!isLost)
+            {
+                onLoss.Add(hook);
+                return;
+            }
+        Run(hook);
+    }
+
+    /// <summary>
+    /// Decides the loss once: records its instant (the deadline when that came first), runs the
+    /// hooks inline, then completes <see cref="Lost"/>. False when already lost.
+    /// </summary>
+    internal bool TryLose(string reason) => End(reason, lost: true);
+
+    /// <summary>
+    /// Ends a grant that is being released: not current from now on, but not a loss, so the
+    /// loss hooks don't run. False when already ended.
+    /// </summary>
+    internal bool TryRelease(string reason) => End(reason, lost: false);
+
+    private bool End(string reason, bool lost)
+    {
+        Action<GrantHandle>[] hooks;
+        lock (state)
+        {
+            if (isLost)
+                return false;
+            isLost = true;
+            lostAt = Math.Min(clock(), deadline);
+            hooks = lost ? [.. onLoss] : [];
+            onLoss.Clear();
+        }
+        foreach (var hook in hooks)
+            Run(hook);
+        this.lost.TrySetResult(reason);
+        return true;
+    }
+
+    private void Run(Action<GrantHandle> hook)
+    {
+        try
+        {
+            hook(this);
+        }
+        catch { }
+    }
 }
 
 /// <summary>
 /// Renews every grant a replica holds (plan §3.2). Each round takes an immutable batch of the
-/// live grants with a monotonic stamp from before its transaction, renews them in one
-/// statement under the per-row predicate on the reserved control data source, and publishes
-/// the outcomes only after the commit, only to the handles of that batch, and only while each
-/// is still current. A grant acquired after the stamp isn't in the batch and keeps its own
-/// acquisition stamp. A row another transaction holds locked is unproved and retried on its
-/// own, with a bounded lock wait, until its own deadline; a row that no longer matches is lost
-/// at once; a batch that hits the lock timeout is split, to a bounded depth.
-/// One watchdog fences every grant at its deadline, whether or not a renewal is still blocked;
-/// a result that arrives after the deadline never revives the grant. Holding no grants starts
-/// no countdown.
+/// live grants with a monotonic stamp taken with the batch, before its transaction, renews them
+/// in one statement under the per-row predicate on a data source reserved for the periodic
+/// batch, and publishes the outcomes only after the commit, only to the handles of that batch,
+/// and only while each is still current. A grant acquired after the stamp isn't in the batch
+/// and keeps its own acquisition stamp. A row another transaction holds locked, or a batch that
+/// hits the lock timeout, is unproved: each such row is retried on its own on the control data
+/// source (shared with acquisitions and releases), with a lock wait bounded by its deadline,
+/// until that deadline; a row that no longer matches is lost at once.
+/// One watchdog thread, independent of the thread pool, loses every grant at its deadline,
+/// whether or not a renewal is still blocked; a result that arrives after the deadline never
+/// revives the grant. Holding no grants starts no countdown.
 /// </summary>
 internal sealed class GrantRenewer : IAsyncDisposable
 {
     private readonly object gate = new();
     private readonly HashSet<GrantHandle> live = [];
     private readonly HashSet<GrantHandle> retrying = [];
+    private readonly PgDatabase batches;
     private readonly PgDatabase control;
     private readonly string replica;
     private readonly LeaseTimings timings;
     private readonly Func<long> clock;
     private readonly Action<string>? log;
     private readonly CancellationTokenSource stopping = new();
-    // Single-row retries take one connection at a time, so the other control connection
-    // stays free for the batch, a fence or a release.
+    // Single-row retries take one control connection at a time, so acquisitions and releases
+    // keep the other.
     private readonly SemaphoreSlim retryLane = new(1, 1);
-    private TaskCompletionSource wake = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Task? loops;
+    private readonly AutoResetEvent wake = new(false);
+    private Task? loop;
+    private Thread? watchdog;
 
+    /// <param name="batches">
+    /// The data source reserved for the periodic batch (<see cref="PgDatabase.Renewal"/>): nothing
+    /// else uses it, so no control traffic can queue ahead of a renewal.
+    /// </param>
+    /// <param name="control">The control data source, for retries of unproved rows.</param>
     internal GrantRenewer(
+        PgDatabase batches,
         PgDatabase control,
         string replica,
         LeaseTimings timings,
@@ -84,6 +193,7 @@ internal sealed class GrantRenewer : IAsyncDisposable
     )
     {
         timings.Validate();
+        this.batches = batches;
         this.control = control;
         this.replica = replica;
         this.timings = timings;
@@ -91,14 +201,6 @@ internal sealed class GrantRenewer : IAsyncDisposable
         this.clock = clock ?? Stopwatch.GetTimestamp;
     }
 
-    /// <summary>How many times a batch that hit the lock timeout is halved before its rows are left unproved.</summary>
-    internal int MaxSplitDepth { get; init; } = 3;
-
-    /// <summary>
-    /// Raised once per lost grant, on the thread pool, never on the renewal or watchdog lane:
-    /// a slow handler can't delay another grant's renewal or fence.
-    /// </summary>
-    internal event Action<GrantHandle, string>? GrantLost;
 
     internal int Count
     {
@@ -113,25 +215,26 @@ internal sealed class GrantRenewer : IAsyncDisposable
     internal GrantHandle Track(LeaseGrant grant)
     {
         var start = grant.AcquisitionStart != 0 ? grant.AcquisitionStart : clock();
-        var handle = new GrantHandle(grant, start + Ticks(timings.FenceAfter));
+        var handle = new GrantHandle(grant, start + Ticks(timings.FenceAfter), clock);
         lock (gate)
             live.Add(handle);
         Wake();
         return handle;
     }
 
-    /// <summary>The grant is definitely lost (a refused write, a takeover): fences it now.</summary>
+    /// <summary>
+    /// The grant is definitely lost (a refused write, a takeover, its deadline): decides the
+    /// loss now, running the handle's hooks inline. The log line is queued, never awaited.
+    /// </summary>
     internal void Lose(GrantHandle handle, string reason)
     {
         lock (gate)
             live.Remove(handle);
-        if (handle.TryLose(reason))
-        {
-            log?.Invoke($"[lease] Tenant {handle.Grant.Tenant} epoch {handle.Grant.Epoch} lost: {reason}");
-            var handlers = GrantLost;
-            if (handlers is not null)
-                _ = Task.Run(() => handlers(handle, reason));
-        }
+        if (handle.TryLose(reason) && log is { } write)
+            ThreadPool.UnsafeQueueUserWorkItem(
+                _ => write($"[lease] Tenant {handle.Grant.Tenant} epoch {handle.Grant.Epoch} lost: {reason}"),
+                null
+            );
     }
 
     /// <summary>
@@ -152,40 +255,42 @@ internal sealed class GrantRenewer : IAsyncDisposable
     {
         lock (gate)
             live.Remove(handle);
-        handle.TryLose(reason);
+        handle.TryRelease(reason);
     }
 
     internal void Start()
     {
-        if (loops is not null)
+        if (loop is not null)
             return;
-        loops = Task.WhenAll(Task.Run(RenewLoopAsync), Task.Run(WatchdogAsync));
+        loop = Task.Run(RenewLoopAsync);
+        watchdog = new Thread(Watch) { IsBackground = true, Name = "Foxwarm lease watchdog" };
+        watchdog.Start();
     }
 
     /// <summary>One renewal round over every live grant; the loop calls it every renew interval.</summary>
     internal async Task RenewOnceAsync(CancellationToken token = default)
     {
-        var stamp = clock();
+        long stamp;
         GrantHandle[] batch;
+        // The stamp and the membership are taken together: a grant tracked after the stamp is
+        // in a later batch.
         lock (gate)
+        {
+            stamp = clock();
             batch = [.. live.Where(handle => handle.IsCurrent(stamp))];
+        }
         if (batch.Length == 0)
             return;
-        await RenewAsync(batch, stamp, depth: 0, token).ConfigureAwait(false);
-    }
-
-    private async Task RenewAsync(GrantHandle[] batch, long stamp, int depth, CancellationToken token)
-    {
         RenewalOutcome[] outcomes;
         try
         {
             outcomes = await TenantLease
                 .RenewBatchAsync(
-                    control,
+                    batches,
                     replica,
                     [.. batch.Select(handle => (handle.Grant.TenantId, handle.Grant.Epoch))],
                     timings.Ttl,
-                    timings.RenewInterval,
+                    timings.RenewInterval / 2,
                     skipLocked: true,
                     token
                 )
@@ -193,15 +298,9 @@ internal sealed class GrantRenewer : IAsyncDisposable
         }
         catch (Npgsql.PostgresException error) when (error.SqlState == "55P03")
         {
-            if (batch.Length > 1 && depth < MaxSplitDepth)
-            {
-                var half = batch.Length / 2;
-                await RenewAsync(batch[..half], stamp, depth + 1, token).ConfigureAwait(false);
-                await RenewAsync(batch[half..], stamp, depth + 1, token).ConfigureAwait(false);
-            }
-            else
-                foreach (var handle in batch)
-                    Unproved(handle);
+            // Proves nothing; each row is retried on its own within its own deadline.
+            foreach (var handle in batch)
+                Unproved(handle);
             return;
         }
         for (var index = 0; index < batch.Length; index++)
@@ -214,10 +313,9 @@ internal sealed class GrantRenewer : IAsyncDisposable
         switch (outcome)
         {
             case RenewalOutcome.Renewed:
-                // A success that arrives after the deadline doesn't revive the grant.
-                if (handle.IsCurrent(clock()))
-                    handle.Prove(stamp + Ticks(timings.FenceAfter));
-                else
+                // Decided against the deadline under the handle's lock: a success that arrives
+                // after it doesn't revive the grant.
+                if (!handle.Prove(stamp + Ticks(timings.FenceAfter)))
                     Lose(handle, Expired);
                 break;
             case RenewalOutcome.Lost:
@@ -239,7 +337,7 @@ internal sealed class GrantRenewer : IAsyncDisposable
         {
             try
             {
-                while (!stopping.IsCancellationRequested && handle.IsCurrent(clock()))
+                while (!stopping.IsCancellationRequested && Tracked(handle))
                 {
                     if (await RetryOnceAsync(handle).ConfigureAwait(false) is not { } result)
                         continue;
@@ -268,6 +366,10 @@ internal sealed class GrantRenewer : IAsyncDisposable
         var failed = false;
         try
         {
+            // Checked on the lane, just before the attempt starts: a grant lost or released
+            // while this retry waited for the lane is never renewed again.
+            if (!Tracked(handle))
+                return null;
             var stamp = clock();
             var remaining = TimeSpan.FromSeconds((double)(handle.Deadline - stamp) / Stopwatch.Frequency);
             if (remaining <= TimeSpan.Zero)
@@ -305,6 +407,13 @@ internal sealed class GrantRenewer : IAsyncDisposable
     }
 
     private const string Expired = "No lease renewal succeeded within the fence deadline.";
+
+    // Still tracked and current: what every new renewal attempt requires.
+    private bool Tracked(GrantHandle handle)
+    {
+        lock (gate)
+            return live.Contains(handle) && handle.IsCurrent(clock());
+    }
 
     private async Task RenewLoopAsync()
     {
@@ -347,15 +456,15 @@ internal sealed class GrantRenewer : IAsyncDisposable
         }
     }
 
-    // Sleeps until the earliest deadline (or a new grant); on every wake, including a late one
-    // after a stall, fences every grant whose deadline has passed.
-    private async Task WatchdogAsync()
+    // A dedicated thread: sleeps until the earliest deadline (or a new grant); on every wake,
+    // including a late one after a stall, loses every grant whose deadline has passed. The loss
+    // instant is each deadline, however late the thread runs.
+    private void Watch()
     {
         while (!stopping.IsCancellationRequested)
         {
-            Task woken;
-            long next = long.MaxValue;
             var now = clock();
+            long next = long.MaxValue;
             GrantHandle[] due;
             lock (gate)
             {
@@ -363,31 +472,30 @@ internal sealed class GrantRenewer : IAsyncDisposable
                 foreach (var handle in live)
                     if (handle.Deadline > now && handle.Deadline < next)
                         next = handle.Deadline;
-                woken = wake.Task;
             }
             foreach (var handle in due)
                 Lose(handle, Expired);
             var wait = next == long.MaxValue
-                ? Timeout.InfiniteTimeSpan
-                : TimeSpan.FromSeconds((double)(next - now) / Stopwatch.Frequency) + TimeSpan.FromMilliseconds(1);
+                ? Timeout.Infinite
+                : (int)Math.Min(int.MaxValue, Math.Ceiling((double)(next - now) * 1000 / Stopwatch.Frequency) + 1);
             try
             {
-                await Task.WhenAny(woken, Task.Delay(wait, stopping.Token)).ConfigureAwait(false);
+                WaitHandle.WaitAny([wake, stopping.Token.WaitHandle], wait);
             }
-            catch (OperationCanceledException)
+            catch (ObjectDisposedException)
             {
                 return;
             }
-            lock (gate)
-                if (wake.Task.IsCompleted)
-                    wake = new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
     }
 
     private void Wake()
     {
-        lock (gate)
-            wake.TrySetResult();
+        try
+        {
+            wake.Set();
+        }
+        catch (ObjectDisposedException) { }
     }
 
     private static long Ticks(TimeSpan span) => (long)(span.TotalSeconds * Stopwatch.Frequency);
@@ -402,8 +510,10 @@ internal sealed class GrantRenewer : IAsyncDisposable
         {
             return;
         }
-        if (loops is not null)
-            await loops.ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
+        if (loop is not null)
+            await loop.ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
+        watchdog?.Join();
         stopping.Dispose();
+        wake.Dispose();
     }
 }

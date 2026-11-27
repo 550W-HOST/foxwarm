@@ -135,9 +135,11 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
         });
     }
 
-    // Exact reads without the gate get their own transaction; the gate holder's join its own.
+    // Exact reads without the gate get their own transaction, or join the transaction another
+    // store's body runs in on this database (the Task store canonicalizing references); the
+    // gate holder's join its own.
     private T Exact<T>(Func<PgTx, T> body) =>
-        Monitor.IsEntered(gate) && current is { } running ? body(running) : database.Read(body);
+        Monitor.IsEntered(gate) && current is { } running ? body(running) : database.ReadOrJoin(body);
 
     // Caller holds the gate and runs no transaction. `raise` decides from the body's result
     // whether this write raises the revision; without it every write does.

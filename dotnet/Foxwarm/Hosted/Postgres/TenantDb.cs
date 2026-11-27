@@ -45,9 +45,19 @@ internal sealed class TenantDb
     /// <summary>Transactions one tenant runs at once by default (plan §7.2).</summary>
     internal const int DefaultMaxInFlight = 8;
 
-    // The TenantDb whose permit this logical flow holds: a transaction body that calls the
-    // same helper again (directly or in work it starts) doesn't take a second permit.
-    private static readonly AsyncLocal<TenantDb?> holding = new();
+    // The transaction this logical flow's body is running in. It ends with the transaction, so
+    // work a body started and left running no longer counts as inside it afterwards.
+    private static readonly AsyncLocal<Scope?> scope = new();
+
+    private sealed class Scope(TenantDb owner, PgTx tx)
+    {
+        internal TenantDb Owner { get; } = owner;
+        internal PgTx Tx { get; } = tx;
+        internal volatile bool Ended;
+    }
+
+    // The transaction of this database the current flow runs in, while it lasts.
+    private Scope? Active => scope.Value is { Ended: false } running && running.Owner == this ? running : null;
 
     private const string LeaseCheck =
         "SELECT 1 FROM tenant_leases WHERE tenant_id = $1 AND epoch = $2 AND state = 'active'"
@@ -67,8 +77,12 @@ internal sealed class TenantDb
     /// </param>
     /// <param name="maxInFlight">
     /// The tenant's statement cap: transactions it runs at once, each holding one connection of
-    /// the shared pool. Further ones wait for a slot, so one busy tenant can't take the whole
-    /// pool. Lease control traffic uses its own data source and doesn't count.
+    /// the shared pool. Every physical transaction takes a slot; further ones wait, so one busy
+    /// tenant can't take the whole pool. A transaction body never opens a second one on the
+    /// same database (it would wait for a slot its own transaction holds): it reads through its
+    /// <see cref="PgTx"/>, or through <see cref="ReadOrJoin{T}"/>. A lost commit is verified
+    /// after the transaction's slot and connection are given back. Lease control traffic uses
+    /// its own data sources and doesn't count.
     /// </param>
     internal TenantDb(
         PgDatabase database,
@@ -113,25 +127,74 @@ internal sealed class TenantDb
 
     internal T Write<T>(Func<PgTx, T> body, PgWriteOptions? options = null)
     {
-        if (holding.Value == this)
-            return WriteCore(body, options);
+        RefuseNested();
+        options ??= new();
+        Committed<T> committed;
         inFlight.Wait();
-        var previous = holding.Value;
-        holding.Value = this;
         try
         {
-            return WriteCore(body, options);
+            committed = WriteCore(body, options);
         }
         finally
         {
-            holding.Value = previous;
             inFlight.Release();
+        }
+        if (committed.Lost is { } lost)
+            ResolveLostCommit(options, lost);
+        return committed.Value;
+    }
+
+    // A committed body's result, or the commit failure whose outcome is unknown.
+    private readonly record struct Committed<T>(T Value, Exception? Lost);
+
+    private T Body<T>(PgTx tx, Func<PgTx, T> body)
+    {
+        var running = new Scope(this, tx);
+        var previous = scope.Value;
+        scope.Value = running;
+        try
+        {
+            return body(tx);
+        }
+        finally
+        {
+            running.Ended = true;
+            scope.Value = previous;
         }
     }
 
-    private T WriteCore<T>(Func<PgTx, T> body, PgWriteOptions? options)
+    private async Task<T> BodyAsync<T>(PgTx tx, Func<PgTx, CancellationToken, Task<T>> body, CancellationToken token)
     {
-        options ??= new();
+        // An async method's flow: the scope is this method's and its callees', and ends here.
+        var running = new Scope(this, tx);
+        scope.Value = running;
+        try
+        {
+            return await body(tx, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            running.Ended = true;
+        }
+    }
+
+    private void RefuseNested()
+    {
+        if (Active is not null)
+            throw new InvalidOperationException(
+                "A tenant database transaction body opened a second transaction on the same database; use its PgTx or ReadOrJoin."
+            );
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> in the transaction the current flow's body is running in
+    /// on this database, or in a read transaction of its own when there is none. For readers
+    /// that a transaction body of another store calls (catalog lookups from the Task store).
+    /// </summary>
+    internal T ReadOrJoin<T>(Func<PgTx, T> body) => Active is { } running ? body(running.Tx) : Read(body);
+
+    private Committed<T> WriteCore<T>(Func<PgTx, T> body, PgWriteOptions options)
+    {
         for (var attempt = 1; ; attempt++)
         {
             CheckOpen();
@@ -142,7 +205,7 @@ internal sealed class TenantDb
             try
             {
                 Begin(tx, write: true, readOnly: false);
-                result = body(tx);
+                result = Body(tx, body);
             }
             catch (Exception error) when (Translate(error) is { } translated)
             {
@@ -159,12 +222,11 @@ internal sealed class TenantDb
             try
             {
                 transaction.Commit();
-                return result;
+                return new(result, null);
             }
             catch (Exception error) when (IsLostCommit(error))
             {
-                ResolveLostCommit(options, error);
-                return result;
+                return new(result, error);
             }
             catch (Exception error) when (Translate(error) is { } translated)
             {
@@ -181,27 +243,29 @@ internal sealed class TenantDb
         CancellationToken token = default
     )
     {
-        if (holding.Value == this)
-            return await WriteCoreAsync(body, options, token).ConfigureAwait(false);
+        RefuseNested();
+        options ??= new();
+        Committed<T> committed;
         await inFlight.WaitAsync(token).ConfigureAwait(false);
-        holding.Value = this;
         try
         {
-            return await WriteCoreAsync(body, options, token).ConfigureAwait(false);
+            committed = await WriteCoreAsync(body, options, token).ConfigureAwait(false);
         }
         finally
         {
             inFlight.Release();
         }
+        if (committed.Lost is { } lost)
+            ResolveLostCommit(options, lost);
+        return committed.Value;
     }
 
-    private async Task<T> WriteCoreAsync<T>(
+    private async Task<Committed<T>> WriteCoreAsync<T>(
         Func<PgTx, CancellationToken, Task<T>> body,
-        PgWriteOptions? options,
+        PgWriteOptions options,
         CancellationToken token
     )
     {
-        options ??= new();
         for (var attempt = 1; ; attempt++)
         {
             CheckOpen();
@@ -214,7 +278,7 @@ internal sealed class TenantDb
             try
             {
                 await BeginAsync(tx, write: true, readOnly: false, token).ConfigureAwait(false);
-                result = await body(tx, token).ConfigureAwait(false);
+                result = await BodyAsync(tx, body, token).ConfigureAwait(false);
             }
             catch (Exception error) when (Translate(error) is { } translated)
             {
@@ -232,12 +296,11 @@ internal sealed class TenantDb
             {
                 // Not cancellable: a cancelled COMMIT is a lost commit, never a quiet rollback.
                 await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
-                return result;
+                return new(result, null);
             }
             catch (Exception error) when (IsLostCommit(error))
             {
-                ResolveLostCommit(options, error);
-                return result;
+                return new(result, error);
             }
             catch (Exception error) when (Translate(error) is { } translated)
             {
@@ -254,18 +317,14 @@ internal sealed class TenantDb
     /// </summary>
     internal T Read<T>(Func<PgTx, T> body, bool snapshot = false)
     {
-        if (holding.Value == this)
-            return ReadCore(body, snapshot);
+        RefuseNested();
         inFlight.Wait();
-        var previous = holding.Value;
-        holding.Value = this;
         try
         {
             return ReadCore(body, snapshot);
         }
         finally
         {
-            holding.Value = previous;
             inFlight.Release();
         }
     }
@@ -281,7 +340,7 @@ internal sealed class TenantDb
         try
         {
             Begin(tx, write: false, readOnly: true);
-            var result = body(tx);
+            var result = Body(tx, body);
             transaction.Commit();
             return result;
         }
@@ -303,10 +362,8 @@ internal sealed class TenantDb
         CancellationToken token = default
     )
     {
-        if (holding.Value == this)
-            return await ReadCoreAsync(body, snapshot, token).ConfigureAwait(false);
+        RefuseNested();
         await inFlight.WaitAsync(token).ConfigureAwait(false);
-        holding.Value = this;
         try
         {
             return await ReadCoreAsync(body, snapshot, token).ConfigureAwait(false);
@@ -335,7 +392,7 @@ internal sealed class TenantDb
         try
         {
             await BeginAsync(tx, write: false, readOnly: true, token).ConfigureAwait(false);
-            var result = await body(tx, token).ConfigureAwait(false);
+            var result = await BodyAsync(tx, body, token).ConfigureAwait(false);
             await transaction.CommitAsync(token).ConfigureAwait(false);
             return result;
         }

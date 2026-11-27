@@ -30,15 +30,21 @@ internal sealed class AdmissionGate
 {
     private readonly object gate = new();
     private readonly Func<long> clock;
+    private readonly Func<bool>? valid;
     private bool open;
     private int inFlight;
     private long lastActivity;
     private TaskCompletionSource? drained;
 
     /// <param name="clock">A monotonic timestamp (<see cref="System.Diagnostics.Stopwatch"/>).</param>
-    internal AdmissionGate(Func<long>? clock = null)
+    /// <param name="valid">
+    /// Checked on every admission: the generation's grant is still current, by its deadline.
+    /// Admission doesn't depend on a loss handler having run.
+    /// </param>
+    internal AdmissionGate(Func<long>? clock = null, Func<bool>? valid = null)
     {
         this.clock = clock ?? System.Diagnostics.Stopwatch.GetTimestamp;
+        this.valid = valid;
         lastActivity = this.clock();
     }
 
@@ -59,7 +65,7 @@ internal sealed class AdmissionGate
     {
         lock (gate)
         {
-            if (!open || Latched != AdmissionLatch.None)
+            if (!open || Latched != AdmissionLatch.None || valid?.Invoke() == false)
                 return null;
             inFlight++;
             lastActivity = clock();

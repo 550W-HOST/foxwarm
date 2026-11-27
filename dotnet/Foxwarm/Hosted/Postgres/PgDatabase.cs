@@ -31,12 +31,20 @@ internal sealed class PgDatabase : IAsyncDisposable
     }
 
     /// <summary>
-    /// A replica's reserved data source for lease control traffic: renewal, release and the
-    /// fencing path. Its own small pool, so tenant transactions that saturate the shared pool
-    /// can't delay a renewal past its deadline.
+    /// A replica's data source for lease control traffic other than the periodic renewal:
+    /// acquisitions, wake-up reads, releases and retries of unproved rows. Its own small pool,
+    /// so tenant transactions that saturate the shared pool can't delay them.
     /// </summary>
     internal static PgDatabase Control(string connectionString) =>
         new(connectionString, "foxwarm-control", ControlConnections);
+
+    /// <summary>
+    /// A replica's data source reserved for the periodic renewal batch: one connection that no
+    /// other traffic uses, so neither tenant transactions nor control traffic waiting on locks
+    /// can queue ahead of a renewal.
+    /// </summary>
+    internal static PgDatabase Renewal(string connectionString) =>
+        new(connectionString, "foxwarm-renewal", 1);
 
     internal int? MaxPoolSize { get; }
 
