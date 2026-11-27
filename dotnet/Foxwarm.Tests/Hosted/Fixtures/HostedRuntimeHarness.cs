@@ -98,6 +98,8 @@ internal sealed class HostedRuntimeHarness : IAsyncDisposable
         var port = FreePort();
         var deployment = DeploymentConfiguration.Parse(
             $"bot: {{httpHost: 127.0.0.1, httpPort: {port}}}\nhealth: {{port: 3081}}\nblobs: {{backend: postgres}}\n"
+                // The scripted model listens on loopback: an egress exception.
+                + "egress: {allow: {hosted: [127.0.0.1]}}\n"
         );
         var context = new PostgresStorageContext(new TenantDb(app, tenantId, epoch), scratch);
         var storage = HostedTestBackend.Compose(context, scratch);
