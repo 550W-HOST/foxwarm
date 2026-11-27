@@ -8,6 +8,23 @@ namespace Foxwarm.Tests.Hosted;
 public sealed class DeploymentConfigurationTests
 {
     [Fact]
+    public void TheRuntimesHostRequiresItsOwnMeshPortAdvertisedAddressAndKey()
+    {
+        const string deployment = "bot: {httpHost: 127.0.0.1}\nhealth: {port: 3081}\nblobs: {backend: postgres}\n";
+        Assert.Throws<HostedBootstrapException>(() => DeploymentConfiguration.Parse(deployment).RequireMeshEndpoint());
+        var listen = DeploymentConfiguration.Parse(deployment + "mesh: {port: 3082}\n").RequireMeshEndpoint();
+        Assert.Equal(3082, listen.Port);
+        using var root = new TempDirectory();
+        var file = Path.Combine(root.Path, "mesh.key");
+        File.WriteAllText(file, "bad");
+        Assert.Throws<HostedBootstrapException>(() => Foxwarm.Hosted.Forwarding.MeshSettings.Load("worker:8082", listen, file));
+        File.WriteAllText(file, Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
+        Assert.Throws<HostedBootstrapException>(() => Foxwarm.Hosted.Forwarding.MeshSettings.Load(null, listen, file));
+        var mesh = Foxwarm.Hosted.Forwarding.MeshSettings.Load("worker:8082", listen, file);
+        Assert.Equal("http://worker:8082", mesh.Address(listen.Port));
+    }
+
+    [Fact]
     public void The_listener_uses_file_mode_rules_and_the_health_port_is_required()
     {
         var deployment = DeploymentConfiguration.Parse(

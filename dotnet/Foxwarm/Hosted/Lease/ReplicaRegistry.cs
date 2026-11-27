@@ -30,15 +30,16 @@ internal sealed class ReplicaRegistry
         int binaryLevel,
         int readerVersion,
         CancellationToken token,
-        string role = ReplicaRoles.General
+        string role = ReplicaRoles.General,
+        string? meshAddress = null
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "INSERT INTO replicas (replica_id, advertise_address, binary_level, reader_version, name, role)"
-                + " VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (replica_id) DO UPDATE SET"
+            "INSERT INTO replicas (replica_id, advertise_address, binary_level, reader_version, name, role, mesh_address)"
+                + " VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (replica_id) DO UPDATE SET"
                 + " advertise_address = excluded.advertise_address, binary_level = excluded.binary_level,"
-                + " reader_version = excluded.reader_version, role = excluded.role, heartbeat_at = now()",
+                + " reader_version = excluded.reader_version, role = excluded.role, mesh_address = excluded.mesh_address, heartbeat_at = now()",
             connection
         );
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
@@ -51,6 +52,7 @@ internal sealed class ReplicaRegistry
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = readerVersion });
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = LogicalName(replica) });
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = role });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text, Value = (object?)meshAddress ?? DBNull.Value });
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
 
@@ -62,7 +64,7 @@ internal sealed class ReplicaRegistry
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "SELECT replica_id, coalesce(name, replica_id), role, draining, (capacity - 'tenants' - 'version')::text, started_at FROM replicas"
+            "SELECT replica_id, coalesce(name, replica_id), role, draining, (capacity - 'tenants' - 'version')::text, started_at, mesh_address FROM replicas"
                 + " WHERE heartbeat_at > now() - make_interval(secs => $1)",
             connection
         );
@@ -76,7 +78,8 @@ internal sealed class ReplicaRegistry
                 reader.GetString(2),
                 reader.GetBoolean(3),
                 System.Text.Json.Nodes.JsonNode.Parse(reader.GetString(4)) as System.Text.Json.Nodes.JsonObject ?? [],
-                reader.GetFieldValue<DateTimeOffset>(5)
+                reader.GetFieldValue<DateTimeOffset>(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6)
             ));
         return rows;
     }

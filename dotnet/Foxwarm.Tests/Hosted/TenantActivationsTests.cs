@@ -270,6 +270,36 @@ public sealed class TenantActivationsTests
     private static TimeSpan Since(long timestamp) => System.Diagnostics.Stopwatch.GetElapsedTime(timestamp);
 
     [Fact]
+    public async Task ExactDispatchPinsOnlyTheNamedPublishedTenantBootAndEpoch()
+    {
+        await using var f = await CreateAsync(second: true);
+        var owner = f.Activations;
+        f.StartGate = Fixture.Closed();
+        var starting = owner.ActivateAsync(Tenant);
+        await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var epoch = await f.EpochAsync();
+        Assert.Null(owner.TryAdmitExact(Tenant, epoch, Replica));
+        f.StartGate.SetResult();
+        var generation = await starting;
+        Assert.Null(owner.TryAdmitExact(Second, epoch, Replica));
+        Assert.Null(owner.TryAdmitExact(Tenant, epoch, "another-boot"));
+        Assert.Null(owner.TryAdmitExact(Tenant, epoch - 1, Replica));
+        Assert.Null(owner.TryAdmitExact(Tenant, epoch + 1, Replica));
+        Assert.Equal(0, generation.Gate.InFlight);
+        var exact = owner.TryAdmitExact(Tenant, epoch, Replica);
+        Assert.NotNull(exact);
+        using (exact.Value.Admission)
+        {
+            Assert.Same(generation, exact.Value.Generation);
+            Assert.Equal(1, generation.Gate.InFlight);
+            generation.Gate.Latch(AdmissionLatch.Drain);
+            Assert.Null(owner.TryAdmitExact(Tenant, epoch, Replica));
+        }
+        Assert.Equal(0, generation.Gate.InFlight);
+        Assert.Equal(1, f.Builds);
+    }
+
+    [Fact]
     public async Task SimultaneousActivationsAcquireOnceStartOnceAndNoFenceLandsOnTheReplacement()
     {
         await using var f = await CreateAsync();
@@ -734,7 +764,9 @@ public sealed class TenantActivationsTests
         var demand = f.Activations.AdmitAsync(Tenant);
         var exitedAt = await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(10));
         // One drain bound for the release, then one from the loss: never the disposal alone.
-        Assert.InRange(System.Diagnostics.Stopwatch.GetElapsedTime(started, exitedAt), Bound * 2, Bound * 2 + Late);
+        // Each Task.Delay is scheduled at millisecond granularity; the measured start may be
+        // between ticks. This still distinguishes two drain bounds from a single one.
+        Assert.InRange(System.Diagnostics.Stopwatch.GetElapsedTime(started, exitedAt), Bound * 2 - TimeSpan.FromMilliseconds(2), Bound * 2 + Late);
         Assert.False(first.Disposed.IsCompleted);
         Assert.Equal(IdleReleaseOutcome.Overrun, await release.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.False(demand.IsCompleted);

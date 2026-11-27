@@ -65,17 +65,14 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         await harness.AddTenantAsync("alpha");
         await harness.AddTenantAsync("beta");
         var a = await harness.StartAsync("replica-a");
+        Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "alpha"));
         var b = await harness.StartAsync("replica-b");
         try
         {
-            // First requests activate each tenant on the replica they arrive at.
-            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "alpha"));
             Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "beta"));
             Assert.Equal("replica-a", ReplicaRegistry.LogicalName((await harness.OwnerAsync("alpha"))!));
-            Assert.Equal("replica-b", ReplicaRegistry.LogicalName((await harness.OwnerAsync("beta"))!));
-            Assert.Equal(1, await TenantsAsync(a));
-            // Held by the other replica: refused (forwarding comes later), the owner unchanged.
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, await ServeAsync(b, "alpha"));
+            // Either public edge reaches the active grant, even when a different boot now ranks first.
+            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "alpha"));
 
             var killed = Stopwatch.StartNew();
             a.Kill();
@@ -105,12 +102,12 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         await harness.AddTenantAsync("alpha");
         await harness.AddTenantAsync("beta");
         var a = await harness.StartAsync("replica-a");
-        var b = await harness.StartAsync("replica-b");
         try
         {
             Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "alpha"));
             Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "beta"));
             Assert.Equal(2, await TenantsAsync(a));
+            var b = await harness.StartAsync("replica-b");
             var stopped = Stopwatch.StartNew();
             a.Terminate();
             Assert.Equal(HostedExit.Stopped, await a.ExitAsync(TimeSpan.FromSeconds(30)));
@@ -136,11 +133,11 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         await using var harness = await ReplicaProcessHarness.CreateAsync();
         await harness.AddTenantAsync("alpha");
         var a = await harness.StartAsync("replica-a");
-        var b = await harness.StartAsync("replica-b");
         try
         {
             Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "alpha"));
             Assert.Equal(1, await TenantsAsync(a));
+            var b = await harness.StartAsync("replica-b");
             var partitioned = Stopwatch.StartNew();
             a.Proxy.Partition();
             var before = await harness.LeaseRowAsync("alpha");
@@ -148,7 +145,20 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
             var expiry = partitioned.Elapsed + (before.ExpiresAt - before.Now);
 
             // B is asked from the start of the partition, concurrently with the watch on A.
-            var successor = ProbeUntilServedAsync(b, "alpha", partitioned, Ttl + TimeSpan.FromSeconds(30));
+            async Task<(TimeSpan, int)> ProbeSuccessorAsync()
+            {
+                var refused = 0;
+                while (partitioned.Elapsed < Ttl + TimeSpan.FromSeconds(30))
+                {
+                    if (await ProbeAsync(b, "alpha") == HttpStatusCode.Unauthorized
+                        && ReplicaRegistry.LogicalName((await harness.OwnerAsync("alpha")) ?? "") == "replica-b")
+                        return (partitioned.Elapsed, refused);
+                    refused++;
+                    await Task.Delay(100);
+                }
+                throw new TimeoutException("The surviving replica did not become the serving owner.");
+            }
+            var successor = ProbeSuccessorAsync();
 
             // A: its published tenant count (or its fenced exit) drops before the expiry.
             TimeSpan? retired = null;

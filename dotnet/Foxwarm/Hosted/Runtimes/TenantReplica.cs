@@ -1,12 +1,15 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Foxwarm.Hosted.Lease;
+using Foxwarm.Hosted.Forwarding;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Hosted.Schema;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Yarp.ReverseProxy.Forwarder;
 
 namespace Foxwarm.Hosted.Runtimes;
 
@@ -30,6 +33,8 @@ internal sealed record TenantReplicaOptions(
     int ReaderVersion
 )
 {
+    internal required MeshSettings Mesh { get; init; }
+
     /// <summary>This replica's placement role (<see cref="ReplicaRoles"/>).</summary>
     internal string Role { get; init; } = ReplicaRoles.General;
 
@@ -173,6 +178,12 @@ internal sealed class TenantReplica
         renewer.SettingsChanged += coordinator.SettingsChanged;
         var registry = new ReplicaRegistry(control);
         var hostnames = new HostnameDirectory(app);
+        using var router = new TenantRouter(Replica, new MeshAuthentication(options.Mesh.Secret, Replica),
+            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, () =>
+            {
+                var owners = Foxwarm.Limits.ReplicaLimits.Process.HotOwners;
+                return owners.UsedBytes < owners.Limit;
+            }, log);
         await using var health = options.HealthEndpoint is { } healthAddress
             ? new HealthEndpoint(healthAddress, () => new TenantReplicaHealth(state, Replica, options.Role, coordinator.Published().Count))
             : null;
@@ -183,15 +194,20 @@ internal sealed class TenantReplica
         var confirmed = false;
         try
         {
+            await using var mesh = await StartListenerAsync(options.Mesh.Listen, mesh: true, router).ConfigureAwait(false);
+            var meshPort = new Uri(mesh.Urls.Single()).Port;
             await registry
-                .RegisterAsync(Replica, options.AdvertiseAddress, SchemaMigrator.BinaryLevel, options.ReaderVersion, stop, options.Role)
+                .RegisterAsync(Replica, options.AdvertiseAddress, SchemaMigrator.BinaryLevel, options.ReaderVersion, stop, options.Role, options.Mesh.Address(meshPort))
                 .ConfigureAwait(false);
             registered = true;
             renewer.Start();
             loops.Add(HeartbeatAsync(registry, background.Token));
             loops.Add(ListenAsync(hostnames, background.Token));
             loops.Add(IdleScanAsync(coordinator, background.Token));
-            await using var front = await StartFrontAsync(coordinator, hostnames).ConfigureAwait(false);
+            await hostnames.RefreshAsync(stop).ConfigureAwait(false);
+            loops.Add(RefreshHostnamesAsync(hostnames, background.Token));
+            await using var front = await StartListenerAsync(options.PublicEndpoint, mesh: false, router).ConfigureAwait(false);
+            FrontPort = new Uri(front.Urls.Single()).Port;
             state = "serving";
             serving.TrySetResult();
             try
@@ -200,6 +216,7 @@ internal sealed class TenantReplica
             }
             catch (OperationCanceledException) { }
             state = "stopping";
+            router.Drain();
             // Tenants first: each refuses new dispatch as it latches, and the front answers.
             confirmed = await coordinator.ShutdownAsync().ConfigureAwait(false);
             using var frontStop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -252,77 +269,69 @@ internal sealed class TenantReplica
         return tenant;
     }
 
-    private async Task<WebApplication> StartFrontAsync(TenantActivations coordinator, HostnameDirectory hostnames)
+    private async Task<WebApplication> StartListenerAsync(IPEndPoint endpoint, bool mesh, TenantRouter router)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
+        if (!mesh) builder.Services.AddHttpForwarder();
         builder.WebHost.UseKestrel(server =>
         {
-            server.Listen(options.PublicEndpoint);
-            // As the Main server's own listener; tenant routes raise it per request.
+            server.Listen(endpoint, binding =>
+            {
+                if (mesh) binding.Protocols = HttpProtocols.Http2;
+            });
             server.Limits.MaxRequestBodySize = 2 * 1024 * 1024;
             server.AddServerHeader = false;
         });
-        var front = builder.Build();
-        front.Run(context => DispatchAsync(context, coordinator, hostnames, log));
-        await front.StartAsync().ConfigureAwait(false);
-        FrontPort = new Uri(front.Urls.First()).Port;
-        return front;
+        var app = builder.Build();
+        // Reserve the operator authority and paths before either tenant listener resolves or admits a request.
+        app.Use((context, next) =>
+        {
+            var path = context.Request.Path;
+            if (path.StartsWithSegments(Operator.OperatorServer.Path)
+                || options.MountedOperatorPath?.IsMatch(path.Value ?? "") == true
+                || Operator.OperatorListener.CanonicalHost(context.Request.Host.Host) == options.OperatorHostname)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return Task.CompletedTask;
+            }
+            return next(context);
+        });
+        if (mesh)
+            app.Run(router.MeshAsync);
+        else
+        {
+            var forwarder = app.Services.GetRequiredService<IHttpForwarder>();
+            app.Run(context => router.PublicAsync(context, forwarder));
+        }
+        try
+        {
+            await app.StartAsync().ConfigureAwait(false);
+            return app;
+        }
+        catch
+        {
+            await app.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
-    // Host → tenant → its published generation. A tenant this replica can't serve gets a bare
-    // 503 with no tenant data; forwarding to its owner replaces that.
-    private async Task DispatchAsync(
-        HttpContext context,
-        TenantActivations coordinator,
-        HostnameDirectory hostnames,
-        Action<string> log
-    )
+    private static async Task DispatchTenantAsync(TenantGeneration generation, HttpContext context)
     {
-        var path = context.Request.Path;
-        if (path.StartsWithSegments(Operator.OperatorServer.Path)
-            || options.MountedOperatorPath?.IsMatch(path.Value ?? "") == true
-            || Operator.OperatorListener.CanonicalHost(context.Request.Host.Host) == options.OperatorHostname)
-        {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-        var aborted = context.RequestAborted;
-        string? tenant;
-        try
-        {
-            tenant = await hostnames.ResolveAsync(context.Request.Host.Host, aborted).ConfigureAwait(false);
-        }
-        catch (Exception) when (!aborted.IsCancellationRequested)
-        {
+        var server = ((TenantRuntime)generation.Runtime!).Server;
+        if (!await server.DispatchAsync(context.Features).ConfigureAwait(false))
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            return;
-        }
-        if (tenant is null)
-        {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-        TenantGeneration generation;
-        AdmissionGate.Admission admission;
-        try
-        {
-            (generation, admission) = await coordinator.AdmitAsync(tenant, ActivationCause.Request, aborted).ConfigureAwait(false);
-        }
-        catch (Exception error) when (!aborted.IsCancellationRequested)
-        {
-            // Acquisition, build and start fail alike for the client: the cause stays in the log.
-            if (error is not (TenantHeldElsewhereException or ObjectDisposedException))
-                log($"[hosted] Tenant {tenant} couldn't be activated: {error.GetType().Name}: {error.Message}");
-            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            return;
-        }
-        using (admission)
-        {
-            var server = ((TenantRuntime)generation.Runtime!).Server;
-            if (!await server.DispatchAsync(context.Features).ConfigureAwait(false))
-                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        }
+    }
+
+    private async Task RefreshHostnamesAsync(HostnameDirectory directory, CancellationToken token)
+    {
+        using var ticks = new PeriodicTimer(HostnameDirectory.Lifetime);
+        while (await ticks.WaitForNextTickAsync(token).ConfigureAwait(false))
+            try { await directory.RefreshAsync(token).ConfigureAwait(false); }
+            catch (Exception error) when (!token.IsCancellationRequested)
+            {
+                log("[hosted] Hostname refresh failed: " + error.GetType().Name);
+            }
     }
 
     private async Task HeartbeatAsync(ReplicaRegistry registry, CancellationToken token)
@@ -661,6 +670,27 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
             generation++;
             cache.Clear();
             negative = 0;
+        }
+    }
+
+    internal async Task RefreshAsync(CancellationToken token)
+    {
+        long started;
+        lock (gate) started = generation;
+        var positive = new Dictionary<string, string>(StringComparer.Ordinal);
+        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
+        await using var command = new Npgsql.NpgsqlCommand("SELECT h.hostname,t.name FROM tenant_hostnames h JOIN tenants t USING (tenant_id)", connection);
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+            positive.Add(reader.GetString(0), reader.GetString(1));
+        lock (gate)
+        {
+            if (generation != started) return;
+            generation++;
+            cache.Clear();
+            negative = 0;
+            var expires = clock() + (long)Lifetime.TotalMilliseconds;
+            foreach (var (host, tenant) in positive) cache.Add(host, (tenant, expires));
         }
     }
 

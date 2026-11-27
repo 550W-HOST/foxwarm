@@ -15,7 +15,8 @@ internal sealed record ReplicaRow(
     string Role,
     bool Draining,
     JsonObject Capacity,
-    DateTimeOffset StartedAt
+    DateTimeOffset StartedAt,
+    string? MeshAddress = null
 );
 
 /// <summary>

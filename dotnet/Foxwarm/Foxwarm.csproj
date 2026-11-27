@@ -70,6 +70,7 @@
     <DefineConstants Condition="'$(FoxwarmHosted)' == 'true'">$(DefineConstants);FOXWARM_HOSTED</DefineConstants>
   </PropertyGroup>
   <ItemGroup Condition="'$(FoxwarmHosted)' == 'true'">
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
     <PackageReference Include="Npgsql" Version="10.0.4" />
     <PackageReference Include="AWSSDK.S3" Version="4.1.2.1" />
     <EmbeddedResource Include="Hosted/Schema/Migrations/*.sql" LogicalName="Foxwarm.Hosted.Migrations.%(Filename)%(Extension)" />

@@ -24,6 +24,8 @@ A hosted tenant's configuration and secrets live in the database, beside an oper
 - **First run.** No documents means today's OOBE: models diagnostics report `oobe`, and the first models installation seeds the `config` document from `templates/config.example.yaml`, which holds only tenant settings.
 - **Live application** is today's in-process installer lane: the owner is the only writer, so there is nothing to propagate.
 
+The runtimes host owns the deployment `mesh.port` and reads `FOXWARM_ADVERTISE_ADDRESS` and `FOXWARM_MESH_SECRET_FILE` for its [replica mesh](./hosted-forwarding.md#d-hosted-mesh-authentication). The single-tenant host keeps its public forwarding address until cutover.
+
 ## D-hosted-config-documents
 
 **Approved plan §7 (P0 tool-authorization constraint).**

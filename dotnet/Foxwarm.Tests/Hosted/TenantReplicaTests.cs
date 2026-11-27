@@ -16,7 +16,7 @@ namespace Foxwarm.Tests.Hosted;
 // The runtimes host on one front, over real lease rows, with small runtimes of its own: each
 // answers /whoami with its tenant and epoch behind the tenant server it was given.
 [Trait("Backend", "postgres")]
-public sealed class TenantReplicaTests
+public sealed partial class TenantReplicaTests
 {
     private static readonly LeaseTimings Fast = new(TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(400), TimeSpan.FromMilliseconds(1200));
     private static readonly TimeSpan Drain = TimeSpan.FromSeconds(1);
@@ -65,6 +65,14 @@ public sealed class TenantReplicaTests
         internal readonly List<string> Log = [];
         internal int Exits;
         internal int Builds;
+        internal int ApplicationCalls;
+        internal bool OwnsDatabase;
+        internal required byte[] MeshKey { get; init; }
+        internal readonly System.Collections.Concurrent.ConcurrentBag<string> Connections = [];
+        internal readonly TaskCompletionSource Truncating = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Cut = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Continue = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal HttpClient Client = null!;
 
         /// <summary>When set, every runtime's start waits for it.</summary>
@@ -124,6 +132,8 @@ public sealed class TenantReplicaTests
             StartGate?.TrySetResult();
             DrainGate?.TrySetResult();
             CallbackGate?.TrySetResult();
+            Continue.TrySetResult();
+            Cut.TrySetResult();
             Stop.Cancel();
             try
             {
@@ -131,7 +141,7 @@ public sealed class TenantReplicaTests
             }
             catch { }
             Client.Dispose();
-            await Database.DisposeAsync();
+            if (OwnsDatabase) await Database.DisposeAsync();
         }
     }
 
@@ -151,14 +161,19 @@ public sealed class TenantReplicaTests
 
     private static async Task<Fixture> StartAsync(LeaseTimings timings, params string[] tenants)
     {
-        var server = await PostgresServer.SharedAsync();
-        var database = await server.CreateDatabaseAsync();
+        var database = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
         foreach (var tenant in tenants)
             await AddTenantAsync(database, tenant);
-        var fixture = new Fixture { Database = database, Stop = new CancellationTokenSource() };
+        return await StartReplicaAsync(database, "replica-a", System.Security.Cryptography.RandomNumberGenerator.GetBytes(32), ownsDatabase: true, timings: timings);
+    }
+
+    private static async Task<Fixture> StartReplicaAsync(HostedTestDatabase database, string name, byte[] key, bool ownsDatabase = false, LeaseTimings? timings = null)
+    {
+        timings ??= Fast;
+        var fixture = new Fixture { Database = database, Stop = new CancellationTokenSource(), MeshKey = key, OwnsDatabase = ownsDatabase };
         fixture.Replica = new TenantReplica(
             new TenantReplicaOptions(
-                "replica-a",
+                name,
                 null,
                 null,
                 new IPEndPoint(IPAddress.Loopback, 0),
@@ -169,6 +184,7 @@ public sealed class TenantReplicaTests
             )
             {
                 ShutdownBound = TimeSpan.FromSeconds(5),
+                Mesh = new(new(IPAddress.Loopback, 0), "127.0.0.1", key),
             },
             database.OpenApp(),
             database.AppConnectionString,
@@ -184,6 +200,7 @@ public sealed class TenantReplicaTests
                 var app = builder.Build();
                 var grant = context.Activation.Grant;
                 app.MapGet("/whoami", () => $"{grant.Tenant}:{grant.Epoch}");
+                MapForwardingRoutes(app, fixture);
                 context.Activation.Fence.Lost.Register(() => fixture.Event($"{grant.Tenant}:fenced"));
                 var runtime = new Runtime(app, grant.Tenant, grant.Epoch, fixture) { StatementLimit = context.Database.MaxInFlight };
                 lock (fixture.Runtimes)
@@ -387,14 +404,17 @@ public sealed class TenantReplicaTests
     public async Task AnyActivationFailureIsABare503AndItsCauseIsLogged()
     {
         await using var f = await StartAsync("alpha");
-        f.FactoryError = new IOException("the blob store answered 500");
+        f.FactoryError = new IOException("backend request failed: /private?key=sensitive");
         using (var refused = await f.GetAsync("alpha"))
         {
             Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
             Assert.Equal("", await refused.Content.ReadAsStringAsync());
         }
         lock (f.Log)
-            Assert.Contains(f.Log, line => line.Contains("alpha") && line.Contains("the blob store answered 500"));
+        {
+            Assert.Contains(f.Log, line => line.Contains("alpha") && line.Contains(nameof(IOException)));
+            Assert.DoesNotContain(f.Log, line => line.Contains("/private") || line.Contains("sensitive"));
+        }
         f.FactoryError = null;
         await UntilAsync(async () => (await f.GetAsync("alpha")).StatusCode == HttpStatusCode.OK, "alpha serves after the backoff", TimeSpan.FromSeconds(30));
     }
