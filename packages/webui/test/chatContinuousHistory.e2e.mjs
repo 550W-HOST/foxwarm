@@ -40,6 +40,29 @@ async function loadContinuousEarlier(chatPage) {
   })
 }
 
+// The Retry control sits above the loaded page. While loaded rows above the reader are still
+// unmounted, reaching the top mounts them below the control and keeps the reading row, which
+// moves the control out of view. Read up as a user would until the page's first row is mounted
+// and the control stays at the top, then wait for it to be shown in the viewport.
+async function readToRetry(chatPage) {
+  const box = await (await chatPage.$('.foxwarm-chat-messages')).boundingBox()
+  await chatPage.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  const mountedRows = () => chatPage.$$eval('[data-chat-timeline="committed"] [data-chat-message-anchor-key]', nodes => nodes.length)
+  for (let piece = 0; piece < 10 && !await chatPage.$('[data-chat-message-anchor-key="seq-local-501"]'); piece++) {
+    const rows = await mountedRows()
+    await chatPage.mouse.wheel({ deltaY: -100_000 })
+    await chatPage.waitForFunction(rows => document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]').length > rows, {}, rows)
+  }
+  assert.ok(await chatPage.$('[data-chat-message-anchor-key="seq-local-501"]'), 'the loaded page is mounted')
+  await chatPage.mouse.wheel({ deltaY: -100_000 })
+  await chatPage.waitForFunction(() => {
+    const button = document.querySelector('[data-continuous-history] button:not([disabled])')
+    const viewport = document.querySelector('.foxwarm-chat-messages')?.getBoundingClientRect()
+    const rect = button?.getBoundingClientRect()
+    return !!rect && rect.height > 0 && rect.top >= viewport.top && rect.bottom <= viewport.bottom
+  })
+}
+
 test('continuous Chat loads one recent page, retries earlier pages, bounds mounted rows, and keeps independent mode positions', async () => {
   const chatPage = await openContinuousChat()
   try {
@@ -51,6 +74,7 @@ test('continuous Chat loads one recent page, retries earlier pages, bounds mount
     await chatPage.evaluate(() => { window.fixtureFailArchive = true })
     await loadContinuousEarlier(chatPage)
     await chatPage.waitForFunction(() => document.querySelector('[data-continuous-history]')?.textContent.includes('could not be loaded'))
+    await readToRetry(chatPage)
     await chatPage.click('[data-continuous-history] button')
     await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
     await loadContinuousEarlier(chatPage)
