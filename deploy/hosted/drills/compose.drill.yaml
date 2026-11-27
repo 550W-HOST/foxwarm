@@ -8,13 +8,11 @@ services:
     restart: "no"
     volumes: !override
       - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
-      - agents:/agents
   foxwarm-2:
     image: ${FOXWARM_DRILL_IMAGE_2:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
     restart: "no"
     volumes: !override
       - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
-      - agents:/agents
   foxwarm-3:
     extends:
       file: compose.yaml
@@ -23,7 +21,6 @@ services:
     restart: "no"
     volumes: !override
       - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
-      - agents:/agents
     environment:
       FOXWARM_REPLICA_ID: foxwarm-3
       FOXWARM_ADVERTISE_ADDRESS: foxwarm-3:3001
