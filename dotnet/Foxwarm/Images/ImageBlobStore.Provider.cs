@@ -12,10 +12,13 @@ namespace Foxwarm.Images;
 
 internal sealed partial class ImageBlobStore
 {
-    private static readonly ConcurrentDictionary<
+    // Provider conversions in progress, coalesced per store instance: a store belongs to one
+    // runtime, so no conversion is shared across hosted tenants or outlives its runtime. Two
+    // instances converting the same image both write the cache file atomically.
+    private readonly ConcurrentDictionary<
         string,
         Lazy<Task<RasterCodec.Variant>>
-    > Conversions = new();
+    > conversions = new();
 
     internal async Task<IReadOnlyList<JsonObject>> HydrateAsync(
         IReadOnlyList<JsonObject> history,
@@ -313,7 +316,7 @@ internal sealed partial class ImageBlobStore
         );
         var root = Path.Combine(DataRoot, "state", "provider-image-cache", "dotnet-v1");
         var path = Path.Combine(root, key[..2], key + ".cache");
-        var operation = Conversions.GetOrAdd(
+        var operation = conversions.GetOrAdd(
             path,
             _ => new Lazy<Task<RasterCodec.Variant>>(ConvertAsync)
         );
@@ -323,7 +326,7 @@ internal sealed partial class ImageBlobStore
         }
         finally
         {
-            Conversions.TryRemove(
+            conversions.TryRemove(
                 new KeyValuePair<string, Lazy<Task<RasterCodec.Variant>>>(path, operation)
             );
         }

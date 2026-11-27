@@ -723,6 +723,34 @@ public sealed class TenantActivationsTests
         Assert.Equal("active", await f.LeaseStateAsync(stuckTenant));
         stall.Set();
     }
+
+    // ---- Placement at acquisition (batch 4) ----
+
+    [Fact]
+    public async Task TheRuntimeIsBuiltForTheProfileTheAcquisitionChecked()
+    {
+        await using var f = await CreateAsync(Bound);
+        f.For(Tenant).FactoryGate = Fixture.Closed();
+        var activation = f.Activations.ActivateAsync(Tenant);
+        await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // The profile changes after the acquisition, before the build reads anything.
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator' WHERE name = '{Tenant}'");
+        f.For(Tenant).FactoryGate.SetResult();
+        var generation = await activation.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(TenantProfiles.Hosted, generation.Grant.Profile);
+        Assert.Equal(TenantProfiles.Hosted, f.RuntimeOf(Tenant).Context.Grant.Profile);
+    }
+
+    [Fact]
+    public async Task AGeneralReplicaRefusesAnOperatorTenantWithoutTouchingItsLease()
+    {
+        await using var f = await CreateAsync(Bound);
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator' WHERE name = '{Tenant}'");
+        var epoch = await f.EpochAsync();
+        await Assert.ThrowsAsync<TenantNotEligibleException>(() => f.Activations.ActivateAsync(Tenant));
+        Assert.Equal(epoch, await f.EpochAsync());
+        Assert.Equal(0, f.Builds);
+    }
 }
 
 public sealed class AdmissionGateTests
