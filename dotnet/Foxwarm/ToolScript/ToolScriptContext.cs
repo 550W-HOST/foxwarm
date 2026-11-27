@@ -25,6 +25,10 @@ internal sealed record ToolScriptContext(
     // run may outlast the call's wait and continue on its own.
     internal ToolScriptDetach? Detach { get; init; }
 
+    // Started by a call of a running script: it runs within its root run's ToolScript slot,
+    // which that run holds while it waits for this call.
+    internal bool Nested { get; init; }
+
     // The runnable skill whose entry this run starts (`ctl skill run`); its record keeps the
     // provenance. Continuations resume the snapshot and never reread the entry.
     internal SkillEntry? SourceSkill { get; init; }

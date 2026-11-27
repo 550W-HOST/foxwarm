@@ -10,7 +10,10 @@ internal interface IHotOwnerReleaser
     /// <summary>The latest admission (monotonic milliseconds) of the owner that would go first.</summary>
     long? OldestIdle();
 
-    /// <summary>Releases that owner; false when none could be released.</summary>
+    /// <summary>
+    /// Releases that owner, or the next one when it no longer qualifies; false when none could
+    /// be released now. Never blocks on the runtime's own idle sweep.
+    /// </summary>
     bool ReleaseOldestIdle();
 }
 
@@ -86,8 +89,12 @@ internal sealed class HotOwnerPool(long limit)
 /// One tenant's budget for resident Session owners, in estimated bytes (plan P2 §7.2). Loading
 /// an owner reserves its estimate; over the tenant's or the replica's budget, the least
 /// recently used idle owner (of this tenant, or of any tenant for the replica's budget) is
-/// released first, then the load waits for room, up to <see cref="Wait"/>. An owner alone in
-/// its budget is always admitted, so one oversized Session still opens.
+/// released first, then the load waits for room, up to <see cref="Wait"/>. While the tenant's own
+/// budget is the one exceeded, only its own owners are released: another tenant's owner
+/// wouldn't make room in it. Waiters look again when a charge shrinks or ends, when an owner may
+/// have become idle (<see cref="OwnerMayBeIdle"/>), and at least every
+/// <see cref="RecheckInterval"/>. An owner alone in its budget is always admitted, so one
+/// oversized Session still opens.
 /// </summary>
 internal sealed class HotOwnerBudget : IDisposable
 {
@@ -103,6 +110,9 @@ internal sealed class HotOwnerBudget : IDisposable
 
     // Bounds the releases one admission tries before it waits.
     private const int ReleaseAttempts = 16;
+
+    /// <summary>Waiters look again at least this often: idleness has more sources than signals.</summary>
+    internal static readonly TimeSpan RecheckInterval = TimeSpan.FromSeconds(1);
 
     private readonly HotOwnerPool tenant;
     private readonly HotOwnerPool? replica;
@@ -146,27 +156,33 @@ internal sealed class HotOwnerBudget : IDisposable
         var deadline = Environment.TickCount64 + (long)Wait.TotalMilliseconds;
         while (true)
         {
+            token.ThrowIfCancellationRequested();
             // Taken before the check, so a release after it wakes the wait below.
             var tenantChanged = tenant.Changed;
             var replicaChanged = replica?.Changed ?? tenantChanged;
             if (TryCharge(bytes, out var charge))
                 return charge;
-            if (ReleaseFor(bytes))
-                continue;
             var remaining = deadline - Environment.TickCount64;
             if (remaining <= 0)
                 throw Exhausted();
+            if (ReleaseFor(bytes))
+                continue;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             await Task.WhenAny(
                     tenantChanged,
                     replicaChanged,
-                    Task.Delay(TimeSpan.FromMilliseconds(remaining), timeout.Token)
+                    Task.Delay(
+                        TimeSpan.FromMilliseconds(Math.Min(remaining, (long)RecheckInterval.TotalMilliseconds)),
+                        timeout.Token
+                    )
                 )
                 .ConfigureAwait(false);
             timeout.Cancel();
-            token.ThrowIfCancellationRequested();
         }
     }
+
+    /// <summary>An owner of this runtime may have become releasable (a turn ended): waiters look again.</summary>
+    internal void OwnerMayBeIdle() => Signal();
 
     /// <summary>
     /// Charges an owner that already exists (a Session just created), then releases idle owners
@@ -222,30 +238,26 @@ internal sealed class HotOwnerBudget : IDisposable
     // Releasing takes the releasers' own locks, so it runs outside Gate.
     private bool ReleaseFor(long bytes)
     {
-        for (var attempt = 0; attempt < ReleaseAttempts; attempt++)
+        bool tenantOver, replicaOver;
+        lock (Gate)
         {
-            bool tenantOver, replicaOver;
-            lock (Gate)
-            {
-                tenantOver = TenantOver(bytes);
-                replicaOver = ReplicaOver(bytes);
-            }
-            IHotOwnerReleaser? candidate = null;
-            if (tenantOver && releaser.OldestIdle() is not null)
-                candidate = releaser;
-            else if (replicaOver)
-                candidate = replica!
-                    .Releasers()
-                    .Select(item => (Releaser: item, Use: item.OldestIdle()))
-                    .Where(item => item.Use is not null)
-                    .OrderBy(item => item.Use)
-                    .Select(item => item.Releaser)
-                    .FirstOrDefault();
-            if (candidate is null)
-                return false;
-            if (candidate.ReleaseOldestIdle())
-                return true;
+            tenantOver = TenantOver(bytes);
+            replicaOver = ReplicaOver(bytes);
         }
+        // The tenant's own deficit: only its own owners make room in it.
+        if (tenantOver)
+            return releaser.ReleaseOldestIdle();
+        if (!replicaOver)
+            return false;
+        var candidates = replica!
+            .Releasers()
+            .Select(item => (Releaser: item, Use: item.OldestIdle()))
+            .Where(item => item.Use is not null)
+            .OrderBy(item => item.Use)
+            .Take(ReleaseAttempts);
+        foreach (var candidate in candidates)
+            if (candidate.Releaser.ReleaseOldestIdle())
+                return true;
         return false;
     }
 

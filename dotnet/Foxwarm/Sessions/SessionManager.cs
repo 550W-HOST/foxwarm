@@ -126,6 +126,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             )
             : null;
         BlobQuota = blobQuota;
+        if (Capabilities.Limits is not null)
+            hotCharges = new(ReferenceEqualityComparer.Instance);
         limitedImageBlobs = blobQuota?.Apply(Storage.ImageBlobs);
         Images = new(root, limitedImageBlobs ?? Storage.ImageBlobs);
         Artifacts = new(
@@ -990,6 +992,20 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         BeginShutdown();
+        try
+        {
+            await DisposeServicesAsync();
+        }
+        finally
+        {
+            // The replica's budgets forget this runtime even when its drain failed: it accepts
+            // nothing more and offers no owners to release. Its storage stays open.
+            DisposeAdmission();
+        }
+    }
+
+    private async Task DisposeServicesAsync()
+    {
         // A failed drain is not permission to close dependencies beneath its owner.
         await ShutdownAsync();
         await timers.DisposeAsync();
@@ -1010,7 +1026,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Tasks.Dispose();
         admissionStop.Dispose();
         Catalog.Dispose();
-        DisposeAdmission();
         http.Dispose();
     }
 

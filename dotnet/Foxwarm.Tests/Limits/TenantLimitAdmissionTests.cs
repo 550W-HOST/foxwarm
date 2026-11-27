@@ -12,14 +12,18 @@ public sealed partial class TenantLimitAdmissionTests
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
 
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         internal readonly TempDirectory Temp = new();
         internal SessionManager Manager = null!;
 
         internal string Data => Path.Combine(Temp.Path, "data");
 
-        internal static async Task<Fixture> Create(TenantLimits? limits, ReplicaLimits? replica = null)
+        internal static async Task<Fixture> Create(
+            TenantLimits? limits,
+            ReplicaLimits? replica = null,
+            Action<string, AtomicJsonWriteStage>? stage = null
+        )
         {
             var f = new Fixture();
             Directory.CreateDirectory(Path.Combine(f.Temp.Path, "work"));
@@ -28,11 +32,14 @@ public sealed partial class TenantLimitAdmissionTests
                 Path.Combine(f.Temp.Path, "work"),
                 Options,
                 HostModels.ForTest(Options),
-                capabilities: RuntimeCapabilities.File with { Limits = limits }
+                capabilities: RuntimeCapabilities.File with { Limits = limits },
+                authorityStageHook: stage
             )
             {
-                ReplicaLimits = replica ?? new ReplicaLimits(long.MaxValue),
+                ReplicaLimits = limits is null ? null : replica ?? new ReplicaLimits(long.MaxValue),
             };
+            // Pressure may release an owner right after its lookup here; the lease has its own test.
+            f.Manager.PressureUseLeaseForTest = TimeSpan.Zero;
             await f.Manager.LoadAsync();
             return f;
         }
@@ -59,8 +66,12 @@ public sealed partial class TenantLimitAdmissionTests
         Assert.Null(f.Manager.Nodes.AdmitCall);
         Assert.Null(f.Manager.Nodes.Registry.MaxApprovedNodes);
         Assert.Null(f.Manager.OutboundMcp.Configuration.MaxServers);
+        // No charge map, no replica pool, no turn hook.
+        Assert.False(f.Manager.HotChargesAllocatedForTest);
+        Assert.Null(f.Manager.ReplicaLimits);
         var owner = await f.Manager.CreateNamedAsync("main", "plain", null, null);
         Assert.Null(owner.Registry.TurnAdmission);
+        Assert.False(f.Manager.HotChargesAllocatedForTest);
     }
 
     [Fact]
@@ -107,7 +118,7 @@ public sealed partial class TenantLimitAdmissionTests
     }
 
     [Fact]
-    public async Task BusyTurnsQueueAtTheTurnAndStopEndsTheWait()
+    public async Task BusyTurnsAreAdmittedBeforeTheBusyClaimAndStopEndsTheWait()
     {
         var turns = new AdmissionSlots(1);
         var store = new InMemorySessionAuthorityStore();
@@ -123,26 +134,60 @@ public sealed partial class TenantLimitAdmissionTests
         await chat.WaitForStarted("first").WaitAsync(TimeSpan.FromSeconds(5));
         var queued = registry.Runner.ProcessQueueAsync("second");
         await Task.Delay(200);
-        // The second turn claimed its Session and waits for the tenant's slot.
+        // The second Session waits for the tenant's slot without claiming busy; its input
+        // stays queued.
         Assert.Single(chat.Calls);
-        Assert.True(second.Snapshot().Busy);
+        Assert.False(second.Snapshot().Busy);
+        Assert.Single(second.Snapshot().Queue);
         chat.Complete("first answer");
         await running.WaitAsync(TimeSpan.FromSeconds(5));
         await queued.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, chat.Calls.Count);
         Assert.Equal(0, turns.InUse);
 
-        // A Stop of a waiting turn ends its wait like a running turn's.
+        // A Stop ends the wait; the Session never became busy.
         var held = await turns.EnterAsync();
         var third = registry.Add("third");
         third.State.Queue.Add(QueueItem.UserText("three"));
         var waiting = registry.Runner.ProcessQueueAsync("third");
-        await TelegramChannelTests.Until(() => third.Snapshot().Busy);
+        await Task.Delay(100);
+        Assert.False(waiting.IsCompleted);
+        Assert.False(third.Snapshot().Busy);
         await registry.Control.StopAsync("third");
         await waiting.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(third.Snapshot().Busy);
         Assert.Equal(2, chat.Calls.Count);
         held.Dispose();
+        Assert.Equal(0, turns.InUse);
+
+        // A failed turn returns its slot.
+        var fourth = registry.Add("fourth");
+        fourth.State.Queue.Add(QueueItem.UserText("four"));
+        chat.QueueFailure(new InvalidOperationException("synthetic failure"));
+        await registry.Runner.ProcessQueueAsync("fourth").WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(3, chat.Calls.Count);
+        Assert.Equal(0, turns.InUse);
+    }
+
+    [Fact]
+    public async Task ShutdownEndsATurnsWaitForItsSlotAndKeepsItsInput()
+    {
+        var turns = new AdmissionSlots(1);
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        var registry = new SessionRegistry(store, chat) { TurnAdmission = turns.EnterAsync };
+        var held = await turns.EnterAsync();
+        var entry = registry.Add("waiting");
+        entry.State.Queue.Add(QueueItem.UserText("kept"));
+        var waiting = registry.Runner.ProcessQueueAsync("waiting");
+        await Task.Delay(100);
+        await registry.Runner.ShutdownAsync(TimeSpan.Zero, TimeSpan.FromSeconds(5));
+        await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Empty(chat.Calls);
+        Assert.False(entry.Snapshot().Busy);
+        Assert.Single(entry.Snapshot().Queue);
+        held.Dispose();
+        Assert.Equal(0, turns.InUse);
     }
 
     [Fact]
@@ -185,31 +230,6 @@ public sealed partial class TenantLimitAdmissionTests
         a2.Dispose();
         b1.Dispose();
         Assert.Equal(0, replica.ToolScripts.InUse);
-    }
-
-    [Fact]
-    public async Task RemoteCallsWaitForTheTenantsExecSlots()
-    {
-        await using var f = await Fixture.Create(Limits with { NodeExecs = 1 });
-        var slots = f.Manager.Admission!.NodeExecs;
-        var held = await slots.EnterAsync();
-        var call = f.Manager.Nodes.ExecuteAsync(
-            "absent",
-            "exec",
-            new JsonObject(),
-            "session",
-            "main",
-            "absent",
-            null,
-            false,
-            default
-        );
-        await Task.Delay(100);
-        Assert.False(call.IsCompleted);
-        held.Dispose();
-        // Admitted, the call proceeds (and finds no such Node), releasing its slot.
-        await Assert.ThrowsAnyAsync<Exception>(() => call.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.Equal(0, slots.InUse);
     }
 
     [Fact]

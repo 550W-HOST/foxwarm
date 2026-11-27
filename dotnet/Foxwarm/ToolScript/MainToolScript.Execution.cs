@@ -105,9 +105,10 @@ internal sealed partial class MainToolScript
             await CommitAsync();
             run.Token.ThrowIfCancellationRequested();
             context.Owner.Entry.RequireIdentityAuthority();
-            // One Monty process per running segment, within the tenant's and the replica's
-            // ToolScript slots; a run over them waits here.
-            if (AdmitProcess is { } admit)
+            // One Monty process per running top-level segment, within the tenant's and the
+            // replica's ToolScript slots; a run over them waits here. A nested run uses its root
+            // run's slot, which that run holds while it waits for the nested call.
+            if (AdmitProcess is { } admit && !context.Nested)
             {
                 processSlot = await admit(run.Token);
                 context.Owner.Entry.RequireIdentityAuthority();
@@ -498,11 +499,21 @@ internal sealed partial class MainToolScript
         }
         finally
         {
-            if (worker is not null)
-                await worker.DisposeAsync();
-            processSlot?.Dispose();
-            active.TryRemove(id, out _);
-            run.Dispose();
+            try
+            {
+                if (worker is not null)
+                {
+                    await worker.DisposeAsync();
+                    if (WorkerDisposedForTest is { } disposed)
+                        await disposed();
+                }
+            }
+            finally
+            {
+                processSlot?.Dispose();
+                active.TryRemove(id, out _);
+                run.Dispose();
+            }
         }
     }
 

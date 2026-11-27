@@ -820,15 +820,16 @@ internal sealed partial class SessionManager
             slot =
                 identities.GetValueOrDefault(session.Id)
                 ?? throw new InvalidOperationException("Creation identity was not claimed.");
-        RecordHotCharge(session, ChargeCreatedOwner(session));
+        var charge = ChargeCreatedOwner(session);
         try
         {
-            PublishOwner(session, slot);
+            PublishOwner(session, slot, charge: charge);
         }
-        catch
+        finally
         {
-            ReleaseHotCharge(session);
-            throw;
+            // Returned only when the owner didn't become resident.
+            if (charge is not null && !OwnsHotCharge(charge))
+                charge.Dispose();
         }
     }
 

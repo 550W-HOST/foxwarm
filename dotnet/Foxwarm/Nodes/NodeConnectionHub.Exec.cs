@@ -60,8 +60,9 @@ internal sealed partial class NodeConnectionHub
     }
 
     /// <summary>
-    /// Admission of one remote tool call (the tenant's concurrent remote exec limit); calls over
-    /// it wait. Null admits at once.
+    /// Admission of one tool call to a resident Node (the tenant's limit on such calls in
+    /// flight through Main); calls over it wait. Provider Nodes keep their Provider's limits.
+    /// Null admits at once.
     /// </summary>
     internal Func<CancellationToken, ValueTask<IDisposable>>? AdmitCall { get; set; }
 
@@ -77,30 +78,6 @@ internal sealed partial class NodeConnectionHub
         CancellationToken token,
         SessionOwner? owner = null,
         Action<JsonNode?>? pathMetadata = null
-    )
-    {
-        if (AdmitCall is null)
-            return await ExecuteAdmittedAsync(
-                id, tool, args, sessionId, agent, currentNode, cwd, programmatic, token, owner, pathMetadata
-            );
-        using var slot = await AdmitCall(token);
-        return await ExecuteAdmittedAsync(
-            id, tool, args, sessionId, agent, currentNode, cwd, programmatic, token, owner, pathMetadata
-        );
-    }
-
-    private async Task<JsonNode?> ExecuteAdmittedAsync(
-        string id,
-        string tool,
-        JsonObject args,
-        string sessionId,
-        string agent,
-        string currentNode,
-        string? cwd,
-        bool programmatic,
-        CancellationToken token,
-        SessionOwner? owner,
-        Action<JsonNode?>? pathMetadata
     )
     {
         Connection connection;
@@ -163,6 +140,9 @@ internal sealed partial class NodeConnectionHub
                 }
             }
         }
+        // The tenant's limit on calls in flight to resident Nodes, taken at dispatch, after a
+        // legacy edit has read its source (a call of its own).
+        using var slot = AdmitCall is null ? null : await AdmitCall(token);
         if (tool != "exec")
             return await ExecuteOnceAsync(
                 connection,

@@ -56,8 +56,6 @@ internal sealed partial class SessionManager
         try
         {
             ReleaseIdleOwners();
-            // Resident owners' estimates follow their history.
-            RemeasureHotOwners();
         }
         catch (Exception error)
         {
@@ -69,6 +67,19 @@ internal sealed partial class SessionManager
         finally
         {
             Monitor.Exit(idleReleaseGate);
+        }
+        // Resident owners' estimates follow their history; outside the gate, so memory
+        // pressure never waits for it.
+        try
+        {
+            RemeasureHotOwners();
+        }
+        catch (Exception error)
+        {
+            MainLog.Diagnostic(
+                "Session hot-owner estimate failed: " + MainLog.SafeFailure(error),
+                failure: true
+            );
         }
     }
 

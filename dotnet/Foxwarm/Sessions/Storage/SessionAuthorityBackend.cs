@@ -101,4 +101,10 @@ internal interface ISessionAuthority
 
     /// <summary>Rejects every later write.</summary>
     void Retire();
+
+    /// <summary>
+    /// The stored size of the bound Session's history, read without loading it (the hot-owner
+    /// reservation of a cold load); null when unknown.
+    /// </summary>
+    Task<long?> PersistedHistoryBytesAsync(CancellationToken token) => Task.FromResult<long?>(null);
 }
