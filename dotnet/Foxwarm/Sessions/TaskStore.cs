@@ -34,7 +34,7 @@ internal sealed class TaskStore : IDisposable
     private readonly ITaskRowStore rows;
     private readonly Func<string, string?> resolveAlias;
     private readonly Func<string, IReadOnlyList<string>> aliases;
-    // Holders may run synchronous Npgsql I/O: async paths wait with Gated (hosted-database.md).
+    // A holder can be doing synchronous row I/O. Async callers wait without occupying a worker.
     private readonly Foxwarm.Storage.StoreGate gate = new();
 
     internal TaskStore(
