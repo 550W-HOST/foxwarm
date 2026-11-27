@@ -282,6 +282,7 @@ internal static class HostedEntry
             // The tenant's limits and settings (journal switch, retention) from its row.
             (limits, settings) = await TenantPolicy.ReadAsync(tenant.Database, token).ConfigureAwait(false);
             tenant.ApplyJournalSettings(settings);
+            tenant.AgentStoreLimits = () => limits.AgentStore;
             var (current, previous) = bootstrap.RequireKeks();
             var keys = new HostedKeyRing(tenant.Database, current, previous);
             keys.OpenOrCreate();
@@ -363,6 +364,12 @@ internal sealed class MainHostRuntime(MainHost host, PostgresStorageContext tena
     private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal MainHost Host => host;
+
+    internal void CredentialRotated()
+    {
+        if (tenant.Credentials is PgInstanceCredentials credentials)
+            credentials.RevokeStreams();
+    }
 
     /// <summary>
     /// The operator changed <c>operator_documents</c> (<c>NOTIFY foxwarm_operator</c>): the

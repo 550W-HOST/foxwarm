@@ -39,15 +39,25 @@ internal sealed partial class PostgresStorageContext : Foxwarm.Limits.IBlobUsage
     {
         if (settings.Backend == BlobBackend.Postgres)
             return;
+        var identity = await Database.ReadAsync(async (tx, ct) =>
+        {
+            await using var command = tx.Command("SELECT object_identity FROM tenants WHERE tenant_id=$1", tx.TenantId);
+            return await command.ExecuteScalarAsync(ct) as string ?? tenant;
+        }, token: token).ConfigureAwait(false);
+        await UseS3BlobsAsync(settings.S3!, identity, token).ConfigureAwait(false);
+    }
+
+    internal async Task UseS3BlobsAsync(S3BlobSettings settings, string tenant, CancellationToken token)
+    {
         var (client, conditional) = await S3Blobs
-            .OpenAsync(settings.S3!, tenant, token)
+            .OpenAsync(settings, tenant, token)
             .ConfigureAwait(false);
         s3Client = client;
-        imageBlobs = new S3BlobStore(client, settings.S3!.Bucket, tenant, ImageBlobsName, conditional);
-        artifactBlobs = new S3BlobStore(client, settings.S3!.Bucket, tenant, ArtifactBlobsName, conditional);
+        imageBlobs = new S3BlobStore(client, settings.Bucket, tenant, ImageBlobsName, conditional);
+        artifactBlobs = new S3BlobStore(client, settings.Bucket, tenant, ArtifactBlobsName, conditional);
         agentFileBlobs = new S3BlobStore(
             client,
-            settings.S3!.Bucket,
+            settings.Bucket,
             tenant,
             PgAgentFileStore.BlobStoreName,
             conditional

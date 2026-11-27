@@ -261,7 +261,7 @@ internal sealed class HostedReplica
         // from here on ends the run within the drain bound.
         await using var current = new LeaseMonitor(lease, grant, options.Timings, log);
         monitor = current;
-        var tenant = new TenantDb(database, grant.TenantId, grant.Epoch);
+        var tenant = new TenantDb(database, grant.TenantId, grant.Epoch, maxInFlight: grant.DbStatements ?? TenantDb.DefaultMaxInFlight);
         current.Attach(tenant);
         current.Start();
         health = health with { Role = ReplicaRole.Owner, Epoch = grant.Epoch };

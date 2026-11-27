@@ -26,10 +26,12 @@ if (await Foxwarm.Vector.VectorChild.TryRunAsync(args))
 if (await Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args))
     return;
 
-if (args is ["db", ..] or ["hosted", "import" or "token" or "health" or "agents", ..])
+if (args is ["operator", ..] or ["db", ..] or ["hosted", "import" or "token" or "health" or "agents", ..])
 {
 #if FOXWARM_HOSTED
-    Environment.ExitCode = await Foxwarm.Hosted.HostedCli.RunAsync(args, Console.Out, Console.Error);
+    Environment.ExitCode = args[0] == "operator"
+        ? await Foxwarm.Hosted.Operator.OperatorCli.RunAsync(args, Console.Out, Console.Error)
+        : await Foxwarm.Hosted.HostedCli.RunAsync(args, Console.Out, Console.Error);
 #else
     Console.Error.WriteLine("This build of Foxwarm doesn't include hosted mode.");
     Environment.ExitCode = 2;

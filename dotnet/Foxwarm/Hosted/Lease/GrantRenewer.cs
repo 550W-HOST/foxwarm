@@ -307,11 +307,17 @@ internal sealed class GrantRenewer : IAsyncDisposable
             Publish(batch[index], outcomes[index], stamp);
     }
 
+    internal event Action<LeaseGrant, bool>? SettingsChanged;
+
     // Applies one committed outcome to the handle of the batch it was taken for.
     private void Publish(GrantHandle handle, RenewalOutcome outcome, long stamp)
     {
         switch (outcome)
         {
+            case RenewalOutcome.CredentialRotated:
+            case RenewalOutcome.SettingsChanged:
+                SettingsChanged?.Invoke(handle.Grant, outcome == RenewalOutcome.CredentialRotated);
+                goto case RenewalOutcome.Renewed;
             case RenewalOutcome.Renewed:
                 // Decided against the deadline under the handle's lock: a success that arrives
                 // after it doesn't revive the grant.

@@ -40,6 +40,12 @@ internal sealed record LeaseGrant(int TenantId, string Tenant, string Replica, l
     /// </summary>
     internal long AcquisitionStart { get; init; }
 
+    internal int? DbStatements { get; init; }
+
+    internal long SettingsRevision { get; init; }
+
+    internal long CredentialVersion { get; init; }
+
     /// <summary>
     /// The tenant's capability profile (<c>hosted</c> or <c>operator</c>) read by the acquiring
     /// transaction, so the runtime is built for the profile the acquisition checked.
@@ -109,6 +115,12 @@ internal enum RenewalOutcome
 {
     /// <summary>Extended under the predicate.</summary>
     Renewed,
+
+    /// <summary>Lease extended; the generation must drain and reload its operator settings.</summary>
+    SettingsChanged,
+
+    /// <summary>As above, and streams authenticated by the old instance token are revoked.</summary>
+    CredentialRotated,
 
     /// <summary>Still this grant's, but locked by another transaction and skipped: proves nothing.</summary>
     Unproved,
@@ -237,7 +249,7 @@ internal sealed class TenantLease
             "UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3), draining_since = NULL"
                 + " FROM tenants t WHERE t.tenant_id = l.tenant_id AND t.name = $1"
-                + " RETURNING l.tenant_id, l.epoch",
+                + " RETURNING l.tenant_id, l.epoch, t.settings_revision, t.credential_version, t.limits->>'dbStatements'",
             connection,
             transaction
         );
@@ -245,16 +257,21 @@ internal sealed class TenantLease
         update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
         update.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
         int tenantId;
-        long epoch;
+        long epoch, revision, credentialVersion;
+        int? dbStatements;
         await using (var reader = await update.ExecuteReaderAsync(token).ConfigureAwait(false))
         {
             if (!await reader.ReadAsync(token).ConfigureAwait(false))
                 return null;
             tenantId = reader.GetInt32(0);
             epoch = reader.GetInt64(1);
+            revision = reader.GetInt64(2);
+            credentialVersion = reader.GetInt64(3);
+            dbStatements = reader.IsDBNull(4) ? null : int.TryParse(reader.GetString(4), out var limit) && limit > 0 ? limit
+                : throw new LeaseRefusedException("limits.dbStatements must be a positive whole number.");
         }
         await transaction.CommitAsync(token).ConfigureAwait(false);
-        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart, Profile = profile, Role = Role };
+        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart, Profile = profile, Role = Role, SettingsRevision = revision, CredentialVersion = credentialVersion, DbStatements = dbStatements };
     }
 
     // The tenant's profile when the lease can be taken: the tenant is active, readable by this
@@ -491,7 +508,8 @@ internal sealed class TenantLease
                 + " FROM tenants t"
                 + " WHERE l.tenant_id = $1 AND l.owner_replica = $2 AND l.epoch = $3"
                 + " AND l.state = 'active' AND l.expires_at > now() AND t.tenant_id = l.tenant_id"
-                + " AND " + PlacementHolds("t", "$5", "$6"),
+                + " AND " + PlacementHolds("t", "$5", "$6")
+                + " AND ($6 IS NULL OR t.settings_revision = $7)",
             connection
         );
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
@@ -504,6 +522,7 @@ internal sealed class TenantLease
             NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text,
             Value = (object?)grant.Role ?? DBNull.Value,
         });
+        command.Parameters.Add(PgTx.Parameter(grant.SettingsRevision));
         return await command.ExecuteNonQueryAsync(token).ConfigureAwait(false) == 1;
     }
 
@@ -548,7 +567,7 @@ internal sealed class TenantLease
             + " SELECT coalesce(r.extended, false),"
             + " coalesce(l.owner_replica = $3 AND l.epoch = b.epoch AND l.state = 'active'"
             + " AND l.expires_at > clock_timestamp() AND t.state = 'active'"
-            + " AND " + PlacementHolds("t", "b.profile", "b.role") + ", false)"
+            + " AND " + PlacementHolds("t", "b.profile", "b.role") + ", false), t.settings_revision, t.credential_version"
             + " FROM batch b LEFT JOIN renewed r ON r.tenant_id = b.tenant_id AND r.epoch = b.epoch"
             + " LEFT JOIN tenant_leases l ON l.tenant_id = b.tenant_id"
             + " LEFT JOIN tenants t ON t.tenant_id = b.tenant_id ORDER BY b.ord";
@@ -598,9 +617,17 @@ internal sealed class TenantLease
                 throw new InvalidOperationException("The renewal returned no result.");
             var index = 0;
             while (await reader.ReadAsync(token).ConfigureAwait(false))
-                outcomes[index++] = reader.GetBoolean(0)
-                    ? RenewalOutcome.Renewed
-                    : reader.GetBoolean(1) ? RenewalOutcome.Unproved : RenewalOutcome.Lost;
+            {
+                if (!reader.GetBoolean(0))
+                    outcomes[index] = reader.GetBoolean(1) ? RenewalOutcome.Unproved : RenewalOutcome.Lost;
+                else if (reader.GetInt64(3) != rows[index].CredentialVersion)
+                    outcomes[index] = RenewalOutcome.CredentialRotated;
+                else if (reader.GetInt64(2) != rows[index].SettingsRevision)
+                    outcomes[index] = RenewalOutcome.SettingsChanged;
+                else
+                    outcomes[index] = RenewalOutcome.Renewed;
+                index++;
+            }
             if (index != rows.Count)
                 throw new InvalidOperationException("The renewal returned a row count that doesn't match the batch.");
             // Consumes the batch to its end: a failed commit surfaces here, before anything is

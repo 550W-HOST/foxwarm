@@ -166,6 +166,12 @@ internal sealed class TenantReplica
             ShutdownBound = options.ShutdownBound,
         };
         activations = coordinator;
+        renewer.SettingsChanged += (grant, rotated) => _ = Task.Run(async () =>
+        {
+            foreach (var generation in coordinator.Published())
+                if (generation.Grant.TenantId == grant.TenantId && generation.Grant.Epoch == grant.Epoch)
+                    await RetireChangedAsync(coordinator, generation, rotated).ConfigureAwait(false);
+        });
         var registry = new ReplicaRegistry(control);
         var hostnames = new HostnameDirectory(app);
         await using var health = options.HealthEndpoint is { } healthAddress
@@ -236,7 +242,7 @@ internal sealed class TenantReplica
             log($"[hosted] Tenant {context.Grant.TenantId} has a stored name that isn't a slug ({TenantSlugs.Rule}); it isn't activated.");
             throw new HostedStartupException($"Tenant {context.Grant.TenantId}'s name isn't a slug.");
         }
-        var database = new TenantDb(app, context.Grant.TenantId, context.Grant.Epoch, maxInFlight: options.MaxInFlight);
+        var database = new TenantDb(app, context.Grant.TenantId, context.Grant.Epoch, maxInFlight: context.Grant.DbStatements ?? options.MaxInFlight);
         context.Fence.Attach(database);
         var server = new TenantServer(options.PublicUrl(context.Generation.Tenant));
         var built = Interlocked.Read(ref operatorVersion);
@@ -321,7 +327,19 @@ internal sealed class TenantReplica
                 await Task.Delay(options.Timings.RenewInterval, token).ConfigureAwait(false);
                 using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
                 bound.CancelAfter(options.Timings.RenewInterval);
-                await registry.HeartbeatAsync(Replica, bound.Token).ConfigureAwait(false);
+                var counts = new JsonObject();
+                foreach (var generation in activations!.Published())
+                    if (((TenantRuntime)generation.Runtime!).Inner is MainHostRuntime main)
+                    {
+                        var owners = main.Host.Sessions.Owners().ToArray();
+                        counts[generation.Id.Tenant] = new JsonObject
+                        {
+                            ["epoch"] = generation.Grant.Epoch,
+                            ["hot"] = owners.Length,
+                            ["busy"] = owners.Count(owner => owner.Entry.WithState(state => state.Busy)),
+                        };
+                    }
+                await registry.HeartbeatAsync(Replica, bound.Token, counts.ToJsonString()).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -441,18 +459,25 @@ internal sealed class TenantReplica
             return;
         await using var connection = await app.OpenAsync(CancellationToken.None).ConfigureAwait(false);
         await using var command = new Npgsql.NpgsqlCommand(
-            "SELECT tenant_id, profile, pinned_role FROM tenants WHERE tenant_id = ANY($1)",
+            "SELECT tenant_id, profile, pinned_role, settings_revision, credential_version FROM tenants WHERE tenant_id = ANY($1)",
             connection
         );
         command.Parameters.Add(new Npgsql.NpgsqlParameter<int[]> { TypedValue = [.. published.Select(item => item.Grant.TenantId).Distinct()] });
-        Dictionary<int, (TenantProfile Profile, string? Pinned)> placement = [];
+        Dictionary<int, (TenantProfile Profile, string? Pinned, long Revision, long Credential)> placement = [];
         await using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
             while (await reader.ReadAsync().ConfigureAwait(false))
-                placement[reader.GetInt32(0)] = (TenantProfiles.Parse(reader.GetString(1)), reader.IsDBNull(2) ? null : reader.GetString(2));
+                placement[reader.GetInt32(0)] = (TenantProfiles.Parse(reader.GetString(1)), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetInt64(3), reader.GetInt64(4));
         foreach (var generation in published)
             if (placement.TryGetValue(generation.Grant.TenantId, out var now)
-                && (now.Profile != generation.Grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
-                _ = coordinator.RetireForPlacementAsync(generation.Id, $"Tenant {generation.Id.Tenant}'s placement changed");
+                && (now.Revision != generation.Grant.SettingsRevision || now.Profile != generation.Grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
+                _ = RetireChangedAsync(coordinator, generation, now.Credential != generation.Grant.CredentialVersion);
+    }
+
+    private static Task<bool> RetireChangedAsync(TenantActivations coordinator, TenantGeneration generation, bool rotated)
+    {
+        if (rotated && ((TenantRuntime)generation.Runtime!).Inner is MainHostRuntime main)
+            main.CredentialRotated();
+        return coordinator.RetireForPlacementAsync(generation.Id, $"Tenant {generation.Id.Tenant}'s settings or placement changed");
     }
 
     private void InvalidateOperatorDocuments()
