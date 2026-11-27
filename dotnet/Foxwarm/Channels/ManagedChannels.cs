@@ -358,7 +358,8 @@ internal sealed class ManagedChannels(
                 router,
                 dependencies,
                 health,
-                http.For("telegram")
+                http.For("telegram"),
+                http.Hold
             ),
             "matrix" => new MatrixChannel(
                 id,

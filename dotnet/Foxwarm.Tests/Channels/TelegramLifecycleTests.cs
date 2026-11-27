@@ -86,6 +86,52 @@ public sealed class TelegramLifecycleTests
         }
     }
 
+    [Fact]
+    public async Task The_closing_offset_sync_survives_runtime_disposal_without_delaying_it()
+    {
+        await using var peer = await TelegramPeer.StartAsync();
+        var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() },
+            dependencies: peer.Dependencies
+        );
+        var sync = new TaskCompletionSource<TelegramPeerCall>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? disposal = null;
+        try
+        {
+            f.Manager.AttachChannel("alpha:42", f.Owner);
+            await f.Manager.ManagedChannels!.ReloadAsync();
+            peer.Push("a", TelegramPeer.Text("42", "11", "before teardown"));
+            await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 1);
+            peer.Respond = async call =>
+            {
+                if (call.Method == "getUpdates" && call.Body["limit"] is not null)
+                {
+                    sync.TrySetResult(call);
+                    await release.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    // Whether the client had closed the connection by the time of the answer.
+                    answered.TrySetResult(call.Aborted.IsCancellationRequested);
+                }
+                return null;
+            };
+            // Runtime teardown disposes the runtime's channel clients; it doesn't wait for the
+            // held closing sync.
+            disposal = f.DisposeAsync().AsTask();
+            var held = await sync.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await disposal.WaitAsync(TimeSpan.FromSeconds(4));
+            Assert.Equal(2, SessionWait.Number(held.Body["offset"]));
+            release.TrySetResult();
+            // The client kept the connection until the answer: the transport stayed valid.
+            Assert.False(await answered.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await (disposal ?? f.DisposeAsync().AsTask());
+        }
+    }
+
     [Theory]
     [InlineData("text/html", "<html>upstream unavailable</html>")]
     [InlineData(

@@ -12,6 +12,8 @@ internal sealed class ChannelHttpClients(EgressPolicy egress) : IDisposable
 {
     private readonly object gate = new();
     private readonly Dictionary<string, HttpClient> clients = new(StringComparer.Ordinal);
+    private int holds;
+    private bool disposed;
 
     /// <summary>A client outside a runtime's set, for adapters built directly by tests.</summary>
     internal static HttpClient Single(EgressPolicy egress) =>
@@ -31,13 +33,52 @@ internal sealed class ChannelHttpClients(EgressPolicy egress) : IDisposable
         }
     }
 
+    /// <summary>
+    /// Keeps the clients usable until the returned lease is disposed, even after the runtime
+    /// disposed this set: work an adapter admitted before its stop (Telegram's closing offset
+    /// sync) finishes on a valid transport, as it did on the process-wide clients, without
+    /// stop or disposal waiting for it.
+    /// </summary>
+    internal IDisposable Hold()
+    {
+        lock (gate)
+            holds++;
+        return new Lease(this);
+    }
+
+    private sealed class Lease(ChannelHttpClients owner) : IDisposable
+    {
+        private int released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref released, 1) == 0)
+                owner.Release();
+        }
+    }
+
+    private void Release()
+    {
+        lock (gate)
+            if (--holds == 0 && disposed)
+                DisposeClients();
+    }
+
     public void Dispose()
     {
         lock (gate)
         {
-            foreach (var client in clients.Values)
-                client.Dispose();
-            clients.Clear();
+            disposed = true;
+            if (holds == 0)
+                DisposeClients();
         }
+    }
+
+    // Called under gate.
+    private void DisposeClients()
+    {
+        foreach (var client in clients.Values)
+            client.Dispose();
+        clients.Clear();
     }
 }

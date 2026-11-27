@@ -13,7 +13,9 @@ internal sealed record TelegramPeerCall(
     string Bot,
     string Method,
     JsonObject Body,
-    byte[]? Bytes = null
+    byte[]? Bytes = null,
+    // The request's abort signal: the client closed the connection.
+    CancellationToken Aborted = default
 );
 
 // An actual local Bot API HTTP peer; no vendor credentials or production endpoint setting.
@@ -117,7 +119,7 @@ internal sealed class TelegramPeer : IAsyncDisposable
         }
         else
             body = (await request.ReadFromJsonAsync<JsonObject>())!;
-        var call = new TelegramPeerCall(bot, method, body, upload);
+        var call = new TelegramPeerCall(bot, method, body, upload, request.HttpContext.RequestAborted);
         Calls.Enqueue(call);
         if (Respond is { } respond && await respond(call) is { } response)
             return response;

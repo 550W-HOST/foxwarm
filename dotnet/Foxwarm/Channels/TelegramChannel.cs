@@ -38,6 +38,8 @@ internal sealed class TelegramChannel : IManagedChannel
     private string username = "";
     private long offset;
 
+    private readonly Func<IDisposable>? holdTransport;
+
     internal TelegramChannel(
         string id,
         JsonObject config,
@@ -46,9 +48,12 @@ internal sealed class TelegramChannel : IManagedChannel
         ChannelTransportDependencies? dependencies,
         ChannelHealth health,
         // The runtime's shared client of this channel type (ManagedChannels).
-        HttpClient? shared = null
+        HttpClient? shared = null,
+        // Keeps that client valid for the polling loop, its closing offset sync included.
+        Func<IDisposable>? holdTransport = null
     )
     {
+        this.holdTransport = holdTransport;
         this.id = id;
         this.sessions = sessions;
         this.router = router;
@@ -124,6 +129,9 @@ internal sealed class TelegramChannel : IManagedChannel
 
     private async Task PollAsync()
     {
+        // Held from the first poll, so the closing sync is admitted on a valid transport even
+        // when the runtime disposes its clients before the loop ends.
+        using var transport = holdTransport?.Invoke();
         var skipSync = false;
         try
         {
