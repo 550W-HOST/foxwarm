@@ -5,7 +5,7 @@ namespace Foxwarm.Sessions;
 public sealed partial class SessionSaveLane
 {
     internal async Task<(bool Changed, string? Previous, string? Current)> CommitNodeAsync(
-        string value,
+        string? value,
         bool clearCwd = true
     )
     {

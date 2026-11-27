@@ -111,6 +111,9 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
     }
 
     internal MainNativePaths Paths { get; private set; } = null!;
+
+    // Set for the Agent-folder file tools: paths are inside this Agent's folder only.
+    internal AgentFolderScope? AgentFolder { get; init; }
     internal Action<JsonArray>? ResolvedPaths { get; set; }
 
     private void ReportPaths(params (string Raw, string Path)[] paths) =>
@@ -401,6 +404,8 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
 
     private string ResolveReadWrite(string path, bool read)
     {
+        if (AgentFolder is { } folder)
+            return folder.Resolve(path);
         if (targetFiles is null)
             return Paths.FilePath(path);
         TargetFileContent.RequirePath(path);

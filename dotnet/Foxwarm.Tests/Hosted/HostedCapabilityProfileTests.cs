@@ -233,13 +233,17 @@ public sealed class HostedCapabilityProfileTests
             ("send_file", new() { ["node"] = "master", ["filePath"] = f.Marker }),
             ("node_bootstrap_info", new() { ["filePath"] = outside }),
             ("node_create_auth_token", new() { ["nodeId"] = "paired", ["filePath"] = outside }),
-            ("set_config", new() { ["target"] = "config", ["filePath"] = f.Marker }),
         };
         foreach (var (name, args) in calls)
         {
             var error = Error(await f.Call(name, args));
             Assert.True(error == "Node is not available: master", $"{name} {args.ToJsonString()}: {error}");
         }
+        // A configuration candidate is a file of the Agent folder there, never a master path.
+        Assert.Equal(
+            $"`@agent` reaches only this Agent's own folder: {f.Marker}.",
+            Error(await f.Call("set_config", new() { ["target"] = "config", ["filePath"] = f.Marker }))
+        );
         // A move from configuration has nothing that could authorize it.
         var move = await f.Call(
             "add_secret",

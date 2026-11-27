@@ -15,6 +15,7 @@ internal static class NodeToolDefinitions
                     "parameters": { "type": "object", "properties": {
                       "action": { "type": "string", "enum": ["list", "status", "select", "create", "ensure", "inspect", "destroy"], "description": "list shows Nodes and Providers; status shows this Session's current Node and working directory; select changes this Session's Node; create or ensure uses a Provider; inspect shows Node or Provider details; destroy requests a Node's removal." },
                       "nodeId": { "type": "string", "description": "Node to select, inspect, or destroy; requested ID for create or ensure. Required for ensure when your Agent was created by another Agent. Without it, ensure cannot check Node-subtree permissions before the Provider runs." },
+                      "none": { "type": "boolean", "description": "With select: clear this Session's Node selection instead of naming a Node." },
                       "providerId": { "type": "string", "description": "Configured Provider to inspect or use for create or ensure. Inspect accepts either providerId or nodeId, not both. Existing Nodes identify their own Provider for destroy." },
                       "parameters": { "type": "object", "description": "Provider-specific options for the lifecycle operation.", "additionalProperties": true },
                       "parametersJson": { "type": "string", "description": "Provider options as a JSON object string when parameters cannot be supplied." },

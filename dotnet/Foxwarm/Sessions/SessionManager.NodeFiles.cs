@@ -28,6 +28,30 @@ internal sealed partial class SessionManager
         return new(NoAgentFolderOperations.Instance, pending ?? new(), sessionId ?? "standalone", agent, lifetime);
     }
 
+    // The Agent-folder file tools of a Session: master's file tools confined to its Agent's
+    // folder, or the Agent store's files of its Agent.
+    internal WorkspaceTools AgentFolderWorkspace(SessionOwner owner)
+    {
+        if (agents.PhysicalFolders)
+        {
+            var directory = agents.AgentDirectory(owner.Agent);
+            return new(directory, pendingWrites, owner.Id, owner.Agent, owner)
+            {
+                AgentFolder = new(owner.Agent, directory),
+            };
+        }
+        return new(
+            new AgentStoreFileOperations(AgentStore!, owner.Agent),
+            pendingWrites,
+            owner.Id,
+            owner.Agent,
+            owner
+        )
+        {
+            AgentFolder = new(owner.Agent, null),
+        };
+    }
+
     // Every Main-local file and process effect checks this before it starts; without a master
     // Node it fails as a call to any unavailable Node does. `current`: master is only the
     // Session's current Node, which without a master Node means it has none.
@@ -52,6 +76,12 @@ internal sealed partial class SessionManager
             var node = SessionWait.Text(args[endpoint + "Node"])?.Trim() ?? "";
             if (SessionWait.Text(args[endpoint + "Path"]) is not string raw)
                 continue;
+            if (node == AgentStorePaths.Endpoint)
+            {
+                var scope = AgentFolderScope(owner);
+                paths.Add(scope.Fact(endpoint + "Path", raw, scope.Resolve(raw)));
+                continue;
+            }
             paths.Add(
                 new(
                     endpoint + "Path",
@@ -96,10 +126,20 @@ internal sealed partial class SessionManager
         string? sessionCwd = null
     )
     {
-        if (node != "master")
+        if (node == AgentStorePaths.Endpoint && AgentStore is { } store)
+        {
+            var storePath = AgentFolderPaths.StorePath(raw);
+            if (store.Stat(owner.Agent, storePath) is not { IsDirectory: false })
+                throw new InvalidDataException("Not a regular file: " + raw);
+            var bytes = (await store.ReadAsync(owner.Agent, storePath, token)).Bytes;
+            return new(new MemoryStream(bytes, writable: false), bytes.Length, raw, Path.GetFileName(storePath));
+        }
+        if (node != "master" && node != AgentStorePaths.Endpoint)
             return await NodeProviders.OpenReadAsync(node, raw, owner, false, token, sessionCwd);
-        RequireMasterNode();
-        var path = files.Paths.FilePath(raw);
+        var path =
+            node == AgentStorePaths.Endpoint
+                ? AgentFolderPaths.Physical(agents.AgentDirectory(owner.Agent), raw)
+                : MasterFilePath(files, raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);
         var stream = new FileStream(
@@ -131,7 +171,9 @@ internal sealed partial class SessionManager
         string? sessionCwd = null
     )
     {
-        if (node != "master")
+        if (node == AgentStorePaths.Endpoint && AgentStore is { } store)
+            return await WriteAgentStoreStreamAsync(owner, store, raw, input, length, overwrite, token, progress);
+        if (node != "master" && node != AgentStorePaths.Endpoint)
             return await NodeProviders.WriteStreamAsync(
                 node,
                 raw,
@@ -144,8 +186,10 @@ internal sealed partial class SessionManager
                 progress,
                 sessionCwd
             );
-        RequireMasterNode();
-        var path = files.Paths.FilePath(raw);
+        var folder = node == AgentStorePaths.Endpoint ? agents.AgentDirectory(owner.Agent) : null;
+        string Resolve() =>
+            folder is null ? MasterFilePath(files, raw) : AgentFolderPaths.Physical(folder, raw);
+        var path = Resolve();
         if (
             Directory.Exists(path)
             || !overwrite && (File.Exists(path) || new FileInfo(path).LinkTarget is not null)
@@ -163,7 +207,7 @@ internal sealed partial class SessionManager
             !await FileToolWrite.WriteStreamAtomic(
                 path,
                 overwrite,
-                () => _ = files.Paths.FilePath(raw),
+                () => _ = Resolve(),
                 async output =>
                     sha = await TransferStream.CopyAsync(input, output, length, token, progress),
                 token
@@ -272,5 +316,47 @@ internal sealed partial class SessionManager
                 "File already exists: " + raw + ". Use overwrite=true to overwrite."
             );
         return path;
+    }
+
+    private string MasterFilePath(WorkspaceTools files, string raw)
+    {
+        RequireMasterNode();
+        return files.Paths.FilePath(raw);
+    }
+
+    private AgentFolderScope AgentFolderScope(SessionOwner owner) =>
+        new(owner.Agent, agents.PhysicalFolders ? agents.AgentDirectory(owner.Agent) : null);
+
+    // A copy into the Agent store: the whole file, within the file limit, created or replaced
+    // as `overwrite` says.
+    private static async Task<(string Path, string Sha256)> WriteAgentStoreStreamAsync(
+        SessionOwner owner,
+        IAgentStore store,
+        string raw,
+        Stream input,
+        long length,
+        bool overwrite,
+        CancellationToken token,
+        Action<long>? progress
+    )
+    {
+        var storePath = AgentFolderPaths.StorePath(raw);
+        if (length > store.Limits.FileBytes)
+            throw AgentFileErrors.FileTooLarge(storePath, store.Limits);
+        var existing = store.Stat(owner.Agent, storePath);
+        if (existing is { IsDirectory: true } || !overwrite && existing is not null)
+            throw new IOException("File already exists: " + raw + ". Use overwrite=true to overwrite.");
+        using var buffer = new MemoryStream((int)length);
+        var sha = await TransferStream.CopyAsync(input, buffer, length, token, progress);
+        owner.Entry.RequireIdentityAuthority();
+        try
+        {
+            await store.WriteAsync(owner.Agent, storePath, buffer.ToArray(), overwrite ? null : 0, token);
+        }
+        catch (AgentFileConflictException)
+        {
+            throw new IOException("File already exists: " + raw + ". Use overwrite=true to overwrite.");
+        }
+        return (AgentFolderPaths.Variable + (storePath.Length == 0 ? "" : "/" + storePath), sha);
     }
 }

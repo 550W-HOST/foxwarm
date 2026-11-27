@@ -313,7 +313,7 @@ internal static class ToolAuthorizationEvaluation
             !match.ContainsKey("tool")
             || ToolMatches(match["tool"], request.Source, request.Name, request.Server, unknownName)
         )
-        && (unknownNode || Optional(match, "targetNode", AuthorizationFact.Of(request.TargetNode)))
+        && (unknownNode || !match.ContainsKey("targetNode") || NodeScalar(match["targetNode"], request.TargetNode))
         && (
             unknownNodeTargets
             || !match.ContainsKey("node")
@@ -362,7 +362,23 @@ internal static class ToolAuthorizationEvaluation
     // Whether a Node selector covers one Node: bare IDs and patterns cover the Node's
     // ancestors, `exact` the Node itself, `current` the caller's current Node, `provider` the
     // Node's Provider.
-    internal static bool NodeMatches(JsonNode matcher, string node, ToolAuthorizationRequest request)
+    internal static bool NodeMatches(JsonNode matcher, string node, ToolAuthorizationRequest request) =>
+        NodeMatchesExactly(matcher, node, request)
+        || MasterAliasMatches(matcher, node, request);
+
+    // The master alias: `@agent` is the caller's own Agent folder, which is on master where
+    // there is one, so a selector that names master covers it too. `current` never does.
+    internal static bool MasterAliasMatches(JsonNode matcher, string node, ToolAuthorizationRequest request) =>
+        node == AgentStorePaths.Endpoint
+        && !(matcher is JsonObject map && map.ContainsKey("current"))
+        && NodeMatchesExactly(matcher, "master", request);
+
+    // A Node-valued fact matched by a scalar selector, with the master alias.
+    internal static bool NodeScalar(JsonNode? matcher, string? node) =>
+        Scalar(matcher, AuthorizationFact.Of(node))
+        || node == AgentStorePaths.Endpoint && Scalar(matcher, AuthorizationFact.Of("master"));
+
+    private static bool NodeMatchesExactly(JsonNode matcher, string node, ToolAuthorizationRequest request)
     {
         {
             if (matcher is not JsonObject map)
@@ -459,6 +475,8 @@ internal static class ToolAuthorizationEvaluation
                 && request.Agent is not null
                 && SessionWait.Text(Argument(request.Args, key).Value) is { Length: > 0 } target
                 && (target == request.Agent) == comparison["sameAgent"]!.GetValue<bool>()
+        : request is { Source: "builtin", Name: "copy_between_nodes" } && key is "sourceNode" or "targetNode"
+            ? NodeScalar(matcher, SessionWait.Text(Argument(request.Args, key).Value)?.Trim())
         : Scalar(matcher, Argument(request.Args, key));
 
     private static bool Arguments(JsonObject? match, ToolAuthorizationRequest request) =>
@@ -1133,7 +1151,8 @@ internal static class AuthorizationPaths
 internal static class ToolAuthorizationNodeEffects
 {
     private static bool Valid(string? id) =>
-        id is not null
+        id == AgentStorePaths.Endpoint
+        || id is not null
         && System.Text.RegularExpressions.Regex.IsMatch(
             id,
             @"^(?:[A-Za-z0-9._:-]{1,128}|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$",

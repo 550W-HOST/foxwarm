@@ -15,6 +15,11 @@ internal sealed record ResolvedTool(
     // The ctl command path (`node select`, `tool call`) when the call came through ctl. Display
     // and denial attribution only; it is never an authorization fact.
     internal string? Command { get; init; }
+
+    // A Node file tool confined to the caller's own Agent folder (`node:@agent/<tool>`, or a
+    // `$fw_agentdir` path without a current Node or master). Its ExecutionNode is master over
+    // Agent folders and `@agent` over an Agent store.
+    internal bool AgentFolder { get; init; }
 }
 
 internal sealed record RegisteredTool(
@@ -240,6 +245,8 @@ internal sealed class ToolRegistry(
             throw new InvalidDataException(
                 "`ctl` is a command front end, not a concrete tool; run the command directly."
             );
+        if (source == "node" && node?.Trim() == AgentStorePaths.Endpoint)
+            return AgentFolderTool(invocation, name, targetArgs);
         var targetNode = TargetNode(node, currentNode);
         if (source == "node" && targetNode != "master")
         {
@@ -312,6 +319,8 @@ internal sealed class ToolRegistry(
             : resolved is { Source: "node", Name: "exec" }
             && providers?.IsProviderNode(resolved.ExecutionNode) == true
                 ? await owner.ExecuteProviderExecAsync(resolved, cancellationToken)
+            : resolved is { Source: "node", AgentFolder: true }
+                ? await owner.ExecuteAgentFolderAsync(resolved.Name, resolved.Args, cancellationToken)
             : resolved.Source == "node" && resolved.ExecutionNode != "master"
                 ? await ExecuteNodeAsync(
                     resolved.ExecutionNode,
@@ -445,9 +454,27 @@ internal sealed class ToolRegistry(
             )
                 target = id[5..id.LastIndexOf('/')];
         }
-        if (nodeCapability && target != "master" && invocation != "ctl")
+        if (nodeCapability && target is not ("master" or AgentStorePaths.Endpoint) && invocation != "ctl")
             await RefreshNodeAsync(target, token);
         var resolved = Resolve(resolvedInvocation, resolvedArgs, currentNode);
+        // Without master, a Session without a Node reaches its Agent folder through
+        // `$fw_agentdir`, as on master.
+        if (
+            !MasterNode
+            && currentNode == "master"
+            && resolved is { Source: "node", ExecutionNode: "master", AgentFolder: false, Name: "read" or "write" or "edit" }
+            && !NamesMaster(resolvedInvocation, resolvedArgs, invocation, args, resolved)
+            && FolderPaths(resolved) is { Count: > 0 } paths
+            && paths.All(AgentFolderPaths.NamesFolder)
+        )
+            resolved = resolved with { ExecutionNode = AgentStorePaths.Endpoint, AgentFolder = true };
+        // Without master, a configuration candidate is a file of the Agent's folder.
+        if (
+            !MasterNode
+            && resolved is { Source: "builtin", Name: "set_config" or "explain_tool_authorization" }
+            && resolved.Args.ContainsKey(resolved.Name == "set_config" ? "filePath" : "policyFilePath")
+        )
+            resolved = resolved with { AgentFolder = true };
         if (!MasterNode && TargetsMaster(resolved))
             throw currentNode == "master" && !NamesMaster(resolvedInvocation, resolvedArgs, invocation, args, resolved)
                 ? RuntimeCapabilities.NoCurrentNode()
@@ -515,10 +542,9 @@ internal sealed class ToolRegistry(
             ) == "master",
             // Main-local files: the candidate of set_config and explain, and the new owner-only
             // token files of node_bootstrap_info and node_create_auth_token.
-            "set_config" or "node_bootstrap_info" or "node_create_auth_token" => args.ContainsKey(
-                "filePath"
-            ),
-            "explain_tool_authorization" => args.ContainsKey("policyFilePath"),
+            "set_config" => !resolved.AgentFolder && args.ContainsKey("filePath"),
+            "node_bootstrap_info" or "node_create_auth_token" => args.ContainsKey("filePath"),
+            "explain_tool_authorization" => !resolved.AgentFolder && args.ContainsKey("policyFilePath"),
             _ => false,
         };
     }
@@ -567,6 +593,42 @@ internal sealed class ToolRegistry(
                 owner,
                 metadata
             );
+
+    // The Agent-folder file tools: read, write and edit, on master's file tools over Agent
+    // folders and on the Agent store without master.
+    private ResolvedTool AgentFolderTool(string invocation, string name, JsonObject args)
+    {
+        if (name is not ("read" or "write" or "edit"))
+            throw new InvalidDataException("Tool is not advertised by Node: " + name);
+        return new(
+            invocation,
+            "node",
+            name,
+            args,
+            ExecutionNode: MasterNode ? "master" : AgentStorePaths.Endpoint
+        )
+        {
+            AgentFolder = true,
+        };
+    }
+
+    // The paths a Node file call names: its filePath, or the files of its patch.
+    private static IReadOnlyList<string?> FolderPaths(ResolvedTool resolved)
+    {
+        if (resolved.Name == "edit" && resolved.Args.ContainsKey("apply_patch"))
+            try
+            {
+                return WorkspacePatch
+                    .Parse(Text(resolved.Args, "apply_patch") ?? "")
+                    .Select(operation => (string?)operation.Path)
+                    .ToArray();
+            }
+            catch (InvalidDataException)
+            {
+                return [];
+            }
+        return [Text(resolved.Args, "filePath")];
+    }
 
     internal static void LocalNode(string? node)
     {

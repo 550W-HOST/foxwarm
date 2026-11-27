@@ -56,7 +56,7 @@ internal static class ToolAuthorizationExplain
         if (assessment.Self is { } self)
             result["self"] = self;
         result["layers"] = new JsonArray(
-            assessment.Layers.Select(layer => (JsonNode?)Layer(layer)).ToArray()
+            assessment.Layers.Select(layer => (JsonNode?)Layer(layer, assessment.Request)).ToArray()
         );
         result["facts"] = Facts(assessment.Request);
         return result;
@@ -163,7 +163,7 @@ internal static class ToolAuthorizationExplain
 
     // decision is the layer's outcome. rule (or default) is the call's own first match; with
     // secret facts, secrets shows how they were decided and decision is the stricter of the two.
-    internal static JsonObject Layer(AuthorizationLayerDecision layer)
+    internal static JsonObject Layer(AuthorizationLayerDecision layer, ToolAuthorizationRequest? request = null)
     {
         var result = new JsonObject
         {
@@ -172,6 +172,8 @@ internal static class ToolAuthorizationExplain
             ["allowed"] = layer.Decision.Allowed,
         };
         Matched(result, layer.Policy, (layer.Decision.Call ?? layer.Decision).Rule);
+        if (ThroughMasterAlias((layer.Decision.Call ?? layer.Decision).Rule, request))
+            result["masterAlias"] = true;
         if (layer.Decision.Secrets is { } secrets)
         {
             var detail = new JsonObject
@@ -225,7 +227,16 @@ internal static class ToolAuthorizationExplain
         var result = item.Operation.ToJson();
         result["decision"] = AuthorizationDecision.Name(item.Effect);
         if (item.Rule is { } rule)
+        {
             result["rule"] = RuleRef(policy, rule);
+            if (
+                item.Operation.Resources["node"] is JsonValue node
+                && SessionWait.Text(node) == AgentStorePaths.Endpoint
+                && rule["node"] is { } selector
+                && selector.ToJsonString().Contains("\"master\"", StringComparison.Ordinal)
+            )
+                result["masterAlias"] = true;
+        }
         else
         {
             result["rule"] = null;
@@ -258,6 +269,34 @@ internal static class ToolAuthorizationExplain
                 ["rule"] = fallback.Rule is { } exec ? RuleRef(policy, exec) : null,
             };
         return result;
+    }
+
+    // Whether a rule matched an `@agent` endpoint through the master alias: one of its Node
+    // selectors names master and the call reaches `@agent`.
+    internal static bool ThroughMasterAlias(JsonObject? rule, ToolAuthorizationRequest? request)
+    {
+        if (rule is null || request is null)
+            return false;
+        var endpoint = AgentStorePaths.Endpoint;
+        if (
+            request.TargetNode != endpoint
+            && request.NodeTargets?.Contains(endpoint) != true
+            && !request.Paths.Any(path => path.Node == endpoint)
+        )
+            return false;
+        var match = rule["match"] as JsonObject ?? rule;
+        static bool NamesMaster(JsonNode? selector) =>
+            selector switch
+            {
+                JsonValue value => SessionWait.Text(value) == "master",
+                JsonArray list => list.Any(NamesMaster),
+                JsonObject map => map.Where(pair => pair.Key != "current").Any(pair => NamesMaster(pair.Value)),
+                _ => false,
+            };
+        return NamesMaster(match["node"])
+            || NamesMaster(match["targetNode"])
+            || NamesMaster(match["args"]?["sourceNode"])
+            || NamesMaster(match["args"]?["targetNode"]);
     }
 
     private static void Matched(JsonObject result, ToolAuthorizationPolicy policy, JsonObject? rule)

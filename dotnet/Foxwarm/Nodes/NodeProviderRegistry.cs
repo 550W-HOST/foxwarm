@@ -119,6 +119,10 @@ internal sealed partial class NodeProviderRegistry
             var parent = ProviderParent(SessionWait.Text(args["providerId"])?.Trim());
             return parent is null ? null : [parent];
         }
+        // Clearing the selection: master where there is one, which an unset Node means; no Node
+        // otherwise.
+        if (action == "select" && id is null && args["none"] is JsonValue none && none.TryGetValue<bool>(out var clear) && clear)
+            return native.MasterNode ? ["master"] : [];
         return
             action is "select" or "inspect" or "destroy"
             && id is not null

@@ -121,13 +121,17 @@ public sealed partial class WorkspaceTools
             when (!createDirs && error.Code is "ENOENT" or "ENOTDIR")
         {
             var stat = await TargetStatAsync(parent, token);
+            // An Agent store's paths are shown as the Agent folder's.
+            var shown = AgentFolder is { Store: true }
+                ? AgentFolderPaths.Variable + (parent.Length == 0 ? "" : "/" + parent)
+                : parent;
             if (stat is null)
                 return Error(
-                    $"Parent directory does not exist: {parent}. write does not create parent directories by default. Retry with createDirs=true."
+                    $"Parent directory does not exist: {shown}. write does not create parent directories by default. Retry with createDirs=true."
                         + hint(true)
                 );
             if (stat.Kind != "directory")
-                return Error($"Parent path is not a directory: {parent}.");
+                return Error($"Parent path is not a directory: {shown}.");
             throw;
         }
         return null;

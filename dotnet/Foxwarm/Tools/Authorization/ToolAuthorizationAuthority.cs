@@ -416,17 +416,25 @@ public sealed partial class WorkspaceTools
                 ?? throw new InvalidDataException("apply_patch requires input.");
             return WorkspacePatch
                 .Parse(input)
-                .Select(operation => new AuthorizationPath(
-                    "apply_patch",
-                    operation.Path,
-                    AuthorizationPaths.CanonicalPotential(ResolvePatchPath(operation.Path, true))
-                ))
+                .Select(operation =>
+                    AgentFolder is { } scope
+                        ? scope.Fact("apply_patch", operation.Path, ResolvePatchPath(operation.Path, true))
+                        : new AuthorizationPath(
+                            "apply_patch",
+                            operation.Path,
+                            AuthorizationPaths.CanonicalPotential(ResolvePatchPath(operation.Path, true))
+                        )
+                )
                 .ToArray();
         }
         if (name is "send_file" or "run_script" or "start_toolscript_run" && raw is not null)
             raw = SessionGoal.Trim(raw);
         if (raw is null || raw.Length == 0)
             return [];
+        if (AgentFolder is { } folder)
+            return name is "read" or "write" or "edit" or "set_config"
+                ? [folder.Fact("filePath", raw, folder.Resolve(raw))]
+                : throw new InvalidDataException("No Agent-folder path resolver for this capability.");
         var resolved = name switch
         {
             "read" or "set_config" or "send_file" or "run_script" or "start_toolscript_run" =>
@@ -447,12 +455,43 @@ public sealed partial class WorkspaceTools
         ];
     }
 
+    // A candidate in the Agent store: the same checks, over the store's file.
+    private async Task<byte[]> CaptureStoredCandidateAsync(string path, bool policy, CancellationToken token)
+    {
+        TargetFileStat stat;
+        try
+        {
+            stat = await targetFiles!.StatAsync(path, token);
+        }
+        catch (Foxwarm.Nodes.NodeProviderException error) when (error.Code == "ENOENT")
+        {
+            throw new InvalidDataException("Configuration candidate must be a regular file.");
+        }
+        if (stat.Kind != "file")
+            throw new InvalidDataException("Configuration candidate must be a regular file.");
+        if (policy && stat.Size > ToolAuthorizationPolicy.MaxBytes)
+            throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
+        using var output = new MemoryStream();
+        while (true)
+        {
+            var chunk = await targetFiles.ReadAsync(path, output.Length, 1024 * 1024, token);
+            if (chunk.Length == 0)
+                break;
+            if (policy && output.Length + chunk.Length > ToolAuthorizationPolicy.MaxBytes)
+                throw new InvalidDataException("Configuration candidate exceeds its byte limit.");
+            output.Write(chunk);
+        }
+        return output.ToArray();
+    }
+
     internal async Task<byte[]> CaptureConfigCandidateAsync(
         string raw,
         bool policy,
         CancellationToken token
     )
     {
+        if (AgentFolder is { Store: true } folder)
+            return await CaptureStoredCandidateAsync(folder.Resolve(raw), policy, token);
         var path = ResolveReadWrite(raw, true);
         if (!RegularFile(path))
             throw new InvalidDataException("Configuration candidate must be a regular file.");

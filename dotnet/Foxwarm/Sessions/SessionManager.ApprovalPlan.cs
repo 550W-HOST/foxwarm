@@ -224,7 +224,7 @@ internal sealed partial class SessionManager
     // Stage A inputs: protected reads whose content decides facts of the call.
     private IReadOnlyList<PlannedCheck> InputChecks(ResolvedTool resolved, WorkspaceTools? files) =>
         CandidateInputPath(resolved, files) is { } path
-            ? [new("candidate-read", CandidateRead(path), files)]
+            ? [new("candidate-read", CandidateRead(path, files), files)]
             : [];
 
     // The set_config candidate of config or models, whose secret facts come from its content.

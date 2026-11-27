@@ -453,6 +453,9 @@ internal sealed partial record OperationPlan(
 
         private string? NodeTarget => facts?.NodeTargets is { Count: > 0 } nodes ? nodes[0] : null;
 
+        // Where a configuration candidate is read: master, or the Agent store's folder.
+        private string CandidateNode => context.MemoryNode ?? "master";
+
         private string? Action => SessionWait.Text(args["action"]);
 
         // A Session reference as handlers and target resolution trim it.
@@ -1256,13 +1259,13 @@ internal sealed partial record OperationPlan(
                     break;
                 case (_, "candidate-read")
                     when resolved.Name == "set_config" && Text("filePath") is string candidate:
-                    yield return Planned(request: Read("set_config", candidate, "master"));
+                    yield return Planned(request: Read("set_config", candidate, CandidateNode));
                     break;
                 case (_, "policy-read") when context.PolicyPath is string policy:
                     yield return Planned(request: Read(invocation, policy, "master"));
                     break;
                 case (_, "candidate-read") when Text("policyFilePath") is string policyCandidate:
-                    yield return Planned(request: Read(invocation, policyCandidate, "master"));
+                    yield return Planned(request: Read(invocation, policyCandidate, CandidateNode));
                     break;
                 case (_, "file-read") when Text("filePath") is string secretFile:
                     yield return Planned(request: Read("read", secretFile, context.CurrentNode));
@@ -1292,6 +1295,9 @@ internal sealed partial record OperationPlan(
         }
 
         private static ResolvedTool Read(string invocation, string path, string node) =>
-            new(invocation, "node", "read", new JsonObject { ["filePath"] = path }, ExecutionNode: node);
+            new(invocation, "node", "read", new JsonObject { ["filePath"] = path }, ExecutionNode: node)
+            {
+                AgentFolder = node == AgentStorePaths.Endpoint,
+            };
     }
 }

@@ -90,6 +90,11 @@ internal static class TargetFileContent
         }
         catch (Foxwarm.Nodes.NodeProviderException error) when (error.Code == "ENOENT") { }
         await operations.MakeDirectoryAsync(await operations.ParentAsync(path, token), token);
+        if (operations is IWholeTargetFileWrites whole)
+        {
+            await whole.WriteWholeAsync(path, bytes, overwrite, token);
+            return;
+        }
         // Empty files still have one initial create/replace operation. Later errors retain the prefix.
         await operations.WriteAsync(
             path,
