@@ -122,6 +122,13 @@ internal sealed class HostedRuntimeHarness : IAsyncDisposable
 
     internal static string Host(string tenant) => tenant + ".test";
 
+    /// <summary>
+    /// Closes the idle connections of the pool every runtime of the harness shares. Pooled
+    /// connections belong to the pool, not to a runtime: how many stay idle after a cycle
+    /// depends on that cycle's concurrency.
+    /// </summary>
+    internal void ClearSharedPool() => app.ClearPool();
+
     internal async Task InstallModelsAsync(Runtime runtime)
     {
         var saved = await runtime.Client.PostAsJsonAsync("api/setup/models", new { yaml = Models });

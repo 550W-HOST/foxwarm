@@ -103,14 +103,19 @@ public sealed class HostedRuntimesInProcessTests(ITestOutputHelper output)
         await HostedRuntimeHarness.TurnsAsync(survivor.Client, "s0", 1);
         // Warm the process with one full cycle of the retiring tenant before the baseline.
         _ = await RetireAsync(harness, "warm-up");
-        var (threads, descriptors) = await SettledResourcesAsync();
-        var retired = await RetireAsync(harness, PostgresServer.Tenant);
-        var alive = await StillReachableAsync(retired);
-        Assert.True(alive.Length == 0, "still reachable after disposal: " + string.Join(", ", alive));
-        var (threadsAfter, descriptorsAfter) = await SettledResourcesAsync();
-        output.WriteLine($"threads {threads} → {threadsAfter}; descriptors {descriptors} → {descriptorsAfter}");
-        Assert.InRange(threadsAfter, 0, threads + 2);
-        Assert.InRange(descriptorsAfter, 0, descriptors + 2);
+        var (threads, descriptors) = await SettledResourcesAsync(harness);
+        // Several retirements: what a runtime leaks grows with each one, while what the process
+        // holds anyway (the shared pool, cached handles) doesn't.
+        for (var cycle = 0; cycle < 3; cycle++)
+        {
+            var retired = await RetireAsync(harness, cycle == 0 ? PostgresServer.Tenant : "retired-" + cycle);
+            var alive = await StillReachableAsync(retired);
+            Assert.True(alive.Length == 0, "still reachable after disposal: " + string.Join(", ", alive));
+            var (threadsAfter, descriptorsAfter) = await SettledResourcesAsync(harness);
+            output.WriteLine($"cycle {cycle}: threads {threads} → {threadsAfter}; descriptors {descriptors} → {descriptorsAfter}");
+            Assert.InRange(threadsAfter, 0, threads + 2);
+            Assert.InRange(descriptorsAfter, 0, descriptors + 2);
+        }
         await HostedRuntimeHarness.TurnsAsync(survivor.Client, "s1", 1);
     }
 
@@ -119,13 +124,13 @@ public sealed class HostedRuntimesInProcessTests(ITestOutputHelper output)
     {
         await using var harness = await HostedRuntimeHarness.CreateAsync();
         await using (var first = await harness.StartAsync("first")) { }
-        var (threads, descriptors) = await SettledResourcesAsync();
+        var (threads, descriptors) = await SettledResourcesAsync(harness);
         // The key ring refuses (no KEK), after the context started its journal writer.
         var (context, writer) = await FailedBuildAsync(harness);
         // The journal writer the context started is stopped, not left waiting for commands.
         await Assert.ThrowsAsync<System.Threading.Channels.ChannelClosedException>(() => writer.BarrierAsync());
         Assert.Empty(await StillReachableAsync([("context", context)]));
-        var (threadsAfter, descriptorsAfter) = await SettledResourcesAsync();
+        var (threadsAfter, descriptorsAfter) = await SettledResourcesAsync(harness);
         Assert.InRange(threadsAfter, 0, threads + 2);
         Assert.InRange(descriptorsAfter, 0, descriptors + 2);
     }
@@ -177,12 +182,14 @@ public sealed class HostedRuntimesInProcessTests(ITestOutputHelper output)
         }
     }
 
-    private static async Task<(int Threads, int Descriptors)> SettledResourcesAsync()
+    private static async Task<(int Threads, int Descriptors)> SettledResourcesAsync(HostedRuntimeHarness harness)
     {
         // Thread-pool threads retire after an idle period; sample until two readings agree.
+        // The shared pool's idle connections are closed first, so its size doesn't count.
         var previous = (-1, -1);
         for (var attempt = 0; attempt < 40; attempt++)
         {
+            harness.ClearSharedPool();
             HostedRuntimeHarness.LiveBytes();
             var current = (Threads(), Directory.GetFiles("/proc/self/fd").Length);
             if (current == previous)
