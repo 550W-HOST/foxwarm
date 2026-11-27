@@ -26,6 +26,7 @@ const {
   buildContextScrollbarScaleSegments,
   getContextScrollbarContextUsage,
   getContextScrollbarLegendStats,
+  getContextScrollbarMessageTone,
   interpolateContextScrollbarBoundary,
 } = await import(pathToFileURL(bundledPath).href)
 
@@ -184,6 +185,7 @@ test('scale model uses log1p, semantic hidden height, measured replacement, and 
   assert.equal(rendered.find(segment => segment.key === tools.key).estimatedTokens, 220)
 
   const snapshot = { role: 'tool', parts: [{ text: 'persistent snapshot' }], __meta: { synthetic: 'persistentMemorySnapshot' } }
+  assert.equal(getContextScrollbarMessageTone(snapshot), 'system')
   const snapshotSegments = buildContextScrollbarSegments([message('user', 'first row', 1)], snapshot)
   assert.equal(snapshotSegments.find(segment => segment.category === 'snapshot').anchorKey, 'persistent-memory-snapshot')
   const snapshotRendered = buildContextScrollbarScaleSegments(snapshotSegments, 'rendered-height', { 'seq-local-1': 100 })

@@ -250,6 +250,7 @@ const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKi
 const isToolGroupableMessage = (msg: Message): boolean => (!getSessionNotice(msg) || !!getLlmErrorMessageDetails(msg)) && (msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg))
 
 const isHeavySystemLikeMessage = (message: Message): boolean => {
+  if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true
   if (getSessionNotice(message)) return true
   if (getLlmErrorMessageDetails(message)) return true
   if (message.role === 'model') return false
