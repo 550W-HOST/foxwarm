@@ -30,7 +30,7 @@ Persisted generic policy and legacy Agent rules naming `set_tool_rules` fail val
 
 ## Effect timing
 
-Main invalidates its policy cache immediately after a successful setter and caches parsed policies by content hash, so unchanged scripted policies do not re-run their generator script when the timed recheck reads the file again. Other processes retain their own successful-parse cache for less than ten seconds.
+Main invalidates its policy cache immediately after a successful `set_config` or Setup → Authorization save, so the installed policy applies from the next tool call. Direct edits to `state/tool-authorization.yaml` on disk are picked up after the ten-second recheck window.
 
 Identity edits use `set_config` with `target: config` or WebUI Setup Config and apply supported access changes immediately. Other app settings can require restart, as reported by the save result. Outbound MCP updates through `mcp_config` are different again: they publish live connection configuration without restarting. Do not use one lifecycle as a substitute for another.
 
@@ -52,7 +52,7 @@ Without `policyFilePath` it explains the active policy. A candidate replaces onl
 3. Walk enabled rules from the beginning. Check all conditions in the first matching rule; later entries are irrelevant once it matches.
 4. If no rule matches, apply the internal default or external deny fallback.
 5. If policy allows the call, examine Agent-local layers, Node readiness/capabilities, own-attachment restrictions, and tool-local validation. Generic allow cannot override them.
-6. For a recent replacement in a Worker, distinguish its bounded cache window from a policy error.
+6. For a direct edit to `state/tool-authorization.yaml` outside `set_config` or Setup, allow the ten-second recheck window.
 
 | Symptom | Checks |
 | --- | --- |

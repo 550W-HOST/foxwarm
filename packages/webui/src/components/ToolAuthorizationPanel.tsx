@@ -143,7 +143,7 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
       const data = await response.json().catch(() => ({}))
       if (generation !== previewGenerationRef.current) return
       if (!response.ok) {
-        setPreview({ draft: submitted !== loadedTextRef.current, rules: [], defaultAction: 'allow', error: data.error || `Preview failed (${response.status})` })
+        setPreview({ draft: submitted !== loadedTextRef.current, rules: [], defaultAction: 'allow', error: data.error || "Couldn't preview the rules." })
       } else {
         setPreview({
           draft: submitted !== loadedTextRef.current,
