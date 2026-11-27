@@ -33,8 +33,8 @@ internal sealed partial class WebUIChannel
                                 return Results.BadRequest(
                                     new JsonObject { ["error"] = "pinned must be a boolean" }
                                 );
-                            change = runtime.ChangePresentation(catalog =>
-                                catalog.Pin(canonical, pinned)
+                            change = await runtime.ChangePresentationAsync(catalog =>
+                                catalog.PinAsync(canonical, pinned)
                             );
                         }
                         else if (action == "archive")
@@ -48,13 +48,13 @@ internal sealed partial class WebUIChannel
                                 body["includeDescendants"] is JsonValue option
                                 && option.TryGetValue<bool>(out var include)
                                 && include;
-                            change = runtime.ChangePresentation(catalog =>
-                                catalog.Archive(canonical, archived, descendants)
+                            change = await runtime.ChangePresentationAsync(catalog =>
+                                catalog.ArchiveAsync(canonical, archived, descendants)
                             );
                         }
                         else
-                            change = runtime.ChangePresentation(catalog =>
-                                catalog.Move(canonical, body, action == "promote")
+                            change = await runtime.ChangePresentationAsync(catalog =>
+                                catalog.MoveAsync(canonical, body, action == "promote")
                             );
                         return Results.Ok(JsonData.WebNode(change.Result));
                     }

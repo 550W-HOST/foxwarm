@@ -254,10 +254,10 @@ internal sealed partial class SessionManager
             : null;
     }
 
-    internal void RecordLastChannel(SessionOwner owner, ExternalChannelContext source)
+    internal async Task RecordLastChannelAsync(SessionOwner owner, ExternalChannelContext source)
     {
         using var admission = BeginOwnerMutation(owner);
-        Catalog.SetLastChannel(
+        await Catalog.SetLastChannelAsync(
             owner.Id,
             new JsonObject
             {

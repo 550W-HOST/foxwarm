@@ -35,15 +35,14 @@ internal sealed partial class SessionListQueries
     /// Non-empty groups with member counts: the main Agent or the master Node first, then
     /// by name. Nodes missing from the directory keep their ID as the name.
     /// </summary>
-    public JsonArray Groups(
+    public async Task<JsonArray> GroupsAsync(
         string by,
         string mode,
         IReadOnlyDictionary<string, SessionGroupNode> nodes
     )
     {
         var first = by == "agent" ? "main" : "master";
-        var groups = Catalog
-            .GroupCounts(by, mode != "flat-time")
+        var groups = (await Catalog.QueryAsync(() => Catalog.GroupCounts(by, mode != "flat-time")))
             .Select(pair =>
             {
                 var node = by == "node" ? nodes.GetValueOrDefault(pair.Key) : null;
@@ -85,7 +84,7 @@ internal sealed partial class SessionListQueries
     /// Keyset pages of group members. An Agent group's main Session is the first row of its
     /// first page; continuations exclude it.
     /// </summary>
-    public JsonObject GroupPages(
+    public async Task<JsonObject> GroupPagesAsync(
         (string Key, string? Cursor)[] requests,
         string by,
         string mode,
@@ -104,8 +103,8 @@ internal sealed partial class SessionListQueries
             cursor is not null && SessionCatalog.Text(cursor["revision"]) != Revision
         );
         var tree = mode != "flat-time";
-        var counts = Catalog.GroupCounts(by, tree);
-        var reads = requests
+        var counts = await Catalog.QueryAsync(() => Catalog.GroupCounts(by, tree));
+        var reads = await Catalog.QueryAsync(() => requests
             .Select(
                 (request, index) =>
                 {
@@ -115,8 +114,8 @@ internal sealed partial class SessionListQueries
                     return (request.Key, After: after, Main: after is null ? main : null, page);
                 }
             )
-            .ToArray();
-        var candidates = runtime.Projections(
+            .ToArray());
+        var candidates = await runtime.ProjectionsAsync(
             reads
                 .SelectMany(read =>
                     read.page.Rows.Select(Id).Concat(read.Main is null ? [] : [read.Main])
@@ -181,7 +180,10 @@ internal sealed partial class SessionListQueries
     /// The group of each Session the Sidebar may show outside a loaded group page: in tree
     /// modes the group of its top-level ancestor, in Flat its own.
     /// </summary>
-    public JsonObject PresentationGroups(IEnumerable<string> ids, string by, string mode)
+    public Task<JsonObject> PresentationGroupsAsync(IEnumerable<string> ids, string by, string mode) =>
+        Catalog.QueryAsync(() => PresentationGroups(ids, by, mode));
+
+    private JsonObject PresentationGroups(IEnumerable<string> ids, string by, string mode)
     {
         var requested = ids.Distinct(StringComparer.Ordinal).ToArray();
         var owners = requested.ToDictionary(id => id, id => id, StringComparer.Ordinal);

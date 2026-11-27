@@ -60,7 +60,7 @@ internal sealed partial class MessageRouter
             );
             if (canonical is null)
                 return new(404, new JsonObject { ["error"] = "Session not found" });
-            return HandlePresentationCommand(
+            return await HandlePresentationCommandAsync(
                 context with { SessionId = canonical },
                 presentation.Command.Verb,
                 presentation.Text("sessionId"),

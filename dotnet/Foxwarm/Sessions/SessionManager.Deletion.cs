@@ -258,7 +258,7 @@ internal sealed partial class SessionManager
                     {
                         try
                         {
-                            ChangePresentation(catalog => catalog.SetParent(id, null));
+                            await ChangePresentationAsync(catalog => catalog.SetParentAsync(id, null));
                         }
                         catch (PresentationCommittedException)
                         {

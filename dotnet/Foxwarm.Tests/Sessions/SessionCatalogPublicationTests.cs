@@ -199,6 +199,7 @@ public sealed class SessionCatalogPublicationTests
                 source["queueLength"] = 0;
                 source["meta"] = snapshot.Meta.DeepClone();
                 catalog.PublishAuthority(source);
+                return Task.CompletedTask;
             },
             mainFields: () => catalog.Get("one")
         );

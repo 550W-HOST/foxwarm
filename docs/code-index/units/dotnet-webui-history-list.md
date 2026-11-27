@@ -8,7 +8,7 @@ Serves bounded Session history/replay, list/search/pagination, architecture/tree
 
 ## Stable methods and callers
 
-History routes use `SessionRuntime`/Archive context readers for exact owner/history operations and return explicit `VECTOR_DISABLED` for unsupported Vector-backed history. List routes call `SessionListQueries`/`SessionCatalog.Page`, `Children`, `Scopes`, and bounded replay helpers; they do not hydrate cold catalog members or rebuild active history from Archive.
+History routes use `SessionRuntime`/Archive context readers for exact owner/history operations and return explicit `VECTOR_DISABLED` for unsupported Vector-backed history. List routes await `SessionListQueries`, which uses `SessionCatalog.Page`, `Children`, `Scopes`, and bounded replay helpers; they do not hydrate cold catalog members or rebuild active history from Archive.
 
 ## Contract and side effects
 

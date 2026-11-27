@@ -169,7 +169,7 @@ public sealed partial class AgentDeletionTests
                     ),
                 }
             );
-            manager.ChangePresentation(catalog => catalog.Archive(second.Id, true));
+            await manager.ChangePresentationAsync(catalog => catalog.ArchiveAsync(second.Id, true));
             Assert.True(manager.Catalog.Get(second.Id)!["archived"]!.GetValue<bool>());
             expected = manager.Catalog.List().Select(row => row["id"]!.ToString()).ToArray();
         }

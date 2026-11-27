@@ -65,7 +65,7 @@ internal sealed record SessionAuthorityRaw(JsonNode? Document, string Locator);
 /// changes when an identity move rebinds the store.
 /// </summary>
 internal sealed record SessionAuthorityCallbacks(
-    Action<SessionSnapshot>? PublishProjection = null,
+    Func<SessionSnapshot, Task>? PublishProjection = null,
     Func<string, JsonObject?>? MainFields = null,
     Action<string>? CheckLifetime = null,
     Action<

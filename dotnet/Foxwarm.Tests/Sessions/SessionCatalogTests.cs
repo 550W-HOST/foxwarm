@@ -194,11 +194,11 @@ public sealed class SessionCatalogTests
         );
         Assert.Equal(
             "After",
-            view.Exact([parent.Id], true)["results"]![0]!["session"]![
+            (await view.ExactAsync([parent.Id], true))["results"]![0]!["session"]![
                 "displayName"
             ]!.GetValue<string>()
         );
-        Assert.Equal(2, view.GlobalSummary()["total"]!.GetValue<long>());
+        Assert.Equal(2, (await view.GlobalSummaryAsync())["total"]!.GetValue<long>());
         await parent.Entry.SaveLane.SaveStrictAsync();
         Assert.Equal("After", manager.Catalog.Get(parent.Id)!["displayName"]!.GetValue<string>());
         var rewritten = JsonNode.Parse(

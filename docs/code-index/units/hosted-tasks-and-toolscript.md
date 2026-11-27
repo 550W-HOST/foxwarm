@@ -9,6 +9,7 @@ Files: `dotnet/Foxwarm/Hosted/Postgres/Tasks/PgTaskRowStore.cs`, `dotnet/Foxwarm
 - `Write` takes the tenant's Task advisory transaction lock at the start of a `READ COMMITTED` transaction. The lock excludes writers even across separate store objects and covers the entire callback.
 - `Read` uses `REPEATABLE READ READ ONLY`, so an assembled detail or list and its counts see the same snapshot.
 - `Direct` gives each row operation its own transaction. Each write takes the same lock; a later statement's failure cannot roll it back.
+- Task tool and HTTP transactions await the `TaskStore` semaphore and the tenant transaction slot separately. PostgreSQL uses the same row rules, snapshot isolation and transaction verification as synchronous callers; SQLite executes the transaction directly after entering the store gate.
 - Lists and lookup tie-breakers use SQLite's byte ordering and explicit null placement. The note identity preserves insertion order, independent of the note time.
 
 ## ToolScript run records

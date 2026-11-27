@@ -205,7 +205,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var pending = await PendingAsync(caller);
         Assert.Equal(["child-reviewer"], Approvers(pending));
         // The target stops being the caller's child while the approval waits.
-        manager.ChangePresentation(catalog => catalog.SetParent("direct", "foreign"));
+        await manager.ChangePresentationAsync(catalog => catalog.SetParentAsync("direct", "foreign"));
         var after = await manager.AssessToolAsync(caller, resolved, null, default);
         Assert.Equal("other-view", after.Asking.Single().Decision.Rule!["id"]!.GetValue<string>());
         Assert.NotEqual(

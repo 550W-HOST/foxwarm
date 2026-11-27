@@ -64,10 +64,10 @@ internal sealed class TaskService : IDisposable
                 && ownerValue.TryGetValue<string>(out var ownerId)
             )
                 normalized["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
-            result = store.ExecuteAsUser(normalized);
+            result = await store.ExecuteAsUserAsync(normalized).ConfigureAwait(false);
             fullDescription = result.Assignment is null
                 ? null
-                : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
+                : await store.ReadStoredDescriptionAsync(Text(result.Payload["task"]?["id"])!).ConfigureAwait(false);
         }
         finally
         {
@@ -110,8 +110,7 @@ internal sealed class TaskService : IDisposable
         if (warnings.Count > 0)
             result.Payload["warning"] = string.Join(" ", warnings);
         if (result.Assignment is not null || result.CommentOwner is not null)
-            result.Payload["task"] = store
-                .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId! }, null)
+            result.Payload["task"] = (await store.ExecuteAsync(new JsonObject { ["action"] = "get", ["taskId"] = taskId! }, null))
                 .Payload["task"]!.DeepClone();
         result.Payload["sentNotifications"] = receipt.Count;
         return result.Payload;
@@ -139,7 +138,7 @@ internal sealed class TaskService : IDisposable
         try
         {
             if (actor is null && action is not ("list" or "get"))
-                actor = store.DefaultActor(args);
+                actor = await store.DefaultActorAsync(args).ConfigureAwait(false);
             if (action is not ("list" or "get") && actor is null)
                 throw new TaskError(
                     "TASK_SESSION_REQUIRED",
@@ -178,22 +177,21 @@ internal sealed class TaskService : IDisposable
                     );
                 scopeIds = scope is "current-session" or "owned"
                     ? new[] { actor }
-                    : manager
-                        .Catalog.List()
+                    : await manager.Catalog.QueryAsync(() => manager.Catalog.List()
                         .Where(row => Text(row["agent"]) == agent)
                         .Select(row => Text(row["id"])!)
-                        .ToArray();
+                        .ToArray());
             }
-            result = store.Execute(
+            result = await store.ExecuteAsync(
                 normalizedArgs,
                 actor,
                 httpLimit,
                 selectedAnchor,
                 scopeSessionIds: scopeIds
-            );
+            ).ConfigureAwait(false);
             fullDescription = result.Assignment is null
                 ? null
-                : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
+                : await store.ReadStoredDescriptionAsync(Text(result.Payload["task"]?["id"])!).ConfigureAwait(false);
         }
         finally
         {
@@ -251,8 +249,7 @@ internal sealed class TaskService : IDisposable
         if (warnings.Count > 0)
             result.Payload["warning"] = string.Join(" ", warnings);
         if (result.Assignment is not null || result.Completed || result.CommentOwner is not null)
-            result.Payload["task"] = store
-                .Execute(new JsonObject { ["action"] = "get", ["taskId"] = resultTaskId! }, null)
+            result.Payload["task"] = (await store.ExecuteAsync(new JsonObject { ["action"] = "get", ["taskId"] = resultTaskId! }, null))
                 .Payload["task"]!.DeepClone();
         if (action is not ("list" or "get"))
             result.Payload["sentNotifications"] = receipt.Count;
@@ -294,8 +291,7 @@ internal sealed class TaskService : IDisposable
         await mutationLane.WaitAsync().ConfigureAwait(false);
         try
         {
-            var task = store
-                .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, source)
+            var task = (await store.ExecuteAsync(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, source))
                 .Payload["task"]!.AsObject();
             if (Text(task["status"]) is "completed" or "cancelled")
                 throw new TaskError("TASK_TERMINAL", $"Task {taskId} is terminal.", 409);
@@ -310,7 +306,7 @@ internal sealed class TaskService : IDisposable
             child = await create().ConfigureAwait(false);
             try
             {
-                attached = store.Execute(
+                attached = await store.ExecuteAsync(
                     new JsonObject
                     {
                         ["action"] = "assign",
@@ -319,9 +315,9 @@ internal sealed class TaskService : IDisposable
                         ["notifySession"] = true,
                     },
                     source
-                );
-                store.AttachChild(taskId, child.Id);
-                fullDescription = store.ReadStoredDescription(taskId);
+                ).ConfigureAwait(false);
+                await store.AttachChildAsync(taskId, child.Id);
+                fullDescription = await store.ReadStoredDescriptionAsync(taskId).ConfigureAwait(false);
             }
             catch (Exception error)
             {
@@ -413,7 +409,7 @@ internal sealed class TaskService : IDisposable
             Text(task["createdByKind"]) == "session" ? Text(task["createdBySessionId"]) : null;
         if (creator is null || resolveSessionId(creator) == resolveSessionId(actor))
         {
-            store.MarkNotification(taskId, "completionNotificationStatus", "skipped");
+            await store.MarkNotificationAsync(taskId, "completionNotificationStatus", "skipped");
             return;
         }
         var usage = await OwnerUsageLineAsync(task);
@@ -442,7 +438,7 @@ internal sealed class TaskService : IDisposable
             if (
                 owner is null
                 || taskId is null
-                || store.OwnerAssignedAt(taskId) is not long assignedAt
+                || await store.OwnerAssignedAtAsync(taskId) is not long assignedAt
                 || task["completedAt"] is not JsonValue completed
                 || !completed.TryGetValue<long>(out var completedAt)
             )
@@ -472,7 +468,7 @@ internal sealed class TaskService : IDisposable
         var canonicalTarget = resolveSessionId(target) ?? target;
         if (actor is not null && canonicalTarget == (resolveSessionId(actor) ?? actor))
         {
-            store.MarkNotification(taskId, field, "skipped", revision);
+            await store.MarkNotificationAsync(taskId, field, "skipped", revision);
             return true;
         }
         try
@@ -487,7 +483,7 @@ internal sealed class TaskService : IDisposable
                 recipient
             );
             receipt.Count++;
-            store.MarkNotification(taskId, field, "sent", revision);
+            await store.MarkNotificationAsync(taskId, field, "sent", revision);
             if (recipient == "new")
                 return true;
             return true;
@@ -496,7 +492,7 @@ internal sealed class TaskService : IDisposable
         {
             try
             {
-                store.MarkNotification(taskId, field, "failed", revision);
+                await store.MarkNotificationAsync(taskId, field, "failed", revision);
             }
             catch { }
             warnings.Add(
@@ -553,7 +549,7 @@ internal sealed class TaskService : IDisposable
         }
         var target = targetSessionId;
         if (target is null && action is not "create")
-            target = store.DefaultActor(args);
+            target = await store.DefaultActorAsync(args).ConfigureAwait(false);
         if (target is null)
             throw new TaskError(
                 "TASK_SESSION_REQUIRED",

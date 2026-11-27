@@ -1,4 +1,5 @@
 using Foxwarm.Hosted;
+using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Xunit.Abstractions;
 
@@ -11,6 +12,21 @@ namespace Foxwarm.Tests.Hosted;
 [Collection("Process console")]
 public sealed class HostedRuntimesInProcessTests(ITestOutputHelper output)
 {
+    [Fact]
+    public async Task ListRowsUseTheTenantsModelConfigurationAfterTheCatalogRead()
+    {
+        await using var harness = await HostedRuntimeHarness.CreateAsync();
+        await using var runtime = await harness.StartAsync(PostgresServer.Tenant);
+        await harness.InstallModelsAsync(runtime);
+        await HostedRuntimeHarness.TurnsAsync(runtime.Client, "listed", 0);
+        using var response = await runtime.Client.PostAsJsonAsync("api/session-list/by-id", new { ids = new[] { "listed" } });
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, text);
+        var row = JsonNode.Parse(text)!["results"]![0]!["session"]!;
+        Assert.Equal("listed", row["id"]!.ToString());
+        Assert.Equal("local/wire", row["defaultModelKey"]!.ToString());
+    }
+
     [Fact]
     public async Task ManyRuntimesShareOneConsoleCaptureAndTagTheirLines()
     {

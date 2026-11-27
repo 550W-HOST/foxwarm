@@ -44,8 +44,8 @@ public sealed class SessionListActivityTests
         return row;
     }
 
-    private static string[] AllPages(
-        Func<string?, JsonObject> read,
+    private static async Task<string[]> AllPagesAsync(
+        Func<string?, Task<JsonObject>> read,
         Func<JsonObject, string?> cursor,
         Func<JsonObject, string[]> ids
     )
@@ -54,7 +54,7 @@ public sealed class SessionListActivityTests
         string? next = null;
         do
         {
-            var page = read(next);
+            var page = await read(next);
             result.AddRange(ids(page));
             next = cursor(page);
         } while (next is not null);
@@ -84,29 +84,29 @@ public sealed class SessionListActivityTests
 
         Assert.Equal(
             ["quiet", "busy-alone", "tail", "stale", "ordered"],
-            Ids(view.Page("time", 10))
+            Ids(await view.PageAsync("time", 10))
         );
         // A saved sidebarOrder still wins; unordered rows follow by activity.
         Assert.Equal(
             ["ordered", "quiet", "busy-alone", "tail", "stale"],
-            Ids(view.Page("default", 10))
+            Ids(await view.PageAsync("default", 10))
         );
         // Flat keeps each Session's own time.
         Assert.Equal(
             ["quiet/mid/hot", "busy-alone", "quiet/mid", "quiet", "tail", "stale", "ordered"],
-            Ids(view.Page("flat-time", 10))
+            Ids(await view.PageAsync("flat-time", 10))
         );
         // The displayed own time of the quiet parent is unchanged.
-        var quiet = view.Page("time", 10)["sessions"]!.AsArray()[0]!;
+        var quiet = (await view.PageAsync("time", 10))["sessions"]!.AsArray()[0]!;
         Assert.Equal(10 * Hour, SessionCatalog.Number(quiet["lastMessageTime"]));
         Assert.Equal(900 * Hour, SessionCatalog.Number(quiet["subtreeActivityTime"]));
 
         // Keyset continuation reaches the same order without repeats or gaps.
         foreach (var mode in new[] { "time", "default", "flat-time" })
             Assert.Equal(
-                Ids(view.Page(mode, 10)),
-                AllPages(
-                    cursor => view.Page(mode, 2, cursor),
+                Ids(await view.PageAsync(mode, 10)),
+                await AllPagesAsync(
+                    cursor => view.PageAsync(mode, 2, cursor),
                     page => page["nextCursor"]?.GetValue<string>(),
                     page => Ids(page)
                 )
@@ -133,11 +133,11 @@ public sealed class SessionListActivityTests
         foreach (var mode in new[] { "time", "default" })
         {
             var expected = new[] { "p/quiet", "p/newer", "p/a", "p/b", "p/c" };
-            Assert.Equal(expected, Ids(view.ChildPages([("p", null)], mode, 10)[0]));
+            Assert.Equal(expected, Ids((await view.ChildPagesAsync([("p", null)], mode, 10))[0]));
             Assert.Equal(
                 expected,
-                AllPages(
-                    cursor => view.ChildPages([("p", cursor)], mode, 2)[0],
+                await AllPagesAsync(
+                    async cursor => (await view.ChildPagesAsync([("p", cursor)], mode, 2))[0],
                     page => page["nextCursor"]?.GetValue<string>(),
                     page => Ids(page)
                 )
@@ -164,7 +164,7 @@ public sealed class SessionListActivityTests
         var (manager, view) = await OpenAsync(temp, rows);
         await using var _ = manager;
         var window = new HashSet<string>(StringComparer.Ordinal) { "p" };
-        var page = view.ChildPages([("p", null)], "time", 5, previews: true, recentWindow: window)[0];
+        var page = (await view.ChildPagesAsync([("p", null)], "time", 5, previews: true, recentWindow: window))[0];
         Assert.Equal(expected, Ids(page).Length);
         Assert.Equal(recent + 4, SessionCatalog.Number(page["total"]));
         Assert.Equal(
@@ -174,7 +174,7 @@ public sealed class SessionListActivityTests
         // The same request without a window keeps the fixed limit.
         Assert.Equal(
             Math.Min(5, recent + 4),
-            Ids(view.ChildPages([("p", null)], "time", 5)[0]).Length
+            Ids((await view.ChildPagesAsync([("p", null)], "time", 5))[0]).Length
         );
     }
 
@@ -202,7 +202,7 @@ public sealed class SessionListActivityTests
         );
         await using var _ = manager;
         var window = new HashSet<string>(StringComparer.Ordinal) { "p" };
-        var page = view.ChildPages([("p", null)], "time", 5, previews: true, recentWindow: window)[0];
+        var page = (await view.ChildPagesAsync([("p", null)], "time", 5, previews: true, recentWindow: window))[0];
         // Two children are recent; the window still holds its minimum of three.
         Assert.Equal(["p/quiet", "p/edge-in", "p/edge-out"], Ids(page));
     }
@@ -218,7 +218,7 @@ public sealed class SessionListActivityTests
         var (manager, view) = await OpenAsync(temp, rows);
         await using var _ = manager;
         var window = new HashSet<string>(StringComparer.Ordinal) { "p", "q" };
-        var first = view.ChildPages(
+        var first = await view.ChildPagesAsync(
             [("p", null), ("q", null)],
             "time",
             5,
@@ -229,17 +229,17 @@ public sealed class SessionListActivityTests
         Assert.NotNull(first[0]["nextCursor"]);
         Assert.Null(first[1]["nextCursor"]);
         // A cursor request is not windowed even when flagged: it returns the full limit.
-        var next = view.ChildPages(
+        var next = (await view.ChildPagesAsync(
             [("p", first[0]["nextCursor"]!.GetValue<string>())],
             "time",
             4,
             recentWindow: window
-        )[0];
+        ))[0];
         Assert.Equal(["p/c5", "p/c6", "p/c7", "p/c8"], Ids(next));
         // Architecture scope never uses the window.
         Assert.Equal(
             5,
-            Ids(view.ChildPages([("p", null)], "time", 5, "main", recentWindow: window)[0]).Length
+            Ids((await view.ChildPagesAsync([("p", null)], "time", 5, "main", recentWindow: window))[0]).Length
         );
     }
 
@@ -258,20 +258,20 @@ public sealed class SessionListActivityTests
         await using var _ = manager;
         Assert.Equal(
             ["quiet", "busy"],
-            Ids(view.GroupPages([("main", null)], "agent", "time", 10)["groups"]![0]!.AsObject())
+            Ids((await view.GroupPagesAsync([("main", null)], "agent", "time", 10))["groups"]![0]!.AsObject())
         );
         Assert.Equal(
             ["quiet/hot", "busy", "quiet"],
             Ids(
-                view.GroupPages([("main", null)], "agent", "flat-time", 10)["groups"]![0]!.AsObject()
+                (await view.GroupPagesAsync([("main", null)], "agent", "flat-time", 10))["groups"]![0]!.AsObject()
             )
         );
         // Group continuation under activity order.
         Assert.Equal(
             ["quiet", "busy"],
-            AllPages(
-                cursor =>
-                    view.GroupPages([("main", cursor)], "agent", "time", 1)["groups"]![0]!
+            await AllPagesAsync(
+                async cursor =>
+                    (await view.GroupPagesAsync([("main", cursor)], "agent", "time", 1))["groups"]![0]!
                         .AsObject(),
                 group => group["nextCursor"]?.GetValue<string>(),
                 group => Ids(group)

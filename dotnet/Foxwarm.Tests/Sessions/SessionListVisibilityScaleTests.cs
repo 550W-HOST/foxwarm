@@ -35,7 +35,7 @@ public sealed class SessionListVisibilityScaleTests(ITestOutputHelper output)
             );
         }
         f.Manager.Catalog.Upsert(rows);
-        f.Manager.ChangePresentation(catalog => catalog.SetParent(source, "team1/s1"));
+        await f.Manager.ChangePresentationAsync(catalog => catalog.SetParentAsync(source, "team1/s1"));
 
         var policies = new Dictionary<string, string>
         {

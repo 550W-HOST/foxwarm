@@ -61,7 +61,7 @@ internal sealed partial class PgSessionCatalog
 
     public string[] RestartIds()
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
                     Strings(
                         tx,
@@ -73,7 +73,7 @@ internal sealed partial class PgSessionCatalog
 
     public string[] PendingApprovalIds()
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
                     Strings(
                         tx,
@@ -85,7 +85,7 @@ internal sealed partial class PgSessionCatalog
 
     public string[] RecentWaitIds(long activityCutoff)
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
                     Strings(
                         tx,
@@ -100,7 +100,7 @@ internal sealed partial class PgSessionCatalog
     {
         if (!Storable(agent) || !Storable(parent))
             return 0;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
                 Long(
                     parent is not null
@@ -127,7 +127,7 @@ internal sealed partial class PgSessionCatalog
     {
         if (!Storable(agent) || !Storable(parent))
             return [];
-        lock (gate)
+        using (gate.Enter())
         {
             var terms = new List<string>();
             var args = new Arguments();
@@ -157,7 +157,7 @@ internal sealed partial class PgSessionCatalog
     {
         if (!Storable(agent))
             return new([], false);
-        lock (gate)
+        using (gate.Enter())
         {
             var columns = SessionCatalog.OrderColumns(
                 mode,
@@ -213,7 +213,7 @@ internal sealed partial class PgSessionCatalog
             throw new InvalidDataException("Agent forest children require time mode.");
         int Take(string id) =>
             limits is not null && limits.TryGetValue(id, out var own) ? own : limit;
-        lock (gate)
+        using (gate.Enter())
         {
             var activity = agent is null && mode != "flat-time";
             var columns = SessionCatalog.OrderColumns(mode, true, activity);
@@ -281,7 +281,7 @@ internal sealed partial class PgSessionCatalog
         var keys = StorableIds(ids);
         if (keys.Length == 0 || !Storable(agent))
             return result;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = agent is null
@@ -311,7 +311,7 @@ internal sealed partial class PgSessionCatalog
         var keys = StorableIds(ids);
         if (keys.Length == 0)
             return result;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = Command(tx, 
@@ -337,7 +337,7 @@ internal sealed partial class PgSessionCatalog
             return new(StringComparer.Ordinal);
         if (ids.Length > 200)
             throw new InvalidDataException("Alias batch exceeds 200 IDs.");
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 var exact = GetMany(ids)
@@ -400,7 +400,7 @@ internal sealed partial class PgSessionCatalog
             WHERE paths.depth<127 AND parent.session_id <> ALL(paths.trail))
             SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
             """;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = Command(tx, sql, TextArray(keys));
@@ -436,7 +436,7 @@ internal sealed partial class PgSessionCatalog
             "outputTokens",
         };
         (long[] Counts, double Cost, long CostCount) values;
-        lock (gate)
+        using (gate.Enter())
             values = Read(tx =>
             {
                 using var command = Command(tx, 
@@ -463,7 +463,7 @@ internal sealed partial class PgSessionCatalog
 
     public Dictionary<string, (int Total, int Active, int Queued)> AgentActivityCounts()
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 var result = new Dictionary<string, (int Total, int Active, int Queued)>(
@@ -503,7 +503,7 @@ internal sealed partial class PgSessionCatalog
 
     public JsonArray AgentCounts()
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = Command(tx, 
@@ -554,7 +554,7 @@ internal sealed partial class PgSessionCatalog
                 SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputTokens,costTotal,costCount FROM descendants ORDER BY recent_rank,session_id LIMIT $2
                 """;
         var keys = summary.Select(pair => pair.Key).ToArray();
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = Command(tx, sql, id, (long)limit);
@@ -580,7 +580,7 @@ internal sealed partial class PgSessionCatalog
         var keys = StorableIds(candidates);
         if (keys.Length == 0 || !Storable(id))
             return result;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 result.UnionWith(
@@ -610,7 +610,7 @@ internal sealed partial class PgSessionCatalog
             WHERE p.session_id <> ALL(a.trail))
             SELECT session_id,count(DISTINCT busy_id) FROM ancestors WHERE session_id<>busy_id AND session_id = ANY($2) GROUP BY session_id
             """;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = Command(tx, sql, TextArray(busyKeys), TextArray(rootKeys));
@@ -647,7 +647,7 @@ internal sealed partial class PgSessionCatalog
             $"SELECT {column},count(*) FROM session_catalog WHERE presentation_root=1 AND pinned_rank=0"
             + (tree ? " AND parent_session_id IS NULL" : "")
             + $" GROUP BY {column}";
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 var counts = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -677,7 +677,7 @@ internal sealed partial class PgSessionCatalog
         var tree = mode != "flat-time";
         if (!Storable(key))
             return new([], false);
-        lock (gate)
+        using (gate.Enter())
         {
             // Tree modes order members by subtree activity, Flat by each Session's own time.
             var columns = SessionCatalog.OrderColumns(mode, true, tree);
@@ -714,7 +714,7 @@ internal sealed partial class PgSessionCatalog
         var keys = StorableIds(ids);
         if (keys.Length == 0)
             return result;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = Command(tx, 
@@ -740,7 +740,7 @@ internal sealed partial class PgSessionCatalog
         var keys = StorableIds(ids);
         if (keys.Length == 0)
             return result;
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
             {
                 using var command = Command(tx, 
@@ -764,7 +764,7 @@ internal sealed partial class PgSessionCatalog
         var keys = StorableIds(parents);
         if (keys.Length == 0)
             return result;
-        lock (gate)
+        using (gate.Enter())
         {
             var args = new Arguments();
             var rank = args.Add(-since);

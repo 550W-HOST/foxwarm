@@ -54,28 +54,28 @@ internal sealed partial class SessionListQueries
     private JsonObject[] Persisted(string[] ids) =>
         ids.Chunk(200).SelectMany(chunk => Catalog.GetMany(chunk)).ToArray();
 
-    public JsonObject GlobalSummary()
+    public async Task<JsonObject> GlobalSummaryAsync()
     {
-        var summary = Catalog.Summary(out var costCount);
+        var (summary, costCount) = await Catalog.QueryAsync(() => (Catalog.Summary(out var count), count));
         var local = runtime.LocalProjections();
-        var live = runtime.Projections(local.Select(Id).ToArray());
-        AdjustSummary(summary, live, Persisted(live.Select(Id).ToArray()), costCount);
+        var live = await runtime.ProjectionsAsync(local.Select(Id).ToArray());
+        AdjustSummary(summary, live, await Catalog.QueryAsync(() => Persisted(live.Select(Id).ToArray())), costCount);
         return summary;
     }
 
-    public JsonArray AgentCounts() => Catalog.AgentCounts();
+    public Task<JsonArray> AgentCountsAsync() => Catalog.QueryAsync(Catalog.AgentCounts);
 
-    public Dictionary<string, int> DescendantActivity(string[] ids)
+    public Task<Dictionary<string, int>> DescendantActivityAsync(string[] ids)
     {
         var local = runtime.LocalProjections();
         var busy = local.Where(row => SessionCatalog.Flag(row["busy"])).Select(Id).ToArray();
         // Every busy Main-local owner is maintained in the visible overlay; no owner scan.
-        return Catalog.BusyDescendants(ids.Distinct(StringComparer.Ordinal).ToArray(), busy);
+        return Catalog.QueryAsync(() => Catalog.BusyDescendants(ids.Distinct(StringComparer.Ordinal).ToArray(), busy));
     }
 
-    public JsonObject Descendants(string requested, int limit)
+    public async Task<JsonObject> DescendantsAsync(string requested, int limit)
     {
-        var resolution = Catalog.Resolve(requested);
+        var resolution = await Catalog.QueryAsync(() => Catalog.Resolve(requested));
         var kind = SessionCatalog.Text(resolution["kind"]);
         if (kind == "missing")
             throw new SessionListQueryException("SESSION_NOT_FOUND", "Session not found.");
@@ -85,13 +85,13 @@ internal sealed partial class SessionListQueries
                 "Session alias is ambiguous."
             );
         var id = SessionCatalog.Text(resolution["sessionId"])!;
-        var baseRows = Catalog.Descendants(id, limit);
-        var projections = runtime.Projections(baseRows.Rows.Select(Id).ToArray(), true);
-        var descendants = Catalog.FilterDescendants(id, projections.Select(Id).ToArray());
+        var baseRows = await Catalog.QueryAsync(() => Catalog.Descendants(id, limit));
+        var projections = await runtime.ProjectionsAsync(baseRows.Rows.Select(Id).ToArray(), true);
+        var descendants = await Catalog.QueryAsync(() => Catalog.FilterDescendants(id, projections.Select(Id).ToArray()));
         AdjustSummary(
             baseRows.Summary,
             projections.Where(row => descendants.Contains(Id(row))).ToArray(),
-            Persisted(descendants.ToArray()),
+            await Catalog.QueryAsync(() => Persisted(descendants.ToArray())),
             baseRows.CostCount
         );
         var previewIds = baseRows.Rows.Select(Id).ToHashSet(StringComparer.Ordinal);
@@ -103,10 +103,11 @@ internal sealed partial class SessionListQueries
         return result;
     }
 
-    public JsonObject Search(string query, int limit)
+    public async Task<JsonObject> SearchAsync(string query, int limit)
     {
         // Source-defined explicit search is a metadata candidate scan, not a typed root-page seek.
-        var candidates = runtime.ListSessions();
+        var ids = await Catalog.QueryAsync(() => Catalog.List().Select(Id).ToArray());
+        var candidates = await runtime.ProjectionsAsync(ids, true);
         var matches = candidates.Where(MetadataMatcher(query)).ToArray();
         return new JsonObject
         {

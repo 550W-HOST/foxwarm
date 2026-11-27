@@ -408,7 +408,7 @@ internal sealed partial class SessionManager
                 SessionCatalog.Text(Catalog.Resolve(targetId)["sessionId"])
                 ?? throw new InvalidDataException($"Session `{targetId}` not found.");
             var archived = action == "archive";
-            var change = ChangePresentation(catalog => catalog.Archive(canonical, archived));
+            var change = await ChangePresentationAsync(catalog => catalog.ArchiveAsync(canonical, archived));
             var changed = SessionWait.Number(change.Result["changedCount"]) is > 0;
             return Output(
                 changed
@@ -435,8 +435,8 @@ internal sealed partial class SessionManager
                 requestedParent = SessionGoal.Trim(requestedParent);
             }
             RequireParentChange(source.Agent, targetId, requestedParent);
-            var change = ChangePresentation(catalog =>
-                catalog.SetParent(targetId, requestedParent)
+            var change = await ChangePresentationAsync(catalog =>
+                catalog.SetParentAsync(targetId, requestedParent)
             );
             return new JsonObject
             {

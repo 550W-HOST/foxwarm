@@ -34,6 +34,7 @@ __pycache__/
 /.temp/
 /dotnet/**/bin/
 /dotnet/**/obj/
+/dotnet/**/TestResults/
 
 # CLI node package build output
 /packages/cli-node/dist

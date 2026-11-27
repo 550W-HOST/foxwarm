@@ -188,7 +188,7 @@ internal sealed class SegmentedSessionAuthority(
 
     public void Retire() => retired = true;
 
-    public Task CommitAsync(
+    public async Task CommitAsync(
         SessionSnapshot snapshot,
         SaveKind kind,
         CancellationToken cancellationToken = default
@@ -197,8 +197,7 @@ internal sealed class SegmentedSessionAuthority(
         cancellationToken.ThrowIfCancellationRequested();
         CheckBound(snapshot);
         Write(snapshot);
-        Publish(snapshot);
-        return Task.CompletedTask;
+        await PublishAsync(snapshot);
     }
 
     public async Task CommitCanonicalAppendAsync(
@@ -224,7 +223,7 @@ internal sealed class SegmentedSessionAuthority(
             throw;
         }
         Notify(stagedSnapshot, records, []);
-        Publish(stagedSnapshot);
+        await PublishAsync(stagedSnapshot);
     }
 
     public async Task CommitCompactionAsync(
@@ -253,7 +252,7 @@ internal sealed class SegmentedSessionAuthority(
             throw;
         }
         Notify(stagedSnapshot, records, newBlocks);
-        Publish(stagedSnapshot);
+        await PublishAsync(stagedSnapshot);
     }
 
     public Task<SessionSnapshot?> LoadAsync(
@@ -358,11 +357,12 @@ internal sealed class SegmentedSessionAuthority(
         catch { }
     }
 
-    private void Publish(SessionSnapshot snapshot)
+    private async Task PublishAsync(SessionSnapshot snapshot)
     {
         try
         {
-            callbacks.PublishProjection?.Invoke(snapshot);
+            if (callbacks.PublishProjection is { } publish)
+                await publish(snapshot);
         }
         catch (Exception error)
         {

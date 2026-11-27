@@ -34,7 +34,8 @@ internal sealed class TaskStore : IDisposable
     private readonly ITaskRowStore rows;
     private readonly Func<string, string?> resolveAlias;
     private readonly Func<string, IReadOnlyList<string>> aliases;
-    private readonly object gate = new();
+    // A holder can be doing synchronous row I/O. Async callers wait without occupying a worker.
+    private readonly Foxwarm.Storage.StoreGate gate = new();
 
     internal TaskStore(
         string root,
@@ -63,6 +64,34 @@ internal sealed class TaskStore : IDisposable
         IReadOnlyList<string>? scopeSessionIds = null
     )
     {
+        var (access, body) = Prepare(args, actor, httpLimit, anchorSeq, actorKind, scopeSessionIds);
+        using (gate.Enter())
+            return rows.Run(access, body);
+    }
+
+    /// <summary><see cref="Execute"/> for async paths: waits without a thread.</summary>
+    internal Task<TaskStoreResult> ExecuteAsync(
+        JsonObject args,
+        string? actor,
+        int? httpLimit = null,
+        long? anchorSeq = null,
+        string actorKind = "session",
+        IReadOnlyList<string>? scopeSessionIds = null
+    )
+    {
+        var (access, body) = Prepare(args, actor, httpLimit, anchorSeq, actorKind, scopeSessionIds);
+        return Gated(access == TaskRowAccess.Write, body);
+    }
+
+    private (TaskRowAccess Access, Func<ITaskRows, TaskStoreResult> Body) Prepare(
+        JsonObject args,
+        string? actor,
+        int? httpLimit,
+        long? anchorSeq,
+        string actorKind,
+        IReadOnlyList<string>? scopeSessionIds
+    )
+    {
         if (actorKind == "user")
             ValidateUser(args);
         else
@@ -70,28 +99,25 @@ internal sealed class TaskStore : IDisposable
         var action = Text(args["action"]);
         if (actorKind != "user" && action is not ("list" or "get") && string.IsNullOrEmpty(actor))
             throw new TaskError("TASK_INVALID_ARGS", "task requires a current Session.");
-        lock (gate)
-            return rows.Run(
-                action is "list" or "get" ? TaskRowAccess.Read : TaskRowAccess.Write,
-                db =>
-                    ExecuteTransaction(
-                        db,
-                        args,
-                        actor,
-                        httpLimit ?? ListLimit,
-                        anchorSeq,
-                        actorKind,
-                        scopeSessionIds
-                    )
-            );
+        return (
+            action is "list" or "get" ? TaskRowAccess.Read : TaskRowAccess.Write,
+            db => ExecuteTransaction(db, args, actor, httpLimit ?? ListLimit, anchorSeq, actorKind, scopeSessionIds)
+        );
     }
+
+    // The async paths' entry: the gate, then the rows' resources, waited for without a thread.
+    private Task<T> Gated<T>(bool write, Func<ITaskRows, T> body) =>
+        gate.HoldAsync(() => rows.RunTransactionAsync(write, db => gate.InBody(() => body(db))));
 
     internal TaskStoreResult ExecuteAsUser(JsonObject args, int? httpLimit = null) =>
         Execute(args, null, httpLimit, null, "user");
 
+    internal Task<TaskStoreResult> ExecuteAsUserAsync(JsonObject args, int? httpLimit = null) =>
+        ExecuteAsync(args, null, httpLimit, null, "user");
+
     internal string? OwnerSessionId(string taskId)
     {
-        lock (gate)
+        using (gate.Enter())
         {
             var row = rows.Run(TaskRowAccess.Direct, db => db.Read(taskId));
             return row is null ? null : Canonical(Text(row["ownerSessionId"]));
@@ -100,30 +126,21 @@ internal sealed class TaskStore : IDisposable
 
     internal string? CreatorSessionId(string taskId)
     {
-        lock (gate)
+        using (gate.Enter())
         {
             var row = rows.Run(TaskRowAccess.Direct, db => db.Read(taskId));
             return row is null ? null : Canonical(Text(row["createdBySessionId"]));
         }
     }
 
-    internal string? DefaultActor(JsonObject args)
-    {
-        var id = Text(args["taskId"]);
-        if (id is null)
-            return null;
-        lock (gate)
-        {
-            var row = rows.Run(TaskRowAccess.Direct, db => db.Read(id));
-            return row is null
-                ? null
-                : Canonical(Text(row["ownerSessionId"]) ?? Text(row["createdBySessionId"]));
-        }
-    }
+    internal Task<string?> DefaultActorAsync(JsonObject args) =>
+        Text(args["taskId"]) is { } id
+            ? ReadTaskAsync(id, row => row is null ? null : Canonical(Text(row["ownerSessionId"]) ?? Text(row["createdBySessionId"])))
+            : Task.FromResult<string?>(null);
 
     internal void MigrateLegacyGoal(string sessionId, string goal, long anchorSeq)
     {
-        lock (gate)
+        using (gate.Enter())
             rows.Run(
                 TaskRowAccess.Write,
                 db =>
@@ -184,57 +201,65 @@ internal sealed class TaskStore : IDisposable
 
     internal string? ReadStoredDescription(string taskId)
     {
-        lock (gate)
+        using (gate.Enter())
             return Text(rows.Run(TaskRowAccess.Direct, db => db.Read(taskId))?["description"]);
     }
 
+    internal Task<string?> ReadStoredDescriptionAsync(string taskId) =>
+        ReadTaskAsync(taskId, row => Text(row?["description"]));
+
+    private Task<T> ReadTaskAsync<T>(string taskId, Func<JsonObject?, T> project) =>
+        gate.HoldAsync(() => rows.ReadTaskAsync(taskId, project));
+
     internal void AttachChild(string taskId, string childSessionId)
     {
-        lock (gate)
-            rows.Run(
-                TaskRowAccess.Write,
-                db =>
-                {
-                var task =
-                    db.Read(taskId)
-                    ?? throw new TaskError("TASK_NOT_FOUND", $"Task {taskId} not found.", 404);
-                var status = Text(task["status"]);
-                if (status is "completed" or "cancelled")
-                    throw new TaskError("TASK_TERMINAL", $"Task {taskId} is terminal.", 409);
-                var owner = Canonical(Text(task["ownerSessionId"]));
-                if (owner != Canonical(childSessionId))
-                    throw new TaskError(
-                        "TASK_OWNED",
-                        $"Task {taskId} is not owned by child Session {Canonical(childSessionId)}.",
-                        409
-                    );
-                var now = Now();
-                db.Update(
-                    taskId,
-                    "createdBySessionId",
-                    Canonical(Text(task["createdBySessionId"])),
-                    "attachedSessionId",
-                    Canonical(childSessionId),
-                    "previousOwnerSessionId",
-                    Canonical(Text(task["previousOwnerSessionId"])),
-                    "updatedAt",
-                    now
-                );
-                db.AddNote(
-                    taskId,
-                    childSessionId,
-                    "session",
-                    $"Attached new Session {Canonical(childSessionId)}.",
-                    now
-                );
-                    return 0;
-                }
+        using (gate.Enter())
+            rows.Run(TaskRowAccess.Write, db => AttachChild(db, taskId, childSessionId));
+    }
+
+    internal Task AttachChildAsync(string taskId, string childSessionId) =>
+        Gated(write: true, db => AttachChild(db, taskId, childSessionId));
+
+    private int AttachChild(ITaskRows db, string taskId, string childSessionId)
+    {
+        var task =
+            db.Read(taskId)
+            ?? throw new TaskError("TASK_NOT_FOUND", $"Task {taskId} not found.", 404);
+        var status = Text(task["status"]);
+        if (status is "completed" or "cancelled")
+            throw new TaskError("TASK_TERMINAL", $"Task {taskId} is terminal.", 409);
+        var owner = Canonical(Text(task["ownerSessionId"]));
+        if (owner != Canonical(childSessionId))
+            throw new TaskError(
+                "TASK_OWNED",
+                $"Task {taskId} is not owned by child Session {Canonical(childSessionId)}.",
+                409
             );
+        var now = Now();
+        db.Update(
+            taskId,
+            "createdBySessionId",
+            Canonical(Text(task["createdBySessionId"])),
+            "attachedSessionId",
+            Canonical(childSessionId),
+            "previousOwnerSessionId",
+            Canonical(Text(task["previousOwnerSessionId"])),
+            "updatedAt",
+            now
+        );
+        db.AddNote(
+            taskId,
+            childSessionId,
+            "session",
+            $"Attached new Session {Canonical(childSessionId)}.",
+            now
+        );
+        return 0;
     }
 
     internal JsonObject TaskContext(string sessionId, IReadOnlyList<long> sequences, bool consume)
     {
-        lock (gate)
+        using (gate.Enter())
             return rows.Run(
                 TaskRowAccess.Write,
                 db =>
@@ -319,7 +344,7 @@ internal sealed class TaskStore : IDisposable
         long? revision = null
     )
     {
-        lock (gate)
+        using (gate.Enter())
             rows.Run(
                 TaskRowAccess.Write,
                 db =>
@@ -329,6 +354,13 @@ internal sealed class TaskStore : IDisposable
                 }
             );
     }
+
+    internal Task MarkNotificationAsync(string taskId, string field, string status, long? revision = null) =>
+        Gated(write: true, db =>
+        {
+            db.SettlePendingNotification(taskId, field, status, revision);
+            return 0;
+        });
 
     private TaskStoreResult ExecuteTransaction(
         ITaskRows db,
@@ -693,7 +725,7 @@ internal sealed class TaskStore : IDisposable
     /// <summary>When the current owner was assigned (epoch ms); null for tasks owned before the column existed.</summary>
     internal long? OwnerAssignedAt(string taskId)
     {
-        lock (gate)
+        using (gate.Enter())
         {
             return rows.Run(TaskRowAccess.Direct, db => db.Read(taskId)) is { } row
                 && row["ownerAssignedAt"] is JsonValue value
@@ -702,13 +734,16 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
+    internal Task<long?> OwnerAssignedAtAsync(string taskId) =>
+        ReadTaskAsync<long?>(taskId, row => row?["ownerAssignedAt"] is JsonValue value ? Long(value) : null);
+
     // Bounded title/status lookup for display surfaces that already reference these Tasks.
     internal JsonObject Summaries(IReadOnlyList<string> ids)
     {
         var result = new JsonObject();
         if (!rows.Exists)
             return result;
-        lock (gate)
+        using (gate.Enter())
             rows.Run(
                 TaskRowAccess.Direct,
                 db =>
@@ -732,7 +767,7 @@ internal sealed class TaskStore : IDisposable
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         if (ids.Count == 0 || !rows.Exists)
             return result;
-        lock (gate)
+        using (gate.Enter())
             rows.Run(
                 TaskRowAccess.Direct,
                 db =>
@@ -813,7 +848,7 @@ internal sealed class TaskStore : IDisposable
 
     public void Dispose()
     {
-        lock (gate)
+        using (gate.Enter())
             rows.Dispose();
     }
 

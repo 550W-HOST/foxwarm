@@ -63,7 +63,7 @@ internal sealed partial class MessageRouter
             }
         if (message.IngressMetadataParts is { } metadata)
             parts = metadata.Concat(parts).ToArray();
-        runtime.Manager.RecordLastChannel(owner, source);
+        await runtime.Manager.RecordLastChannelAsync(owner, source);
         var sendOnly =
             SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["mode"]) == "send-only";
         var item = new QueueItem(

@@ -927,7 +927,7 @@ internal sealed partial class SessionManager
             id,
             agent,
             new SessionAuthorityCallbacks(
-                PublishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot),
+                PublishProjection: snapshot => PublishCatalogSnapshotAsync(snapshot, slot),
                 MainFields: current => Catalog.Get(current),
                 CheckLifetime: current =>
                 {

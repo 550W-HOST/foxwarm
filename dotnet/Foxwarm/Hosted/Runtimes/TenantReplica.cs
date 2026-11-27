@@ -479,12 +479,17 @@ internal sealed class TenantReplica
     private sealed class TenantRuntime(TenantReplica owner, IHostedRuntime runtime, TenantServer server, long builtAt)
         : IGenerationRuntime
     {
-        private readonly object state = new();
-        private bool started;
-        private bool retired;
-        private bool pending;
-        private long appliedAt = builtAt;
-        private Task callbacks = Task.CompletedTask;
+        private readonly OperatorDocumentCallbacks changes = new(builtAt, () => owner.OperatorVersion, () =>
+        {
+            try
+            {
+                owner.operatorDocumentsChanged?.Invoke(runtime);
+            }
+            catch (Exception error)
+            {
+                owner.log("[hosted] Applying the operator documents failed: " + error.Message);
+            }
+        });
 
         internal TenantServer Server => server;
 
@@ -494,52 +499,10 @@ internal sealed class TenantReplica
         public async Task StartAsync(CancellationToken token)
         {
             await runtime.StartAsync().ConfigureAwait(false);
-            lock (state)
-            {
-                started = true;
-                // A change notified after the build read the documents, or during the start.
-                pending |= Interlocked.Read(ref owner.operatorVersion) != appliedAt;
-            }
-            Deliver();
+            _ = changes.Start();
         }
 
-        internal void OperatorDocumentsChanged()
-        {
-            lock (state)
-                pending = true;
-            Deliver();
-        }
-
-        // Runs the callback for the latest version once, after any running one; nothing once
-        // retired, and nothing before the start ended.
-        private void Deliver()
-        {
-            lock (state)
-            {
-                if (!started || retired || !pending)
-                    return;
-                callbacks = callbacks.ContinueWith(_ => Apply(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-            }
-        }
-
-        private void Apply()
-        {
-            lock (state)
-            {
-                if (retired || !pending)
-                    return;
-                pending = false;
-                appliedAt = Interlocked.Read(ref owner.operatorVersion);
-            }
-            try
-            {
-                owner.operatorDocumentsChanged?.Invoke(runtime);
-            }
-            catch (Exception error)
-            {
-                owner.log("[hosted] Applying the operator documents failed: " + error.Message);
-            }
-        }
+        internal void OperatorDocumentsChanged() => _ = changes.Notify();
 
         // Released only once the runtime can report what keeps it busy and what is due; until
         // then a tenant stays active while its grant renews.
@@ -553,15 +516,64 @@ internal sealed class TenantReplica
 
         public async ValueTask DisposeAsync()
         {
-            Task running;
-            lock (state)
-            {
-                retired = true;
-                running = callbacks;
-            }
+            var running = changes.Retire();
             owner.Retired(this);
             await running.ConfigureAwait(false);
             await runtime.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    // Serializes a runtime's operator-document callbacks across startup and retirement.
+    internal sealed class OperatorDocumentCallbacks(long builtAt, Func<long> version, Action refresh)
+    {
+        private readonly object state = new();
+        private bool started;
+        private bool retired;
+        private long scheduledVersion = builtAt;
+        private Task callbacks = Task.CompletedTask;
+
+        internal Task Start()
+        {
+            lock (state)
+            {
+                started = true;
+                return ScheduleCurrentVersion();
+            }
+        }
+
+        internal Task Notify()
+        {
+            lock (state)
+                return ScheduleCurrentVersion();
+        }
+
+        // Caller holds state. Start and listener delivery may both observe the same change.
+        private Task ScheduleCurrentVersion()
+        {
+            var current = version();
+            if (!started || retired || scheduledVersion == current)
+                return callbacks;
+            scheduledVersion = current;
+            callbacks = callbacks.ContinueWith(_ => Apply(current), CancellationToken.None,
+                TaskContinuationOptions.None, TaskScheduler.Default);
+            return callbacks;
+        }
+
+        private void Apply(long scheduled)
+        {
+            lock (state)
+                if (retired || scheduled != scheduledVersion)
+                    return;
+            refresh();
+        }
+
+        internal Task Retire()
+        {
+            lock (state)
+            {
+                retired = true;
+                return callbacks;
+            }
         }
     }
 

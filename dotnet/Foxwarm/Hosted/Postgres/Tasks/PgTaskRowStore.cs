@@ -21,35 +21,52 @@ internal sealed class PgTaskRowStore(TenantDb database) : ITaskRowStore
             _ => throw new ArgumentOutOfRangeException(nameof(access)),
         };
 
+    public Task<T> RunTransactionAsync<T>(bool write, Func<ITaskRows, T> body)
+    {
+        T Run(PgTx tx) => body(new Rows(database, tx));
+        if (!write)
+            return database.ReadAsync(Run, snapshot: true);
+        var transaction = new TaskWrite<T>(Run);
+        return database.WriteAsync(transaction.Run, transaction.Options);
+    }
+
+    public Task<T> ReadTaskAsync<T>(string taskId, Func<JsonObject?, T> project) =>
+        database.ReadAsync(tx => project(new Rows(database, tx).Read(taskId)));
+
     public void Dispose() { }
 
     private static T Write<T>(TenantDb database, Func<PgTx, T> body)
     {
-        string? xid = null;
-        return database.Write(
-            tx =>
+        var write = new TaskWrite<T>(body);
+        return database.Write(write.Run, write.Options);
+    }
+
+    private sealed class TaskWrite<T>(Func<PgTx, T> body)
+    {
+        private string? xid;
+
+        internal T Run(PgTx tx)
+        {
+            using (var command = tx.Command(
+                "SELECT pg_advisory_xact_lock($1, $2), pg_current_xact_id()::text",
+                tx.TenantId,
+                TaskWriterLock
+            ))
+            using (var row = command.ExecuteReader())
             {
-                using (var command = tx.Command(
-                    "SELECT pg_advisory_xact_lock($1, $2), pg_current_xact_id()::text",
-                    tx.TenantId,
-                    TaskWriterLock
-                ))
-                using (var row = command.ExecuteReader())
-                {
-                    row.Read();
-                    xid = row.GetString(1);
-                }
-                return body(tx);
-            },
-            new PgWriteOptions(Verify: tx =>
-                tx.Scalar("SELECT pg_xact_status($1::xid8)", xid) switch
-                {
-                    "committed" => true,
-                    "aborted" => false,
-                    _ => throw new InvalidOperationException("The Task transaction outcome is unavailable."),
-                }
-            )
-        );
+                row.Read();
+                xid = row.GetString(1);
+            }
+            return body(tx);
+        }
+
+        internal PgWriteOptions Options => new(Verify: tx =>
+            tx.Scalar("SELECT pg_xact_status($1::xid8)", xid) switch
+            {
+                "committed" => true,
+                "aborted" => false,
+                _ => throw new InvalidOperationException("The Task transaction outcome is unavailable."),
+            });
     }
 
     private sealed class Rows(TenantDb database, PgTx? transaction = null) : ITaskRows
