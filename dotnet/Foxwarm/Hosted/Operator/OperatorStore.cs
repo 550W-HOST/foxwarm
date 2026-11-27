@@ -14,7 +14,7 @@ internal sealed class OperatorProblem(int status, string message) : Exception(me
 internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
 {
     internal static readonly TimeSpan SetupLifetime = TimeSpan.FromHours(24);
-    internal const string Applied = "The owner applies limit and journal changes when notified or at its next lease renewal. New requests then use the new settings; running work gets time to finish.";
+    internal const string Applied = "Applies within one lease renewal, usually at once. New requests use the new settings, and running work is allowed to finish.";
     internal const string SetupPrefix = "fwsetup_";
     internal static byte[] Hash(string value) => SHA256.HashData(Encoding.UTF8.GetBytes(value));
     private static string RandomToken(string prefix) => prefix + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
@@ -27,12 +27,12 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
 
     internal Task CheckRoleAsync(CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
         await Scalar(tx, "SELECT current_user = operator_role FROM schema_info", ct) is true
-            ? true : throw new HostedBootstrapException("Operator service requires the database's operator role."), token);
+            ? true : throw new HostedBootstrapException("The operator service must connect as the database's operator role."), token);
 
     internal static Task<string> IssueAsync(PgDatabase owner, CancellationToken token) => owner.ClusterAsync(async (tx, ct) =>
     {
         if (await Scalar(tx, "SELECT current_user = pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'operator_credentials'::regclass", ct) is not true)
-            throw new HostedBootstrapException("Token creation requires the migration database role.");
+            throw new HostedBootstrapException("Creating an operator token requires the migration database role.");
         var value = RandomToken("fwop_");
         var hash = Convert.ToHexStringLower(Hash(value));
         await tx.ExecuteAsync("INSERT INTO operator_credentials (id, hash) VALUES ($1, $2)", ct, hash[..24], hash);

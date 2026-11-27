@@ -49,7 +49,7 @@ internal sealed class PgInstanceCredentials(TenantDb database, Func<InstanceKeys
     internal string? ReadLegacyHttpToken()
     {
         if (database.Read(tx => tx.Scalar("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId)) is not 0L)
-            throw new HostedBootstrapException("Use operator tenant rotate to issue a new setup token for this tenant.");
+            throw new HostedBootstrapException("Use `foxwarm operator tenant rotate <slug>` to issue a new setup token.");
         return ReadStored(InstanceCredentialName.HttpToken);
     }
 

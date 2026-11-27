@@ -21,17 +21,18 @@ internal sealed record OperatorListener(Uri Origin, IPEndPoint Endpoint, Deploym
             || !Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http")
             || uri.AbsolutePath != "/" || uri.UserInfo != "" || uri.Query != "" || uri.Fragment != ""
             || Sessions.SessionWait.Number(settings["port"]) is not { } port || port is < 1 or > 65535 || port != Math.Truncate(port))
-            throw new HostedBootstrapException("Operator service requires operator.url (an HTTP or HTTPS origin) and operator.port.");
+            throw new HostedBootstrapException("The operator service needs operator.url (an HTTP or HTTPS origin) and operator.port.");
         var template = (string?)deployment.Root["url"];
         if (template is null || !template[(template.IndexOf("://", StringComparison.Ordinal) + 3)..].StartsWith("{slug}.", StringComparison.Ordinal))
-            throw new HostedBootstrapException("Operator service requires a tenant URL with {slug} as its first hostname label.");
+            throw new HostedBootstrapException("The operator service needs a tenant URL template whose first hostname label is {slug}.");
         return new(uri, new(deployment.PublicEndpoint.Address, (int)port), deployment);
     }
 
     internal void CheckHostname(string slug, string hostname)
     {
-        if (hostname != new Uri(Deployment.TenantOrigin(slug)).IdnHost || string.Equals(hostname, Origin.IdnHost, StringComparison.OrdinalIgnoreCase))
-            throw new OperatorProblem(400, "Use the tenant's assigned subdomain as its primary hostname.");
+        var expected = new Uri(Deployment.TenantOrigin(slug)).IdnHost;
+        if (hostname != expected || string.Equals(hostname, Origin.IdnHost, StringComparison.OrdinalIgnoreCase))
+            throw new OperatorProblem(400, $"The primary hostname must be the tenant's subdomain, {expected}.");
     }
 }
 
@@ -75,13 +76,13 @@ internal static class OperatorServer
         try
         {
             if (request.Headers.Origin.Count != 0 && !string.Equals(request.Headers.Origin, listener.Origin.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
-                throw new OperatorProblem(403, "Wrong operator origin.");
+                throw new OperatorProblem(403, "Requests must come from the operator origin.");
             if (!AuthenticationHeaderValue.TryParse(request.Headers.Authorization, out var header)
                 || !string.Equals(header.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase) || header.Parameter is not { Length: 69 } bearer
                 || !bearer.StartsWith("fwop_", StringComparison.Ordinal) || !await store.AuthorizedAsync(bearer, ct))
             {
                 response.Headers.WWWAuthenticate = "Bearer";
-                throw new OperatorProblem(401, "Operator bearer token required.");
+                throw new OperatorProblem(401, "An operator bearer token is required.");
             }
             var segments = (remaining.Value ?? "").Trim('/').Split('/');
             JsonNode result;
@@ -113,13 +114,13 @@ internal static class OperatorServer
                             case "ceiling": ValidateCeiling(value); break;
                             default: throw new OperatorProblem(400, "Unknown or malformed tenant setting.");
                         }
-                    if (edits.Count == 0) throw new OperatorProblem(400, "Supply a tenant setting to change.");
+                    if (edits.Count == 0) throw new OperatorProblem(400, "Supply at least one setting to change.");
                     result = await store.UpdateAsync(slug, edits, ct);
                     break;
                 case ("GET", ["profiles", var profile, "ceiling"]): result = await store.ProfileCeilingAsync(Profile(profile), false, null, ct); break;
                 case ("PUT", ["profiles", var profile, "ceiling"]):
                     var body = await Body(request, ct);
-                    if (body.Count != 1 || !body.ContainsKey("ceiling")) throw new OperatorProblem(400, "Supply a ceiling document or null.");
+                    if (body.Count != 1 || !body.ContainsKey("ceiling")) throw new OperatorProblem(400, "Supply a ceiling document, or null to remove it.");
                     ValidateCeiling(body["ceiling"]);
                     result = await store.ProfileCeilingAsync(Profile(profile), true, (string?)body["ceiling"], ct); break;
                 default: response.StatusCode = 404; return;
@@ -128,16 +129,16 @@ internal static class OperatorServer
             await response.WriteAsync(result.ToJsonString(), ct);
         }
         catch (OperatorProblem problem) { await Error(response, problem.Status, problem.Message, ct); }
-        catch (JsonException) { await Error(response, 400, "Invalid JSON object.", ct); }
-        catch (ArgumentException) { await Error(response, 400, "Invalid JSON object.", ct); }
+        catch (JsonException) { await Error(response, 400, "The request body must be a JSON object.", ct); }
+        catch (ArgumentException) { await Error(response, 400, "The request body must be a JSON object.", ct); }
         catch (InvalidDataException error) { await Error(response, 400, error.Message, ct); }
-        catch (Npgsql.PostgresException error) when (error.SqlState == "23505") { await Error(response, 409, "Tenant slug or hostname is already in use.", ct); }
+        catch (Npgsql.PostgresException error) when (error.SqlState == "23505") { await Error(response, 409, "That tenant slug or hostname is already in use.", ct); }
     }
 
     private static async Task<JsonObject> Body(HttpRequest request, CancellationToken token) =>
-        await JsonNode.ParseAsync(request.Body, cancellationToken: token) as JsonObject ?? throw new OperatorProblem(400, "Invalid JSON object.");
+        await JsonNode.ParseAsync(request.Body, cancellationToken: token) as JsonObject ?? throw new OperatorProblem(400, "The request body must be a JSON object.");
 
-    internal static string Profile(string name) => name is "hosted" or "operator" ? name : throw new OperatorProblem(400, "Use profile hosted or operator.");
+    internal static string Profile(string name) => name is "hosted" or "operator" ? name : throw new OperatorProblem(400, "The profile must be hosted or operator.");
     private static string Text(JsonNode? value, string field) => value is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : throw new OperatorProblem(400, $"{field} must be a string.");
     private static void ValidateCeiling(JsonNode? value)
     {

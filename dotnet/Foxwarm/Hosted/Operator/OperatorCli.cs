@@ -32,7 +32,7 @@ internal static class OperatorCli
             if (args is ["operator", "token", "create"])
             {
                 var settings = HostedBootstrap.FromEnvironment();
-                await using var owner = new PgDatabase(settings.MigrateDatabaseUrl ?? throw new HostedBootstrapException("Set FOXWARM_MIGRATE_DATABASE_URL or its _FILE form."), "foxwarm-operator-token");
+                await using var owner = new PgDatabase(settings.MigrateDatabaseUrl ?? throw new HostedBootstrapException("Set FOXWARM_MIGRATE_DATABASE_URL or FOXWARM_MIGRATE_DATABASE_URL_FILE."), "foxwarm-operator-token");
                 await SchemaMigrator.RequireCompatibleAsync(owner, token: token);
                 await output.WriteLineAsync(await OperatorStore.IssueAsync(owner, token));
                 return 0;
@@ -41,7 +41,7 @@ internal static class OperatorCli
                 throw new ArgumentException(Usage);
             if (!Uri.TryCreate(url, UriKind.Absolute, out var origin) || origin.Scheme is not ("https" or "http")
                 || origin.AbsolutePath != "/" || origin.Query.Length > 0 || origin.UserInfo.Length > 0 || origin.Fragment.Length > 0)
-                throw new ArgumentException("--url must be the operator origin.");
+                throw new ArgumentException("--url must be the operator's HTTP or HTTPS origin.");
             var (method, path, body) = await RequestAsync(command, token);
             using var client = EgressHttp.Client(EgressPolicy.Unguarded, EgressPurpose.Deployment,
                 new EgressHandlerOptions { UseCookies = false, AllowAutoRedirect = false });
@@ -61,8 +61,8 @@ internal static class OperatorCli
 
     private static async Task<(HttpMethod, string, string?)> RequestAsync(string[] args, CancellationToken token)
     {
-        static string Tenant(string slug) => TenantSlugs.IsValid(slug) ? "/tenants/" + slug : throw new ArgumentException("Invalid tenant slug.");
-        static string Ceiling(string profile) => profile is "hosted" or "operator" ? "/profiles/" + profile + "/ceiling" : throw new ArgumentException("Use profile hosted or operator.");
+        static string Tenant(string slug) => TenantSlugs.IsValid(slug) ? "/tenants/" + slug : throw new ArgumentException("Tenant slug must be " + TenantSlugs.Rule + ".");
+        static string Ceiling(string profile) => profile is "hosted" or "operator" ? "/profiles/" + profile + "/ceiling" : throw new ArgumentException("The profile must be hosted or operator.");
         return args switch
         {
             ["tenants"] => (HttpMethod.Get, "/tenants", null),
