@@ -324,17 +324,13 @@ public sealed class TenantLeaseTests
                 (await TenantLease.RenewBatchAsync(control, renewed.Replica, [renewed], Slow.Ttl, TimeSpan.FromSeconds(5), false, CancellationToken.None))[0]
             );
         Assert.Equal((true, RenewalOutcome.Renewed), await RenewAsync(grant));
-        // A pin the role doesn't allow, then a changed profile: neither renews, both report loss.
-        await database.ExecuteOwnerAsync("UPDATE tenants SET pinned_role = 'master-host'");
-        Assert.Equal((false, RenewalOutcome.Lost), await RenewAsync(grant));
-        await database.ExecuteOwnerAsync("UPDATE tenants SET pinned_role = NULL");
-        Assert.Equal((true, RenewalOutcome.Renewed), await RenewAsync(grant));
-        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator'");
+        // Moving to the master host changes both columns in one edit: the general grant is lost.
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator', pinned_role = 'master-host'");
         Assert.Equal((false, RenewalOutcome.Lost), await RenewAsync(grant));
 
         // An import serves nothing: its grant has no role and renews on the lease alone.
         await lease.ReleaseAsync(grant, CancellationToken.None);
-        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'hosted'");
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'hosted', pinned_role = NULL");
         var importing = new TenantLease(database.OpenOwner(), PostgresServer.Tenant, 2);
         var import = (await importing.TryAcquireForImportAsync("import:1", grant.Epoch, Slow.Ttl, TimeSpan.FromSeconds(5), CancellationToken.None))!;
         Assert.Null(import.Role);
@@ -355,7 +351,7 @@ public sealed class TenantLeaseTests
         {
             var finalize = lease.ActivateImportAsync(import, CancellationToken.None);
             await UntilLockWaitersAsync(database, 1);
-            var edit = OperatorAsync(database, $"UPDATE tenants SET profile = 'operator' WHERE tenant_id = {import.TenantId}");
+            var edit = OperatorAsync(database, $"UPDATE tenants SET profile = 'operator', pinned_role = 'master-host' WHERE tenant_id = {import.TenantId}");
             await UntilLockWaitersAsync(database, 2);
             await holding.CommitAsync();
             await finalize.WaitAsync(TimeSpan.FromSeconds(30));
@@ -384,7 +380,7 @@ public sealed class TenantLeaseTests
                 editor
             ))
                 await shadow.ExecuteNonQueryAsync();
-            await using var update = new Npgsql.NpgsqlCommand($"UPDATE tenants SET profile = 'operator' WHERE tenant_id = {tenant}", editor);
+            await using var update = new Npgsql.NpgsqlCommand($"UPDATE tenants SET profile = 'operator', pinned_role = 'master-host' WHERE tenant_id = {tenant}", editor);
             var edit = update.ExecuteNonQueryAsync();
             await Task.Delay(500);
             Assert.False(edit.IsCompleted, "the edit didn't wait for the held lease row");
@@ -401,7 +397,7 @@ public sealed class TenantLeaseTests
     public async Task ARoleMismatchSeenBeforeTheLockWaitsForAnEditInFlight()
     {
         await using var database = await PrepareAsync();
-        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator'");
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator', pinned_role = 'master-host'");
         var lease = Lease(database.OpenApp());
         await Assert.ThrowsAsync<TenantNotEligibleException>(() => TryAcquire(lease, "a", Slow));
 
@@ -409,7 +405,7 @@ public sealed class TenantLeaseTests
         {
             await editor.OpenAsync();
             await using var editing = await editor.BeginTransactionAsync();
-            await using (var edit = new Npgsql.NpgsqlCommand("UPDATE tenants SET profile = 'hosted'", editor, editing))
+            await using (var edit = new Npgsql.NpgsqlCommand("UPDATE tenants SET profile = 'hosted', pinned_role = NULL", editor, editing))
                 await edit.ExecuteNonQueryAsync();
             var acquisition = TryAcquire(lease, "a", Slow);
             await UntilLockWaitersAsync(database, 1);
@@ -420,7 +416,7 @@ public sealed class TenantLeaseTests
         }
 
         // Held by another replica while the stored placement excludes this role: a retry.
-        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator'");
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator', pinned_role = 'master-host'");
         Assert.Null(await TryAcquire(new TenantLease(database.OpenApp(), PostgresServer.Tenant, 2), "b", Slow));
     }
 }

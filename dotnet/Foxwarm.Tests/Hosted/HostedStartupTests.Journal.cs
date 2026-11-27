@@ -46,7 +46,7 @@ public sealed partial class HostedStartupTests
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
         await database.ExecuteOwnerAsync(
-            $"UPDATE tenants SET profile = '{profile}', limits = '{{\"busyTurns\": 2}}', settings = '{{\"journal\": {{\"enabled\": false}}}}'"
+            $"UPDATE tenants SET profile = '{profile}', pinned_role = {(profile == "operator" ? "'master-host'" : "NULL")}, limits = '{{\"busyTurns\": 2}}', settings = '{{\"journal\": {{\"enabled\": false}}}}'"
         );
         using var temp = new TempDirectory();
         var files = HostedFiles.Create(temp.Path);
