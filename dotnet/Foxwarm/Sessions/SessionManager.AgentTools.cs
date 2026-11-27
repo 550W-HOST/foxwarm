@@ -93,11 +93,13 @@ internal sealed partial class SessionManager
                 case "set_agent_rules":
                 {
                     Keys(args, ["agentName", "rules"], ["agentName", "rules"]);
-                    if (args["rules"] is not JsonArray replacement)
-                        throw new InvalidDataException("rules must be an array.");
+                    if (args["rules"] is not (JsonArray or JsonObject))
+                        throw new InvalidDataException(
+                            "rules must be an array or a { script, data? } object."
+                        );
                     await SetAgentRulesAsync(
                         RequiredString(args, "agentName"),
-                        replacement,
+                        args["rules"]!,
                         source
                     );
                     return (Output("Agent rules replaced."), false);
@@ -120,10 +122,12 @@ internal sealed partial class SessionManager
                         ["agentName"]
                     );
                     var nameValue = RequiredString(args, "agentName");
-                    if (args.ContainsKey("rules") && args["rules"] is not JsonArray)
-                        throw new InvalidDataException("rules must be an array.");
-                    var localRules = args["rules"] as JsonArray;
-                    _ = AgentRulePolicy.Parse(localRules ?? new JsonArray());
+                    if (args.ContainsKey("rules") && args["rules"] is not (JsonArray or JsonObject))
+                        throw new InvalidDataException(
+                            "rules must be an array or a { script, data? } object."
+                        );
+                    var localRules = args["rules"];
+                    _ = await AgentRulePolicy.ParseAsync(localRules ?? new JsonArray());
                     var defaultNode = OptionalString(args, "defaultNode");
                     if (defaultNode is not null)
                         Foxwarm.Nodes.NodeProviderRegistry.ValidateId(defaultNode);

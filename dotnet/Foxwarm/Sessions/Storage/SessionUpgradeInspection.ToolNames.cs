@@ -58,8 +58,8 @@ internal static partial class SessionUpgradeInspection
                 () =>
                 {
                     foreach (var (agent, row) in agents.MetadataSnapshot())
-                        if (row is JsonObject value && value["rules"] is JsonArray rules)
-                            foreach (var warning in AgentRulePolicy.Parse(rules).Warnings)
+                        if (row is JsonObject value && value["rules"] is JsonArray or JsonObject)
+                            foreach (var warning in AgentRulePolicy.Parse(value["rules"]).Warnings)
                                 Warn($"rules of Agent {JsonData.Serialize(agent)}: {warning}");
                 }
             );

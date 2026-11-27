@@ -74,4 +74,68 @@ public sealed partial class WebUiStartupTests
         Assert.Equal(rev1, reloaded!["revision"]!.GetValue<string>());
         Assert.Null(reloaded["error"]);
     }
+
+    [Fact]
+    public async Task Agents_http_api_accepts_and_validates_scripted_rule_layers()
+    {
+        await using var h = new Host();
+        await File.WriteAllTextAsync(h.TokenPath, h.Token);
+        await File.WriteAllTextAsync(h.ConfigPath, $"bot: {{httpPort: {h.Port}}}\nvector: false\n");
+        h.Start();
+        await h.Ready();
+
+        // Create Agent with scripted layer via POST /api/agents
+        var created = await h.Client.PostAsJsonAsync(
+            "/api/agents",
+            new
+            {
+                agentId = "scripted-worker",
+                rules = new
+                {
+                    data = new { ops = new[] { "env.read" } },
+                    script = "return [{'id': f'allow-{o}', 'op': o, 'node': {'exact': 'master'}, 'action': 'allow'} for o in data['ops']] + [{'id': 'deny-all', 'action': 'deny'}]",
+                },
+            }
+        );
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        var agents = await h.Client.GetFromJsonAsync<JsonObject>("/api/agents");
+        var row = agents!["agents"]!
+            .AsArray()
+            .OfType<JsonObject>()
+            .Single(item => item["id"]!.GetValue<string>() == "scripted-worker");
+        Assert.IsType<JsonObject>(row["rules"]);
+        Assert.Equal(2, row["ruleCount"]!.GetValue<int>());
+        Assert.True(row["restricted"]!.GetValue<bool>());
+
+        // Bad script via PUT /api/agents/{id} returns 400 with line/index error and keeps rules unchanged.
+        var badPut = await h.Client.PutAsJsonAsync(
+            "/api/agents/scripted-worker",
+            new
+            {
+                rules = new
+                {
+                    script = "return [{'id': 'bad-caller', 'agent': 'x', 'action': 'allow'}]",
+                },
+            }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, badPut.StatusCode);
+        var badBody = await badPut.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Contains("rule[0]", badBody!["error"]!.GetValue<string>());
+
+        // Valid update via PUT /api/agents/{id} replaces rules and returns the stored object.
+        var goodPut = await h.Client.PutAsJsonAsync(
+            "/api/agents/scripted-worker",
+            new
+            {
+                rules = new
+                {
+                    script = "return [{'id': 'allow-read', 'op': 'env.read', 'node': {'exact': 'master'}, 'action': 'allow'}]",
+                },
+            }
+        );
+        Assert.Equal(HttpStatusCode.OK, goodPut.StatusCode);
+        var goodBody = await goodPut.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.IsType<JsonObject>(goodBody!["agent"]!["rules"]);
+    }
 }

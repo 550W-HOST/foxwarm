@@ -7,10 +7,27 @@ internal static class AgentToolDefinitions
     private static JsonObject LocalRules(string description) =>
         new()
         {
-            ["type"] = "array",
             ["description"] = description,
-            ["maxItems"] = 256,
-            ["items"] = new JsonObject { ["type"] = "object" },
+            ["oneOf"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["type"] = "array",
+                    ["maxItems"] = 256,
+                    ["items"] = new JsonObject { ["type"] = "object" },
+                },
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["script"] = new JsonObject { ["type"] = "string" },
+                        ["data"] = new JsonObject(),
+                    },
+                    ["required"] = new JsonArray("script"),
+                    ["additionalProperties"] = false,
+                },
+            },
         };
 
     private const string ForceModelDescription =

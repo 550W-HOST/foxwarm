@@ -26,6 +26,10 @@ internal sealed partial class AgentCatalog
         string,
         (string Digest, ToolAuthorizationPolicy Policy)
     > ruleLayerCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<
+        string,
+        (string Digest, string Error)
+    > ruleLayerErrorCache = new(StringComparer.Ordinal);
 
     public AgentCatalog(
         string dataRoot,
@@ -200,7 +204,7 @@ internal sealed partial class AgentCatalog
         string? inherit = null,
         string? initialSoul = null,
         string? createdBy = null,
-        JsonArray? rules = null,
+        JsonNode? rules = null,
         string? defaultNode = null,
         string? defaultCwd = null,
         string? preparationName = null,
@@ -217,13 +221,41 @@ internal sealed partial class AgentCatalog
             preparationName ?? ".create-" + Guid.NewGuid().ToString("N")
         );
         await createGate.WaitAsync();
+        Foxwarm.Tools.ToolAuthorizationPolicy? parsedRules = null;
         var createdDirectory = false;
         var publishedDirectory = false;
         var committed = false;
         JsonObject? initialMetadata = null;
-        Monitor.Enter(stateGate);
+        var entered = false;
         try
         {
+            // Expand and validate local rules outside stateGate so scripted layers never block
+            // catalog readers while running the Monty worker.
+            var previewSnapshot = MetadataSnapshot();
+            var previewPrevious = previewSnapshot[name] as JsonObject;
+            JsonNode? rulesToParse;
+            if (restoreRetained)
+            {
+                if (previewPrevious is null)
+                    throw new InvalidDataException(
+                        "No retained Agent metadata exists for this name."
+                    );
+                rulesToParse = previewPrevious.ContainsKey("rules")
+                    ? previewPrevious["rules"] is JsonArray or JsonObject
+                        ? previewPrevious["rules"]
+                        : throw new InvalidDataException(
+                            "Retained Agent rules must be an array or a { script, data? } object."
+                        )
+                    : null;
+            }
+            else
+                rulesToParse = rules;
+            parsedRules = await Foxwarm.Tools.AgentRulePolicy.ParseAsync(
+                rulesToParse ?? new JsonArray()
+            );
+
+            Monitor.Enter(stateGate);
+            entered = true;
             if (
                 (!restoreRetained && Exists(name))
                 || Directory.Exists(directory)
@@ -254,8 +286,11 @@ internal sealed partial class AgentCatalog
                 createdBy = Creator(MetadataSnapshot(), name);
                 inherit = SessionWait.Text(previous["inherit"]);
                 rules = previous.ContainsKey("rules")
-                    ? previous["rules"] as JsonArray
-                        ?? throw new InvalidDataException("Retained Agent rules must be an array.")
+                    ? previous["rules"] is JsonArray or JsonObject
+                        ? previous["rules"]
+                        : throw new InvalidDataException(
+                            "Retained Agent rules must be an array or a { script, data? } object."
+                        )
                     : null;
             }
             if (
@@ -267,7 +302,6 @@ internal sealed partial class AgentCatalog
                     "This name has retained Agent authority. Use administrator restoration or explicit retained-record cleanup."
                 );
             ValidateCreatorAdmission(createdBy, MetadataSnapshot(), unlimitedChildren);
-            _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
             ValidateDefaultNode(defaultNode ?? DefaultNode(name));
             ValidateDefaultCwd(defaultCwd ?? DefaultCwd(name));
             ValidateInheritance(name, inherit);
@@ -330,6 +364,11 @@ internal sealed partial class AgentCatalog
                 if (initialMetadata is { Count: > 0 })
                     metadata[name] = initialMetadata.DeepClone();
             }
+            if (parsedRules is not null)
+            {
+                ruleLayerCache[name] = (RuleLayerDigest(rules), parsedRules);
+                ruleLayerErrorCache.TryRemove(name, out _);
+            }
             if (durabilityFailure is not null)
                 throw durabilityFailure;
         }
@@ -341,6 +380,11 @@ internal sealed partial class AgentCatalog
                     known.Add(name);
                 if (initialMetadata is { Count: > 0 })
                     metadata[name] = initialMetadata.DeepClone();
+            }
+            if (parsedRules is not null)
+            {
+                ruleLayerCache[name] = (RuleLayerDigest(rules), parsedRules);
+                ruleLayerErrorCache.TryRemove(name, out _);
             }
             throw;
         }
@@ -378,7 +422,8 @@ internal sealed partial class AgentCatalog
         }
         finally
         {
-            Monitor.Exit(stateGate);
+            if (entered)
+                Monitor.Exit(stateGate);
             createGate.Release();
             publication?.Invoke(publishedDirectory);
         }

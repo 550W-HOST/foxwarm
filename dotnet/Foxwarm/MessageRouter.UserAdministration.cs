@@ -39,7 +39,7 @@ internal sealed partial class MessageRouter
         {
             var count = rows.Count(row => SessionWait.Text(row["agent"]) == agent);
             var inherit = SessionWait.Text(metadata[agent]?["inherit"]);
-            var ruleCount = (metadata[agent]?["rules"] as JsonArray)?.Count ?? 0;
+            var ruleCount = manager.AgentRuleCount(agent);
             output +=
                 $"`{agent}`"
                 + (count > 0 ? $" - {count} session{(count > 1 ? "s" : "")}" : "")

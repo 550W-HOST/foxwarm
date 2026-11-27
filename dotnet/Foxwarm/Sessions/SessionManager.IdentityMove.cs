@@ -19,7 +19,7 @@ internal sealed partial class SessionManager
     {
         internal readonly SessionOwner Owner = owner;
         internal string? Creator;
-        internal JsonArray? InitialRules;
+        internal JsonNode? InitialRules;
         internal string? DefaultNode;
         internal string? DefaultCwd;
         internal SessionIdentityMoveRecord Record = record;
@@ -165,7 +165,7 @@ internal sealed partial class SessionManager
         JsonObject args,
         IdentityMovePurpose purpose,
         CancellationToken token = default,
-        JsonArray? initialRules = null,
+        JsonNode? initialRules = null,
         string? defaultNode = null,
         string? defaultCwd = null,
         SessionOwner? creator = null

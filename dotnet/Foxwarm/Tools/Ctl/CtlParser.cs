@@ -871,6 +871,10 @@ internal static partial class CtlParser
                     if (text is "true" or "false")
                         return JsonValue.Create(text == "true");
                     break;
+                case "array":
+                    if (ParseJson(text, parameter) is JsonArray arr)
+                        return arr;
+                    break;
                 case "object":
                     if (ParseJson(text, parameter) is JsonObject obj)
                         return obj;
