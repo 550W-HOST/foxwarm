@@ -286,6 +286,16 @@ async function attachRequestMocks(targetPage, options = {}) {
       }
       return
     }
+    if (url.pathname.endsWith('/api/setup/authorization')) {
+      if (request.method() === 'POST') {
+        const body = JSON.parse(request.postData() || '{}')
+        options.authorizationSaveRequests?.push(body)
+        void respondJson(request, { saved: true, target: 'tool-rules', exists: true, yaml: body.yaml, revision: 'sha256:mock' })
+      } else {
+        void respondJson(request, { exists: false, yaml: '', revision: 'absent' })
+      }
+      return
+    }
     if (url.pathname.includes('/api/setup/secrets')) {
       const body = request.postData() ? JSON.parse(request.postData()) : null
       secretRequests.push({ method: request.method(), path: url.pathname, body })
@@ -647,7 +657,7 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Appearance, Models, Config, Secrets and Notifications tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models, Config, Authorization, Secrets and Notifications tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
   const requestStart = requestPaths.length
   await setupPage.setBypassServiceWorker(true)
@@ -678,12 +688,14 @@ test('Setup uses accessible Appearance, Models, Config, Secrets and Notification
       { tab: 'appearance', selected: 'true', status: null },
       { tab: 'models', selected: 'false', status: 'complete' },
       { tab: 'config', selected: 'false', status: null },
+      { tab: 'authorization', selected: 'false', status: null },
       { tab: 'secrets', selected: 'false', status: null },
       { tab: 'notifications', selected: 'false', status: null },
     ])
     assert.deepEqual(await setupPage.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
       'inmemory://foxwarm/setup/foxwarm-models.yaml',
       'inmemory://foxwarm/setup/foxwarm-config.yaml',
+      'inmemory://foxwarm/setup/foxwarm-tool-authorization.yaml',
     ])
     assert.equal(await setupPage.$eval('[data-setup-section="appearance"]', (panel) => panel.hidden), false)
     assert.equal(await setupPage.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
@@ -713,6 +725,10 @@ test('Setup uses accessible Appearance, Models, Config, Secrets and Notification
     await setupPage.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
 
     await setupPage.focus('[data-setup-tab="config"]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="authorization"][aria-selected="true"]')
+    assert.equal(await setupPage.$eval('[data-setup-section="authorization"]', (panel) => panel.hidden), false)
+    await setupPage.waitForSelector('[data-authorization-absent]')
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="secrets"][aria-selected="true"]')
     await setupPage.waitForSelector('[data-secret="openai-key"]')
@@ -1080,8 +1096,8 @@ test('Setup fallback keeps the pane budget and one scroller in a narrow short sp
     await smallPage.$eval('[data-setup-config-last="weixin"]', element => element.scrollIntoView({ block: 'end' }))
     await recordSetupEvidence(smallPage, 'small-split-fallback', geometry)
     assert.equal(await smallPage.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true)
-    assert.equal(await smallPage.$$eval('[data-editor-fallback="true"]', editors => editors.length), 2,
-      'both editor instances remain mounted when switching tabs')
+    assert.equal(await smallPage.$$eval('[data-editor-fallback="true"]', editors => editors.length), 3,
+      'every editor instance remains mounted when switching tabs')
     assert.equal(await smallPage.$eval('[role="tablist"][aria-label="Setup sections"]', tabs => tabs.getAttribute('aria-orientation')), 'horizontal')
   } finally { await context.close() }
 })
@@ -1887,6 +1903,42 @@ test('channel property completions follow each instance type and canonical-key f
       ['botToken', 'enabled'], ['homeserver', 'appId'])
     await assertSuggestions('channels:\n  telegram:\n    type: matrix\n    \n', 4,
       ['homeserver', 'enabled'], ['botToken', 'appId'])
+  } finally {
+    await completionPage.close()
+  }
+})
+
+test('tool authorization editor offers policy schema completions and markers', async () => {
+  const completionPage = await browser.newPage()
+  await completionPage.setBypassServiceWorker(true)
+  await attachRequestMocks(completionPage)
+  const policyUri = 'inmemory://foxwarm/setup/foxwarm-tool-authorization.yaml'
+  const editor = `[data-monaco-model-uri="${policyUri}"]`
+  const assertSuggestions = async (yaml, position, expected, excluded) => {
+    await runMonacoEditorAction(completionPage, policyUri, 'replace-value', { value: yaml })
+    const suggestions = await readVisibleSuggestions(completionPage, policyUri, position)
+    for (const name of expected) assert.ok(suggestions.some((text) => text.includes(name)), `${name} missing from ${suggestions.join(' | ')}`)
+    for (const name of excluded) assert.equal(suggestions.some((text) => text.includes(name)), false, `${name} leaked into ${suggestions.join(' | ')}`)
+  }
+  const markers = () => completionPage.$eval(editor, (element) => Number(element.getAttribute('data-marker-count') || 0))
+  try {
+    await completionPage.goto(`${baseUrl}/policy-completions/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(completionPage)
+    await completionPage.waitForSelector('[data-setup-tab="authorization"]', { timeout: 20_000 })
+    await completionPage.click('[data-setup-tab="authorization"]')
+    await completionPage.waitForSelector(`${editor}[data-editor-ready="true"]`, { timeout: 20_000 })
+    await assertSuggestions('version: 1\n', { line: 2, column: 1 }, ['defaultAction', 'rules'], ['providers'])
+    // A tool rule and an operation rule offer their own selectors.
+    // Each list is filtered by the typed prefix, so every candidate is rendered.
+    await assertSuggestions('version: 1\nrules:\n  - action: deny\n    t\n', { line: 4, column: 6 }, ['tool'], ['targetSession', 'task'])
+    await assertSuggestions('version: 1\nrules:\n  - op: env.read\n    action: deny\n    t\n', { line: 5, column: 6 }, ['targetSession', 'targetAgent', 'task'], ['tool'])
+    await assertSuggestions('version: 1\nrules:\n  - action: deny\n    m\n', { line: 4, column: 6 }, ['match'], ['model', 'mcp'])
+    await assertSuggestions('version: 1\nrules:\n  - op: env.\n    action: deny\n', { line: 3, column: 13 }, ['env.read', 'env.exec', 'env.*'], ['session.create'])
+    await runMonacoEditorAction(completionPage, policyUri, 'replace-value', { value: 'version: 1\nrules:\n  - tool: exec\n    action: deny\n' })
+    await completionPage.waitForFunction((selector) => document.querySelector(selector)?.getAttribute('data-marker-count') === '0', { timeout: 10_000 }, editor)
+    await runMonacoEditorAction(completionPage, policyUri, 'replace-value', { value: 'version: 1\nrules:\n  - tool: exec\n    action: block\n' })
+    await completionPage.waitForFunction((selector) => Number(document.querySelector(selector)?.getAttribute('data-marker-count') || 0) > 0, { timeout: 10_000 }, editor)
+    assert.ok(await markers() > 0)
   } finally {
     await completionPage.close()
   }

@@ -1,7 +1,7 @@
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, {type ContextMenuAnchorRect} from './ContextMenu'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
+import { Bell, Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelSetupYaml, defaultModelsYaml, formFromPreset, readModelSetupForm, validateModelSetupForm, type ModelSetupForm } from '../setupModels'
 import ModelSetupFormPanel from './ModelSetupFormPanel'
@@ -15,6 +15,7 @@ import ThemeManager from './ThemeManager'
 import FoxLoaderPreview from './FoxLoaderPreview'
 import NotificationSettings from './NotificationSettings'
 import SecretsPanel from './SecretsPanel'
+import ToolAuthorizationPanel from './ToolAuthorizationPanel'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
 
 type SetupStatus = {
@@ -103,9 +104,9 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config' | 'secrets' | 'notifications'
+type SetupTab = 'appearance' | 'models' | 'config' | 'authorization' | 'secrets' | 'notifications'
 type ModelsView = 'form' | 'yaml'
-const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'secrets', 'notifications']
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorization', 'secrets', 'notifications']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -158,10 +159,10 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // Secrets loads its own data; the Setup Refresh action reloads it too.
-  const [secretsRefreshRequest, setSecretsRefreshRequest] = useState(0)
+  // Secrets and Authorization load their own data; the Setup Refresh action reloads them too.
+  const [panelRefreshRequest, setPanelRefreshRequest] = useState(0)
   const refreshSetup = () => {
-    setSecretsRefreshRequest((current) => current + 1)
+    setPanelRefreshRequest((current) => current + 1)
     void loadStatus()
   }
 
@@ -181,6 +182,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const appearanceTabRef = useRef<HTMLButtonElement | null>(null)
   const notificationsTabRef = useRef<HTMLButtonElement | null>(null)
   const secretsTabRef = useRef<HTMLButtonElement | null>(null)
+  const authorizationTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -296,7 +298,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
-    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef, secrets: secretsTabRef, notifications: notificationsTabRef })[tab].current?.focus())
+    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, authorization: authorizationTabRef, appearance: appearanceTabRef, secrets: secretsTabRef, notifications: notificationsTabRef })[tab].current?.focus())
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -608,6 +610,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
         {key:'appearance',label:'Appearance',checked:activeTab==='appearance',selection:'radio',icon:<Palette size={16}/>,onSelect:()=>activateTab('appearance')},
         {key:'models',label:'Models',checked:activeTab==='models',selection:'radio',icon:<Bot size={16}/>,onSelect:()=>activateTab('models')},
         {key:'config',label:'Config',checked:activeTab==='config',selection:'radio',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
+        {key:'authorization',label:'Authorization',checked:activeTab==='authorization',selection:'radio',icon:<ShieldCheck size={16}/>,onSelect:()=>activateTab('authorization')},
         {key:'secrets',label:'Secrets',checked:activeTab==='secrets',selection:'radio',icon:<KeyRound size={16}/>,onSelect:()=>activateTab('secrets')},
         {key:'notifications',label:'Notifications',checked:activeTab==='notifications',selection:'radio',icon:<Bell size={16}/>,onSelect:()=>activateTab('notifications')},
         {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:refreshSetup},
@@ -679,6 +682,22 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
                 </button>
                 <button
+                  ref={authorizationTabRef}
+                  id="setup-tab-authorization"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'authorization'}
+                  aria-controls="setup-panel-authorization"
+                  tabIndex={activeTab === 'authorization' ? 0 : -1}
+                  data-setup-tab="authorization"
+                  onClick={() => activateTab('authorization')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'authorization' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong'}`}
+                >
+                  <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>Authorization</span>
+                </button>
+                <button
                   ref={secretsTabRef}
                   id="setup-tab-secrets"
                   type="button"
@@ -729,7 +748,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
             <section id="setup-panel-secrets" role="tabpanel" aria-labelledby="setup-tab-secrets" data-setup-section="secrets" hidden={activeTab !== 'secrets'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
               <div className="mx-auto w-full max-w-5xl">
-                {activeTab === 'secrets' && <SecretsPanel refreshRequest={secretsRefreshRequest} />}
+                {activeTab === 'secrets' && <SecretsPanel refreshRequest={panelRefreshRequest} />}
               </div>
             </section>
 
@@ -785,6 +804,11 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                 {weixinMessage && <div className="mt-3 text-sm text-fw-text">{weixinMessage}</div>}
                 {weixinQrSrc && <img src={weixinQrSrc} alt="Weixin login QR code" className="mt-4 h-56 w-56 rounded-lg border border-fw-border bg-fw-surface object-contain p-2 dark:border-fw-border" />}
               </details>}
+            </section>
+
+            <section id="setup-panel-authorization" role="tabpanel" aria-labelledby="setup-tab-authorization" data-setup-section="authorization" hidden={activeTab !== 'authorization'} className={`${activeTab === 'authorization' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto p-4 md:p-5`}>
+              {/* Stays mounted like the other editors, so unsaved policy edits survive tab switches. */}
+              <ToolAuthorizationPanel active={activeTab === 'authorization'} refreshRequest={panelRefreshRequest} />
             </section>
 
           </div>

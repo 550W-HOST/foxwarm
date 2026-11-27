@@ -35,7 +35,8 @@ after(async () => {
 
 test('static config schemas are distinct, permissive, and omit the removed models path field', () => {
   assert.notEqual(schemas.MODELS_YAML_MODEL_URI, schemas.APP_CONFIG_YAML_MODEL_URI)
-  assert.equal(schemas.YAML_CONFIG_SCHEMAS.length, 2)
+  assert.equal(schemas.YAML_CONFIG_SCHEMAS.length, 3)
+  assert.equal(new Set([schemas.MODELS_YAML_MODEL_URI, schemas.APP_CONFIG_YAML_MODEL_URI, schemas.TOOL_AUTHORIZATION_YAML_MODEL_URI]).size, 3)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.additionalProperties, true)
   assert.equal(schemas.APP_CONFIG_SCHEMA.additionalProperties, true)
   const providerObject = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties.oneOf.find((entry) => entry.type === 'object')
@@ -217,6 +218,30 @@ test('WebUI schema wrappers reuse the shared canonical schema objects without a 
   const wrapperSource = await readFile(path.join(webuiRoot, 'src/yamlConfigSchemas.ts'), 'utf8')
   assert.match(wrapperSource, /shared\/src\/configSchemas/)
   assert.doesNotMatch(wrapperSource, /Foxwarm models configuration|providerEntry|channelEntry/)
+})
+
+test('tool authorization schema agrees with the Main server parser on its corpus', async () => {
+  const { parse } = await import('yaml')
+  const corpus = JSON.parse(await readFile(path.resolve(webuiRoot, '../shared/src/toolAuthorizationPolicySchema.fixtures.json'), 'utf8'))
+  assert.deepEqual(schemas.TOOL_AUTHORIZATION_POLICY_SCHEMA, sharedSchemas.TOOL_AUTHORIZATION_POLICY_SCHEMA)
+  const validate = new Ajv({ allErrors: true, strict: false }).compile(schemas.TOOL_AUTHORIZATION_POLICY_SCHEMA)
+  let checked = 0
+  for (const entry of corpus.cases) {
+    if (entry.schema === 'yaml-syntax') {
+      assert.throws(() => parse(entry.yaml), entry.name)
+      continue
+    }
+    const document = parse(entry.yaml)
+    const expected = entry.valid || entry.schema === 'server-only'
+    assert.equal(validate(document), expected, `${entry.name}: ${JSON.stringify(validate.errors)}`)
+    checked += 1
+  }
+  assert(checked > 30)
+  const schema = schemas.TOOL_AUTHORIZATION_POLICY_SCHEMA
+  assert.deepEqual(schema.required, ['version'])
+  assert.equal(schema.additionalProperties, false)
+  assert(schema.properties.rules.items.then.properties.op.anyOf[0].enum.includes('env.*'))
+  assert(schema.properties.rules.items.then.properties.op.anyOf[0].enum.includes('secret.use'))
 })
 
 test('models schema accepts complete image pricing at provider and model level and rejects partial or extra rates', () => {

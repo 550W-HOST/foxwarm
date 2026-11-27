@@ -1,16 +1,17 @@
 # Unit: Shared config schemas
 
-Files: packages/shared/src/configSchemas.ts
+Files: packages/shared/src/configSchemas.ts, packages/shared/src/toolAuthorizationPolicySchema.ts, packages/shared/src/toolAuthorizationPolicySchema.fixtures.json
 Secondary files: packages/shared/src/index.ts, packages/shared/package.json, packages/webui/src/yamlConfigSchemas.ts, packages/vscode-web/foxwarm-fs/src/configSchemas.ts
 
 ## Purpose
 
-Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App configuration so build-time browser consumers reuse one definition without exposing runtime configuration data. The application schema includes optional Vector connection/enablement, startup-only session/vector worker placement, trusted executable Node-provider definitions, the bounded session-worker idle setting, and the vector-maintenance boolean/object toggle.
+Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App configuration and the global tool authorization policy so build-time browser consumers reuse one definition without exposing runtime configuration data. The application schema includes optional Vector connection/enablement, startup-only session/vector worker placement, trusted executable Node-provider definitions, the bounded session-worker idle setting, and the vector-maintenance boolean/object toggle.
 
 ## Key exports
 
 - `MODELS_CONFIG_SCHEMA` — advisory models/provider/virtual-routing structure aligned with tolerant backend readers, including live `retryIntervalsMs` sequences at defaults, provider and model scopes (virtual providers use their own value or defaults), including non-whitespace provider string aliases, provider/model `{ allowed, default }` effort configuration, and the Chat Completions-only `historyReasoningField` enum.
 - `APP_CONFIG_SCHEMA` — advisory public `url`, worker placement, trusted executable Node providers, bot, LLM (including `compactKeepPercent`, `compactThresholdPercent`, `memoryWarningThresholdPercent`, and the `32768` `maxOutput` default), paths, type-aware channels (the five managed types including `qqbot`), and ASR structure.
+- `TOOL_AUTHORIZATION_POLICY_SCHEMA` and `TOOL_AUTHORIZATION_OPERATIONS` — the tool authorization policy, written from the Main server's parser ([tool authorization](./tool-authorization.md#setup-editor)). Unlike the configuration schemas it is strict (`additionalProperties: false`), because the parser rejects unknown fields. Rules decide their shape by `op`: operation rules and version-1 tool rules get their own selectors through `if`/`then`/`else`. Within-rule constraints the parser applies (approval only with ask, ask or `secrets` never with `externalId`, no `match` beside top-level selectors, path variables, identity and secret-name patterns, one-of Node/target forms, list bounds) are encoded; cross-field catalog checks (which selectors an operation declares, `secret.use` alone, Session-target resolver families, duplicate IDs, removed builtin names, UTF-8 byte limits) remain server-only.
 - `CONCRETE_PROVIDER_TYPES`, `VIRTUAL_PROVIDER_TYPES`, and their union `KNOWN_PROVIDER_TYPES`; `isConcreteProviderType()` is the single predicate used by config expansion, the setup model-test route, and the schema. The `providerType`/`provider` schema accepts only known values or the empty string.
 
 The package exports these through `@foxwarm/shared/configSchemas`; browser bundles may consume the same source directly at build time.
@@ -24,6 +25,8 @@ The package exports these through `@foxwarm/shared/configSchemas`; browser bundl
 - WebUI owns its in-memory URI/file-match wrappers and unsaved-document completion provider. Code's filesystem extension owns exact authoritative master-URI association and supplies serialized local content to Red Hat YAML.
 
 ## Tests and integration
+
+- `toolAuthorizationPolicySchema.fixtures.json` is a corpus of policies with the parser's verdict. `ToolAuthorizationSchemaParityTests` (Main server) asserts each verdict and that `TOOL_AUTHORIZATION_OPERATIONS` equals the operation catalog; `configEditor.test.mjs` asserts the schema accepts every valid policy and rejects every invalid one not marked `server-only` or `yaml-syntax`. A grammar change updates the corpus with both sides.
 
 - WebUI config-editor tests assert shared-import parity and validate representative current, legacy, custom, and backend-tolerant fixtures with Ajv, including exact executable Node-provider constraints.
 - WebUI config-editor tests keep managed channel branches in parity with backend adapters while retaining custom string types. The real Monaco/YAML-worker browser test proves two differently typed instances do not mix platform-property suggestions, explicit type overrides the map key, canonical missing/empty-type fallback works, and unknown types retain common/custom editing.

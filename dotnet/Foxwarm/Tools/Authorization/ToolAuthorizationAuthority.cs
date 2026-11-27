@@ -268,6 +268,43 @@ internal sealed class ToolAuthorizationAuthority(
         }
     }
 
+    // The revision of an absent policy file. A present file's revision is the SHA-256 of its
+    // bytes, so any change by any writer, including a direct file edit, changes it.
+    internal const string AbsentRevision = "absent";
+
+    internal static string Revision(byte[]? bytes) =>
+        bytes is null
+            ? AbsentRevision
+            : "sha256:"
+                + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+
+    // The active policy file as stored (null when absent) with its revision, for editors that
+    // replace the complete policy. It is not parsed: an invalid file is still returned.
+    internal async Task<(byte[]? Bytes, string Revision)> ReadActiveFileAsync(
+        CancellationToken token = default
+    )
+    {
+        if (!WorkspaceTools.PolicyFileKind(path, out var missing))
+        {
+            if (missing)
+                return (null, AbsentRevision);
+            throw new InvalidDataException("Policy must be a readable regular file.");
+        }
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(path, token);
+            return (bytes, Revision(bytes));
+        }
+        catch (Exception error)
+            when ((error is FileNotFoundException or DirectoryNotFoundException)
+                && !WorkspaceTools.PolicyFileKind(path, out var absent)
+                && absent
+            )
+        {
+            return (null, AbsentRevision);
+        }
+    }
+
     internal async Task InstallAsync(byte[] bytes, CancellationToken token)
     {
         _ = ToolAuthorizationYaml.Parse(bytes);
