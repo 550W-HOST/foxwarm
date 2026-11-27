@@ -10,6 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const fixture = await createHostFixture('setup-mcp')
 const peerFile = resolve(import.meta.dirname, 'mainHostMcp.peer.mjs')
@@ -123,7 +124,7 @@ try {
   // Add a stdio server through the form; saving checks it.
   await click('[data-mcp-add]')
   await typeInto(`${form} [data-mcp-field="name"]`, 'local')
-  await page.select(`${form} [data-mcp-field="transport"]`, 'stdio')
+  await chooseSelectOption(page, `${form} [data-mcp-field="transport"]`, 'stdio')
   await typeInto(`${form} [data-mcp-field="command"]`, process.execPath)
   for (const [index, value] of [peerFile, 'stdio', peerRoot, 'ui-label'].entries()) {
     await click(`${form} button::-p-text(Add argument)`)
@@ -142,7 +143,7 @@ try {
   // An invalid save is refused with the validation error, and the file is unchanged.
   const before = await readFile(mcpFile, 'utf8')
   await click(`${row('remote')} [data-mcp-action="edit"]`)
-  await page.select(`${form} [data-mcp-field="transport"]`, 'stdio')
+  await chooseSelectOption(page, `${form} [data-mcp-field="transport"]`, 'stdio')
   await click(`${form} button[type="submit"]`)
   assert.match(await formError(), /stdio requires command/)
   assert.equal(await readFile(mcpFile, 'utf8'), before)

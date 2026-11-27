@@ -3,6 +3,7 @@ import { MoreHorizontal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { formatActivityTime } from '../activityTime'
 import ContextMenu, { type ContextMenuAnchorRect } from './ContextMenu'
+import Select from './Select'
 
 // A literal credential the server keeps without sending it: it stays where it is unless replaced.
 type Hidden = { hidden: string; key?: string; index?: number }
@@ -60,6 +61,7 @@ const enabledOf = (server: ServerView) => server.enable !== false
 const messageOf = (cause: unknown, fallback: string) => cause instanceof Error ? cause.message : fallback
 
 const transportLabels: Record<string, string> = { auto: 'HTTP (auto-detect)', 'streamable-http': 'Streamable HTTP', sse: 'SSE', stdio: 'Local command (stdio)' }
+const transportOptions = Object.entries(transportLabels).map(([value, label]) => ({ value, label }))
 
 // Width comes from the caller, so a sized field never carries a conflicting `w-full`.
 const fieldClass = 'rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-sm text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 disabled:opacity-70'
@@ -206,9 +208,7 @@ function ServerForm({ initial, revision, existing, onSaved, onCancel, onReload }
         <input className={`${inputClass} mt-1 font-mono`} data-mcp-field="name" value={form.name} onChange={event => set('name', event.target.value)} disabled={existing} required autoComplete="off" spellCheck={false} />
       </label>
       <label className={labelClass}>Transport
-        <select data-mcp-field="transport" className={`${inputClass} mt-1`} value={form.transport} onChange={event => set('transport', event.target.value)}>
-          {Object.entries(transportLabels).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
-        </select>
+        <Select data-mcp-field="transport" className={`${inputClass} mt-1`} value={form.transport} onChange={value => set('transport', value)} options={transportOptions} />
       </label>
     </div>
     {stdio ? <>
