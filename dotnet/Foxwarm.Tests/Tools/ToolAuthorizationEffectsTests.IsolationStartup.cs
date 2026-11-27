@@ -428,4 +428,24 @@ public sealed partial class ToolAuthorizationEffectsTests
         await restarted.LoadAsync();
         return restarted.StartupIsolationMigration!;
     }
+
+    [Fact]
+    public async Task Isolation_migration_inventory_reports_policyError_when_global_policy_is_unavailable()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path, Obj(MigrationIsolation));
+        var policyFile = Path.Combine(temp.Path, "data", "state", "tool-authorization.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(policyFile)!);
+        await File.WriteAllTextAsync(
+            policyFile,
+            "version: 1\nscript: |\n  import time\n  time.time()\n  return []\n"
+        );
+
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var inventory = manager.IsolationMigrationInventory();
+        Assert.NotNull(inventory["policyError"]);
+        Assert.Contains("unavailable", inventory["policyError"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+        Assert.Single(inventory["agents"]!.AsArray());
+    }
 }

@@ -87,7 +87,8 @@ internal sealed partial class SessionManager
         {
             global = authorization.Load();
         }
-        catch (Exception error) when (error is InvalidDataException or IOException)
+        catch (Exception error)
+            when (error is InvalidDataException or IOException or ToolAuthorizationUnavailableException)
         {
             policyError = error.Message;
         }
