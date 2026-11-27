@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels.WebUi;
 using Foxwarm.Sessions;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 
@@ -270,12 +271,18 @@ internal sealed class HttpServer
 #if FOXWARM_HOSTED
                 if (admin && sessions.Storage.Credentials is Hosted.Postgres.PgInstanceCredentials adminCredential)
                 {
-                    // A rotation cuts existing authenticated streams as soon as it is observed.
-                    // Ordinary requests retain the runtime's normal bounded shutdown grace.
+                    // The front can start a bodyless response after the tenant HttpContext
+                    // has been disposed. Keep only features owned by the transport here.
+                    var upgrade = context.WebSockets.IsWebSocketRequest;
+                    var response = context.Features.GetRequiredFeature<IHttpResponseFeature>();
+                    var lifetime = context.Features.GetRequiredFeature<IHttpRequestLifetimeFeature>();
                     context.Response.OnStarting(() =>
                     {
-                        if (context.WebSockets.IsWebSocketRequest || context.Response.ContentType?.StartsWith("text/event-stream", StringComparison.OrdinalIgnoreCase) == true)
-                            context.Response.RegisterForDispose(adminCredential.Revoked.Register(context.Abort));
+                        if (upgrade || response.Headers.ContentType.ToString().StartsWith("text/event-stream", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var registration = adminCredential.Revoked.Register(lifetime.Abort);
+                            response.OnCompleted(static state => ((CancellationTokenRegistration)state).DisposeAsync().AsTask(), registration);
+                        }
                         return Task.CompletedTask;
                     });
                 }

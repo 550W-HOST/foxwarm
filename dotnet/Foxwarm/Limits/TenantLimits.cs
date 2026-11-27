@@ -101,11 +101,7 @@ internal sealed record TenantLimits
         ["webhooks"] = (int.MaxValue, (l, v) => l with { Webhooks = (int)v }),
     };
 
-    /// <summary>
-    /// The column's value over the defaults: each key a positive whole number (sizes in bytes).
-    /// Other limits in the column belong to other owners (the Agent store's, the database
-    /// statement cap) and are left to them; a malformed known key is refused, naming it.
-    /// </summary>
+    /// <summary>The operator API accepts only known limit names and valid values.</summary>
     internal static void RequireKnown(JsonObject column)
     {
         foreach (var (key, _) in column)
@@ -114,6 +110,7 @@ internal sealed record TenantLimits
         Parse(column);
     }
 
+    /// <summary>Apply known column overrides to the defaults, ignoring keys this reader doesn't recognize.</summary>
     internal static TenantLimits Parse(JsonObject? column)
     {
         var limits = Defaults;
