@@ -43,8 +43,7 @@ internal sealed class EgressDeniedException(string host, IPAddress? address)
     internal string Host => host;
     internal IPAddress? Address => address;
 
-    // Coordinator-approved copy (2026-11-27). The cause may be a configured deny, not only an
-    // internal address.
+    // The cause may be a configured deny, not only an internal address.
     internal static string Copy(string host) =>
         $"Can't connect to {host}: its address is blocked by this deployment's network policy.";
 
@@ -67,9 +66,8 @@ internal sealed class EgressCertificateException(string host)
 {
     internal string Host => host;
 
-    // Draft copy for the coordinator.
     internal static string Copy(string host) =>
-        $"TLS certificate validation failed for {host}: the server didn't send its full certificate chain, and this deployment doesn't download missing intermediate certificates.";
+        $"Can't verify the TLS certificate of {host}: the server didn't send its full certificate chain, and this deployment doesn't download missing certificates.";
 
     internal static EgressCertificateException? Find(Exception? error)
     {
