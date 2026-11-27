@@ -104,7 +104,7 @@ function RunBadge({ run }: { run?: TimerRun }) {
 function TimerRowCard({ timer, owner, selected, now, onSelect }: { timer: TimerRow; owner?: TimerOwner; selected: boolean; now: number; onSelect: () => void }) {
   return (
     <button type="button" onClick={onSelect} data-system-timer-id={timer.id} data-system-timer-selected={selected || undefined}
-      className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${selected ? 'border-fw-accent-border bg-fw-accent-section' : 'border-fw-border bg-fw-surface hover:bg-fw-hover'}`}>
+      className={`w-full rounded-xl border px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fw-focus-ring ${selected ? 'border-fw-accent-border bg-fw-accent-section' : 'border-fw-border bg-fw-surface hover:bg-fw-hover'}`}>
       <div className="flex min-w-0 items-center gap-2">
         <ActionIcon timer={timer} />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong">{timerSummary(timer)}</span>

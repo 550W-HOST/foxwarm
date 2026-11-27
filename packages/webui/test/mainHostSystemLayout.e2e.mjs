@@ -13,6 +13,7 @@ const fixture = await createHostFixture('system-layout')
 const exists = file => access(file).then(() => true, () => false)
 // A model key naming a GPT model selects the framework prompt's GPT-only blocks.
 await writeModelFixture(fixture.data, { default: 'gpt-lab', providers: { 'gpt-lab': { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:9/r', models: ['wire'], contextLimit: 20000 } } })
+await writeFile(join(fixture.data, 'state/timers.json'), JSON.stringify({ timers: [{ id: 'daily', sessionId: 'row-00', message: 'Post the daily summary', cron: '0 0 1 1 *', newSession: false, createdAt: 1 }] }))
 await writeFile(join(fixture.data, 'state/tool-authorization.yaml'), 'version: 1\nrules:\n  - id: global-no-web\n    tool: web_search\n    action: deny\n')
 const failures = []
 
@@ -84,9 +85,13 @@ try {
     const list = row.closest('[data-system-pane-scroll="list"]')
     const outer = list.getBoundingClientRect(), box = row.getBoundingClientRect()
     const left = outer.left + list.clientLeft, top = outer.top + list.clientTop
-    // Outset box-shadows (rings) extend by their spread; inset ones are drawn inside the row.
-    const spread = Math.max(0, ...getComputedStyle(row).boxShadow.split(/,(?![^(]*\))/).filter(shadow => !/\binset\b/.test(shadow))
-      .map(shadow => parseFloat(shadow.replace(/[a-z]+\([^)]*\)/g, '').match(/-?[\d.]+px/g)?.[3] || '0')))
+    // Outset box-shadows (rings) extend by their spread, a visible outline by its width and
+    // offset; inset rings are drawn inside the row.
+    const style = getComputedStyle(row)
+    const visibleOutline = style.outlineStyle !== 'none' && !/^(transparent|rgba\(.*,\s*0\))$/.test(style.outlineColor)
+    const spread = Math.max(0, visibleOutline ? parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset) : 0,
+      ...style.boxShadow.split(/,(?![^(]*\))/).filter(shadow => !/\binset\b/.test(shadow))
+        .map(shadow => parseFloat(shadow.replace(/[a-z]+\([^)]*\)/g, '').match(/-?[\d.]+px/g)?.[3] || '0')))
     return { left: left - (box.left - spread), top: top - (box.top - spread), right: box.right + spread - (left + list.clientWidth), bottom: box.bottom + spread - (top + list.clientHeight) }
   })
   await page.click('[data-architecture-agent-id="main"]')
@@ -99,6 +104,16 @@ try {
     if (Object.values(outside).some(value => value > 0)) failures.push(`${state} first agent row: ring outside the list pane ${JSON.stringify(outside)}`)
     await page.$eval('[data-architecture-agent-id="main"]', row => row.blur())
   }
+  // Timer rows (like Webhooks) are buttons: their focus ring replaces the browser's outline.
+  await page.click('[data-system-tab="timers"]')
+  await page.waitForSelector('[data-system-split="timers"][data-system-split-layout="split"] [data-system-timer-id="daily"]')
+  await page.keyboard.press('Shift')
+  await page.focus('[data-system-timer-id="daily"]')
+  assert.equal(await page.$eval('[data-system-timer-id="daily"]', row => row.matches(':focus-visible')), true)
+  const timerOutside = await ringOutsideList('[data-system-timer-id="daily"]')
+  if (Object.values(timerOutside).some(value => value > 0)) failures.push(`focused first timer row: ring outside the list pane ${JSON.stringify(timerOutside)}`)
+  await page.click('[data-system-tab="agents"]')
+  await page.waitForSelector('[data-architecture-agent-id="child"]')
   await page.click('[data-architecture-agent-id="child"]')
   await page.waitForSelector('[data-architecture-agent-inspector-id="child"] [data-agent-tab-panel="overview"]')
   assert.match(await page.$eval('[data-agent-access]', element => element.textContent), /Rules from parent apply too/)
