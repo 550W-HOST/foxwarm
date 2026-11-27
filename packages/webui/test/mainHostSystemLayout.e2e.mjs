@@ -79,6 +79,26 @@ try {
   await page.waitForSelector('[data-architecture-agent-id="child"]')
   assert.deepEqual(await page.$$eval('[data-architecture-agent-id]', rows => rows.map(row => [row.getAttribute('data-architecture-agent-id'), row.getAttribute('data-agent-depth')])), [['main', '0'], ['parent', '0'], ['child', '1']])
   assert.match(await page.$eval('[data-architecture-agent-id="parent"]', row => row.textContent), /1 rule/)
+  // The list pane scrolls and so clips: the first row's selection and focus rings stay inside it.
+  const ringOutsideList = selector => page.$eval(selector, row => {
+    const list = row.closest('[data-system-pane-scroll="list"]')
+    const outer = list.getBoundingClientRect(), box = row.getBoundingClientRect()
+    const left = outer.left + list.clientLeft, top = outer.top + list.clientTop
+    // Outset box-shadows (rings) extend by their spread; inset ones are drawn inside the row.
+    const spread = Math.max(0, ...getComputedStyle(row).boxShadow.split(/,(?![^(]*\))/).filter(shadow => !/\binset\b/.test(shadow))
+      .map(shadow => parseFloat(shadow.replace(/[a-z]+\([^)]*\)/g, '').match(/-?[\d.]+px/g)?.[3] || '0')))
+    return { left: left - (box.left - spread), top: top - (box.top - spread), right: box.right + spread - (left + list.clientWidth), bottom: box.bottom + spread - (top + list.clientHeight) }
+  })
+  await page.click('[data-architecture-agent-id="main"]')
+  await page.waitForSelector('[data-architecture-agent-id="main"][data-architecture-agent-selected="true"]')
+  await page.keyboard.press('Shift')
+  await page.focus('[data-architecture-agent-id="main"]')
+  assert.equal(await page.$eval('[data-architecture-agent-id="main"]', row => row.matches(':focus-visible')), true)
+  for (const state of ['focused', 'selected']) {
+    const outside = await ringOutsideList('[data-architecture-agent-id="main"]')
+    if (Object.values(outside).some(value => value > 0)) failures.push(`${state} first agent row: ring outside the list pane ${JSON.stringify(outside)}`)
+    await page.$eval('[data-architecture-agent-id="main"]', row => row.blur())
+  }
   await page.click('[data-architecture-agent-id="child"]')
   await page.waitForSelector('[data-architecture-agent-inspector-id="child"] [data-agent-tab-panel="overview"]')
   assert.match(await page.$eval('[data-agent-access]', element => element.textContent), /Rules from parent apply too/)

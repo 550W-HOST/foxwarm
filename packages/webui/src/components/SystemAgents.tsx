@@ -85,9 +85,10 @@ function AgentList({ agents, selectedId, onSelect, onCreateSession }: { agents: 
         const selected = agent.id === selectedId
         return (
           <li key={agent.id}>
+            {/* Selection and focus rings are inset: the list scrolls in its own pane, which clips anything drawn outside the row. */}
             <div role="button" tabIndex={0} data-architecture-agent-id={agent.id} data-architecture-agent-selected={selected ? 'true' : 'false'} data-agent-depth={depth}
               onClick={() => onSelect(agent.id)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(agent.id) } }}
-              className={`group flex min-w-0 items-center gap-2 rounded-lg py-2 pr-2 outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring ${selected ? 'bg-fw-accent-surface ring-1 ring-fw-accent-border dark:bg-fw-accent-surface-strong/30' : 'hover:bg-fw-hover'}`}
+              className={`group flex min-w-0 items-center gap-2 rounded-lg py-2 pr-2 outline-none ring-inset focus-visible:ring-2 focus-visible:ring-fw-focus-ring ${selected ? 'bg-fw-accent-surface ring-1 ring-fw-accent-border dark:bg-fw-accent-surface-strong/30' : 'hover:bg-fw-hover'}`}
               style={{ paddingLeft: 10 + depth * 18 }}>
               {depth ? <span className="h-3 w-2.5 shrink-0 self-start border-b border-l border-fw-border-strong" aria-hidden /> : null}
               <span className={`h-2 w-2 shrink-0 rounded-full ${active ? 'bg-fw-accent' : 'bg-fw-border-strong'}`} aria-hidden />
