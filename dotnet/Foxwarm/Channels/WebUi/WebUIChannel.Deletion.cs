@@ -17,10 +17,7 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     JsonObject? input = null;
-                    if (
-                        request.ContentLength is > 0
-                        || request.Headers.ContainsKey("Transfer-Encoding")
-                    )
+                    if (MayHaveBody(request))
                     {
                         try
                         {

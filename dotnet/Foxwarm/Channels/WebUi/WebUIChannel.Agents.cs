@@ -10,6 +10,12 @@ namespace Foxwarm.Channels.WebUi;
 
 internal sealed partial class WebUIChannel
 {
+    // HTTP/2 uploads can have neither Content-Length nor Transfer-Encoding. Kestrel's
+    // feature knows whether the stream can carry DATA after its headers.
+    private static bool MayHaveBody(HttpRequest request) =>
+        request.HttpContext.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody
+        ?? (request.ContentLength is > 0 || request.Headers.TransferEncoding.Count > 0);
+
     private void RegisterAgentRoutes(WebApplication app)
     {
         app.MapGet(
@@ -294,7 +300,7 @@ internal sealed partial class WebUIChannel
                 {
                     // Optional body: { acknowledgeDescendants: boolean }.
                     var acknowledge = false;
-                    if (request.ContentLength is > 0 || request.Headers.TransferEncoding.Count > 0)
+                    if (MayHaveBody(request))
                     {
                         var body =
                             await JsonNode.ParseAsync(request.Body, cancellationToken: token)
@@ -487,10 +493,7 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     JsonObject? body = null;
-                    if (
-                        request.ContentLength is > 0
-                        || request.Headers.ContainsKey("Transfer-Encoding")
-                    )
+                    if (MayHaveBody(request))
                     {
                         // A zero-byte chunked JSON stream is the same as a bodyless request.
                         using var input = new MemoryStream();
