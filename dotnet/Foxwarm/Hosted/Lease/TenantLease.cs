@@ -37,6 +37,44 @@ internal sealed record LeaseGrant(int TenantId, string Tenant, string Replica, l
     /// unknown. The lease monitor's fence clock starts here.
     /// </summary>
     internal long AcquisitionStart { get; init; }
+
+    /// <summary>
+    /// The tenant's capability profile (<c>hosted</c> or <c>operator</c>) read by the acquiring
+    /// transaction, so the runtime is built for the profile the acquisition checked.
+    /// </summary>
+    internal string Profile { get; init; } = TenantProfiles.Hosted;
+}
+
+/// <summary>A tenant's capability profile, as <c>tenants.profile</c> stores it.</summary>
+internal static class TenantProfiles
+{
+    internal const string Hosted = "hosted";
+    internal const string Operator = "operator";
+}
+
+/// <summary>A replica's placement role, as <c>replicas.role</c> stores it.</summary>
+internal static class ReplicaRoles
+{
+    internal const string General = "general";
+
+    /// <summary>The pinned master host: it serves the operator tenant and nothing else.</summary>
+    internal const string MasterHost = "master-host";
+
+    /// <summary>The operator surface's process; it never serves a tenant.</summary>
+    internal const string Operator = "operator";
+
+    /// <summary>
+    /// Whether a replica of <paramref name="role"/> may take a tenant with this profile and pin
+    /// (plan §3.3): the master host takes only the operator tenant (or a tenant pinned to it),
+    /// a general replica only unpinned hosted tenants, and the operator surface none.
+    /// </summary>
+    internal static bool MayServe(string role, string profile, string? pinnedRole) =>
+        role switch
+        {
+            MasterHost => profile == TenantProfiles.Operator || pinnedRole == MasterHost,
+            General => profile == TenantProfiles.Hosted && pinnedRole is null,
+            _ => false,
+        };
 }
 
 /// <summary>
@@ -70,6 +108,12 @@ internal enum RenewalOutcome
 internal sealed class LeaseRefusedException(string message) : Exception(message);
 
 /// <summary>
+/// This replica's role may not serve the tenant (its profile or pin requires another role).
+/// A definite decline: another replica may take it.
+/// </summary>
+internal sealed class TenantNotEligibleException(string message) : Exception(message);
+
+/// <summary>
 /// The lease rows of one tenant. An acquisition raises the epoch; every write transaction of
 /// the owner carries that epoch and fails once it is no longer current (see
 /// <see cref="TenantDb"/>). All times are database times.
@@ -80,12 +124,16 @@ internal sealed class TenantLease
 
     private readonly PgDatabase database;
 
-    internal TenantLease(PgDatabase database, string tenant, int readerVersion)
+    internal TenantLease(PgDatabase database, string tenant, int readerVersion, string role = ReplicaRoles.General)
     {
         this.database = database;
         Tenant = tenant;
         ReaderVersion = readerVersion;
+        Role = role;
     }
+
+    /// <summary>The placement role of the replica acquiring through this lease.</summary>
+    internal string Role { get; }
 
     internal string Tenant { get; }
 
@@ -135,7 +183,7 @@ internal sealed class TenantLease
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         // Look first without a lock: a waiting FOR UPDATE would queue the owner's writers.
-        if (!await EligibleAsync(connection, null, replica, token).ConfigureAwait(false))
+        if (await EligibleAsync(connection, null, replica, token).ConfigureAwait(false) is null)
             return null;
         var acquisitionStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
@@ -167,7 +215,7 @@ internal sealed class TenantLease
         {
             return null;
         }
-        if (!await EligibleAsync(connection, transaction, replica, token).ConfigureAwait(false))
+        if (await EligibleAsync(connection, transaction, replica, token).ConfigureAwait(false) is not { } profile)
             return null;
         await using var update = new NpgsqlCommand(
             "UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
@@ -190,12 +238,14 @@ internal sealed class TenantLease
             epoch = reader.GetInt64(1);
         }
         await transaction.CommitAsync(token).ConfigureAwait(false);
-        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart };
+        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart, Profile = profile };
     }
 
-    // The lease can be taken: the tenant is active, readable by this binary, and its lease is
-    // released, expired or this replica's. Throws when the tenant refuses this binary.
-    private async Task<bool> EligibleAsync(
+    // The tenant's profile when the lease can be taken: the tenant is active, readable by this
+    // binary, servable by this replica's role, and its lease is released, expired or this
+    // replica's; null otherwise. Throws when the tenant refuses this binary or this role; both
+    // checks run again under the row lock.
+    private async Task<string?> EligibleAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         string replica,
@@ -204,7 +254,7 @@ internal sealed class TenantLease
     {
         await using var command = new NpgsqlCommand(
             "SELECT t.state, t.min_reader_version,"
-                + " (l.state = 'released' OR l.expires_at <= now() OR l.owner_replica = $2)"
+                + " (l.state = 'released' OR l.expires_at <= now() OR l.owner_replica = $2), t.profile, t.pinned_role"
                 + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.name = $1",
             connection,
             transaction
@@ -222,9 +272,15 @@ internal sealed class TenantLease
             throw new LeaseRefusedException(
                 $"Tenant {Tenant} requires a Foxwarm Main that reads installation level {required}; this binary reads level {ReaderVersion}. Upgrade Main instead of downgrading."
             );
+        var profile = reader.GetString(3);
+        var pinned = reader.IsDBNull(4) ? null : reader.GetString(4);
+        if (!ReplicaRoles.MayServe(Role, profile, pinned))
+            throw new TenantNotEligibleException(
+                $"Tenant {Tenant} (profile {profile}{(pinned is null ? "" : ", pinned to " + pinned)}) isn't served by a {Role} replica."
+            );
         if (state != "active")
-            return false;
-        return reader.GetBoolean(2);
+            return null;
+        return reader.GetBoolean(2) ? profile : null;
     }
 
     /// <summary>

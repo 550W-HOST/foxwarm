@@ -157,6 +157,14 @@ A runtime owns what its build started, so a retired or failed runtime releases i
 - **Wake-up carry-through.** The activation reads the tenant's wake-up row and passes it to the runtime (`ActivationContext.Wakeup`), so the due occurrence fires even when it is already past. The row stays until the runtime replaces or clears it.
 - **Not yet.** The runtimes host comes next: it wires the production `MainHost`, the front and the producers into the gate, and the renewer and supervisor into the replica. The wake-up and recovery scans belong to the timers work.
 
+## D-hosted-placement
+
+**Plan §3.3 (P2), coordinator-confirmed.** Placement ranks; the lease decides.
+
+- **Rank.** `Placement.Score(slug, name)` is the first 8 bytes of SHA-256 over the slug, a zero byte and the replica's logical name, as an unsigned big-endian integer; `Rank` orders names by descending score, ties by name. `Candidates` takes the live boots (`ReplicaRegistry.LiveAsync`), counts two boots of one logical name as the older one, drops draining replicas and those whose role may not serve the tenant, then applies the capacity filter, which only ever concerns new placement.
+- **Eligibility at acquisition.** `TenantLease` carries the acquiring replica's role. Both eligibility reads (before and under the row lock) check `ReplicaRoles.MayServe(role, profile, pinned_role)`: a general replica takes only unpinned `hosted` tenants, the master host only the `operator` tenant or one pinned to it, the operator surface none. A refusal is `TenantNotEligibleException`, a definite decline that leaves the lease untouched; another replica may take the tenant.
+- **The checked profile.** The acquisition returns the profile it read under the row lock in `LeaseGrant.Profile`, and the runtime is built for that profile (`ActivationContext.Grant`). A profile change after the acquisition doesn't change the generation being built.
+
 ## D-hosted-tenant-server
 
 `TenantServer` is the `IServer` of a tenant runtime that has no listener (`HttpServerSettings.Server`): a replica's front server receives every request and hands it to the tenant with `DispatchAsync`.
@@ -201,7 +209,9 @@ A runtime owns what its build started, so a retired or failed runtime releases i
   - idle release: its busy cases, step order and wake-up write, the occurrence carried into the next activation, and an abort by demand that keeps the grant for the next generation;
   - coordinator disposal.
 
-  `AdmissionGateTests` races admissions against the idle latch.
+  - placement at acquisition: the runtime is built for the profile the acquisition checked even when it changes before the build, and a general replica refuses an operator tenant without touching its lease.
+
+  `AdmissionGateTests` races admissions against the idle latch. `PlacementTests` covers the rank's stability and order, candidate filtering (role, drain, duplicate logical name, capacity), acquisition by role and profile with the profile carried in the grant, and the registry's live boots.
 - **Renewal (P2).** `GrantRenewalTests`, on real lease rows:
   - one batch over a live, an expired, a released, a taken-over and a suspended row renews only the live one, leaves the others untouched and loses exactly their handles;
   - a `FOR UPDATE` lock held on A's row past A's deadline fences A at it while B keeps renewing and making fenced commits, and A's row is never extended;

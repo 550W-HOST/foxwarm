@@ -90,6 +90,9 @@ internal sealed class TenantActivations : IAsyncDisposable
     /// </summary>
     internal TimeSpan ShutdownBound { get; init; }
 
+    /// <summary>This replica's placement role; acquisition refuses tenants it may not serve.</summary>
+    internal string Role { get; init; } = ReplicaRoles.General;
+
     /// <summary>
     /// The published generation of <paramref name="tenant"/>, activating it when there is none.
     /// Throws <see cref="TenantHeldElsewhereException"/> when another replica holds the lease,
@@ -352,7 +355,7 @@ internal sealed class TenantActivations : IAsyncDisposable
     private Slot SlotOf(string tenant)
     {
         if (!slots.TryGetValue(tenant, out var slot))
-            slots[tenant] = slot = new(new TenantLease(control, tenant, readerVersion) { LockTimeout = timings.RenewInterval });
+            slots[tenant] = slot = new(new TenantLease(control, tenant, readerVersion, Role) { LockTimeout = timings.RenewInterval });
         return slot;
     }
 

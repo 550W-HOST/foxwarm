@@ -29,15 +29,16 @@ internal sealed class ReplicaRegistry
         string? advertiseAddress,
         int binaryLevel,
         int readerVersion,
-        CancellationToken token
+        CancellationToken token,
+        string role = ReplicaRoles.General
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "INSERT INTO replicas (replica_id, advertise_address, binary_level, reader_version, name)"
-                + " VALUES ($1, $2, $3, $4, $5) ON CONFLICT (replica_id) DO UPDATE SET"
+            "INSERT INTO replicas (replica_id, advertise_address, binary_level, reader_version, name, role)"
+                + " VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (replica_id) DO UPDATE SET"
                 + " advertise_address = excluded.advertise_address, binary_level = excluded.binary_level,"
-                + " reader_version = excluded.reader_version, heartbeat_at = now()",
+                + " reader_version = excluded.reader_version, role = excluded.role, heartbeat_at = now()",
             connection
         );
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
@@ -49,7 +50,35 @@ internal sealed class ReplicaRegistry
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = binaryLevel });
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = readerVersion });
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = LogicalName(replica) });
+        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = role });
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Replicas whose heartbeat is younger than <paramref name="liveFor"/>, for placement: per
+    /// boot, with its logical name, role, drain flag, capacity and start time.
+    /// </summary>
+    internal async Task<IReadOnlyList<ReplicaRow>> LiveAsync(TimeSpan liveFor, CancellationToken token)
+    {
+        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT replica_id, coalesce(name, replica_id), role, draining, capacity::text, started_at FROM replicas"
+                + " WHERE heartbeat_at > now() - make_interval(secs => $1)",
+            connection
+        );
+        command.Parameters.Add(new NpgsqlParameter<double> { TypedValue = liveFor.TotalSeconds });
+        var rows = new List<ReplicaRow>();
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+            rows.Add(new(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetBoolean(3),
+                System.Text.Json.Nodes.JsonNode.Parse(reader.GetString(4)) as System.Text.Json.Nodes.JsonObject ?? [],
+                reader.GetFieldValue<DateTimeOffset>(5)
+            ));
+        return rows;
     }
 
     /// <summary>
