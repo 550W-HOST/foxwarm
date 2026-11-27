@@ -58,7 +58,7 @@ A replica exits with 0 when stopped, 75 when it lost the tenant (restart it; it 
 
 `foxwarm operator serve` runs the control plane on its own database login and HTTP listener. It takes `FOXWARM_DATABASE_URL_FILE` for the operator role and `FOXWARM_KEK_FILE`, never the migration URL. In the deployment YAML, set `url: "https://{slug}.example.com"` and `operator: {url: "https://control.example.net", port: 3003}`. Route the operator host to this service and the wildcard tenant domain to the replicas. Preserve the public Host header, including any non-default port. Terminate TLS at ingress; keep the control plane internal where possible.
 
-The Compose `operator` profile adds this service with the local example in `deployment.operator.yaml`. The Helm equivalent is `operator.enabled`, `operator.url` and `operator.existingSecret` (keys `database-url` and `kek.json`). On an existing database, provision the operator login and supply its password separately; the Compose init script only runs on an empty directory. The default packaged replicas still use the single-tenant topology pending the multi-tenant forwarding cutover. Enabling the operator service alone does not change that topology.
+The Compose `operator` profile adds this service with the local example in `deployment.operator.yaml`. The Helm equivalent is `operator.enabled`, `operator.url` and `operator.existingSecret` (keys `database-url` and `kek.json`). For Compose, run `./generate-secrets.sh --operator secrets` once in the stack directory. The default PostgreSQL service uses the original secrets and leaves the operator role `NOLOGIN`. Enabling the profile runs a one-shot job that sets the separate login password, including on an existing volume. For Helm, provision the login in the external database. The default packaged replicas still use the single-tenant topology pending the multi-tenant forwarding cutover. On these single-tenant (P1) replicas, settings apply on the next start. On P1, a rotation takes effect only after a replica restart.
 
 Create an operator bearer with the migration environment and store it in a private file:
 
@@ -67,7 +67,7 @@ Create an operator bearer with the migration environment and store it in a priva
 foxwarm operator --url https://control.example.net --token-file operator.token tenant create alpha hosted alpha.example.com
 ```
 
-Give the returned setup token to the tenant administrator. It expires in 24 hours. The first sign-in on the tenant's own origin shows the access token to save. `tenant rotate alpha` invalidates the earlier credential once the owner observes the change (normally by the next five-second renewal) and issues another one-time token. See [the operator API](../../docs/code-index/units/hosted-operator.md) for settings, placement and rotation.
+Give the returned setup token to the tenant administrator. It expires in 24 hours. The first sign-in on the tenant's own origin shows the access token to save. On a multi-tenant replica, `tenant rotate alpha` invalidates the earlier credential once the owner observes the change (normally by the next five-second renewal) and issues another one-time token. See [the operator API](../../docs/code-index/units/hosted-operator.md) for settings, placement and rotation.
 
 ## Deployment configuration
 
@@ -122,9 +122,9 @@ kubectl exec deploy/foxwarm -- /app/Foxwarm hosted token
 
 ## Upgrades
 
-Migrate first, then roll the replicas; the Helm hook does this in order. A replica refuses to start (exit 78) against a schema with a migration it doesn't know whose reader level is above its own, or a tenant that a newer version has marked; downgrade by restoring the database, not by starting an older image. On a graceful stop the owner drains and releases the tenant, and a standby takes over within a few seconds. New requests in that window wait at the standbys and reach the new owner; WebUI and Node connections to the old owner reconnect.
+Migrate first, then finish rolling all replicas before creating tenants or rotating credentials. The schema floor is checked at startup: a running older owner can continue to renew after migration. The operator rejects creation and rotation while any live replica heartbeat reports a binary level below 1200. A replica refuses to start (exit 78) against a schema with a migration it doesn't know whose reader level is above its own, or a tenant that a newer version has marked; downgrade by restoring the database, not by starting an older image. On a graceful stop the owner drains and releases the tenant, and a standby takes over within a few seconds. New requests in that window wait at the standbys and reach the new owner; WebUI and Node connections to the old owner reconnect.
 
-To rotate the key-encryption key, mount the new key as `FOXWARM_KEK_FILE` and the old one as `FOXWARM_KEK_PREVIOUS_FILE`, roll the replicas, check with `db status` that every tenant names the new key, then remove the old one.
+To rotate the key-encryption key, mount the new key as `FOXWARM_KEK_FILE` and the old one as `FOXWARM_KEK_PREVIOUS_FILE`, roll the operator service together with all replicas, check with `db status` that every tenant names the new key, then remove the old one.
 
 ## Moving a file-mode installation
 

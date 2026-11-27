@@ -33,22 +33,41 @@ internal sealed class PgInstanceCredentials(TenantDb database, Func<InstanceKeys
             _ => throw new ArgumentOutOfRangeException(nameof(name)),
         };
 
-    public string? Read(InstanceCredentialName name)
+    private long version;
+    private byte[]? verifier;
+    internal string? DownloadKey { get; private set; }
+
+    // Capture once, under this runtime's grant. Redemption publishes a new verifier to
+    // the same owner after commit; later owners read only its digest from this snapshot.
+    internal bool CaptureVersionedHttp()
     {
-        if (name == InstanceCredentialName.HttpToken)
+        var snapshot = database.Write(tx =>
         {
-            var version = database.Read(tx => (long)tx.Scalar("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId)!);
-            if (version > 0)
-                return VersionToken(version);
-        }
-        return ReadStored(name);
+            using var command = tx.Command("SELECT version, credential_hash, download_key FROM foxwarm_auth_snapshot()");
+            using var reader = command.ExecuteReader();
+            return reader.Read()
+                ? (Version: reader.GetInt64(0), Hash: reader.IsDBNull(1) ? null : (byte[])reader[1], Key: Convert.ToHexStringLower((byte[])reader[2]))
+                : default;
+        });
+        version = snapshot.Version;
+        verifier = snapshot.Hash;
+        DownloadKey = snapshot.Key;
+        return version != 0;
     }
 
-    // The P1 operator command may read a legacy stored token only. Never derive or print
-    // the reusable access token issued by a tenant's one-time exchange.
+    internal bool Matches(string candidate) => Volatile.Read(ref verifier) is { } digest
+        && CryptographicOperations.FixedTimeEquals(Operator.OperatorStore.Hash(candidate), digest);
+
+    public string? Read(InstanceCredentialName name) => name == InstanceCredentialName.HttpToken && IsVersioned()
+        ? null : ReadStored(name);
+
+    private bool IsVersioned() => version != 0 || database.Read(tx =>
+        tx.Scalar("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId)) is not 0L;
+
+    // The P1 operator command may print a legacy stored token only.
     internal string? ReadLegacyHttpToken()
     {
-        if (database.Read(tx => tx.Scalar("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId)) is not 0L)
+        if (IsVersioned())
             throw new HostedBootstrapException("Use `foxwarm operator tenant rotate <slug>` to issue a new setup token.");
         return ReadStored(InstanceCredentialName.HttpToken);
     }
@@ -70,7 +89,9 @@ internal sealed class PgInstanceCredentials(TenantDb database, Func<InstanceKeys
 
     public string ReadOrCreate(InstanceCredentialName name, Func<string> generate)
     {
-        if (Read(name) is { } existing)
+        if (name == InstanceCredentialName.HttpToken && IsVersioned())
+            throw new InvalidOperationException("A versioned access token is available only through setup exchange.");
+        if (ReadStored(name) is { } existing)
             return existing;
         var key = Key(name);
         var nonce = RandomNumberGenerator.GetBytes(NonceBytes);
@@ -92,21 +113,19 @@ internal sealed class PgInstanceCredentials(TenantDb database, Func<InstanceKeys
             ?? throw new InvalidOperationException("The instance credential could not be read back.");
     }
 
-    // A distinct secret under the DEK for each rotation. Knowing an earlier HTTP token
-    // gives no information about its successor. Version zero keeps existing installations.
-    private string VersionToken(long version) => Convert.ToHexStringLower(keys().Derive(
-        "http-token/" + version.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-
-    internal Task<string> RedeemAsync(string submitted, string runtimeToken, CancellationToken token) =>
-        database.WriteAsync(async (tx, ct) =>
+    internal async Task<(string Status, string? AccessToken)> RedeemAsync(string submitted, CancellationToken token)
+    {
+        var access = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+        var digest = Operator.OperatorStore.Hash(access);
+        var outcome = await database.WriteAsync(async (tx, ct) =>
         {
-            await using var revision = tx.Command("SELECT credential_version FROM tenants WHERE tenant_id=$1", tx.TenantId);
-            var version = (long)(await revision.ExecuteScalarAsync(ct))!;
-            if (version == 0 || VersionToken(version) != runtimeToken)
-                return "invalid";
-            await using var redeem = tx.Command("SELECT foxwarm_redeem_setup($1,$2)", Operator.OperatorStore.Hash(submitted), version);
+            await using var redeem = tx.Command("SELECT foxwarm_redeem_setup($1,$2,$3)", Operator.OperatorStore.Hash(submitted), version, digest);
             return (string)(await redeem.ExecuteScalarAsync(ct))!;
-        }, token: token);
+        }, token: token).ConfigureAwait(false);
+        if (outcome != "redeemed") return (outcome,null);
+        Volatile.Write(ref verifier,digest);
+        return (outcome,access);
+    }
 
     private byte[] Encrypt(string name, byte[] nonce, string text)
     {

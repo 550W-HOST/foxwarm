@@ -44,6 +44,8 @@ internal interface IGenerationRuntime : IAsyncDisposable
     /// </summary>
     Task StartAsync(CancellationToken token);
 
+    void CredentialRotated() { }
+
     /// <summary>
     /// The runtime's own idle check, evaluated under the admission lock: no busy Session, no
     /// channel poller, no Node connection, no running ToolScript or exec, no timer due within

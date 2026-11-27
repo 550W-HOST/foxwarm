@@ -45,15 +45,19 @@ public sealed class TenantKeysTests
         await using var _ = database;
         var keys = new HostedKeyRing(tenant, NewKek("kek-a")).OpenOrCreate();
         const string setup = "fwsetup_synthetic";
-        await database.OpenOwner().ClusterAsync((tx, ct) => tx.ExecuteAsync(
-            "UPDATE tenants SET credential_version=1, setup_hash=$1, setup_expires_at=now()+interval '1 hour' WHERE tenant_id=$2",
-            ct, Foxwarm.Hosted.Operator.OperatorStore.Hash(setup), tenant.TenantId), default);
+        await database.OpenOwner().ClusterAsync(async (tx,ct) =>
+        {
+            await tx.ExecuteAsync("UPDATE tenants SET credential_version=1 WHERE tenant_id=$1",ct,tenant.TenantId);
+            return await tx.ExecuteAsync("INSERT INTO tenant_auth(tenant_id,version,setup_hash,expires_at,download_key) VALUES ($1,1,$2,now()+interval '1 hour',$3)",
+                ct,tenant.TenantId,Foxwarm.Hosted.Operator.OperatorStore.Hash(setup),RandomNumberGenerator.GetBytes(32));
+        }, default);
         var old = new PgInstanceCredentials(tenant, () => keys);
-        var token = old.Read(InstanceCredentialName.HttpToken)!;
+        Assert.True(old.CaptureVersionedHttp());
         var epoch = await database.TakeLeaseAsync(tenant.TenantId, "successor");
-        await Assert.ThrowsAsync<TenantFencedException>(() => old.RedeemAsync(setup, token, default));
+        await Assert.ThrowsAsync<TenantFencedException>(() => old.RedeemAsync(setup, default));
         var successor = new PgInstanceCredentials(new TenantDb(database.OpenApp(), tenant.TenantId, epoch), () => keys);
-        Assert.Equal("redeemed", await successor.RedeemAsync(setup, token, default));
+        Assert.True(successor.CaptureVersionedHttp());
+        Assert.Equal("redeemed", (await successor.RedeemAsync(setup, default)).Status);
     }
 
     [Fact]

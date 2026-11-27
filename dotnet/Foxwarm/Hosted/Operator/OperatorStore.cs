@@ -29,6 +29,10 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
         await Scalar(tx, "SELECT current_user = operator_role FROM schema_info", ct) is true
             ? true : throw new HostedBootstrapException("The operator service must connect as the database's operator role."), token);
 
+    internal Task RequireOperatorHostnameAsync(string host, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
+        await Scalar(tx, "SELECT 1 FROM tenant_hostnames WHERE hostname=$1", ct, host) is int
+            ? throw new HostedBootstrapException("The operator hostname is already assigned to a tenant.") : true, token);
+
     internal static Task<string> IssueAsync(PgDatabase owner, CancellationToken token) => owner.ClusterAsync(async (tx, ct) =>
     {
         if (await Scalar(tx, "SELECT current_user = pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'operator_credentials'::regclass", ct) is not true)
@@ -48,12 +52,9 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
     internal Task<JsonObject> CreateAsync(string slug, string profile, string hostname, CancellationToken token) =>
         database.ClusterAsync(async (tx, ct) =>
         {
-            var setup = RandomToken(SetupPrefix);
-            var id = (int)(await Scalar(tx, """
-                INSERT INTO tenants(name,profile,credential_version,setup_hash,setup_expires_at)
-                VALUES ($1,$2,1,$3,now()+make_interval(secs => $4)) RETURNING tenant_id
-                """, ct, slug, profile, Hash(setup), SetupLifetime.TotalSeconds))!;
-            await tx.ExecuteAsync("UPDATE tenants SET object_identity = tenant_id::text || '-' || to_char(created_at AT TIME ZONE 'UTC','YYYYMMDD\"T\"HH24:MI:SS.US\"Z\"') WHERE tenant_id=$1", ct, id);
+            await RequireCurrentReplicas(tx, ct);
+            var id = (int)(await Scalar(tx, "INSERT INTO tenants(name,profile,credential_version) VALUES ($1,$2,1) RETURNING tenant_id", ct, slug, profile))!;
+            var setup = await IssueSetupAsync(tx, id, 1, ct);
             await tx.ExecuteAsync("INSERT INTO tenant_leases(tenant_id,epoch,state,expires_at) VALUES ($1,1,'active',now()+interval '30 seconds')", ct, id);
             var keyId = InstanceKeys.NewKeyId();
             var key = RandomNumberGenerator.GetBytes(InstanceKeys.KeyBytes);
@@ -86,13 +87,36 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
 
     internal Task<JsonObject> RotateAsync(string slug, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
     {
-        var setup = RandomToken(SetupPrefix);
-        if (await tx.ExecuteAsync("""
-            UPDATE tenants SET credential_version=credential_version+1, setup_hash=$2, setup_expires_at=now()+make_interval(secs => $3),
-                setup_redeemed_at=NULL WHERE name=$1 AND state='active'
-            """, ct, slug, Hash(setup), SetupLifetime.TotalSeconds) != 1) throw Missing();
+        await RequireCurrentReplicas(tx, ct);
+        int id;
+        long version;
+        await using (var command = tx.Command("UPDATE tenants SET credential_version=credential_version+1 WHERE name=$1 AND state='active' RETURNING tenant_id,credential_version", slug))
+        await using (var reader = await command.ExecuteReaderAsync(ct))
+        {
+            if (!await reader.ReadAsync(ct)) throw Missing();
+            id = reader.GetInt32(0);
+            version = reader.GetInt64(1);
+        }
+        var setup = await IssueSetupAsync(tx, id, version, ct);
         return new JsonObject { ["setupToken"] = setup };
     }, token);
+
+    private static async Task RequireCurrentReplicas(PgTx tx, CancellationToken ct)
+    {
+        if (await Scalar(tx, "SELECT 1 FROM replicas WHERE binary_level<1200 AND heartbeat_at>now()-make_interval(secs=>$1) LIMIT 1", ct, Lease.LeaseTimings.Default.Ttl.TotalSeconds) is int)
+            throw new OperatorProblem(409, "Finish upgrading all live replicas before creating a tenant or rotating its access token.");
+    }
+
+    private static async Task<string> IssueSetupAsync(PgTx tx, int id, long version, CancellationToken ct)
+    {
+        var setup = RandomToken(SetupPrefix);
+        await tx.ExecuteAsync("""
+            INSERT INTO tenant_auth(tenant_id,version,setup_hash,expires_at,download_key) VALUES ($1,$2,$3,now()+make_interval(secs=>$4),$5)
+            ON CONFLICT(tenant_id) DO UPDATE SET version=$2,setup_hash=$3,expires_at=now()+make_interval(secs=>$4),
+                credential_hash=NULL,download_key=$5
+            """, ct, id, version, Hash(setup), SetupLifetime.TotalSeconds, RandomNumberGenerator.GetBytes(32));
+        return setup;
+    }
 
     internal Task<JsonObject> UpdateAsync(string slug, JsonObject edits, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
     {

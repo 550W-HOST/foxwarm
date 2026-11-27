@@ -3,10 +3,28 @@
 ALTER TABLE tenants
     ADD COLUMN object_identity text COLLATE "C",
     ADD COLUMN settings_revision bigint NOT NULL DEFAULT 0,
-    ADD COLUMN credential_version bigint NOT NULL DEFAULT 0,
-    ADD COLUMN setup_hash bytea,
-    ADD COLUMN setup_expires_at timestamptz,
-    ADD COLUMN setup_redeemed_at timestamptz;
+    ADD COLUMN credential_version bigint NOT NULL DEFAULT 0;
+
+-- Existing rows retain their old blob namespace. Every new tenant takes a new identity,
+-- including rows made by import and migration rather than by the operator process.
+CREATE FUNCTION foxwarm_set_object_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.object_identity := NEW.tenant_id::text || '-' || to_char(NEW.created_at AT TIME ZONE 'UTC','YYYYMMDD"T"HH24:MI:SS.US"Z"');
+    RETURN NEW;
+END $$;
+CREATE TRIGGER foxwarm_set_object_identity BEFORE INSERT ON tenants FOR EACH ROW EXECUTE FUNCTION foxwarm_set_object_identity();
+
+-- No replica table grants. Its owner can read the active lease's access verifier through
+-- the scoped snapshot, never the setup digest. The operator can replace a setup token,
+-- but only the migration identity can issue operator credentials.
+CREATE TABLE tenant_auth (
+    tenant_id integer PRIMARY KEY REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+    version bigint NOT NULL CHECK (version > 0),
+    setup_hash bytea NOT NULL CHECK (octet_length(setup_hash)=32),
+    expires_at timestamptz NOT NULL,
+    credential_hash bytea CHECK (octet_length(credential_hash)=32),
+    download_key bytea NOT NULL CHECK (octet_length(download_key)=32)
+);
 
 CREATE FUNCTION foxwarm_operator_revision() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -31,27 +49,37 @@ END
 $$;
 REVOKE ALL ON FUNCTION foxwarm_provision_key FROM PUBLIC;
 
--- The owner may redeem only the current setup token for the credential its runtime holds.
--- Locking the tenant row orders concurrent redemptions and rotations; keep the hash until
--- rotation so only the original token can receive the already-used diagnosis.
-CREATE FUNCTION foxwarm_redeem_setup(digest bytea, version bigint) RETURNS text
+CREATE FUNCTION foxwarm_auth_snapshot() RETURNS TABLE(version bigint, credential_hash bytea, download_key bytea)
 LANGUAGE plpgsql SECURITY DEFINER AS $$
-DECLARE
-    row tenants%ROWTYPE;
 BEGIN
     PERFORM foxwarm_require_lease();
-    SELECT * INTO row FROM tenants WHERE tenant_id = current_setting('foxwarm.tenant')::integer FOR UPDATE;
-    IF row.setup_hash IS NULL OR row.setup_hash <> digest OR row.credential_version <> version THEN RETURN 'invalid'; END IF;
-    IF row.setup_redeemed_at IS NOT NULL THEN RETURN 'used'; END IF;
-    IF row.setup_expires_at <= clock_timestamp() THEN RETURN 'expired'; END IF;
-    UPDATE tenants SET setup_redeemed_at = clock_timestamp() WHERE tenant_id = row.tenant_id;
+    RETURN QUERY SELECT a.version,a.credential_hash,a.download_key FROM tenant_auth a WHERE tenant_id=current_setting('foxwarm.tenant')::integer;
+END $$;
+REVOKE ALL ON FUNCTION foxwarm_auth_snapshot FROM PUBLIC;
+
+CREATE FUNCTION foxwarm_redeem_setup(digest bytea, expected_version bigint, verifier bytea) RETURNS text
+LANGUAGE plpgsql STRICT SECURITY DEFINER AS $$
+DECLARE row tenant_auth%ROWTYPE;
+BEGIN
+    IF octet_length(digest)<>32 OR octet_length(verifier)<>32 OR expected_version<=0 THEN RETURN 'invalid'; END IF;
+    PERFORM foxwarm_require_lease();
+    SELECT * INTO row FROM tenant_auth WHERE tenant_id=current_setting('foxwarm.tenant')::integer FOR UPDATE;
+    IF NOT FOUND OR row.version<>expected_version OR row.setup_hash<>digest THEN RETURN 'invalid'; END IF;
+    IF row.credential_hash IS NOT NULL THEN RETURN 'used'; END IF;
+    IF row.expires_at<=clock_timestamp() THEN RETURN 'expired'; END IF;
+    UPDATE tenant_auth SET credential_hash=verifier WHERE tenant_id=row.tenant_id;
     RETURN 'redeemed';
-END
-$$;
+END $$;
 REVOKE ALL ON FUNCTION foxwarm_redeem_setup FROM PUBLIC;
-DO $$ BEGIN
+DO $$
+DECLARE operator text := current_setting('foxwarm.operator_role');
+BEGIN
     EXECUTE format('ALTER FUNCTION foxwarm_provision_key SET search_path TO pg_catalog, %I, pg_temp', current_schema());
+    EXECUTE format('ALTER FUNCTION foxwarm_auth_snapshot SET search_path TO pg_catalog, %I, pg_temp', current_schema());
     EXECUTE format('ALTER FUNCTION foxwarm_redeem_setup SET search_path TO pg_catalog, %I, pg_temp', current_schema());
-    EXECUTE format('GRANT EXECUTE ON FUNCTION foxwarm_provision_key TO %I', current_setting('foxwarm.operator_role'));
-    EXECUTE format('GRANT EXECUTE ON FUNCTION foxwarm_redeem_setup TO %I', current_setting('foxwarm.app_role'));
+    EXECUTE format('GRANT EXECUTE ON FUNCTION foxwarm_provision_key TO %I',operator);
+    EXECUTE format('GRANT INSERT,UPDATE ON tenant_auth TO %I',operator);
+    EXECUTE format('GRANT SELECT (tenant_id) ON tenant_auth TO %I',operator);
+    EXECUTE format('REVOKE INSERT,UPDATE,DELETE ON operator_credentials FROM %I',operator);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION foxwarm_redeem_setup,foxwarm_auth_snapshot TO %I',current_setting('foxwarm.app_role'));
 END $$;

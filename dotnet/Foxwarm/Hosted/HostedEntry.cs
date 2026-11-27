@@ -95,6 +95,7 @@ internal static class HostedEntry
             )
             {
                 Role = bootstrap.Role,
+                OperatorHostname = deployment.Root.ContainsKey("operator") ? Operator.OperatorListener.ReadSettings(deployment).Origin.IdnHost : null,
             },
             database,
             bootstrap.RequireDatabaseUrl(),
@@ -205,6 +206,7 @@ internal static class HostedEntry
     )
     {
         var storage = new PostgresStorageContext(context.Database, bootstrap.RequireScratchRoot());
+        deployment = deployment.ForTenant(bootstrap.Tenant);
         await OpenTenantStorageAsync(storage, deployment, bootstrap.Tenant, token).ConfigureAwait(false);
         return await BuildRuntimeAsync(
                 storage,
@@ -331,6 +333,7 @@ internal static class HostedEntry
             // A tenant of a multi-tenant replica: requests come from the replica's front, and
             // the tenant can't stop the replica's process.
             Server = server,
+            ReservedOperatorHost = deployment.Root.ContainsKey("operator") ? Operator.OperatorListener.ReadSettings(deployment).Origin.IdnHost : null,
             ShutdownAvailable = server is null,
         };
         // Without HTTP no host adopts it, so connections queued on it are refused now.
@@ -365,7 +368,7 @@ internal sealed class MainHostRuntime(MainHost host, PostgresStorageContext tena
 
     internal MainHost Host => host;
 
-    internal void CredentialRotated()
+    public void CredentialRotated()
     {
         if (tenant.Credentials is PgInstanceCredentials credentials)
             credentials.RevokeStreams();

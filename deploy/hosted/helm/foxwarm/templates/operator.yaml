@@ -43,7 +43,9 @@ spec:
             - {name: scratch, mountPath: /scratch}
       volumes:
         - name: config
-          configMap: {name: {{ include "foxwarm.fullname" . }}-deployment}
+          configMap:
+            name: {{ include "foxwarm.fullname" . }}-deployment
+            items: [{key: operator.yaml, path: deployment.yaml}]
         - name: credentials
           secret:
             secretName: {{ required "operator.existingSecret is required" .Values.operator.existingSecret }}

@@ -31,6 +31,9 @@ internal interface IHostedRuntime : IAsyncDisposable
 
     /// <summary>Completes when the runtime stopped on its own (for example a stop request).</summary>
     Task Stopped { get; }
+
+    /// <summary>Abort streams authenticated with the superseded administrator credential.</summary>
+    void CredentialRotated() { }
 }
 
 /// <summary>What a starting owner gives its runtime.</summary>

@@ -16,15 +16,21 @@ internal sealed record OperatorListener(Uri Origin, IPEndPoint Endpoint, Deploym
 {
     internal static OperatorListener From(DeploymentConfiguration deployment)
     {
+        var listener = ReadSettings(deployment);
+        var template = (string?)deployment.Root["url"];
+        if (template is null || !template[(template.IndexOf("://", StringComparison.Ordinal) + 3)..].StartsWith("{slug}.", StringComparison.Ordinal))
+            throw new HostedBootstrapException("The operator service needs a tenant URL template whose first hostname label is {slug}.");
+        return listener;
+    }
+
+    internal static OperatorListener ReadSettings(DeploymentConfiguration deployment)
+    {
         if (deployment.Root["operator"] is not JsonObject settings || settings.Any(x => x.Key is not ("url" or "port"))
             || settings["url"] is not JsonValue origin || !origin.TryGetValue<string>(out var text)
             || !Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http")
             || uri.AbsolutePath != "/" || uri.UserInfo != "" || uri.Query != "" || uri.Fragment != ""
             || Sessions.SessionWait.Number(settings["port"]) is not { } port || port is < 1 or > 65535 || port != Math.Truncate(port))
             throw new HostedBootstrapException("The operator service needs operator.url (an HTTP or HTTPS origin) and operator.port.");
-        var template = (string?)deployment.Root["url"];
-        if (template is null || !template[(template.IndexOf("://", StringComparison.Ordinal) + 3)..].StartsWith("{slug}.", StringComparison.Ordinal))
-            throw new HostedBootstrapException("The operator service needs a tenant URL template whose first hostname label is {slug}.");
         return new(uri, new(deployment.PublicEndpoint.Address, (int)port), deployment);
     }
 
@@ -47,6 +53,7 @@ internal static class OperatorServer
         await SchemaMigrator.RequireCompatibleAsync(database, token: token);
         var store = new OperatorStore(database, bootstrap.RequireKeks().Current);
         await store.CheckRoleAsync(token);
+        await store.RequireOperatorHostnameAsync(listener.Origin.IdnHost, token);
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.UseKestrel(server =>
@@ -73,6 +80,13 @@ internal static class OperatorServer
             response.StatusCode = 404;
             return;
         }
+        var segments = (remaining.Value ?? "").Trim('/').Split('/');
+        if ((request.Method, segments) is not ("GET", ["placement"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
+            and not ("POST", ["tenants"] or ["tenants", _, "rotate"]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
+        {
+            response.StatusCode = 404;
+            return;
+        }
         try
         {
             if (request.Headers.Origin.Count != 0 && !string.Equals(request.Headers.Origin, listener.Origin.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
@@ -84,7 +98,6 @@ internal static class OperatorServer
                 response.Headers.WWWAuthenticate = "Bearer";
                 throw new OperatorProblem(401, "An operator bearer token is required.");
             }
-            var segments = (remaining.Value ?? "").Trim('/').Split('/');
             JsonNode result;
             switch (request.Method, segments)
             {

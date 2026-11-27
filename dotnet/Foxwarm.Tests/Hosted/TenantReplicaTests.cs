@@ -27,6 +27,8 @@ public sealed class TenantReplicaTests
         internal long Epoch => epoch;
         internal int OperatorChanges;
         internal int StatementLimit;
+        internal readonly TaskCompletionSource Revoked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void CredentialRotated() => Revoked.TrySetResult();
         internal readonly TaskCompletionSource Disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task StartAsync()
@@ -45,6 +47,7 @@ public sealed class TenantReplicaTests
         public async ValueTask DisposeAsync()
         {
             owner.Event($"{tenant}:dispose");
+            if (owner.DrainGate is { } gate) await gate.Task;
             await app.StopAsync();
             await app.DisposeAsync();
             Disposed.TrySetResult();
@@ -66,6 +69,7 @@ public sealed class TenantReplicaTests
 
         /// <summary>When set, every runtime's start waits for it.</summary>
         internal TaskCompletionSource? StartGate;
+        internal TaskCompletionSource? DrainGate;
 
         /// <summary>When set, the factory throws it.</summary>
         internal Exception? FactoryError;
@@ -118,6 +122,7 @@ public sealed class TenantReplicaTests
         public async ValueTask DisposeAsync()
         {
             StartGate?.TrySetResult();
+            DrainGate?.TrySetResult();
             CallbackGate?.TrySetResult();
             Stop.Cancel();
             try
@@ -159,7 +164,7 @@ public sealed class TenantReplicaTests
                 new IPEndPoint(IPAddress.Loopback, 0),
                 slug => $"http://{slug}.test",
                 timings,
-                Drain,
+                timings == Fast ? Drain : TimeSpan.FromSeconds(4),
                 ReaderVersion: 2
             )
             {
@@ -534,6 +539,43 @@ public sealed class TenantReplicaTests
         Assert.Equal(beta, await f.WhoAmIAsync("beta"));
         Assert.NotEqual("alpha:" + alpha.Epoch, await f.WhoAmIAsync("alpha"));
         Assert.Equal(3, Assert.Single(f.Live("alpha")).StatementLimit);
+    }
+
+    [Fact]
+    public async Task RotationReachesASettingsDrainBeforeItsRuntimeStops()
+    {
+        var timings = new LeaseTimings(TimeSpan.FromSeconds(30),TimeSpan.FromSeconds(1),TimeSpan.FromSeconds(15));
+        await using var f=await StartAsync(timings,"alpha");
+        await InitialSubscriptionAsync(f);
+        await f.WhoAmIAsync("alpha");
+        var old=Assert.Single(f.Live("alpha"));
+        f.DrainGate=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET settings='{\"journal\":{\"enabled\":false}}' WHERE name='alpha'");
+        await UntilAsync(()=>f.EventList().Contains("alpha:dispose"),"settings drain");
+        Assert.False(old.Revoked.Task.IsCompleted);
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET credential_version=credential_version+1 WHERE name='alpha'");
+        await old.Revoked.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(old.Disposed.Task.IsCompleted);
+        f.DrainGate.SetResult();
+    }
+
+    [Fact]
+    public async Task SettingsObservedDuringStartCannotOpenTheObsoleteGate()
+    {
+        await using var f = await StartAsync("alpha");
+        await InitialSubscriptionAsync(f);
+        f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = f.GetAsync("alpha");
+        await UntilAsync(() => f.EventList().Contains("alpha:start-waits"), "start paused after capture");
+        var old = Assert.Single(f.Live("alpha"));
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET limits='{\"busyTurns\":3}' WHERE name='alpha'");
+        // Wait for a successful renewal after the setting is committed. Its result observes the revision.
+        var expiry = (DateTime)(await f.Database.ScalarAsync("SELECT expires_at FROM tenant_leases JOIN tenants USING(tenant_id) WHERE name='alpha'"))!;
+        await UntilAsync(async () => (DateTime)(await f.Database.ScalarAsync("SELECT expires_at FROM tenant_leases JOIN tenants USING(tenant_id) WHERE name='alpha'"))! > expiry, "renewal observed new revision");
+        f.StartGate.SetResult();
+        using var response = await first;
+        Assert.NotEqual("alpha:" + old.Epoch, await response.Content.ReadAsStringAsync());
+        Assert.NotEqual("alpha:" + old.Epoch, await f.WhoAmIAsync("alpha"));
     }
 
     // Review 4c #2: a runtime that stops promptly isn't enough; a release that can't take the

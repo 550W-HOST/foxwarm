@@ -56,7 +56,7 @@ public sealed class ClusterSchemaTests
         await RunAsync(operatorRole, $"INSERT INTO tenant_leases (tenant_id) VALUES ({created})");
         await RunAsync(operatorRole, $"INSERT INTO tenant_hostnames (hostname, tenant_id, kind) VALUES ('beta.example.test', {created}, 'primary')");
         await RunAsync(operatorRole, $"UPDATE tenants SET state = 'suspended', limits = '{{\"sessions\": 10}}' WHERE tenant_id = {created}");
-        await RunAsync(operatorRole, "INSERT INTO operator_credentials (id, hash) VALUES ('op1', 'h')");
+        Assert.Equal("42501", (await RefusedAsync(operatorRole, "INSERT INTO operator_credentials (id, hash) VALUES ('op1', 'h')")).SqlState);
         Assert.Equal(1L, await RunAsync(app, "SELECT count(*) FROM tenant_hostnames"));
         // The operator role reaches no tenant data directly.
         Assert.Equal(

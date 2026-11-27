@@ -7,11 +7,10 @@
 set -eu
 owner="$(cat /run/secrets/owner-password)"
 app="$(cat /run/secrets/app-password)"
-operator="$(cat /run/secrets/operator-password)"
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
-  -v owner="$owner" -v app="$app" -v operator="$operator" <<'SQL'
+  -v owner="$owner" -v app="$app" <<'SQL'
 CREATE ROLE foxwarm_owner LOGIN PASSWORD :'owner';
 CREATE ROLE foxwarm_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD :'app';
-CREATE ROLE foxwarm_operator LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD :'operator';
+CREATE ROLE foxwarm_operator NOLOGIN NOSUPERUSER NOBYPASSRLS;
 CREATE DATABASE foxwarm OWNER foxwarm_owner;
 SQL

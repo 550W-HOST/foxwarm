@@ -110,6 +110,15 @@ public sealed class OperatorProcessTests
             Assert.Equal(HttpStatusCode.Unauthorized, (await Send(client, HttpMethod.Get, api + "/tenants", bearer: "fwop_" + new string('0', 64))).Status);
             Assert.Equal(HttpStatusCode.NotFound, (await Send(client, HttpMethod.Get, api + "/tenants", "alpha.test", op)).Status);
             Assert.Equal(HttpStatusCode.NotFound, (await Send(client, HttpMethod.Post, origin + "/api/auth", bearer: op)).Status);
+            var unknown = await Send(client,HttpMethod.Get,api+"/unknown");
+            Assert.Equal(HttpStatusCode.NotFound,unknown.Status); Assert.Equal("",unknown.Text);
+            using (var foreign = new HttpRequestMessage(HttpMethod.Get,api+"/tenants"))
+            {
+                foreign.Headers.Authorization=new("Bearer",op);
+                foreign.Headers.Add("Origin","https://another.test");
+                using var refused=await client.SendAsync(foreign);
+                Assert.Equal(HttpStatusCode.Forbidden,refused.StatusCode);
+            }
             var create = new JsonObject { ["slug"] = "alpha", ["profile"] = "hosted", ["primaryHostname"] = "custom.test" };
             Assert.Equal(HttpStatusCode.BadRequest, (await Call(HttpMethod.Post, "/tenants", create)).Status);
             var created = JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "tenant", "create", "alpha", "hosted", "alpha.test"))!;
@@ -157,6 +166,8 @@ public sealed class OperatorProcessTests
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", changed)).Status);
             await Until(async () => { await AsAdmin(reusable, "/health"); return await harness.EpochAsync("alpha") > epoch; });
             Assert.Contains(HttpStatusCode.TooManyRequests, new[] { (await AsAdmin(reusable,"/health")).Status, (await AsAdmin(reusable,"/health")).Status });
+            var reserved = await AsAdmin(reusable,OperatorServer.Path+"/placement");
+            Assert.Equal(HttpStatusCode.NotFound,reserved.Status); Assert.Equal("",reserved.Text);
             var reset = await Call(HttpMethod.Patch, "/tenants/alpha", new JsonObject { ["limits"] = new JsonObject() });
             Assert.Equal(HttpStatusCode.OK, reset.Status);
             await Until(async () => (await AsAdmin(reusable,"/health")).Status == HttpStatusCode.OK && await harness.EpochAsync("alpha") > epoch + 1);
@@ -193,7 +204,7 @@ public sealed class OperatorProcessTests
             Assert.NotEqual(reusable, (string?)next.Json["instanceToken"]);
             Assert.Equal(HttpStatusCode.Unauthorized, (await Redeem(nextSetup)).Status);
             nextSetup = (string)(await Call(HttpMethod.Post, "/tenants/alpha/rotate")).Json["setupToken"]!;
-            await db.ExecuteOwnerAsync("UPDATE tenants SET setup_expires_at=now()-interval '1 second' WHERE name='alpha'");
+            await db.ExecuteOwnerAsync("UPDATE tenant_auth SET expires_at=now()-interval '1 second' WHERE tenant_id=(SELECT tenant_id FROM tenants WHERE name='alpha')");
             await Until(async () =>
             {
                 var reply = await Redeem(nextSetup);

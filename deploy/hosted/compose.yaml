@@ -41,7 +41,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
-    secrets: [postgres-password, owner-password, app-password, operator-password]
+    secrets: [postgres-password, owner-password, app-password]
     volumes:
       - postgres:/var/lib/postgresql
       # Creates the schema owner and runtime roles and the foxwarm database on first start.
@@ -88,6 +88,19 @@ services:
       disable: true
     restart: "no"
 
+  operator-login:
+    profiles: [operator]
+    image: postgres:18.7-trixie
+    read_only: true
+    entrypoint: ["/bin/sh", "/setup/operator-login.sh"]
+    secrets: [postgres-password, operator-password]
+    volumes:
+      - ./operator-login.sh:/setup/operator-login.sh:ro
+    networks: [backend]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   operator:
     profiles: [operator]
     image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
@@ -95,7 +108,7 @@ services:
     read_only: true
     user: "1000:1000"
     depends_on:
-      migrate:
+      operator-login:
         condition: service_completed_successfully
     environment:
       FOXWARM_ROLE: operator
