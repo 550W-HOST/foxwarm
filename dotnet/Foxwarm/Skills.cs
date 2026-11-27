@@ -40,15 +40,40 @@ internal enum SkillAccess
 // Knowledge discovery only: entry documents are loaded on demand, never executable tool registration.
 internal sealed partial class Skills(AgentCatalog agents, string globalRoot, bool masterNode = true)
 {
-    // Global skills about operating a Main server on its own machine (updates, restarts, data
-    // layout). Without a master Node (RuntimeCapabilities.MasterNode) they are neither listed nor
+    // Global skills about operating a Main server or a service beside it on its own machine
+    // (updates, restarts, data layout, the speech service). Without a master Node (RuntimeCapabilities.MasterNode) they are neither listed nor
     // loadable nor runnable: a hosted installation is upgraded by image rollouts outside Foxwarm.
     private static readonly IReadOnlySet<string> MasterNodeSkills = new HashSet<string>(
         StringComparer.Ordinal
     )
     {
         "foxwarm-maintenance",
+        // Runs a speech service beside the Main server and sets the deployment's `asrService`.
+        "asr-service",
     };
+
+    /// <summary>
+    /// The text of a skill document as this runtime reads it. Bundled (global) Markdown documents
+    /// may hold <c>master-node</c> wrappers (<see cref="ConditionalMemory"/>), filtered for
+    /// whether this runtime has a master Node; with one, the result is the document without its
+    /// wrappers and hosted blocks, the same bytes the document had before it was conditioned.
+    /// Agent skills are their Agent's own text and are never filtered.
+    /// </summary>
+    internal string Text(SkillInfo info, string path, string text) =>
+        Conditioned(info, path) ? ConditionalMemory.FilterMasterNodeSource(text, masterNode) : text;
+
+    /// <summary>The bytes of a skill file as this runtime reads it (<see cref="Text"/>).</summary>
+    internal byte[] Bytes(SkillInfo info, string path, byte[] bytes)
+    {
+        if (!Conditioned(info, path))
+            return bytes;
+        var text = System.Text.Encoding.UTF8.GetString(bytes);
+        var filtered = ConditionalMemory.FilterMasterNodeSource(text, masterNode);
+        return ReferenceEquals(filtered, text) ? bytes : System.Text.Encoding.UTF8.GetBytes(filtered);
+    }
+
+    internal static bool Conditioned(SkillInfo info, string path) =>
+        info.SourceType == "global" && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
     private bool Unavailable(string name, string rootType) =>
         !masterNode && rootType == "global" && MasterNodeSkills.Contains(name);
@@ -133,7 +158,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             name,
             agent,
             true,
-            async info => (info, await info.Source.ReadAllTextAsync(info.MetadataPath))
+            async info => (info, Text(info, "SKILL.md", await info.Source.ReadAllTextAsync(info.MetadataPath)))
         );
 
     // Resolution shared by load and run: Agent-local, inherited, then global; the first valid

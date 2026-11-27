@@ -38,10 +38,18 @@ Identity edits use `set_config` with `target: config` or WebUI Setup Config and 
 
 `ctl config explain-auth` runs the `explain_tool_authorization` builtin. Each probe names an existing caller Session and the concrete tool as a tool ID or source/name descriptor with `args`; the call is resolved at that Session's current Node and evaluated with its real Agent layers, paths and relations, without running it. The result shows the final `decision` (`allow`, `ask` or `deny`; `allowed` is true only for allow), per layer its `decision` and the matching rule (position, ID, action, reason, match, and `approval` for ask) or the default, and the facts used. An ask result adds the combined `approval` options. Denials raised before policy evaluation appear as `precheck`; tool-local validation is not evaluated.
 
+<foxwarm-if master-node="true">
 ```text
 config explain-auth --policy-file-path '$fw_tmp/tool-authorization-candidate.yaml' --compare --probes @probes
   values: { "probes": [ { "sessionId": "<caller-session>", "toolId": "node:<node>/exec", "args": { "command": "true" } } ] }
 ```
+</foxwarm-if>
+<foxwarm-if master-node="false">
+```text
+config explain-auth --probes @probes
+  values: { "probes": [ { "sessionId": "<caller-session>", "toolId": "node:<node>/exec", "args": { "command": "true" } } ] }
+```
+</foxwarm-if>
 
 Without `policyFilePath` it explains the active policy. A candidate replaces only the global layer and is never installed. `compare` adds per-probe `active`/`candidate`/`changed` (the final decision differs) and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant plus master `read` of the active policy and of the candidate. Up to 256 probes per call. A probe may carry a `label` (up to 200 characters) that is echoed in its result row. `--compact` returns one short row per probe: `index`, `sessionId`, `toolId`, `decision` and `rules` (the layer, rule ID and decision of each layer that matched a rule or did not allow), or `active` and `candidate` of the same shape plus `changed` with `--compare`, and `error` for a probe that failed; it leaves out the facts and rule details. Results beyond about 40,000 characters are saved to a file by the tool output limit, so a batch of hundreds of probes reads best compact or from a ToolScript, which can select from the result before returning it.
 
@@ -56,7 +64,11 @@ Without `policyFilePath` it explains the active policy. A candidate replaces onl
 
 | Symptom | Checks |
 | --- | --- |
+<foxwarm-if master-node="true">
 | Setter denied | Current setter permission and current master read permission for the exact candidate |
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 | Candidate rejected | Strict field names, version, duplicate IDs, bounded sizes, scalar operators, supported path variables, registered Session-target family |
 | Call waits or returns `tool_approval_*` | An `ask` rule or default matched: decide in the WebUI dock, or check `approvers`, the identity's Session scope and `timeoutSeconds`. `tool_approval_unavailable` means the ask applied to an internal step, the call's targets kept changing while it waited, or the Session's pending limit was reached |
 | Tool is visible but call denied | Discovery is conservative; argument/path/target conditions are checked strictly at invocation |

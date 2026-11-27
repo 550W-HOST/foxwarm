@@ -517,6 +517,38 @@ public sealed class HostedCapabilityProfileTests
         Assert.Throws<InvalidDataException>(() => TenantProfiles.Parse(null));
     }
 
+    // A bundled skill's master-node wrappers are filtered for the runtime in `skill load` and its
+    // resource reads; file mode reads the document without wrappers or hosted text.
+    [Fact]
+    public async Task Bundled_skill_documents_and_resources_read_for_the_profile()
+    {
+        const string Conditioned =
+            "before\n<foxwarm-if master-node=\"true\">\nFILE-ONLY\n</foxwarm-if>\n<foxwarm-if master-node=\"false\">\nHOSTED-ONLY\n</foxwarm-if>\nafter\n";
+        foreach (var capabilities in new[] { RuntimeCapabilities.File, RuntimeCapabilities.Hosted })
+        {
+            await using var f = await Fixture.Create(capabilities);
+            await File.AppendAllTextAsync(Path.Combine(f.Skills, "demo", "SKILL.md"), Conditioned);
+            await File.WriteAllTextAsync(Path.Combine(f.Skills, "demo", "guide.md"), Conditioned);
+            var expected = capabilities.MasterNode ? "before\nFILE-ONLY\nafter\n" : "before\nHOSTED-ONLY\nafter\n";
+            var load = await f.Ctl("skill load demo");
+            Succeeded(load);
+            var text = load["output"]!.GetValue<string>();
+            Assert.EndsWith(expected + "\n", text);
+            Assert.DoesNotContain("foxwarm-if", text);
+            var resource = await f.Ctl("skill load demo guide.md");
+            Succeeded(resource);
+            var read = resource["output"]!.GetValue<string>();
+            Assert.Contains(capabilities.MasterNode ? "FILE-ONLY" : "HOSTED-ONLY", read);
+            Assert.DoesNotContain(capabilities.MasterNode ? "HOSTED-ONLY" : "FILE-ONLY", read);
+            Assert.DoesNotContain("foxwarm-if", read);
+            // Line ranges count the runtime's text.
+            var second = await f.Ctl("skill load demo guide.md --start-line 2 --end-line 2");
+            Succeeded(second);
+            Assert.Contains(capabilities.MasterNode ? "FILE-ONLY" : "HOSTED-ONLY", second["output"]!.GetValue<string>());
+            Assert.DoesNotContain("before", second["output"]!.GetValue<string>());
+        }
+    }
+
     [Fact]
     public async Task Skills_memory_and_the_prompt_work_without_master()
     {

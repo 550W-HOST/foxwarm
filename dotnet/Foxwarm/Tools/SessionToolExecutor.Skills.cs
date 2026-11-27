@@ -58,7 +58,7 @@ internal sealed partial class SessionToolExecutor
         long total = 0;
         foreach (var file in plan)
         {
-            var bytes = await info.Source.ReadAllBytesAsync(file.FullPath, token);
+            var bytes = sessions.SkillCatalog.Bytes(info, file.Path, await info.Source.ReadAllBytesAsync(file.FullPath, token));
             var entry = new JsonObject
             {
                 ["path"] = file.Path,
@@ -170,14 +170,39 @@ internal sealed partial class SessionToolExecutor
                 },
             };
         JsonObject? data = null;
-        var text = await FileToolCore.Read(
-            resource.FullPath,
-            resource.Display,
-            first,
-            last,
-            token,
-            Programmatic ? value => data = value : null
-        );
+        string text;
+        if (Skills.Conditioned(info, resource.Path))
+        {
+            // A bundled document is read as this runtime's text of it (Skills.Text).
+            var content = sessions.SkillCatalog.Bytes(
+                info,
+                resource.Path,
+                await File.ReadAllBytesAsync(resource.FullPath, token)
+            );
+            text = await FileToolCore.ReadContent(
+                resource.FullPath,
+                resource.Display,
+                content.Length,
+                first,
+                last,
+                (offset, count) =>
+                    Task.FromResult(
+                        content.AsSpan((int)Math.Min(offset, content.Length))[
+                            ..(int)Math.Min(count, Math.Max(0, content.Length - offset))
+                        ].ToArray()
+                    ),
+                Programmatic ? value => data = value : null
+            );
+        }
+        else
+            text = await FileToolCore.Read(
+                resource.FullPath,
+                resource.Display,
+                first,
+                last,
+                token,
+                Programmatic ? value => data = value : null
+            );
         var result = new JsonObject { ["output"] = $"FILE: {resource.Display}\n{text}" };
         if (data is not null)
         {

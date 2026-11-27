@@ -82,10 +82,18 @@ For `update_timer`, omit schedule fields when you only want to change metadata s
 
 Set `action: "toolscript"` and supply a complete `script` specification instead of a message. These timers must belong to the calling Session. Message timers retain the default `action: "message"`, including their existing other-Session and new-Session targets.
 
+<foxwarm-if master-node="true">
 ```text
 timer create --action toolscript --cron '*/10 * * * *' --script @script
   values: { "script": { "node": "master", "filePath": "checks/monitor.py", "args": {"check": "disk"} } }
 ```
+</foxwarm-if>
+<foxwarm-if master-node="false">
+```text
+timer create --action toolscript --cron '*/10 * * * *' --script @script
+  values: { "script": { "node": "devbox", "filePath": "checks/monitor.py", "args": {"check": "disk"} } }
+```
+</foxwarm-if>
 
 `script` accepts the normal `run_script` source/input fields: `code` or `filePath`, source `node`, `args` or `argsJson`, `mode`, and `timeoutSecs`. Files are read and authorized anew at firing. Omitted/current source Node and relative paths use the owner's current routing; explicit source selection does not change VM placement or nested tools' default Node. Inline code cannot specify a source Node. A supplied replacement `script` replaces the whole specification, not individual keys. Switching action requires its new payload and clears stale fields. `newSession` target fields apply only to message timers.
 
