@@ -203,9 +203,13 @@ internal static class QQBotUpload
             {
                 throw new IOException("QQ Bot media part upload timed out.");
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException error)
             {
-                throw new IOException("QQ Bot media part upload failed.");
+                // A policy refusal stays the cause; it names only the host, never the signed
+                // URL or its query. Other failures keep their generic message.
+                throw Foxwarm.Net.EgressDeniedException.Find(error) is { } denied
+                    ? new IOException("QQ Bot media part upload failed.", denied)
+                    : new IOException("QQ Bot media part upload failed.");
             }
             requireCurrent();
             await request(

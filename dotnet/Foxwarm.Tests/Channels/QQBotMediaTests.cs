@@ -91,6 +91,44 @@ public sealed class QQBotMediaTests
         Assert.Empty(Files(f)); // delivery does not create inbound storage
     }
 
+    // The presigned part host refused as the guarded connect callback refuses it.
+    private sealed class RefusedParts(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
+            request.Method == HttpMethod.Put
+                ? throw new HttpRequestException(
+                    "Connection to " + request.RequestUri + " failed.",
+                    new Foxwarm.Net.EgressDeniedException(request.RequestUri!.Host, null)
+                )
+                : base.SendAsync(request, token);
+    }
+
+    [Fact]
+    public async Task A_refused_part_upload_keeps_the_refusal_without_the_signed_url()
+    {
+        await using var peer = await QQBotPeer.StartAsync();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["qq"] = peer.Config() },
+            dependencies: peer.Dependencies with
+            {
+                CreateQQBotHttp = () => new HttpClient(new RefusedParts(peer.CreateHttpHandler())),
+            }
+        );
+        f.Manager.AttachChannel("qq:group:room", f.Owner);
+        await QQBotChannelTests.Start(f, peer);
+        var path = Path.Combine(f.Work, "large.bin");
+        await File.WriteAllBytesAsync(path, new byte[5242880]);
+        var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+            f.Manager.ChannelRegistry.Get("qq")!
+                .SendFile!("group:room", new(path, "large.bin", null, false), null, default)
+        );
+        Assert.True(ChannelFailure.Refused(error));
+        var described = ChannelFailure.Describe(error, "QQ Bot sending");
+        Assert.Contains("cos.myqcloud.com: its address is blocked by this deployment's network policy", described);
+        Assert.DoesNotContain("/part/", described);
+        Assert.DoesNotContain("https://", described);
+    }
+
     [Theory]
     [InlineData(5242880)]
     [InlineData(10002433)]
