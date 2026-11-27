@@ -229,14 +229,7 @@ internal static class ToolAuthorizationExplain
         if (item.Rule is { } rule)
         {
             result["rule"] = RuleRef(policy, rule);
-            // Through the alias when the rule matches this operation only with it.
-            if (
-                request is not null
-                && SessionWait.Text(item.Operation.Resources["node"]) == AgentStorePaths.Endpoint
-                && ToolAuthorizationEvaluation.WithoutMasterAlias(() =>
-                    OperationRules.Match(rule, item.Operation, request, SessionWait.Text(rule["action"]) is "deny" or "ask")
-                ) != OperationMatch.Yes
-            )
+            if (request is not null && OperationThroughMasterAlias(rule, item.Operation, request))
                 result["masterAlias"] = true;
         }
         else
@@ -288,6 +281,22 @@ internal static class ToolAuthorizationExplain
             return false;
         return ToolAuthorizationEvaluation.LegacyRuleMatches(rule, request)
             && !ToolAuthorizationEvaluation.WithoutMasterAlias(() => ToolAuthorizationEvaluation.LegacyRuleMatches(rule, request));
+    }
+
+    // Whether an operation's winning rule matched it through the master alias: re-evaluated by
+    // the rule's own evaluator (operation or whole-call), it matches with the alias and doesn't
+    // without it. An undecidable match is never marked: it isn't a match the alias made.
+    internal static bool OperationThroughMasterAlias(JsonObject rule, AuthorizationOperation operation, ToolAuthorizationRequest request)
+    {
+        if (!OperationRules.IsOperationRule(rule))
+            return ToolAuthorizationEvaluation.MatchesCall(rule, request)
+                && !ToolAuthorizationEvaluation.WithoutMasterAlias(() => ToolAuthorizationEvaluation.MatchesCall(rule, request));
+        if (SessionWait.Text(operation.Resources["node"]) != AgentStorePaths.Endpoint)
+            return false;
+        var restrictive = SessionWait.Text(rule["action"]) is "deny" or "ask";
+        return OperationRules.Match(rule, operation, request, restrictive) == OperationMatch.Yes
+            && ToolAuthorizationEvaluation.WithoutMasterAlias(() => OperationRules.Match(rule, operation, request, restrictive))
+                == OperationMatch.No;
     }
 
     private static void Matched(JsonObject result, ToolAuthorizationPolicy policy, JsonObject? rule)

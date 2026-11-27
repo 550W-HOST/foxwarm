@@ -198,6 +198,7 @@ internal sealed partial class SessionManager
                 if (CtlParser.Parse(call) is CtlError error)
                     throw new InvalidDataException(error.Message);
                 resolved = tools.Route(tools.Resolve("ctl", call, CurrentNode(target)), CurrentNode(target), "ctl", call);
+                tools.RequireAvailable(resolved, CurrentNode(target), "ctl", call);
             }
             else
             {
@@ -205,6 +206,7 @@ internal sealed partial class SessionManager
                 if (!call.ContainsKey("args") && !call.ContainsKey("argsJson"))
                     call["args"] = new JsonObject();
                 resolved = tools.Route(tools.Resolve("call_tool", call, CurrentNode(target)), CurrentNode(target), "call_tool", call);
+                tools.RequireAvailable(resolved, CurrentNode(target), "call_tool", call);
             }
             if (SessionToolExecutor.IsCtlFrontEnd(resolved))
                 throw new InvalidDataException(

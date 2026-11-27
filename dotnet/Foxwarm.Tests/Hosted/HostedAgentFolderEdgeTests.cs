@@ -382,7 +382,7 @@ public sealed class HostedAgentFolderEdgeTests(ITestOutputHelper output)
         protected override object? Invoke(MethodInfo? method, object?[]? args)
         {
             var result = method!.Invoke(Inner, args);
-            if (method.Name is "ReadAsync" or "ReadRangeAsync" && result is Task task)
+            if (method.Name is "ReadAsync" or "ReadRangeAsync" or "ReadBoundedAsync" && result is Task task)
             {
                 task.GetAwaiter().GetResult();
                 Inner.WriteAsync((string?)args![0], (string)args[1]!, Next, null, default).GetAwaiter().GetResult();

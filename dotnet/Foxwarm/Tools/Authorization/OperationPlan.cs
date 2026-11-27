@@ -510,6 +510,9 @@ internal sealed partial record OperationPlan(
                 case "default-cwd-probe":
                     if (Action != "select")
                         return false;
+                    // Clearing the selection without master selects no Node: no default cwd.
+                    if (facts?.NodeTargets is { Count: 0 })
+                        return false;
                     if (NodeTarget is not { } node || context.DefaultCwdProbe is not { } probe)
                         return null;
                     return probe(node);

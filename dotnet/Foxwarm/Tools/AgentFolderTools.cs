@@ -133,14 +133,15 @@ internal sealed class AgentStoreFileOperations(IAgentFileStore store, string age
             ? new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)).ToUnixTimeMilliseconds()
             : 0;
 
+    // Kind, length and time only: no content is read and no generation is computed.
     public Task<TargetFileStat> StatAsync(string path, CancellationToken token)
     {
-        var stat = store.Stat(agent, path) ?? throw Missing(path);
+        var kind = store.Kind(agent, path) ?? throw Missing(path);
         return Task.FromResult(
             new TargetFileStat(
-                stat.IsDirectory ? "directory" : "file",
-                stat.IsDirectory ? 0 : stat.Length,
-                Milliseconds(stat.LastWriteUtc),
+                kind.Kind,
+                kind.Kind == "directory" ? 0 : kind.Length,
+                Milliseconds(kind.LastWriteUtc),
                 path.Length == 0 ? "" : path[(path.LastIndexOf('/') + 1)..]
             )
         );
@@ -150,20 +151,17 @@ internal sealed class AgentStoreFileOperations(IAgentFileStore store, string age
     // larger than the limit.
     internal async Task<byte[]?> ReadCandidateAsync(string path, long? limit, CancellationToken token)
     {
-        if (store.Stat(agent, path) is not { IsDirectory: false } stat)
+        if (store.Kind(agent, path) is not { Kind: "file" })
             throw new InvalidDataException("Configuration candidate must be a regular file.");
-        if (stat.Length > limit)
-            return null;
-        AgentFileContent content;
         try
         {
-            content = await store.ReadAsync(agent, path, token);
+            // The limit applies to the version that is read, before its content is.
+            return (await store.ReadBoundedAsync(agent, path, limit ?? long.MaxValue, token))?.Bytes;
         }
         catch (Exception error) when (error is FileNotFoundException or UnauthorizedAccessException or IOException and not AgentFileConflictException)
         {
             throw new InvalidDataException("Configuration candidate must be a regular file.");
         }
-        return content.Bytes.LongLength > limit ? null : content.Bytes;
     }
 
     public async Task<byte[]> ReadAsync(string path, long offset, int count, CancellationToken token)
@@ -180,16 +178,20 @@ internal sealed class AgentStoreFileOperations(IAgentFileStore store, string age
 
     public Task<IReadOnlyList<TargetFileStat>> ReadDirectoryAsync(string path, CancellationToken token)
     {
-        if (store.Stat(agent, path) is not { IsDirectory: true })
-            throw store.Stat(agent, path) is null
+        var directory = store.Kind(agent, path);
+        if (directory is not { Kind: "directory" })
+            throw directory is null
                 ? Missing(path)
                 : new NodeProviderException("ENOTDIR", "Not a directory: " + path);
+        // A link is listed as a link, from its own metadata; it is never followed.
         IReadOnlyList<TargetFileStat> entries = store
             .List(agent, path)
             .Select(entry =>
             {
+                if (entry.IsLink)
+                    return new TargetFileStat("symlink", 0, Milliseconds(entry.LastWriteUtc), entry.Name);
                 var modified = entry.IsDirectory
-                    ? store.Stat(agent, path.Length == 0 ? entry.Name : path + "/" + entry.Name)?.LastWriteUtc
+                    ? store.Kind(agent, path.Length == 0 ? entry.Name : path + "/" + entry.Name)?.LastWriteUtc
                     : entry.LastWriteUtc;
                 return new TargetFileStat(
                     entry.IsDirectory ? "directory" : "file",
@@ -244,11 +246,11 @@ internal sealed class AgentStoreFileOperations(IAgentFileStore store, string age
         if (path.Length == 0)
             return;
         var parent = AgentFilePaths.Parent(path);
-        switch (store.Stat(agent, parent))
+        switch (store.Kind(agent, parent))
         {
             case null:
                 throw Missing(path);
-            case { IsDirectory: false }:
+            case { Kind: not "directory" }:
                 throw new NodeProviderException("ENOTDIR", "Not a directory: " + path);
         }
     }
@@ -257,7 +259,7 @@ internal sealed class AgentStoreFileOperations(IAgentFileStore store, string age
     {
         RequireParent(path);
         // A directory is an existing entry that a file write never replaces, as on a file system.
-        if (store.Stat(agent, path) is { IsDirectory: true })
+        if (store.Kind(agent, path) is { Kind: "directory" })
             throw new NodeProviderException("EEXIST", "File already exists: " + path);
         return Effect(path, () => store.WriteAsync(agent, path, bytes, overwrite ? null : 0, token));
     }

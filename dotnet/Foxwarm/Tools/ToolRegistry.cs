@@ -348,9 +348,11 @@ internal sealed class ToolRegistry(
         if (owner.Programmatic)
         {
             owner.ScriptBudget!.JsonValue(result);
-            // Local files publish structured data; only directory listings have a sole output field.
+            // Local files, and the Agent folder's, publish structured data; only directory
+            // listings have a sole output field.
             if (
-                resolved is { Source: "node", ExecutionNode: "master", Name: "read" }
+                resolved is { Source: "node", Name: "read" }
+                && (resolved.ExecutionNode == "master" || resolved.AgentFolder)
                 && result is JsonObject { Count: 1 } localRead
                 && localRead["output"] is JsonValue output
                 && output.TryGetValue<string>(out var listing)
@@ -475,17 +477,30 @@ internal sealed class ToolRegistry(
         if (nodeCapability && target is not ("master" or AgentStorePaths.Endpoint) && invocation != "ctl")
             await RefreshNodeAsync(target, token);
         var resolved = Route(Resolve(resolvedInvocation, resolvedArgs, currentNode), currentNode, resolvedInvocation, resolvedArgs);
-        if (!MasterNode && TargetsMaster(resolved))
-            throw currentNode == "master" && !NamesMaster(resolvedInvocation, resolvedArgs, invocation, args, resolved)
+        RequireAvailable(resolved, currentNode, resolvedInvocation, resolvedArgs);
+        return resolved;
+    }
+
+    /// <summary>
+    /// Refuses a routed call this runtime can't run, before policy: a master target without
+    /// master, and a configuration move without its documents. Pure, so an explanation reports
+    /// the refusal dispatch would give.
+    /// </summary>
+    internal void RequireAvailable(ResolvedTool resolved, string currentNode, string invocation, JsonObject args)
+    {
+        if (MasterNode)
+            return;
+        var (expanded, expandedArgs, _) = Unwrap(invocation, args);
+        if (TargetsMaster(resolved))
+            throw currentNode == "master" && !NamesMaster(invocation, args, expanded, expandedArgs, resolved)
                 ? RuntimeCapabilities.NoCurrentNode()
                 : RuntimeCapabilities.MasterUnavailable();
         // A move from configuration needs what reading the value directly would: a master read
         // of the file holding it. Without master no tool reads the tenant documents.
-        if (!MasterNode && resolved is { Source: "builtin", Name: "add_secret" } && resolved.Args.ContainsKey("fromConfig"))
+        if (resolved is { Source: "builtin", Name: "add_secret" } && resolved.Args.ContainsKey("fromConfig"))
             throw new InvalidDataException(
                 "fromConfig is not available on this server: no tool reads its configuration documents. Give the value with value or filePath."
             );
-        return resolved;
     }
 
     /// <summary>

@@ -78,7 +78,7 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
             new() { ["command"] = "tool call node:@agent/exec --args @a", ["values"] = Values(new() { ["command"] = "true" }) }
         ),
         // Configuration candidates in the Agent folder.
-        ("write", new() { ["filePath"] = "$fw_agentdir/rules.yaml", ["content"] = "version: 1\ndefaultAction: allow\nrules:\n  - id: no-exec\n    tool: {source: node, name: exec}\n    action: deny\n" }),
+        ("write", new() { ["filePath"] = "$fw_agentdir/rules.yaml", ["content"] = "version: 1\ndefaultAction: allow\nrules:\n  - id: no-list\n    tool: {source: builtin, name: list_agents}\n    action: deny\n" }),
         ("write", new() { ["filePath"] = "$fw_agentdir/bad.yaml", ["content"] = "version: 7\n" }),
         ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/bad.yaml", ["probes"] = Probe() }),
         ("explain_tool_authorization", new() { ["policyFilePath"] = "$fw_agentdir/missing.yaml", ["probes"] = Probe() }),
@@ -91,9 +91,9 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         ("explain_tool_authorization", new() { ["probes"] = Probe() }),
     ];
 
-    // An exec of the fixture's Session, which the candidate denies.
+    // The same available call in both modes, denied by the candidate.
     private static JsonArray Probe() =>
-        new(new JsonObject { ["sessionId"] = "profile", ["source"] = "node", ["name"] = "exec", ["args"] = new JsonObject { ["command"] = "true" } });
+        new(new JsonObject { ["sessionId"] = "profile", ["toolId"] = "builtin:list_agents", ["args"] = new JsonObject() });
 
     // The policy each call of the script is explained under before it runs: allow, ask and deny
     // by Node and by path.
@@ -229,7 +229,7 @@ public sealed class HostedAgentFolderTests(ITestOutputHelper output)
         Assert.Contains(actual.Decided, item => item.StartsWith("decision deny; global deny deny-notes", StringComparison.Ordinal));
         Assert.Contains(actual.Decided, item => item.StartsWith("decision allow;", StringComparison.Ordinal));
         // The installed candidate is the active policy.
-        Assert.Contains("no-exec", actual.Seen[^1]);
+        Assert.Contains("no-list", actual.Seen[^1]);
     }
 
     private static string Template(string name) =>

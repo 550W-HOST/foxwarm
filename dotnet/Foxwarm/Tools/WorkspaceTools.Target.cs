@@ -28,10 +28,11 @@ public sealed partial class WorkspaceTools
             ? File.Exists(path)
             : (await TargetStatAsync(path, token)) is { Kind: not "directory" };
 
+    // An Agent folder reports other kinds; its regular files are files.
     private async Task<bool> RegularFileAsync(string path, CancellationToken token) =>
-        targetFiles is null
-            ? RegularFile(path)
-            : (await TargetStatAsync(path, token)) is { Kind: not "directory" };
+        targetFiles is null ? RegularFile(path)
+        : AgentFolder is not null ? (await TargetStatAsync(path, token)) is { Kind: "file" }
+        : (await TargetStatAsync(path, token)) is { Kind: not "directory" };
 
     private async Task<long> SizeAsync(string path, CancellationToken token) =>
         targetFiles is null
