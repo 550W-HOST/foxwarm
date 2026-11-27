@@ -262,42 +262,57 @@ internal sealed partial class SessionManager
             {
                 var manifest = AgentManifest(name);
                 var owned = counts.GetValueOrDefault(name);
-                return (object)
-                    new JsonObject
-                    {
-                        ["id"] = name,
-                        ["inherit"] = AgentInherit(name),
-                        ["inheritanceChain"] = JsonData.Node(AgentChain(name)),
-                        ["createdBy"] = agents.CreatedBy(name),
-                        ["creatorChain"] = CreatorChainOrNull(name),
-                        ["rules"] =
-                            agents.MetadataSnapshot()[name]?["rules"]?.DeepClone()
-                            ?? new JsonArray(),
-                        ["ruleCount"] = agents.ExpandedRuleCount(name),
-                        ["defaultNode"] = agents.DefaultNode(name),
-                        ["defaultCwd"] = agents.DefaultCwd(name),
-                        ["inheritable"] = agents.Inheritable(name),
-                        ["restricted"] = RestrictedLayer(
-                            name,
-                            agents.MetadataSnapshot()[name]?["rules"]
-                        ),
-                        ["isolationMigration"] = IsolationMigrationSummary(name),
-                        ["sessionCount"] = owned.Total,
-                        ["lastActivity"] =
-                            lastActivity.GetValueOrDefault(name) is > 0 and var last
-                                ? last
-                                : (double?)null,
-                        ["activeSessionCount"] = owned.Active,
-                        ["queuedSessionCount"] = owned.Queued,
-                        ["memoryRoot"] = manifest.MemoryRoot,
-                        ["memoryFileCount"] = manifest.Files.Count,
-                        ["memoryLastModified"] =
-                            manifest.Files.Count == 0
-                                ? (double?)null
-                                : manifest.Files.Max(file => file.ModifiedAt),
-                    };
+                var rawRules = agents.MetadataSnapshot()[name]?["rules"];
+                var (expandedRules, rulesError) = ExpandedLayer(name, rawRules);
+                var row = new JsonObject
+                {
+                    ["id"] = name,
+                    ["inherit"] = AgentInherit(name),
+                    ["inheritanceChain"] = JsonData.Node(AgentChain(name)),
+                    ["createdBy"] = agents.CreatedBy(name),
+                    ["creatorChain"] = CreatorChainOrNull(name),
+                    ["rules"] = rawRules?.DeepClone() ?? new JsonArray(),
+                    ["expandedRules"] = expandedRules,
+                    ["ruleCount"] = expandedRules.Count,
+                    ["defaultNode"] = agents.DefaultNode(name),
+                    ["defaultCwd"] = agents.DefaultCwd(name),
+                    ["inheritable"] = agents.Inheritable(name),
+                    ["restricted"] = RestrictedLayer(name, rawRules),
+                    ["isolationMigration"] = IsolationMigrationSummary(name),
+                    ["sessionCount"] = owned.Total,
+                    ["lastActivity"] =
+                        lastActivity.GetValueOrDefault(name) is > 0 and var last
+                            ? last
+                            : (double?)null,
+                    ["activeSessionCount"] = owned.Active,
+                    ["queuedSessionCount"] = owned.Queued,
+                    ["memoryRoot"] = manifest.MemoryRoot,
+                    ["memoryFileCount"] = manifest.Files.Count,
+                    ["memoryLastModified"] =
+                        manifest.Files.Count == 0
+                            ? (double?)null
+                            : manifest.Files.Max(file => file.ModifiedAt),
+                };
+                if (rulesError is not null)
+                    row["rulesError"] = rulesError;
+                return (object)row;
             })
             .ToArray();
+    }
+
+    private (JsonArray Rules, string? Error) ExpandedLayer(string name, JsonNode? rawRules)
+    {
+        if (rawRules is null)
+            return (new JsonArray(), null);
+        try
+        {
+            var policy = agents.ResolveCachedRuleLayer(name, rawRules);
+            return (policy.PreviewRules, null);
+        }
+        catch (InvalidDataException error)
+        {
+            return (new JsonArray(), error.Message);
+        }
     }
 
 

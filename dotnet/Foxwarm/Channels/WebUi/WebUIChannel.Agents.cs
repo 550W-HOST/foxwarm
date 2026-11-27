@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 using Microsoft.AspNetCore.Http.Features;
 
 namespace Foxwarm.Channels.WebUi;
@@ -365,6 +366,46 @@ internal sealed partial class WebUIChannel
                     return Results.Json(
                         new JsonObject { ["error"] = error.Message },
                         statusCode: sessions.Agents().Contains(agentId) ? 400 : 404
+                    );
+                }
+            }
+        );
+        app.MapPost(
+            "/api/agents/rules/preview",
+            async (HttpRequest request, CancellationToken token) =>
+            {
+                try
+                {
+                    var body =
+                        await JsonNode.ParseAsync(request.Body, cancellationToken: token)
+                            as JsonObject
+                        ?? throw new InvalidDataException("Agent rules preview needs an object.");
+                    ToolRegistry.Keys(body, ["rules"]);
+                    if (body["rules"] is not (JsonArray or JsonObject))
+                        throw new InvalidDataException(
+                            "rules must be an array or a { script, data? } object."
+                        );
+                    var policy = await AgentRulePolicy.ParseAsync(body["rules"], token);
+                    var result = new JsonObject
+                    {
+                        ["scripted"] = policy.FromScript,
+                        ["expandedRules"] = policy.PreviewRules,
+                    };
+                    if (policy.Warnings.Count > 0)
+                        result["warnings"] = Warnings(policy);
+                    return Results.Ok(result);
+                }
+                catch (Exception error)
+                    when (error is JsonException or InvalidDataException or InvalidOperationException)
+                {
+                    return Results.BadRequest(
+                        new JsonObject
+                        {
+                            ["error"] =
+                                error is JsonException
+                                    ? "Agent rules preview input must be JSON."
+                                    : error.Message,
+                        }
                     );
                 }
             }

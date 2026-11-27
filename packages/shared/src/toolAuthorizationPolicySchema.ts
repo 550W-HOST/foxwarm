@@ -385,5 +385,16 @@ export const TOOL_AUTHORIZATION_POLICY_SCHEMA = {
         else: toolRule,
       },
     },
+    script: {
+      ...nonBlank,
+      description: 'Deterministic ToolScript that returns the complete ordered rule list. Cannot be combined with `rules`.',
+    },
+    data: {
+      description: 'Static data passed to `script` as `data`. Requires `script`.',
+    },
   },
+  allOf: [
+    { not: { required: ['rules', 'script'] } },
+    { if: { required: ['data'] }, then: { required: ['script'] } },
+  ],
 }
