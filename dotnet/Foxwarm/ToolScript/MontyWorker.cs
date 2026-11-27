@@ -116,18 +116,30 @@ internal sealed class MontyWorker : IAsyncDisposable
             if (seconds is double limit)
                 limits.MaxFeedDurationMicros = checked((ulong)(limit * 1_000_000));
         }
+        return ConfigureAsync(name, limits, HostOsPolicy(), null, budget, token);
+    }
+
+    internal Task<WorkerEvent> ConfigureAsync(
+        string name,
+        ResourceLimits limits,
+        OsPolicy osPolicy,
+        ExecutionClock? executionClock,
+        ToolScriptDataBudget budget,
+        CancellationToken token
+    )
+    {
+        var configure = new Configure
+        {
+            ScriptName = name,
+            MontyVersion = Version,
+            ProtocolVersion = ProtocolVersion,
+            Limits = limits,
+            OsPolicy = osPolicy,
+        };
+        if (executionClock is { } clock)
+            configure.ExecutionClock = clock;
         return TurnAsync(
-            new ClientRequest
-            {
-                Configure = new Configure
-                {
-                    ScriptName = name,
-                    MontyVersion = Version,
-                    ProtocolVersion = ProtocolVersion,
-                    Limits = limits,
-                    OsPolicy = HostOsPolicy(),
-                },
-            },
+            new ClientRequest { Configure = configure },
             budget,
             _ => { },
             token
