@@ -198,12 +198,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Catalog = Storage.Catalog;
         Tasks = new TaskService(
             this,
-            Storage.Tasks,
-            id => ResolveTaskSessionId(id),
-            id => TaskSessionAliases(id),
-            id => TaskAnchorSeq(id),
-            // Catalog membership, not residency: a released or unloaded owner keeps its Agent.
-            id => Find(id)?.Agent ?? CatalogMetadata(id)?.Agent
+            new TaskStore(Storage.Tasks, ResolveTaskSessionId, TaskSessionAliases),
+            id => Catalog.QueryAsync(() => ResolveTaskSessionId(id)),
+            TaskAnchorSeqAsync,
+            id => Catalog.QueryAsync(() => Find(id)?.Agent ?? CatalogMetadata(id)?.Agent)
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
@@ -457,14 +455,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 .ToArray()
             : [];
 
-    internal long? TaskAnchorSeq(string id)
+    private async Task<long?> TaskAnchorSeqAsync(string canonical)
     {
-        var canonical = ResolveTaskSessionId(id);
-        if (canonical is null)
+        var row = await Catalog.QueryAsync(() => Catalog.Get(canonical));
+        if (row is null)
             return null;
-        var row = Catalog.Get(canonical);
-        var agent = SessionCatalog.Text(row?["agent"]) ?? "main";
-        if (Storage.Authority.ReadEnvelope(canonical, agent) is { } rootValue)
+        var agent = SessionCatalog.Text(row["agent"]) ?? "main";
+        if (await Storage.Authority.ReadEnvelopeAsync(canonical, agent) is { } rootValue)
         {
             if (rootValue["nextMessageSeq"] is JsonValue value)
             {
@@ -478,7 +475,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 }
             }
         }
-        var live = Find(canonical)?.Entry.Snapshot().NextMessageSeq;
+        var live = FindCanonical(canonical)?.Entry.Snapshot().NextMessageSeq;
         return live is { } next ? next - 1 : null;
     }
 
@@ -760,24 +757,53 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal event Action<SessionRuntimeEvent>? Changed;
     internal event Action? TopologyChanged;
 
+    // Binding checks from this runtime's topology subscribers share the notification order,
+    // including when an earlier subscriber is still completing a selected revocation.
+    private readonly object bindingGate = new();
+    private Task bindingChecks = Task.CompletedTask;
+
+    internal void QueueBindingCheck(Func<Task> check)
+    {
+        lock (bindingGate)
+            bindingChecks = bindingChecks.ContinueWith(_ => check(), CancellationToken.None,
+                TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+    }
+
+
+    // Identity changes must finish stale-binding checks before releasing their claims: a
+    // later move or recreation could otherwise hide that a previously bound lifetime ended.
+    private Task PendingBindingChecks()
+    {
+        lock (bindingGate)
+            return bindingChecks;
+    }
+
     internal void NotifyCreated(SessionOwner owner)
     {
-        owner.Changed += value =>
+        owner.ChangedProjection = (value, row) =>
         {
             if (!IsCurrentOwner(owner))
                 return;
             if (value.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted)
-                CaptureLocalProjection(owner);
-            if (
-                servicesReady
-                && !IsDeletionClaimed(owner.Id)
-                && value.Kind == SessionEventKind.StateChanged
-            )
-                WaitTransition(owner.Id);
-            ObserveChannelTurn(owner, value);
+            {
+                row ??= Catalog.Get(owner.Id);
+                var meta = OverlayMainMetadata(owner.AuthorityMetadata(), row);
+                CaptureLocalProjection(owner, meta, row);
+                if (value.Kind == SessionEventKind.StateChanged)
+                {
+                    if (servicesReady && !IsDeletionClaimed(owner.Id))
+                    {
+                        if (owner.Entry.IdentityAvailable)
+                            waitTimeouts.Transition(owner.Id, meta.Wait ?? SessionCatalog.WaitProjection(row?["meta"]?["wait"]));
+                        waitLiveness.Transition(owner.Id, meta);
+                    }
+                    ObserveChannelTurn(owner, meta);
+                }
+            }
             Changed?.Invoke(value);
         };
-        CaptureLocalProjection(owner);
+        var row = Catalog.Get(owner.Id);
+        CaptureLocalProjection(owner, OverlayMainMetadata(owner.AuthorityMetadata(), row), row);
         if (servicesReady)
             _ = ReconcileTimerWaitsAsync(owner);
         TopologyChanged?.Invoke();
@@ -828,6 +854,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     internal IArchiveSession ArchiveReader(string sessionId) =>
         Storage.Archive.ForSession(sessionId);
+
+    private SessionOwner? FindCanonical(string id) =>
+        sessions.TryGetValue(id, out var owner) && !owner.Entry.Retired && !IsRetiring(id) ? owner : null;
 
     public SessionOwner? Find(string id)
     {

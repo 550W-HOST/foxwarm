@@ -51,10 +51,12 @@ internal static class HostedTestBackend
     }
 
     /// <summary>A context for <paramref name="root"/>, sharing the root's database with earlier ones.</summary>
-    internal static IStorageContext Create(string root)
+    internal static IStorageContext Create(string root) => Create(root, TenantDb.DefaultMaxInFlight);
+
+    internal static IStorageContext Create(string root, int maxInFlight)
     {
         var full = Path.GetFullPath(root);
-        var tenant = tenants.GetOrAdd(full, key => new Lazy<Tenant>(() => Open(key))).Value;
+        var tenant = tenants.GetOrAdd(full, key => new Lazy<Tenant>(() => Open(key, maxInFlight))).Value;
         return Compose(
             new PostgresStorageContext(tenant.Database, full)
             {
@@ -63,6 +65,8 @@ internal static class HostedTestBackend
             full
         );
     }
+
+    internal static TenantDb TenantDatabase(string root) => tenants[Path.GetFullPath(root)].Value.Database;
 
     /// <summary>The owner access to the database behind <paramref name="root"/>, once one exists; for fault injection.</summary>
     internal static HostedTestDatabase? Database(string root) =>
@@ -74,7 +78,7 @@ internal static class HostedTestBackend
     internal static IStorageContext Compose(PostgresStorageContext hosted, string root) =>
         hosted.Missing.Count == 0 ? hosted : new MixedStorageContext(hosted, new FileStorageContext(root));
 
-    private static Tenant Open(string root)
+    private static Tenant Open(string root, int maxInFlight)
     {
         var server = PostgresServer.SharedAsync().GetAwaiter().GetResult();
         var database = server.CreateDatabaseAsync().GetAwaiter().GetResult();
@@ -89,7 +93,7 @@ internal static class HostedTestBackend
             ConnectionIdleLifetime = 2,
             ConnectionPruningInterval = 1,
         };
-        return new Tenant(database, new TenantDb(database.OpenApp(app.ConnectionString), tenantId, epoch));
+        return new Tenant(database, new TenantDb(database.OpenApp(app.ConnectionString), tenantId, epoch, maxInFlight: maxInFlight));
     }
 
     private sealed record Tenant(HostedTestDatabase Owner, TenantDb Database);

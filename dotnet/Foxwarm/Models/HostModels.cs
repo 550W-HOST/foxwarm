@@ -83,6 +83,8 @@ internal sealed partial class HostModels
 
     internal HostModels Capture() => owner?.Capture() ?? this;
 
+    internal Task<HostModels> CaptureAsync() => owner?.CaptureAsync() ?? Task.FromResult(this);
+
     internal IReadOnlyList<int> GetRetryIntervals(string key)
     {
         if (owner is not null)

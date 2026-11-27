@@ -180,12 +180,12 @@ internal sealed partial class SessionManager
         if (assessment.Layers.Any(layer => layer.Policy.HasOperationRules))
             sliceRequest = sliceRequest with
             {
-                Operations = AuthorizationOperations(owner, slice, sliceRequest, files),
+                Operations = await AuthorizationOperationsAsync(owner, slice, sliceRequest, files),
             };
         return new(
             assessment,
-            ApprovalFingerprint(owner, slice, assessment.Request),
-            ApprovalFingerprint(owner, slice, sliceRequest),
+            await ApprovalFingerprintAsync(owner, slice, assessment.Request),
+            await ApprovalFingerprintAsync(owner, slice, sliceRequest),
             asking.Length > 0 && !asking.Any(OperationRules.IsOperationRule)
         );
     }

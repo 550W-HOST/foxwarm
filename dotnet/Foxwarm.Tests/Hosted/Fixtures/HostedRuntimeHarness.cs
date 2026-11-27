@@ -56,9 +56,9 @@ internal sealed class HostedRuntimeHarness : IAsyncDisposable
     }
 
     /// <summary>Creates the tenant when it doesn't exist yet, takes its lease at a new epoch and starts its runtime.</summary>
-    internal async Task<Runtime> StartAsync(string tenant, TenantFront? front = null)
+    internal async Task<Runtime> StartAsync(string tenant, TenantFront? front = null, int maxInFlight = TenantDb.DefaultMaxInFlight)
     {
-        var (_, build, client, scratch) = await BuildAsync(tenant, withKey: true, front);
+        var (_, build, client, scratch) = await BuildAsync(tenant, withKey: true, front, maxInFlight);
         var runtime = await build;
         await runtime.StartAsync();
         return new Runtime(tenant, runtime, client, scratch);
@@ -75,7 +75,8 @@ internal sealed class HostedRuntimeHarness : IAsyncDisposable
     private async Task<(PostgresStorageContext, Task<IHostedRuntime>, HttpClient, string)> BuildAsync(
         string tenant,
         bool withKey,
-        TenantFront? front = null
+        TenantFront? front = null,
+        int maxInFlight = TenantDb.DefaultMaxInFlight
     )
     {
         if (await database.ScalarAsync("SELECT count(*) FROM tenants WHERE name = $1", tenant) is 0L)
@@ -100,7 +101,7 @@ internal sealed class HostedRuntimeHarness : IAsyncDisposable
                 // The scripted model listens on loopback: an egress exception.
                 + "egress: {allow: {hosted: [127.0.0.1]}}\n"
         );
-        var context = new PostgresStorageContext(new TenantDb(app, tenantId, epoch), scratch);
+        var context = new PostgresStorageContext(new TenantDb(app, tenantId, epoch, maxInFlight: maxInFlight), scratch);
         var storage = HostedTestBackend.Compose(context, scratch);
         // Behind a front, the runtime has no listener and its requests carry the tenant's host.
         var server = front?.Server(Host(tenant));

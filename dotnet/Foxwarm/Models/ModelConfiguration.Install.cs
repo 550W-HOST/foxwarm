@@ -87,7 +87,7 @@ internal sealed partial class ModelConfiguration
                 var generation = Secrets.Store.Generation;
                 bool whileLocked;
                 HostModels next;
-                lock (gate)
+                using (gate.Enter())
                 {
                     resolvedWhileLocked = false;
                     next = Validate(raw);
@@ -102,7 +102,7 @@ internal sealed partial class ModelConfiguration
                     token,
                     () =>
                     {
-                        lock (gate)
+                        using (gate.Enter())
                         {
                             Secrets.SetTextRedactionKnownLabels(next.KnownLabels);
                             catalog = next;

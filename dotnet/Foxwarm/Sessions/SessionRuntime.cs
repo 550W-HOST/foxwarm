@@ -76,6 +76,12 @@ internal sealed class SessionRuntime(SessionManager manager)
 
     public JsonObject[] ListSessions() => manager.ListPresentations();
 
+    internal async Task<JsonObject[]> ListSessionsAsync()
+    {
+        var ids = await Catalog.QueryAsync(() => Catalog.List().Select(row => SessionCatalog.Text(row["id"])!).ToArray());
+        return await ProjectionsAsync(ids, includeLocal: true);
+    }
+
     internal (long Total, JsonObject[] Page) ListPage(int start, int count) =>
         manager.CatalogMetadataOffset(start, count);
 
@@ -97,6 +103,8 @@ internal sealed class SessionRuntime(SessionManager manager)
         add => manager.Changed += value;
         remove => manager.Changed -= value;
     }
+    internal void QueueBindingCheck(Func<Task> check) => manager.QueueBindingCheck(check);
+
     public event Action TopologyChanged
     {
         add => manager.TopologyChanged += value;
@@ -305,7 +313,11 @@ internal sealed partial class SessionOwner
 
     public SessionMetadata Metadata()
     {
-        var result = Entry.WithState(state =>
+        var value = AuthorityMetadata();
+        return MainMetadata?.Invoke(value) ?? value;
+    }
+
+    internal SessionMetadata AuthorityMetadata() => Entry.WithState(state =>
         {
             var envelope = state.AuthorityEnvelope;
             static string? Text(JsonNode? node) =>
@@ -356,8 +368,6 @@ internal sealed partial class SessionOwner
                 Questions: SessionQuestions.Projection(state.Meta)
             );
         });
-        return MainMetadata?.Invoke(result) ?? result;
-    }
 
     internal Func<int>? RunningExecCount { get; set; }
 
@@ -365,7 +375,7 @@ internal sealed partial class SessionOwner
 
     public JsonObject BuildDto(SessionMetadata meta)
     {
-        var dto = SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
+        var dto = SessionPresentation.Build(meta, models.Capture(), ResolveAncestry, ToolActive, Compacting);
         dto["runtimeState"] = RuntimeSnapshot(meta);
         // Background commands still tracked for this Session; the WebUI lists them on request.
         dto["runningExecs"] = RunningExecCount?.Invoke() ?? 0;

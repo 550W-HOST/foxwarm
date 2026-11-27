@@ -72,6 +72,8 @@ public sealed class WebUiResourceBoundaryTests
         try
         {
             await selected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            // Identity settlement keeps its claim while the selected revocation runs.
+            Assert.False(changing.IsCompleted);
             // The real topology/configuration callback has captured this request. Let its
             // HTTP pipeline finish and Kestrel dispose the context before that callback resumes.
             f.FinishLifetime.TrySetResult();

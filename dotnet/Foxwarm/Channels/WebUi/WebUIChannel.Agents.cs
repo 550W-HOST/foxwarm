@@ -460,28 +460,24 @@ internal sealed partial class WebUIChannel
         );
         app.MapGet(
             "/api/sessions",
-            (HttpContext context) =>
+            async (HttpContext context) =>
             {
                 var scoped = WebUiAccess.Request(context);
-                var rows = runtime.ListSessions();
-                scoped?.Require();
-                return Results.Ok(
-                    new JsonObject
+                var rows = await runtime.ListSessionsAsync();
+                if (scoped is not null)
+                    rows = await runtime.Catalog.QueryAsync(() =>
                     {
-                        ["sessions"] = JsonData.WebNode(
-                            scoped is null
-                                ? rows
-                                : rows.Where(row => scoped.Allows(SessionCatalog.Text(row["id"])!))
+                        scoped.Require();
+                        return rows.Where(row => scoped.Allows(SessionCatalog.Text(row["id"])!))
                                     .Select(row => new JsonObject
                                     {
                                         ["id"] = row["id"]?.DeepClone(),
                                         ["displayName"] = row["displayName"]?.DeepClone(),
                                         ["busy"] = row["busy"]?.DeepClone(),
                                     })
-                                    .ToArray()
-                        ),
-                    }
-                );
+                                    .ToArray();
+                    });
+                return Results.Ok(new JsonObject { ["sessions"] = JsonData.WebNode(rows) });
             }
         );
         app.MapPost(
@@ -553,7 +549,7 @@ internal sealed partial class WebUIChannel
                         var requestedParent = body["parentSessionId"]?.GetValue<string>()?.Trim();
                         if (!string.IsNullOrEmpty(requestedParent))
                         {
-                            var resolution = runtime.Catalog.Resolve(requestedParent);
+                            var resolution = await runtime.Catalog.QueryAsync(() => runtime.Catalog.Resolve(requestedParent));
                             parentId = SessionCatalog.Text(resolution["sessionId"]);
                             if (SessionCatalog.Text(resolution["kind"]) == "ambiguous")
                                 throw new InvalidDataException("Parent Session ID is ambiguous.");

@@ -56,13 +56,13 @@ internal sealed partial class SessionManager
                 []
             );
             var policies = EffectivePolicies(owner.Agent, authorization.Load());
-            request = PopulateEffectiveTargets(request, owner, policies);
+            request = PopulateSessionTargets(request, owner, policies);
             var decision = EffectiveDecision(policies, request);
             if (
                 !decision.Allowed
                 && !(
                     decision.Effect == ToolAuthorizationEffect.Ask
-                    && approved?.Covers(owner, ApprovalFingerprint(owner, resolved, request))
+                    && approved?.Covers(owner, ToolApprovalScope.Fingerprint(resolved, ApprovalSessionTarget(owner, request)))
                         == true
                 )
             )

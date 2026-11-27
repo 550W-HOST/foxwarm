@@ -133,6 +133,9 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
+    internal Task<(string? Owner, string? Creator)> ReferencesAsync(string taskId) =>
+        ReadTaskAsync(taskId, row => (Canonical(Text(row?["ownerSessionId"])), Canonical(Text(row?["createdBySessionId"]))));
+
     internal Task<string?> DefaultActorAsync(JsonObject args) =>
         Text(args["taskId"]) is { } id
             ? ReadTaskAsync(id, row => row is null ? null : Canonical(Text(row["ownerSessionId"]) ?? Text(row["createdBySessionId"])))

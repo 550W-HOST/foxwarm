@@ -59,30 +59,19 @@ internal sealed class PostgresSessionAuthorityBackend : ISessionAuthorityBackend
             tx.Scalar("SELECT 1 FROM session_heads WHERE session_id = $1", sessionId) is not null
         );
 
-    public JsonObject? ReadEnvelope(string sessionId, string agent)
+    public JsonObject? ReadEnvelope(string sessionId, string agent) =>
+        Database.Read(tx => ReadEnvelope(tx, sessionId, agent), snapshot: true);
+
+    public Task<JsonObject?> ReadEnvelopeAsync(string sessionId, string agent) =>
+        Database.ReadAsync(tx => ReadEnvelope(tx, sessionId, agent), snapshot: true);
+
+    private static JsonObject? ReadEnvelope(PgTx tx, string sessionId, string agent)
     {
-        // Head and parts only; the records were validated when they were written.
-        var envelope = Database.Read<(JsonObject Document, int Count)?>(
-            tx =>
-            {
-                if (
-                    PgSessionRows
-                        .ReadHeadAsync(tx, sessionId, forUpdate: false, async: false, default)
-                        .GetAwaiter()
-                        .GetResult()
-                    is not { } head
-                )
-                    return null;
-                var values = PgSessionRows
-                    .ReadPartsAsync(tx, head, async: false, default)
-                    .GetAwaiter()
-                    .GetResult();
-                return (PgSessionEnvelope.Decode(head.Envelope, head.Parts, values), head.RecordCount);
-            },
-            snapshot: true
-        );
-        if (envelope is not var (document, count))
+        if (PgSessionRows.ReadHeadAsync(tx, sessionId, forUpdate: false, async: false, default).GetAwaiter().GetResult() is not { } head)
             return null;
+        var values = PgSessionRows.ReadPartsAsync(tx, head, async: false, default).GetAwaiter().GetResult();
+        var document = PgSessionEnvelope.Decode(head.Envelope, head.Parts, values);
+        var count = head.RecordCount;
         if (!document.ContainsKey("history"))
             throw SessionAuthorityErrors.Invalid("Session authority history must be an array.", "history");
         SessionAuthorityDocument.ValidateState(document, count, sessionId, agent);

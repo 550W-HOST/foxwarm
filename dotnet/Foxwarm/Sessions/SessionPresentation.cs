@@ -7,13 +7,12 @@ internal static class SessionPresentation
 {
     internal static JsonObject Build(
         SessionMetadata meta,
-        HostModels models,
+        HostModels catalog,
         Func<string, SessionMetadata?>? resolveAncestry,
         bool toolActive = false,
         bool compacting = false
     )
     {
-        var catalog = models.Capture();
         var model =
             meta.Runtime == ClaudeRuntimeState.Kind || catalog.All.Count == 0
                 ? null

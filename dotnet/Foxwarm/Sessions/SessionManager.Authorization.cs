@@ -186,7 +186,7 @@ internal sealed partial class SessionManager
         // passes only when a grant of this invocation covers this exact request.
         if (assessment.Effect == ToolAuthorizationEffect.Ask)
         {
-            var fingerprint = ApprovalFingerprint(owner, resolved, assessment.Request);
+            var fingerprint = await ApprovalFingerprintAsync(owner, resolved, assessment.Request);
             if (ToolApprovalScope.Current?.Covers(owner, fingerprint) != true)
                 throw new ToolApprovalRequiredException(assessment, resolved, fingerprint);
         }
@@ -243,17 +243,13 @@ internal sealed partial class SessionManager
     // target and Task owner resolved even when no rule needed them, so a check that names its
     // concrete target and one that resolves it from the arguments agree. Resolution failures
     // leave the fact absent; a check that resolves it differently is then not covered.
-    internal string ApprovalFingerprint(
+    internal async Task<string> ApprovalFingerprintAsync(
         SessionOwner owner,
         ResolvedTool resolved,
         ToolAuthorizationRequest request
-    ) => ToolApprovalScope.Fingerprint(resolved, ApprovalRequest(owner, request));
+    ) => ToolApprovalScope.Fingerprint(resolved, await ApprovalRequestAsync(owner, request));
 
-    // The request with the facts an approval binds, as approvers see them.
-    internal ToolAuthorizationRequest ApprovalRequest(
-        SessionOwner owner,
-        ToolAuthorizationRequest request
-    )
+    private ToolAuthorizationRequest ApprovalSessionTarget(SessionOwner owner, ToolAuthorizationRequest request)
     {
         if (request.SessionTarget is null)
             try
@@ -264,6 +260,24 @@ internal sealed partial class SessionManager
             {
                 // The fact stays absent: a check that resolves it is then not covered.
             }
+        return request;
+    }
+
+    // The request with the facts an approval binds, as approvers see them.
+    internal async Task<ToolAuthorizationRequest> ApprovalRequestAsync(
+        SessionOwner owner,
+        ToolAuthorizationRequest request
+    )
+    {
+        if (request.SessionTarget is null)
+            try
+            {
+                request = await Catalog.QueryAsync(() => PopulateAuthorizationTargets(request, owner));
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // A target that could not be resolved is not covered by this approval.
+            }
         if (
             request.TaskOwnerSession is null
             && SessionWait.Text(request.Args["taskId"]) is { Length: > 0 and <= 128 } taskId
@@ -271,12 +285,12 @@ internal sealed partial class SessionManager
         )
             try
             {
-                var taskOwner = Tasks.OwnerSessionId(taskId.Trim());
+                var taskOwner = (await Tasks.ReferencesAsync(taskId.Trim())).Owner;
                 request = request with
                 {
                     TaskOwnerSession = taskOwner is null
                         ? null
-                        : SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"]),
+                        : await Catalog.QueryAsync(() => SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"])),
                 };
             }
             catch (Exception error) when (error is not OperationCanceledException)
@@ -457,16 +471,14 @@ internal sealed partial class SessionManager
                 OwnedSecrets = OwnedSecrets(owner.Agent, secrets),
             };
         var layers = EffectiveLayers(owner.Agent, policy);
-        request = PopulateEffectiveTargets(
-            request,
-            owner,
-            layers.Select(layer => layer.Policy).ToArray(),
-            concreteTarget
-        );
+        var policies = layers.Select(layer => layer.Policy).ToArray();
+        if (concreteTarget is not null || policies.Any(policy => ToolAuthorizationEvaluation.NeedsTarget(policy, request)))
+            request = await Catalog.QueryAsync(() => PopulateSessionTargets(request, owner, policies, concreteTarget));
+        request = await PopulateTaskTargetAsync(request, policies);
         if (operations is not null)
             request = request with { Operations = operations };
         else if (layers.Any(layer => layer.Policy.HasOperationRules))
-            request = request with { Operations = AuthorizationOperations(owner, resolved, request, files) };
+            request = request with { Operations = await AuthorizationOperationsAsync(owner, resolved, request, files) };
         return new(
             request,
             layers
@@ -544,7 +556,7 @@ internal sealed partial class SessionManager
                 || read.Effect == ToolAuthorizationEffect.Ask
                     && ToolApprovalScope.Current?.Covers(
                         owner,
-                        ApprovalFingerprint(owner, readTool, read.Request)
+                        await ApprovalFingerprintAsync(owner, readTool, read.Request)
                     ) != true
             )
                 return null;
@@ -675,7 +687,7 @@ internal sealed partial class SessionManager
             );
     }
 
-    private ToolAuthorizationRequest PopulateEffectiveTargets(
+    private ToolAuthorizationRequest PopulateSessionTargets(
         ToolAuthorizationRequest request,
         SessionOwner owner,
         IReadOnlyList<ToolAuthorizationPolicy> policies,
@@ -700,6 +712,11 @@ internal sealed partial class SessionManager
         }
         else if (policies.Any(policy => ToolAuthorizationEvaluation.NeedsTarget(policy, request)))
             request = PopulateAuthorizationTargets(request, owner);
+        return request;
+    }
+
+    private async Task<ToolAuthorizationRequest> PopulateTaskTargetAsync(ToolAuthorizationRequest request, IReadOnlyList<ToolAuthorizationPolicy> policies)
+    {
         if (
             policies.Any(policy => ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request))
             && SessionWait.Text(request.Args["taskId"]) is string taskId
@@ -707,12 +724,12 @@ internal sealed partial class SessionManager
         {
             if (taskId.Length > 128 || string.IsNullOrWhiteSpace(taskId))
                 throw new InvalidDataException("Task authorization requires a bounded taskId.");
-            var taskOwner = Tasks.OwnerSessionId(taskId.Trim());
+            var taskOwner = (await Tasks.ReferencesAsync(taskId.Trim())).Owner;
             request = request with
             {
                 TaskOwnerSession = taskOwner is null
                     ? null
-                    : SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"]),
+                    : await Catalog.QueryAsync(() => SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"])),
             };
         }
         return request;

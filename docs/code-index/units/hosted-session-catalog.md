@@ -30,6 +30,8 @@ Files: `dotnet/Foxwarm/Hosted/Postgres/Catalog/PgSessionCatalog.cs`, `dotnet/Fox
 
 Authority publication and presentation commits wait for the catalog's semaphore asynchronously and raise `Changed` only after releasing it. The hot-parent update reads the counter and parent together, applies it to the hot owner, and retries on a concurrent revision. WebUI list operations await their catalog reads. Row collection and its archive sequence counts share a read transaction; rendering starts after that transaction and the gate are released, because model configuration may read tenant documents. Exact point reads from independent callers still use `ReadOrJoin`. File mode executes the same public operations on its existing SQLite store.
 
+Presentation route entry and cold identity admission await canonical resolution. A hot parent change carries the row it reconciled into local capture, wait transitions and channel-turn notification. List rendering reads one model snapshot per nonempty batch, after the catalog transaction releases its slot. The model owner waits asynchronously for its gate and the tenant's configuration-document read before rendering any rows.
+
 ## Tests
 
 - `CatalogStarvationTests` drives concurrent presentation updates with a capped worker pool and verifies that queued list and Task reads yield while the tenant's only statement slot is occupied. `HostedRuntimesInProcessTests` requests an exact WebUI row with PostgreSQL-backed model configuration and checks the configured default model.

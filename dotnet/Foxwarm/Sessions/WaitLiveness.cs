@@ -13,7 +13,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     private readonly Dictionary<string, CancellationTokenSource> scheduled = new(
         StringComparer.Ordinal
     );
-    private readonly Dictionary<string, string[]> dependencies = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string WaitId, string[] Sources)> dependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> reverse = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string WaitId, QueueItem Item)> pending = new(
         StringComparer.Ordinal
@@ -54,6 +54,11 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     {
         var owner = manager.Find(sessionId);
         var meta = owner?.Metadata() ?? manager.CatalogMetadata(sessionId);
+        Transition(sessionId, meta);
+    }
+
+    internal void Transition(string sessionId, SessionMetadata? meta)
+    {
         var wait = meta?.Wait;
         lock (gate)
         {
@@ -74,7 +79,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             )
                 released.TrySetResult();
             if (dependencies.Remove(sessionId, out var old))
-                foreach (var dependency in old)
+                foreach (var dependency in old.Sources)
                     if (reverse.TryGetValue(dependency, out var waiters))
                     {
                         waiters.Remove(sessionId);
@@ -84,7 +89,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             if (Candidate(meta))
             {
                 var next = Sources(wait!);
-                dependencies[sessionId] = next;
+                dependencies[sessionId] = (SessionWait.Text(wait!["id"])!, next);
                 foreach (var dependency in next)
                 {
                     if (!reverse.TryGetValue(dependency, out var waiters))
@@ -111,11 +116,9 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     {
         if (scheduled.Remove(id, out var prior))
             prior.Cancel();
-        var metadata = manager.Find(id)?.Metadata() ?? manager.CatalogMetadata(id);
-        var wait = metadata?.Wait;
-        if (!manager.CanRunCallbacks(id) || !Candidate(metadata))
+        if (!dependencies.TryGetValue(id, out var candidate))
             return;
-        var expected = SessionWait.Text(wait!["id"])!;
+        var expected = candidate.WaitId;
         var stop = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         scheduled[id] = stop;
         Track(
@@ -144,6 +147,8 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
 
     private void Diagnose(string id, string expected)
     {
+        if (!manager.CanRunCallbacks(id))
+            return;
         var owner = manager.Find(id);
         var metadata = owner?.Metadata() ?? manager.CatalogMetadata(id);
         var wait = metadata?.Wait;
@@ -199,9 +204,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         {
             if (!pending.Remove(id, out var wake))
                 continue;
-            var metadata = manager.Find(id)?.Metadata() ?? manager.CatalogMetadata(id);
-            var wait = metadata?.Wait;
-            if (!Candidate(metadata) || SessionWait.Text(wait!["id"]) != wake.WaitId)
+            if (!dependencies.TryGetValue(id, out var candidate) || candidate.WaitId != wake.WaitId)
                 continue;
             var settled = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
@@ -313,7 +316,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             if (active.Remove(id, out var settled))
                 settled.TrySetResult();
             if (dependencies.Remove(id, out var old))
-                foreach (var dependency in old)
+                foreach (var dependency in old.Sources)
                     if (reverse.TryGetValue(dependency, out var waiters))
                     {
                         waiters.Remove(id);

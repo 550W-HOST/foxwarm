@@ -22,6 +22,8 @@ internal interface ISessionAuthorityBackend
     /// </summary>
     JsonObject? ReadEnvelope(string sessionId, string agent);
 
+    Task<JsonObject?> ReadEnvelopeAsync(string sessionId, string agent) => Task.FromResult(ReadEnvelope(sessionId, agent));
+
     /// <summary>
     /// The stored document as persisted, with history in order and without normalization, for
     /// the administrator debug view and identity recovery. Null when absent.

@@ -110,7 +110,7 @@ internal sealed partial class SessionManager
                 return owner;
             }
             // Main identity resolution may read SQLite. It never runs under the owner registry gate.
-            var canonical = SessionCatalog.Text(Catalog.Resolve(requestedId)["sessionId"]);
+            var canonical = await Catalog.QueryAsync(() => SessionCatalog.Text(Catalog.Resolve(requestedId)["sessionId"]));
             string? id = null;
             bool start = false;
             lock (lifecycle)
