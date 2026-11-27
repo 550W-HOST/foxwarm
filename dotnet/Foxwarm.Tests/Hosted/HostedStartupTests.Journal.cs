@@ -36,6 +36,51 @@ public sealed partial class HostedStartupTests
         Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
     }
 
+    [Fact]
+    public async Task TheHostedRuntimeAppliesTheTenantsLimitsAndJournalSwitch()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        await database.ExecuteOwnerAsync(
+            "UPDATE tenants SET limits = '{\"busyTurns\": 2}', settings = '{\"journal\": {\"enabled\": false}}'"
+        );
+        using var temp = new TempDirectory();
+        var files = HostedFiles.Create(temp.Path);
+        var replica = StartHosted(database.OpenApp(), files);
+        await WaitUntilAsync(
+            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
+            TimeSpan.FromSeconds(60),
+            "the hosted runtime serves"
+        );
+        var sessions = ((MainHostRuntime)replica.Runtimes.Single()).Host.Sessions;
+        Assert.Equal(Foxwarm.Limits.TenantLimits.Defaults with { BusyTurns = 2 }, sessions.Capabilities.Limits);
+        Assert.Equal(2, sessions.Admission!.Turns.Capacity);
+        Assert.False(((PgLlmJournalStore)sessions.Journal).Recording);
+        replica.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+    }
+
+    [Theory]
+    [InlineData("limits", "{\"busyTurns\": 0}", "limits.busyTurns")]
+    [InlineData("settings", "{\"journal\": {\"enabled\": \"no\"}}", "settings.journal.enabled")]
+    public async Task AMalformedTenantLimitOrSettingRefusesStartupNamingTheKey(string column, string value, string key)
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        await database.ExecuteOwnerAsync($"UPDATE tenants SET {column} = '{value}'");
+        using var temp = new TempDirectory();
+        var files = HostedFiles.Create(temp.Path);
+        var tenantId = await database.TenantIdAsync();
+        var epoch = await database.TakeLeaseAsync(tenantId);
+        var tenant = new PostgresStorageContext(new TenantDb(database.OpenApp(), tenantId, epoch), files.Scratch);
+        var deployment = DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\n");
+        var error = await Assert.ThrowsAsync<HostedStartupException>(() =>
+            HostedEntry.BuildRuntimeAsync(tenant, HostedTestBackend.Compose(tenant, files.Scratch), files.Bootstrap, deployment)
+        );
+        Assert.StartsWith(key + " ", error.Message);
+        Assert.Equal(0L, await database.ScalarAsync("SELECT count(*) FROM tenant_keys"));
+    }
+
     [Theory]
     [InlineData("journal: {retentionDays: 0}\n", "journal.retentionDays")]
     [InlineData("journal: {retentionDays: '30'}\n", "journal.retentionDays")]
