@@ -6,6 +6,22 @@ namespace Foxwarm.Tests;
 
 public sealed partial class AsrRoutesTests
 {
+    [Theory]
+    [InlineData(8, 200)]
+    [InlineData(9, 413)]
+    public async Task Hosted_upload_limit_counts_file_bytes_without_multipart_headers(int bytes, int status)
+    {
+        await using var f = await Fixture.Create(capabilities: RuntimeCapabilities.Hosted with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { UploadBytes = 8 } });
+        using var form = new MultipartFormDataContent { { new ByteArrayContent(new byte[bytes]), "file", "sample.bin" } };
+        using var response = await f.Client.PostAsync("/api/upload", form);
+        var result = await Json(response);
+        Assert.True((int)response.StatusCode == status, result.ToJsonString());
+        if (status == 413)
+            Assert.Equal("This file is larger than the 8 bytes upload limit.", result["error"]!.ToString());
+        else
+            Assert.Equal(bytes, new FileInfo(result["path"]!.ToString()).Length);
+    }
+
     [Fact]
     public async Task Upload_stages_in_OS_temporary_directory_and_preparation_consumes_it()
     {

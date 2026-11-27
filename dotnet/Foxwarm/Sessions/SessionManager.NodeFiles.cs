@@ -125,6 +125,18 @@ internal sealed partial class SessionManager
         return paths;
     }
 
+    // A file tool call on this Agent's folder (`node:@agent/<operation>`), as a call would be.
+    internal Task AuthorizeAgentFolderFileAsync(SessionOwner owner, string raw, string operation, CancellationToken token) =>
+        AuthorizeToolAsync(
+            owner,
+            new(operation, "node", operation, new JsonObject { ["filePath"] = raw }, ExecutionNode: AgentStorePaths.Endpoint)
+            {
+                AgentFolder = true,
+            },
+            AgentFolderWorkspace(owner),
+            token
+        );
+
     internal Task AuthorizeNodeFileAsync(
         SessionOwner owner,
         string node,

@@ -301,7 +301,12 @@ internal sealed class TelegramChannel : IManagedChannel
         var filePath =
             SessionWait.Text(file?["file_path"])
             ?? throw new InvalidDataException("Telegram file has no download path.");
-        var bytes = await http.GetByteArrayAsync(new Uri(files, filePath), stopping.Token);
+        async Task<byte[]> Download()
+        {
+            using var response = await http.GetAsync(new Uri(files, filePath), HttpCompletionOption.ResponseHeadersRead, stopping.Token);
+            response.EnsureSuccessStatusCode();
+            return await sessions.ReadChannelBodyAsync(response.Content, stopping.Token);
+        }
         var unique = SessionWait.Text(media["file_unique_id"]) ?? fileId;
         var name = photo is not null
             ? "telegram-photo-" + unique + ".jpg"
@@ -311,10 +316,10 @@ internal sealed class TelegramChannel : IManagedChannel
             : SessionWait.Text(media["mime_type"]) ?? "application/octet-stream";
         // Deliberately preserve Source eager storage before Router authorization, using the adapter TYPE.
         // Named instances therefore retain Source's type-keyed helper limitation in this phase.
-        var parts = await sessions.SaveInboundChannelFileAsync(
+        var parts = await sessions.SaveRemoteChannelFileAsync(
             "telegram",
             chat,
-            bytes,
+            Download,
             name,
             mime,
             SessionWait.Text(message["caption"]) ?? "",

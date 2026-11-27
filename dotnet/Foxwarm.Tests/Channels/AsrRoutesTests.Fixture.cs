@@ -48,7 +48,8 @@ public sealed partial class AsrRoutesTests
         internal static async Task<Fixture> Create(
             Func<string, string>? config = null,
             bool prefix = false,
-            bool enabled = true
+            bool enabled = true,
+            RuntimeCapabilities? capabilities = null
         )
         {
             var f = new Fixture();
@@ -160,7 +161,8 @@ public sealed partial class AsrRoutesTests
                     "",
                     1000
                 ),
-                model.Models
+                model.Models,
+                capabilities: capabilities
             );
             await f.Manager.LoadAsync();
             var address = prefix

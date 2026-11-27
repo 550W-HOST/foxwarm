@@ -19,14 +19,19 @@ internal sealed class UploadPreparationException(
 {
     internal IReadOnlyList<JsonObject> SavedFiles { get; } = saved;
     internal bool InvalidInput =>
-        InnerException is ImageInputException or InvalidDataException or ArgumentException;
+        InnerException is ImageInputException or InvalidDataException or ArgumentException or AgentStoreQuotaException;
 }
 
 internal sealed class WebUiUploadedFiles(SessionManager sessions)
 {
     internal const long Limit = 1024L * 1024 * 1024;
+
+    // Without master an upload is kept in the Agent store, so it is no larger than one Agent file.
+    internal long UploadLimit => sessions.ReceivedFileLimit;
+
+    internal string TooLarge => $"This file is larger than the {Foxwarm.Limits.TenantLimits.Size(UploadLimit)} upload limit.";
     internal static string StagingRoot => Path.Combine(Path.GetTempPath(), "foxwarm-uploads");
-    internal string Root => StagingRoot;
+    internal string Root => sessions.Capabilities.MasterNode ? StagingRoot : Path.Combine(sessions.DataRoot, "foxwarm-uploads");
     internal Func<SessionOwner, string, Task>? BeforeStage { get; set; }
 
     internal static string Mime(string? declared, string filename)
@@ -93,9 +98,10 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 var mime = Mime(SessionWait.Text((entry as JsonObject)?["mimeType"]), filename);
                 await using var source = OpenStaged(path);
                 var isImage = ImageInputPolicy.IsImageInput(mime);
-                // Without a master Node no tool reads the Agent directory, so only images,
-                // which the model sees inline, can be attached.
-                if (!sessions.Capabilities.MasterNode && !isImage)
+                // Without a master Node and an Agent store no tool reads the Agent directory, so
+                // only images, which the model sees inline, can be attached.
+                var stored = !sessions.Capabilities.MasterNode && sessions.AgentStore is not null;
+                if (!sessions.Capabilities.MasterNode && !stored && !isImage)
                     throw new ImageInputException(
                         $"\"{filename}\" can't be attached: this server accepts images only."
                     );
@@ -119,7 +125,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         source.Position = 0;
                     }
                 }
-                if (!sessions.Capabilities.MasterNode)
+                if (!sessions.Capabilities.MasterNode && !stored)
                 {
                     if (!isImage || bytes is null)
                         throw new ImageInputException(
@@ -128,23 +134,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     await sessions.WaitForIdentityMutationAsync(owner.Id, token);
                     sessions.RequireFileIngressOwner(owner);
                     scoped?.RequireUpload(owner.Id, path);
-                    var inlineId = "image_" + Guid.NewGuid();
-                    var inline = await sessions.Images.PutAsync(bytes, mime, inlineId, token);
-                    parts.Add(
-                        new JsonObject
-                        {
-                            ["inlineDataRef"] = inline,
-                            ["imageMeta"] = new JsonObject
-                            {
-                                ["imageId"] = inlineId,
-                                ["mimeType"] = mime,
-                                ["width"] = inline["width"]?.DeepClone(),
-                                ["height"] = inline["height"]?.DeepClone(),
-                                ["sizeBytes"] = source.Length,
-                                ["sha256"] = inline["sha256"]?.DeepClone(),
-                            },
-                        }
-                    );
+                    parts.Add(await InlineImageAsync(bytes, mime, source.Length, token));
                     scoped?.ConsumeUpload(path);
                     await source.DisposeAsync();
                     File.Delete(path);
@@ -154,74 +144,68 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 await sessions.WaitForIdentityMutationAsync(owner.Id, token);
                 sessions.RequireFileIngressOwner(owner);
                 scoped?.RequireUpload(owner.Id, path);
-                var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
-                var storage = ChannelFileNames.StorageName(
-                    filename,
-                    mime,
-                    timestamp,
-                    Convert.ToHexStringLower(
-                        System.Security.Cryptography.RandomNumberGenerator.GetBytes(4)
-                    )
-                );
-                // Uploads are stored on master under the Agent directory.
-                var directory = Path.Combine(
-                    sessions.AgentDirectory(owner.Agent),
-                    ".temp",
-                    "channel-files",
-                    "webui"
-                );
-                var destination = Path.Combine(directory, storage);
-                Directory.CreateDirectory(directory);
-                token.ThrowIfCancellationRequested();
-                // Keep the actual started destination across move; delete only this created temporary file.
-                var temp =
-                    destination
-                    + "."
-                    + Environment.ProcessId
-                    + "."
-                    + Guid.NewGuid().ToString("N")
-                    + ".tmp";
-                var created = false;
-                try
+                var relative = SessionManager.ChannelFileRelativePath("webui", filename, mime);
+                var node = stored ? AgentStorePaths.Endpoint : "master";
+                string destination;
+                if (stored)
                 {
-                    scoped?.Require(owner.Id);
-                    await using (
-                        var output = new FileStream(
-                            temp,
-                            FileMode.CreateNew,
-                            FileAccess.Write,
-                            FileShare.None,
-                            65536,
-                            FileOptions.Asynchronous
-                        )
-                    )
+                    if (bytes is null)
                     {
-                        created = true;
-                        source.Position = 0;
-                        await CopyStagedAsync(source, output, token);
-                        await output.FlushAsync(token);
-                        output.Flush(true);
+                        using var buffer = new MemoryStream();
+                        await CopyStagedAsync(source, buffer, token);
+                        bytes = buffer.ToArray();
                     }
                     scoped?.Require(owner.Id);
-                    File.Move(temp, destination, overwrite: false);
-                    created = false;
-                    saved.Add(
-                        new JsonObject
-                        {
-                            ["path"] = destination,
-                            ["filename"] = filename,
-                            ["node"] = "master",
-                            ["mimeType"] = mime,
-                            ["size"] = source.Length,
-                        }
-                    );
-                    DirectorySync.Sync(directory);
+                    destination = await sessions.SaveStoredChannelFileAsync(owner.Agent, relative, bytes, token);
                 }
-                finally
+                else
                 {
-                    if (created)
-                        File.Delete(temp);
+                    destination = Path.Combine(sessions.AgentDirectory(owner.Agent), relative);
+                    var directory = Path.GetDirectoryName(destination)!;
+                    Directory.CreateDirectory(directory);
+                    token.ThrowIfCancellationRequested();
+                    // Keep the actual started destination across move; delete only this created temporary file.
+                    var temp =
+                        destination
+                        + "."
+                        + Environment.ProcessId
+                        + "."
+                        + Guid.NewGuid().ToString("N")
+                        + ".tmp";
+                    var created = false;
+                    try
+                    {
+                        scoped?.Require(owner.Id);
+                        await using (
+                            var output = new FileStream(
+                                temp,
+                                FileMode.CreateNew,
+                                FileAccess.Write,
+                                FileShare.None,
+                                65536,
+                                FileOptions.Asynchronous
+                            )
+                        )
+                        {
+                            created = true;
+                            source.Position = 0;
+                            await CopyStagedAsync(source, output, token);
+                            await output.FlushAsync(token);
+                            output.Flush(true);
+                        }
+                        scoped?.Require(owner.Id);
+                        File.Move(temp, destination, overwrite: false);
+                        created = false;
+                    }
+                    finally
+                    {
+                        if (created)
+                            File.Delete(temp);
+                    }
                 }
+                saved.Add(new JsonObject { ["path"] = destination, ["filename"] = filename, ["node"] = node, ["mimeType"] = mime, ["size"] = source.Length });
+                if (!stored)
+                    DirectorySync.Sync(Path.GetDirectoryName(destination)!);
                 await StageAsync(owner, "after-copy");
                 scoped?.Require(owner.Id);
                 parts.Add(
@@ -231,31 +215,13 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                             filename,
                             destination,
                             mime,
-                            "master",
+                            node,
                             isImage
                         ),
                     }
                 );
                 if (isImage)
-                {
-                    var imageId = "image_" + Guid.NewGuid();
-                    var reference = await sessions.Images.PutAsync(bytes!, mime, imageId, token);
-                    parts.Add(
-                        new JsonObject
-                        {
-                            ["inlineDataRef"] = reference,
-                            ["imageMeta"] = new JsonObject
-                            {
-                                ["imageId"] = imageId,
-                                ["mimeType"] = mime,
-                                ["width"] = reference["width"]?.DeepClone(),
-                                ["height"] = reference["height"]?.DeepClone(),
-                                ["sizeBytes"] = source.Length,
-                                ["sha256"] = reference["sha256"]?.DeepClone(),
-                            },
-                        }
-                    );
-                }
+                    parts.Add(await InlineImageAsync(bytes!, mime, source.Length, token));
                 scoped?.ConsumeUpload(path);
                 // Administrator callers may still use other existing staging files.
                 await source.DisposeAsync();
@@ -320,8 +286,8 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         "Uploaded file is outside server upload staging."
                     );
             }
-            if (stream.Length > Limit)
-                throw new ImageInputException("This file is larger than the 1 GiB upload limit.");
+            if (stream.Length > UploadLimit)
+                throw new ImageInputException(TooLarge);
             return stream;
         }
         catch
@@ -331,7 +297,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         }
     }
 
-    private static async Task CopyStagedAsync(Stream source, Stream output, CancellationToken token)
+    private async Task CopyStagedAsync(Stream source, Stream output, CancellationToken token)
     {
         var chunk = new byte[65536];
         long copied = 0;
@@ -339,10 +305,30 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         while ((read = await source.ReadAsync(chunk, token)) > 0)
         {
             copied += read;
-            if (copied > Limit)
-                throw new ImageInputException("This file is larger than the 1 GiB upload limit.");
+            if (copied > UploadLimit)
+                throw new ImageInputException(TooLarge);
             await output.WriteAsync(chunk.AsMemory(0, read), token);
         }
+    }
+
+    // An image part, as the model sees an uploaded image.
+    private async Task<JsonObject> InlineImageAsync(byte[] bytes, string mime, long size, CancellationToken token)
+    {
+        var imageId = "image_" + Guid.NewGuid();
+        var reference = await sessions.Images.PutAsync(bytes, mime, imageId, token);
+        return new JsonObject
+        {
+            ["inlineDataRef"] = reference,
+            ["imageMeta"] = new JsonObject
+            {
+                ["imageId"] = imageId,
+                ["mimeType"] = mime,
+                ["width"] = reference["width"]?.DeepClone(),
+                ["height"] = reference["height"]?.DeepClone(),
+                ["sizeBytes"] = size,
+                ["sha256"] = reference["sha256"]?.DeepClone(),
+            },
+        };
     }
 
     private async Task StageAsync(SessionOwner owner, string stage)

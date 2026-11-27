@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Foxwarm.Channels;
 using Foxwarm.Tools;
 
@@ -25,34 +24,30 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException("Attachment Session owner is no longer current.");
         if (new FileInfo(source).Length != size)
             throw new IOException("Inbound spool size changed.");
+        if (Capabilities.Limits is not null && size > ReceivedFileLimit)
+            return UnkeptStoredFile(filename, mime, "", size, OversizedReason(ReceivedFileLimit));
         if (!Capabilities.MasterNode)
         {
             if (image && size > 20 * 1024 * 1024)
                 throw new InvalidDataException("Image exceeds the inline limit.");
-            return await UnkeptChannelFileAsync(
-                image ? await File.ReadAllBytesAsync(source, token) : null,
-                filename,
-                mime,
-                "",
-                image,
-                token,
-                size
-            );
+            if (AgentStore is null)
+                return await UnkeptChannelFileAsync(image ? await File.ReadAllBytesAsync(source, token) : null, filename, mime, "", image, token, size);
+            var bytes = await File.ReadAllBytesAsync(source, token);
+            string stored;
+            try
+            {
+                stored = await SaveStoredChannelFileAsync(owner.Agent, ChannelFileRelativePath(platform, filename, mime), bytes, token);
+            }
+            catch (AgentStoreQuotaException error)
+            {
+                return UnkeptStoredFile(filename, mime, "", size, error.Message);
+            }
+            var saved = new List<JsonObject> { new() { ["text"] = ChannelFileNames.Descriptor(filename, stored, mime, AgentStorePaths.Endpoint, image) } };
+            if (image)
+                saved.Add(await InlineChannelImageAsync(bytes, mime, token));
+            return saved;
         }
-        var segment = Regex.Replace(platform.Trim(), "[^a-zA-Z0-9._-]+", "_").TrimStart('.');
-        var name = ChannelFileNames.StorageName(
-            filename,
-            mime,
-            DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ"),
-            Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(4))
-        );
-        var path = Path.Combine(
-            AgentDirectory(owner.Agent),
-            ".temp",
-            "channel-files",
-            segment.Length == 0 ? "file" : segment,
-            name
-        );
+        var path = Path.Combine(AgentDirectory(owner.Agent), ChannelFileRelativePath(platform, filename, mime));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         if (!await FileToolWrite.CopyPathAtomic(source, path, false, () => { }, token))
             throw new IOException("Inbound file already exists.");
@@ -65,24 +60,7 @@ internal sealed partial class SessionManager
             // Only a byte-probed raster under the safe inline cap reaches the blob owner.
             if (size > 20 * 1024 * 1024)
                 throw new InvalidDataException("Image exceeds the inline limit.");
-            var bytes = await File.ReadAllBytesAsync(source, token);
-            var imageId = "image_" + Guid.NewGuid();
-            var reference = await Images.PutAsync(bytes, mime, imageId, token);
-            parts.Add(
-                new JsonObject
-                {
-                    ["inlineDataRef"] = reference,
-                    ["imageMeta"] = new JsonObject
-                    {
-                        ["imageId"] = imageId,
-                        ["mimeType"] = mime,
-                        ["sizeBytes"] = bytes.Length,
-                        ["width"] = reference["width"]?.DeepClone(),
-                        ["height"] = reference["height"]?.DeepClone(),
-                        ["sha256"] = reference["sha256"]?.DeepClone(),
-                    },
-                }
-            );
+            parts.Add(await InlineChannelImageAsync(await File.ReadAllBytesAsync(source, token), mime, token));
         }
         return parts;
     }

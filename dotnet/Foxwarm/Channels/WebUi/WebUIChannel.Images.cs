@@ -9,18 +9,8 @@ namespace Foxwarm.Channels.WebUi;
 
 internal sealed partial class WebUIChannel
 {
-    // One upload: the tenant's limit in hosted mode, 1 GiB in file mode.
-    private long UploadLimit =>
-        sessions.Capabilities.Limits?.UploadBytes is { } limit
-            ? Math.Min(limit, WebUiUploadedFiles.Limit)
-            : WebUiUploadedFiles.Limit;
-
     // Multipart boundaries, part headers and small form fields around the one file.
     internal const long UploadOverheadBytes = 1024 * 1024;
-
-    private string UploadLimitError =>
-        $"This file is larger than the {Foxwarm.Limits.TenantLimits.Size(UploadLimit)} upload limit.";
-    private static string UploadRoot => WebUiUploadedFiles.StagingRoot;
 
     private static string AttachmentMime(string? declared, string filename) =>
         WebUiUploadedFiles.Mime(declared, filename);
@@ -32,7 +22,8 @@ internal sealed partial class WebUIChannel
             "/api/upload",
             async (HttpContext context) =>
             {
-                var uploadLimit = UploadLimit;
+                var uploads = new WebUiUploadedFiles(sessions);
+                var uploadLimit = uploads.UploadLimit;
                 if (
                     context.Features.Get<IHttpMaxRequestBodySizeFeature>() is
                     { IsReadOnly: false } limit
@@ -49,7 +40,7 @@ internal sealed partial class WebUIChannel
                     return Results.Json(
                         new JsonObject
                         {
-                            ["error"] = UploadLimitError,
+                            ["error"] = uploads.TooLarge,
                             ["maxBytes"] = uploadLimit,
                         },
                         statusCode: 413
@@ -92,14 +83,14 @@ internal sealed partial class WebUIChannel
                     var mimeType = AttachmentMime(file.ContentType, file.FileName);
                     if (file.Length > uploadLimit)
                         return Results.Json(
-                            new JsonObject { ["error"] = UploadLimitError },
+                            new JsonObject { ["error"] = uploads.TooLarge },
                             statusCode: 413
                         );
-                    Directory.CreateDirectory(UploadRoot);
+                    Directory.CreateDirectory(uploads.Root);
                     var original = Path.GetFileName(file.FileName.Replace('\\', '/'));
                     var extension = Path.GetExtension(original);
                     var path = Path.Combine(
-                        UploadRoot,
+                        uploads.Root,
                         Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)) + extension
                     );
                     try
@@ -148,7 +139,7 @@ internal sealed partial class WebUIChannel
                         || error is BadHttpRequestException { StatusCode: 413 }
                     )
                         return Results.Json(
-                            new JsonObject { ["error"] = UploadLimitError },
+                            new JsonObject { ["error"] = uploads.TooLarge },
                             statusCode: 413
                         );
                     return Results.BadRequest(

@@ -24,8 +24,10 @@ internal sealed class QQBotMedia(
             : fallback;
     }
 
-    private long ImageLimit => Limit(config?["imageMaxBytes"], 20L * MiB, 20L * MiB);
-    private long FileLimit => Limit(config?["fileMaxBytes"], 50L * MiB, 200L * MiB);
+    private long ImageLimit => Math.Min(Limit(config?["imageMaxBytes"], 20L * MiB, 20L * MiB), sessions.ReceivedFileLimit);
+    // In an Agent store, no larger than one Agent file may be.
+    private long FileLimit =>
+        Math.Min(Limit(config?["fileMaxBytes"], 50L * MiB, 200L * MiB), sessions.ReceivedFileLimit);
     private long TotalLimit => Limit(config?["maxTotalBytes"], 200L * MiB, 200L * MiB);
     private int CountLimit =>
         (int)
@@ -396,7 +398,7 @@ internal sealed class QQBotMedia(
                 {
                     throw Storage();
                 }
-                if (raster is null)
+                if (raster is null && SessionWait.Text(saved[0]["text"])?.StartsWith("<foxwarm-file", StringComparison.Ordinal) == true)
                 {
                     var note =
                         attachment.Kind == "image"

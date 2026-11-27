@@ -242,9 +242,8 @@ internal sealed partial class MatrixChannel
                     MediaUri(SessionWait.Text(content["url"]))
                     ?? throw new InvalidDataException("Invalid Matrix media URI.");
                 // Source fetches eagerly before Router authorization and does not attach the access token.
-                using (var response = await http.GetAsync(media))
+                using (var response = await http.GetAsync(media, HttpCompletionOption.ResponseHeadersRead))
                 {
-                    var bytes = await response.Content.ReadAsByteArrayAsync();
                     var name = !image ? SessionWait.Text(content["filename"]) : null;
                     if (string.IsNullOrEmpty(name))
                         name = SessionWait.Text(content["body"]);
@@ -253,10 +252,10 @@ internal sealed partial class MatrixChannel
                     var mime = SessionWait.Text(content["info"]?["mimetype"]);
                     if (string.IsNullOrEmpty(mime))
                         mime = image ? "image/jpeg" : "application/octet-stream";
-                    parts = await sessions.SaveInboundChannelFileAsync(
+                    parts = await sessions.SaveRemoteChannelFileAsync(
                         "matrix",
                         room,
-                        bytes,
+                        () => sessions.ReadChannelBodyAsync(response.Content, CancellationToken.None),
                         name,
                         mime,
                         "",

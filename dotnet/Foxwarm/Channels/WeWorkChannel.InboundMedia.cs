@@ -35,9 +35,9 @@ internal sealed partial class WeWorkChannel
         if (url.Length == 0)
             throw new InvalidDataException("No WeWork media download source available");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        using var response = await http.GetAsync(url, timeout.Token);
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
         response.EnsureSuccessStatusCode();
-        var bytes = await response.Content.ReadAsByteArrayAsync(timeout.Token);
+        var bytes = await sessions.ReadChannelBodyAsync(response.Content, timeout.Token, padding: encrypted ? 32 : 0);
         if (
             directUrl.Length == 0
             && response.Content.Headers.ContentType?.MediaType?.Contains(
@@ -94,17 +94,17 @@ internal sealed partial class WeWorkChannel
         var mime = First(media["mime_type"], media["mimetype"]);
         if (mime.Length == 0)
             mime = kind == "image" ? "image/jpeg" : "application/octet-stream";
-        var bytes = await DownloadAsync(
+        Task<byte[]> Download() => DownloadAsync(
             First(payload["response_url"], config["webhookUrl"]),
             Text(media["url"]),
             "",
             true,
             Text(media["aeskey"])
         );
-        return await sessions.SaveInboundChannelFileAsync(
+        return await sessions.SaveRemoteChannelFileAsync(
             "wework",
             conversation,
-            bytes,
+            Download,
             filename,
             mime,
             "",
@@ -179,7 +179,7 @@ internal sealed partial class WeWorkChannel
                     )
                     : First(payload["Url"], payload["file"]?["url"]);
             var mediaId = First(payload["MediaId"], payload["media_id"]);
-            var bytes = await DownloadAsync(
+            Task<byte[]> Download() => DownloadAsync(
                 replyWebhook,
                 direct,
                 mediaId,
@@ -201,10 +201,10 @@ internal sealed partial class WeWorkChannel
             var mime = First(payload["MimeType"], payload["mime_type"]);
             if (mime.Length == 0)
                 mime = type == "image" ? "image/jpeg" : "application/octet-stream";
-            return await sessions.SaveInboundChannelFileAsync(
+            return await sessions.SaveRemoteChannelFileAsync(
                 "wework",
                 conversation,
-                bytes,
+                Download,
                 filename,
                 mime,
                 "",

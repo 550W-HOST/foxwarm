@@ -29,11 +29,21 @@ internal sealed partial class SessionToolExecutor
                     // Capability limits do not remove an otherwise authorized Main spool.
                     node = "master";
             }
-            // Without a master Node there is no Main spool: the result is shortened in place.
-            if (node == "master" && !sessions.Capabilities.MasterNode)
-                throw new InvalidOperationException(
-                    "The complete output was not saved because this Session has no Node with file tools."
-                );
+            // Without a master Node the spool is the Agent's folder in the Agent store; without
+            // a store either, the result is shortened in place.
+            if (node is "master" or AgentStorePaths.Endpoint && !sessions.Capabilities.MasterNode)
+            {
+                if (sessions.AgentStore is null)
+                    throw new InvalidOperationException(
+                        "The complete output was not saved because this Session has no Node with file tools."
+                    );
+                var folderPath = AgentFolderPaths.Variable + "/" + path;
+                await sessions.AuthorizeAgentFolderFileAsync(hosted, folderPath, "read", token);
+                await sessions.AuthorizeAgentFolderFileAsync(hosted, folderPath, "write", token);
+                hosted.Entry.RequireIdentityAuthority();
+                await sessions.AgentStore.WriteAsync(hosted.Agent, path, Encoding.UTF8.GetBytes(text), 0, token);
+                return new(folderPath, AgentStorePaths.Endpoint, NodeSelected: sessions.CurrentNode(hosted) != "master");
+            }
             if (node == "master")
             {
                 try

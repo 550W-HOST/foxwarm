@@ -1,3 +1,4 @@
+using Foxwarm.Sessions;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -11,7 +12,10 @@ internal static class ToolOutputGuard
         string Path,
         string Node,
         bool Relative = false,
-        string? Cwd = null
+        string? Cwd = null,
+        // In the Agent's folder without master: whether the Session has a Node, so the output
+        // is read through `node:@agent/read` rather than `read`.
+        bool NodeSelected = false
     );
 
     internal static async Task<JsonNode?> GuardAsync(
@@ -213,7 +217,9 @@ internal static class ToolOutputGuard
     }
 
     private static string Location(SavedOutput saved) =>
-        $"Tool output truncated; complete output on Node {saved.Node}: {saved.Path}. Use read on that Node to inspect it."
+        saved.Node == AgentStorePaths.Endpoint
+            ? $"Tool output truncated; the complete output is in this Agent's folder: {saved.Path}. Use {(saved.NodeSelected ? "node:@agent/read" : "read")} to inspect it."
+        : $"Tool output truncated; complete output on Node {saved.Node}: {saved.Path}. Use read on that Node to inspect it."
         + (
             saved.Relative
                 ? saved.Cwd is null

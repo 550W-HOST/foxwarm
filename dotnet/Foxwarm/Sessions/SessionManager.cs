@@ -587,6 +587,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             Usage.StartBackfill(admissionStop.Token);
             Activity.StartBackfill(admissionStop.Token);
+            if (!Capabilities.MasterNode && AgentStore is not null)
+                toolOutputSweep ??= Task.Run(() => RunToolOutputSweepAsync(admissionStop.Token));
         }
         var ids = Catalog
             .RestartIds()
@@ -1034,6 +1036,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 )
             )
         );
+        if (toolOutputSweep is not null)
+            await toolOutputSweep;
         await timers.DisposeAsync();
         // Webhook handlers are ToolScript runs too; settle them before ToolScript closes.
         await Webhooks.DrainAsync();
