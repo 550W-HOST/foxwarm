@@ -40,11 +40,18 @@ internal static class OperatorCeiling
     /// </summary>
     internal static ToolAuthorizationPolicy Parse(string text)
     {
-        var policy = ToolAuthorizationYaml.Parse(Encoding.UTF8.GetBytes(text));
-        if (SessionWait.Text(policy.Value["defaultAction"]) != "allow")
-            throw new InvalidDataException(
-                "An operator ceiling has no defaultAction: anything its rules don't match passes."
-            );
+        // Checked as written: normalization fills an omitted default with allow, so an explicit
+        // `defaultAction: allow` would otherwise look like the implicit pass.
+        var policy = ToolAuthorizationYaml.Parse(
+            Encoding.UTF8.GetBytes(text),
+            document =>
+            {
+                if (document.ContainsKey("defaultAction"))
+                    throw new InvalidDataException(
+                        "An operator ceiling has no defaultAction: anything its rules don't match passes."
+                    );
+            }
+        );
         foreach (var rule in (policy.Value["rules"] as System.Text.Json.Nodes.JsonArray ?? []).OfType<System.Text.Json.Nodes.JsonObject>())
         {
             var action = SessionWait.Text(rule["action"]);

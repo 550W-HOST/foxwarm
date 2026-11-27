@@ -38,7 +38,8 @@ internal static class ToolAuthorizationYaml
         ScalarOrList,
     }
 
-    internal static ToolAuthorizationPolicy Parse(byte[] bytes)
+    // `inspect` sees the document as written, before normalization fills in defaults.
+    internal static ToolAuthorizationPolicy Parse(byte[] bytes, Action<JsonObject>? inspect = null)
     {
         if (bytes.Length > ToolAuthorizationPolicy.MaxBytes)
             throw new InvalidDataException("Tool policy exceeds its byte limit.");
@@ -50,10 +51,11 @@ internal static class ToolAuthorizationYaml
                 Shape.Root,
                 new HashSet<PolicyYamlNode>(ReferenceEqualityComparer.Instance)
             );
-            return ToolAuthorizationPolicy.Normalize(
+            var document =
                 root as JsonObject
-                    ?? throw new InvalidDataException("Tool policy requires a YAML object.")
-            );
+                ?? throw new InvalidDataException("Tool policy requires a YAML object.");
+            inspect?.Invoke(document);
+            return ToolAuthorizationPolicy.Normalize(document);
         }
         catch (YamlException error)
         {

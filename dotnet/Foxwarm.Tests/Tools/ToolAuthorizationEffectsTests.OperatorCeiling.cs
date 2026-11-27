@@ -284,10 +284,21 @@ public sealed partial class ToolAuthorizationEffectsTests
                 OperatorCeiling.Parse("version: 1\nrules:\n  - tool: {source: node, name: exec}\n    action: allow\n")
             ).Message
         );
-        foreach (var action in new[] { "deny", "ask" })
-            Assert.Throws<InvalidDataException>(() =>
-                OperatorCeiling.Parse($"version: 1\ndefaultAction: {action}\nrules: []\n")
+        // Any written default is refused, including an explicit allow that normalization
+        // can't tell from an omitted one.
+        foreach (var action in new[] { "deny", "ask", "allow" })
+            Assert.Equal(
+                "An operator ceiling has no defaultAction: anything its rules don't match passes.",
+                Assert.Throws<InvalidDataException>(() =>
+                    OperatorCeiling.Parse($"version: 1\ndefaultAction: {action}\nrules: []\n")
+                ).Message
             );
+        // A stored one fails closed when loaded.
+        var authority = new ToolAuthorizationAuthority(new Foxwarm.Storage.FileConfigDocuments(Path.GetTempPath()))
+        {
+            CeilingSource = new CeilingSource("version: 1\ndefaultAction: allow\n"),
+        };
+        Assert.Throws<ToolAuthorizationUnavailableException>(() => authority.LoadCeiling());
         // The version-1 grammar still applies.
         Assert.Throws<InvalidDataException>(() => OperatorCeiling.Parse("version: 2\nrules: []\n"));
         Assert.Empty(OperatorCeiling.Parse("version: 1\n").Value["rules"]!.AsArray());
