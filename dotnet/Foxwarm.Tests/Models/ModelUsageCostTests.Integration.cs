@@ -86,7 +86,7 @@ public sealed partial class ModelUsageCostTests
         var cold = queries.Projection(id)!;
         Assert.Equal("llm-failed", cold["runtimeState"]!["state"]!.GetValue<string>());
         AssertCost(cold["tokenUsage"]?["cost"]);
-        AssertCost(queries.GlobalSummary()["cost"]);
+        AssertCost((await queries.GlobalSummaryAsync())["cost"]);
         Assert.Empty(manager.Owners());
 
         var reloaded = await manager.RequiredAsync(id);
@@ -97,7 +97,7 @@ public sealed partial class ModelUsageCostTests
         Assert.False(fork.Metadata().LlmFailed);
         Assert.Null(fork.Metadata().Cost);
         Assert.Contains(fork.History(), row => row["__meta"]?["usage"]?["cost"] is not null);
-        AssertCost(queries.GlobalSummary()["cost"]);
+        AssertCost((await queries.GlobalSummaryAsync())["cost"]);
 
         await config.SaveAsync(
             new JsonObject

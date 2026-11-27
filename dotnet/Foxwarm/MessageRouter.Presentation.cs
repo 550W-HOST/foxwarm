@@ -9,7 +9,7 @@ internal sealed partial class MessageRouter
     internal const string CommandSpace =
         "[\u0009\u000A\u000B\u000C\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]";
 
-    private MessageRouteResult HandlePresentationCommand(
+    private async Task<MessageRouteResult> HandlePresentationCommandAsync(
         ChannelContext context,
         string verb,
         string? sessionId,
@@ -42,11 +42,10 @@ internal sealed partial class MessageRouter
                     reply = $"❌ Session `{requested}` not found.";
                 else
                 {
-                    outcome = runtime
-                        .ChangePresentation(catalog =>
-                            catalog.Archive(canonical, action == "archive", singleCommand: true)
-                        )
-                        .Result;
+                    outcome = (await runtime
+                        .ChangePresentationAsync(catalog =>
+                            catalog.ArchiveAsync(canonical, action == "archive", singleCommand: true)
+                        )).Result;
                     reply =
                         $"✅ Session `{requested}` {(action == "archive" ? "archived" : "unarchived")}.";
                 }
@@ -54,11 +53,10 @@ internal sealed partial class MessageRouter
             else
             {
                 var child = sessionId ?? context.SessionId;
-                outcome = runtime
-                    .ChangePresentation(catalog =>
-                        catalog.SetParent(child, action == "parent" ? parentSessionId : null)
-                    )
-                    .Result;
+                outcome = (await runtime
+                    .ChangePresentationAsync(catalog =>
+                        catalog.SetParentAsync(child, action == "parent" ? parentSessionId : null)
+                    )).Result;
                 var previous = SessionCatalog.Text(outcome["previousParentSessionId"]);
                 var parent = SessionCatalog.Text(outcome["parentSessionId"]);
                 var label = child == context.SessionId ? "Current session" : $"Session `{child}`";

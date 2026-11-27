@@ -8,7 +8,7 @@ File implementation of `ISessionAuthority`, opened through the [Session authorit
 
 ## Stable methods and callers
 
-- `CommitAsync` validates a bound snapshot, writes active JSON, then calls `PublishProjection`.
+- `CommitAsync` validates a bound snapshot, writes active JSON, then awaits `PublishProjection`.
 - `CommitCanonicalAppendAsync` validates, admits exact Archive message rows, prepares/validates/streams authority UTF-8 to a temporary file while persistence is pending, awaits the Archive commit, then publishes active JSON, rolls back only rows inserted by a failed pre-rename attempt, and publishes the projection after JSON publication.
 - `CommitCompactionAsync` performs the corresponding Archive block/message write followed by active JSON write and inserted-row rollback.
 - `LoadAsync` reads only the bound Session JSON through the shared read-only `SessionAuthorityReader`, then externalizes image parts. Missing authority with existing Archive rows is a typed local unavailable error; Archive access errors remain global. When both JSON and Archive are absent it returns `null`; the caller still decides whether that lifetime is creatable. `SessionManager.Admission` rejects a missing authority for an already registered catalog member instead of silently creating an empty Session.

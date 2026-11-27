@@ -89,7 +89,7 @@ internal sealed class PostgresSessionAuthority : ISessionAuthority
         cancellationToken.ThrowIfCancellationRequested();
         CheckBound(snapshot);
         await WriteAsync(snapshot, null, compaction: false, default).ConfigureAwait(false);
-        Publish(snapshot);
+        await PublishAsync(snapshot).ConfigureAwait(false);
     }
 
     public async Task CommitCanonicalAppendAsync(
@@ -107,7 +107,7 @@ internal sealed class PostgresSessionAuthority : ISessionAuthority
         var batch = PgArchiveBatch.Prepare(sessionId, [], records);
         await WriteAsync(stagedSnapshot, batch, compaction: false, default).ConfigureAwait(false);
         Notify(stagedSnapshot, records, []);
-        Publish(stagedSnapshot);
+        await PublishAsync(stagedSnapshot).ConfigureAwait(false);
     }
 
     public async Task CommitCompactionAsync(
@@ -126,7 +126,7 @@ internal sealed class PostgresSessionAuthority : ISessionAuthority
         var inserted = await WriteAsync(stagedSnapshot, batch, compaction: true, cancellationToken)
             .ConfigureAwait(false);
         Notify(stagedSnapshot, records, inserted.Blocks);
-        Publish(stagedSnapshot);
+        await PublishAsync(stagedSnapshot).ConfigureAwait(false);
     }
 
     public async Task<SessionSnapshot?> LoadAsync(
@@ -300,11 +300,12 @@ internal sealed class PostgresSessionAuthority : ISessionAuthority
         catch { }
     }
 
-    private void Publish(SessionSnapshot snapshot)
+    private async Task PublishAsync(SessionSnapshot snapshot)
     {
         try
         {
-            callbacks.PublishProjection?.Invoke(snapshot);
+            if (callbacks.PublishProjection is { } publish)
+                await publish(snapshot).ConfigureAwait(false);
         }
         catch (Exception error)
         {

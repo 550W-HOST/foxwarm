@@ -139,6 +139,7 @@ public sealed class SessionUsageTests
                     fired = true;
                     throw new IOException("Assistant committed, projection failed");
                 }
+                return Task.CompletedTask;
             }
         );
         var registry = new SessionRegistry(

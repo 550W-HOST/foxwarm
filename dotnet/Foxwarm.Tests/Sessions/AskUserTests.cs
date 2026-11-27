@@ -441,7 +441,7 @@ public sealed class AskUserTests
         var wait = f.Owner.WaitSnapshot()!;
         Assert.Equal(new[] { id }, SessionWait.Strings(wait["waitQuestionIds"]));
         Assert.Null(wait["timeoutSeconds"]);
-        var listed = new SessionListQueries(new SessionRuntime(f.Manager)).QuestionSessions(10);
+        var listed = await new SessionListQueries(new SessionRuntime(f.Manager)).QuestionSessionsAsync(10);
         Assert.Equal(f.Owner.Id, SessionWait.Text(listed[0]!["id"]));
         Assert.True(listed[0]!["questions"]!["waiting"]!.GetValue<bool>());
     }

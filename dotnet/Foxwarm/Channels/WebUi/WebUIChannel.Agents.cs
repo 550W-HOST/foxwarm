@@ -143,8 +143,8 @@ internal sealed partial class WebUIChannel
                         defaultCwd: body["defaultCwd"]?.GetValue<string>()
                     );
                     if (created.MainSessionId is not null)
-                        runtime.ChangePresentation(catalog =>
-                            catalog.Move(
+                        await runtime.ChangePresentationAsync(catalog =>
+                            catalog.MoveAsync(
                                 created.MainSessionId,
                                 new JsonObject
                                 {
@@ -582,8 +582,8 @@ internal sealed partial class WebUIChannel
                                 runtime: runtimeSelection
                             );
                     }
-                    runtime.ChangePresentation(catalog =>
-                        catalog.Move(
+                    await runtime.ChangePresentationAsync(catalog =>
+                        catalog.MoveAsync(
                             hosted.Id,
                             new JsonObject
                             {

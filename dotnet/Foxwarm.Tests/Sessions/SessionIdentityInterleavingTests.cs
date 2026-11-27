@@ -34,19 +34,24 @@ public sealed class SessionIdentityInterleavingTests
         var parent = await manager.CreateNamedAsync("main", "parent", null, null);
         var child = await manager.CreateNamedAsync("main", "child", null, null);
 
+        await ExerciseConcurrentParentChangesAsync(manager, parent, child);
+    }
+
+    internal static async Task ExerciseConcurrentParentChangesAsync(SessionManager manager, SessionOwner parent, SessionOwner child)
+    {
         var updates = Enumerable
             .Range(0, 200)
             .Select(index =>
                 Task.Run(() =>
-                    manager.ChangePresentation(catalog =>
-                        catalog.SetParent("child", index % 2 == 0 ? parent.Id : null)
+                    manager.ChangePresentationAsync(catalog =>
+                        catalog.SetParentAsync(child.Id, index % 2 == 0 ? parent.Id : null)
                     )
                 )
             )
             .ToArray();
         await Task.WhenAll(updates);
 
-        var catalogParent = SessionCatalog.Text(manager.Catalog.Get("child")!["parentSessionId"]);
+        var catalogParent = SessionCatalog.Text(manager.Catalog.Get(child.Id)!["parentSessionId"]);
         Assert.Equal(catalogParent, child.Metadata().ParentSessionId);
     }
 
@@ -101,8 +106,8 @@ public sealed class SessionIdentityInterleavingTests
         var root = await manager.CreateNamedAsync("main", "root", null, null);
         var a = await manager.CreateNamedAsync("main", "a", null, null);
         var b = await manager.CreateNamedAsync("main", "b", null, null);
-        manager.ChangePresentation(catalog => catalog.SetParent("a", "root"));
-        manager.ChangePresentation(catalog => catalog.SetParent("b", "root"));
+        await manager.ChangePresentationAsync(catalog => catalog.SetParentAsync("a", "root"));
+        await manager.ChangePresentationAsync(catalog => catalog.SetParentAsync("b", "root"));
         manager.BeforeDeleteStage = (stage, id) =>
         {
             if (stage == "detach" && id == "b")

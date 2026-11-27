@@ -524,8 +524,10 @@ public sealed class GrantRenewalTests
         Assert.Equal(0, tenant.InFlight);
     }
 
-    [Fact]
-    public async Task ALostCommitIsVerifiedAfterTheTransactionsSlotAndConnectionAreReturned()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ALostCommitIsVerifiedAfterTheTransactionsSlotAndConnectionAreReturned(bool asyncWriter)
     {
         var (database, tenants) = await PrepareAsync(0);
         await using var _ = database;
@@ -544,30 +546,29 @@ public sealed class GrantRenewalTests
         var competitorDone = false;
         var competitorDoneAtVerify = false;
         Task? competitor = null;
-        var result = tenant.Write(
-            tx =>
-            {
-                tx.Execute($"INSERT INTO {Table} (key, value) VALUES ('lost', 'commit')");
-                // Waits for the only slot, which this transaction holds.
-                // Another flow's transaction (not this body's), an async waiter: a released slot
-                // is handed to it before any later caller.
-                using (ExecutionContext.SuppressFlow())
-                    competitor = Task.Run(async () =>
-                    {
-                        await tenant.ReadAsync<object?>((inner, token) => Task.FromResult(inner.Scalar("SELECT 1")));
-                        Volatile.Write(ref competitorDone, true);
-                    });
-                Thread.Sleep(200);
-                // COMMIT reaches the server, its reply doesn't.
-                proxy.HoldExisting(toServer: false, toClient: true);
-                return 7;
-            },
-            new PgWriteOptions(Verify: tx =>
-            {
-                competitorDoneAtVerify = Volatile.Read(ref competitorDone);
-                return true;
-            })
-        );
+        int Write(PgTx tx)
+        {
+            tx.Execute($"INSERT INTO {Table} (key, value) VALUES ('lost', 'commit')");
+            // Waits for the only slot, which this transaction holds.
+            // Another flow's transaction (not this body's), an async waiter: a released slot
+            // is handed to it before any later caller.
+            using (ExecutionContext.SuppressFlow())
+                competitor = Task.Run(async () =>
+                {
+                    await tenant.ReadAsync<object?>((inner, token) => Task.FromResult(inner.Scalar("SELECT 1")));
+                    Volatile.Write(ref competitorDone, true);
+                });
+            Thread.Sleep(200);
+            // COMMIT reaches the server, its reply doesn't.
+            proxy.HoldExisting(toServer: false, toClient: true);
+            return 7;
+        }
+        var options = new PgWriteOptions(Verify: tx =>
+        {
+            competitorDoneAtVerify = Volatile.Read(ref competitorDone);
+            return true;
+        });
+        var result = asyncWriter ? await tenant.WriteAsync(Write, options) : tenant.Write(Write, options);
         Assert.Equal(7, result);
         await competitor!;
         // The verification is a transaction of its own, queued for the slot after the waiting

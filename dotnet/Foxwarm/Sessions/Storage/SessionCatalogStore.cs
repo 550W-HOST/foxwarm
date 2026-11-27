@@ -116,4 +116,53 @@ internal interface ISessionCatalogStore : IDisposable
     void NotifyIdentityChanged();
     DeleteSelection SelectDeletion(string requested, bool recursive);
     void RemoveForDeletion(string id);
+
+    // ---- Async paths ----------------------------------------------------------------------
+    // A store whose writes hold a gate around synchronous database I/O overrides these, so
+    // callers on async paths wait for it without blocking a pool thread (hosted-database.md).
+    // The defaults run the synchronous member.
+
+    Task PublishAuthorityAsync(JsonObject authority, bool allowInsert = false) =>
+        Completed(() =>
+        {
+            PublishAuthority(authority, allowInsert);
+            return true;
+        });
+
+    Task<PresentationChange> SetLastChannelAsync(string id, JsonObject channel) =>
+        Completed(() => SetLastChannel(id, channel));
+
+    Task<PresentationChange> ArchiveAsync(
+        string requested,
+        bool archived,
+        bool descendants = false,
+        bool singleCommand = false
+    ) => Completed(() => Archive(requested, archived, descendants, singleCommand));
+
+    Task<PresentationChange> PinAsync(string requested, bool pinned) =>
+        Completed(() => Pin(requested, pinned));
+
+    Task<PresentationChange> SetParentAsync(string requested, string? parent) =>
+        Completed(() => SetParent(requested, parent));
+
+    Task<PresentationChange> MoveAsync(string requested, JsonObject body, bool promote = false) =>
+        Completed(() => Move(requested, body, promote));
+
+    /// <summary>
+    /// Runs read queries on this catalog. A gated store holds its gate for the body, waiting for
+    /// it without a thread, and the members the body calls join that hold.
+    /// </summary>
+    Task<T> QueryAsync<T>(Func<T> body) => Completed(body);
+
+    private static Task<T> Completed<T>(Func<T> body)
+    {
+        try
+        {
+            return Task.FromResult(body());
+        }
+        catch (Exception error)
+        {
+            return Task.FromException<T>(error);
+        }
+    }
 }

@@ -231,7 +231,7 @@ public sealed partial class AgentRulesTreeTests
                 """
             )
         );
-        f.Manager.ChangePresentation(catalog => catalog.SetParent(worker.Id, source));
+        await f.Manager.ChangePresentationAsync(catalog => catalog.SetParentAsync(worker.Id, source));
         Assert.Equal(Sorted(worker.Id, source), ListedSessions(await SessionList(f, worker)));
         var agents = AgentRows((await f.ToolAsync("list_agents", new(), worker))!.AsObject());
         Assert.Equal(["main", "worker"], agents.Keys.Order(StringComparer.Ordinal).ToArray());

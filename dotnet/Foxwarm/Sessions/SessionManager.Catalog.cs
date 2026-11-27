@@ -71,7 +71,7 @@ internal sealed partial class SessionManager
         return raw;
     }
 
-    private void PublishCatalogSnapshot(SessionSnapshot snapshot, IdentitySlot slot)
+    private async Task PublishCatalogSnapshotAsync(SessionSnapshot snapshot, IdentitySlot slot)
     {
         lock (lifecycle)
             if (
@@ -82,10 +82,9 @@ internal sealed partial class SessionManager
                 throw new InvalidOperationException(
                     "Session authority lifetime is no longer current."
                 );
-        Catalog.PublishAuthority(
-            SnapshotProjection(snapshot),
-            slot.Creating && !slot.CatalogCreated
-        );
+        await Catalog
+            .PublishAuthorityAsync(SnapshotProjection(snapshot), slot.Creating && !slot.CatalogCreated)
+            .ConfigureAwait(false);
         slot.CatalogCreated = true;
     }
 
@@ -292,6 +291,20 @@ internal sealed partial class SessionManager
 
     internal JsonObject[] CatalogPresentations(string[] ids, bool includeLocal)
     {
+        var render = PreparePresentations(ids, includeLocal);
+        return render();
+    }
+
+    internal async Task<JsonObject[]> CatalogPresentationsAsync(string[] ids, bool includeLocal)
+    {
+        var render = await Catalog.QueryAsync(() => PreparePresentations(ids, includeLocal)).ConfigureAwait(false);
+        return render();
+    }
+
+    // Collect catalog and archive data first. Rendering uses the model configuration, which
+    // can read its own tenant documents; it must run outside the catalog transaction and gate.
+    private Func<JsonObject[]> PreparePresentations(string[] ids, bool includeLocal)
+    {
         var all = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
         foreach (var row in Catalog.GetMany(chunk))
@@ -331,7 +344,7 @@ internal sealed partial class SessionManager
         }
         var sequences = Storage.Archive.SequenceCounts(all.Keys.ToArray());
         var ancestry = PresentationAncestry(all, current);
-        return all
+        return () => all
             .Values.Select(row =>
             {
                 var id = SessionCatalog.Text(row["id"])!;
@@ -440,13 +453,15 @@ internal sealed partial class SessionManager
         return CatalogPresentations(ids, true);
     }
 
-    internal PresentationChange ChangePresentation(Func<ISessionCatalogStore, PresentationChange> action)
+    internal async Task<PresentationChange> ChangePresentationAsync(
+        Func<ISessionCatalogStore, Task<PresentationChange>> action
+    )
     {
-        var change = action(Catalog);
+        var change = await action(Catalog).ConfigureAwait(false);
         try
         {
             foreach (var id in change.ChangedIds)
-                SyncHotParent(id);
+                await SyncHotParentAsync(id).ConfigureAwait(false);
             foreach (var id in change.ChangedIds)
                 Find(id)?.PublishStateChanged();
         }
@@ -457,15 +472,16 @@ internal sealed partial class SessionManager
         return change;
     }
 
-    private void SyncHotParent(string id)
+    private async Task SyncHotParentAsync(string id)
     {
         var owner = Find(id);
         if (owner is null)
             return;
         while (true)
         {
-            var revision = Catalog.Revision;
-            var parent = SessionCatalog.Text(Catalog.Get(id)?["parentSessionId"]);
+            var (revision, parent) = await Catalog.QueryAsync(() =>
+                (Catalog.Revision, SessionCatalog.Text(Catalog.Get(id)?["parentSessionId"]))
+            ).ConfigureAwait(false);
             owner.Entry.WithState(state =>
             {
                 if (parent is null)

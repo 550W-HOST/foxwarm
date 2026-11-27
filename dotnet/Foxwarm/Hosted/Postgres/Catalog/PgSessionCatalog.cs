@@ -71,27 +71,28 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
         + " ON CONFLICT (tenant_id, session_id) DO UPDATE SET "
         + string.Join(',', Fields.Skip(1).Select(field => field + "=excluded." + field));
 
-    private readonly object gate = new();
+    // Holders run synchronous Npgsql I/O: async paths wait with HoldAsync (hosted-database.md).
+    private readonly Foxwarm.Storage.StoreGate gate = new();
     private readonly string instance = Guid.NewGuid().ToString("N");
 
     // The transaction of the method holding the gate; only the gate holder reads or writes it.
     private PgTx? current;
     private long revision;
-    private bool initialized;
+    private volatile bool initialized;
 
     public event Action? Changed;
 
     public Func<JsonObject[], IDisposable>? BeforePresentationMutation { get; set; }
 
+    // Read without the gate once initialized: only a gate holder writes it.
     public string Revision
     {
         get
         {
-            lock (gate)
-            {
-                EnsureInitialized();
-                return instance + ":" + revision;
-            }
+            if (!initialized)
+                using (gate.Enter())
+                    EnsureInitialized();
+            return instance + ":" + Interlocked.Read(ref revision);
         }
     }
 
@@ -102,7 +103,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public void Initialize()
     {
-        lock (gate)
+        using (gate.Enter())
             EnsureInitialized();
     }
 
@@ -121,65 +122,72 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         if (current is { } running)
             return body(running);
-        return database.Read(tx =>
-        {
-            current = tx;
-            try
-            {
-                return body(tx);
-            }
-            finally
-            {
-                current = null;
-            }
-        });
+        return database.Read(tx => WithCurrent(tx, () => body(tx)));
     }
 
     // Exact reads without the gate get their own transaction, or join the transaction another
     // store's body runs in on this database (the Task store canonicalizing references); the
     // gate holder's join its own.
     private T Exact<T>(Func<PgTx, T> body) =>
-        Monitor.IsEntered(gate) && current is { } running ? body(running) : database.ReadOrJoin(body);
+        gate.IsHeld && current is { } running ? body(running) : database.ReadOrJoin(body);
 
     // Caller holds the gate and runs no transaction. `raise` decides from the body's result
     // whether this write raises the revision; without it every write does.
     private T Write<T>(Func<PgTx, T> body, Func<T, bool>? raise = null)
     {
-        EnsureInitialized();
-        long written = 0;
-        var result = database.Write(
-            tx =>
-            {
-                current = tx;
-                try
-                {
-                    var value = body(tx);
-                    written =
-                        raise is null || raise(value)
-                            ? (long)
-                                tx.Scalar(
-                                    "INSERT INTO catalog_revision AS r (revision) VALUES (1)"
-                                        + " ON CONFLICT (tenant_id) DO UPDATE SET revision = r.revision + 1"
-                                        + " RETURNING revision"
-                                )!
-                            : 0;
-                    BeforeCommit?.Invoke();
-                    return value;
-                }
-                finally
-                {
-                    current = null;
-                }
-            },
-            new PgWriteOptions(
-                Verify: tx =>
-                    written == 0
-                    || tx.Scalar("SELECT revision FROM catalog_revision") as long? == written
-            )
-        );
-        if (written != 0)
-            revision = written;
-        return result;
+        var write = new CatalogWrite<T>(this, body, raise);
+        return write.Finish(database.Write(write.Run, write.Options));
+    }
+
+    private Task<T> WriteAsync<T>(Func<PgTx, T> body, Func<T, bool>? raise = null) =>
+        gate.HoldAsync(async () =>
+        {
+            var write = new CatalogWrite<T>(this, body, raise);
+            return write.Finish(await database.WriteAsync(write.Run, write.Options).ConfigureAwait(false));
+        });
+
+    // The catalog revision and the data commit together. Verification runs after this
+    // transaction has given back its connection and statement slot.
+    private sealed class CatalogWrite<T>(PgSessionCatalog catalog, Func<PgTx, T> body, Func<T, bool>? raise)
+    {
+        private long written;
+
+        internal PgWriteOptions Options => new(Verify: tx =>
+            written == 0 || tx.Scalar("SELECT revision FROM catalog_revision") as long? == written);
+
+        internal T Run(PgTx tx) => catalog.WithCurrent(tx, () =>
+        {
+            catalog.EnsureInitialized();
+            var result = body(tx);
+            written = raise is null || raise(result)
+                ? (long)tx.Scalar(
+                    "INSERT INTO catalog_revision AS r (revision) VALUES (1)"
+                    + " ON CONFLICT (tenant_id) DO UPDATE SET revision = r.revision + 1 RETURNING revision"
+                )!
+                : 0;
+            catalog.BeforeCommit?.Invoke();
+            return result;
+        });
+
+        internal T Finish(T result)
+        {
+            if (written != 0)
+                Interlocked.Exchange(ref catalog.revision, written);
+            return result;
+        }
+    }
+
+    private T WithCurrent<T>(PgTx tx, Func<T> body)
+    {
+        current = tx;
+        try
+        {
+            return gate.InBody(body);
+        }
+        finally
+        {
+            current = null;
+        }
     }
 
     private PgTx Current => current ?? throw new InvalidOperationException("No catalog transaction.");
@@ -255,7 +263,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
         var storable = StorableIds(ids);
         if (storable.Length == 0)
             return [];
-        lock (gate)
+        using (gate.Enter())
         {
             var rows = Read(tx =>
                 Rows(
@@ -271,7 +279,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public JsonObject[] List(int limit = int.MaxValue, int offset = 0)
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
                     Rows(
                         tx,
@@ -285,7 +293,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public JsonObject[] QuestionRows(int limit)
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
                     Rows(
                         tx,
@@ -337,7 +345,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         if (!Storable(id))
             return null;
-        lock (gate)
+        using (gate.Enter())
             return Read(_ =>
             {
                 var row = Get(id);
@@ -352,7 +360,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         if (!Storable(id))
             return [];
-        lock (gate)
+        using (gate.Enter())
             return Read(_ =>
             {
                 var result = new List<string>();
@@ -373,7 +381,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         if (!Storable(id))
             return [];
-        lock (gate)
+        using (gate.Enter())
             return Read(tx =>
                     Rows(
                         tx,
@@ -539,7 +547,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     /// </summary>
     internal void Import(JsonObject[] records)
     {
-        lock (gate)
+        using (gate.Enter())
             Write(tx =>
             {
                 WriteRows(tx, records);
@@ -550,25 +558,31 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public void PublishAuthority(JsonObject authority, bool allowInsert = false)
     {
-        var id = Text(authority["id"])!;
-        lock (gate)
-            Write(tx =>
-            {
-                if (Get(id) is { } main)
-                    SessionCatalog.OverlayMain(authority, main);
-                else if (!allowInsert)
-                    throw new InvalidOperationException(
-                        "Session catalog membership is no longer current."
-                    );
-                WriteRows(tx, [SessionCatalog.Project(authority)]);
-                return true;
-            });
+        using (gate.Enter())
+            Write(tx => WriteAuthority(tx, authority, allowInsert));
         Changed?.Invoke();
+    }
+
+    public async Task PublishAuthorityAsync(JsonObject authority, bool allowInsert = false)
+    {
+        await WriteAsync(tx => WriteAuthority(tx, authority, allowInsert)).ConfigureAwait(false);
+        Changed?.Invoke();
+    }
+
+    // Caller holds the gate.
+    private bool WriteAuthority(PgTx tx, JsonObject authority, bool allowInsert)
+    {
+        if (Get(Text(authority["id"])!) is { } main)
+            SessionCatalog.OverlayMain(authority, main);
+        else if (!allowInsert)
+            throw new InvalidOperationException("Session catalog membership is no longer current.");
+        WriteRows(tx, [SessionCatalog.Project(authority)]);
+        return true;
     }
 
     public void Rename(string id, string? name)
     {
-        lock (gate)
+        using (gate.Enter())
             Write(tx =>
             {
                 var row = Get(id) ?? throw new InvalidDataException("Session not found.");
@@ -586,7 +600,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     public bool RenameIfUnnamed(string id, string name)
     {
         bool renamed;
-        lock (gate)
+        using (gate.Enter())
             renamed = Write(
                 tx =>
                 {
@@ -613,7 +627,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
         bool requireSource = true
     )
     {
-        lock (gate)
+        using (gate.Enter())
             return Write(tx =>
             {
                 var rewrite = SessionCatalogRules.RewriteIdentity(
@@ -637,7 +651,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public string ValidateIdentityParent(string child, string parent)
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(_ =>
             {
                 var id = Text(
@@ -652,13 +666,13 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public DeleteSelection SelectDeletion(string requested, bool recursive)
     {
-        lock (gate)
+        using (gate.Enter())
             return Read(_ => SessionCatalogRules.SelectDeletion(this, requested, recursive));
     }
 
     public void RemoveForDeletion(string id)
     {
-        lock (gate)
+        using (gate.Enter())
             Write(tx =>
             {
                 var old =
@@ -684,20 +698,28 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     )
     {
         PresentationChange result;
-        lock (gate)
-            result = Write(
-                tx =>
-                {
-                    var operation = prepare();
-                    using var admission = BeforePresentationMutation?.Invoke(operation.Rows);
-                    WriteRows(tx, operation.Rows);
-                    return new PresentationChange(
-                        operation.Result,
-                        operation.Rows.Select(row => Text(row["id"])!).ToArray()
-                    );
-                },
-                raise: change => change.ChangedIds.Length > 0
-            );
+        using (gate.Enter())
+            result = Write(tx => ApplyPresentation(tx, prepare), HasChanges);
+        return Presented(result);
+    }
+
+    private async Task<PresentationChange> CommitPresentationAsync(
+        Func<(JsonObject Result, JsonObject[] Rows)> prepare
+    ) => Presented(await WriteAsync(tx => ApplyPresentation(tx, prepare), HasChanges).ConfigureAwait(false));
+
+    private static bool HasChanges(PresentationChange change) => change.ChangedIds.Length > 0;
+
+    private PresentationChange ApplyPresentation(PgTx tx, Func<(JsonObject Result, JsonObject[] Rows)> prepare)
+    {
+        var operation = prepare();
+        using var admission = BeforePresentationMutation?.Invoke(operation.Rows);
+        WriteRows(tx, operation.Rows);
+        return new(operation.Result, operation.Rows.Select(row => Text(row["id"])!).ToArray());
+    }
+
+    // After the gate's release: a committed change is announced.
+    private PresentationChange Presented(PresentationChange result)
+    {
         if (result.ChangedIds.Length > 0)
             try
             {
@@ -731,6 +753,35 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public PresentationChange Move(string requested, JsonObject body, bool promote = false) =>
         CommitPresentation(() => SessionCatalogRules.Move(this, requested, body, promote));
+
+    public Task<PresentationChange> SetLastChannelAsync(string id, JsonObject channel) =>
+        CommitPresentationAsync(() => SessionCatalogRules.SetLastChannel(this, id, channel));
+
+    public Task<PresentationChange> ArchiveAsync(
+        string requested,
+        bool archived,
+        bool descendants = false,
+        bool singleCommand = false
+    ) =>
+        CommitPresentationAsync(() =>
+            SessionCatalogRules.Archive(this, requested, archived, descendants, singleCommand)
+        );
+
+    public Task<PresentationChange> PinAsync(string requested, bool pinned) =>
+        CommitPresentationAsync(() => SessionCatalogRules.Pin(this, requested, pinned));
+
+    public Task<PresentationChange> SetParentAsync(string requested, string? parent) =>
+        CommitPresentationAsync(() => SessionCatalogRules.SetParent(this, requested, parent));
+
+    public Task<PresentationChange> MoveAsync(string requested, JsonObject body, bool promote = false) =>
+        CommitPresentationAsync(() => SessionCatalogRules.Move(this, requested, body, promote));
+
+    /// <summary>
+    /// Runs read queries on this catalog holding its gate, waiting for it without a thread; the
+    /// members the body calls join the hold.
+    /// </summary>
+    public Task<T> QueryAsync<T>(Func<T> body) =>
+        gate.HoldAsync(() => database.ReadAsync(tx => WithCurrent(tx, body)));
 
     public IReadOnlyList<SessionCatalog.SequenceSession> SequenceSessions() =>
         database.Read(tx =>

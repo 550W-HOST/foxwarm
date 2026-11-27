@@ -47,7 +47,7 @@ public sealed partial class SessionAdmissionTests
         await manager.LoadAsync();
         var runtime = new SessionRuntime(manager);
         var view = new SessionListQueries(runtime);
-        Assert.Equal(2, view.GlobalSummary()["total"]!.GetValue<long>());
+        Assert.Equal(2, (await view.GlobalSummaryAsync())["total"]!.GetValue<long>());
         Assert.NotNull(view.Projection("one"));
         Assert.Equal(
             2,

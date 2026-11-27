@@ -94,17 +94,14 @@ internal sealed partial class SessionListQueries
 
     public JsonObject? Projection(string id) => runtime.Projection(id);
 
-    internal JsonArray ProjectionRows(string[] ids) => Array(runtime.Projections(ids));
+    internal async Task<JsonArray> ProjectionRowsAsync(string[] ids) => Array(await runtime.ProjectionsAsync(ids));
 
-    /// <summary>Sessions with open ask_user questions, most recent first; the Sidebar elevates them above pinned rows.</summary>
-    public JsonArray QuestionSessions(int limit) =>
-        ProjectionRows(
-            runtime
-                .Catalog.QuestionRows(limit)
-                .Select(row => SessionCatalog.Text(row["id"]))
-                .OfType<string>()
-                .ToArray()
-        );
+    /// <summary>Sessions with open questions, most recent first, for the Sidebar.</summary>
+    public async Task<JsonArray> QuestionSessionsAsync(int limit)
+    {
+        var ids = await Catalog.QueryAsync(() => Catalog.QuestionRows(limit).Select(Id).ToArray());
+        return await ProjectionRowsAsync(ids);
+    }
 
     private static JsonArray Array(IEnumerable<JsonObject> rows) =>
         new(rows.Select(row => (JsonNode?)row).ToArray());
@@ -272,7 +269,7 @@ internal sealed partial class SessionListQueries
             }
         );
 
-    public JsonObject Page(
+    public async Task<JsonObject> PageAsync(
         string mode,
         int limit,
         string? cursor = null,
@@ -288,13 +285,13 @@ internal sealed partial class SessionListQueries
             : "flat";
         var decoded = Decode(cursor, mode, scope, false);
         var activity = mode != "flat-time" && agent is null;
-        (CatalogPage Page, JsonObject[] Candidates) Read(JsonArray? after)
+        async Task<(CatalogPage Page, JsonObject[] Candidates)> ReadAsync(JsonArray? after)
         {
-            var page = Catalog.Page(mode, limit, after, roots, agent, pinnedOnly);
-            var candidates = runtime.Projections(page.Rows.Select(Id).ToArray(), true);
+            var page = await Catalog.QueryAsync(() => Catalog.Page(mode, limit, after, roots, agent, pinnedOnly));
+            var candidates = await runtime.ProjectionsAsync(page.Rows.Select(Id).ToArray(), true);
             var scopes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
             foreach (var chunk in candidates.Select(Id).Chunk(200))
-            foreach (var pair in Catalog.Scopes(chunk))
+            foreach (var pair in await Catalog.QueryAsync(() => Catalog.Scopes(chunk)))
                 scopes[pair.Key] = pair.Value;
             var ordered = candidates
                 .Where(row =>
@@ -307,10 +304,10 @@ internal sealed partial class SessionListQueries
                 .ToArray();
             return (page, ordered);
         }
-        var result = Read(decoded?["key"] as JsonArray);
+        var result = await ReadAsync(decoded?["key"] as JsonArray);
         var reset = decoded is not null && SessionCatalog.Text(decoded["revision"]) != Revision;
         if (reset)
-            result = Read(null);
+            result = await ReadAsync(null);
         var selected = result.Candidates.Take(limit).ToArray();
         return new JsonObject
         {
@@ -327,7 +324,7 @@ internal sealed partial class SessionListQueries
         };
     }
 
-    public JsonObject[] ChildPages(
+    public async Task<JsonObject[]> ChildPagesAsync(
         (string Id, string? Cursor)[] requests,
         string mode,
         int limit,
@@ -355,13 +352,13 @@ internal sealed partial class SessionListQueries
         // A flagged parent's first page holds as many children as were active within the last
         // 24 hours, between three and the smaller of `limit` and five; continuations are sized
         // by `limit` as usual.
-        var limits = RecentWindows(
+        var limits = await Catalog.QueryAsync(() => RecentWindows(
             recentWindow is null || agent is not null
                 ? []
                 : first.Where(recentWindow.Contains).ToArray(),
             Math.Min(limit, RecentChildWindowMax)
-        );
-        var baseRows = Catalog.Children(
+        ));
+        var baseRows = await Catalog.QueryAsync(() => Catalog.Children(
             requests
                 .Select(
                     (request, index) =>
@@ -372,8 +369,8 @@ internal sealed partial class SessionListQueries
             limit,
             agent,
             limits
-        );
-        var candidates = runtime.Projections(
+        ));
+        var candidates = await runtime.ProjectionsAsync(
             baseRows
                 .SelectMany(group => group.Rows.Select(Id))
                 .Distinct(StringComparer.Ordinal)
@@ -450,22 +447,22 @@ internal sealed partial class SessionListQueries
                 .ToArray()
         );
 
-    public JsonObject Exact(string[] ids, bool includePaths)
+    public async Task<JsonObject> ExactAsync(string[] ids, bool includePaths)
     {
         var resolved = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
-        foreach (var pair in Catalog.ResolveMany(chunk))
+        foreach (var pair in await Catalog.QueryAsync(() => Catalog.ResolveMany(chunk)))
             resolved[pair.Key] = pair.Value;
         var canonical = resolved
             .Values.Select(row => SessionCatalog.Text(row["sessionId"]))
             .OfType<string>()
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var projected = runtime.Projections(canonical).ToDictionary(Id, StringComparer.Ordinal);
+        var projected = (await runtime.ProjectionsAsync(canonical)).ToDictionary(Id, StringComparer.Ordinal);
         var paths = new Dictionary<string, string[]>(StringComparer.Ordinal);
         if (includePaths)
             foreach (var chunk in canonical.Chunk(100))
-            foreach (var pair in Catalog.Paths(chunk))
+            foreach (var pair in await Catalog.QueryAsync(() => Catalog.Paths(chunk)))
                 paths[pair.Key] = pair.Value;
         var results = new JsonArray();
         var pathJson = new JsonObject();

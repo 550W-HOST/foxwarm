@@ -10,7 +10,7 @@ internal sealed partial class WebUIChannel
         app.MapGet(
             "/api/session-list/sidebar",
             (HttpRequest request) =>
-                ListResult(() =>
+                ListResult(async () =>
                 {
                     var query = request.Query;
                     SessionListQueries.Keys(
@@ -39,7 +39,7 @@ internal sealed partial class WebUIChannel
                         );
                     var view = new SessionListQueries(runtime);
                     // A grouped Sidebar pages the pinned section here and each group separately.
-                    var result = view.Page(
+                    var result = await view.PageAsync(
                         mode,
                         limit,
                         Query(query, "cursor"),
@@ -52,7 +52,7 @@ internal sealed partial class WebUIChannel
                     var groups =
                         mode == "flat-time"
                             ? []
-                            : view.ChildPages(
+                            : await view.ChildPagesAsync(
                                 rootIds.Select(id => (id, (string?)null)).ToArray(),
                                 mode,
                                 childLimit,
@@ -67,7 +67,7 @@ internal sealed partial class WebUIChannel
                     var children = new JsonArray(
                         groups.Select(group => (JsonNode?)group).ToArray()
                     );
-                    var focus = view.Exact(
+                    var focus = await view.ExactAsync(
                         focusIds.Cast<string>().Distinct(StringComparer.Ordinal).ToArray(),
                         true
                     );
@@ -93,18 +93,19 @@ internal sealed partial class WebUIChannel
                     result["children"] = children;
                     result["focus"] = focus["results"]!.DeepClone();
                     result["presentationPaths"] = focus["paths"]!.DeepClone();
-                    result["pathContext"] = view.Exact(context.ToArray(), false)[
+                    result["pathContext"] = (await view.ExactAsync(context.ToArray(), false))[
                         "results"
                     ]!.DeepClone();
                     result["forcedChildren"] = forced;
                     // The first page also carries Sessions with open questions, wherever they sit.
                     if (Query(query, "cursor") is null)
-                        result["questionSessions"] = view.QuestionSessions(50);
+                        result["questionSessions"] = await view.QuestionSessionsAsync(50);
                     if (grouping is not null)
                     {
-                        result["groups"] = view.Groups(grouping, mode, GroupNodes());
+                        var nodes = GroupNodes();
+                        result["groups"] = await view.GroupsAsync(grouping, mode, nodes);
                         // Tree paths are shown under their first row; Flat shows every row by itself.
-                        result["presentationGroups"] = view.PresentationGroups(
+                        result["presentationGroups"] = await view.PresentationGroupsAsync(
                             mode == "flat-time"
                                 ? context
                                 : (focus["paths"] as JsonObject)!
@@ -123,7 +124,7 @@ internal sealed partial class WebUIChannel
             async (HttpRequest request) =>
                 await ListBody(
                     request,
-                    body =>
+                    async body =>
                     {
                         SessionListQueries.Keys(
                             body.Select(pair => pair.Key),
@@ -146,13 +147,13 @@ internal sealed partial class WebUIChannel
                         var grouping = SessionListQueries.Grouping(BodyText(body, "group"));
                         var mode = SessionListQueries.Mode(BodyText(body, "mode"));
                         var view = new SessionListQueries(runtime);
-                        var result = view.Exact(
+                        var result = await view.ExactAsync(
                             SessionListQueries.Ids(body["ids"]),
                             body["includePaths"]?.GetValue<bool>() == true
                         );
                         // Grouped Sidebars place exact rows outside a loaded page by these keys.
                         if (grouping is not null)
-                            result["presentationGroups"] = view.PresentationGroups(
+                            result["presentationGroups"] = await view.PresentationGroupsAsync(
                                 (result["results"] as JsonArray)!
                                     .Select(item =>
                                         SessionCatalog.Text(item?["resolution"]?["sessionId"])
@@ -170,7 +171,7 @@ internal sealed partial class WebUIChannel
             async (HttpRequest request) =>
                 await ListBody(
                     request,
-                    body =>
+                    async body =>
                     {
                         SessionListQueries.Keys(
                             body.Select(pair => pair.Key),
@@ -249,7 +250,7 @@ internal sealed partial class WebUIChannel
                                 recent.Add(id);
                         }
                         var view = new SessionListQueries(runtime);
-                        var pages = view.ChildPages(
+                        var pages = await view.ChildPagesAsync(
                             requests.ToArray(),
                             mode,
                             limit,
@@ -276,7 +277,7 @@ internal sealed partial class WebUIChannel
             async (HttpRequest request) =>
                 await ListBody(
                     request,
-                    body =>
+                    async body =>
                     {
                         SessionListQueries.Keys(
                             body.Select(pair => pair.Key),
@@ -333,12 +334,12 @@ internal sealed partial class WebUIChannel
                             requests.Add((key, SessionCatalog.Text(group["cursor"])));
                         }
                         var view = new SessionListQueries(runtime);
-                        var result = view.GroupPages(requests.ToArray(), grouping, mode, limit);
+                        var result = await view.GroupPagesAsync(requests.ToArray(), grouping, mode, limit);
                         // Tree-mode members carry the same child previews as Sidebar roots.
                         var previews =
                             mode == "flat-time"
                                 ? []
-                                : view.ChildPages(
+                                : await view.ChildPagesAsync(
                                     result["groups"]!
                                         .AsArray()
                                         .SelectMany(group => group!["sessions"]!.AsArray())
@@ -374,12 +375,12 @@ internal sealed partial class WebUIChannel
             async (HttpRequest request) =>
                 await ListBody(
                     request,
-                    body =>
+                    async body =>
                     {
                         SessionListQueries.Keys(body.Select(pair => pair.Key), "ids");
                         var ids = SessionListQueries.Ids(body["ids"]);
                         var view = new SessionListQueries(runtime);
-                        var counts = view.DescendantActivity(ids);
+                        var counts = await view.DescendantActivityAsync(ids);
                         return new JsonObject
                         {
                             ["version"] = 1,
@@ -402,7 +403,7 @@ internal sealed partial class WebUIChannel
         app.MapGet(
             "/api/session-list/search",
             (HttpRequest request) =>
-                ListResult(() =>
+                ListResult(async () =>
                 {
                     SessionListQueries.Keys(request.Query.Keys, "q", "limit");
                     var query = SessionCatalog.Trim(Query(request.Query, "q") ?? "");
@@ -411,7 +412,7 @@ internal sealed partial class WebUIChannel
                             "SESSION_LIST_SEARCH_INVALID",
                             "q must contain 1 to 256 characters."
                         );
-                    return new SessionListQueries(runtime).Search(
+                    return await new SessionListQueries(runtime).SearchAsync(
                         query,
                         SessionListQueries.Limit(Query(request.Query, "limit"), 50, 100)
                     );
@@ -420,7 +421,7 @@ internal sealed partial class WebUIChannel
         app.MapGet(
             "/api/session-list/architecture",
             (HttpRequest request) =>
-                ListResult(() =>
+                ListResult(async () =>
                 {
                     SessionListQueries.Keys(
                         request.Query.Keys,
@@ -431,7 +432,7 @@ internal sealed partial class WebUIChannel
                     );
                     var view = new SessionListQueries(runtime);
                     var agent = Query(request.Query, "agent");
-                    var roots = view.Page(
+                    var roots = await view.PageAsync(
                         "time",
                         SessionListQueries.Limit(Query(request.Query, "limit"), 50, 100),
                         Query(request.Query, "cursor"),
@@ -442,7 +443,7 @@ internal sealed partial class WebUIChannel
                         .OfType<JsonObject>()
                         .Select(row => row["id"]!.GetValue<string>())
                         .ToArray();
-                    var children = view.ChildPages(
+                    var children = await view.ChildPagesAsync(
                         rootIds.Select(id => (id, (string?)null)).ToArray(),
                         "time",
                         SessionListQueries.Limit(Query(request.Query, "childLimit"), 10, 20),
@@ -455,8 +456,8 @@ internal sealed partial class WebUIChannel
                     {
                         ["version"] = 1,
                         ["revision"] = view.Revision,
-                        ["summary"] = view.GlobalSummary(),
-                        ["agentCounts"] = view.AgentCounts(),
+                        ["summary"] = await view.GlobalSummaryAsync(),
+                        ["agentCounts"] = await view.AgentCountsAsync(),
                         ["agent"] = agent,
                         ["roots"] = roots,
                         ["children"] = new JsonArray(
@@ -468,7 +469,7 @@ internal sealed partial class WebUIChannel
         app.MapGet(
             "/api/session-list/descendants/{id}",
             (string id, HttpRequest request) =>
-                ListResult(() =>
+                ListResult(async () =>
                 {
                     SessionListQueries.Keys(request.Query.Keys, "limit");
                     var raw = request
@@ -477,7 +478,7 @@ internal sealed partial class WebUIChannel
                         .Split('/')
                         .Last();
                     var canonical = Uri.UnescapeDataString(raw ?? id);
-                    return new SessionListQueries(runtime).Descendants(
+                    return await new SessionListQueries(runtime).DescendantsAsync(
                         canonical,
                         SessionListQueries.Limit(Query(request.Query, "limit"), 20, 100)
                     );
@@ -531,11 +532,11 @@ internal sealed partial class WebUIChannel
             ? (int)number
         : throw new SessionListQueryException("SESSION_LIST_LIMIT_INVALID", "Invalid limit.");
 
-    private static IResult ListResult(Func<JsonObject> build)
+    private static async Task<IResult> ListResult(Func<Task<JsonObject>> build)
     {
         try
         {
-            return Results.Ok(JsonData.WebNode(build()));
+            return Results.Ok(JsonData.WebNode(await build()));
         }
         catch (SessionListQueryException error)
         {
@@ -564,7 +565,7 @@ internal sealed partial class WebUIChannel
 
     private static async Task<IResult> ListBody(
         HttpRequest request,
-        Func<JsonObject, JsonObject> build
+        Func<JsonObject, Task<JsonObject>> build
     )
     {
         try
@@ -578,7 +579,7 @@ internal sealed partial class WebUIChannel
                         ["code"] = "SESSION_LIST_DTO_INVALID",
                     }
                 )
-                : ListResult(() => build(body));
+                : await ListResult(() => build(body));
         }
         catch (System.Text.Json.JsonException)
         {

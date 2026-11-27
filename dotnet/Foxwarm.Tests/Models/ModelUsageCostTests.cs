@@ -244,7 +244,7 @@ public sealed partial class ModelUsageCostTests
             SessionCatalog.Number(view.Projection(owner.Id)?["tokenUsage"]?["cost"])!.Value,
             10
         );
-        Assert.Equal(0.000081, SessionCatalog.Number(view.GlobalSummary()["cost"])!.Value, 10);
+        Assert.Equal(0.000081, SessionCatalog.Number((await view.GlobalSummaryAsync())["cost"])!.Value, 10);
         Assert.Equal(
             0.000081,
             SessionCatalog.Number(manager.Catalog.Get(owner.Id)?["stats"]?["totalCost"])!.Value,
@@ -284,7 +284,7 @@ public sealed partial class ModelUsageCostTests
             SessionCatalog.Number(view.Projection(owner.Id)?["tokenUsage"]?["cost"])!.Value,
             10
         );
-        Assert.Equal(0.000081, SessionCatalog.Number(view.GlobalSummary()["cost"])!.Value, 10);
+        Assert.Equal(0.000081, SessionCatalog.Number((await view.GlobalSummaryAsync())["cost"])!.Value, 10);
     }
 
     [Fact]
@@ -358,8 +358,8 @@ public sealed partial class ModelUsageCostTests
                 0,
                 SessionCatalog.Number(queries.Projection(owner.Id)?["tokenUsage"]?["cost"])
             );
-            Assert.Equal(0, SessionCatalog.Number(queries.GlobalSummary()["cost"]));
-            Assert.Equal(0, SessionCatalog.Number(queries.Descendants(parent.Id, 10)["cost"]));
+            Assert.Equal(0, SessionCatalog.Number((await queries.GlobalSummaryAsync())["cost"]));
+            Assert.Equal(0, SessionCatalog.Number((await queries.DescendantsAsync(parent.Id, 10))["cost"]));
         }
         finally
         {

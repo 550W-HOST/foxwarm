@@ -99,7 +99,7 @@ internal sealed partial class MessageRouter
             throw new UserCommandException("❌ No active session. Specify the target session explicitly.");
         await ReplyRouteAsync(
             command.Source,
-            HandlePresentationCommand(
+            await HandlePresentationCommandAsync(
                 new(command.CurrentId ?? "", command.Source.Type),
                 command.Verb,
                 id,

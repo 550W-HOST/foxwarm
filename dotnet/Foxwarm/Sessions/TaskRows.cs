@@ -41,6 +41,16 @@ internal interface ITaskRowStore : IDisposable
     /// transaction; a normal return commits it.
     /// </summary>
     T Run<T>(TaskRowAccess access, Func<ITaskRows, T> body);
+
+    /// <summary>
+    /// <see cref="Run{T}"/> for async paths: a store whose rows wait for a database resource
+    /// waits for it without a thread. Others run the body at once.
+    /// </summary>
+    Task<T> RunTransactionAsync<T>(bool write, Func<ITaskRows, T> body) =>
+        Task.FromResult(Run(write ? TaskRowAccess.Write : TaskRowAccess.Read, body));
+
+    Task<T> ReadTaskAsync<T>(string taskId, Func<JsonObject?, T> project) =>
+        Task.FromResult(Run(TaskRowAccess.Direct, rows => project(rows.Read(taskId))));
 }
 
 internal interface ITaskRows

@@ -150,7 +150,7 @@ internal sealed partial class WebUIChannel
                             );
                         // Scope can change while the projection reads; never return stale scope.
                         scoped?.Require();
-                        return result;
+                        return Task.FromResult(result);
                     }
                 )
         );

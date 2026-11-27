@@ -28,7 +28,11 @@ Files: `dotnet/Foxwarm/Hosted/Postgres/Catalog/PgSessionCatalog.cs`, `dotnet/Fox
 
 **Derived design.** One monitor serializes the methods the file catalog serializes, and a method's statements share one transaction. Calls made while it runs join that transaction, including the presentation-mutation hook's reads. Ordinary `Get` and `Resolve` take no monitor and run in their own read transaction, so readers don't wait for a held presentation writer.
 
+Authority publication and presentation commits wait for the catalog's semaphore asynchronously and raise `Changed` only after releasing it. The hot-parent update reads the counter and parent together, applies it to the hot owner, and retries on a concurrent revision. WebUI list operations await their catalog reads. Row collection and its archive sequence counts share a read transaction; rendering starts after that transaction and the gate are released, because model configuration may read tenant documents. Exact point reads from independent callers still use `ReadOrJoin`. File mode executes the same public operations on its existing SQLite store.
+
 ## Tests
+
+- `CatalogStarvationTests` drives concurrent presentation updates with a capped worker pool and verifies that queued list and Task reads yield while the tenant's only statement slot is occupied. `HostedRuntimesInProcessTests` requests an exact WebUI row with PostgreSQL-backed model configuration and checks the configured default model.
 
 - **`SessionCatalogContractTests`** (abstract) runs as `FileSessionCatalogContractTests` and `PostgresSessionCatalogContractTests` (`Backend=postgres`). It was extracted from the `SessionCatalog*Tests` classes, which keep only file-only behavior: SQLite plans and statement observation, upgrades of earlier layouts, writers that bypass the store and SQLite lock failures. The maintained-value checks compare the stored count and activity tables with a full recomputation after every step.
 - **`PostgresSessionCatalogTests`** covers fencing of every write operation after a takeover (nothing written, no event, revision unchanged), the lost-`COMMIT` cases through `PgTcpProxy`, the revision counter, tenant separation and the index plans of pages, child windows, group pages, recent-child counts, startup selections and alias resolution.

@@ -42,7 +42,7 @@ internal sealed partial class PgArchiveStore(TenantDb database) : IArchiveStore
         );
 
     public Dictionary<string, (long Count, long Latest)> SequenceCounts(string[] ids) =>
-        database.Read(tx =>
+        database.ReadOrJoin(tx =>
         {
             var result = new Dictionary<string, (long Count, long Latest)>(StringComparer.Ordinal);
             foreach (var chunk in ids.Chunk(1000))

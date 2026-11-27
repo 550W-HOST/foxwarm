@@ -21,7 +21,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
     private readonly Action<AtomicJsonWriteStage>? authorityStageHook;
     private readonly Func<int, CancellationToken, Task>? canonicalCommitBarrier;
     private int canonicalCommitCount;
-    private readonly Action<SessionSnapshot>? publishProjection;
+    private readonly Func<SessionSnapshot, Task>? publishProjection;
     private readonly Func<JsonObject?>? mainFields;
     private readonly Action? checkLifetime;
     private readonly Action<
@@ -52,7 +52,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         string agent = "main",
         Action<AtomicJsonWriteStage>? authorityStageHook = null,
         Func<int, CancellationToken, Task>? canonicalCommitBarrier = null,
-        Action<SessionSnapshot>? publishProjection = null,
+        Func<SessionSnapshot, Task>? publishProjection = null,
         Func<JsonObject?>? mainFields = null,
         Action? checkLifetime = null,
         Action<
@@ -133,7 +133,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         return Task.CompletedTask;
     }
 
-    public Task CommitAsync(
+    public async Task CommitAsync(
         SessionSnapshot snapshot,
         SaveKind kind,
         CancellationToken cancellationToken = default
@@ -150,8 +150,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         {
             publicationError = error;
         }
-        PublishProjection(snapshot, publicationError);
-        return Task.CompletedTask;
+        await PublishProjectionAsync(snapshot, publicationError).ConfigureAwait(false);
     }
 
     public async Task CommitCanonicalAppendAsync(
@@ -226,7 +225,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
             if (published)
                 NotifyArchiveCommitted(stagedSnapshot, records, []);
         }
-        PublishProjection(stagedSnapshot, publicationError);
+        await PublishProjectionAsync(stagedSnapshot, publicationError).ConfigureAwait(false);
     }
 
     public async Task CommitCompactionAsync(
@@ -294,7 +293,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
             if (published)
                 NotifyArchiveCommitted(stagedSnapshot, records, newBlocks);
         }
-        PublishProjection(stagedSnapshot, publicationError);
+        await PublishProjectionAsync(stagedSnapshot, publicationError).ConfigureAwait(false);
     }
 
     private void NotifyArchiveCommitted(
@@ -311,7 +310,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         catch { }
     }
 
-    private void PublishProjection(
+    private async Task PublishProjectionAsync(
         SessionSnapshot snapshot,
         AuthorityCommittedException? publicationError
     )
@@ -319,7 +318,8 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthority
         // Known publication still needs its normal projection attempt before reporting durability failure.
         try
         {
-            publishProjection?.Invoke(snapshot);
+            if (publishProjection is not null)
+                await publishProjection(snapshot).ConfigureAwait(false);
         }
         catch (Exception error)
         {

@@ -87,6 +87,9 @@ internal sealed class SessionRuntime(SessionManager manager)
     internal JsonObject[] Projections(string[] ids, bool includeLocal = false) =>
         manager.CatalogPresentations(ids, includeLocal);
 
+    internal Task<JsonObject[]> ProjectionsAsync(string[] ids, bool includeLocal = false) =>
+        manager.CatalogPresentationsAsync(ids, includeLocal);
+
     internal JsonObject? Projection(string id) => Projections([id]).FirstOrDefault();
 
     public event Action<SessionRuntimeEvent> Changed
@@ -204,9 +207,9 @@ internal sealed class SessionRuntime(SessionManager manager)
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) =>
         await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
 
-    internal PresentationChange ChangePresentation(
-        Func<ISessionCatalogStore, PresentationChange> action
-    ) => manager.ChangePresentation(action);
+    internal Task<PresentationChange> ChangePresentationAsync(
+        Func<ISessionCatalogStore, Task<PresentationChange>> action
+    ) => manager.ChangePresentationAsync(action);
 
     internal void ReplyToCommand(string id, string text) => manager.ReplyToCommand(id, text);
 

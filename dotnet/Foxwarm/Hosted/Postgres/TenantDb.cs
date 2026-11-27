@@ -140,7 +140,7 @@ internal sealed class TenantDb
             inFlight.Release();
         }
         if (committed.Lost is { } lost)
-            ResolveLostCommit(options, lost);
+            ResolveLostCommitAsync(options, lost, asynchronous: false).GetAwaiter().GetResult();
         return committed.Value;
     }
 
@@ -237,6 +237,9 @@ internal sealed class TenantDb
         }
     }
 
+    internal Task<T> WriteAsync<T>(Func<PgTx, T> body, PgWriteOptions? options = null) =>
+        WriteAsync((tx, _) => Task.FromResult(body(tx)), options);
+
     internal async Task<T> WriteAsync<T>(
         Func<PgTx, CancellationToken, Task<T>> body,
         PgWriteOptions? options = null,
@@ -256,7 +259,7 @@ internal sealed class TenantDb
             inFlight.Release();
         }
         if (committed.Lost is { } lost)
-            ResolveLostCommit(options, lost);
+            await ResolveLostCommitAsync(options, lost, asynchronous: true).ConfigureAwait(false);
         return committed.Value;
     }
 
@@ -355,6 +358,9 @@ internal sealed class TenantDb
             throw;
         }
     }
+
+    internal Task<T> ReadAsync<T>(Func<PgTx, T> body, bool snapshot = false) =>
+        ReadAsync((tx, _) => Task.FromResult(body(tx)), snapshot);
 
     internal async Task<T> ReadAsync<T>(
         Func<PgTx, CancellationToken, Task<T>> body,
@@ -531,7 +537,7 @@ internal sealed class TenantDb
             or IOException
             or ObjectDisposedException;
 
-    private void ResolveLostCommit(PgWriteOptions options, Exception error)
+    private async Task ResolveLostCommitAsync(PgWriteOptions options, Exception error, bool asynchronous)
     {
         if (options.Verify is not { } verify)
             throw new CommitOutcomeUnknownException(
@@ -541,7 +547,7 @@ internal sealed class TenantDb
         bool visible;
         try
         {
-            visible = Read(verify);
+            visible = asynchronous ? await ReadAsync(verify).ConfigureAwait(false) : Read(verify);
         }
         catch (Exception verification)
         {

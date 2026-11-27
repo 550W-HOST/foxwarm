@@ -270,6 +270,7 @@ public sealed class CommittedAuthorityProjectionTests
                     row["model"] = snapshot.AuthorityEnvelope["model"]!.DeepClone();
                     row["meta"] = snapshot.Meta.DeepClone();
                     Catalog.PublishAuthority(row, allowInsert: true);
+                    return Task.CompletedTask;
                 }
             );
         }

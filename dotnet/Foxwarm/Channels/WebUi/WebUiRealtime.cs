@@ -376,11 +376,11 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     scoped?.Bind(requestedId);
                 var resolvedSemantic = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
                 foreach (var chunk in requestedSessions.Chunk(200))
-                foreach (var pair in runtime.Catalog.ResolveMany(chunk))
+                foreach (var pair in await runtime.Catalog.QueryAsync(() => runtime.Catalog.ResolveMany(chunk)))
                     resolvedSemantic[pair.Key] = pair.Value;
                 var resolvedList = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
                 foreach (var chunk in requestedList.Chunk(200))
-                foreach (var pair in runtime.Catalog.ResolveMany(chunk))
+                foreach (var pair in await runtime.Catalog.QueryAsync(() => runtime.Catalog.ResolveMany(chunk)))
                     resolvedList[pair.Key] = pair.Value;
                 var listCanonical = resolvedList
                     .Values.Select(row => SessionCatalog.Text(row["sessionId"]))
@@ -642,7 +642,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                                     .Select(id => (JsonNode?)JsonValue.Create(id))
                                     .ToArray()
                             ),
-                            ["sessions"] = view.ProjectionRows(listCanonical),
+                            ["sessions"] = await view.ProjectionRowsAsync(listCanonical),
                         },
                         requested
                     );

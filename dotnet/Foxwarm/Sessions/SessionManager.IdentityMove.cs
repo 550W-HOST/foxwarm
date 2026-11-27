@@ -400,10 +400,10 @@ internal sealed partial class SessionManager
                 ownedAgentCreation!.Release();
             identityMoveGate.Release();
         }
-        return FinishMoveParent(owner, result, previousParent, parentProvided, parent);
+        return await FinishMoveParentAsync(owner, result, previousParent, parentProvided, parent);
     }
 
-    private JsonObject FinishMoveParent(
+    private async Task<JsonObject> FinishMoveParentAsync(
         SessionOwner owner,
         JsonObject result,
         string? previousParent,
@@ -418,7 +418,7 @@ internal sealed partial class SessionManager
             result["requestedParentSessionId"] = parent;
             try
             {
-                ChangePresentation(catalog => catalog.SetParent(owner.Id, parent));
+                await ChangePresentationAsync(catalog => catalog.SetParentAsync(owner.Id, parent));
             }
             catch (Exception error)
             {

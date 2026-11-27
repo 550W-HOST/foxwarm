@@ -102,7 +102,11 @@ public sealed class PostgresSessionAuthorityStoreTests : IAsyncLifetime
         var store = backend.Open(
             "s",
             "main",
-            new SessionAuthorityCallbacks(PublishProjection: snapshot => published.Add(snapshot.NextMessageSeq))
+            new SessionAuthorityCallbacks(PublishProjection: snapshot =>
+            {
+                published.Add(snapshot.NextMessageSeq);
+                return Task.CompletedTask;
+            })
         );
         void Once(Action action) =>
             backend.BeforeCommit = _ =>
