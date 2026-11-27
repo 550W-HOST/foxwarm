@@ -54,7 +54,7 @@ internal sealed partial class ModelConfiguration
         if (count > limit && count > saved)
             throw new TenantLimitException(
                 key,
-                $"This installation can have at most {limit} {noun}; the configuration has {count}."
+                $"This installation can have at most {limit} {noun}; this configuration has {count}."
             );
     }
 }

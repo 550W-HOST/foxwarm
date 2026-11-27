@@ -252,7 +252,7 @@ internal sealed class HotOwnerBudget : IDisposable
     private TenantLimitException Exhausted() =>
         new(
             "hotOwnerBytes",
-            "Too many Sessions are open at once. Try again when another Session has finished."
+            "Too many Sessions are active right now. Try again when one has finished."
         );
 
     public void Dispose()

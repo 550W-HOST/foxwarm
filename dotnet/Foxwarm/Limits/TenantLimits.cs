@@ -54,11 +54,23 @@ internal sealed record TenantLimits
 
     internal static TenantLimits Defaults { get; } = new();
 
-    /// <summary>A size for messages: whole GiB or MiB when exact, bytes otherwise.</summary>
-    internal static string Size(long bytes) =>
-        bytes % GiB == 0 ? $"{bytes / GiB} GiB"
-        : bytes % MiB == 0 ? $"{bytes / MiB} MiB"
-        : $"{bytes} bytes";
+    /// <summary>
+    /// A size for messages: whole GiB or MiB when exact, otherwise the largest unit it reaches
+    /// with one decimal (<c>8.2 GiB</c>), and bytes below a KiB.
+    /// </summary>
+    internal static string Size(long bytes)
+    {
+        const long KiB = 1024;
+        if (bytes > 0 && bytes % GiB == 0)
+            return $"{bytes / GiB} GiB";
+        if (bytes > 0 && bytes % MiB == 0)
+            return $"{bytes / MiB} MiB";
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        return bytes >= GiB ? string.Format(culture, "{0:0.#} GiB", (double)bytes / GiB)
+            : bytes >= MiB ? string.Format(culture, "{0:0.#} MiB", (double)bytes / MiB)
+            : bytes >= KiB ? string.Format(culture, "{0:0.#} KiB", (double)bytes / KiB)
+            : $"{bytes} bytes";
+    }
 
     private delegate TenantLimits Apply(TenantLimits limits, long value);
 

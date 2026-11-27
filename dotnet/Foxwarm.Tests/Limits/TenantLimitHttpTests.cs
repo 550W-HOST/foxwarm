@@ -136,7 +136,7 @@ public sealed class TenantLimitHttpTests
         var body = (await refused.Content.ReadFromJsonAsync<JsonObject>())!;
         Assert.True(
             body["maxBytes"]?.GetValue<long>() == 1024 * 1024
-                || body["error"]!.GetValue<string>() == "File exceeds the 1 MiB upload limit.",
+                || body["error"]!.GetValue<string>() == "This file is larger than the 1 MiB upload limit.",
             body.ToJsonString()
         );
         using var accepted = await f.Client.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 - 4096));

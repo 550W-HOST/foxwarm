@@ -50,7 +50,7 @@ internal sealed partial class ApprovedNodeRegistry
         if (MaxApprovedNodes is { } max && Approved(document).Count >= max)
             throw new Foxwarm.Limits.TenantLimitException(
                 "residentNodes",
-                $"This installation already has {max} Nodes, its limit. Remove a Node before adding another."
+                $"This installation already has {max} Nodes, the most it can have. Remove one before adding another."
             );
     }
 

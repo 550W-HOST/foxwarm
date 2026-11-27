@@ -16,7 +16,7 @@ internal sealed partial class WebUIChannel
             : WebUiUploadedFiles.Limit;
 
     private string UploadLimitError =>
-        $"File exceeds the {Foxwarm.Limits.TenantLimits.Size(UploadLimit)} upload limit.";
+        $"This file is larger than the {Foxwarm.Limits.TenantLimits.Size(UploadLimit)} upload limit.";
     private static string UploadRoot => WebUiUploadedFiles.StagingRoot;
 
     private static string AttachmentMime(string? declared, string filename) =>

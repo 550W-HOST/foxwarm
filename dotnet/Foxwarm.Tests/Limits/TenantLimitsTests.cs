@@ -48,6 +48,16 @@ public sealed class TenantLimitsTests
     }
 
     [Theory]
+    [InlineData(100L * 1024 * 1024, "100 MiB")]
+    [InlineData(10L * 1024 * 1024 * 1024, "10 GiB")]
+    [InlineData(8_804_682_956L, "8.2 GiB")]
+    [InlineData(1_572_864L + 1, "1.5 MiB")]
+    [InlineData(2_500L, "2.4 KiB")]
+    [InlineData(512L, "512 bytes")]
+    public void SizesReadAsWholeUnitsOrOneDecimal(long bytes, string text) =>
+        Assert.Equal(text, TenantLimits.Size(bytes));
+
+    [Theory]
     [InlineData("{\"busyTurns\": 0}", "limits.busyTurns")]
     [InlineData("{\"webhooks\": 1.5}", "limits.webhooks")]
     [InlineData("{\"channels\": \"8\"}", "limits.channels")]

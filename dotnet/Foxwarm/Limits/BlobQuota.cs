@@ -73,7 +73,7 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         if (used + bytes > Limit)
             throw new TenantLimitException(
                 "blobBytes",
-                $"Stored images and artifacts have reached this installation's {TenantLimits.Size(Limit)} limit."
+                $"Images and artifacts have reached this installation's {TenantLimits.Size(Limit)} storage limit."
             );
     }
 
@@ -99,7 +99,7 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         }
         if (warn)
             MainLog.Diagnostic(
-                $"Stored images and artifacts use {total} bytes, over {SoftShare:P0} of the {Limit}-byte limit."
+                $"Images and artifacts use {TenantLimits.Size(total)} of this installation's {TenantLimits.Size(Limit)} storage limit."
             );
     }
 

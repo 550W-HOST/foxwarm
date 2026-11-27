@@ -138,7 +138,7 @@ internal sealed class McpConfiguration
             if (previous is null && MaxServers is { } max && next.Count > max)
                 throw new Foxwarm.Limits.TenantLimitException(
                     "mcpServers",
-                    $"This installation already has {max} MCP servers, its limit. Remove one before adding another."
+                    $"This installation already has {max} MCP servers, the most it can have. Remove one before adding another."
                 );
             if (admit is not null)
                 await admit(Snapshot(), (JsonObject)next.DeepClone());

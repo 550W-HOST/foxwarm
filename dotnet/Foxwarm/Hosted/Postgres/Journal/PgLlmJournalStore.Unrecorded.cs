@@ -145,7 +145,7 @@ internal sealed partial class PgLlmJournalStore
             {
                 ["requestId"] = requestId,
                 ["completeness"] = NotRecorded,
-                ["reason"] = "The request journal was off for this request; its content wasn't recorded.",
+                ["reason"] = "The request journal was off for this request, so its content wasn't recorded.",
             }
             : null;
 }
