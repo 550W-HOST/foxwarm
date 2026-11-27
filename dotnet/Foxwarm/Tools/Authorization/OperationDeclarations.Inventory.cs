@@ -231,9 +231,11 @@ internal static partial class OperationDeclarations
             "builtin:continue_script#model-request",
             "builtin:run_skill#model-request"
         ),
-        Site(Output, "SaveToolOutputAsync", 1, File, "*#output-spill"),
-        Site(Output, "SaveToolOutputAsync", 2, File, "*#output-spill"),
+        Site(Output, "SaveToolOutputAsync", 1, "AuthorizeAgentFolderFileAsync", "*#output-spill"),
+        Site(Output, "SaveToolOutputAsync", 2, "AuthorizeAgentFolderFileAsync", "*#output-spill"),
         Site(Output, "SaveToolOutputAsync", 3, File, "*#output-spill"),
+        Site(Output, "SaveToolOutputAsync", 4, File, "*#output-spill"),
+        Site(Output, "SaveToolOutputAsync", 5, File, "*#output-spill"),
         Site(
             Script,
             "ExecuteToolScriptAsync",
@@ -328,6 +330,7 @@ internal static partial class OperationDeclarations
             "EvaluateCreationTarget",
             "the decision-only form of the creation-target evaluation"
         ),
+        ("Sessions/SessionManager.NodeFiles.cs", "AuthorizeAgentFolderFileAsync", "Agent folder file wrapper"),
         ("Sessions/SessionManager.NodeFiles.cs", "AuthorizeNodeFileAsync", "Node file wrapper"),
     ];
 

@@ -188,6 +188,7 @@ public sealed partial class OperationDeclarationCoverageTests
     [
         "AuthorizeToolAsync",
         "AuthorizeNodeFileAsync",
+        "AuthorizeAgentFolderFileAsync",
         "AssessToolAsync",
         "AuthorizeCreateSessionTargetAsync",
         "EvaluateCreationTarget",

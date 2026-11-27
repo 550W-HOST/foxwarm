@@ -62,23 +62,36 @@ internal sealed partial class WeWorkChannel
             );
     }
 
-    private static IReadOnlyList<JsonObject> Quote(List<JsonObject> parts, JsonObject payload)
+    // A mixed inbound message can interleave text, files and quotes. Bind its received files
+    // in place after routing, leaving all the other parts in their original order.
+    private static ExternalChannelMessage Combine(IReadOnlyList<ExternalChannelMessage> messages)
     {
-        var type = Text(payload["quote"]?["msgtype"]);
-        if (type.Length > 0)
-            parts.Add(
-                new JsonObject
-                {
-                    ["text"] =
-                        type == "text" && Nonempty(Text(payload["quote"]?["text"]?["content"]))
-                            ? "[Quoted text]\n" + Text(payload["quote"]?["text"]?["content"])
-                            : "[Quoted " + type + " message]",
-                }
-            );
-        return parts;
+        var preview = messages.SelectMany(message => message.Parts).ToArray();
+        if (messages.All(message => message.BindReceivedFiles is null))
+            return new(preview);
+        return new(preview, BindReceivedFiles: async owner =>
+        {
+            var parts = new List<JsonObject>();
+            foreach (var message in messages)
+                parts.AddRange(message.BindReceivedFiles is { } bind ? await bind(owner) : message.Parts);
+            return parts;
+        });
     }
 
-    private async Task<IReadOnlyList<JsonObject>> AibotFileAsync(
+    private static ExternalChannelMessage TextMessage(string text) => new([new JsonObject { ["text"] = text }]);
+
+    private static ExternalChannelMessage Quote(ExternalChannelMessage message, JsonObject payload)
+    {
+        var type = Text(payload["quote"]?["msgtype"]);
+        if (type.Length == 0)
+            return message;
+        var text = type == "text" && Nonempty(Text(payload["quote"]?["text"]?["content"]))
+            ? "[Quoted text]\n" + Text(payload["quote"]?["text"]?["content"])
+            : "[Quoted " + type + " message]";
+        return Combine([message, TextMessage(text)]);
+    }
+
+    private async Task<ExternalChannelMessage> AibotFileAsync(
         JsonObject payload,
         string conversation,
         string kind
@@ -101,7 +114,7 @@ internal sealed partial class WeWorkChannel
             true,
             Text(media["aeskey"])
         );
-        return await sessions.SaveRemoteChannelFileAsync(
+        return await sessions.ReceiveRemoteChannelFileAsync(
             "wework",
             conversation,
             Download,
@@ -116,7 +129,7 @@ internal sealed partial class WeWorkChannel
     private static string First(params JsonNode?[] nodes) =>
         nodes.Select(Text).FirstOrDefault(value => value.Length > 0) ?? "";
 
-    private async Task<IReadOnlyList<JsonObject>?> BuildPartsAsync(
+    private async Task<ExternalChannelMessage?> BuildMessageAsync(
         JsonObject payload,
         string conversation,
         string replyWebhook,
@@ -130,41 +143,33 @@ internal sealed partial class WeWorkChannel
             payload["Text"]?["Content"]
         );
         if (type == "text" && content.Length > 0)
-            return Quote([new JsonObject { ["text"] = content }], payload);
+            return Quote(TextMessage(content), payload);
         if (aibot && type is "image" or "file")
-            return Quote((await AibotFileAsync(payload, conversation, type)).ToList(), payload);
+            return Quote(await AibotFileAsync(payload, conversation, type), payload);
         if (aibot && type == "mixed")
         {
-            var parts = new List<JsonObject>();
+            var parts = new List<ExternalChannelMessage>();
             foreach (
                 var item in (payload["mixed"]?["msg_item"] as JsonArray ?? []).OfType<JsonObject>()
             )
             {
                 var itemType = Text(item["msgtype"]);
                 if (itemType == "text" && Nonempty(Text(item["text"]?["content"])))
-                    parts.Add(new JsonObject { ["text"] = Text(item["text"]?["content"]) });
+                    parts.Add(TextMessage(Text(item["text"]?["content"])));
                 else if (itemType == "image")
                 {
                     var nested = (JsonObject)payload.DeepClone();
                     nested["image"] = item["image"]?.DeepClone();
-                    parts.AddRange(await AibotFileAsync(nested, conversation, "image"));
+                    parts.Add(await AibotFileAsync(nested, conversation, "image"));
                 }
                 else
-                    parts.Add(
-                        new JsonObject
-                        {
-                            ["text"] =
-                                "[Mixed item: "
-                                + (itemType.Length == 0 ? "unknown" : itemType)
-                                + "]",
-                        }
-                    );
+                    parts.Add(TextMessage("[Mixed item: " + (itemType.Length == 0 ? "unknown" : itemType) + "]"));
             }
-            return Quote(parts, payload);
+            return Quote(Combine(parts), payload);
         }
         if (aibot && type == "voice" && Nonempty(Text(payload["voice"]?["content"])))
             return Quote(
-                [new JsonObject { ["text"] = Text(payload["voice"]?["content"]) }],
+                TextMessage(Text(payload["voice"]?["content"])),
                 payload
             );
         if (type is "image" or "file")
@@ -201,7 +206,7 @@ internal sealed partial class WeWorkChannel
             var mime = First(payload["MimeType"], payload["mime_type"]);
             if (mime.Length == 0)
                 mime = type == "image" ? "image/jpeg" : "application/octet-stream";
-            return await sessions.SaveRemoteChannelFileAsync(
+            return await sessions.ReceiveRemoteChannelFileAsync(
                 "wework",
                 conversation,
                 Download,
@@ -214,9 +219,6 @@ internal sealed partial class WeWorkChannel
         }
         if (type == "event")
             return null;
-        return
-        [
-            new JsonObject { ["text"] = "[" + (type.Length == 0 ? "Unknown" : type) + " message]" },
-        ];
+        return TextMessage("[" + (type.Length == 0 ? "Unknown" : type) + " message]");
     }
 }

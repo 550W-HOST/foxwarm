@@ -11,14 +11,22 @@ internal static class LeasedImport
     internal static async Task<int> RunAsync(
         PgDatabase app, PgDatabase ownerDatabase, string tenant, long? expectedEpoch, ImportKind kind,
         LeaseTimings timings, BlobSettings? blobs, string work, ImportReport report,
-        Func<PostgresStorageContext, TenantDb, CancellationToken, Task> run, CancellationToken stop)
+        Func<PostgresStorageContext, TenantDb, CancellationToken, Task> run, CancellationToken stop, string? agentPlan = null)
     {
         var state = kind == ImportKind.Full ? "importing" : "importing-agents";
         var lease = new TenantLease(ownerDatabase, tenant, AgentCatalog.ReaderVersion);
         var replica = "import:" + Guid.NewGuid().ToString("D");
-        var grant = await lease
-            .TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind)
-            .ConfigureAwait(false);
+        LeaseGrant? grant;
+        try
+        {
+            grant = await lease.TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind, agentPlan);
+        }
+        catch (LeaseRefusedException error)
+        {
+            report.Refuse(error.Message);
+            report.Outcome = "refused";
+            return HostedImport.Refused;
+        }
         if (grant is null)
         {
             report.Refuse($"Tenant {tenant} changed while the import was checking it, or its lease is held; run the import again.");

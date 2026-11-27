@@ -54,7 +54,9 @@ internal sealed partial class ImportRun
         long Rows(string file, ImportTable table) => Copy(file) is { } connection ? ImportTables.CountRows(connection, table) : 0;
         var documents = source.SessionDocuments().Count();
         var (frontier, other) = source.SessionDirectoryLeftovers();
-        agentFolders = AgentFolderImport.Scan(Path.Combine(source.Root, "agents"), AgentStoreLimits.Default.FileBytes, report, required: false);
+        var (root, required) = AgentFolderImport.SourceRoot(source.Root, config?.Source, options.AgentsDirectory);
+        report.Root["source"]!["agentsDirectory"] = root;
+        agentFolders = AgentFolderImport.Scan(root, AgentStoreLimits.Default.FileBytes, report, required);
         var plan = new JsonObject
         {
             ["agentFiles"] = agentFolders.FileCount,

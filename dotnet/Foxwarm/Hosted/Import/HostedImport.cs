@@ -24,6 +24,8 @@ internal sealed record HostedImportOptions(
             Path.GetFileNameWithoutExtension(ReportPath) + ".deployment.yaml"
         );
 
+    internal string? AgentsDirectory { get; init; }
+
     internal LeaseTimings Timings { get; init; } = LeaseTimings.Default;
 
     /// <summary>
@@ -176,7 +178,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             return copies.Count;
         }, count => count);
         CheckSourceContent();
-        report.Phase("configuration split", () => config = SplitConfiguration(), _ => config!.Blocks.Count);
+        report.Phase("configuration split", () => config = SplitConfiguration(), _ => config?.Blocks.Count ?? 0);
         var plan = report.Phase("plan", Plan, items => items.Count);
         report.Root["plan"] = plan;
         var target = await InspectTargetAsync().ConfigureAwait(false);
@@ -261,7 +263,6 @@ internal sealed partial class ImportRun : IAsyncDisposable
             report.Refuse(
                 "keys/secrets.key is missing. The installation's key becomes the tenant data key (it decrypts the secrets, OAuth grants and the text-redaction cache), so the import needs it; restore it from the backup."
             );
-        report.Root["source"]!["agentsDirectory"] = Path.Combine(source.Root, "agents");
     }
 
     // Checks that need the SQLite copies: the catalog schema, the documents of its members,
@@ -410,15 +411,16 @@ internal sealed partial class ImportRun : IAsyncDisposable
         }
         report.Root["tenant"]!["existed"] = true;
         var tenant = new TenantDb(databases.App, id.Value, 0);
-        var (state, epoch, free, owner, tables) = tenant.Read(
+        var (state, epoch, free, owner, tables, profile) = tenant.Read(
             tx =>
             {
                 string tenantState;
+                string profile;
                 long leaseEpoch;
                 bool leaseFree;
                 string? leaseOwner;
                 using (var command = tx.Command(
-                    "SELECT t.state, l.epoch, (l.state = 'released' OR l.expires_at <= now()), l.owner_replica"
+                    "SELECT t.state, l.epoch, (l.state = 'released' OR l.expires_at <= now()), l.owner_replica, t.profile"
                         + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.tenant_id = $1",
                     id.Value
                 ))
@@ -429,6 +431,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
                     leaseEpoch = reader.GetInt64(1);
                     leaseFree = reader.GetBoolean(2);
                     leaseOwner = reader.IsDBNull(3) ? null : reader.GetString(3);
+                    profile = reader.GetString(4);
                 }
                 var names = new List<string>();
                 using (var command = tx.Command(
@@ -441,12 +444,14 @@ internal sealed partial class ImportRun : IAsyncDisposable
                 var filled = names
                     .Where(name => tx.Scalar($"SELECT 1 FROM {ImportTables.Quote(name)} LIMIT 1") is not null)
                     .ToList();
-                return (tenantState, leaseEpoch, leaseFree, leaseOwner, filled);
+                return (tenantState, leaseEpoch, leaseFree, leaseOwner, filled, profile);
             },
             snapshot: true
         );
         report.Root["tenant"]!["previousState"] = state;
-        if (tables.Count > 0)
+        if (profile != "hosted")
+            report.Refuse("The tenant keeps its Agent files on master: " + options.Tenant);
+        else if (tables.Count > 0)
             report.Refuse(
                 $"Tenant {options.Tenant} ({state}) already holds data in {string.Join(", ", tables)}. An import only writes into an empty tenant."
                     + (state == "importing"

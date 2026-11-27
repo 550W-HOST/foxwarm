@@ -67,8 +67,8 @@ public sealed partial class HostedAgentStoreTests
             using var content = new StreamContent(stream);
             if (known)
                 content.Headers.ContentLength = 32;
-            var notice = await f.Manager.SaveRemoteChannelFileAsync("matrix", "room", () => f.Manager.ReadChannelBodyAsync(content, default), "f", "text/plain", "caption", default);
-            Assert.Contains(known ? "(text/plain, 32 bytes)" : "(text/plain, more than 8 bytes)", SessionWait.Text(Assert.Single(notice)["text"]));
+            var notice = await f.Manager.ReceiveRemoteChannelFileAsync("matrix", "room", () => f.Manager.ReadChannelBodyAsync(content, default), "f", "text/plain", "caption", default);
+            Assert.Contains(known ? "(text/plain, 32 bytes)" : "(text/plain, more than 8 bytes)", SessionWait.Text(Assert.Single(notice.Parts)["text"]));
             Assert.Equal(known ? 0 : 9, stream.Position);
         }
         Assert.Empty(f.Store.List("main", ".temp/channel-files"));

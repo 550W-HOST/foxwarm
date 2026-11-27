@@ -230,11 +230,11 @@ internal sealed partial class MatrixChannel
             sender,
             text => SendTextAsync(room, text, false, CancellationToken.None)
         );
-        IReadOnlyList<JsonObject> parts;
+        ExternalChannelMessage message;
         switch (SessionWait.Text(content["msgtype"]))
         {
             case "m.text":
-                parts = [new JsonObject { ["text"] = content["body"]?.DeepClone() }];
+                message = new([new JsonObject { ["text"] = content["body"]?.DeepClone() }]);
                 break;
             case "m.image" or "m.file":
                 var image = SessionWait.Text(content["msgtype"]) == "m.image";
@@ -252,7 +252,7 @@ internal sealed partial class MatrixChannel
                     var mime = SessionWait.Text(content["info"]?["mimetype"]);
                     if (string.IsNullOrEmpty(mime))
                         mime = image ? "image/jpeg" : "application/octet-stream";
-                    parts = await sessions.SaveRemoteChannelFileAsync(
+                    message = await sessions.ReceiveRemoteChannelFileAsync(
                         "matrix",
                         room,
                         () => sessions.ReadChannelBodyAsync(response.Content, CancellationToken.None),
@@ -267,6 +267,6 @@ internal sealed partial class MatrixChannel
             default:
                 return;
         }
-        await router.HandleExternalMessageAsync(context, new(parts));
+        await router.HandleExternalMessageAsync(context, message);
     }
 }

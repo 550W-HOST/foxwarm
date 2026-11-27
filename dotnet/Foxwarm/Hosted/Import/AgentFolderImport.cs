@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Hosted.Postgres;
+using System.Text;
 using Foxwarm.Tools;
 
 namespace Foxwarm.Hosted.Import;
@@ -15,6 +17,52 @@ internal sealed class AgentFolderImport
 
     private readonly List<Entry> entries = [];
     internal int FileCount => entries.Count(entry => !entry.Directory);
+
+    internal static (string Root, bool Required) SourceRoot(string dataRoot, JsonObject? config, string? staged)
+    {
+        if (staged is not null)
+        {
+            if (!Directory.Exists(staged) || new DirectoryInfo(staged).LinkTarget is not null)
+                throw new ImportRefusedException("--agents-dir must name an existing directory, not a link or a file: " + staged + ".");
+            return (Path.GetFullPath(staged), true);
+        }
+        var paths = HostPaths.ForDataRoot(dataRoot, applicationRoot: dataRoot);
+        if (config?["paths"] is null || config["paths"] is JsonObject settings && settings["agentsDir"] is null)
+            return (paths.AgentsRoot, false);
+        const string unresolved = "The configured Agents directory can't be found in the offline copy. Stage it and pass --agents-dir <path>.";
+        try
+        {
+            if (config["paths"] is not JsonObject mapping || mapping["agentsDir"] is not JsonValue node || !node.TryGetValue<string>(out var value))
+                throw new ImportRefusedException(unresolved);
+            if (value.Length == 0)
+                return (paths.AgentsRoot, false);
+            if (string.IsNullOrWhiteSpace(value) || value.Trim() == "~" || value.Trim().StartsWith("~/", StringComparison.Ordinal))
+                throw new ImportRefusedException(unresolved);
+            var root = paths.WithConfiguration(new JsonObject { ["paths"] = new JsonObject { ["agentsDir"] = value } }, _ => null).AgentsRoot;
+            var relative = Path.GetRelativePath(AuthorizationPaths.CanonicalPotential(dataRoot), AuthorizationPaths.CanonicalPotential(root));
+            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new ImportRefusedException($"The configured Agents directory is outside the offline copy: {root}. Stage it and pass --agents-dir <path>.");
+            if (new DirectoryInfo(root).LinkTarget is not null)
+                throw new ImportRefusedException(unresolved);
+            if (!Directory.Exists(root))
+                throw new ImportRefusedException($"The configured Agents directory is missing: {root}. Restore it or pass --agents-dir <path>.");
+            return (root, true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            throw new ImportRefusedException(unresolved);
+        }
+    }
+
+    // Stable identity for an admitted source plan; include directory entries so empty Agents and
+    // directories are accounted for. Store keys exclude NUL and cannot end in a slash.
+    internal JsonObject Summary()
+    {
+        using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var path in entries.Select(entry => entry.Name + (entry.Directory ? "/" : "")).Order(StringComparer.Ordinal))
+            digest.AppendData(Encoding.UTF8.GetBytes(path + "\0"));
+        return new JsonObject { ["files"] = FileCount, ["bytes"] = entries.Sum(entry => entry.Length), ["pathsSha256"] = Convert.ToHexStringLower(digest.GetHashAndReset()) };
+    }
 
     internal static AgentFolderImport Scan(string root, long fileLimit, ImportReport report, bool required)
     {
@@ -54,6 +102,8 @@ internal sealed class AgentFolderImport
                 report.NotImported(label, 1, "Symbolic link.");
             else if (AgentFilePaths.Problem(key, allowRoot: true) is { } problem)
                 report.NotImported(label, 1, "Invalid Agent file path: " + problem + ".");
+            else if (PgAgentFileStore.KeySizeProblem(agent ?? "", key) is { } keyError)
+                report.NotImported(label, 1, keyError.Message);
             else if (entry is DirectoryInfo folder)
             {
                 if (key is "tmp" or ".temp")

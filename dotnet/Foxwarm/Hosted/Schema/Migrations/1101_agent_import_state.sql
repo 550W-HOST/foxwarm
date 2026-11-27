@@ -4,3 +4,6 @@
 ALTER TABLE tenants DROP CONSTRAINT tenants_state_check;
 ALTER TABLE tenants ADD CONSTRAINT tenants_state_check
     CHECK (state IN ('importing', 'importing-agents', 'active', 'suspended', 'deleting'));
+
+-- Stored with importing-agents, retained on failure and cleared on activation or explicit abandon.
+ALTER TABLE tenants ADD COLUMN agent_import_plan jsonb;

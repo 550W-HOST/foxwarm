@@ -67,7 +67,7 @@ internal static class HostedCli
 
     internal const string Usage =
         "Usage: foxwarm db migrate [--app-role <role>] [--operator-role <role>] [--tenant <name>] | foxwarm db status\n"
-        + "       foxwarm hosted import --data-root <dir> [--tenant <name>] [--journal] [--dry-run]\n"
+        + "       foxwarm hosted import --data-root <dir> [--agents-dir <path>] [--tenant <name>] [--journal] [--dry-run]\n"
         + "                              [--report <file>] [--deployment-config <file>]\n"
         + "       foxwarm hosted agents import --tenant <name> (--from <dir> | --abandon) [--report <file>] [--deployment-config <file>]\n"
         + "       foxwarm hosted token [--tenant <name>]\n"
@@ -190,6 +190,7 @@ internal static class HostedCli
     )
     {
         string? dataRoot = null;
+        string? agentsDirectory = null;
         string? report = null;
         var deployment = bootstrap.DeploymentConfigPath;
         var tenant = agentsOnly ? null : bootstrap.Tenant;
@@ -199,6 +200,9 @@ internal static class HostedCli
         for (var index = 0; index < options.Length; index++)
             switch (options[index])
             {
+                case "--agents-dir" when !agentsOnly && index + 1 < options.Length:
+                    agentsDirectory = options[++index];
+                    break;
                 case "--data-root" when !agentsOnly && index + 1 < options.Length:
                 case "--from" when agentsOnly && index + 1 < options.Length:
                     dataRoot = options[++index];
@@ -241,7 +245,7 @@ internal static class HostedCli
             return await Import.HostedAgentImport.RunAsync(app, owner, tenant, dataRoot, abandon, report, blobs, output);
         var (kek, _) = bootstrap.RequireKeks();
         return await Import.HostedImport.RunAsync(
-            new Import.HostedImportOptions(dataRoot!, tenant, journal, dryRun, report) { Blobs = blobs },
+            new Import.HostedImportOptions(dataRoot!, tenant, journal, dryRun, report) { Blobs = blobs, AgentsDirectory = agentsDirectory },
             new Import.ImportDatabases(app, owner, kek),
             output
         );

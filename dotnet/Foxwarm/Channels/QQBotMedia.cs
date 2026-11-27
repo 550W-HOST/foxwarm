@@ -24,10 +24,8 @@ internal sealed class QQBotMedia(
             : fallback;
     }
 
-    private long ImageLimit => Math.Min(Limit(config?["imageMaxBytes"], 20L * MiB, 20L * MiB), sessions.ReceivedFileLimit);
-    // In an Agent store, no larger than one Agent file may be.
-    private long FileLimit =>
-        Math.Min(Limit(config?["fileMaxBytes"], 50L * MiB, 200L * MiB), sessions.ReceivedFileLimit);
+    private long ImageLimit => Limit(config?["imageMaxBytes"], 20L * MiB, 20L * MiB);
+    private long FileLimit => Limit(config?["fileMaxBytes"], 50L * MiB, 200L * MiB);
     private long TotalLimit => Limit(config?["maxTotalBytes"], 200L * MiB, 200L * MiB);
     private int CountLimit =>
         (int)
@@ -50,12 +48,15 @@ internal sealed class QQBotMedia(
         string? Asr
     );
 
-    private sealed class MediaError(string message) : IOException(message);
+    private class MediaError(string message) : IOException(message);
+    private sealed class Oversized(long? length) : MediaError("media download exceeded the configured size limit")
+    {
+        internal long? Length { get; } = length;
+    }
 
     private static MediaError Invalid() => new("media metadata or bytes were invalid");
 
-    private static MediaError TooLarge() =>
-        new("media download exceeded the configured size limit");
+    private static Oversized TooLarge(long? length = null) => new(length);
 
     private static MediaError Storage() => new("media storage failed");
 
@@ -250,8 +251,8 @@ internal sealed class QQBotMedia(
                 }
                 if (!response.IsSuccessStatusCode)
                     throw new MediaError("media download failed");
-                if (response.Content.Headers.ContentLength > max)
-                    throw TooLarge();
+                if (response.Content.Headers.ContentLength is { } length && length > max)
+                    throw TooLarge(length);
                 // Match Source's separate bounded body phase after response headers.
                 timeout.CancelAfter(Timeout);
                 await using var input = await response.Content.ReadAsStreamAsync(timeout.Token);
@@ -276,7 +277,7 @@ internal sealed class QQBotMedia(
                     var bytes = new byte[65536];
                     long total = 0;
                     int count;
-                    while ((count = await input.ReadAsync(bytes, timeout.Token)) != 0)
+                    while ((count = await input.ReadAsync(bytes.AsMemory(0, (int)Math.Min(bytes.Length, max - total + 1)), timeout.Token)) != 0)
                     {
                         if (total + count > max)
                             throw TooLarge();
@@ -349,17 +350,20 @@ internal sealed class QQBotMedia(
             }
             var limit = attachment.Kind == "image" ? Math.Max(FileLimit, ImageLimit) : FileLimit;
             var remaining = TotalLimit - total;
-            var fetchLimit = Math.Min(limit, remaining);
+            var nativeLimit = Math.Min(limit, remaining);
+            var hostedLimit = sessions.ReceivedFileLimit;
+            var hostedBinds = sessions.Capabilities.Limits is not null && hostedLimit < nativeLimit;
+            var fetchLimit = hostedBinds ? hostedLimit : nativeLimit;
             var downloaded = false;
             string? directory = null;
             try
             {
                 if (attachment.Kind == "unsupported")
                     throw new MediaError("nested QQ media is deferred");
-                if (attachment.Size > limit)
+                if (attachment.Size > (hostedBinds ? hostedLimit : limit))
                 {
-                    totalReached |= attachment.Size > TotalLimit;
-                    throw TooLarge();
+                    totalReached |= !hostedBinds && attachment.Size > TotalLimit;
+                    throw TooLarge(attachment.Size);
                 }
                 if (totalReached || total >= TotalLimit)
                     throw TooLarge();
@@ -410,11 +414,16 @@ internal sealed class QQBotMedia(
                 }
                 parts.AddRange(saved);
             }
+            catch (Oversized error) when (hostedBinds && !totalReached && !downloaded)
+            {
+                parts.AddRange(SessionManager.UnkeptStoredFile(attachment.Name, attachment.Mime, "", error.Length,
+                    SessionManager.OversizedReason(hostedLimit), hostedLimit));
+            }
             catch (Exception error)
             {
                 var safe = error is MediaError ? error.Message : "media download failed";
                 if (
-                    safe == "media download exceeded the configured size limit"
+                    error is Oversized
                     && !downloaded
                     && fetchLimit == remaining
                 )

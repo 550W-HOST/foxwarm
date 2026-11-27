@@ -314,9 +314,7 @@ internal sealed class TelegramChannel : IManagedChannel
         var mime = photo is not null
             ? "image/jpeg"
             : SessionWait.Text(media["mime_type"]) ?? "application/octet-stream";
-        // Deliberately preserve Source eager storage before Router authorization, using the adapter TYPE.
-        // Named instances therefore retain Source's type-keyed helper limitation in this phase.
-        var parts = await sessions.SaveRemoteChannelFileAsync(
+        var incoming = await sessions.ReceiveRemoteChannelFileAsync(
             "telegram",
             chat,
             Download,
@@ -325,7 +323,7 @@ internal sealed class TelegramChannel : IManagedChannel
             SessionWait.Text(message["caption"]) ?? "",
             stopping.Token
         );
-        _ = ObserveAsync(router.HandleExternalMessageAsync(context, new(parts)));
+        _ = ObserveAsync(router.HandleExternalMessageAsync(context, incoming));
     }
 
     private async Task ObserveAsync(Task task)

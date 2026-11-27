@@ -44,7 +44,7 @@ internal sealed partial class SessionManager
             }
             var saved = new List<JsonObject> { new() { ["text"] = ChannelFileNames.Descriptor(filename, stored, mime, AgentStorePaths.Endpoint, image) } };
             if (image)
-                saved.Add(await InlineChannelImageAsync(bytes, mime, token));
+                saved.Add(await SavedChannelImagePartAsync(bytes, mime, token));
             return saved;
         }
         var path = Path.Combine(AgentDirectory(owner.Agent), ChannelFileRelativePath(platform, filename, mime));
@@ -60,7 +60,7 @@ internal sealed partial class SessionManager
             // Only a byte-probed raster under the safe inline cap reaches the blob owner.
             if (size > 20 * 1024 * 1024)
                 throw new InvalidDataException("Image exceeds the inline limit.");
-            parts.Add(await InlineChannelImageAsync(await File.ReadAllBytesAsync(source, token), mime, token));
+            parts.Add(await SavedChannelImagePartAsync(await File.ReadAllBytesAsync(source, token), mime, token));
         }
         return parts;
     }

@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+using Foxwarm.Channels;
 
 namespace Foxwarm.Sessions;
 
@@ -34,17 +34,20 @@ internal sealed partial class SessionManager
         }
     }
 
-    internal async Task<IReadOnlyList<JsonObject>> SaveRemoteChannelFileAsync(
+    internal async Task<ExternalChannelMessage> ReceiveRemoteChannelFileAsync(
         string platform, string conversation, Func<Task<byte[]>> download, string name, string mime,
         string caption, CancellationToken token, bool? image = null)
     {
         try
         {
-            return await SaveInboundChannelFileAsync(platform, conversation, await download(), name, mime, caption, token, image);
+            var bytes = await download();
+            if (AgentStore is null)
+                return new(await SaveInboundChannelFileAsync(platform, conversation, bytes, name, mime, caption, token, image));
+            return new([], BindReceivedFiles: owner => SaveInboundChannelFileCoreAsync(platform, owner, bytes, name, mime, caption, token, image));
         }
         catch (ReceivedFileTooLarge error)
         {
-            return UnkeptStoredFile(name, mime, caption, error.Size, OversizedReason(ReceivedFileLimit), ReceivedFileLimit);
+            return new(UnkeptStoredFile(name, mime, caption, error.Size, OversizedReason(ReceivedFileLimit), ReceivedFileLimit));
         }
     }
 }

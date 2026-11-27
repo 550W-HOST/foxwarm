@@ -267,7 +267,7 @@ internal sealed partial class WeWorkChannel
             chatId = "";
         var replyWebhook = webhook;
         var responseUrl = delivery.Mode == "webhook" ? delivery.ResponseUrl ?? "" : "";
-        IReadOnlyList<JsonObject>? parts = null;
+        ExternalChannelMessage? incoming = null;
         var messageIsAibot = isAibot;
         if (
             body["msgtype"] is JsonValue type
@@ -283,7 +283,7 @@ internal sealed partial class WeWorkChannel
                 ? Text(body["response_url"])
                 : responseUrl;
             messageIsAibot |= responseUrl.Length > 0 || Nonempty(Text(body["aibotid"]));
-            parts = await BuildPartsAsync(
+            incoming = await BuildMessageAsync(
                 body,
                 chatId.Length > 0 ? chatId : user,
                 responseUrl.Length > 0 ? responseUrl : replyWebhook,
@@ -301,7 +301,7 @@ internal sealed partial class WeWorkChannel
             chatType = Nonempty(Text(xml["ChatType"])) ? Text(xml["ChatType"]) : "unknown";
             chatId = Text(xml["ChatId"]);
             replyWebhook = Nonempty(Text(xml["WebhookUrl"])) ? Text(xml["WebhookUrl"]) : webhook;
-            parts = await BuildPartsAsync(
+            incoming = await BuildMessageAsync(
                 xml,
                 chatId.Length > 0 ? chatId : user,
                 replyWebhook,
@@ -317,7 +317,7 @@ internal sealed partial class WeWorkChannel
         {
             if (msgId.Length > 0 && processed.TryGetValue(msgId, out var duplicate))
                 return duplicate.Response?.DeepClone() as JsonObject;
-            if (parts is { Count: > 0 } && user != "unknown")
+            if (incoming is not null && (incoming.Parts.Count > 0 || incoming.BindReceivedFiles is not null) && user != "unknown")
             {
                 var conversation = chatId.Length > 0 ? chatId : user;
                 WeWorkStreamSnapshot? stream = null;
@@ -408,7 +408,7 @@ internal sealed partial class WeWorkChannel
         if (initialPush is not null)
             _ = ObserveAsync(PushStreamAsync(initialPush, CancellationToken.None));
         if (dispatch is not null)
-            _ = ObserveAsync(router.HandleExternalMessageAsync(dispatch, new(parts!)));
+            _ = ObserveAsync(router.HandleExternalMessageAsync(dispatch, incoming!));
         return passive;
     }
 }

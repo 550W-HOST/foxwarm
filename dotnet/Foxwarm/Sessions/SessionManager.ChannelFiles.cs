@@ -85,8 +85,17 @@ internal sealed partial class SessionManager
             },
         };
         if (image)
-            parts.Add(await InlineChannelImageAsync(bytes, mime, token));
+            parts.Add(await SavedChannelImagePartAsync(bytes, mime, token));
         return parts;
+    }
+
+    private async Task<JsonObject> SavedChannelImagePartAsync(byte[] bytes, string mime, CancellationToken token)
+    {
+        try { return await InlineChannelImageAsync(bytes, mime, token); }
+        catch (Foxwarm.Limits.TenantLimitException error) when (error.Limit == "blobBytes")
+        {
+            return new JsonObject { ["text"] = "[Image not attached inline: the storage limit for images is reached.]" };
+        }
     }
 
     internal long ReceivedFileLimit => Math.Min(

@@ -3,6 +3,7 @@ using Foxwarm.Hosted.Blobs;
 using Foxwarm.Hosted.Lease;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Hosted.Schema;
+using Foxwarm.Sessions;
 
 namespace Foxwarm.Hosted.Import;
 
@@ -44,6 +45,7 @@ internal static class HostedAgentImport
             });
             if (!abandon && (!Directory.Exists(from!) || new DirectoryInfo(from!).LinkTarget is not null))
                 throw new ImportRefusedException("The source must be an existing, ordinary Agents directory: " + from);
+            var plan = abandon ? null : AgentFolderImport.Scan(from!, AgentStoreLimits.Default.FileBytes, report, required: true);
             exit = await LeasedImport.RunAsync(app, owner, tenant, expectedEpoch, abandon ? ImportKind.AbandonAgents : ImportKind.Agents,
                 LeaseTimings.Default, blobs, work, report, async (storage, _, ct) =>
                 {
@@ -60,11 +62,10 @@ internal static class HostedAgentImport
                     }
                     else
                     {
-                        var plan = AgentFolderImport.Scan(from!, store.Limits.FileBytes, report, required: true);
-                        await report.PhaseAsync("agent files", () => plan.WriteAsync(store, ct), count => count);
-                        await report.PhaseAsync("verify Agent files", () => plan.VerifyAsync(store, report, ct), count => count);
+                        await report.PhaseAsync("agent files", () => plan!.WriteAsync(store, ct), count => count);
+                        await report.PhaseAsync("verify Agent files", () => plan!.VerifyAsync(store, report, ct), count => count);
                     }
-                }, token);
+                }, token, plan?.Summary().ToJsonString());
             if (abandon && exit == HostedImport.Imported)
                 report.Outcome = "abandoned";
         }
