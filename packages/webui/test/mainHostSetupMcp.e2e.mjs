@@ -93,6 +93,12 @@ try {
   const click = async selector => { await page.waitForSelector(selector, { visible: true }); await page.click(selector) }
   const typeInto = async (selector, text) => { await page.waitForSelector(selector, { visible: true }); await page.click(selector, { clickCount: 3 }); await page.keyboard.press('Backspace'); await page.type(selector, text) }
   const form = '[data-mcp-form]'
+  const rowMenu = async (name, item) => {
+    await click(`${row(name)} [data-mcp-action="more"]`)
+    await page.waitForSelector('[role="menu"] [role="menuitem"]', { visible: true })
+    for (const handle of await page.$$('[role="menu"] [role="menuitem"]')) if ((await handle.evaluate(node => node.textContent?.trim())) === item) { await handle.click(); return }
+    throw new Error('Missing row menu item ' + item)
+  }
   const formError = async () => until(async () => page.$eval(`${form} [data-mcp-form-error]`, node => node.textContent).catch(() => null), 'form error', 10000)
 
   // Opening the tab shows the last observation (none) and doesn't connect.
@@ -104,6 +110,8 @@ try {
   await click(`${row('remote')} [data-mcp-action="check"]`)
   await waitStatus('remote', 'connected')
   assert.match((await status('remote')).text, /21 tools/)
+  assert.match((await status('remote')).text, /^Connected · 21 tools · (Now|\d+m ago)$/)
+  assert.match(await page.$eval(`${row('remote')} [data-mcp-status]`, node => node.title), /\d/)
   assert((await peerEvents()).some(event => event.event === 'http' && event.authMatched))
 
   // A Session's discovery becomes the last observation too.
@@ -163,11 +171,11 @@ try {
   await click(`${form} button::-p-text(Cancel)`)
 
   // Disable, then delete.
-  await click(`${row('local')} [data-mcp-action="toggle"]`)
+  await rowMenu('local', 'Disable')
   await waitStatus('local', 'disabled')
   assert.equal((await stored()).local.enable, false)
   assert.equal(await page.$(`${row('local')} [data-mcp-action="check"]`), null)
-  await click(`${row('local')} [data-mcp-action="delete"]`)
+  await rowMenu('local', 'Delete')
   await page.waitForSelector(`${row('local')} [data-mcp-confirm-delete]`)
   assert.match(await page.$eval(`${row('local')} [data-mcp-confirm-delete]`, node => node.textContent), /^Delete local\? Agents lose its tools, and its sign-in is removed\./)
   await click(`${row('local')} [data-mcp-action="confirm-delete"]`)

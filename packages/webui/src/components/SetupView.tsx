@@ -588,7 +588,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
         title="Foxwarm Setup"
-        subtitle="Manage models, channels, app settings, secrets, appearance, and notifications."
+        subtitle="Manage models, configuration, tool authorization, MCP servers, secrets, appearance and notifications."
         actions={
           <div className="flex items-center gap-2">
             <button

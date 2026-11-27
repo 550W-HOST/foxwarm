@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { MoreHorizontal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import { formatActivityTime } from '../activityTime'
+import ContextMenu, { type ContextMenuAnchorRect } from './ContextMenu'
 
 // A literal credential the server keeps without sending it: it stays where it is unless replaced.
 type Hidden = { hidden: string; key?: string; index?: number }
@@ -127,17 +130,19 @@ function viewWithEnabled(server: ServerView, enable: boolean): Record<string, un
   return { ...rest, enable }
 }
 
-function statusText(entry: ServerEntry, checking: boolean) {
-  if (!enabledOf(entry.server)) return { text: 'Disabled', tone: 'muted' as const }
-  if (checking) return { text: 'Checking…', tone: 'muted' as const }
+// The time is relative, like the Sessions list; the absolute time is the tooltip.
+function statusText(entry: ServerEntry, checking: boolean): { text: string; tone: 'muted' | 'success' | 'danger'; title?: string } {
+  if (!enabledOf(entry.server)) return { text: 'Disabled', tone: 'muted' }
+  if (checking) return { text: 'Checking…', tone: 'muted' }
   const observed = entry.observed
-  if (!observed) return { text: 'Not checked yet', tone: 'muted' as const }
-  const at = new Date(observed.at).toLocaleString()
+  if (!observed) return { text: 'Not checked yet', tone: 'muted' }
+  const at = formatActivityTime(observed.at)
+  const title = new Date(observed.at).toLocaleString()
   if (observed.ok) {
     const tools = observed.toolCount === 1 ? '1 tool' : `${observed.toolCount ?? 0} tools`
-    return { text: `Connected · ${tools} · ${at}`, tone: 'success' as const }
+    return { text: `Connected · ${tools} · ${at}`, tone: 'success', title }
   }
-  return { text: `Connection failed · ${at} · ${observed.error ?? 'Unknown error'}`, tone: 'danger' as const }
+  return { text: `Connection failed · ${at} · ${observed.error ?? 'Unknown error'}`, tone: 'danger', title }
 }
 
 const oauthLabels: Record<string, string> = {
@@ -275,6 +280,14 @@ export default function McpServersPanel({ refreshRequest = 0 }: { refreshRequest
   const [checking, setChecking] = useState<Set<string>>(new Set())
   const [rowErrors, setRowErrors] = useState<Record<string, RequestError>>({})
   const [busyRow, setBusyRow] = useState<string | null>(null)
+  // The row whose ⋯ menu is open, with the trigger's position.
+  const [rowMenu, setRowMenu] = useState<{ name: string; anchor: ContextMenuAnchorRect; trigger: HTMLButtonElement } | null>(null)
+  // Relative times are redrawn every half minute.
+  const [, setClock] = useState(0)
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(current => current + 1), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
   const mounted = useRef(true)
 
   const refresh = useCallback(async () => {
@@ -377,8 +390,20 @@ export default function McpServersPanel({ refreshRequest = 0 }: { refreshRequest
   }
 
   const servers = data?.servers ?? []
+  const menuEntry = rowMenu ? servers.find(entry => entry.name === rowMenu.name) : undefined
+  // The menu closes after every choice; focus returns to its trigger, and a delete
+  // confirmation then takes it.
+  const closeRowMenu = () => {
+    const trigger = rowMenu?.trigger
+    setRowMenu(null)
+    if (trigger?.isConnected) trigger.focus()
+  }
   const editedEntry = editing ? servers.find(entry => entry.name === editing) : undefined
   return <div className="flex flex-col gap-4" data-setup-mcp>
+    <ContextMenu open={!!menuEntry} anchorRect={rowMenu?.anchor ?? null} preferredPlacement="bottom-end" onClose={closeRowMenu} entries={menuEntry ? [
+      { key: 'toggle', label: enabledOf(menuEntry.server) ? 'Disable' : 'Enable', onSelect: () => void toggle(menuEntry) },
+      { key: 'delete', label: 'Delete', danger: true, onSelect: () => setConfirming(menuEntry.name) },
+    ] : []} />
     <datalist id={SECRET_LIST_ID}>
       {(data?.secrets ?? []).map(name => <option key={name} value={`\${secret:${name}}`} />)}
     </datalist>
@@ -409,20 +434,22 @@ export default function McpServersPanel({ refreshRequest = 0 }: { refreshRequest
             <div className="min-w-0 flex-1 basis-64">
               <div className={nameClass}>{entry.name}</div>
               <p className={metaClass}>{transportLabels[entry.server.transport ?? 'auto'] ?? entry.server.transport}{target ? ` · ${target}` : ''}</p>
-              <p data-mcp-status={!enabled ? 'disabled' : checking.has(entry.name) ? 'checking' : !entry.observed ? 'unknown' : entry.observed.ok ? 'connected' : 'failing'} className={`mt-1 break-words text-xs ${status.tone === 'success' ? 'text-fw-success' : status.tone === 'danger' ? 'text-fw-danger' : 'text-fw-text-muted'}`}>{status.text}</p>
+              <p title={status.title} data-mcp-status={!enabled ? 'disabled' : checking.has(entry.name) ? 'checking' : !entry.observed ? 'unknown' : entry.observed.ok ? 'connected' : 'failing'} className={`mt-1 break-words text-xs ${status.tone === 'success' ? 'text-fw-success' : status.tone === 'danger' ? 'text-fw-danger' : 'text-fw-text-muted'}`}>{status.text}</p>
               {entry.oauth && <p className={metaClass} data-mcp-oauth={entry.oauth.state}>{oauthLabels[entry.oauth.state] ?? entry.oauth.state}{entry.oauth.error ? `: ${entry.oauth.error}` : ''}</p>}
             </div>
             {editing !== entry.name && confirming === entry.name && <div data-mcp-confirm-delete className="flex basis-full flex-wrap items-center gap-2 rounded-lg border border-fw-danger-border bg-fw-danger-surface px-3 py-2">
               <p className="min-w-0 flex-1 basis-64 break-words text-sm text-fw-text-strong">Delete <code className="font-mono font-semibold">{entry.name}</code>? Agents lose its tools, and its sign-in is removed.</p>
               <button type="button" data-mcp-action="confirm-delete" className={dangerButtonClass} disabled={busy} onClick={() => void remove(entry)}>Delete</button>
-              <button type="button" className={secondaryButtonClass} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+              <button type="button" className={secondaryButtonClass} disabled={busy} onClick={() => setConfirming(null)} autoFocus>Cancel</button>
             </div>}
             {editing !== entry.name && confirming !== entry.name && <div className="flex flex-wrap gap-2">
               {entry.oauth && entry.oauth.state !== 'authorized' && entry.oauth.state !== 'authorizing' && enabled && <button type="button" data-mcp-action="sign-in" className={secondaryButtonClass} disabled={busy} onClick={() => void signIn(entry)}>Sign in</button>}
               {enabled && <button type="button" data-mcp-action="check" className={secondaryButtonClass} disabled={busy || checking.has(entry.name)} onClick={() => void check(entry.name)}>Check</button>}
-              <button type="button" data-mcp-action="toggle" className={secondaryButtonClass} disabled={busy} onClick={() => void toggle(entry)}>{enabled ? 'Disable' : 'Enable'}</button>
               <button type="button" data-mcp-action="edit" className={secondaryButtonClass} disabled={busy} onClick={() => openForm(entry.name)}>Edit</button>
-              <button type="button" data-mcp-action="delete" className={dangerButtonClass} disabled={busy} onClick={() => setConfirming(entry.name)}>Delete</button>
+              <button type="button" data-mcp-action="more" aria-label={`More actions for ${entry.name}`} aria-haspopup="menu" aria-expanded={rowMenu?.name === entry.name} className={`${secondaryButtonClass} px-2`} disabled={busy}
+                onClick={event => { const trigger = event.currentTarget; setRowMenu({ name: entry.name, anchor: trigger.getBoundingClientRect(), trigger }) }}>
+                <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+              </button>
             </div>}
             {editing === entry.name && editedEntry && <ServerForm key={formKey} initial={formOf(editedEntry)} revision={editedEntry.revision} existing onSaved={saved} onCancel={() => setEditing(null)} onReload={() => reloadForm(entry.name)} />}
             {rowError && <div role="alert" data-mcp-row-error className={`${alertClass} basis-full`}>
