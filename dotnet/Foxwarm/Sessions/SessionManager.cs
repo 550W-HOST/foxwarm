@@ -263,7 +263,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     throw new InvalidOperationException(
                         "Exec completion owner is unavailable; retry after recovery."
                     );
-                var current = await RequiredAsync(sessionId);
+                using var currentUse = await ResolveExecCompletionOwnerAsync(sessionId);
+                var current = currentUse.Owner;
                 var eventPart = CompletionEvent(message);
                 try
                 {
@@ -654,15 +655,28 @@ internal sealed partial class SessionManager : IAsyncDisposable
             waitLiveness.Transition(id);
         if (startMainServices)
             await StartMainServicesAsync();
-        await executor.ReconcileNowAsync();
-        executor.StartReconciliation();
+        if (deferred.Count == 0)
+            await executor.ReconcileNowAsync();
         StartIdleRelease();
         foreach (var owner in sessions.Values)
             StartRecoveredProcessing(owner);
-        if (deferred.Count > 0)
+        // A completed exec owned by a deferred Session may itself need space. Deliver after
+        // activation, independently of the runnable-owner pass and its progress.
+        if (deferred.Count != 0)
         {
             deferredRecovery = RecoverDeferredAsync(deferred, lostWaits.ToHashSet(), startMainServices);
+            deferredRecovery = Task.WhenAll(deferredRecovery, executor.ReconcileNowAsync());
         }
+        executor.StartReconciliation();
+    }
+
+    private async Task<OwnerUse> ResolveExecCompletionOwnerAsync(string sessionId)
+    {
+        // A notification cannot hold a shared cold load waiting for space while the recovery
+        // pass needs to get past this owner. Its durable exec record retries on reconciliation.
+        using var immediate = Admission is not null && !deferredRecovery.IsCompleted
+            ? HotOwnerBudget.WithoutWaiting() : null;
+        return await UseRequiredAsync(sessionId);
     }
 
     private Task deferredRecovery = Task.CompletedTask;
@@ -679,21 +693,23 @@ internal sealed partial class SessionManager : IAsyncDisposable
             _ = owner.StartProcessing();
     }
 
-    // One at a time, in recovery order: each owner loads when there is room, and its processor
-    // starts at once, so the earlier owners' work frees room for the later ones.
-    private async Task RecoverDeferredAsync(
-        IReadOnlyList<string> order,
-        HashSet<string> lostWaits,
-        bool startMainServices
-    )
+    // Try each outstanding owner once per pass. A smaller owner that fits behind a larger
+    // blocked owner can start immediately, without spinning on the blocked owner.
+    private async Task RecoverDeferredAsync(List<string> pending, HashSet<string> lostWaits, bool startMainServices)
     {
-        foreach (var id in order)
+        var budget = Admission!.HotOwners;
+        while (pending.Count > 0 && accepting)
         {
-            while (accepting)
+            var changed = budget.CapacitySignals();
+            foreach (var id in pending.ToArray())
             {
+                if (!accepting)
+                    return;
                 try
                 {
-                    var owner = await GetExistingAsync(id, admissionStop.Token);
+                    SessionOwner? owner;
+                    using (HotOwnerBudget.WithoutWaiting())
+                        owner = await GetExistingAsync(id, admissionStop.Token);
                     if (owner is not null)
                     {
                         if (lostWaits.Contains(id))
@@ -702,26 +718,30 @@ internal sealed partial class SessionManager : IAsyncDisposable
                             await ReconcileTimerWaitsAsync(owner);
                         StartRecoveredProcessing(owner);
                     }
-                    break;
                 }
                 catch (TenantLimitException error) when (error.Limit == "hotOwnerBytes")
                 {
-                    // No room yet: the owners already running will make some.
+                    continue;
                 }
                 catch (Exception) when (!accepting || admissionStop.IsCancellationRequested)
                 {
-                    // Shutdown ends recovery.
                     return;
                 }
                 catch (Exception error)
                 {
-                    MainLog.Diagnostic(
-                        "Session recovery failed: " + MainLog.SafeFailure(error),
-                        failure: true
-                    );
-                    break;
+                    MainLog.Diagnostic("Session recovery failed: " + MainLog.SafeFailure(error), failure: true);
                 }
+                pending.Remove(id);
             }
+            if (pending.Count > 0)
+                try
+                {
+                    await HotOwnerBudget.WaitForCapacityAsync(changed, admissionStop.Token);
+                }
+                catch (OperationCanceledException) when (admissionStop.IsCancellationRequested)
+                {
+                    return;
+                }
         }
     }
 

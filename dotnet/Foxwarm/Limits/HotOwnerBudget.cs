@@ -174,7 +174,8 @@ internal sealed class HotOwnerBudget : IDisposable
     /// <summary>Reserves an owner's estimate, releasing idle owners or waiting for room.</summary>
     internal async Task<Charge> ReserveAsync(long bytes, CancellationToken token = default)
     {
-        var deadline = Environment.TickCount64 + (noWait.Value ? 0 : (long)Wait.TotalMilliseconds);
+        var deadline = Environment.TickCount64 + (long)Wait.TotalMilliseconds;
+        var immediateReleases = 0;
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -186,8 +187,12 @@ internal sealed class HotOwnerBudget : IDisposable
             var remaining = deadline - Environment.TickCount64;
             if (remaining <= 0)
                 throw Exhausted();
+            if (noWait.Value && immediateReleases++ >= ReleaseAttempts)
+                throw Exhausted();
             if (ReleaseFor(bytes))
                 continue;
+            if (noWait.Value)
+                throw Exhausted();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             await Task.WhenAny(
                     tenantChanged,
@@ -200,6 +205,18 @@ internal sealed class HotOwnerBudget : IDisposable
                 .ConfigureAwait(false);
             timeout.Cancel();
         }
+    }
+
+    // Capture before a recovery pass to avoid missing a release during its last attempt.
+    internal (Task Tenant, Task Replica) CapacitySignals() => (tenant.Changed, (replica ?? tenant).Changed);
+
+    internal static async Task WaitForCapacityAsync((Task Tenant, Task Replica) signals, CancellationToken token)
+    {
+        // Publication grace can expire and previously pinned owners can become idle without a byte change.
+        using var delay = CancellationTokenSource.CreateLinkedTokenSource(token);
+        await Task.WhenAny(signals.Tenant, signals.Replica, Task.Delay(RecheckInterval, delay.Token));
+        delay.Cancel();
+        token.ThrowIfCancellationRequested();
     }
 
     /// <summary>An owner of this runtime may have become releasable (a turn ended): waiters look again.</summary>
