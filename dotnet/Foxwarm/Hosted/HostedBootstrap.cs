@@ -37,9 +37,11 @@ internal sealed record HostedBootstrap(
             ScratchRoot ?? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "foxwarm-replica")
         );
 
-    internal string OperatorAgentsRoot(int tenantId) =>
+    internal string OperatorAgentsRoot(int tenantId) => OperatorAgentsRoot(AgentsVolume ?? throw new HostedBootstrapException(MissingAgentsVolume), tenantId);
+
+    internal static string OperatorAgentsRoot(string volume, int tenantId) =>
         System.IO.Path.Combine(
-            System.IO.Path.GetFullPath(AgentsVolume ?? throw new HostedBootstrapException(MissingAgentsVolume)),
+            System.IO.Path.GetFullPath(volume),
             tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture)
         );
 
