@@ -231,17 +231,17 @@ internal sealed class ArtifactStore(
             var target = RevisionKey(id, revision);
             var manifest = System.Text.Encoding.UTF8.GetBytes(record.ToJsonText());
             // The tenant's blob limit admits or refuses the resource and the revision together.
-            using var reservation = blobs is Foxwarm.Limits.BlobQuota.Store limited
-                ? await limited.Quota.ReserveAsync((resource?.Length ?? 0) + manifest.Length, token)
-                : null;
+            // A raster this artifact already stores (a revision changing only its text) costs
+            // nothing; this artifact's lane serializes the lookup with its writes.
+            var resourceKey = resource is null ? null : ResourceKey(id, digest!);
+            var limited = blobs as Foxwarm.Limits.BlobQuota.Store;
+            var storeResource = resourceKey is not null
+                && (limited is null || !await blobs.ExistsAsync(resourceKey, token));
+            using var reservation = limited is null ? null
+                : await limited.Quota.ReserveAsync((storeResource ? resource!.Length : 0L) + manifest.Length, token);
             using var prepaid = reservation is null ? null : Foxwarm.Limits.BlobQuota.UsePrepaid(reservation);
-            if (resource is not null)
-                await blobs.CreateAsync(
-                    ResourceKey(id, digest!),
-                    resource,
-                    keepExisting: true,
-                    token
-                );
+            if (storeResource)
+                await blobs.CreateAsync(resourceKey!, resource!, keepExisting: true, token);
             // Resources are complete before the exclusively-created revision becomes visible.
             await blobs.CreateAsync(target, manifest, keepExisting: false, token);
             return record;

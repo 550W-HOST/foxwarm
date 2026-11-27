@@ -51,6 +51,35 @@ public sealed partial class TenantLimitAdmissionTests
     }
 
     [Fact]
+    public async Task ReusingContentDoesNotRequireAUsageMeasurement()
+    {
+        using var temp = new TempDirectory();
+        var inner = new Foxwarm.Images.ImageBlobFiles(temp.Path);
+        await inner.CreateAsync(Key('a'), Pixel, true, default);
+        var quota = new BlobQuota(0, _ => throw new IOException("storage unavailable"));
+        Assert.False(await quota.Apply(inner).CreateAsync(Key('a'), Pixel, true, default));
+    }
+
+    [Fact]
+    public async Task ReusingAnArtifactRasterReservesOnlyItsRevision()
+    {
+        using var temp = new TempDirectory();
+        var inner = new Foxwarm.Artifacts.ArtifactBlobFiles(temp.Path);
+        var first = new Foxwarm.Artifacts.ArtifactStore(temp.Path, blobs: inner);
+        var document = await new Foxwarm.Artifacts.ArtifactPreparer().ImageAsync(Pixel, "Blue", null, default);
+        var receipt = await first.PublishAsync("owner", document, image: Pixel);
+        var id = receipt["receipt"]!["artifactId"]!.GetValue<string>();
+        var manifestBytes = System.Text.Encoding.UTF8.GetByteCount(receipt.ToJsonText());
+        var used = manifestBytes + Pixel.Length;
+        var quota = new BlobQuota(used + manifestBytes, _ => Task.FromResult((long)used));
+        var store = new Foxwarm.Artifacts.ArtifactStore(temp.Path, blobs: quota.Apply(inner));
+        document["title"] = "Gold";
+        var second = await store.PublishAsync("owner", document, id, 1, image: Pixel);
+        Assert.Equal(2, second["receipt"]!["revision"]!.GetValue<long>());
+        Assert.Equal(used + manifestBytes, await quota.UsedAsync(default));
+    }
+
+    [Fact]
     public async Task BlobReservationsAreAtomicAndReturnedOnDuplicateFailureAndCancellation()
     {
         using var temp = new TempDirectory();
@@ -178,7 +207,7 @@ public sealed partial class TenantLimitAdmissionTests
             owner.AuthorityStore.Images.ExternalizeMessageAsync(Message())
         );
         // A write a commit needs is admitted over the limit, and counted.
-        using (BlobQuota.AllowOverLimit())
+        using (BlobQuota.AllowOverLimit(owner.AuthorityStore.Images.Blobs))
             await owner.AuthorityStore.Images.ExternalizeMessageAsync(Message());
         Assert.Equal(Pixel.Length, await f.Manager.BlobQuota!.UsedAsync(default));
     }

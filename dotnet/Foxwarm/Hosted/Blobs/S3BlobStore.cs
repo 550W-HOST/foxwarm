@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using System.Net;
-using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using Amazon.Runtime;
 using Amazon.S3;
@@ -51,14 +49,23 @@ internal sealed class S3BlobStore : IBlobStore
 
     public Task<bool> ExistsAsync(string key, CancellationToken token) => HeadExistsAsync(root + key, token);
 
-    public async Task<bool> CreateAsync(
+    public Task<bool> CreateAsync(
         string key,
         ReadOnlyMemory<byte> content,
         bool keepExisting,
         CancellationToken token
+    ) => CreateAsync(key, content, keepExisting, static () => { }, token);
+
+    public async Task<bool> CreateAsync(
+        string key,
+        ReadOnlyMemory<byte> content,
+        bool keepExisting,
+        Action uncertain,
+        CancellationToken token
     )
     {
         var name = root + key;
+
         try
         {
             if (!ConditionalWrites)
@@ -67,18 +74,22 @@ internal sealed class S3BlobStore : IBlobStore
                 // serializes the creates of one key in the single owner.
                 if (await HeadExistsAsync(name, token).ConfigureAwait(false))
                     return Existing(key, keepExisting);
-                await PutAsync(name, content, conditional: false, token).ConfigureAwait(false);
+                await DispatchPutAsync(conditional: false).ConfigureAwait(false);
                 return true;
             }
             for (var attempt = 1; ; attempt++)
             {
-                switch (await PutConditionallyAsync(name, content, token).ConfigureAwait(false))
+                switch (await DispatchPutAsync(conditional: true).ConfigureAwait(false))
                 {
                     case PutOutcome.Created:
                         return true;
                     case PutOutcome.Exists:
-                        // A retried PUT whose first attempt stored the object finds it existing;
-                        // the same bytes under the key are this write.
+                        // Quota callers already checked for an existing object before reserving.
+                        // A 412 now can be an SDK retry after a committed PUT lost its reply.
+                        uncertain();
+                        // A retried PUT whose first attempt stored the object finds it existing,
+                        // whether the SDK or the interrupted-transfer check retried it; the same
+                        // bytes under the key are this write.
                         if (!keepExisting && await HoldsAsync(name, content, token).ConfigureAwait(false))
                             return true;
                         return Existing(key, keepExisting);
@@ -87,6 +98,7 @@ internal sealed class S3BlobStore : IBlobStore
                         await Task.Delay(50 * attempt, token).ConfigureAwait(false);
                         continue;
                     default:
+                        // Every PUT was refused as conflicting: none stored the object.
                         throw new IOException(
                             $"The blob {key} couldn't be created: concurrent writes kept conflicting."
                         );
@@ -96,6 +108,24 @@ internal sealed class S3BlobStore : IBlobStore
         catch (Exception error) when (S3Blobs.Failure(error, key) is { } failure)
         {
             throw failure;
+        }
+
+        async Task<PutOutcome> DispatchPutAsync(bool conditional)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                return await PutAsync(name, content, conditional, token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is IOException or HttpRequestException or OperationCanceledException
+                || error is AmazonS3Exception s3 && (s3.StatusCode == 0 || (int)s3.StatusCode >= 500))
+            {
+                // The remote object may exist even when this client lost the acknowledgement.
+                uncertain();
+                if (conditional && !token.IsCancellationRequested && await HeadExistsAsync(name, token).ConfigureAwait(false))
+                    return PutOutcome.Exists;
+                throw;
+            }
         }
     }
 
@@ -249,35 +279,6 @@ internal sealed class S3BlobStore : IBlobStore
         bool conditional,
         CancellationToken token
     ) => S3Blobs.PutAsync(client, bucket, name, content, conditional, token);
-
-    /// <summary>
-    /// A conditional <c>PUT</c> of a create. An endpoint may refuse it for an existing key before
-    /// it has read the whole body and close the connection, so the client, still sending, sees a reset
-    /// instead of the 412 (VersityGW does, also after <c>100 Continue</c>). A transport failure
-    /// therefore decides by the key: keys are created once and never removed, so an existing key
-    /// is the 412's outcome. A missing key leaves the failure as it is.
-    /// </summary>
-    private async Task<PutOutcome> PutConditionallyAsync(
-        string name,
-        ReadOnlyMemory<byte> content,
-        CancellationToken token
-    )
-    {
-        ExceptionDispatchInfo interrupted;
-        try
-        {
-            return await PutAsync(name, content, conditional: true, token).ConfigureAwait(false);
-        }
-        catch (Exception error)
-            when (error is IOException or HttpRequestException && !token.IsCancellationRequested)
-        {
-            interrupted = ExceptionDispatchInfo.Capture(error);
-        }
-        if (await HeadExistsAsync(name, token).ConfigureAwait(false))
-            return PutOutcome.Exists;
-        interrupted.Throw();
-        throw new UnreachableException();
-    }
 
     private async Task<bool> HoldsAsync(string name, ReadOnlyMemory<byte> content, CancellationToken token)
     {

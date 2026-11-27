@@ -25,6 +25,20 @@ internal interface IBlobStore
         CancellationToken token
     );
 
+    /// <summary>
+    /// As <see cref="CreateAsync(string, ReadOnlyMemory{byte}, bool, CancellationToken)"/>, and
+    /// calls <paramref name="uncertain"/> when the outcome can't be known: the content may have
+    /// been stored by this write although the result says otherwise (a lost response, a
+    /// cancellation after the write was sent). Stores whose outcome is always known never call it.
+    /// </summary>
+    Task<bool> CreateAsync(
+        string key,
+        ReadOnlyMemory<byte> content,
+        bool keepExisting,
+        Action uncertain,
+        CancellationToken token
+    ) => CreateAsync(key, content, keepExisting, token);
+
     /// <summary>The stored bytes. A missing or unreadable key fails like a file read.</summary>
     Task<byte[]> ReadAllAsync(string key, CancellationToken token);
 

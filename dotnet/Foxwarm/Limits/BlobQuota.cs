@@ -33,6 +33,8 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
     private readonly object gate = new();
     private readonly SemaphoreSlim measuring = new(1, 1);
     private long? baseline;
+    // Set by a create whose outcome is unknown: the next write measures again.
+    private bool stale;
     private long added;
     private long reserved;
     private bool warned;
@@ -60,11 +62,14 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
     }
 
     /// <summary>
-    /// Admits the writes of the current flow over the limit (a commit's required write, a
-    /// migration of durable content); they are still counted.
+    /// Admits the writes of the current flow to <paramref name="store"/> over the limit (a
+    /// commit's required write, a migration of durable content); they are still counted. Null,
+    /// with nothing set, when the store has no limit.
     /// </summary>
-    internal static IDisposable AllowOverLimit()
+    internal static IDisposable? AllowOverLimit(IBlobStore store)
     {
+        if (store is not Store)
+            return null;
         var previous = overLimit.Value;
         overLimit.Value = true;
         return new Scope(() => overLimit.Value = previous);
@@ -73,23 +78,30 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
     /// <summary>The usage known so far: the measurement plus content added since.</summary>
     internal async Task<long> UsedAsync(CancellationToken token)
     {
-        var measured = await BaselineAsync(token).ConfigureAwait(false);
+        await BaselineAsync(token).ConfigureAwait(false);
         lock (gate)
-            return measured + added;
+            return baseline!.Value + added;
     }
 
     // Measures the stores once; a failed measurement isn't kept, so the next write retries.
     private async Task<long> BaselineAsync(CancellationToken token)
     {
         lock (gate)
-            if (baseline is long known)
+            if (baseline is long known && !stale)
                 return known;
         await measuring.WaitAsync(token).ConfigureAwait(false);
         try
         {
+            long counted;
+            bool writesInFlight;
             lock (gate)
-                if (baseline is long known)
+            {
+                if (baseline is long known && !stale)
                     return known;
+                // Content added before this measurement is in it.
+                counted = added;
+                writesInFlight = reserved != 0;
+            }
             long value;
             try
             {
@@ -108,7 +120,13 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
                 );
             }
             lock (gate)
+            {
                 baseline = value;
+                added -= counted;
+                // An overlapping write may already be in the measured bytes. Keep the
+                // conservative charge until a measurement with no writes in flight.
+                stale = writesInFlight || added != 0;
+            }
             return value;
         }
         finally
@@ -123,14 +141,14 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
     /// </summary>
     internal async Task<Reservation> ReserveAsync(long bytes, CancellationToken token)
     {
-        var measured = await BaselineAsync(token).ConfigureAwait(false);
+        await BaselineAsync(token).ConfigureAwait(false);
         long total;
         lock (gate)
         {
-            if (!overLimit.Value && measured + added + reserved + bytes > Limit)
+            if (!overLimit.Value && baseline!.Value + added + reserved + bytes > Limit)
                 throw Refused();
             reserved += bytes;
-            total = measured + added + reserved;
+            total = baseline!.Value + added + reserved;
         }
         WarnOnce(total);
         return new Reservation(this, bytes);
@@ -178,7 +196,7 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         private long remaining = bytes;
 
         // Moves this write's bytes from reserved to added.
-        internal void Charge(long amount)
+        internal void Charge(long amount, bool uncertain = false)
         {
             lock (quota.gate)
             {
@@ -186,6 +204,7 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
                 remaining -= taken;
                 quota.reserved -= taken;
                 quota.added += amount;
+                quota.stale |= uncertain;
             }
         }
 
@@ -264,30 +283,38 @@ internal sealed class BlobQuota(long limit, Func<CancellationToken, Task<long>>?
         )
         {
             if (prepaid.Value is { } paid)
-            {
-                var created = await inner.CreateAsync(key, content, keepExisting, token).ConfigureAwait(false);
-                if (created)
-                    paid.Charge(content.Length);
-                return created;
-            }
-            Reservation reservation;
+                return await CreateChargedAsync(key, content, keepExisting, paid, token).ConfigureAwait(false);
+            // Content already stored under its key costs nothing: no reservation, so no
+            // measurement, even at the limit or while usage can't be measured.
+            if (await inner.ExistsAsync(key, token).ConfigureAwait(false))
+                return !keepExisting && await inner.CreateAsync(key, content, false, token).ConfigureAwait(false);
+            using var reservation = await quota.ReserveAsync(content.Length, token).ConfigureAwait(false);
+            return await CreateChargedAsync(key, content, keepExisting, reservation, token).ConfigureAwait(false);
+        }
+
+        // A create drawing on a reservation: charged when it creates the content, or when the
+        // store can't tell whether it did (then counted until the next measurement finds out).
+        private async Task<bool> CreateChargedAsync(
+            string key,
+            ReadOnlyMemory<byte> content,
+            bool keepExisting,
+            Reservation reservation,
+            CancellationToken token
+        )
+        {
+            var uncertain = false;
+            var created = false;
             try
             {
-                reservation = await quota.ReserveAsync(content.Length, token).ConfigureAwait(false);
-            }
-            catch (TenantLimitException) when (keepExisting)
-            {
-                // Content already stored under its key costs nothing, even at the limit.
-                if (await inner.ExistsAsync(key, token).ConfigureAwait(false))
-                    return false;
-                throw;
-            }
-            using (reservation)
-            {
-                var created = await inner.CreateAsync(key, content, keepExisting, token).ConfigureAwait(false);
-                if (created)
-                    reservation.Charge(content.Length);
+                created = await inner
+                    .CreateAsync(key, content, keepExisting, () => uncertain = true, token)
+                    .ConfigureAwait(false);
                 return created;
+            }
+            finally
+            {
+                if (created || uncertain)
+                    reservation.Charge(content.Length, uncertain);
             }
         }
 
