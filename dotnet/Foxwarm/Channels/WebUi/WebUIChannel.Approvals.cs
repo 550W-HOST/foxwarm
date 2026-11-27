@@ -117,6 +117,10 @@ internal sealed partial class WebUIChannel
                 {
                     return Results.NotFound(new JsonObject { ["error"] = error.Message });
                 }
+                catch (ToolApprovalNotAllowedException)
+                {
+                    return NotApprover();
+                }
                 catch (ToolApprovalNotPendingException error)
                 {
                     return Results.Json(
