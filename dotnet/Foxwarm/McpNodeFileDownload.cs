@@ -82,29 +82,39 @@ internal static class McpNodeFileDownload
                     return;
                 }
                 var args = new JsonObject { ["filePath"] = path };
-                var permission = new ToolAuthorizationRequest(
-                    "node",
-                    "read",
-                    null,
-                    args,
-                    [new("filePath", path, null, node)],
-                    null,
-                    null,
-                    node,
-                    sessions.ToolWorkspace,
-                    null,
-                    null,
-                    Principal: "external",
-                    ExternalId: principal.Id,
-                    NodeTargets: ToolAuthorizationNodeEffects.Resolve("node", "read", node, args)
-                );
+                var targets = ToolAuthorizationNodeEffects.Resolve("node", "read", node, args);
+                // The external read an MCP `read` of the same file would be, without an MCP
+                // context: each check takes the current Node forest, so ancestor selectors
+                // match as they do for that read.
+                ToolAuthorizationRequest Permission() =>
+                    new(
+                        "node",
+                        "read",
+                        null,
+                        args,
+                        [new("filePath", path, null, node)],
+                        null,
+                        null,
+                        node,
+                        sessions.ToolWorkspace,
+                        null,
+                        null,
+                        Principal: "external",
+                        ExternalId: principal.Id,
+                        NodeTargets: targets,
+                        NodeForest: targets is { Count: > 0 } ? sessions.Nodes.Registry.Forest() : null
+                    );
                 void AssertRead()
                 {
                     if (
                         !principal.Current
                         || node == "master"
                         || !sessions.Nodes.SupportsExternalRead(node)
-                        || !sessions
+                    )
+                        throw new McpInboundSafeException("File download is not permitted.");
+                    var permission = Permission();
+                    if (
+                        !sessions
                             .Authorization.GlobalLayers(sessions.Authorization.Load())
                             .All(layer => ToolAuthorizationEvaluation.Evaluate(layer, permission).Allowed)
                     )
