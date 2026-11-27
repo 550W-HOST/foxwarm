@@ -48,10 +48,12 @@ const route = '/api/sessions/saved-prompt/history'
 const snapshotCard = '[data-system-message-kind="snapshot"]'
 let page
 const requests = [], errors = []
-async function waitChat() {
+// The Session's rows have rendered: its latest row, or the saved reading position it returns to.
+async function waitChat(sessionId) {
   await waitForWebUiReady(page)
   await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
-  await page.waitForFunction(() => document.body.innerText.includes('Retained row 104'))
+  await page.waitForFunction(id => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === id
+    && /Retained row \d+/.test(document.querySelector('[data-chat-timeline="committed"]')?.innerText || ''), {}, sessionId)
 }
 async function view(name) {
   await page.click('[aria-label="Open session options"]')
@@ -84,8 +86,20 @@ async function assertNoSnapshotRow(label, continuous = false) {
   assert.equal(await page.$(snapshotCard), null, label)
 }
 
+// The snapshot is the first row of the timeline, and the timeline mounts rows as the reader
+// approaches them: read upward with the wheel until it is mounted.
+async function readUpToSnapshot() {
+  const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  for (let step = 0; step < 60 && !await page.$(snapshotCard); step++) {
+    await page.mouse.wheel({ deltaY: -1500 })
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
+
 async function assertSnapshotRow(expected) {
-  await page.waitForFunction(() => document.body.innerText.includes('Retained row 104'))
+  await page.waitForFunction(() => /Retained row \d+/.test(document.querySelector('[data-chat-timeline="committed"]')?.innerText || ''))
+  await readUpToSnapshot()
   await page.waitForSelector(snapshotCard)
   // This checks saved content, not pointer geometry. Viewport restoration can move
   // the top card between Puppeteer's scroll/coordinate lookup and mouse dispatch.
@@ -110,7 +124,7 @@ try {
   page.on('pageerror', error => errors.push(error.message))
   page.on('response', response => { if (response.url().includes('/saved-prompt/history')) requests.push(new URL(response.url()).search) })
   await page.evaluate(() => window.foxwarmTest.switchToSession('saved-prompt'))
-  await waitChat()
+  await waitChat('saved-prompt')
   await assertSnapshotRow(stored)
   assert.equal(await debugSnapshot('saved-prompt'), stored)
   const firstReconnect = await page.evaluate(() => window.fixtureSubscriptionAcks)
@@ -118,11 +132,11 @@ try {
   await page.waitForFunction(previous => window.fixtureSubscriptionAcks > previous, {}, firstReconnect)
   await assertSnapshotRow(stored)
   await page.evaluate(() => window.foxwarmTest.switchToSession('empty-prompt'))
-  await waitChat()
+  await waitChat('empty-prompt')
   await assertNoSnapshotRow('empty snapshot has no row')
   assert.equal(await debugSnapshot('empty-prompt'), '')
   await page.evaluate(() => window.foxwarmTest.switchToSession('saved-prompt'))
-  await waitChat()
+  await waitChat('saved-prompt')
   for (const name of ['grouped', 'conversation', 'detailed']) {
     await view(name)
     if (name === 'conversation') await assertNoSnapshotRow('Conversation omits the memory snapshot', true)
@@ -134,7 +148,7 @@ try {
   const refreshed = (await fixture.api('GET', route)).body.persistentMemorySnapshot
   assert(refreshed.includes(diskMarker))
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await waitChat()
+  await waitChat('saved-prompt')
   await assertSnapshotRow(diskMarker)
   assert.equal(await debugSnapshot('saved-prompt'), refreshed)
   assert.equal(JSON.parse(await readFile(join(sessionDir, 'saved-prompt.json'), 'utf8')).persistentMemorySnapshot, refreshed)

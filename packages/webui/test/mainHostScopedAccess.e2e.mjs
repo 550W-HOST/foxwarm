@@ -220,6 +220,15 @@ try {
   await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
   await page.waitForSelector('[data-continuous-history]')
   await page.evaluate(() => { const element = document.querySelector('.foxwarm-chat-messages'); element.scrollTop = 0; element.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); element.dispatchEvent(new Event('scroll')) })
+  // The earlier page mounts above the kept reading row; read upward with the wheel until the
+  // older lazy image is near the viewport and loaded.
+  const scroller = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(scroller.x + scroller.width / 2, scroller.y + scroller.height / 2)
+  const olderImageLoaded = () => page.evaluate(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))
+  for (let step = 0; step < 60 && !await olderImageLoaded(); step++) {
+    await page.mouse.wheel({ deltaY: -1500 })
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
   await page.waitForFunction(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))
   const downloads = join(host.root, 'scoped-native-downloads'); await mkdir(downloads)
   const cdp = await page.createCDPSession(); await cdp.send('Network.enable')
