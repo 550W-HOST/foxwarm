@@ -218,7 +218,8 @@ internal sealed partial class MessageRouter
             );
             return;
         }
-        if (!owner.Metadata().Busy)
+        // A turn waiting for its busy-turn slot isn't busy yet, but its processor runs.
+        if (!owner.Metadata().Busy && !owner.Processing)
         {
             await command.Reply("⚠️ Session is not currently running.");
             return;

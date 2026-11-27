@@ -82,6 +82,59 @@ public sealed class TenantLimitHttpTests
         }
     }
 
+    [Theory]
+    [InlineData("control")]
+    [InlineData("slash")]
+    [InlineData("route")]
+    public async Task PublicStopFinalizesAnInputWhileItsProcessorWaitsForAdmission(string path)
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { BusyTurns = 1 });
+        var holder = await f.Manager.CreateNamedAsync("main", "holder", null, null);
+        using var slot = await holder.Registry.TurnAdmission!(default);
+        var owner = (await f.Manager.GetExistingAsync("uploads"))!;
+        await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("pending input"));
+        var waiting = owner.StartProcessing();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!owner.Entry.HasProcessor)
+            await Task.Delay(5, deadline.Token);
+        Assert.False(owner.Metadata().Busy);
+        using var response = path switch
+        {
+            "control" => await f.Client.PostAsJsonAsync("api/sessions/uploads/message", new { text = "/stop", controlRequestId = "stop-1" }),
+            "slash" => await f.Client.PostAsJsonAsync("api/sessions/uploads/message", new { text = "/stop" }),
+            _ => await f.Client.PostAsync("api/sessions/uploads/stop", null),
+        };
+        response.EnsureSuccessStatusCode();
+        await waiting.WaitAsync(deadline.Token);
+        Assert.Empty(owner.Entry.Snapshot().Queue);
+        Assert.Contains(owner.History(), row => row.ToJsonString().Contains("pending input"));
+        Assert.Equal(1, f.Manager.Admission!.Turns.InUse);
+    }
+
+    [Fact]
+    public async Task CwdChangeResolvesTheOwnerAfterReadingItsBody()
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults);
+        var before = (await f.Manager.GetExistingAsync("uploads"))!;
+        const string body = "{\"cwd\":\"work\"}";
+        using var client = new System.Net.Sockets.TcpClient();
+        await client.ConnectAsync(f.Base.Host, f.Base.Port);
+        var stream = client.GetStream();
+        using var reader = new StreamReader(stream);
+        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(
+            $"POST /api/sessions/uploads/cwd HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {Token}\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n"));
+        Assert.Contains("100 Continue", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal("", await reader.ReadLineAsync());
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        Assert.Equal(1, f.Manager.ReleaseIdleOwners());
+        Assert.True(before.Entry.Retired);
+        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(body));
+        Assert.Contains("200 OK", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+        var after = (await f.Manager.GetExistingAsync("uploads"))!;
+        Assert.NotSame(before, after);
+        Assert.Equal("work", after.Entry.Snapshot().AuthorityEnvelope["cwd"]?.ToString());
+    }
+
     [Fact]
     public async Task RequestsOverTheRateAreRefusedWithRetryAfter()
     {

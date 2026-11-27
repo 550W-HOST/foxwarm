@@ -38,8 +38,9 @@ public sealed partial class TenantLimitAdmissionTests
             {
                 ReplicaLimits = limits is null ? null : replica ?? new ReplicaLimits(long.MaxValue),
             };
-            // Pressure may release an owner right after its lookup here; the lease has its own test.
-            f.Manager.PressureUseLeaseForTest = TimeSpan.Zero;
+            // Pressure may release an owner right after its publication here; the grace has its
+            // own test.
+            f.Manager.PressureGraceForTest = TimeSpan.Zero;
             await f.Manager.LoadAsync();
             return f;
         }

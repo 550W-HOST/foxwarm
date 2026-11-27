@@ -1,3 +1,4 @@
+using Foxwarm.Models;
 using System.Text.Json.Nodes;
 using Foxwarm.Limits;
 using Foxwarm.Sessions;
@@ -13,7 +14,30 @@ public sealed partial class TenantLimitAdmissionTests
     private static long OneOwner => HotOwnerBudget.Estimate(0) * 3 / 2;
 
     [Fact]
-    public async Task AColdLoadReservesBeforeReadingAndTheUseLeaseKeepsAJustUsedOwner()
+    public async Task HostShutdownReturnsItsShareOfTheReplicaAfterAFailedSave()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        Directory.CreateDirectory(work);
+        await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), "vector: false\ndbWorkers: false\n");
+        var host = await MainHost.CreateAsync([], data, work, new ModelConfiguration(data),
+            await HttpServerSettings.CaptureDesktopAsync(data), null, capabilities: RuntimeCapabilities.File with { Limits = Limits });
+        var owner = await host.Sessions.CreateNamedAsync("main", "failed-final-save", null, null);
+        var path = ((PersistentSessionAuthorityStore)owner.AuthorityStore).AuthorityPath;
+        File.Move(path, path + ".saved");
+        Directory.CreateDirectory(path); // An atomic replacement of the file will fail.
+        var budget = host.Sessions.Admission!.HotOwners;
+        var pool = ReplicaLimits.Process.HotOwners;
+        Assert.Contains(budget.Releaser, pool.Releasers());
+        await Assert.ThrowsAnyAsync<Exception>(() => host.DisposeAsync().AsTask());
+        Assert.DoesNotContain(budget.Releaser, pool.Releasers());
+        Assert.Equal(0, budget.UsedBytes);
+    }
+
+    [Fact]
+    public async Task AColdLoadReservesBeforeReadingAndTheGraceKeepsAJustPublishedOwner()
     {
         await using var f = await Fixture.Create(Limits with { HotOwnerBytes = OneOwner });
         var a = await f.Manager.CreateNamedAsync("main", "a", null, null);
@@ -25,8 +49,8 @@ public sealed partial class TenantLimitAdmissionTests
             lock (reads)
                 reads.Add(id);
         };
-        // b was just used: within its lease, pressure leaves it resident.
-        f.Manager.PressureUseLeaseForTest = TimeSpan.FromHours(1);
+        // b was just published: within its grace, pressure leaves it resident.
+        f.Manager.PressureGraceForTest = TimeSpan.FromHours(1);
         var load = f.Manager.GetExistingAsync(a.Id);
         await Task.Delay(400);
         Assert.False(load.IsCompleted);
@@ -34,12 +58,28 @@ public sealed partial class TenantLimitAdmissionTests
         // The waiting load holds no history.
         lock (reads)
             Assert.Empty(reads);
-        // Past the lease, the next look releases b and the load reads a.
-        f.Manager.PressureUseLeaseForTest = TimeSpan.Zero;
+        // Past the grace, the next look releases b and the load reads a.
+        f.Manager.PressureGraceForTest = TimeSpan.Zero;
         Assert.NotNull(await load.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.False(Resident(f.Manager, b.Id));
         lock (reads)
             Assert.Equal([a.Id], reads);
+    }
+
+    [Fact]
+    public async Task LookupsOrderVictimsButDontKeepAnOwnerResident()
+    {
+        await using var f = await Fixture.Create(Limits with { HotOwnerBytes = OneOwner });
+        var a = await f.Manager.CreateNamedAsync("main", "a", null, null);
+        var b = await f.Manager.CreateNamedAsync("main", "b", null, null);
+        Assert.False(Resident(f.Manager, a.Id));
+        f.Manager.PressureGraceForTest = TimeSpan.FromMilliseconds(200);
+        // Once publication grace expires, even an immediately preceding observation can't
+        // protect b. Drive the same release operation that a blocked reservation uses.
+        await Task.Delay(350);
+        Assert.Same(b, await f.Manager.GetExistingAsync(b.Id));
+        Assert.True(f.Manager.Admission!.HotOwners.Releaser.ReleaseOldestIdle());
+        Assert.True(b.Entry.Retired);
     }
 
     [Fact]

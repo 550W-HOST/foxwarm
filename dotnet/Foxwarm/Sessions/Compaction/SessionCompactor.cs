@@ -38,6 +38,10 @@ internal sealed partial class SessionCompactor
         internal readonly double Keep = keep;
         internal readonly bool Background = background,
             Standalone = standalone;
+
+        // The tenant's busy-turn slot of a standalone compaction started outside a turn;
+        // returned at its settlement.
+        internal IDisposable? TurnSlot;
         internal readonly CancellationTokenSource Cancellation = new();
         internal readonly TaskCompletionSource PlanningSettled = new(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -222,12 +226,22 @@ internal sealed partial class SessionCompactor
         return run.Committed ? (false, true) : (true, false);
     }
 
+    /// <param name="underTurn">
+    /// Started from a tool call of a running turn: the compaction runs under that turn's
+    /// busy-turn slot. Otherwise a standalone compaction takes its own slot before claiming busy.
+    /// </param>
     public Task<CompactAdmission> StartManualAsync(
         string? guidance = null,
-        double? keepPercent = null
-    ) => StartAsync(guidance, keepPercent, idle: false);
+        double? keepPercent = null,
+        bool underTurn = false
+    ) => StartAsync(guidance, keepPercent, idle: false, underTurn);
 
-    private async Task<CompactAdmission> StartAsync(string? guidance, double? keepPercent, bool idle)
+    private async Task<CompactAdmission> StartAsync(
+        string? guidance,
+        double? keepPercent,
+        bool idle,
+        bool underTurn = false
+    )
     {
         ClaudeRuntimeState.RequireFoxwarm(hosted, "Foxwarm context compaction");
         if (hosted.Entry.HistoryMutation)
@@ -289,6 +303,20 @@ internal sealed partial class SessionCompactor
         var claimed = false;
         try
         {
+            // The tenant's busy-turn limit counts a standalone busy window like a turn: one
+            // started outside a turn waits for its own slot, before the busy claim; one started
+            // from a turn's tool call uses that turn's slot and never waits behind it.
+            if (!underTurn && hosted.Registry.TurnAdmission is { } admit)
+            {
+                try
+                {
+                    run.TurnSlot = await admit(run.Cancellation.Token);
+                }
+                catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
+                {
+                    return new(false, false, false, true);
+                }
+            }
             claimed = await hosted.Registry.HostFor(hosted.Id).TryClaimBusyAsync();
             if (!claimed)
                 return new(false, false, false, true);
@@ -302,6 +330,7 @@ internal sealed partial class SessionCompactor
             {
                 entry.ReleaseProcessor();
                 entry.NotifyProcessorReleased();
+                run.TurnSlot?.Dispose();
                 run.PipelineDone.TrySetResult();
                 await FinishAsync(run);
                 // A Stop that found this claim but no turn: a turn processor finalizes it.
@@ -336,6 +365,8 @@ internal sealed partial class SessionCompactor
             }
             hosted.Entry.ReleaseProcessor();
             hosted.Entry.NotifyProcessorReleased();
+            // After the claim, so the next turn finds this Session idle.
+            run.TurnSlot?.Dispose();
             run.PipelineDone.TrySetResult();
             await FinishAsync(run);
             hosted.PublishStateChanged();

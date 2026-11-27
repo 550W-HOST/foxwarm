@@ -13,6 +13,39 @@ namespace Foxwarm.Tests;
 [Trait("Backend", "neutral")]
 public sealed partial class CompactLifecycleTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StandaloneCompactionHonorsTheOriginatingTurnSlot(bool fromTurn)
+    {
+        await using var fixture = await CompactFixture.CreateAsync(false, false);
+        await fixture.SeedAsync();
+        var slots = new Foxwarm.Limits.AdmissionSlots(1);
+        fixture.Owner.Registry.TurnAdmission = slots.EnterAsync;
+        using var held = await slots.EnterAsync();
+        try
+        {
+            var starting = fixture.Owner.Compactor.StartManualAsync(underTurn: fromTurn);
+            if (!fromTurn)
+            {
+                Assert.False(starting.IsCompleted);
+                Assert.False(fixture.Owner.Metadata().Busy);
+                held.Dispose();
+            }
+            Assert.True((await starting.WaitAsync(TimeSpan.FromSeconds(5))).Started);
+            await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(fixture.Owner.Metadata().Busy);
+            Assert.Equal(1, slots.InUse);
+        }
+        finally
+        {
+            fixture.Peer.ReleasePlan();
+            held.Dispose();
+            await fixture.Owner.Compactor.DrainAsync();
+        }
+        Assert.Equal(0, slots.InUse);
+    }
+
     [Fact]
     public void Compact_plan_schema_allows_direct_or_repaired_file_submission()
     {

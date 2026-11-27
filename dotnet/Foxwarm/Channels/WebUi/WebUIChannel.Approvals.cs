@@ -95,6 +95,10 @@ internal sealed partial class WebUIChannel
                 {
                     return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
+                using var use = await AdmitRouteMutationAsync(request, id);
+                if (use is null)
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
+                hosted = use.Owner;
                 var record = hosted.Entry.WithState(state =>
                     SessionApprovals.Find(state.Meta, approvalId)?.DeepClone() as JsonObject
                 );

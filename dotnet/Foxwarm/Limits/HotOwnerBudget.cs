@@ -135,6 +135,9 @@ internal sealed class HotOwnerBudget : IDisposable
 
     internal TimeSpan Wait { get; }
 
+    // The runtime's releaser in the pools; for tests.
+    internal IHotOwnerReleaser Releaser => releaser;
+
     internal long Limit => tenant.Limit;
 
     internal long UsedBytes
@@ -150,10 +153,28 @@ internal sealed class HotOwnerBudget : IDisposable
     internal static long Estimate(long historyJsonBytes) =>
         OwnerFloorBytes + HistoryFactor * Math.Max(0, historyJsonBytes);
 
+    private static readonly AsyncLocal<bool> noWait = new();
+
+    /// <summary>
+    /// Makes the reservations of the current flow take only immediately available room,
+    /// without waiting (startup recovery, which defers what doesn't fit).
+    /// </summary>
+    internal static IDisposable WithoutWaiting()
+    {
+        var previous = noWait.Value;
+        noWait.Value = true;
+        return new Restore(() => noWait.Value = previous);
+    }
+
+    private sealed class Restore(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
+    }
+
     /// <summary>Reserves an owner's estimate, releasing idle owners or waiting for room.</summary>
     internal async Task<Charge> ReserveAsync(long bytes, CancellationToken token = default)
     {
-        var deadline = Environment.TickCount64 + (long)Wait.TotalMilliseconds;
+        var deadline = Environment.TickCount64 + (noWait.Value ? 0 : (long)Wait.TotalMilliseconds);
         while (true)
         {
             token.ThrowIfCancellationRequested();

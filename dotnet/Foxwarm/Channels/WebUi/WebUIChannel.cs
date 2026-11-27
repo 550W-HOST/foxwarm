@@ -140,6 +140,10 @@ internal sealed partial class WebUIChannel(
                 {
                     return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
+                using var use = await AdmitRouteMutationAsync(request, id);
+                if (use is null)
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
+                hosted = use.Owner;
                 return Results.Ok(
                     JsonData.WebNode(await hosted.UpdateCwdAsync(SessionWait.Text(body["cwd"])))
                 );
@@ -159,6 +163,10 @@ internal sealed partial class WebUIChannel(
                     var body =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Model settings must be an object.");
+                    using var use = await AdmitRouteMutationAsync(request, id);
+                    if (use is null)
+                        return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
+                    hosted = use.Owner;
                     return Results.Ok(
                         JsonData.WebNode(
                             await runtime.UpdateSettingsAsync(
@@ -193,6 +201,10 @@ internal sealed partial class WebUIChannel(
                     var body =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Child settings must be an object.");
+                    using var use = await AdmitRouteMutationAsync(request, id);
+                    if (use is null)
+                        return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
+                    hosted = use.Owner;
                     return Results.Ok(
                         JsonData.WebNode(
                             await hosted.UpdateSettingsAsync(
@@ -507,7 +519,7 @@ internal sealed partial class WebUIChannel(
                     return Results.Ok(
                         new JsonObject { ["stoppedCurrent"] = false, ["abortedInFlight"] = false }
                     );
-                if (!hosted.Metadata().Busy)
+                if (!hosted.Metadata().Busy && !hosted.Processing)
                     return Results.Ok(
                         new JsonObject { ["stoppedCurrent"] = false, ["abortedInFlight"] = false }
                     );
@@ -680,6 +692,24 @@ internal sealed partial class WebUIChannel(
         if (scoped is not null && owner?.Id != canonical)
             throw new WebUiAccessException();
         return owner;
+    }
+
+    private sealed record RouteMutation(SessionOwner Owner, IDisposable Admission) : IDisposable
+    {
+        public void Dispose() => Admission.Dispose();
+    }
+
+    // Resolve after reading the body. If release won the race, resolve again before doing any
+    // work. Once admitted, even a multi-step effect runs exactly once on a current owner.
+    private async Task<RouteMutation?> AdmitRouteMutationAsync(HttpRequest request, string id)
+    {
+        while (await FindRouteAsync(request, id) is { } owner)
+        {
+            request.HttpContext.RequestAborted.ThrowIfCancellationRequested();
+            if (sessions.AdmitCurrentOwner(owner) is { } admission)
+                return new(owner, admission);
+        }
+        return null;
     }
 
     private string? CatalogRoute(HttpRequest request) =>

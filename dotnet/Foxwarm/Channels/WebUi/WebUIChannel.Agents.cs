@@ -675,6 +675,10 @@ internal sealed partial class WebUIChannel
                         || body.ContainsKey("forceModel") && body["forceModel"] is not JsonObject
                     )
                         throw new InvalidDataException("Invalid child creation fields.");
+                    using var use = await AdmitRouteMutationAsync(request, id);
+                    if (use is null)
+                        return Results.NotFound(new JsonObject { ["error"] = "Parent Session not found" });
+                    parent = use.Owner;
                     var (child, delivered) = await sessions.CreateChildAsync(
                         parent,
                         suffix,

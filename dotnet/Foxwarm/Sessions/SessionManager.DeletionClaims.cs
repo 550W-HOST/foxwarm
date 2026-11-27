@@ -189,6 +189,14 @@ internal sealed partial class SessionManager
         return scope;
     }
 
+    // Check and admit under the same fence used by idle release. A stale lookup can retry
+    // before any effect; deletion and identity-move refusals retain their normal outcomes.
+    internal IDisposable? AdmitCurrentOwner(SessionOwner owner)
+    {
+        lock (lifecycle)
+            return IsCurrentOwner(owner) ? BeginMutation([owner.Id]) : null;
+    }
+
     private IDisposable BeginOwnerMutation(SessionOwner owner, bool acceptedTimer = false)
     {
         var scope = BeginMutation([owner.Id], acceptedTimer: acceptedTimer);

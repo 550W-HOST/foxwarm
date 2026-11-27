@@ -97,7 +97,7 @@ internal sealed partial class SessionManager
             );
     }
 
-    private void DisposeAdmission()
+    internal void DisposeAdmission()
     {
         if (hotCharges is not null)
             foreach (var owner in hotCharges.Keys.ToArray())
@@ -130,17 +130,17 @@ internal sealed partial class SessionManager
     }
 
     /// <summary>
-    /// A lookup's use lease: memory pressure doesn't release an owner within this time of its
-    /// latest lookup, which covers the caller's way from the lookup to its first operation (a
-    /// registered mutation then keeps the owner resident by itself).
+    /// Memory pressure doesn't release an owner within this time of its publication, so a load
+    /// isn't undone by the next one before its caller's first operation. Lookups don't renew it;
+    /// they only order the victims.
     /// </summary>
-    internal static readonly TimeSpan PressureUseLease = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan PressurePublicationGrace = TimeSpan.FromSeconds(5);
 
-    internal TimeSpan PressureUseLeaseForTest { get; set; } = PressureUseLease;
+    internal TimeSpan PressureGraceForTest { get; set; } = PressurePublicationGrace;
 
     // Memory pressure releases the least recently used owner with nothing live, whatever its
-    // quiet period beyond the use lease; the ordinary idle release fences it the same way. It
-    // never waits for the idle sweep: a sweep in progress releases owners itself.
+    // quiet period, once its publication grace is over; the ordinary idle release fences it the
+    // same way. It never waits for the idle sweep: a sweep in progress releases owners itself.
     private sealed class HotOwners(SessionManager manager) : IHotOwnerReleaser
     {
         public long? OldestIdle()
@@ -157,9 +157,8 @@ internal sealed partial class SessionManager
             try
             {
                 var now = Environment.TickCount64;
-                var lease = (long)manager.PressureUseLeaseForTest.TotalMilliseconds;
                 foreach (var (owner, _) in manager.IdleCandidates())
-                    if (manager.TryReleaseIdleOwner(owner, now, lease))
+                    if (manager.TryReleaseIdleOwner(owner, now, 0))
                         return true;
                 return false;
             }
@@ -170,16 +169,17 @@ internal sealed partial class SessionManager
         }
     }
 
-    // Resident owners past the use lease with nothing live, least recently used first.
+    // Resident owners past their publication grace with nothing live, least recently used
+    // first.
     private IEnumerable<(SessionOwner Owner, long LastUse)> IdleCandidates()
     {
         if (!accepting)
             yield break;
-        var cutoff = Environment.TickCount64 - (long)PressureUseLeaseForTest.TotalMilliseconds;
+        var cutoff = Environment.TickCount64 - (long)PressureGraceForTest.TotalMilliseconds;
         var candidates = new List<(SessionOwner Owner, long LastUse)>();
         lock (lifecycle)
             foreach (var owner in sessions.Values)
-                if (ReleasableSlot(owner, out var slot) && slot.LastUse <= cutoff)
+                if (ReleasableSlot(owner, out var slot) && slot.Published <= cutoff)
                     candidates.Add((owner, slot.LastUse));
         foreach (var candidate in candidates.OrderBy(item => item.LastUse))
             if (IdleReleaseBlocker(candidate.Owner) is null)

@@ -38,6 +38,10 @@ internal sealed partial class WebUIChannel
                     return Results.BadRequest(new JsonObject { ["error"] = "Invalid fork suffix" });
                 try
                 {
+                    using var use = await AdmitRouteMutationAsync(request, id);
+                    if (use is null)
+                        return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
+                    parent = use.Owner;
                     var child = await sessions.ForkAsync(parent, SessionWait.Text(body["suffix"]));
                     return Results.Ok(
                         new JsonObject { ["success"] = true, ["newSessionId"] = child.Id }

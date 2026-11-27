@@ -104,8 +104,10 @@ public sealed class SessionEntry
 
     internal static void DetachTurnScope() => currentTurn.Value = null;
 
-    internal bool CanSettleDuringShutdown =>
+    internal bool InActiveTurn =>
         currentTurn.Value is { Active: true } scope && ReferenceEquals(scope.Entry, this);
+
+    internal bool CanSettleDuringShutdown => InActiveTurn;
 
     public SessionState State { get; }
     public SessionSaveLane SaveLane { get; }

@@ -14,6 +14,35 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
 {
 
     [Fact]
+    public async Task LimitedStartupRunsMoreDurableQueuesThanFitTogether()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        await using var peer = new Peer();
+        await using (var seed = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options)))
+        {
+            await seed.LoadAsync();
+            foreach (var id in new[] { "queued-a", "queued-b", "queued-c" })
+            {
+                var owner = await seed.CreateNamedAsync("main", id, null, null);
+                owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+                await owner.Registry.Ingress.EnqueueAsync(id, QueueItem.UserText(id));
+            }
+        }
+        await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
+            capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = 400_000 } })
+        { PressureGraceForTest = TimeSpan.Zero };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await manager.LoadAsync().WaitAsync(deadline.Token);
+        while (peer.Requests.Count < 3)
+            await Task.Delay(20, deadline.Token);
+        await Settle(manager);
+        Assert.Empty(manager.Catalog.RestartIds());
+        Assert.Single(manager.Owners());
+    }
+
+    [Fact]
     public void Recovery_query_keeps_managed_pending_candidates_without_selecting_wait_presence()
     {
         using var temp = new TempDirectory();

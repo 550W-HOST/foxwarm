@@ -25,6 +25,10 @@ internal sealed partial class SessionManager
         internal long LastUse = Environment.TickCount64;
         internal long Uses;
 
+        // When the owner was published (monotonic milliseconds): the start of its publication
+        // grace against memory pressure, which lookups don't renew.
+        internal long Published;
+
         internal void Touch()
         {
             LastUse = Environment.TickCount64;
@@ -359,6 +363,7 @@ internal sealed partial class SessionManager
             // The resident owner holds its hot-owner charge from here on, whatever happens next.
             RecordHotCharge(owner, charge);
             slot.Touch();
+            slot.Published = slot.LastUse;
         }
         owner.EnableCommittedNotifications();
         try
