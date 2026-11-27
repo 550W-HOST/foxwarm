@@ -78,7 +78,7 @@ services:
       disable: true
     profiles: [drill]
 
-  # One replica of the imported tenant; its Agents volume is the source's copied Agent folders.
+  # One replica of the imported tenant, including its stored Agent folders.
   foxwarm-imported:
     extends:
       file: compose.yaml
@@ -90,12 +90,10 @@ services:
       FOXWARM_ADVERTISE_ADDRESS: foxwarm-imported:3001
     volumes: !override
       - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
-      - imported-agents:/agents
     profiles: [drill]
 
 volumes:
   source: {}
-  imported-agents: {}
 
 secrets:
   postgres-password:

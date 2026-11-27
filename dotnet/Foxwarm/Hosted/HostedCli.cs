@@ -40,6 +40,8 @@ internal static class HostedCli
                     return await MigrateAsync(bootstrap, options, output);
                 case ["db", "status"]:
                     return await StatusAsync(bootstrap, output);
+                case ["hosted", "agents", "import", .. var options]:
+                    return await ImportAsync(bootstrap, options, output, error, agentsOnly: true);
                 case ["hosted", "import", .. var options]:
                     return await ImportAsync(bootstrap, options, output, error);
                 case ["hosted", "token", .. var options]:
@@ -67,6 +69,7 @@ internal static class HostedCli
         "Usage: foxwarm db migrate [--app-role <role>] [--operator-role <role>] [--tenant <name>] | foxwarm db status\n"
         + "       foxwarm hosted import --data-root <dir> [--tenant <name>] [--journal] [--dry-run]\n"
         + "                              [--report <file>] [--deployment-config <file>]\n"
+        + "       foxwarm hosted agents import --tenant <name> (--from <dir> | --abandon) [--report <file>] [--deployment-config <file>]\n"
         + "       foxwarm hosted token [--tenant <name>]\n"
         + "       foxwarm hosted health [--ready]";
 
@@ -182,19 +185,22 @@ internal static class HostedCli
         HostedBootstrap bootstrap,
         string[] options,
         TextWriter output,
-        TextWriter error
+        TextWriter error,
+        bool agentsOnly = false
     )
     {
         string? dataRoot = null;
         string? report = null;
         var deployment = bootstrap.DeploymentConfigPath;
-        var tenant = bootstrap.Tenant;
+        var tenant = agentsOnly ? null : bootstrap.Tenant;
+        var abandon = false;
         var journal = false;
         var dryRun = false;
         for (var index = 0; index < options.Length; index++)
             switch (options[index])
             {
-                case "--data-root" when index + 1 < options.Length:
+                case "--data-root" when !agentsOnly && index + 1 < options.Length:
+                case "--from" when agentsOnly && index + 1 < options.Length:
                     dataRoot = options[++index];
                     break;
                 case "--tenant" when index + 1 < options.Length:
@@ -206,10 +212,13 @@ internal static class HostedCli
                 case "--deployment-config" when index + 1 < options.Length:
                     deployment = options[++index];
                     break;
-                case "--journal":
+                case "--abandon" when agentsOnly:
+                    abandon = true;
+                    break;
+                case "--journal" when !agentsOnly:
                     journal = true;
                     break;
-                case "--dry-run":
+                case "--dry-run" when !agentsOnly:
                     dryRun = true;
                     break;
                 default:
@@ -217,20 +226,22 @@ internal static class HostedCli
                     await error.WriteLineAsync(Usage);
                     return UsageError;
             }
-        if (dataRoot is null || string.IsNullOrWhiteSpace(tenant))
+        if ((dataRoot is null) != abandon || string.IsNullOrWhiteSpace(tenant))
         {
             await error.WriteLineAsync(Usage);
             return UsageError;
         }
-        report ??= $"foxwarm-import-{tenant}-{DateTimeOffset.UtcNow:yyyyMMdd'T'HHmmss'Z'}.json";
-        var (kek, _) = bootstrap.RequireKeks();
+        report ??= agentsOnly ? $"foxwarm-agents-import-{Guid.NewGuid():N}.json" : $"foxwarm-import-{tenant}-{DateTimeOffset.UtcNow:yyyyMMdd'T'HHmmss'Z'}.json";
         // The blobs go where the replicas will read them: the deployment configuration's
         // `blobs` block, or PostgreSQL without one.
         var blobs = deployment is null ? null : DeploymentConfiguration.Load(deployment).Blobs;
         await using var app = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm-import");
         await using var owner = new PgDatabase(bootstrap.RequireMigrateDatabaseUrl(), "foxwarm-import-owner");
+        if (agentsOnly)
+            return await Import.HostedAgentImport.RunAsync(app, owner, tenant, dataRoot, abandon, report, blobs, output);
+        var (kek, _) = bootstrap.RequireKeks();
         return await Import.HostedImport.RunAsync(
-            new Import.HostedImportOptions(dataRoot, tenant, journal, dryRun, report) { Blobs = blobs },
+            new Import.HostedImportOptions(dataRoot!, tenant, journal, dryRun, report) { Blobs = blobs },
             new Import.ImportDatabases(app, owner, kek),
             output
         );

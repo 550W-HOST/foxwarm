@@ -86,9 +86,9 @@ public sealed partial class HostedImportTests : IAsyncLifetime
         Assert.Equal("false", dropped[0]!["value"]!.ToJsonString());
         Assert.DoesNotContain("stdio", await ConfigDocumentAsync(database, "synthetic", "mcp"));
 
-        // What has no hosted owner is listed, with the Agent folder's source directory.
-        var notImported = Texts(result.Report["notImported"], "what");
-        Assert.Contains(notImported, item => item.Contains(Path.Combine(fixture.DataRoot, "agents"), StringComparison.Ordinal));
+        var importedFiles = verification["agentFiles"]!.AsArray();
+        Assert.NotEmpty(importedFiles);
+        Assert.All(importedFiles, file => Assert.True(file!["equal"]!.GetValue<bool>()));
         var exec = result.Report["notImported"]!.AsArray().Single(item => item!["what"]!.ToString().StartsWith("exec registry", StringComparison.Ordinal));
         Assert.Equal(1, exec!["count"]!.GetValue<long>());
     }

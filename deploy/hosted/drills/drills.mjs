@@ -466,7 +466,7 @@ export async function importSeed(env) {
   await source.stop()
   const imported = await env.importSource(source, 'imported')
   assert(imported.code === 0, 'hosted import exits 0: ' + imported.stderr + imported.stdout)
-  const replica = await env.startTenantReplica('imported', source)
+  const replica = await env.startTenantReplica('imported')
   await until(async () => {
     const status = await getJson(replica.statusUrl, 1500).catch(() => null)
     return status?.role === 'owner' && status.ready

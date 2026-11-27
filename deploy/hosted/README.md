@@ -36,7 +36,7 @@ The container's arguments are Foxwarm's: no arguments run a replica, and the ope
 | `FOXWARM_ADVERTISE_ADDRESS` | `host:port` where other replicas reach this one's public listener |
 | `FOXWARM_TENANT` | the tenant name (default `default`) |
 
-`FOXWARM_MODE`, `FOXWARM_SCRATCH_DIR`, `FOXWARM_AGENTS_DIR` and `FOXWARM_DEPLOYMENT_CONFIG` are set by the image. Each `…_FILE` variable also has a plain form holding the value itself.
+`FOXWARM_MODE`, `FOXWARM_SCRATCH_DIR` and `FOXWARM_DEPLOYMENT_CONFIG` are set by the image. Each `…_FILE` variable also has a plain form holding the value itself.
 
 Keep the key-encryption key safe and backed up. The tenant's secrets are encrypted under a data key that only it unwraps; without it the tenant can't start, and nothing is regenerated.
 
@@ -119,14 +119,16 @@ Stop the file-mode Main, then run `hosted import` with the replicas' database UR
 foxwarm hosted import --data-root /path/to/foxwarm-data --deployment-config deployment.yaml --report import.json
 ```
 
-The source directory isn't changed. The import verifies what it copied and writes an owner-only report, including the settings it moved to a draft deployment configuration and the settings hosted mode doesn't have. Copy the installation's `agents/` directory to the Agents volume. The imported tenant keeps its sign-in token and secrets. Details are in [hosted import](../../docs/code-index/units/hosted-import.md).
+The source directory isn't changed. The import verifies what it copied and writes an owner-only report, including the settings it moved to a draft deployment configuration and the settings hosted mode doesn't have. Agent folders under `agents/` are imported and verified file by file. The imported tenant keeps its sign-in token and secrets. Details are in [hosted import](../../docs/code-index/units/hosted-import.md).
+
+For an existing hosted tenant that used a separate Agents volume, stop its replicas and run `foxwarm hosted agents import --tenant <name> --from <agents-directory>` with the same database and blob configuration. Restart the replicas after verification succeeds. An interrupted import keeps the tenant offline; run the command again against the same volume. It skips identical files and reports conflicts without overwriting them. To resume service with the files already in place, use `foxwarm hosted agents import --tenant <name> --abandon` and inspect its inventory.
 
 ## Limitations of this release
 
 - One tenant per deployment, served by one replica at a time. Standbys add availability, not capacity.
 - Failover is a restart: after a crash, a standby takes over when the lease expires (up to 30 seconds) and resumes interrupted turns as a restarted file-mode Main does. Model streams and tool calls in flight are not continued.
 - There is no `master` Node: no commands, terminals, Code or browser on the replica. Connect Nodes for Agents to work on. Stdio MCP servers, Claude Code Sessions and Vector search aren't available.
-- Agent folders live on a shared volume, the only state outside the database.
+- Agent folders live in the tenant’s Agent store. Replicas need no Agents volume.
 - The hosted image isn't published; build it from this repository.
 - Large imports need memory: importing a 64 MB Session document peaked at about 1.1 GB.
 

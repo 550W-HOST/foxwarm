@@ -137,11 +137,6 @@ internal sealed partial class ImportRun : IAsyncDisposable
     private SessionCatalog? sourceCatalog;
     private ConfigSplitResult? config;
     private InstanceKeys? sourceKeys;
-    private LeaseMonitor? monitor;
-    private LeaseGrant? grant;
-    private TenantLease? lease;
-    private CancellationTokenSource? cancel;
-
     internal ImportRun(
         HostedImportOptions options,
         ImportDatabases databases,
@@ -157,6 +152,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
         this.work = work;
         this.report = report;
         this.stop = stop;
+        Token = stop;
     }
 
     /// <summary>The tenant's rows, written by the runtime role at the import's epoch.</summary>
@@ -167,7 +163,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
 
     internal PostgresStorageContext Hosted { get; private set; } = null!;
 
-    private CancellationToken Token => cancel?.Token ?? stop;
+    private CancellationToken Token { get; set; }
 
     internal async Task<int> RunAsync()
     {
@@ -198,79 +194,17 @@ internal sealed partial class ImportRun : IAsyncDisposable
         return await ImportAsync(target).ConfigureAwait(false);
     }
 
-    private async Task<int> ImportAsync(long? expectedEpoch)
-    {
-        lease = new TenantLease(databases.Owner, options.Tenant, AgentCatalog.ReaderVersion);
-        var replica = "import:" + Guid.NewGuid().ToString("D");
-        grant = await lease
-            .TryAcquireForImportAsync(replica, expectedEpoch, options.Timings.Ttl, options.Timings.RenewInterval, stop)
-            .ConfigureAwait(false);
-        if (grant is null)
+    private Task<int> ImportAsync(long? expectedEpoch) => LeasedImport.RunAsync(
+        databases.App, databases.Owner, options.Tenant, expectedEpoch, ImportKind.Full, options.Timings,
+        options.Blobs, work, report, async (storage, owner, token) =>
         {
-            report.Refuse($"Tenant {options.Tenant} changed while the import was checking it, or its lease is held; run the import again.");
-            report.Outcome = "refused";
-            return HostedImport.Refused;
-        }
-        report.Root["tenant"]!["id"] = grant.TenantId;
-        report.Root["tenant"]!["epoch"] = grant.Epoch;
-        report.Root["tenant"]!["leaseOwner"] = replica;
-        Db = new TenantDb(databases.App, grant.TenantId, grant.Epoch);
-        Owner = new TenantDb(databases.Owner, grant.TenantId, grant.Epoch);
-        monitor = new LeaseMonitor(lease, grant, options.Timings);
-        monitor.Attach(Db);
-        monitor.Attach(Owner);
-        monitor.Start();
-        cancel = CancellationTokenSource.CreateLinkedTokenSource(stop, monitor.Lost);
-        Hosted = new PostgresStorageContext(Db, Path.Combine(work, "scratch"));
-        await Hosted.OpenBlobsAsync(options.Blobs ?? new Foxwarm.Hosted.Blobs.BlobSettings(Foxwarm.Hosted.Blobs.BlobBackend.Postgres, null), options.Tenant, stop).ConfigureAwait(false);
-        var activated = false;
-        try
-        {
-            await WriteAsync().ConfigureAwait(false);
-            await VerifyAsync().ConfigureAwait(false);
-            if (report.Failures.Count > 0)
-            {
-                report.Outcome = "verification-failed";
-                report.Root["tenant"]!["state"] = "importing";
-                return HostedImport.Failed;
-            }
-            Token.ThrowIfCancellationRequested();
-            await lease.ActivateImportAsync(grant, stop).ConfigureAwait(false);
-            activated = true;
-            report.Root["tenant"]!["state"] = "active";
-            report.Outcome = "imported";
-            return HostedImport.Imported;
-        }
-        catch (Exception error) when (Fence(error))
-        {
-            report.Outcome = "fenced";
-            report.Root["tenant"]!["state"] = "importing";
-            report.Root["error"] = "The import lost the tenant lease and stopped writing: " + error.Message;
-            return HostedImport.Fenced;
-        }
-        catch (Exception error) when (error is not OperationCanceledException || !stop.IsCancellationRequested)
-        {
-            report.Outcome = "failed";
-            report.Root["tenant"]!["state"] = "importing";
-            report.Root["error"] = error.GetType().Name + ": " + error.Message;
-            return HostedImport.Failed;
-        }
-        finally
-        {
-            await monitor.DisposeAsync().ConfigureAwait(false);
-            if (!activated)
-                try
-                {
-                    await lease.ReleaseAsync(grant, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception) { }
-        }
-    }
-
-    private bool Fence(Exception error) =>
-        error is TenantFencedException
-        || monitor?.Lost.IsCancellationRequested == true && error is OperationCanceledException or InvalidOperationException
-        || error.InnerException is { } inner && Fence(inner);
+            Hosted = storage;
+            Db = storage.Database;
+            Owner = owner;
+            Token = token;
+            await WriteAsync();
+            await VerifyAsync();
+        }, stop);
 
     // ---- Preflight (design §8.1 step 1) ----
 
@@ -531,7 +465,6 @@ internal sealed partial class ImportRun : IAsyncDisposable
         sourceCatalog?.Dispose();
         foreach (var connection in copies.Values)
             await connection.DisposeAsync().ConfigureAwait(false);
-        cancel?.Dispose();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
     }
 }

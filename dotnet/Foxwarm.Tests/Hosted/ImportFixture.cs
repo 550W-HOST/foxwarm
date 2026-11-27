@@ -12,13 +12,25 @@ internal static partial class ImportFixture
     internal static SortedDictionary<string, string> TreeHashes(string root)
     {
         var result = new SortedDictionary<string, string>(StringComparer.Ordinal);
-        foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
-            result[Path.GetRelativePath(root, directory) + "/"] = Mode(directory);
-        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        Walk(new DirectoryInfo(root));
+        void Walk(DirectoryInfo parent)
         {
-            using var stream = File.OpenRead(file);
-            result[Path.GetRelativePath(root, file)] =
-                Convert.ToHexStringLower(SHA256.HashData(stream)) + " " + new FileInfo(file).Length + " " + Mode(file);
+            foreach (var entry in parent.GetFileSystemInfos())
+            {
+                var path = Path.GetRelativePath(root, entry.FullName);
+                if (entry.LinkTarget is { } target)
+                    result[path] = "link " + target;
+                else if (entry is DirectoryInfo directory)
+                {
+                    result[path + "/"] = Mode(entry.FullName);
+                    Walk(directory);
+                }
+                else
+                {
+                    using var stream = File.OpenRead(entry.FullName);
+                    result[path] = Convert.ToHexStringLower(SHA256.HashData(stream)) + " " + stream.Length + " " + Mode(entry.FullName);
+                }
+            }
         }
         return result;
     }

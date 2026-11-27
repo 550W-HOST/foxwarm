@@ -32,15 +32,7 @@ public sealed partial class HostedStartupTests
         Assert.True(imported.Exit == 0, imported.Report.ToJsonString());
         IStorageContext? storage = null;
         // The Agent folders reach the tenant's Agent store before the runtime starts.
-        var replica = StartHosted(
-            database.OpenApp(),
-            files,
-            built =>
-            {
-                storage = built;
-                CopyAgentsToStoreAsync(Path.Combine(fixture.DataRoot, "agents"), built.AgentFiles!).GetAwaiter().GetResult();
-            }
-        );
+        var replica = StartHosted(database.OpenApp(), files, built => storage = built);
         await WaitUntilAsync(
             () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
             TimeSpan.FromSeconds(60),
@@ -67,30 +59,5 @@ public sealed partial class HostedStartupTests
 
         replica.Stop.Cancel();
         Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
-    }
-
-    // Each Agent folder as one Agent of the store, the installation's files beside them at
-    // the installation level; links are left out.
-    internal static async Task CopyAgentsToStoreAsync(string agents, IAgentStore store)
-    {
-        foreach (var file in Directory.EnumerateFiles(agents))
-            await store.WriteAsync(null, Path.GetFileName(file), await File.ReadAllBytesAsync(file), null, default);
-        foreach (var folder in Directory.EnumerateDirectories(agents).Where(path => !Path.GetFileName(path).StartsWith('.')))
-        {
-            string Relative(string path) => Path.GetRelativePath(folder, path).Replace(Path.DirectorySeparatorChar, '/');
-            var entries = new DirectoryInfo(folder)
-                .EnumerateFileSystemInfos("*", SearchOption.AllDirectories)
-                .Where(entry => entry.LinkTarget is null)
-                .ToArray();
-            var files = new List<KeyValuePair<string, byte[]>>();
-            foreach (var file in entries.OfType<FileInfo>())
-                files.Add(new(Relative(file.FullName), await File.ReadAllBytesAsync(file.FullName)));
-            var directories = entries
-                .OfType<DirectoryInfo>()
-                .Where(directory => !directory.EnumerateFileSystemInfos().Any())
-                .Select(directory => Relative(directory.FullName))
-                .ToArray();
-            await store.CreateAgentAsync(Path.GetFileName(folder), directories, files, default);
-        }
     }
 }

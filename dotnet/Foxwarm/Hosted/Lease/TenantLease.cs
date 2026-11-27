@@ -3,6 +3,8 @@ using Npgsql;
 
 namespace Foxwarm.Hosted.Lease;
 
+internal enum ImportKind { Full, Agents, AbandonAgents }
+
 /// <summary>Lease timing (design U17: TTL 30 s, renew every 5 s, self-fence after 20 s).</summary>
 /// <param name="Ttl">How long one acquisition or renewal keeps the lease.</param>
 /// <param name="RenewInterval">How often the owner renews, and how often a standby retries.</param>
@@ -317,7 +319,8 @@ internal sealed class TenantLease
         long? expectedEpoch,
         TimeSpan ttl,
         TimeSpan lockTimeout,
-        CancellationToken token
+        CancellationToken token,
+        ImportKind kind = ImportKind.Full
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
@@ -333,6 +336,8 @@ internal sealed class TenantLease
         }
         if (expectedEpoch is null)
         {
+            if (kind != ImportKind.Full)
+                return null;
             await using var create = new NpgsqlCommand(
                 "WITH created AS (INSERT INTO tenants (name, state) VALUES ($1, 'importing')"
                     + " ON CONFLICT (name) DO NOTHING RETURNING tenant_id)"
@@ -351,13 +356,23 @@ internal sealed class TenantLease
             // trigger locks the lease under the tenant row), so the two never wait on each other
             // in a cycle.
             await using (var tenantRow = new NpgsqlCommand(
-                "SELECT state FROM tenants WHERE name = $1 FOR UPDATE",
+                "SELECT state, profile FROM tenants WHERE name = $1 FOR UPDATE",
                 connection,
                 transaction
             ))
             {
                 tenantRow.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
-                if (await tenantRow.ExecuteScalarAsync(token).ConfigureAwait(false) is not ("active" or "importing"))
+                await using var row = await tenantRow.ExecuteReaderAsync(token).ConfigureAwait(false);
+                if (!await row.ReadAsync(token).ConfigureAwait(false))
+                    return null;
+                var state = row.GetString(0);
+                var admitted = kind switch
+                {
+                    ImportKind.Full => state is "active" or "importing",
+                    ImportKind.Agents => state is "active" or "importing-agents",
+                    _ => state == "importing-agents",
+                };
+                if (!admitted || kind != ImportKind.Full && row.GetString(1) != "hosted")
                     return null;
             }
             await using var current = new NpgsqlCommand(
@@ -380,7 +395,7 @@ internal sealed class TenantLease
             return null;
         }
         await using var update = new NpgsqlCommand(
-            "WITH marked AS (UPDATE tenants SET state = 'importing' WHERE name = $1 RETURNING tenant_id)"
+            "WITH marked AS (UPDATE tenants SET state = $4 WHERE name = $1 RETURNING tenant_id)"
                 + " UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3)"
                 + " FROM marked WHERE l.tenant_id = marked.tenant_id RETURNING l.tenant_id, l.epoch",
@@ -390,6 +405,7 @@ internal sealed class TenantLease
         update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
         update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
         update.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
+        update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = kind == ImportKind.Full ? "importing" : "importing-agents" });
         int tenantId;
         await using (var reader = await update.ExecuteReaderAsync(token).ConfigureAwait(false))
         {
@@ -408,7 +424,7 @@ internal sealed class TenantLease
     /// no longer holds the lease, so an import that lost it never activates the tenant. Needs
     /// the migrating role, like <see cref="TryAcquireForImportAsync"/>.
     /// </summary>
-    internal async Task ActivateImportAsync(LeaseGrant grant, CancellationToken token)
+    internal async Task ActivateImportAsync(LeaseGrant grant, CancellationToken token, ImportKind kind = ImportKind.Full)
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
@@ -436,16 +452,18 @@ internal sealed class TenantLease
                 throw new TenantFencedException("The import no longer holds the tenant lease.");
         }
         await using var activate = new NpgsqlCommand(
-            "WITH activated AS (UPDATE tenants SET state = 'active' WHERE tenant_id = $1 AND state = 'importing'),"
+            "WITH activated AS (UPDATE tenants SET state = 'active' WHERE tenant_id = $1 AND state = $3 RETURNING tenant_id),"
                 + " released AS (UPDATE tenant_leases SET state = 'released', expires_at = now()"
-                + " WHERE tenant_id = $1 RETURNING tenant_id)"
-                + " SELECT pg_notify($2, tenant_id::text) FROM released",
+                + " WHERE tenant_id IN (SELECT tenant_id FROM activated) RETURNING tenant_id)"
+                + " SELECT tenant_id, pg_notify($2, tenant_id::text) FROM released",
             connection,
             transaction
         );
         activate.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
         activate.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Channel });
-        await activate.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        activate.Parameters.Add(new NpgsqlParameter<string> { TypedValue = kind == ImportKind.Full ? "importing" : "importing-agents" });
+        if (await activate.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+            throw new TenantFencedException("The tenant is not in the expected import state.");
         await transaction.CommitAsync(token).ConfigureAwait(false);
     }
 

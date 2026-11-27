@@ -14,6 +14,7 @@ internal sealed partial class ImportRun
 
     private async Task VerifyAsync()
     {
+        await report.PhaseAsync("verify Agent files", () => agentFolders!.VerifyAsync(Hosted.AgentFiles, report, Token), count => count);
         await report.PhaseAsync("verify sessions", VerifySessionsAsync, count => count).ConfigureAwait(false);
         report.Phase("verify catalog", VerifyCatalog, count => count);
         await report.PhaseAsync("verify catalog loads", VerifyCatalogLoadsAsync, count => count).ConfigureAwait(false);
