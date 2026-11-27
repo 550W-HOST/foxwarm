@@ -174,6 +174,47 @@ public sealed class InitialChannelStartupTests
     }
 
     [Fact]
+    public async Task A_refused_endpoint_isnt_retried_at_startup()
+    {
+        using var temp = new TempDirectory();
+        await using var qq = await QQBotPeer.StartAsync();
+        await using var telegram = await TelegramPeer.StartAsync();
+        var delays = new ConcurrentQueue<TimeSpan>();
+        // Both peers listen on loopback, which the hosted policy refuses; QQ Bot's fixed
+        // public endpoints resolve there too.
+        var hosted = Foxwarm.Net.EgressPolicy.Hosted().WithTransport(
+            (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Loopback }),
+            (_, _) => throw new InvalidOperationException("A refused endpoint was connected.")
+        );
+        var (host, config) = await MainAsync(
+            temp,
+            new() { ["qq"] = qq.Config(), ["telegram"] = ExternalChannelFixture.Channel() },
+            telegram.Dependencies with
+            {
+                CreateHttp = () => ChannelHttpClients.Single(hosted),
+                CreateQQBotHttp = () => QQBotChannel.CreateHttp(hosted),
+                Delay = (duration, token) =>
+                {
+                    delays.Enqueue(duration);
+                    return Task.CompletedTask;
+                },
+            }
+        );
+        await using var ownedHost = host;
+        await host.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await config.ManagedChannels!.StartInitialAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Empty(delays);
+        Assert.Empty(telegram.Calls);
+        Assert.Empty(qq.Calls);
+        foreach (var id in new[] { "qq", "telegram" })
+        {
+            var status = Status(config, id);
+            Assert.False(status["running"]!.GetValue<bool>());
+            Assert.Contains("blocked by this deployment's network policy", status["lastError"]!.ToString());
+        }
+    }
+
+    [Fact]
     public async Task Shutdown_cancels_a_pending_initial_retry_without_starting_the_next_attempt()
     {
         using var temp = new TempDirectory();

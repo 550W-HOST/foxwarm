@@ -88,7 +88,8 @@ internal sealed partial class MatrixChannel : IManagedChannel
                 stopping.Token
             );
         }
-        catch (Exception error) when (!stopping.IsCancellationRequested)
+        // A refused homeserver fails the start before polling or other requests are scheduled.
+        catch (Exception error) when (!stopping.IsCancellationRequested && !ChannelFailure.Refused(error))
         {
             // The sync loop reports whether the homeserver is reachable.
             health.Log(error);

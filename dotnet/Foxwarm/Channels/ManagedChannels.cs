@@ -209,6 +209,9 @@ internal sealed class ManagedChannels(
                     if (closed)
                         return false;
                     RecordError(id, error, "start");
+                    // The egress policy refused the endpoint: another attempt can't help.
+                    if (ChannelFailure.Refused(error))
+                        return false;
                     if (attempt == attempts)
                         break;
                     try

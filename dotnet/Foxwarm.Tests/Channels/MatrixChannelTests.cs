@@ -347,6 +347,31 @@ public sealed class MatrixChannelTests
     }
 
     [Fact]
+    public async Task A_refused_homeserver_fails_the_start_before_other_requests()
+    {
+        await using var peer = await ExternalProtocolPeer.StartAsync();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = peer.Matrix() }
+        );
+        var reports = 0;
+        var hosted = Foxwarm.Net.EgressPolicy.Hosted();
+        await using var adapter = new MatrixChannel(
+            "alpha",
+            peer.Matrix(),
+            f.Manager,
+            f.Router,
+            new ChannelTransportDependencies(CreateHttp: () => ChannelHttpClients.Single(hosted)),
+            ChannelHealth.From(_ => Interlocked.Increment(ref reports))
+        );
+        var error = await Assert.ThrowsAnyAsync<Exception>(adapter.StartAsync);
+        Assert.True(ChannelFailure.Refused(error));
+        // Neither the sync loop nor the capabilities request was scheduled.
+        await Task.Delay(300);
+        Assert.Equal(0, Volatile.Read(ref reports));
+        Assert.Empty(peer.Calls);
+    }
+
+    [Fact]
     public async Task Timeline_backfill_and_capped_global_dedup_match_the_adapter_gate_and_invalid_media_does_not_forward_credentials()
     {
         await using var peer = await ExternalProtocolPeer.StartAsync();
