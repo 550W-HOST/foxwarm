@@ -23,9 +23,13 @@ public sealed partial class CompactLifecycleTests
         var slots = new Foxwarm.Limits.AdmissionSlots(1);
         fixture.Owner.Registry.TurnAdmission = slots.EnterAsync;
         using var held = await slots.EnterAsync();
+        var source = new SessionRegistry(new InMemorySessionAuthorityStore(), new ControlledChat()).Add("source");
+        using var turn = source.EnterTurnScope();
+        if (fromTurn)
+            turn.AttachSlot(held);
         try
         {
-            var starting = fixture.Owner.Compactor.StartManualAsync(underTurn: fromTurn);
+            var starting = fixture.Owner.Compactor.StartManualAsync(sourceTurn: fromTurn ? source : null);
             if (!fromTurn)
             {
                 Assert.False(starting.IsCompleted);
@@ -35,12 +39,18 @@ public sealed partial class CompactLifecycleTests
             Assert.True((await starting.WaitAsync(TimeSpan.FromSeconds(5))).Started);
             await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(fixture.Owner.Metadata().Busy);
+            // The initiating turn can finish while the independent target is still busy.
+            if (fromTurn)
+                turn.ReleaseOwnerSlot();
             Assert.Equal(1, slots.InUse);
         }
         finally
         {
             fixture.Peer.ReleasePlan();
-            held.Dispose();
+            if (fromTurn)
+                turn.ReleaseOwnerSlot();
+            else
+                held.Dispose();
             await fixture.Owner.Compactor.DrainAsync();
         }
         Assert.Equal(0, slots.InUse);

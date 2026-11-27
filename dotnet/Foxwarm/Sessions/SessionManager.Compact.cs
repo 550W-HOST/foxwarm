@@ -27,7 +27,7 @@ internal sealed partial class SessionManager
             : null;
         // A tool call still inside the source turn borrows its slot. Detached work whose
         // source turn has ended takes a slot like an external control.
-        var result = await target.Compactor.StartManualAsync(guidance, keep, underTurn: source.Entry.InActiveTurn);
+        var result = await target.Compactor.StartManualAsync(guidance, keep, sourceTurn: source.Entry);
         if (result.AlreadyPending)
             return Output($"Compaction is already pending for session `{targetId}`.");
         var mode = guidance is null ? "automatic compaction plan" : "guided compaction plan";

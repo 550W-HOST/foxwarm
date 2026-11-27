@@ -39,8 +39,7 @@ internal sealed partial class SessionCompactor
         internal readonly bool Background = background,
             Standalone = standalone;
 
-        // The tenant's busy-turn slot of a standalone compaction started outside a turn;
-        // returned at its settlement.
+        // Exclusive outside a turn, shared with the source inside a turn; returned at settlement.
         internal IDisposable? TurnSlot;
         internal readonly CancellationTokenSource Cancellation = new();
         internal readonly TaskCompletionSource PlanningSettled = new(
@@ -226,21 +225,21 @@ internal sealed partial class SessionCompactor
         return run.Committed ? (false, true) : (true, false);
     }
 
-    /// <param name="underTurn">
+    /// <param name="sourceTurn">
     /// Started from a tool call of a running turn: the compaction runs under that turn's
     /// busy-turn slot. Otherwise a standalone compaction takes its own slot before claiming busy.
     /// </param>
     public Task<CompactAdmission> StartManualAsync(
         string? guidance = null,
         double? keepPercent = null,
-        bool underTurn = false
-    ) => StartAsync(guidance, keepPercent, idle: false, underTurn);
+        SessionEntry? sourceTurn = null
+    ) => StartAsync(guidance, keepPercent, idle: false, sourceTurn);
 
     private async Task<CompactAdmission> StartAsync(
         string? guidance,
         double? keepPercent,
         bool idle,
-        bool underTurn = false
+        SessionEntry? sourceTurn = null
     )
     {
         ClaudeRuntimeState.RequireFoxwarm(hosted, "Foxwarm context compaction");
@@ -306,11 +305,11 @@ internal sealed partial class SessionCompactor
             // The tenant's busy-turn limit counts a standalone busy window like a turn: one
             // started outside a turn waits for its own slot, before the busy claim; one started
             // from a turn's tool call uses that turn's slot and never waits behind it.
-            if (!underTurn && hosted.Registry.TurnAdmission is { } admit)
+            if (hosted.Registry.TurnAdmission is { } admit)
             {
                 try
                 {
-                    run.TurnSlot = await admit(run.Cancellation.Token);
+                    run.TurnSlot = sourceTurn?.BorrowTurnSlot() ?? await admit(run.Cancellation.Token);
                 }
                 catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
                 {

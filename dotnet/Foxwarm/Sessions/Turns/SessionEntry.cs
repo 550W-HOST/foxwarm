@@ -83,10 +83,65 @@ public sealed class SessionEntry
 
     private static readonly AsyncLocal<TurnScope?> currentTurn = new();
 
-    private sealed class TurnScope(SessionEntry entry, TurnScope? previous) : IDisposable
+    internal sealed class TurnScope(SessionEntry entry, TurnScope? previous) : IDisposable
     {
         internal readonly SessionEntry Entry = entry;
         internal volatile bool Active = true;
+        private IDisposable? slot;
+        private int users;
+        private bool ownerReleased;
+
+        internal void AttachSlot(IDisposable admitted)
+        {
+            lock (this)
+            {
+                slot = admitted;
+                users = 1;
+            }
+        }
+
+        internal IDisposable? BorrowSlot()
+        {
+            lock (this)
+            {
+                if (ownerReleased || slot is null)
+                    return null;
+                users++;
+                return new Borrow(this);
+            }
+        }
+
+        internal void ReleaseOwnerSlot()
+        {
+            lock (this)
+            {
+                if (ownerReleased || slot is null)
+                    return;
+                ownerReleased = true;
+                ReleaseSlot();
+            }
+        }
+
+        private void ReleaseSlot()
+        {
+            if (--users == 0)
+            {
+                slot!.Dispose();
+                slot = null;
+            }
+        }
+
+        private sealed class Borrow(TurnScope scope) : IDisposable
+        {
+            private TurnScope? held = scope;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref held, null) is { } owner)
+                    lock (owner)
+                        owner.ReleaseSlot();
+            }
+        }
 
         public void Dispose()
         {
@@ -95,7 +150,7 @@ public sealed class SessionEntry
         }
     }
 
-    internal IDisposable EnterTurnScope()
+    internal TurnScope EnterTurnScope()
     {
         var scope = new TurnScope(this, currentTurn.Value);
         currentTurn.Value = scope;
@@ -104,10 +159,13 @@ public sealed class SessionEntry
 
     internal static void DetachTurnScope() => currentTurn.Value = null;
 
-    internal bool InActiveTurn =>
+    internal IDisposable? BorrowTurnSlot() =>
+        currentTurn.Value is { Active: true } scope && ReferenceEquals(scope.Entry, this)
+            ? scope.BorrowSlot() : null;
+
+    internal bool CanSettleDuringShutdown =>
         currentTurn.Value is { Active: true } scope && ReferenceEquals(scope.Entry, this);
 
-    internal bool CanSettleDuringShutdown => InActiveTurn;
 
     public SessionState State { get; }
     public SessionSaveLane SaveLane { get; }

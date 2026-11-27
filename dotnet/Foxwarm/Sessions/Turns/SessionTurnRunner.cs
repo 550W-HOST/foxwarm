@@ -209,6 +209,8 @@ public sealed class SessionTurnRunner
             // busy and keeps its queued input; Stop and shutdown end the wait.
             var entered = registry.TurnAdmission is not { } admitTurn
                 || (turnSlot = await AdmitTurnAsync(entry, admitTurn).ConfigureAwait(false)) is not null;
+            if (turnSlot is not null)
+                turnScope.AttachSlot(turnSlot);
             claimed = entered && await host.TryClaimBusyAsync(continuing: retry).ConfigureAwait(false);
             if (!claimed)
             {
@@ -448,7 +450,8 @@ public sealed class SessionTurnRunner
                     entry.ReleaseProcessor();
                 }
                 // The busy-turn slot goes after the claim, so its waiters find this Session idle.
-                turnSlot?.Dispose();
+                if (turnSlot is not null)
+                    turnScope.ReleaseOwnerSlot();
                 try
                 {
                     // A Stop that arrived after the checks above, while the claim was still held,
