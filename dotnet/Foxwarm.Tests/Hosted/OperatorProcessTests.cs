@@ -142,8 +142,13 @@ public sealed class OperatorProcessTests
             var edits = new JsonObject { ["primaryHostname"] = "alpha.test", ["ceiling"] = ceiling["ceiling"]!.DeepClone(), ["profile"] = "operator" };
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", edits)).Status);
             Assert.Equal("operator", (string?)(await Call(HttpMethod.Get, "/tenants/alpha")).Json["profile"]);
+            Assert.Equal("master-host", await db.ScalarAsync("SELECT pinned_role FROM tenants WHERE name='alpha'"));
             edits["profile"] = "hosted";
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", edits)).Status);
+            Assert.True(await db.ScalarAsync("SELECT pinned_role IS NULL FROM tenants WHERE name='alpha'") is true);
+            var master = new JsonObject { ["slug"] = "control", ["profile"] = "operator", ["primaryHostname"] = "control.test" };
+            Assert.Equal(HttpStatusCode.Created, (await Call(HttpMethod.Post, "/tenants", master)).Status);
+            Assert.Equal("master-host", await db.ScalarAsync("SELECT pinned_role FROM tenants WHERE name='control'"));
             var replica = await harness.StartAsync("general", new Dictionary<string,string> { ["FOXWARM_KEK_FILE"] = key });
             var front = $"http://127.0.0.1:{replica.FrontPort}";
             Task<Reply> Redeem(string value) => Send(client, HttpMethod.Post, front + "/api/auth", "alpha.test", body: new JsonObject { ["token"] = value });

@@ -167,6 +167,10 @@ internal static class OperatorServer
         catch (JsonException) { await Error(response, 400, "The request body must be a JSON object.", ct); }
         catch (ArgumentException) { await Error(response, 400, "The request body must be a JSON object.", ct); }
         catch (InvalidDataException error) { await Error(response, 400, error.Message, ct); }
+        catch (Npgsql.PostgresException error) when (error.SqlState == "23505" && error.ConstraintName == "tenants_one_operator")
+        {
+            await Error(response, 409, "This deployment already has an operator tenant.", ct);
+        }
         catch (Npgsql.PostgresException error) when (error.SqlState == "23505") { await Error(response, 409, "That tenant slug or hostname is already in use.", ct); }
     }
 

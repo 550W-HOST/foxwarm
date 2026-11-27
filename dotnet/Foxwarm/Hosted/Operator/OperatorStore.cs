@@ -53,7 +53,7 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
         database.ClusterAsync(async (tx, ct) =>
         {
             await RequireCurrentReplicas(tx, ct);
-            var id = (int)(await Scalar(tx, "INSERT INTO tenants(name,profile,credential_version) VALUES ($1,$2,1) RETURNING tenant_id", ct, slug, profile))!;
+            var id = (int)(await Scalar(tx, "INSERT INTO tenants(name,profile,pinned_role,credential_version) VALUES ($1,$2,$3,1) RETURNING tenant_id", ct, slug, profile, Pin(profile)))!;
             var setup = await IssueSetupAsync(tx, id, 1, ct);
             await tx.ExecuteAsync("INSERT INTO tenant_leases(tenant_id,epoch,state,expires_at) VALUES ($1,1,'active',now()+interval '30 seconds')", ct, id);
             var keyId = InstanceKeys.NewKeyId();
@@ -82,6 +82,8 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
             : await Scalar(tx, "SELECT item::text FROM (" + TenantJson + " WHERE name=$1) rows", ct, slug);
         return JsonNode.Parse(text as string ?? throw Missing())!;
     }, token);
+
+    private static string? Pin(string profile) => profile == "operator" ? Lease.ReplicaRoles.MasterHost : null;
 
     private static OperatorProblem Missing() => new(404, "Tenant not found.");
 
@@ -135,7 +137,10 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
                     await tx.ExecuteAsync("DELETE FROM tenant_hostnames WHERE tenant_id=$1 AND kind='primary'", ct, id);
                     await tx.ExecuteAsync("INSERT INTO tenant_hostnames(tenant_id,hostname,kind) VALUES ($1,$2,'primary')", ct, id, (string?)value);
                     break;
-                case "profile": await tx.ExecuteAsync("UPDATE tenants SET profile=$2 WHERE tenant_id=$1", ct, id, (string?)value); break;
+                case "profile":
+                    var profile = (string)value!;
+                    await tx.ExecuteAsync("UPDATE tenants SET profile=$2,pinned_role=$3 WHERE tenant_id=$1", ct, id, profile, Pin(profile));
+                    break;
                 case "limits": await tx.ExecuteAsync("UPDATE tenants SET limits=$2::jsonb WHERE tenant_id=$1", ct, id, value!.ToJsonString()); break;
                 case "journal": await tx.ExecuteAsync("UPDATE tenants SET settings=jsonb_set(settings,'{journal}',$2::jsonb) WHERE tenant_id=$1", ct, id, value!.ToJsonString()); break;
                 case "ceiling": await SetCeiling(tx, id, "ceiling", (string?)value, ct); break;
