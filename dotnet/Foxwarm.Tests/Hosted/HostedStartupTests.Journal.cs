@@ -1,3 +1,4 @@
+using Foxwarm.Hosted.Lease;
 using Foxwarm.Hosted;
 using Foxwarm.Hosted.Postgres;
 
@@ -36,17 +37,21 @@ public sealed partial class HostedStartupTests
         Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
     }
 
-    [Fact]
-    public async Task TheHostedRuntimeAppliesTheTenantsLimitsAndJournalSwitch()
+    // Both profiles take the limits from the tenant's row.
+    [Theory]
+    [InlineData("hosted")]
+    [InlineData("operator")]
+    public async Task TheHostedRuntimeAppliesTheTenantsLimitsAndJournalSwitch(string profile)
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
         await database.ExecuteOwnerAsync(
-            "UPDATE tenants SET limits = '{\"busyTurns\": 2}', settings = '{\"journal\": {\"enabled\": false}}'"
+            $"UPDATE tenants SET profile = '{profile}', limits = '{{\"busyTurns\": 2}}', settings = '{{\"journal\": {{\"enabled\": false}}}}'"
         );
         using var temp = new TempDirectory();
         var files = HostedFiles.Create(temp.Path);
-        var replica = StartHosted(database.OpenApp(), files);
+        var replica = StartHosted(database.OpenApp(), files,
+            role: profile == "operator" ? ReplicaRoles.MasterHost : ReplicaRoles.General);
         await WaitUntilAsync(
             () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
             TimeSpan.FromSeconds(60),
