@@ -407,6 +407,24 @@ public sealed class TenantReplicaTests
         Assert.Equal("changed", f.ObservedDocuments);
     }
 
+    [Fact]
+    public async Task ASubscriptionAlreadyAppliedByStartDoesNotRefreshTheRuntimeTwice()
+    {
+        long version = 0;
+        var calls = 0;
+        var callbacks = new TenantReplica.OperatorDocumentCallbacks(version, () => version, () => calls++);
+        // Invalidation advanced the version and captured this runtime. Its start ended and
+        // applied that version before the listener reached it in the captured set.
+        version++;
+        await callbacks.Start();
+        Assert.Equal(1, calls);
+        await callbacks.Notify();
+        Assert.Equal(1, calls);
+        version++;
+        await callbacks.Notify();
+        Assert.Equal(2, calls);
+    }
+
     // Review 4b #9: a change during the start is applied once the start ended.
     [Fact]
     public async Task AnOperatorDocumentChangeDuringAStartIsAppliedWhenTheStartEnds()
