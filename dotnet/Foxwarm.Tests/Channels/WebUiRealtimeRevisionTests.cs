@@ -1414,7 +1414,7 @@ public sealed class WebUiRealtimeRevisionTests
             await Task.Delay(5, token);
     }
 
-    private sealed class ProbeSocket : WebSocket
+    internal sealed class ProbeSocket : WebSocket
     {
         private readonly Channel<byte[]?> incoming = Channel.CreateUnbounded<byte[]?>();
         internal bool AutoReplyToClose { get; init; } = true;

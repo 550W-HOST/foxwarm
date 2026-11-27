@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Models;
 
 namespace Foxwarm.Sessions;
 
@@ -135,9 +136,11 @@ internal sealed partial class SessionManager
             : null;
     }
 
-    private SessionMetadata OverlayMainMetadata(SessionMetadata value)
+    private SessionMetadata OverlayMainMetadata(SessionMetadata value) => OverlayMainMetadata(value, Catalog.Get(value.Id));
+
+    private static SessionMetadata OverlayMainMetadata(SessionMetadata value, JsonObject? main)
     {
-        if (Catalog.Get(value.Id) is not { } main)
+        if (main is null)
             return value;
         return value with
         {
@@ -150,11 +153,10 @@ internal sealed partial class SessionManager
         };
     }
 
-    private void CaptureLocalProjection(SessionOwner owner)
+    private void CaptureLocalProjection(SessionOwner owner, SessionMetadata meta, JsonObject? persisted)
     {
         if (!IsCurrentOwner(owner))
             return;
-        var meta = owner.Metadata();
         var context = ExecutionPlacement(owner);
         var runtime = owner.RuntimeSnapshot(meta);
         var runningExecs = RunningExecs(owner).Length;
@@ -218,7 +220,6 @@ internal sealed partial class SessionManager
         // Volatile only: a Session keeps its local projection while background commands run.
         if (runningExecs > 0)
             projected["_runningExecs"] = runningExecs;
-        var persisted = Catalog.Get(owner.Id);
         if (persisted is not null)
             SessionCatalog.OverlayMain(projected, persisted);
         var differs =
@@ -292,18 +293,18 @@ internal sealed partial class SessionManager
     internal JsonObject[] CatalogPresentations(string[] ids, bool includeLocal)
     {
         var render = PreparePresentations(ids, includeLocal);
-        return render();
+        return render is null ? [] : render(models.Capture());
     }
 
     internal async Task<JsonObject[]> CatalogPresentationsAsync(string[] ids, bool includeLocal)
     {
         var render = await Catalog.QueryAsync(() => PreparePresentations(ids, includeLocal)).ConfigureAwait(false);
-        return render();
+        return render is null ? [] : render(await models.CaptureAsync().ConfigureAwait(false));
     }
 
     // Collect catalog and archive data first. Rendering uses the model configuration, which
     // can read its own tenant documents; it must run outside the catalog transaction and gate.
-    private Func<JsonObject[]> PreparePresentations(string[] ids, bool includeLocal)
+    private Func<HostModels, JsonObject[]>? PreparePresentations(string[] ids, bool includeLocal)
     {
         var all = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
@@ -330,6 +331,8 @@ internal sealed partial class SessionManager
                 SessionCatalog.OverlayMain(copy, main);
             all[id] = copy;
         }
+        if (all.Count == 0)
+            return null;
         var scopes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         var childCounts = new Dictionary<string, long>(StringComparer.Ordinal);
         var subtreeTimes = new Dictionary<string, double>(StringComparer.Ordinal);
@@ -344,13 +347,13 @@ internal sealed partial class SessionManager
         }
         var sequences = Storage.Archive.SequenceCounts(all.Keys.ToArray());
         var ancestry = PresentationAncestry(all, current);
-        return () => all
+        return snapshot => all
             .Values.Select(row =>
             {
                 var id = SessionCatalog.Text(row["id"])!;
                 var dto = SessionPresentation.Build(
                     Metadata(row),
-                    models,
+                    snapshot,
                     id => ancestry.GetValueOrDefault(id),
                     SessionCatalog.Flag(row["_toolActive"]),
                     SessionCatalog.Flag(row["_compacting"])
@@ -460,10 +463,17 @@ internal sealed partial class SessionManager
         var change = await action(Catalog).ConfigureAwait(false);
         try
         {
+            var changed = new List<(SessionOwner Owner, JsonObject Row)>();
             foreach (var id in change.ChangedIds)
-                await SyncHotParentAsync(id).ConfigureAwait(false);
-            foreach (var id in change.ChangedIds)
-                Find(id)?.PublishStateChanged();
+                if (FindCanonical(id) is { } owner)
+                {
+                    var row = await SyncHotParentAsync(owner).ConfigureAwait(false);
+                    if (row is not null)
+                        changed.Add((owner, row));
+                }
+            foreach (var (owner, row) in changed)
+                if (IsCurrentOwner(owner))
+                    owner.PublishStateChanged(row);
         }
         catch (Exception error)
         {
@@ -472,16 +482,14 @@ internal sealed partial class SessionManager
         return change;
     }
 
-    private async Task SyncHotParentAsync(string id)
+    private async Task<JsonObject?> SyncHotParentAsync(SessionOwner owner)
     {
-        var owner = Find(id);
-        if (owner is null)
-            return;
         while (true)
         {
-            var (revision, parent) = await Catalog.QueryAsync(() =>
-                (Catalog.Revision, SessionCatalog.Text(Catalog.Get(id)?["parentSessionId"]))
+            var (revision, row) = await Catalog.QueryAsync(() =>
+                (Catalog.Revision, Catalog.Get(owner.Id))
             ).ConfigureAwait(false);
+            var parent = SessionCatalog.Text(row?["parentSessionId"]);
             owner.Entry.WithState(state =>
             {
                 if (parent is null)
@@ -490,7 +498,7 @@ internal sealed partial class SessionManager
                     state.AuthorityEnvelope["parentSessionId"] = parent;
             });
             if (revision == Catalog.Revision)
-                return;
+                return row;
         }
     }
 

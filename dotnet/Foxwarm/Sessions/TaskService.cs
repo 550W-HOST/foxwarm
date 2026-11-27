@@ -18,26 +18,22 @@ internal sealed class TaskService : IDisposable
 
     private readonly TaskStore store;
     private readonly SessionManager manager;
-    private readonly Func<string, string?> resolveSessionId;
-    private readonly Func<string, string?> resolveSessionAgent;
-    private readonly Func<string, long?> anchorSeq;
+    private readonly Func<string, Task<string?>> resolveSessionId;
+    private readonly Func<string, Task<string?>> resolveSessionAgent;
+    private readonly Func<string, Task<long?>> anchorSeq;
     private readonly SemaphoreSlim mutationLane = new(1, 1);
 
-    internal TaskService(
-        SessionManager manager,
-        ITaskRowStore rows,
-        Func<string, string?> resolveSessionId,
-        Func<string, IReadOnlyList<string>> aliases,
-        Func<string, long?> anchorSeq,
-        Func<string, string?> resolveSessionAgent
-    )
+    internal TaskService(SessionManager manager, TaskStore store, Func<string, Task<string?>> resolveSessionId,
+        Func<string, Task<long?>> anchorSeq, Func<string, Task<string?>> resolveSessionAgent)
     {
         this.manager = manager;
+        this.store = store;
         this.resolveSessionId = resolveSessionId;
         this.resolveSessionAgent = resolveSessionAgent;
         this.anchorSeq = anchorSeq;
-        store = new TaskStore(rows, resolveSessionId, aliases);
     }
+
+    internal Task<(string? Owner, string? Creator)> ReferencesAsync(string taskId) => store.ReferencesAsync(taskId);
 
     internal string? OwnerSessionId(string taskId) => store.OwnerSessionId(taskId);
 
@@ -53,17 +49,7 @@ internal sealed class TaskService : IDisposable
         await mutationLane.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (
-                normalized["ownerSessionId"] is JsonValue owner
-                && owner.TryGetValue<string>(out var requested)
-                && resolveSessionId(requested) is not { } canonical
-            )
-                throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
-            if (
-                normalized["ownerSessionId"] is JsonValue ownerValue
-                && ownerValue.TryGetValue<string>(out var ownerId)
-            )
-                normalized["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
+            await NormalizeOwnerAsync(normalized);
             result = await store.ExecuteAsUserAsync(normalized).ConfigureAwait(false);
             fullDescription = result.Assignment is null
                 ? null
@@ -121,6 +107,15 @@ internal sealed class TaskService : IDisposable
     internal IReadOnlyDictionary<string, string> Statuses(IReadOnlyList<string> ids) =>
         store.Statuses(ids);
 
+    private static bool UsesAnchor(string? action) => action is "create" or "claim" or "assign" or "update";
+
+    private async Task NormalizeOwnerAsync(JsonObject args)
+    {
+        if (args["ownerSessionId"] is JsonValue value && value.TryGetValue<string>(out var requested))
+            args["ownerSessionId"] = await resolveSessionId(requested)
+                ?? throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
+    }
+
     internal async Task<TaskStoreResult> ExecuteAsync(
         JsonObject args,
         string? actor,
@@ -144,22 +139,11 @@ internal sealed class TaskService : IDisposable
                     "TASK_SESSION_REQUIRED",
                     "Select an existing Session for this operation."
                 );
-            actor = actor is null ? null : resolveSessionId(actor) ?? actor;
+            actor = actor is null ? null : await resolveSessionId(actor) ?? actor;
             var normalizedArgs = (JsonObject)args.DeepClone();
-            if (
-                action is "assign" or "create"
-                && args["ownerSessionId"] is JsonValue ownerValue
-                && ownerValue.TryGetValue<string>(out var requestedOwner)
-                && resolveSessionId(requestedOwner) is not { } canonicalOwner
-            )
-                throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
-            if (
-                action is "assign" or "create"
-                && args["ownerSessionId"] is JsonValue ownerString
-                && ownerString.TryGetValue<string>(out var ownerId)
-            )
-                normalizedArgs["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
-            var selectedAnchor = actor is null ? null : anchor ?? anchorSeq(actor);
+            if (action is "assign" or "create")
+                await NormalizeOwnerAsync(normalizedArgs);
+            var selectedAnchor = actor is not null && UsesAnchor(action) ? anchor ?? await anchorSeq(actor) : null;
             IReadOnlyList<string>? scopeIds = null;
             if (action == "list" && Text(args["scope"]) is string scope && scope != "all")
             {
@@ -169,7 +153,7 @@ internal sealed class TaskService : IDisposable
                         "A current Session is required for this task list scope."
                     );
                 var agent =
-                    resolveSessionAgent(actor)
+                    await resolveSessionAgent(actor)
                     ?? throw new TaskError(
                         "TASK_SESSION_NOT_FOUND",
                         "The current Session Agent could not be resolved for this task list scope.",
@@ -284,7 +268,7 @@ internal sealed class TaskService : IDisposable
         Func<string?> additionalMessage
     )
     {
-        var source = resolveSessionId(sourceSessionId) ?? sourceSessionId;
+        var source = await resolveSessionId(sourceSessionId) ?? sourceSessionId;
         TaskStoreResult attached;
         string? fullDescription;
         SessionOwner child;
@@ -407,7 +391,7 @@ internal sealed class TaskService : IDisposable
         var taskId = Text(task["id"])!;
         var creator =
             Text(task["createdByKind"]) == "session" ? Text(task["createdBySessionId"]) : null;
-        if (creator is null || resolveSessionId(creator) == resolveSessionId(actor))
+        if (creator is null || await resolveSessionId(creator) == await resolveSessionId(actor))
         {
             await store.MarkNotificationAsync(taskId, "completionNotificationStatus", "skipped");
             return;
@@ -465,8 +449,8 @@ internal sealed class TaskService : IDisposable
         string eventName
     )
     {
-        var canonicalTarget = resolveSessionId(target) ?? target;
-        if (actor is not null && canonicalTarget == (resolveSessionId(actor) ?? actor))
+        var canonicalTarget = await resolveSessionId(target) ?? target;
+        if (actor is not null && canonicalTarget == (await resolveSessionId(actor) ?? actor))
         {
             await store.MarkNotificationAsync(taskId, field, "skipped", revision);
             return true;
@@ -538,12 +522,12 @@ internal sealed class TaskService : IDisposable
             if (action == "list" && payload["tasks"] is JsonArray tasks)
                 foreach (var item in tasks.OfType<JsonObject>())
                 {
-                    item["createdByAgent"] = resolveSessionAgent(
+                    item["createdByAgent"] = await resolveSessionAgent(
                         Text(item["createdBySessionId"]) ?? ""
                     );
                     item["ownerAgent"] = item["ownerSessionId"] is null
                         ? null
-                        : resolveSessionAgent(Text(item["ownerSessionId"]) ?? "");
+                        : await resolveSessionAgent(Text(item["ownerSessionId"]) ?? "");
                 }
             return payload;
         }
@@ -556,9 +540,9 @@ internal sealed class TaskService : IDisposable
                 "Select an existing Session for this operation."
             );
         var canonical =
-            resolveSessionId(target)
+            await resolveSessionId(target)
             ?? throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
-        var result = (await ExecuteAsync(args, canonical, limit, anchorSeq(canonical))).Payload;
+        var result = (await ExecuteAsync(args, canonical, limit)).Payload;
         result["sessionId"] = canonical;
         return result;
     }
@@ -575,7 +559,7 @@ internal sealed class TaskService : IDisposable
             await ExecuteAsync(
                 normalized,
                 source.Id,
-                anchor: source.Entry.Snapshot().NextMessageSeq - 1
+                anchor: UsesAnchor(Text(args["action"])) ? source.Entry.Snapshot().NextMessageSeq - 1 : null
             )
         ).Payload;
         var task = payload["task"] as JsonObject;

@@ -106,8 +106,7 @@ internal sealed partial class SessionListQueries
     public async Task<JsonObject> SearchAsync(string query, int limit)
     {
         // Source-defined explicit search is a metadata candidate scan, not a typed root-page seek.
-        var ids = await Catalog.QueryAsync(() => Catalog.List().Select(Id).ToArray());
-        var candidates = await runtime.ProjectionsAsync(ids, true);
+        var candidates = await runtime.ListSessionsAsync();
         var matches = candidates.Where(MetadataMatcher(query)).ToArray();
         return new JsonObject
         {

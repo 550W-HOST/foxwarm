@@ -12,8 +12,8 @@ internal sealed partial class WebUIChannel
             "/api/sessions/{id}/nodes",
             async (string id, HttpRequest request) =>
             {
-                var canonical = CatalogRoute(request);
-                var row = canonical is null ? null : sessions.Catalog.Get(canonical);
+                var canonical = await CatalogRouteAsync(request);
+                var row = canonical is null ? null : await sessions.Catalog.QueryAsync(() => sessions.Catalog.Get(canonical));
                 if (row is null)
                     return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var choices = new JsonArray();

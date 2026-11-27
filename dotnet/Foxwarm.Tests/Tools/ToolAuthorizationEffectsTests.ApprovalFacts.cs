@@ -209,8 +209,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         var after = await manager.AssessToolAsync(caller, resolved, null, default);
         Assert.Equal("other-view", after.Asking.Single().Decision.Rule!["id"]!.GetValue<string>());
         Assert.NotEqual(
-            manager.ApprovalFingerprint(caller, resolved, before.Request),
-            manager.ApprovalFingerprint(caller, resolved, after.Request)
+            await manager.ApprovalFingerprintAsync(caller, resolved, before.Request),
+            await manager.ApprovalFingerprintAsync(caller, resolved, after.Request)
         );
         await manager.DecideToolApprovalAsync(
             caller,

@@ -328,10 +328,10 @@ internal sealed partial class SessionManager
                 catch
                 {
                     if (Catalog.Get(id) is null)
-                        CompleteDeletedOwner(operation, id, owner);
+                        await CompleteDeletedOwnerAsync(operation, id, owner);
                     throw;
                 }
-                CompleteDeletedOwner(operation, id, owner);
+                await CompleteDeletedOwnerAsync(operation, id, owner);
             }
             lock (lifecycle)
                 foreach (
@@ -481,7 +481,7 @@ internal sealed partial class SessionManager
             );
     }
 
-    private void CompleteDeletedOwner(DeleteOperation operation, string id, SessionOwner owner)
+    private async Task CompleteDeletedOwnerAsync(DeleteOperation operation, string id, SessionOwner owner)
     {
         operation.Deleted.Add(id);
         lock (lifecycle)
@@ -507,5 +507,6 @@ internal sealed partial class SessionManager
         Changed?.Invoke(new(id, SessionEventKind.Deleted, null));
         waitLiveness.Transition(id);
         TopologyChanged?.Invoke();
+        await PendingBindingChecks().ConfigureAwait(false);
     }
 }

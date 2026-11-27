@@ -264,7 +264,7 @@ internal sealed partial class WebUIChannel(
             "/api/sessions/{id}/message",
             async (string id, HttpRequest request) =>
             {
-                var canonical = CatalogRoute(request);
+                var canonical = await CatalogRouteAsync(request);
                 if (!sessions.Accepting)
                     return Results.StatusCode(503);
                 JsonObject? input;
@@ -686,9 +686,10 @@ internal sealed partial class WebUIChannel(
         if (RouteIdentity(request) is not { } id)
             return null;
         var scoped = WebUiAccess.Request(request);
-        var canonical = scoped?.Bind(id);
+        var canonical = scoped is null ? null : await runtime.Catalog.QueryAsync(() => scoped.Bind(id));
         var owner = await runtime.GetOwnerAsync(id, request.HttpContext.RequestAborted);
-        scoped?.Require(id);
+        if (scoped is not null)
+            await runtime.Catalog.QueryAsync(() => { scoped.Require(id); return true; });
         if (scoped is not null && owner?.Id != canonical)
             throw new WebUiAccessException();
         return owner;
@@ -712,9 +713,9 @@ internal sealed partial class WebUIChannel(
         return null;
     }
 
-    private string? CatalogRoute(HttpRequest request) =>
+    private async Task<string?> CatalogRouteAsync(HttpRequest request) =>
         RouteIdentity(request) is { } id
-            ? SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"])
+            ? await runtime.Catalog.QueryAsync(() => SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"]))
             : null;
 
     private static async Task SendSse(HttpContext context, JsonObject payload)

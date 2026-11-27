@@ -738,6 +738,7 @@ internal sealed partial class SessionManager
         try
         {
             Catalog.NotifyIdentityChanged();
+            await PendingBindingChecks().ConfigureAwait(false);
             owner.PublishStateChanged();
         }
         catch (Exception error)

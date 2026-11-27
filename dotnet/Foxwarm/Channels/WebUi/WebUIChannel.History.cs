@@ -78,8 +78,8 @@ internal sealed partial class WebUIChannel
             "/api/sessions/{id}/debug-file",
             async (string id, HttpRequest request) =>
             {
-                var resolved = CatalogRoute(request);
-                if (resolved is null || runtime.Catalog.Get(resolved) is null)
+                var resolved = await CatalogRouteAsync(request);
+                if (resolved is null || await runtime.Catalog.QueryAsync(() => runtime.Catalog.Get(resolved)) is null)
                     return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var stored = await sessions.Storage.Authority.ReadRawAsync(
                     resolved,
@@ -240,7 +240,7 @@ internal sealed partial class WebUIChannel
                     strict: false,
                     request.HttpContext.RequestAborted
                 );
-                if (CatalogRoute(request) != canonicalId)
+                if (await CatalogRouteAsync(request) != canonicalId)
                     return Results.Json(
                         new JsonObject { ["error"] = "Session binding changed." },
                         statusCode: 403

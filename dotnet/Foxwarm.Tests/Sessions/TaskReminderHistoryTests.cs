@@ -388,11 +388,10 @@ public sealed class TaskReminderHistoryTests
             );
             Tasks = new TaskService(
                 null!,
-                rows,
-                id => id,
-                _ => [],
-                _ => null,
-                _ => "main"
+                new TaskStore(rows, id => id, _ => []),
+                id => Task.FromResult<string?>(id),
+                _ => Task.FromResult<long?>(null),
+                _ => Task.FromResult<string?>("main")
             );
             var agents = new AgentCatalog(root, Path.Combine(root, "work"));
             var memory = new AgentMemory(agents, new Skills(agents, Path.Combine(root, "skills")));

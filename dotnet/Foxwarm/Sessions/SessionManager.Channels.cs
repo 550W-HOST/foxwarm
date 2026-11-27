@@ -169,10 +169,10 @@ internal sealed partial class SessionManager
             catch
             {
                 if (Catalog.Get(id) is null)
-                    CompleteDeletedOwner(operation, id, owner);
+                    await CompleteDeletedOwnerAsync(operation, id, owner);
                 throw;
             }
-            CompleteDeletedOwner(operation, id, owner);
+            await CompleteDeletedOwnerAsync(operation, id, owner);
         }
         catch
         {

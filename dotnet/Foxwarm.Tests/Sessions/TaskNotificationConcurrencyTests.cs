@@ -101,6 +101,14 @@ public sealed class TaskNotificationConcurrencyTests
         var latestEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        // Actor and owner preflight can yield before the assignment reaches its row. Wait
+        // for the commit, keeping notification persistence held, before testing overtaking.
+        async Task WaitForOwner(string expected)
+        {
+            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            while ((await manager.Tasks.ReferencesAsync(id)).Owner != expected)
+                await Task.Delay(10, bound.Token);
+        }
         // Hold ordinary recipient persistence, not Task storage or an injected delivery substitute.
         var previousSave = previous.Entry.SaveLane.MutateIdentityAsync(async () =>
         {
@@ -125,7 +133,7 @@ public sealed class TaskNotificationConcurrencyTests
             var earlier = userAssignment
                 ? manager.Tasks.ExecuteAsUserAsync(args)
                 : SessionAction(args);
-            Assert.Equal(next.Id, manager.Tasks.OwnerSessionId(id));
+            await WaitForOwner(next.Id);
             Assert.False(earlier.IsCompleted);
 
             var list = await manager
@@ -163,7 +171,7 @@ public sealed class TaskNotificationConcurrencyTests
                     ["notifySession"] = true,
                 }
             );
-            Assert.Equal(latest.Id, manager.Tasks.OwnerSessionId(id));
+            await WaitForOwner(latest.Id);
             Assert.False(later.IsCompleted);
             Assert.Equal("pending", Text((await Get())["assignmentNotificationStatus"]));
 

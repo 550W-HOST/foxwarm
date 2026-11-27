@@ -52,7 +52,12 @@ public sealed class SessionIdentityInterleavingTests
         await Task.WhenAll(updates);
 
         var catalogParent = SessionCatalog.Text(manager.Catalog.Get(child.Id)!["parentSessionId"]);
-        Assert.Equal(catalogParent, child.Metadata().ParentSessionId);
+        Assert.Equal(catalogParent, child.Entry.WithState(state => SessionCatalog.Text(state.AuthorityEnvelope["parentSessionId"])));
+        // Force a different final parent as well: a skipped hot write cannot pass just
+        // because the competing assignments happened to finish at their starting value.
+        var next = catalogParent is null ? parent.Id : null;
+        await manager.ChangePresentationAsync(catalog => catalog.SetParentAsync(child.Id, next));
+        Assert.Equal(next, child.Entry.WithState(state => SessionCatalog.Text(state.AuthorityEnvelope["parentSessionId"])));
     }
 
     [Fact]

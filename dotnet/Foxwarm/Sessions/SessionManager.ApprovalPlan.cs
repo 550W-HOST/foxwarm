@@ -119,7 +119,7 @@ internal sealed partial class SessionManager
         var checks = new List<ApprovalCheck>();
         if (primary.Effect == ToolAuthorizationEffect.Ask)
         {
-            var fingerprint = ApprovalFingerprint(owner, resolved, primary.Request);
+            var fingerprint = await ApprovalFingerprintAsync(owner, resolved, primary.Request);
             if (scope?.Covers(owner, fingerprint) != true)
                 checks.Add(new("primary", resolved, primary, fingerprint, true));
         }
@@ -213,7 +213,7 @@ internal sealed partial class SessionManager
             {
                 continue;
             }
-            var facts = ApprovalRequest(owner, assessment.Request);
+            var facts = await ApprovalRequestAsync(owner, assessment.Request);
             assessed.Add(
                 new(check, assessment, facts, ToolApprovalScope.Fingerprint(check.Request, facts))
             );

@@ -101,7 +101,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         var listActive = false;
         var initializing = false;
         var closing = false;
-        var pending = new List<(JsonObject Data, SessionOwner? Owner)>();
+        var pending = new List<(JsonObject Data, SessionOwner? Owner, string? Projection)>();
         long queuedBytes = 0;
         string? logsId = null;
         Action? stopLogs = null;
@@ -110,17 +110,20 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             long? Revision,
             JsonObject Data,
             int Bytes,
-            string? LogsId
+            string? LogsId,
+            string? Projection
         )>();
-        void Queue(long? expected, JsonObject data, string? topic = null)
+        void Queue(long? expected, JsonObject data, string? topic = null, string? projection = null)
         {
             var bytes = Encoding.UTF8.GetByteCount(data.ToJsonText());
             Interlocked.Add(ref queuedBytes, bytes);
-            if (!output.Writer.TryWrite((expected, data, bytes, topic)))
+            if (!output.Writer.TryWrite((expected, data, bytes, topic, projection)))
                 Interlocked.Add(ref queuedBytes, -bytes);
         }
-        bool Subscribed(JsonObject data)
+        bool Subscribed(JsonObject data, string? projection = null)
         {
+            if (projection is not null)
+                return listActive && listIds.Contains(projection);
             if (SessionCatalog.Text(data["sessionId"]) is { } id)
                 return sessionIds.Contains(id);
             if (!listActive)
@@ -134,11 +137,11 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     SessionCatalog.Text(row) is { } deleted && listIds.Contains(deleted)
                 ) == true;
         }
-        void Deliver(JsonObject data)
+        void Deliver(JsonObject data, string? projection = null)
         {
             lock (gate)
             {
-                if (!Subscribed(data))
+                if (!Subscribed(data, projection))
                     return;
                 if (initializing)
                 {
@@ -148,10 +151,10 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         return;
                     }
                     var id = SessionCatalog.Text(data["sessionId"]);
-                    pending.Add((data, id is null ? null : runtime.Owner(id)));
+                    pending.Add((data, id is null ? null : runtime.Owner(id), projection));
                 }
                 else
-                    Queue(revision, data);
+                    Queue(revision, data, projection: projection);
             }
         }
         void Changed(SessionRuntimeEvent entry)
@@ -186,16 +189,9 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 && entry.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted
             )
             {
-                var row = new SessionListQueries(runtime).Projection(entry.SessionId);
-                if (row is not null)
-                    Deliver(
-                        new JsonObject
-                        {
-                            ["type"] = "session-list-delta",
-                            ["sessions"] = new JsonArray(row),
-                            ["deletedIds"] = new JsonArray(),
-                        }
-                    );
+                // The output pump reads the row at this position in the event stream. No
+                // catalog work runs on the publisher, and invalidation cannot pass its delta.
+                Deliver(new JsonObject { ["type"] = "session-list-delta", ["deletedIds"] = new JsonArray() }, entry.SessionId);
             }
             if (invalidate)
                 Invalidated();
@@ -233,6 +229,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         {
             await foreach (var item in output.Reader.ReadAllAsync(lifetime.Token))
             {
+                var accountedBytes = item.Bytes;
                 try
                 {
                     lock (gate)
@@ -241,6 +238,25 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                             || (item.LogsId is not null && item.LogsId != logsId)
                         )
                             continue;
+                    if (item.Projection is { } id)
+                    {
+                        try
+                        {
+                            var rows = await runtime.ProjectionsAsync([id]);
+                            if (rows.Length == 0)
+                                continue;
+                            item.Data["sessions"] = new JsonArray(rows[0]);
+                            // The row now occupies the queue until its send finishes.
+                            accountedBytes = Encoding.UTF8.GetByteCount(item.Data.ToJsonText());
+                            Interlocked.Add(ref queuedBytes, accountedBytes - item.Bytes);
+                        }
+                        catch (Exception error)
+                        {
+                            LogUnavailable(error, id);
+                            lifetime.Cancel();
+                            return;
+                        }
+                    }
                     if (BeforeQueuedSend is { } pause)
                         await pause(item.Data, lifetime.Token);
                     await Send(item.Data, item.Revision, item.LogsId, queued: true);
@@ -276,7 +292,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 }
                 finally
                 {
-                    Interlocked.Add(ref queuedBytes, -item.Bytes);
+                    Interlocked.Add(ref queuedBytes, -accountedBytes);
                 }
             }
         }
@@ -412,7 +428,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     listIds = listCanonical.ToHashSet(StringComparer.Ordinal);
                     listActive = active;
                     // A superseding initialization carries only still-subscribed events.
-                    pending.RemoveAll(item => !Subscribed(item.Data));
+                    pending.RemoveAll(item => !Subscribed(item.Data, item.Projection));
                 }
                 CancellationTokenSource? previous;
                 lock (gate)
@@ -693,7 +709,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         return;
                     foreach (var item in pending)
                         if (
-                            Subscribed(item.Data)
+                            Subscribed(item.Data, item.Projection)
                             && (
                                 SessionCatalog.Text(item.Data["sessionId"]) is not { } id
                                 || (
@@ -708,7 +724,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                                 )
                             )
                         )
-                            Queue(requested, item.Data);
+                            Queue(requested, item.Data, projection: item.Projection);
                     pending.Clear();
                     Queue(
                         requested,

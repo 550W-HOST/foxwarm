@@ -326,11 +326,10 @@ public sealed partial class AnthropicHostedSearchTests
             );
             Tasks = new TaskService(
                 null!,
-                new SqliteTaskRowStore(data),
-                id => id,
-                _ => [],
-                _ => null,
-                _ => "main"
+                new TaskStore(new SqliteTaskRowStore(data), id => id, _ => []),
+                id => Task.FromResult<string?>(id),
+                _ => Task.FromResult<long?>(null),
+                _ => Task.FromResult<string?>("main")
             );
             var chat = new SessionChatService(
                 requests,

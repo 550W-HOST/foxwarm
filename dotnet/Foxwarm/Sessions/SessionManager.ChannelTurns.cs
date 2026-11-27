@@ -163,7 +163,7 @@ internal sealed partial class SessionManager
         }
     }
 
-    private void ObserveChannelTurn(SessionOwner owner, SessionRuntimeEvent value)
+    private void ObserveChannelTurn(SessionOwner owner, SessionMetadata state)
     {
         try
         {
@@ -172,12 +172,7 @@ internal sealed partial class SessionManager
                 turn = channelTurns.GetValueOrDefault(owner);
             if (turn is null)
                 return;
-            if (value.Kind == SessionEventKind.StateChanged)
-            {
-                var state = owner.Metadata();
-                turn.Stopping |= state.Stopping;
-                return;
-            }
+            turn.Stopping |= state.Stopping;
         }
         catch (Exception error)
         {

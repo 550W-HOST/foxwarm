@@ -27,7 +27,7 @@ internal sealed record ConfigurationSources(
 
 internal sealed partial class ModelConfiguration
 {
-    private readonly object gate = new();
+    private readonly StoreGate gate = new();
     private readonly JsonObject? deployment;
     private readonly TenantProfile profile;
     private readonly IInstanceCredentials? credentials;
@@ -249,28 +249,37 @@ internal sealed partial class ModelConfiguration
 
     internal HostModels Capture()
     {
-        lock (gate)
-        {
-            var raw =
-                ReadCurrentModelsRaw()
-                ?? throw new InvalidDataException("Models configuration is missing.");
-            var generation = Secrets.Store.Generation;
-            if (
-                catalog is not null
-                && raw == cachedRaw
-                && generation == cachedSecretGeneration
-                && !(cachedWhileLocked && !Secrets.Locked)
-            )
-                return catalog;
-            resolvedWhileLocked = false;
-            var next = Validate(raw);
-            Secrets.SetTextRedactionKnownLabels(next.KnownLabels);
-            catalog = next;
-            cachedRaw = raw;
-            cachedSecretGeneration = generation;
-            cachedWhileLocked = resolvedWhileLocked;
-            return next;
-        }
+        using (gate.Enter())
+            return Capture(ReadCurrentModelsRaw());
+    }
+
+    internal Task<HostModels> CaptureAsync() => gate.HoldAsync(async () =>
+    {
+        var bytes = await Documents.ReadAsync(ConfigDocumentName.Models, CancellationToken.None).ConfigureAwait(false);
+        var raw = bytes is null ? TemplateText() : ConfigDocumentText.Decode(bytes);
+        return gate.InBody(() => Capture(raw));
+    });
+
+    private HostModels Capture(string? raw)
+    {
+        if (raw is null)
+            throw new InvalidDataException("Models configuration is missing.");
+        var generation = Secrets.Store.Generation;
+        if (
+            catalog is not null
+            && raw == cachedRaw
+            && generation == cachedSecretGeneration
+            && !(cachedWhileLocked && !Secrets.Locked)
+        )
+            return catalog;
+        resolvedWhileLocked = false;
+        var next = Validate(raw);
+        Secrets.SetTextRedactionKnownLabels(next.KnownLabels);
+        catalog = next;
+        cachedRaw = raw;
+        cachedSecretGeneration = generation;
+        cachedWhileLocked = resolvedWhileLocked;
+        return next;
     }
 
     private HostModels Validate(string raw)
@@ -424,12 +433,13 @@ internal sealed partial class ModelConfiguration
     // The models file the catalog reads: the installed file, or the template before the first
     // save. Null when neither exists.
     internal string? ReadCurrentModelsRaw() =>
-        ReadInstalledModelsText()
-        ?? (File.Exists(TemplatePath) ? File.ReadAllText(TemplatePath, Encoding.UTF8) : null);
+        ReadInstalledModelsText() ?? TemplateText();
+
+    private string? TemplateText() => File.Exists(TemplatePath) ? File.ReadAllText(TemplatePath, Encoding.UTF8) : null;
 
     internal JsonObject Diagnostics()
     {
-        lock (gate)
+        using (gate.Enter())
         {
             var installed = ReadInstalledModelsText();
             var exists = installed is not null;

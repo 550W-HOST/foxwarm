@@ -170,9 +170,28 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
 
     private void CheckBindings()
     {
-        foreach (var (registration, request) in requests)
-            if (!request.Current || !request.BindingsCurrent())
+        var tracked = requests.ToArray();
+        if (tracked.Length == 0)
+            return;
+        runtime.QueueBindingCheck(() => CheckBindingsAsync(tracked));
+    }
+
+    private async Task CheckBindingsAsync(KeyValuePair<Registration, WebUiRequest>[] tracked)
+    {
+        foreach (var (registration, request) in tracked)
+        {
+            bool valid;
+            try
+            {
+                valid = request.Current && await runtime.Catalog.QueryAsync(request.BindingsCurrent);
+            }
+            catch (Exception)
+            {
+                valid = false;
+            }
+            if (!valid)
                 Abort(registration);
+        }
     }
 
     private void Abort(Registration registration)

@@ -13,6 +13,7 @@ internal sealed partial class SessionOwner
     private readonly ConcurrentDictionary<long, Task> running = new();
     private readonly ConcurrentDictionary<long, Channel<SessionRuntimeEvent>> listeners = new();
     internal event Action<SessionRuntimeEvent>? Changed;
+    internal Action<SessionRuntimeEvent, JsonObject?>? ChangedProjection { get; set; }
     private long nextListener;
     private long nextRun;
     private int lastReportedFailureCount;
@@ -266,9 +267,21 @@ internal sealed partial class SessionOwner
         if (Entry.Retired)
             return;
         var value = new SessionRuntimeEvent(Id, kind, data?.DeepClone(), snapshot);
+        Publish(value, null);
+    }
+
+    private void Publish(SessionRuntimeEvent value, JsonObject? catalogRow)
+    {
+        ChangedProjection?.Invoke(value, catalogRow);
         Changed?.Invoke(value);
         foreach (var channel in listeners.Values)
             channel.Writer.TryWrite(value);
+    }
+
+    internal void PublishStateChanged(JsonObject row)
+    {
+        if (!Entry.Retired)
+            Publish(new(Id, SessionEventKind.StateChanged, null), row);
     }
 
     public void PublishStateChanged() => Emit(SessionEventKind.StateChanged);

@@ -9,7 +9,7 @@ namespace Foxwarm.Sessions;
 // protected file.
 internal sealed partial class SessionManager
 {
-    internal IReadOnlyList<AuthorizationOperation> AuthorizationOperations(
+    internal async Task<IReadOnlyList<AuthorizationOperation>> AuthorizationOperationsAsync(
         SessionOwner owner,
         ResolvedTool resolved,
         ToolAuthorizationRequest request,
@@ -27,7 +27,10 @@ internal sealed partial class SessionManager
             .Select(operation => SessionWait.Text(operation.Resources["targetAgent"]))
             .OfType<string>()
             .ToHashSet(StringComparer.Ordinal);
-        return operations.Select(operation => WithFacts(owner, operation, request, created)).ToArray();
+        var result = new List<AuthorizationOperation>(operations.Count);
+        foreach (var operation in operations)
+            result.Add(await WithFactsAsync(owner, operation, created));
+        return result;
     }
 
     // The facts the plan reads beyond the request, from their owners: catalog lookups, Agent
@@ -113,10 +116,9 @@ internal sealed partial class SessionManager
                 },
         };
 
-    private AuthorizationOperation WithFacts(
+    private async Task<AuthorizationOperation> WithFactsAsync(
         SessionOwner owner,
         AuthorizationOperation operation,
-        ToolAuthorizationRequest request,
         IReadOnlySet<string>? created = null
     )
     {
@@ -147,15 +149,14 @@ internal sealed partial class SessionManager
         if (SessionWait.Text(operation.Resources["task"]) is { } task && task.Length <= 128)
         {
             var id = task.Trim();
-            string? Canonical(string? session) =>
-                session is null ? null : SessionCatalog.Text(Catalog.Resolve(session)["sessionId"]) ?? session;
             try
             {
-                var exists = Tasks.OwnerSessionId(id) is not null || Tasks.CreatorSessionId(id) is not null;
+                var (taskOwner, creator) = await Tasks.ReferencesAsync(id);
+                var exists = taskOwner is not null || creator is not null;
                 operation = operation with
                 {
-                    TaskOwned = exists ? Canonical(Tasks.OwnerSessionId(id)) == owner.Id : null,
-                    TaskCreated = exists ? Canonical(Tasks.CreatorSessionId(id)) == owner.Id : null,
+                    TaskOwned = exists ? taskOwner == owner.Id : null,
+                    TaskCreated = exists ? creator == owner.Id : null,
                 };
             }
             catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
