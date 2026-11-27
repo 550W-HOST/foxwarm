@@ -21,10 +21,11 @@ public sealed class TenantLeaseTests
         TimeSpan.FromSeconds(2)
     );
 
-    private static async Task<HostedTestDatabase> PrepareAsync()
+    private static async Task<HostedTestDatabase> PrepareAsync(bool register = true)
     {
         var server = await PostgresServer.SharedAsync();
         var database = await server.CreateDatabaseAsync();
+        if (register) await database.RegisterBootsAsync("a","b","c","owner","standby");
         await database.CreateTenantTableAsync(Table);
         return database;
     }
@@ -66,15 +67,15 @@ public sealed class TenantLeaseTests
     [Fact]
     public async Task TheRegistryResolvesTheCurrentOwnersAddressOnly()
     {
-        await using var database = await PrepareAsync();
+        await using var database = await PrepareAsync(register:false);
         var app = database.OpenApp();
         var registry = new ReplicaRegistry(app);
         var a = ReplicaRegistry.NewReplicaId("pod-a");
         var b = ReplicaRegistry.NewReplicaId("pod-a");
         Assert.StartsWith("pod-a/", a);
         Assert.NotEqual(a, b);
-        await registry.RegisterAsync(a, "10.0.0.1:3001", 2, 2, CancellationToken.None);
-        await registry.RegisterAsync(b, null, 2, 2, CancellationToken.None);
+        await registry.RegisterAsync(a, "10.0.0.1:3001", Foxwarm.Hosted.Schema.SchemaMigrator.BinaryLevel, 2, CancellationToken.None);
+        await registry.RegisterAsync(b, null, Foxwarm.Hosted.Schema.SchemaMigrator.BinaryLevel, 2, CancellationToken.None);
         await registry.HeartbeatAsync(a, CancellationToken.None);
         Assert.Null(await registry.OwnerAddressAsync(PostgresServer.Tenant, CancellationToken.None));
         var lease = Lease(app);

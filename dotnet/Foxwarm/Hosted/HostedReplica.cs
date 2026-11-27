@@ -31,6 +31,9 @@ internal interface IHostedRuntime : IAsyncDisposable
 
     /// <summary>Completes when the runtime stopped on its own (for example a stop request).</summary>
     Task Stopped { get; }
+
+    /// <summary>Abort streams authenticated with the superseded administrator credential.</summary>
+    void CredentialRotated() { }
 }
 
 /// <summary>What a starting owner gives its runtime.</summary>
@@ -261,7 +264,7 @@ internal sealed class HostedReplica
         // from here on ends the run within the drain bound.
         await using var current = new LeaseMonitor(lease, grant, options.Timings, log);
         monitor = current;
-        var tenant = new TenantDb(database, grant.TenantId, grant.Epoch);
+        var tenant = new TenantDb(database, grant.TenantId, grant.Epoch, maxInFlight: grant.DbStatements ?? TenantDb.DefaultMaxInFlight);
         current.Attach(tenant);
         current.Start();
         health = health with { Role = ReplicaRole.Owner, Epoch = grant.Epoch };

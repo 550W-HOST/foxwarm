@@ -55,6 +55,24 @@ internal sealed record DeploymentConfiguration(
     internal string TenantOrigin(string slug) =>
         SessionWait.Text(ForTenant(slug).Root["url"])?.TrimEnd('/') ?? $"http://{slug}:{PublicEndpoint.Port}";
 
+    // The front knows the mount before it knows the tenant. Preserve a slug placeholder in
+    // the mount itself: on a custom hostname it cannot infer the slug from the Host header.
+    internal System.Text.RegularExpressions.Regex? MountedOperatorPath()
+    {
+        if (SessionWait.Text(Root["url"]) is not { } url) return null;
+        var slash = url.IndexOf('/', url.IndexOf("://", StringComparison.Ordinal) + 3);
+        if (slash < 0) return null;
+        var template = PublicWebAddress.Capture(PublicEndpoint.Port, "http://localhost" + url[slash..]).Prefix.Value;
+        if (string.IsNullOrEmpty(template)) return null;
+        var parts = template.Split(SlugPlaceholder, StringSplitOptions.None);
+        var pattern = new System.Text.StringBuilder("^" + System.Text.RegularExpressions.Regex.Escape(parts[0]));
+        for (var i=1;i<parts.Length;i++)
+            pattern.Append(i==1 ? @"(?<slug>[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)" : @"\k<slug>")
+                .Append(System.Text.RegularExpressions.Regex.Escape(parts[i]));
+        pattern.Append("(?i:" + System.Text.RegularExpressions.Regex.Escape(Operator.OperatorServer.Path) + ")(?:/|$)");
+        return new(pattern.ToString(), System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    }
+
     private static string Expand(string template, string slug) =>
         template.Replace(SlugPlaceholder, slug, StringComparison.Ordinal);
 

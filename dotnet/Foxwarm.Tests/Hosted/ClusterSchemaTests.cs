@@ -56,7 +56,7 @@ public sealed class ClusterSchemaTests
         await RunAsync(operatorRole, $"INSERT INTO tenant_leases (tenant_id) VALUES ({created})");
         await RunAsync(operatorRole, $"INSERT INTO tenant_hostnames (hostname, tenant_id, kind) VALUES ('beta.example.test', {created}, 'primary')");
         await RunAsync(operatorRole, $"UPDATE tenants SET state = 'suspended', limits = '{{\"sessions\": 10}}' WHERE tenant_id = {created}");
-        await RunAsync(operatorRole, "INSERT INTO operator_credentials (id, hash) VALUES ('op1', 'h')");
+        Assert.Equal("42501", (await RefusedAsync(operatorRole, "INSERT INTO operator_credentials (id, hash) VALUES ('op1', 'h')")).SqlState);
         Assert.Equal(1L, await RunAsync(app, "SELECT count(*) FROM tenant_hostnames"));
         // The operator role reaches no tenant data directly.
         Assert.Equal(
@@ -127,6 +127,7 @@ public sealed class ClusterSchemaTests
 
         var occurrence = new JsonObject { ["timer"] = "daily", ["generation"] = 3, ["at"] = "2026-11-28T09:00:00Z" };
         var due = new DateTimeOffset(2026, 11, 28, 8, 58, 0, TimeSpan.Zero);
+        await database.RegisterBootsAsync("r1/0001");
         var first = (await Acquire(lease))!;
         Assert.True(await lease.ReleaseWithWakeupAsync(first, new WakeupDue(due, occurrence), default));
         Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));

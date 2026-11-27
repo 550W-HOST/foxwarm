@@ -42,6 +42,8 @@ internal sealed record HttpServerSettings(
     /// </summary>
     internal bool ShutdownAvailable { get; init; } = true;
 
+    internal string? ReservedOperatorHost { get; init; }
+
     internal static bool Enabled(ModelConfiguration? configuration) =>
         Feature(configuration, "enableWebUI");
 
@@ -76,8 +78,13 @@ internal sealed record HttpServerSettings(
             || configuration.Access.Snapshot.Values.Any(identity =>
                 identity.Mcp || identity.Webhook is not null
             );
-        var token = http ? await LoadOrCreateTokenAsync(dataRoot, credentials) : "";
-        if (http && string.IsNullOrWhiteSpace(token))
+        var needsPlaintext = http;
+#if FOXWARM_HOSTED
+        if (http && credentials is Hosted.Postgres.PgInstanceCredentials hosted && hosted.CaptureVersionedHttp())
+            needsPlaintext = false;
+#endif
+        var token = needsPlaintext ? await LoadOrCreateTokenAsync(dataRoot, credentials) : "";
+        if (needsPlaintext && string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
         return new(
             port,

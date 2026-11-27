@@ -7,4 +7,10 @@ metadata:
 data:
   # FOXWARM_DEPLOYMENT_CONFIG; read at start, so a change rolls the replicas (checksum annotation).
   deployment.yaml: |
+    {{- $replica := include "foxwarm.deploymentConfig" . | fromYaml -}}
+    {{- if $replica.url -}}{{- $_ := set $replica "url" (replace "{slug}" .Values.tenant $replica.url) -}}{{- end -}}
+    {{- toYaml $replica | nindent 4 }}
+  {{- if .Values.operator.enabled }}
+  operator.yaml: |
     {{- include "foxwarm.deploymentConfig" . | nindent 4 }}
+  {{- end }}

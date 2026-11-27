@@ -15,9 +15,17 @@ sh "$here/generate-secrets.sh" "$work/secrets" >/dev/null
 cp -R "$work/secrets" "$work/stack-secrets"
 # compose.yaml names ./secrets; render it from a copy of this directory with generated ones.
 mkdir "$work/stack"
-cp -R "$here/compose.yaml" "$here/deployment.yaml" "$here/haproxy.cfg" "$here/postgres-init" "$here/drills" "$work/stack/"
+cp -R "$here/compose.yaml" "$here/deployment.yaml" "$here/deployment.operator.yaml" "$here/haproxy.cfg" "$here/postgres-init" "$here/operator-login.sh" "$here/drills" "$work/stack/"
 mv "$work/stack-secrets" "$work/stack/secrets"
-docker compose -f "$work/stack/compose.yaml" config --quiet
+# A pre-operator secrets directory must still satisfy every default service mount.
+legacy="$work/stack/secrets"
+test ! -e "$legacy/operator-password" && test ! -e "$legacy/operator-database-url"
+docker compose -f "$work/stack/compose.yaml" config --format json | node -e '
+  const fs = require("node:fs"); const config = JSON.parse(fs.readFileSync(0, "utf8"));
+  for (const service of Object.values(config.services)) for (const {source} of service.secrets || []) fs.accessSync(config.secrets[source].file);
+'
+sh "$here/generate-secrets.sh" --operator "$legacy"
+docker compose -f "$work/stack/compose.yaml" --profile operator config --quiet
 echo "compose: compose.yaml renders"
 FOXWARM_DRILL_SECRETS="$work/secrets" docker compose -f "$work/stack/compose.yaml" -f "$work/stack/drills/compose.drill.yaml" --profile drill config --quiet
 echo "compose: compose.yaml with drills/compose.drill.yaml renders"
@@ -40,6 +48,7 @@ parse() { # $1: a deployment configuration file
   esac
 }
 parse "$here/deployment.yaml"
+parse "$here/deployment.operator.yaml"
 parse "$here/drills/deployment.drill.yaml"
 
 chart="$here/helm/foxwarm"
@@ -52,6 +61,13 @@ for values in "$chart"/ci/*-values.yaml; do
   awk '/^  deployment.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/$name.deployment.yaml"
   test -s "$work/$name.deployment.yaml"
   parse "$work/$name.deployment.yaml"
+  if grep -q '  operator.yaml: |' "$work/$name.yaml"; then
+    ! grep -F '{slug}' "$work/$name.deployment.yaml" || exit 1
+    grep -q 'url: https://default.example.test' "$work/$name.deployment.yaml"
+    awk '/^  operator.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/operator-config.yaml"
+    grep -Fq '{slug}' "$work/operator-config.yaml"
+    parse "$work/operator-config.yaml"
+  fi
   echo "helm: $name renders and validates"
 done
 # Required values are enforced.

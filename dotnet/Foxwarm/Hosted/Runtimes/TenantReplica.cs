@@ -42,6 +42,10 @@ internal sealed record TenantReplicaOptions(
     /// <summary>How often published tenants are checked for idle release.</summary>
     internal TimeSpan IdleScan { get; init; } = TimeSpan.FromSeconds(30);
 
+    internal System.Text.RegularExpressions.Regex? MountedOperatorPath { get; init; }
+
+    internal string? OperatorHostname { get; init; }
+
     /// <summary>Transactions in flight per tenant (<see cref="TenantDb"/>'s statement cap).</summary>
     internal int MaxInFlight { get; init; } = 8;
 }
@@ -166,6 +170,7 @@ internal sealed class TenantReplica
             ShutdownBound = options.ShutdownBound,
         };
         activations = coordinator;
+        renewer.SettingsChanged += coordinator.SettingsChanged;
         var registry = new ReplicaRegistry(control);
         var hostnames = new HostnameDirectory(app);
         await using var health = options.HealthEndpoint is { } healthAddress
@@ -236,7 +241,7 @@ internal sealed class TenantReplica
             log($"[hosted] Tenant {context.Grant.TenantId} has a stored name that isn't a slug ({TenantSlugs.Rule}); it isn't activated.");
             throw new HostedStartupException($"Tenant {context.Grant.TenantId}'s name isn't a slug.");
         }
-        var database = new TenantDb(app, context.Grant.TenantId, context.Grant.Epoch, maxInFlight: options.MaxInFlight);
+        var database = new TenantDb(app, context.Grant.TenantId, context.Grant.Epoch, maxInFlight: context.Grant.DbStatements ?? options.MaxInFlight);
         context.Fence.Attach(database);
         var server = new TenantServer(options.PublicUrl(context.Generation.Tenant));
         var built = Interlocked.Read(ref operatorVersion);
@@ -267,13 +272,21 @@ internal sealed class TenantReplica
 
     // Host → tenant → its published generation. A tenant this replica can't serve gets a bare
     // 503 with no tenant data; forwarding to its owner replaces that.
-    private static async Task DispatchAsync(
+    private async Task DispatchAsync(
         HttpContext context,
         TenantActivations coordinator,
         HostnameDirectory hostnames,
         Action<string> log
     )
     {
+        var path = context.Request.Path;
+        if (path.StartsWithSegments(Operator.OperatorServer.Path)
+            || options.MountedOperatorPath?.IsMatch(path.Value ?? "") == true
+            || Operator.OperatorListener.CanonicalHost(context.Request.Host.Host) == options.OperatorHostname)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
         var aborted = context.RequestAborted;
         string? tenant;
         try
@@ -321,7 +334,19 @@ internal sealed class TenantReplica
                 await Task.Delay(options.Timings.RenewInterval, token).ConfigureAwait(false);
                 using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
                 bound.CancelAfter(options.Timings.RenewInterval);
-                await registry.HeartbeatAsync(Replica, bound.Token).ConfigureAwait(false);
+                var counts = new JsonObject();
+                foreach (var generation in activations!.Published())
+                    if (((TenantRuntime)generation.Runtime!).Inner is MainHostRuntime main)
+                    {
+                        var owners = main.Host.Sessions.Owners().ToArray();
+                        counts[generation.Id.Tenant] = new JsonObject
+                        {
+                            ["epoch"] = generation.Grant.Epoch,
+                            ["hot"] = owners.Length,
+                            ["busy"] = owners.Count(owner => owner.Entry.WithState(state => state.Busy)),
+                        };
+                    }
+                await registry.HeartbeatAsync(Replica, bound.Token, counts.ToJsonString()).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -436,23 +461,23 @@ internal sealed class TenantReplica
     // new eligibility. The lease row lock orders such an edit after any grant in flight.
     private async Task RetireMisplacedAsync(TenantActivations coordinator)
     {
-        var published = coordinator.Published();
-        if (published.Count == 0)
+        var held = coordinator.Grants();
+        if (held.Count == 0)
             return;
         await using var connection = await app.OpenAsync(CancellationToken.None).ConfigureAwait(false);
         await using var command = new Npgsql.NpgsqlCommand(
-            "SELECT tenant_id, profile, pinned_role FROM tenants WHERE tenant_id = ANY($1)",
+            "SELECT tenant_id, profile, pinned_role, settings_revision, credential_version FROM tenants WHERE tenant_id = ANY($1)",
             connection
         );
-        command.Parameters.Add(new Npgsql.NpgsqlParameter<int[]> { TypedValue = [.. published.Select(item => item.Grant.TenantId).Distinct()] });
-        Dictionary<int, (TenantProfile Profile, string? Pinned)> placement = [];
+        command.Parameters.Add(new Npgsql.NpgsqlParameter<int[]> { TypedValue = [.. held.Select(grant => grant.TenantId).Distinct()] });
+        Dictionary<int, (TenantProfile Profile, string? Pinned, long Revision, long Credential)> placement = [];
         await using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
             while (await reader.ReadAsync().ConfigureAwait(false))
-                placement[reader.GetInt32(0)] = (TenantProfiles.Parse(reader.GetString(1)), reader.IsDBNull(2) ? null : reader.GetString(2));
-        foreach (var generation in published)
-            if (placement.TryGetValue(generation.Grant.TenantId, out var now)
-                && (now.Profile != generation.Grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
-                _ = coordinator.RetireForPlacementAsync(generation.Id, $"Tenant {generation.Id.Tenant}'s placement changed");
+                placement[reader.GetInt32(0)] = (TenantProfiles.Parse(reader.GetString(1)), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetInt64(3), reader.GetInt64(4));
+        foreach (var grant in held)
+            if (placement.TryGetValue(grant.TenantId, out var now)
+                && (now.Revision != grant.SettingsRevision || now.Profile != grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
+                coordinator.SettingsChanged(grant, now.Credential != grant.CredentialVersion);
     }
 
     private void InvalidateOperatorDocuments()
@@ -494,6 +519,8 @@ internal sealed class TenantReplica
         internal TenantServer Server => server;
 
         internal IHostedRuntime Inner => runtime;
+
+        public void CredentialRotated() => runtime.CredentialRotated();
 
         // The host's start takes no token: the whole start is awaited, never only the wait.
         public async Task StartAsync(CancellationToken token)
@@ -639,7 +666,7 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
 
     internal async Task<string?> ResolveAsync(string host, CancellationToken token)
     {
-        var key = host.ToLowerInvariant();
+        var key = Operator.OperatorListener.CanonicalHost(host);
         while (true)
         {
             long started;

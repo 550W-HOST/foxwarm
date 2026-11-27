@@ -88,6 +88,44 @@ services:
       disable: true
     restart: "no"
 
+  operator-login:
+    profiles: [operator]
+    image: postgres:18.7-trixie
+    read_only: true
+    entrypoint: ["/bin/sh", "/setup/operator-login.sh"]
+    secrets: [postgres-password, operator-password]
+    volumes:
+      - ./operator-login.sh:/setup/operator-login.sh:ro
+    networks: [backend]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  operator:
+    profiles: [operator]
+    image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
+    command: [operator, serve]
+    read_only: true
+    user: "1000:1000"
+    depends_on:
+      operator-login:
+        condition: service_completed_successfully
+    environment:
+      FOXWARM_ROLE: operator
+      FOXWARM_DATABASE_URL_FILE: /run/secrets/operator-database-url
+      FOXWARM_KEK_FILE: /run/secrets/kek
+    secrets: [operator-database-url, kek]
+    volumes:
+      - ./deployment.operator.yaml:/etc/foxwarm/deployment.yaml:ro
+    tmpfs:
+      - /scratch:uid=1000,gid=1000,mode=0700
+    ports:
+      - "127.0.0.1:3003:3003"
+    networks: [backend, frontend]
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   foxwarm-1:
     <<: *replica
     environment:
@@ -127,6 +165,10 @@ secrets:
     file: ./secrets/postgres-password
   owner-password:
     file: ./secrets/owner-password
+  operator-password:
+    file: ./secrets/operator-password
+  operator-database-url:
+    file: ./secrets/operator-database-url
   app-password:
     file: ./secrets/app-password
   database-url:

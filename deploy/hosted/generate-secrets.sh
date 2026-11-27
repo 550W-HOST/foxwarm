@@ -6,12 +6,23 @@
 #
 #   deploy/hosted/generate-secrets.sh deploy/hosted/secrets
 set -eu
+random_hex() { od -An -tx1 -N "$1" /dev/urandom | tr -d ' \n'; }
+if [ "${1:-}" = --operator ]; then
+  dir="${2:?usage: generate-secrets.sh --operator <existing directory>}"
+  test -f "$dir/kek.json" && test -f "$dir/postgres-password" || { echo 'Generate the base secrets first.' >&2; exit 1; }
+  set -C
+  umask 022
+  test ! -e "$dir/operator-password" && test ! -e "$dir/operator-database-url" || { echo 'Operator secrets already exist.' >&2; exit 1; }
+  operator="$(random_hex 24)"
+  printf '%s' "$operator" > "$dir/operator-password"
+  printf 'postgres://foxwarm_operator:%s@postgres:5432/foxwarm\n' "$operator" > "$dir/operator-database-url"
+  exit 0
+fi
 dir="${1:?usage: generate-secrets.sh <new directory>}"
 if [ -e "$dir" ]; then
   echo "$dir exists; refusing to overwrite secrets." >&2
   exit 1
 fi
-random_hex() { od -An -tx1 -N "$1" /dev/urandom | tr -d ' \n'; }
 umask 077
 mkdir -p "$dir"
 umask 022

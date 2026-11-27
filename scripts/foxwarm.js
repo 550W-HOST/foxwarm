@@ -14,6 +14,7 @@ Subcommands:
   model    Send one prompt through Foxwarm's configured production model stack
   archive  Export SQLite-authoritative archives as compatibility JSONL
   db       Hosted mode: apply or show the database schema (db migrate, db status)
+  operator Hosted mode: serve the operator API or administer tenants
   hosted   Hosted mode: import a file-mode installation (hosted import)
 
 Options:
@@ -55,7 +56,7 @@ async function run(argv, streams = {}) {
     stdout.write(`${pkg.version || 'unknown'}\n`);
     return 0;
   }
-  if (subcommand === 'db' || subcommand === 'hosted') {
+  if (subcommand === 'db' || subcommand === 'hosted' || subcommand === 'operator') {
     try {
       return await runPassthrough(argv, streams);
     } catch (error) {

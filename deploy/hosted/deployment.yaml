@@ -6,6 +6,9 @@
 # The public address users open (the proxy's published port).
 url: http://localhost:3001
 
+# Reserve the optional operator service's hostname on the tenant listener.
+operator: {url: 'http://operator.localhost:3003', port: 3003}
+
 bot:
   # The public listener of each replica; the proxy connects to it.
   httpHost: 0.0.0.0

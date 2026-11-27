@@ -33,6 +33,26 @@ public sealed class HostedImportS3Tests : IAsyncLifetime
         await File.WriteAllTextAsync(secretFile, server.SecretKey + "\n");
         var settings = new BlobSettings(BlobBackend.S3, bucket.Settings with { AccessKeyIdFile = keyFile, SecretAccessKeyFile = secretFile });
 
+        // Every creator takes the same insertion path, including admin CLI and API.
+        var migrationErrors = new StringWriter();
+        Assert.Equal(0,await Foxwarm.Hosted.HostedCli.RunAsync(["db","migrate","--tenant","migrated"],new StringWriter(),migrationErrors,
+            new System.Collections.Hashtable { ["FOXWARM_MIGRATE_DATABASE_URL"]=database.OwnerConnectionString,
+                ["FOXWARM_APP_ROLE"]=PostgresServer.AppRole, ["FOXWARM_OPERATOR_ROLE"]=PostgresServer.OperatorRole }));
+        using var material = new TempDirectory();
+        await using var op = new Foxwarm.Hosted.Postgres.PgDatabase(database.OperatorConnectionString,"operator-test");
+        var key=Foxwarm.Hosted.Postgres.KeyEncryptionKey.From(Foxwarm.Secrets.InstanceKeys.OpenOrCreate(Path.Combine(material.Path,"kek")));
+        await new Foxwarm.Hosted.Operator.OperatorStore(op,key).CreateAsync("provisioned","hosted","provisioned.test",default);
+        foreach (var slug in new[] {"migrated","provisioned"})
+        {
+            var id=await database.TenantIdAsync(slug);
+            var epoch=await database.TakeLeaseAsync(id);
+            var storageId=Assert.IsType<string>(await database.ScalarAsync("SELECT object_identity FROM tenants WHERE tenant_id=$1",id));
+            await using var storage=new Foxwarm.Hosted.PostgresStorageContext(new Foxwarm.Hosted.Postgres.TenantDb(database.OpenApp(),id,epoch),temp.Path);
+            await storage.OpenBlobsAsync(settings,slug,default);
+            await storage.ArtifactBlobs.CreateAsync("test",new byte[]{1},false,default);
+            Assert.Contains($"t/{storageId}/artifacts/test",await bucket.KeysAsync());
+        }
+
         var result = await HostedImportTests.RunAsync(
             database,
             fixture.DataRoot,
@@ -44,8 +64,9 @@ public sealed class HostedImportS3Tests : IAsyncLifetime
         Assert.True(result.Exit == 0, result.Report.ToJsonString());
         Assert.Equal(2, result.Report["verification"]!["blobs"]!["sameHash"]!.GetValue<long>());
         var keys = await bucket.KeysAsync();
-        Assert.Contains($"t/s3tenant/images/{fixture.ImageKey}", keys);
-        Assert.Contains($"t/s3tenant/artifacts/{fixture.ArtifactKey}", keys);
+        var identity = Assert.IsType<string>(await database.ScalarAsync("SELECT object_identity FROM tenants WHERE name='s3tenant'"));
+        Assert.Contains($"t/{identity}/images/{fixture.ImageKey}", keys);
+        Assert.Contains($"t/{identity}/artifacts/{fixture.ArtifactKey}", keys);
         Assert.Equal(0, (await HostedImportTests.RowCountsAsync(database, "s3tenant"))["blob_objects"]);
         var draft = await File.ReadAllTextAsync(result.Report["configuration"]!["deploymentDraft"]!.ToString());
         Assert.Contains("  backend: s3", draft);

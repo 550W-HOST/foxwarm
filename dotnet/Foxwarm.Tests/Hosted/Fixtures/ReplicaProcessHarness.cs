@@ -103,7 +103,7 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
         ))!;
 
     /// <summary>Starts a replica process named <paramref name="name"/> and waits until it is ready.</summary>
-    internal async Task<Replica> StartAsync(string name, IDictionary<string, string>? environment = null)
+    internal async Task<Replica> StartAsync(string name, IDictionary<string, string>? environment = null, bool webUi = true, string extraConfig = "")
     {
         var root = Path.Combine(temp.Path, name);
         var front = FreePort();
@@ -112,7 +112,7 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
         var deployment = Path.Combine(root, "deployment.yaml");
         await File.WriteAllTextAsync(
             deployment,
-            $"bot: {{httpHost: 127.0.0.1, httpPort: {front}}}\nhealth: {{port: {health}}}\nblobs: {{backend: postgres}}\n"
+            $"bot: {{httpHost: 127.0.0.1, httpPort: {front}, enableWebUI: {webUi.ToString().ToLowerInvariant()}}}\nhealth: {{port: {health}}}\nblobs: {{backend: postgres}}\n{extraConfig}"
         );
         var proxy = PgTcpProxy.For(Database.AppConnectionString);
         var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");

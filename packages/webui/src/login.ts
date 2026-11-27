@@ -61,16 +61,43 @@ function mountLogin() {
       const response = await fetch('./api/auth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }), signal: controller.signal,
       })
+      const result = await response.json().catch(() => ({}))
       if (!response.ok) {
+        if (result?.code === 'setup_used' || result?.code === 'setup_expired') {
+          fail(result.code === 'setup_used'
+            ? 'This setup token has already been used. Sign in with your saved access token or ask your operator for a new setup token.'
+            : 'This setup token has expired. Ask your operator for a new one.', true)
+          return
+        }
         fail(response.status === 401 || response.status === 403 ? 'Invalid token. Try again.' : 'Couldn’t sign in. Try again.', response.status === 401 || response.status === 403)
         return
       }
-      writeBrowserAuthCookie(token)
-      try { localStorage.setItem('foxwarm_token', token) } catch { /* The authenticated cookie remains usable without browser storage. */ }
+      const issued = typeof result?.instanceToken === 'string' ? result.instanceToken : null
+      const credential = issued ?? token
+      writeBrowserAuthCookie(credential)
+      try { localStorage.setItem('foxwarm_token', credential) } catch { /* The authenticated cookie remains usable without browser storage. */ }
       input.value = ''
       succeeded = true
-      document.body.dataset.state = 'success'
+      document.body.dataset.state = issued ? 'save-token' : 'success'
       label.textContent = 'Signed in'
+      if (issued) {
+        form.hidden = true
+        document.getElementById('login-title')!.hidden = true
+        document.getElementById('saveToken')!.hidden = false
+        const field = document.getElementById('issuedToken') as HTMLInputElement
+        field.value = issued
+        document.getElementById('saveTitle')!.focus()
+        const copy = document.getElementById('copyToken') as HTMLButtonElement
+        copy.onclick = async () => {
+          field.select()
+          try {
+            await navigator.clipboard.writeText(field.value)
+            copy.textContent = 'Copied'
+          } catch { if (document.execCommand('copy')) copy.textContent = 'Copied' }
+        }
+        document.getElementById('continue')!.onclick = () => location.replace('./')
+        return
+      }
       window.setTimeout(() => location.replace('./'), matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180)
     } catch {
       if (timedOut) fail('Connection timed out. Try again.')

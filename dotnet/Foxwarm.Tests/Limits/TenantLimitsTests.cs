@@ -39,12 +39,16 @@ public sealed class TenantLimitsTests
             {
                 ["busyTurns"] = 3,
                 ["uploadBytes"] = 5 * MiB,
-                // The Agent store's and the statement cap's keys aren't this record's.
-                ["agentStoreBytes"] = 1,
-                ["statements"] = "anything",
+                ["agentStoreBytes"] = 12 * MiB,
+                ["dbStatements"] = 3,
+                ["otherOwnerLimit"] = "anything",
             }
         );
-        Assert.Equal(TenantLimits.Defaults with { BusyTurns = 3, UploadBytes = 5 * MiB }, limits);
+        Assert.Equal(3, limits.BusyTurns);
+        Assert.Equal(5 * MiB, limits.UploadBytes);
+        Assert.Equal(12 * MiB, limits.AgentStore.TotalBytes);
+        Assert.Equal(3, limits.DbStatements);
+        Assert.Equal(TenantLimits.Defaults.BlobBytes, limits.BlobBytes);
     }
 
     [Theory]

@@ -39,6 +39,28 @@ public sealed class TenantKeysTests
     private static byte[] Derived(InstanceKeys keys) => keys.Derive(InstanceKeys.SecretStorePurpose);
 
     [Fact]
+    public async Task FencedRedemptionLeavesTheSetupTokenForTheNewOwner()
+    {
+        var (database, tenant) = await OpenAsync();
+        await using var _ = database;
+        var keys = new HostedKeyRing(tenant, NewKek("kek-a")).OpenOrCreate();
+        const string setup = "fwsetup_synthetic";
+        await database.OpenOwner().ClusterAsync(async (tx,ct) =>
+        {
+            await tx.ExecuteAsync("UPDATE tenants SET credential_version=1 WHERE tenant_id=$1",ct,tenant.TenantId);
+            return await tx.ExecuteAsync("INSERT INTO tenant_auth(tenant_id,version,setup_hash,expires_at,download_key) VALUES ($1,1,$2,now()+interval '1 hour',$3)",
+                ct,tenant.TenantId,Foxwarm.Hosted.Operator.OperatorStore.Hash(setup),RandomNumberGenerator.GetBytes(32));
+        }, default);
+        var old = new PgInstanceCredentials(tenant, () => keys);
+        Assert.True(old.CaptureVersionedHttp());
+        var epoch = await database.TakeLeaseAsync(tenant.TenantId, "successor");
+        await Assert.ThrowsAsync<TenantFencedException>(() => old.RedeemAsync(setup, default));
+        var successor = new PgInstanceCredentials(new TenantDb(database.OpenApp(), tenant.TenantId, epoch), () => keys);
+        Assert.True(successor.CaptureVersionedHttp());
+        Assert.Equal("redeemed", (await successor.RedeemAsync(setup, default)).Status);
+    }
+
+    [Fact]
     public async Task The_data_key_is_created_once_and_every_open_derives_the_same_keys()
     {
         var (database, tenant) = await OpenAsync();

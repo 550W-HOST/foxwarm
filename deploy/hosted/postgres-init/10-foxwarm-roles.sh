@@ -2,7 +2,7 @@
 # Runs once, when the postgres image initializes an empty data directory. Creates the schema
 # owner (runs `foxwarm db migrate`), the runtime role the replicas use (no superuser, no
 # BYPASSRLS: row-level security applies to it), the operator role that owns tenant
-# administration (no login until the operator surface connects as it) and the foxwarm
+# administration and the foxwarm
 # database. The passwords are the ones in the database URL secrets.
 set -eu
 owner="$(cat /run/secrets/owner-password)"

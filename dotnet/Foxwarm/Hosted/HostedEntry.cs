@@ -17,6 +17,7 @@ internal static class HostedEntry
 {
     internal static async Task<int> RunAsync()
     {
+        bool multiTenant = Environment.GetEnvironmentVariable("FOXWARM_HOSTED_TOPOLOGY") == "tenants";
         HostedBootstrap bootstrap;
         DeploymentConfiguration deployment;
         try
@@ -24,6 +25,8 @@ internal static class HostedEntry
             bootstrap = HostedBootstrap.FromEnvironment();
             bootstrap.RequireDatabaseUrl();
             deployment = bootstrap.RequireDeployment();
+            if (!multiTenant && deployment.Root.ContainsKey("operator"))
+                Operator.OperatorListener.ReadSettings(deployment).CheckSingleTenant(bootstrap.Tenant);
             // Checked before standing by, so a missing key or S3 credential file fails at once.
             _ = bootstrap.RequireKeks();
             _ = deployment.Blobs.S3?.ReadCredentials();
@@ -39,7 +42,7 @@ internal static class HostedEntry
         await using var database = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm");
         // Transitional: the multi-tenant runtimes host, until forwarding replaces the
         // single-tenant replica and this selection is removed.
-        if (Environment.GetEnvironmentVariable("FOXWARM_HOSTED_TOPOLOGY") == "tenants")
+        if (multiTenant)
             return await RunTenantsAsync(bootstrap, deployment, database, stop.Token).ConfigureAwait(false);
         var replica = new HostedReplica(
             new HostedReplicaOptions(
@@ -95,6 +98,8 @@ internal static class HostedEntry
             )
             {
                 Role = bootstrap.Role,
+                MountedOperatorPath = deployment.MountedOperatorPath(),
+                OperatorHostname = deployment.Root.ContainsKey("operator") ? Operator.OperatorListener.ReadSettings(deployment).Host : null,
             },
             database,
             bootstrap.RequireDatabaseUrl(),
@@ -205,6 +210,7 @@ internal static class HostedEntry
     )
     {
         var storage = new PostgresStorageContext(context.Database, bootstrap.RequireScratchRoot());
+        deployment = deployment.ForTenant(bootstrap.Tenant);
         await OpenTenantStorageAsync(storage, deployment, bootstrap.Tenant, token).ConfigureAwait(false);
         return await BuildRuntimeAsync(
                 storage,
@@ -282,6 +288,7 @@ internal static class HostedEntry
             // The tenant's limits and settings (journal switch, retention) from its row.
             (limits, settings) = await TenantPolicy.ReadAsync(tenant.Database, token).ConfigureAwait(false);
             tenant.ApplyJournalSettings(settings);
+            tenant.AgentStoreLimits = () => limits.AgentStore;
             var (current, previous) = bootstrap.RequireKeks();
             var keys = new HostedKeyRing(tenant.Database, current, previous);
             keys.OpenOrCreate();
@@ -330,6 +337,7 @@ internal static class HostedEntry
             // A tenant of a multi-tenant replica: requests come from the replica's front, and
             // the tenant can't stop the replica's process.
             Server = server,
+            ReservedOperatorHost = deployment.Root.ContainsKey("operator") ? Operator.OperatorListener.ReadSettings(deployment).Host : null,
             ShutdownAvailable = server is null,
         };
         // Without HTTP no host adopts it, so connections queued on it are refused now.
@@ -363,6 +371,12 @@ internal sealed class MainHostRuntime(MainHost host, PostgresStorageContext tena
     private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal MainHost Host => host;
+
+    public void CredentialRotated()
+    {
+        if (tenant.Credentials is PgInstanceCredentials credentials)
+            credentials.RevokeStreams();
+    }
 
     /// <summary>
     /// The operator changed <c>operator_documents</c> (<c>NOTIFY foxwarm_operator</c>): the

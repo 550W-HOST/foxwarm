@@ -26,6 +26,7 @@ internal static class SchemaLint
         "provider_grants",
         "operator_documents",
         "operator_credentials",
+        "tenant_auth",
     ];
 
     /// <summary>The runtime role's direct writes to cluster tables (P1's registry and leases).</summary>
@@ -36,7 +37,7 @@ internal static class SchemaLint
     };
 
     // Cluster tables the runtime role mustn't read.
-    private static readonly string[] RuntimeUnreadable = ["operator_credentials"];
+    private static readonly string[] RuntimeUnreadable = ["operator_credentials", "tenant_auth"];
 
     private const string ClusterPrivileges = """
         SELECT c.relname, c.relrowsecurity, p.privilege, has_table_privilege(i.app_role, c.oid, p.privilege)

@@ -171,6 +171,52 @@ internal sealed class TenantActivations : IAsyncDisposable
             return [.. slots.Values.Select(slot => slot.Current).OfType<TenantGeneration>()];
     }
 
+    internal IReadOnlyList<LeaseGrant> Grants()
+    {
+        lock (gate)
+            return [.. slots.Values.Select(slot => slot.Grant?.Grant).OfType<LeaseGrant>()];
+    }
+
+    // Record the observation before releasing the publication lock. A build can finish
+    // normally but cannot admit work from this epoch. A retiring runtime still owns
+    // authenticated connections until its disposal completes.
+    internal void SettingsChanged(LeaseGrant grant, bool rotated)
+    {
+        TenantGeneration? current;
+        IGenerationRuntime? revoke = null;
+        lock (gate)
+        {
+            if (!slots.TryGetValue(grant.Tenant, out var slot) || slot.Grant?.Grant != grant) return;
+            if (slot.StaleEpoch != grant.Epoch)
+            {
+                slot.StaleEpoch = grant.Epoch;
+                if (slot.Building is { } building)
+                    _ = BoundStaleBuildAsync(building);
+            }
+            current = slot.Current;
+            current?.Gate.Latch(AdmissionLatch.Stop);
+            if (rotated) revoke = (current ?? slot.Retiring)?.Runtime;
+        }
+        revoke?.CredentialRotated();
+        if (current is not null)
+            _ = RetireForPlacementAsync(current.Id, $"Tenant {grant.Tenant}'s settings or placement changed");
+    }
+
+    // The first observation starts one fixed countdown, regardless of later renewals
+    // or whether the factory, start, or disposal is in progress. Loss hands the same
+    // unsettled generation to its existing fence supervisor; the lease is not released.
+    private async Task BoundStaleBuildAsync(TenantGeneration building)
+    {
+        try
+        {
+            await building.Stopped.WaitAsync(supervisor.DrainBound).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            renewer.Lose(building.Handle, $"Tenant {building.Id.Tenant}'s obsolete startup didn't stop within the drain bound.");
+        }
+    }
+
     /// <summary>The tenant's published generation, or null.</summary>
     internal TenantGeneration? Current(string tenant)
     {
@@ -410,6 +456,9 @@ internal sealed class TenantActivations : IAsyncDisposable
     /// </summary>
     internal Func<Task>? BeforeRegister { get; set; }
 
+    // Test barrier at the moment a renewal can first observe a new handle.
+    internal Action<LeaseGrant>? AfterTrack { get; set; }
+
     private Slot SlotOf(string tenant)
     {
         if (!slots.TryGetValue(tenant, out var slot))
@@ -435,6 +484,8 @@ internal sealed class TenantActivations : IAsyncDisposable
             fence.Refused += error => renewer.Lose(held, "A write was refused by the tenant lease fence: " + error.Message);
             generation.Obligation = supervisor.Watch(id.ToString(), () => held.HardStop(supervisor.DrainTicks), generation.Stopped);
             slot.Building = generation;
+            if (slot.StaleEpoch == held.Grant.Epoch)
+                _ = BoundStaleBuildAsync(generation);
         }
         generation.Stopped.ContinueWith(
             task =>
@@ -518,11 +569,12 @@ internal sealed class TenantActivations : IAsyncDisposable
                 }
                 if (acquired is null)
                     throw new TenantHeldElsewhereException(slot.Lease.Tenant);
-                held = renewer.Track(acquired);
-                held.OnLoss(OnGrantLost);
                 PendingRelease? late = null;
                 lock (gate)
                 {
+                    held = renewer.Track(acquired);
+                    AfterTrack?.Invoke(acquired);
+                    held.OnLoss(OnGrantLost);
                     if (disposed)
                         late = BeginRelease(slot, held);
                     else if (held.IsCurrent(clock()))
@@ -590,7 +642,7 @@ internal sealed class TenantActivations : IAsyncDisposable
             bool published;
             lock (gate)
             {
-                published = !disposed && slot.Grant == held && held.IsCurrent(clock()) && !generation.IsFenced;
+                published = !disposed && slot.Grant == held && slot.StaleEpoch != held.Grant.Epoch && held.IsCurrent(clock()) && !generation.IsFenced;
                 if (published)
                 {
                     slot.Current = generation;
@@ -604,6 +656,17 @@ internal sealed class TenantActivations : IAsyncDisposable
             }
             if (!published)
             {
+                // If a settings observation stopped publication, the lease is still valid:
+                // dispose with the database available and release only after confirmation.
+                bool stale;
+                lock (gate) stale = slot.StaleEpoch == held.Grant.Epoch && !generation.IsFenced && !disposed;
+                if (stale)
+                {
+                    generation.Gate.Latch(AdmissionLatch.Stop);
+                    generation.Settle(await DisposeBuiltAsync(generation).ConfigureAwait(false));
+                    await ReleaseWhenStoppedAsync(slot, generation, CancellationToken.None).ConfigureAwait(false);
+                    throw new LeaseRefusedException($"Tenant {id.Tenant}'s settings changed during startup.");
+                }
                 generation.Gate.Latch(AdmissionLatch.Fence);
                 generation.Fence.Close();
                 generation.Settle(await DisposeBuiltAsync(generation).ConfigureAwait(false));
@@ -855,6 +918,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         // Hand-backs tracked from the moment the grant leaves this slot.
         internal List<PendingRelease> Releases { get; } = [];
         internal long Generations { get; set; }
+        internal long? StaleEpoch { get; set; }
         internal Task<IdleReleaseOutcome>? Releasing { get; set; }
         // Work that arrived while an idle release ran; it aborts the release.
         internal bool Demand { get; set; }

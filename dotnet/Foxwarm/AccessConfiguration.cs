@@ -59,6 +59,7 @@ internal sealed record AccessChange(
 internal sealed class AccessConfiguration
 {
     private ImmutableDictionary<string, AccessIdentity> snapshot;
+    private Func<string, bool>? reservedVerifier;
     private string reservedToken = "";
     internal ImmutableDictionary<string, AccessIdentity> Snapshot => Volatile.Read(ref snapshot);
     internal event Func<AccessChange, Task>? Changed;
@@ -354,8 +355,18 @@ internal sealed class AccessConfiguration
         reservedToken = token;
     }
 
-    internal void Validate(ImmutableDictionary<string, AccessIdentity> next) =>
+    internal void ReserveInstanceVerifier(Func<string, bool> matches)
+    {
+        reservedVerifier = matches;
+        Validate(Snapshot);
+    }
+
+    internal void Validate(ImmutableDictionary<string, AccessIdentity> next)
+    {
+        if (reservedVerifier is { } matches && next.Values.Any(identity => matches(identity.Token)))
+            throw new InvalidDataException("access identity tokens must not reuse the instance superuser token.");
         Validate(next, reservedToken);
+    }
 
     internal static void Validate(ImmutableDictionary<string, AccessIdentity> next, string reserved)
     {

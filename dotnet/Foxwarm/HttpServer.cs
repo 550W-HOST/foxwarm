@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels.WebUi;
 using Foxwarm.Sessions;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 
@@ -46,19 +47,32 @@ internal sealed class HttpServer
         Socket? listenSocket = null,
         TimeSpan? shutdownTimeout = null,
         Microsoft.AspNetCore.Hosting.Server.IServer? server = null,
-        bool shutdownAvailable = true
+        bool shutdownAvailable = true,
+        string? reservedOperatorHost = null
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
-        Downloads = new(apiToken);
+        string signingKey = apiToken;
+        Func<string, bool> matches = candidate => apiToken.Length > 0 && Equal(candidate, apiToken);
+        bool versioned = false;
+#if FOXWARM_HOSTED
+        if (sessions.Storage.Credentials is Hosted.Postgres.PgInstanceCredentials { DownloadKey: { } signed } owner)
+        {
+            matches = owner.Matches;
+            signingKey = signed;
+            versioned = true;
+        }
+#endif
+        Downloads = new(signingKey);
         var accessConfiguration =
             sessions.Models.ConfigurationOwner?.Access ?? new AccessConfiguration(new JsonObject());
-        accessConfiguration.ReserveInstanceToken(apiToken);
+        if (versioned) accessConfiguration.ReserveInstanceVerifier(matches);
+        else accessConfiguration.ReserveInstanceToken(apiToken);
         var access = new WebUiAccess(new SessionRuntime(sessions), accessConfiguration);
         access.Start();
         WebUiEnabled =
             webUiEnabled ?? HttpServerSettings.Enabled(sessions.Models.ConfigurationOwner);
-        var browserCookie = Convert
+        var browserCookie = versioned ? null : Convert
             .ToHexString(
                 HMACSHA256.HashData(
                     Encoding.UTF8.GetBytes(apiToken),
@@ -191,6 +205,16 @@ internal sealed class HttpServer
                 }
             }
         );
+#if FOXWARM_HOSTED
+        if (sessions.Storage is Hosted.PostgresStorageContext)
+            app.Use(async (context,next) =>
+            {
+                if (context.Request.Path.StartsWithSegments(Hosted.Operator.OperatorServer.Path)
+                    || Hosted.Operator.OperatorListener.CanonicalHost(context.Request.Host.Host) == reservedOperatorHost)
+                    context.Response.StatusCode=404;
+                else await next();
+            });
+#endif
         app.UseRouting();
         app.UseWebSockets(
             new WebSocketOptions
@@ -235,7 +259,7 @@ internal sealed class HttpServer
                     return;
                 }
                 if (
-                    WebUiEnabled
+                    (WebUiEnabled || versioned)
                     && context.Request.Path == "/api/auth"
                     && context.Request.Method == "POST"
                 )
@@ -243,7 +267,26 @@ internal sealed class HttpServer
                     await next();
                     return;
                 }
-                var admin = Authorized(context.Request, apiToken, browserCookie);
+                var admin = Authorized(context.Request, matches, browserCookie);
+#if FOXWARM_HOSTED
+                if (admin && sessions.Storage.Credentials is Hosted.Postgres.PgInstanceCredentials adminCredential)
+                {
+                    // The front can start a bodyless response after the tenant HttpContext
+                    // has been disposed. Keep only features owned by the transport here.
+                    var upgrade = context.WebSockets.IsWebSocketRequest;
+                    var response = context.Features.GetRequiredFeature<IHttpResponseFeature>();
+                    var lifetime = context.Features.GetRequiredFeature<IHttpRequestLifetimeFeature>();
+                    context.Response.OnStarting(() =>
+                    {
+                        if (upgrade || response.Headers.ContentType.ToString().StartsWith("text/event-stream", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var registration = adminCredential.Revoked.Register(lifetime.Abort);
+                            response.OnCompleted(static state => ((CancellationTokenRegistration)state).DisposeAsync().AsTask(), registration);
+                        }
+                        return Task.CompletedTask;
+                    });
+                }
+#endif
                 var scoped = !admin && WebUiEnabled ? access.Authenticate(context) : null;
                 var valid = admin || scoped is not null;
                 var staticEntry =
@@ -354,7 +397,7 @@ internal sealed class HttpServer
                 await next();
             });
         }
-        if (WebUiEnabled)
+        if (WebUiEnabled || versioned)
         {
             app.MapPost(
                 "/api/auth",
@@ -374,15 +417,27 @@ internal sealed class HttpServer
                         || body.Count != 1
                         || body["token"] is not JsonValue value
                         || !value.TryGetValue<string>(out var submitted)
-                        || (
-                            !Equal(submitted, apiToken)
-                            && accessConfiguration.Authenticate(submitted) is null
-                        )
-                    )
+                    ) return Results.Unauthorized();
+#if FOXWARM_HOSTED
+                    if (submitted.StartsWith(Hosted.Operator.OperatorStore.SetupPrefix, StringComparison.Ordinal)
+                        && versioned && accessConfiguration.Authenticate(submitted) is null
+                        && sessions.Storage.Credentials is Hosted.Postgres.PgInstanceCredentials credentials)
+                    {
+                        context.Response.Headers.CacheControl = "no-store";
+                        var (outcome, accessToken) = await credentials.RedeemAsync(submitted, context.RequestAborted);
+                        return outcome == "redeemed"
+                            ? Results.Ok(new JsonObject { ["success"] = true, ["instanceToken"] = accessToken })
+                            : Results.Json(new JsonObject { ["code"] = "setup_" + outcome }, JsonData.WebOptions, statusCode: 401);
+                    }
+#endif
+                    if (!matches(submitted) && (!WebUiEnabled || accessConfiguration.Authenticate(submitted) is null))
                         return Results.Unauthorized();
                     return Results.Ok(new JsonObject { ["success"] = true });
                 }
             );
+        }
+        if (WebUiEnabled)
+        {
             app.MapGet(
                 "/api/auth/session",
                 (HttpContext context) =>
@@ -403,7 +458,7 @@ internal sealed class HttpServer
             app,
             sessions,
             accessConfiguration,
-            request => Authorized(request, apiToken, browserCookie),
+            request => Authorized(request, matches, browserCookie),
             context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.NodeProviders)
         );
         app.MapGet("/health", () => Results.Ok(new JsonObject { ["status"] = "ready" }));
@@ -443,11 +498,12 @@ internal sealed class HttpServer
         App = app;
     }
 
-    private static bool Authorized(HttpRequest request, string token, string derived)
+    private static bool Authorized(HttpRequest request, Func<string, bool> matches, string? derived)
     {
         if (
             request.Headers.Authorization.Count == 1
-            && Equal(request.Headers.Authorization.ToString(), "Bearer " + token)
+            && request.Headers.Authorization.ToString() is { } authorization
+            && authorization.StartsWith("Bearer ", StringComparison.Ordinal) && matches(authorization[7..])
         )
             return true;
         foreach (var header in request.Headers.Cookie)
@@ -465,7 +521,7 @@ internal sealed class HttpServer
             {
                 continue;
             }
-            if (Equal(candidate, token) || Equal(candidate, derived))
+            if (matches(candidate) || derived is not null && Equal(candidate, derived))
                 return true;
         }
         return false;

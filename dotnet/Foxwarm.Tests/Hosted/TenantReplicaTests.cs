@@ -26,6 +26,9 @@ public sealed class TenantReplicaTests
         internal string Tenant => tenant;
         internal long Epoch => epoch;
         internal int OperatorChanges;
+        internal int StatementLimit;
+        internal readonly TaskCompletionSource Revoked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void CredentialRotated() => Revoked.TrySetResult();
         internal readonly TaskCompletionSource Disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task StartAsync()
@@ -44,6 +47,7 @@ public sealed class TenantReplicaTests
         public async ValueTask DisposeAsync()
         {
             owner.Event($"{tenant}:dispose");
+            if (owner.DrainGate is { } gate) await gate.Task;
             await app.StopAsync();
             await app.DisposeAsync();
             Disposed.TrySetResult();
@@ -65,6 +69,7 @@ public sealed class TenantReplicaTests
 
         /// <summary>When set, every runtime's start waits for it.</summary>
         internal TaskCompletionSource? StartGate;
+        internal TaskCompletionSource? DrainGate;
 
         /// <summary>When set, the factory throws it.</summary>
         internal Exception? FactoryError;
@@ -117,6 +122,7 @@ public sealed class TenantReplicaTests
         public async ValueTask DisposeAsync()
         {
             StartGate?.TrySetResult();
+            DrainGate?.TrySetResult();
             CallbackGate?.TrySetResult();
             Stop.Cancel();
             try
@@ -141,7 +147,9 @@ public sealed class TenantReplicaTests
         );
     }
 
-    private static async Task<Fixture> StartAsync(params string[] tenants)
+    private static Task<Fixture> StartAsync(params string[] tenants) => StartAsync(Fast, tenants);
+
+    private static async Task<Fixture> StartAsync(LeaseTimings timings, params string[] tenants)
     {
         var server = await PostgresServer.SharedAsync();
         var database = await server.CreateDatabaseAsync();
@@ -155,8 +163,8 @@ public sealed class TenantReplicaTests
                 null,
                 new IPEndPoint(IPAddress.Loopback, 0),
                 slug => $"http://{slug}.test",
-                Fast,
-                Drain,
+                timings,
+                timings == Fast ? Drain : TimeSpan.FromSeconds(4),
                 ReaderVersion: 2
             )
             {
@@ -177,7 +185,7 @@ public sealed class TenantReplicaTests
                 var grant = context.Activation.Grant;
                 app.MapGet("/whoami", () => $"{grant.Tenant}:{grant.Epoch}");
                 context.Activation.Fence.Lost.Register(() => fixture.Event($"{grant.Tenant}:fenced"));
-                var runtime = new Runtime(app, grant.Tenant, grant.Epoch, fixture);
+                var runtime = new Runtime(app, grant.Tenant, grant.Epoch, fixture) { StatementLimit = context.Database.MaxInFlight };
                 lock (fixture.Runtimes)
                     fixture.Runtimes.Add(runtime);
                 await Task.Yield();
@@ -499,6 +507,75 @@ public sealed class TenantReplicaTests
         Assert.Equal("while-away", f.ObservedDocuments);
         Assert.Equal(1, Volatile.Read(ref runtime.OperatorChanges));
         Assert.StartsWith("alpha:", await f.WhoAmIAsync("alpha"));
+    }
+
+    [Theory]
+    [InlineData("notify")]
+    [InlineData("reconnect")]
+    [InlineData("renewal")]
+    public async Task SettingsRevisionDrainsOnlyTheChangedGeneration(string path)
+    {
+        // In the two signal cases, no renewal could have observed the change yet.
+        var timings = path == "renewal" ? Fast : new LeaseTimings(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60));
+        await using var f = await StartAsync(timings, "alpha", "beta");
+        await InitialSubscriptionAsync(f);
+        await f.WhoAmIAsync("alpha");
+        var beta = await f.WhoAmIAsync("beta");
+        var alpha = Assert.Single(f.Live("alpha"));
+        const string update = "UPDATE tenants SET limits='{\"dbStatements\":3}' WHERE name='alpha'";
+        if (path == "renewal")
+            await f.Database.ExecuteOwnerAsync("ALTER TABLE tenants DISABLE TRIGGER foxwarm_notify_tenants; " + update);
+        else if (path == "reconnect")
+        {
+            var count = await f.Database.ScalarAsync("WITH ended AS (SELECT pg_terminate_backend(pid) done FROM pg_stat_activity "
+                + "WHERE application_name='foxwarm-listen' AND datname=current_database()), edited AS (" + update
+                + " RETURNING 1) SELECT count(*) FROM ended WHERE done");
+            Assert.Equal(1L, count);
+        }
+        else await f.Database.ExecuteOwnerAsync(update);
+        await UntilAsync(async () => await f.OwnerAsync("alpha") is null, "settings revision retired and released the old grant", TimeSpan.FromSeconds(5));
+        Assert.True(alpha.Disposed.Task.IsCompleted);
+        Assert.DoesNotContain("alpha:fenced", f.EventList());
+        Assert.Equal(beta, await f.WhoAmIAsync("beta"));
+        Assert.NotEqual("alpha:" + alpha.Epoch, await f.WhoAmIAsync("alpha"));
+        Assert.Equal(3, Assert.Single(f.Live("alpha")).StatementLimit);
+    }
+
+    [Fact]
+    public async Task RotationReachesASettingsDrainBeforeItsRuntimeStops()
+    {
+        var timings = new LeaseTimings(TimeSpan.FromSeconds(30),TimeSpan.FromSeconds(1),TimeSpan.FromSeconds(15));
+        await using var f=await StartAsync(timings,"alpha");
+        await InitialSubscriptionAsync(f);
+        await f.WhoAmIAsync("alpha");
+        var old=Assert.Single(f.Live("alpha"));
+        f.DrainGate=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET settings='{\"journal\":{\"enabled\":false}}' WHERE name='alpha'");
+        await UntilAsync(()=>f.EventList().Contains("alpha:dispose"),"settings drain");
+        Assert.False(old.Revoked.Task.IsCompleted);
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET credential_version=credential_version+1 WHERE name='alpha'");
+        await old.Revoked.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(old.Disposed.Task.IsCompleted);
+        f.DrainGate.SetResult();
+    }
+
+    [Fact]
+    public async Task SettingsObservedDuringStartCannotOpenTheObsoleteGate()
+    {
+        await using var f = await StartAsync("alpha");
+        await InitialSubscriptionAsync(f);
+        f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = f.GetAsync("alpha");
+        await UntilAsync(() => f.EventList().Contains("alpha:start-waits"), "start paused after capture");
+        var old = Assert.Single(f.Live("alpha"));
+        await f.Database.ExecuteOwnerAsync("UPDATE tenants SET limits='{\"busyTurns\":3}' WHERE name='alpha'");
+        // Wait for a successful renewal after the setting is committed. Its result observes the revision.
+        var expiry = (DateTime)(await f.Database.ScalarAsync("SELECT expires_at FROM tenant_leases JOIN tenants USING(tenant_id) WHERE name='alpha'"))!;
+        await UntilAsync(async () => (DateTime)(await f.Database.ScalarAsync("SELECT expires_at FROM tenant_leases JOIN tenants USING(tenant_id) WHERE name='alpha'"))! > expiry, "renewal observed new revision");
+        f.StartGate.SetResult();
+        using var response = await first;
+        Assert.NotEqual("alpha:" + old.Epoch, await response.Content.ReadAsStringAsync());
+        Assert.NotEqual("alpha:" + old.Epoch, await f.WhoAmIAsync("alpha"));
     }
 
     // Review 4c #2: a runtime that stops promptly isn't enough; a release that can't take the

@@ -33,6 +33,14 @@
           <svg class="login-submit-check" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
         </button>
       </form>
+      <section id="saveToken" hidden aria-labelledby="saveTitle">
+        <h2 id="saveTitle" tabindex="-1">Save your access token</h2>
+        <p>Copy this token and keep it somewhere safe. You'll need it to sign in again or from another browser.</p>
+        <label for="issuedToken">Access token</label>
+        <input type="text" id="issuedToken" readonly spellcheck="false" autocomplete="off">
+        <button id="copyToken" type="button">Copy token</button>
+        <button id="continue" type="button">Continue</button>
+      </section>
       <noscript><p class="login-error">JavaScript is required to sign in.</p></noscript>
     </section>
   </main>
