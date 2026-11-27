@@ -81,22 +81,80 @@ public sealed class PostgresTaskRowStoreTests
         store.Run(TaskRowAccess.Read, snapshot =>
         {
             Assert.Null(snapshot.Read("direct"));
-            Assert.Throws<InvalidOperationException>(() => other.Run<bool>(TaskRowAccess.Direct, rows =>
-            {
-                Insert(rows, "direct");
-                throw new InvalidOperationException();
-            }));
+            // Another writer commits while the snapshot is open: a separate flow, as another
+            // thread of the owner would be; a body's own flow can't open a second transaction.
+            OnSeparateFlow(() =>
+                Assert.Throws<CallbackFailure>(() => other.Run<bool>(TaskRowAccess.Direct, rows =>
+                {
+                    Insert(rows, "direct");
+                    throw new CallbackFailure();
+                }))
+            );
             Assert.Null(snapshot.Read("direct"));
             return true;
         });
         Assert.True(store.Exists);
         Assert.NotNull(store.Run(TaskRowAccess.Direct, rows => rows.Read("direct")));
-        Assert.Throws<InvalidOperationException>(() => store.Run<bool>(TaskRowAccess.Write, rows =>
+        Assert.Throws<CallbackFailure>(() => store.Run<bool>(TaskRowAccess.Write, rows =>
         {
             Insert(rows, "transaction");
-            throw new InvalidOperationException();
+            throw new CallbackFailure();
         }));
         Assert.Null(store.Run(TaskRowAccess.Direct, rows => rows.Read("transaction")));
+    }
+
+    [Fact]
+    public async Task A_task_row_access_from_inside_a_transaction_body_is_refused_and_writes_nothing()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        using var temp = new TempDirectory();
+        var (store, tenant) = await OpenAsync(database, temp.Path);
+        using var other = new PgTaskRowStore(tenant);
+        store.Run(TaskRowAccess.Write, rows =>
+        {
+            Insert(rows, "outer");
+            return true;
+        });
+        foreach (var access in new[] { TaskRowAccess.Direct, TaskRowAccess.Read, TaskRowAccess.Write })
+        {
+            var entered = false;
+            var refusal = Assert.Throws<InvalidOperationException>(() =>
+                store.Run(TaskRowAccess.Read, _ => other.Run(access, rows =>
+                {
+                    entered = true;
+                    Insert(rows, "nested-" + access);
+                    return true;
+                }))
+            );
+            Assert.Contains("opened a second transaction", refusal.Message);
+            Assert.False(entered && access != TaskRowAccess.Direct, $"{access} ran its body");
+            Assert.Null(store.Run(TaskRowAccess.Direct, rows => rows.Read("nested-" + access)));
+        }
+        Assert.NotNull(store.Run(TaskRowAccess.Direct, rows => rows.Read("outer")));
+    }
+
+    private sealed class CallbackFailure : Exception;
+
+    // Runs on a thread that doesn't inherit the caller's execution context, so no transaction
+    // scope of the caller flows into it.
+    private static void OnSeparateFlow(Action action)
+    {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception error)
+            {
+                failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error);
+            }
+        });
+        thread.UnsafeStart();
+        thread.Join();
+        failure?.Throw();
     }
 
     [Fact]
