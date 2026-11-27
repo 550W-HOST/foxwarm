@@ -268,4 +268,56 @@ public sealed class PolicyScriptDeterminismTests(ITestOutputHelper output)
             PolicyScriptRunner.OnBeforeSpawn = previous;
         }
     }
+
+    [Fact]
+    public async Task Startup_delay_does_not_consume_execution_wall_clock_and_timeouts_report_phase()
+    {
+        var prevSpawn = PolicyScriptRunner.OnBeforeSpawn;
+        var prevStartup = PolicyScriptRunner.StartupWallClockOverride;
+        var prevExec = PolicyScriptRunner.ExecutionWallClockOverride;
+        try
+        {
+            // Startup takes longer than the execution wall-clock limit (250ms > 120ms),
+            // yet the script succeeds because execution wall clock starts only after Configure.
+            PolicyScriptRunner.StartupWallClockOverride = TimeSpan.FromSeconds(5);
+            PolicyScriptRunner.ExecutionWallClockOverride = TimeSpan.FromMilliseconds(150);
+            PolicyScriptRunner.OnBeforeSpawn = () => Thread.Sleep(250);
+            var ok = await PolicyScriptRunner.EvaluateRulesAsync(
+                "return [{'id': 'after-slow-start', 'action': 'allow'}]",
+                null,
+                "slow-start"
+            );
+            Assert.Single(ok);
+
+            // Startup timeout reports startup phase clearly and is marked transient.
+            PolicyScriptRunner.StartupWallClockOverride = TimeSpan.FromMilliseconds(40);
+            PolicyScriptRunner.ExecutionWallClockOverride = TimeSpan.FromSeconds(2);
+            PolicyScriptRunner.OnBeforeSpawn = () => Thread.Sleep(120);
+            var startupErr = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                PolicyScriptRunner.EvaluateRulesAsync("return []", null, "startup-timeout")
+            );
+            Assert.True(PolicyScriptRunner.IsTransient(startupErr));
+            Assert.Contains("startup timed out", startupErr.Message, StringComparison.OrdinalIgnoreCase);
+
+            // Execution wall-clock timeout reports execution phase clearly and is marked transient.
+            PolicyScriptRunner.OnBeforeSpawn = null;
+            PolicyScriptRunner.StartupWallClockOverride = TimeSpan.FromSeconds(5);
+            PolicyScriptRunner.ExecutionWallClockOverride = TimeSpan.FromMilliseconds(30);
+            var execErr = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                PolicyScriptRunner.EvaluateRulesAsync(
+                    "while True:\n    pass\nreturn []",
+                    null,
+                    "exec-timeout"
+                )
+            );
+            Assert.True(PolicyScriptRunner.IsTransient(execErr));
+            Assert.Contains("execution wall-clock", execErr.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            PolicyScriptRunner.OnBeforeSpawn = prevSpawn;
+            PolicyScriptRunner.StartupWallClockOverride = prevStartup;
+            PolicyScriptRunner.ExecutionWallClockOverride = prevExec;
+        }
+    }
 }

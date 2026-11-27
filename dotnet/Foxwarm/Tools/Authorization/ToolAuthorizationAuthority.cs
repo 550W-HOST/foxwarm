@@ -148,6 +148,8 @@ internal sealed class ToolAuthorizationAuthority(
     private ToolAuthorizationPolicy? cached;
     private ToolAuthorizationPolicy? compiledPolicy;
     private string? compiledRevision;
+    private string? failedRevision;
+    private string? failedMessage;
     private long loadedAt;
     private long Now => clock?.Invoke() ?? Environment.TickCount64;
     internal Action<string>? InstallBoundary { get; set; }
@@ -168,6 +170,21 @@ internal sealed class ToolAuthorizationAuthority(
                 : null;
     }
 
+    private string? DeterministicFailureHit(string revision)
+    {
+        lock (cacheGate)
+            return failedRevision == revision ? failedMessage : null;
+    }
+
+    private void RecordDeterministicFailure(string revision, string message)
+    {
+        lock (cacheGate)
+        {
+            failedRevision = revision;
+            failedMessage = message;
+        }
+    }
+
     private ToolAuthorizationPolicy Cache(ToolAuthorizationPolicy value, string revision)
     {
         var now = Now;
@@ -176,6 +193,8 @@ internal sealed class ToolAuthorizationAuthority(
             cached = value;
             compiledPolicy = value;
             compiledRevision = revision;
+            failedRevision = null;
+            failedMessage = null;
             loadedAt = now;
             return value;
         }
@@ -188,6 +207,8 @@ internal sealed class ToolAuthorizationAuthority(
             cached = null;
             compiledPolicy = null;
             compiledRevision = null;
+            failedRevision = null;
+            failedMessage = null;
         }
     }
 
@@ -199,7 +220,11 @@ internal sealed class ToolAuthorizationAuthority(
     {
         if (CompiledHit(revision) is { } existing)
             return existing;
-        return await ToolAuthorizationYaml.ParseAsync(bytes, cancellationToken).ConfigureAwait(false);
+        if (DeterministicFailureHit(revision) is { } failure)
+            throw new InvalidDataException(failure);
+        return await ToolAuthorizationYaml
+            .ParseAsync(bytes, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     internal ToolAuthorizationPolicy? CachedForBytes(byte[] bytes) =>
@@ -291,12 +316,22 @@ internal sealed class ToolAuthorizationAuthority(
         var revision = Revision(bytes);
         if (CompiledHit(revision) is { } existing)
             return (existing, revision);
-        var policy = bytes is null
-            ? ToolAuthorizationPolicy.Compatibility()
-            : ToolAuthorizationYaml.Parse(bytes);
-        if (bytes is not null)
-            ToolAuthorizationPolicy.Report("policy", policy);
-        return (policy, revision);
+        if (DeterministicFailureHit(revision) is { } failure)
+            throw new InvalidDataException(failure);
+        try
+        {
+            var policy = bytes is null
+                ? ToolAuthorizationPolicy.Compatibility()
+                : ToolAuthorizationYaml.Parse(bytes);
+            if (bytes is not null)
+                ToolAuthorizationPolicy.Report("policy", policy);
+            return (policy, revision);
+        }
+        catch (InvalidDataException error) when (!PolicyScriptRunner.IsTransient(error))
+        {
+            RecordDeterministicFailure(revision, error.Message);
+            throw;
+        }
     }
 
     private async Task<(ToolAuthorizationPolicy Policy, string Revision)> ReadAsync(
@@ -307,12 +342,24 @@ internal sealed class ToolAuthorizationAuthority(
         var revision = Revision(bytes);
         if (CompiledHit(revision) is { } existing)
             return (existing, revision);
-        var policy = bytes is null
-            ? ToolAuthorizationPolicy.Compatibility()
-            : await ToolAuthorizationYaml.ParseAsync(bytes, cancellationToken).ConfigureAwait(false);
-        if (bytes is not null)
-            ToolAuthorizationPolicy.Report("policy", policy);
-        return (policy, revision);
+        if (DeterministicFailureHit(revision) is { } failure)
+            throw new InvalidDataException(failure);
+        try
+        {
+            var policy = bytes is null
+                ? ToolAuthorizationPolicy.Compatibility()
+                : await ToolAuthorizationYaml
+                    .ParseAsync(bytes, cancellationToken)
+                    .ConfigureAwait(false);
+            if (bytes is not null)
+                ToolAuthorizationPolicy.Report("policy", policy);
+            return (policy, revision);
+        }
+        catch (InvalidDataException error) when (!PolicyScriptRunner.IsTransient(error))
+        {
+            RecordDeterministicFailure(revision, error.Message);
+            throw;
+        }
     }
 
     internal ToolAuthorizationPolicy Load()

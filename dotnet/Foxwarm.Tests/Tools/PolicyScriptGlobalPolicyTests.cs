@@ -220,6 +220,144 @@ public sealed class PolicyScriptGlobalPolicyTests
     }
 
     [Fact]
+    public async Task Transient_load_failures_are_not_cached_and_recover_on_next_load()
+    {
+        using var temp = new TempDirectory();
+        var now = 1_000L;
+        var authority = new ToolAuthorizationAuthority(
+            temp.Path,
+            clock: () => now,
+            retryDelay: _ => Task.CompletedTask
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(authority.PolicyPath)!);
+
+        const string validScript = """
+            version: 1
+            defaultAction: deny
+            script: |
+              return [{"id": "recovered", "action": "allow"}]
+            """;
+        await File.WriteAllTextAsync(authority.PolicyPath, validScript);
+
+        var prevBinary = PolicyScriptRunner.BinaryOverride;
+        var prevSpawn = PolicyScriptRunner.OnBeforeSpawn;
+        var prevStartup = PolicyScriptRunner.StartupWallClockOverride;
+        try
+        {
+            // 1. Spawn failure (missing/unspawnable worker) -> fails closed, NOT cached; recovers on next Load.
+            PolicyScriptRunner.BinaryOverride = () => "/nonexistent/monty-spawn-fail";
+            await Assert.ThrowsAsync<ToolAuthorizationUnavailableException>(() =>
+                authority.LoadAsync()
+            );
+
+            PolicyScriptRunner.BinaryOverride = prevBinary;
+            var afterSpawn = await authority.LoadAsync();
+            Assert.Equal(
+                "recovered",
+                afterSpawn.Value["rules"]!.AsArray()[0]!["id"]!.GetValue<string>()
+            );
+
+            // 2. Crashed worker on changed policy -> fails closed, NOT cached; recovers on next Load.
+            var crashingWorker = Path.Combine(temp.Path, "crash-worker.sh");
+            await File.WriteAllTextAsync(crashingWorker, "#!/bin/sh\nexit 1\n");
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(
+                    crashingWorker,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                );
+
+            const string validScriptV2 = """
+                version: 1
+                defaultAction: deny
+                script: |
+                  return [{"id": "recovered-v2", "action": "allow"}]
+                """;
+            await File.WriteAllTextAsync(authority.PolicyPath, validScriptV2);
+            now += 15_000;
+            PolicyScriptRunner.BinaryOverride = () => crashingWorker;
+            await Assert.ThrowsAsync<ToolAuthorizationUnavailableException>(() =>
+                authority.LoadAsync()
+            );
+
+            PolicyScriptRunner.BinaryOverride = prevBinary;
+            var afterCrash = await authority.LoadAsync();
+            Assert.Equal(
+                "recovered-v2",
+                afterCrash.Value["rules"]!.AsArray()[0]!["id"]!.GetValue<string>()
+            );
+
+            // 3. Startup timeout on changed policy -> fails closed, NOT cached; recovers on next Load.
+            const string validScriptV3 = """
+                version: 1
+                defaultAction: deny
+                script: |
+                  return [{"id": "recovered-v3", "action": "allow"}]
+                """;
+            await File.WriteAllTextAsync(authority.PolicyPath, validScriptV3);
+            now += 15_000;
+            PolicyScriptRunner.StartupWallClockOverride = TimeSpan.FromMilliseconds(20);
+            PolicyScriptRunner.OnBeforeSpawn = () => Thread.Sleep(80);
+            await Assert.ThrowsAsync<ToolAuthorizationUnavailableException>(() =>
+                authority.LoadAsync()
+            );
+
+            PolicyScriptRunner.OnBeforeSpawn = null;
+            PolicyScriptRunner.StartupWallClockOverride = prevStartup;
+            var afterTimeout = await authority.LoadAsync();
+            Assert.Equal(
+                "recovered-v3",
+                afterTimeout.Value["rules"]!.AsArray()[0]!["id"]!.GetValue<string>()
+            );
+        }
+        finally
+        {
+            PolicyScriptRunner.BinaryOverride = prevBinary;
+            PolicyScriptRunner.OnBeforeSpawn = prevSpawn;
+            PolicyScriptRunner.StartupWallClockOverride = prevStartup;
+        }
+    }
+
+    [Fact]
+    public async Task Deterministic_script_error_stays_cached_until_policy_bytes_change()
+    {
+        using var temp = new TempDirectory();
+        var now = 1_000L;
+        var authority = new ToolAuthorizationAuthority(
+            temp.Path,
+            clock: () => now,
+            retryDelay: _ => Task.CompletedTask
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(authority.PolicyPath)!);
+
+        await File.WriteAllTextAsync(
+            authority.PolicyPath,
+            "version: 1\nscript: |\n  return [1 / 0]\n"
+        );
+
+        var c0 = PolicyScriptRunner.CompilationCount;
+        await Assert.ThrowsAsync<ToolAuthorizationUnavailableException>(() => authority.LoadAsync());
+        Assert.Equal(c0 + 1, PolicyScriptRunner.CompilationCount);
+
+        // Repeated loads with unchanged bytes stay failed closed without re-running Monty.
+        now += 15_000;
+        await Assert.ThrowsAsync<ToolAuthorizationUnavailableException>(() => authority.LoadAsync());
+        Assert.Throws<ToolAuthorizationUnavailableException>(() => authority.Load());
+        Assert.Equal(c0 + 1, PolicyScriptRunner.CompilationCount);
+
+        // Updating the file bytes clears the failure and compiles once.
+        await File.WriteAllTextAsync(
+            authority.PolicyPath,
+            "version: 1\nscript: |\n  return [{'id': 'fixed', 'action': 'allow'}]\n"
+        );
+        var fixedPolicy = await authority.LoadAsync();
+        Assert.Equal(c0 + 2, PolicyScriptRunner.CompilationCount);
+        Assert.Equal(
+            "fixed",
+            fixedPolicy.Value["rules"]!.AsArray()[0]!["id"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
     public async Task Cold_synchronous_Load_runs_concurrently_without_deadlock()
     {
         using var temp = new TempDirectory();
