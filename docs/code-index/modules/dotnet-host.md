@@ -19,6 +19,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Hosted operator](../units/hosted-operator.md): separate control-plane process, tenant provisioning, settings, placement observations and first-run credential exchange.
 - [Hosted runtimes host](../units/hosted-runtimes-host.md): placement and eligibility at acquisition, and the replica that serves many tenants on one front.
 - [Tenant forwarding](../units/hosted-forwarding.md): public routing, the authenticated replica mesh and dispatch outcomes.
+- [Hosted master host](../units/hosted-master-host.md): the one pinned operator tenant, its persistent Agent volume and full Main runtime.
 - [Runtime capability profile](../units/hosted-capabilities.md): which Main-local features a runtime has, and the hosted runtime without a master Node.
 - [Egress guard, tenant limits and tenant settings](../units/hosted-egress-limits.md): the outbound client factory and its profiles, the deployment `egress` rules, and the source rule; the tenant limits at their admission points and the tenant settings (journal switch and retention).
 - [Hosted Archive and identity ledger](../units/hosted-archive.md): the Archive tables, the row insert of the authority commit, and the sequence projection.

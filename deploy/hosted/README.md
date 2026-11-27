@@ -162,3 +162,7 @@ For an existing hosted tenant that used a separate Agents volume, stop its repli
 ## Drills
 
 `drills/run.mjs` checks the failover contracts against local processes or this Compose stack: a turn interrupted by killing the owner, a database partition, the upgrade refusals, a rolling update and an import. CI runs them on the Compose stack with `check-render.sh`, which validates the Compose files and the Helm chart, and `kind/check.mjs`, which installs the chart on a kind cluster and checks the migration hook, the probes and a takeover after the owner pod is deleted. See [hosted packaging](../../docs/code-index/units/hosted-packaging.md).
+
+### Operator Agent folders
+
+The master host opens Agent folders under `FOXWARM_AGENTS_DIR/<tenant_id>/`. The numeric directory belongs to that database tenant for its entire lifetime. Back up the master volume alongside its structured state. After replacing or deleting the operator tenant, preserve or remove its old directory explicitly. A replacement gets its own directory.

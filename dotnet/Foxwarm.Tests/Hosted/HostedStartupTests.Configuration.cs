@@ -64,7 +64,7 @@ public sealed partial class HostedStartupTests
                 var runtime = await HostedEntry.BuildRuntimeAsync(
                     tenant,
                     storage,
-                    files.Bootstrap,
+                    files.Bootstrap with { Role = role, AgentsVolume = role == ReplicaRoles.MasterHost ? files.Agents : null },
                     deployment,
                     context.PublicListener,
                     profile: context.Grant.Profile
