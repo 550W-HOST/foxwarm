@@ -167,6 +167,27 @@ public sealed class OperatorProcessTests
             await db.ExecuteOwnerAsync("UPDATE replicas SET capacity=jsonb_set(capacity, '{tenants,alpha,epoch}', '-1')");
             Assert.Null((await Call(HttpMethod.Get, "/placement")).Json["tenants"]!.AsArray().Single(t => (string?)t!["slug"] == "alpha")!["hot"]);
             var epoch = await harness.EpochAsync("alpha");
+            // The operator owns both limits. Change which one is tighter and verify the real
+            // multipart route reads the effective minimum from each replacement generation.
+            foreach (var (upload, agentFile) in new[] { (131072, 65536), (65536, 131072) })
+            {
+                var limits = new JsonObject { ["uploadBytes"] = upload, ["agentFileBytes"] = agentFile };
+                Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", new JsonObject { ["limits"] = limits })).Status);
+                var previous = epoch;
+                await Until(async () => (await AsAdmin(reusable, "/health")).Status == HttpStatusCode.OK && await harness.EpochAsync("alpha") > previous);
+                epoch = await harness.EpochAsync("alpha");
+                foreach (var (bytes, status) in new[] { (65536, HttpStatusCode.OK), (65537, HttpStatusCode.RequestEntityTooLarge) })
+                {
+                    using var uploadRequest = new HttpRequestMessage(HttpMethod.Post, front + "/api/upload") { Content = new MultipartFormDataContent
+                    {
+                        { new ByteArrayContent(new byte[bytes]), "file", "sample.txt" },
+                    } };
+                    uploadRequest.Headers.Host = "alpha.test";
+                    uploadRequest.Headers.Authorization = new("Bearer", reusable);
+                    using var uploaded = await client.SendAsync(uploadRequest);
+                    Assert.Equal(status, uploaded.StatusCode);
+                }
+            }
             var changed = new JsonObject { ["limits"] = new JsonObject { ["requestsPerSecond"] = 1, ["requestBurst"] = 1, ["dbStatements"] = 2, ["agentStoreFiles"] = 200 }, ["journal"] = new JsonObject { ["enabled"] = false, ["retentionDays"] = 2 } };
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", changed)).Status);
             await Until(async () => { await AsAdmin(reusable, "/health"); return await harness.EpochAsync("alpha") > epoch; });
