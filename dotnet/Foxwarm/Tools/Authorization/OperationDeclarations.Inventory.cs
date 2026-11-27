@@ -289,7 +289,13 @@ internal static partial class OperationDeclarations
         Site("McpInboundSessions.cs", "ReadAsync", 2, Require, "builtin:view_session#primary"),
         Site("McpInboundSessions.cs", "SendAsync", 1, RequireAsync, "builtin:send_to_session#primary"),
         Site("McpInboundSessions.cs", "SendAsync", 2, Require, "builtin:send_to_session#primary"),
+        // The stateless file download: the external Node read of the file, evaluated against
+        // the ceiling and global layers at each check (before the request, at the send gate and
+        // before publishing bytes).
+        Site("McpNodeFileDownload.cs", "Register", 1, Evaluate, "node:*#primary"),
     ];
+
+    private const string Evaluate = "ToolAuthorizationEvaluation.Evaluate";
 
 
     // The only direct callers of the evaluator.
@@ -298,6 +304,11 @@ internal static partial class OperationDeclarations
         (Auth, "AssessToolAsync", "the shared assessment of every internal request"),
         (Auth, "EffectiveDecision", "the combined decision of the effective layers"),
         ("McpExternalContext.cs", "Require", "the inbound check of one external request"),
+        (
+            "Sessions/SessionManager.Approvals.cs",
+            "CurrentApproversAsync",
+            "who may decide a pending approval under the effective layers in effect now"
+        ),
     ];
 
     // Sites that are the gate or the plumbing of the calls above, not obligations of their own.
