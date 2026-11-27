@@ -49,7 +49,7 @@ internal static class McpOAuthHttp
         var host = endpoint.IdnHost.Trim('[', ']');
         var addresses = IPAddress.TryParse(host, out var literal)
             ? [literal]
-            : await egress.Resolver(host, token);
+            : await egress.ResolveAsync(host, token);
         var allowPrivate =
             SameOrigin(resource, endpoint) || Loopback(resource.Host) && Loopback(endpoint.Host);
         // The deployment's policy first, so a refused endpoint is named as one.

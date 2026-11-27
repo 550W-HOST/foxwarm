@@ -70,7 +70,9 @@ egress:
     hosted: [llm.models.svc.cluster.local]
 ```
 
-A host name exception skips the address check for that name only; prefer it to a CIDR. HTTPS servers must send their full certificate chain: missing intermediate certificates aren't downloaded.
+A host name exception skips the address check for that name only; prefer it to a CIDR. It matches the name exactly as written, trailing dot included: a relative name such as `mock-llm` or a Kubernetes short service name is resolved through the replica's DNS search list, while `api.example.com.` is absolute. Use absolute names for hosts outside the cluster. HTTPS servers must send their full certificate chain: missing intermediate certificates aren't downloaded.
+
+Addresses in the local-use NAT64 range `64:ff9b:1::/48` are refused for every tenant, because the range doesn't say which IPv4 host an address stands for. If you run a translator there, allow its prefix under `egress.allow.hosted` or `egress.allow.operator`; the IPv4 rules then no longer apply to addresses in that prefix. Addresses in the well-known NAT64 prefix `64:ff9b::/96` are checked as the IPv4 address they translate to.
 
 ## Docker Compose
 

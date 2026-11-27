@@ -220,8 +220,12 @@ internal sealed record EgressAllowList(
         return new(networks, hosts);
     }
 
+    // An IPv4 exception covers a translated address of that IPv4 host, never a tunnel's:
+    // a 6to4 address takes an IPv6 exception (EgressAddresses.AllowCandidates).
     internal bool Contains(IPAddress address) =>
-        EgressAddresses.Candidates(address).Any(candidate => Networks.Any(network => network.Contains(candidate)));
+        EgressAddresses
+            .AllowCandidates(address)
+            .Any(candidate => Networks.Any(network => network.Contains(candidate)));
 }
 
 /// <summary>
@@ -260,9 +264,18 @@ internal static class EgressAddresses
         IPNetwork.Parse("ff00::/8"),
     ];
 
+    // The well-known NAT64 prefix: a translation, the IPv4 peer in the last 32 bits (RFC 6052).
     private static readonly IPNetwork Nat64 = IPNetwork.Parse("64:ff9b::/96");
-    private static readonly IPNetwork Nat64Local = IPNetwork.Parse("64:ff9b:1::/48");
+
+    // 6to4: a tunnel to a whole IPv6 site behind the IPv4 router in bits 16–47 (RFC 3056).
     private static readonly IPNetwork SixToFour = IPNetwork.Parse("2002::/16");
+
+    /// <summary>
+    /// The local-use NAT64 reservation (RFC 8215). Its translation prefix and the place of an
+    /// embedded IPv4 address are each operator's own, so no IPv4 identity is derived from it;
+    /// both guarded profiles deny it unless the deployment allows it.
+    /// </summary>
+    internal static readonly IPNetwork Nat64Local = IPNetwork.Parse("64:ff9b:1::/48");
 
     /// <summary>
     /// The address in the effective address space rules are compared in, which is also the
@@ -293,31 +306,51 @@ internal static class EgressAddresses
     }
 
     /// <summary>
-    /// The IPv4 address a NAT64 or 6to4 address carries: <c>64:ff9b::/96</c> and
-    /// <c>64:ff9b:1::/48</c> in the last 32 bits, <c>2002::/16</c> in bits 16–47. Null for any
-    /// other address. The connection still goes to the IPv6 address.
+    /// The IPv4 address a well-known NAT64 or a 6to4 address carries: <c>64:ff9b::/96</c> in
+    /// the last 32 bits, <c>2002::/16</c> in bits 16–47. Null for any other address. The
+    /// connection still goes to the IPv6 address.
     /// </summary>
-    internal static IPAddress? EmbeddedV4(IPAddress address)
+    internal static IPAddress? EmbeddedV4(IPAddress address) =>
+        Translated(address) ?? Tunnelled(address);
+
+    // The IPv4 peer a well-known NAT64 address is translated to.
+    private static IPAddress? Translated(IPAddress address)
     {
         address = Effective(address);
-        if (address.AddressFamily != AddressFamily.InterNetworkV6)
-            return null;
-        var bytes = address.GetAddressBytes();
-        if (Nat64.Contains(address) || Nat64Local.Contains(address))
-            return new IPAddress(bytes[12..16]);
-        if (SixToFour.Contains(address))
-            return new IPAddress(bytes[2..6]);
-        return null;
+        return address.AddressFamily == AddressFamily.InterNetworkV6 && Nat64.Contains(address)
+            ? new IPAddress(address.GetAddressBytes()[12..16])
+            : null;
+    }
+
+    // The IPv4 router a 6to4 address's site is reached through.
+    private static IPAddress? Tunnelled(IPAddress address)
+    {
+        address = Effective(address);
+        return address.AddressFamily == AddressFamily.InterNetworkV6 && SixToFour.Contains(address)
+            ? new IPAddress(address.GetAddressBytes()[2..6])
+            : null;
     }
 
     /// <summary>
-    /// The forms of an address the rules apply to: its effective address and, for a NAT64 or
-    /// 6to4 address, the IPv4 address it carries.
+    /// The forms of an address deny rules and the default set apply to: its effective address
+    /// and, for a well-known NAT64 or a 6to4 address, the IPv4 address it carries. For a
+    /// tunnel that is the outer endpoint, checked conservatively.
     /// </summary>
     internal static IReadOnlyList<IPAddress> Candidates(IPAddress address)
     {
         var effective = Effective(address);
         return EmbeddedV4(effective) is { } embedded ? [effective, embedded] : [effective];
+    }
+
+    /// <summary>
+    /// The forms of an address allow exceptions apply to: its effective address and, for a
+    /// well-known NAT64 address, the IPv4 peer it is translated to. A 6to4 address's IPv4
+    /// router isn't the host behind it, so only an IPv6 exception allows it.
+    /// </summary>
+    internal static IReadOnlyList<IPAddress> AllowCandidates(IPAddress address)
+    {
+        var effective = Effective(address);
+        return Translated(effective) is { } peer ? [effective, peer] : [effective];
     }
 
     /// <summary>
@@ -336,12 +369,15 @@ internal static class EgressAddresses
     }
 
     /// <summary>
-    /// A host name in the form connections name it: IDNA ASCII, lower case, without a trailing
-    /// dot. Null when the text isn't a DNS name.
+    /// A host name in the form it is resolved in: IDNA ASCII and lower case. A trailing root
+    /// label stays: <c>api.example.com.</c> is absolute, <c>api.example.com</c> and
+    /// <c>mock-llm</c> are resolver-relative and go through the search list. The root rule
+    /// applies after IDNA conversion, so an ideographic full stop ends a name as a dot does.
+    /// Null when the text isn't a DNS name.
     /// </summary>
     internal static string? HostKey(string host)
     {
-        host = host.Trim().TrimEnd('.');
+        host = host.Trim();
         if (host.Length == 0)
             return null;
         string ascii;
@@ -351,10 +387,23 @@ internal static class EgressAddresses
         }
         catch (ArgumentException)
         {
-            return null;
+            // Some IDNA implementations refuse an empty root label; convert the name without it.
+            if (!host.EndsWith('.') || host.Length == 1)
+                return null;
+            try
+            {
+                ascii = new System.Globalization.IdnMapping().GetAscii(host[..^1]) + ".";
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
         }
-        ascii = ascii.ToLowerInvariant();
-        return Uri.CheckHostName(ascii) == UriHostNameType.Dns ? ascii : null;
+        var absolute = ascii.EndsWith('.');
+        var name = (absolute ? ascii[..^1] : ascii).ToLowerInvariant();
+        if (name.Length == 0 || name.EndsWith('.') || Uri.CheckHostName(name) != UriHostNameType.Dns)
+            return null;
+        return absolute ? name + "." : name;
     }
 }
 
@@ -418,9 +467,21 @@ internal sealed class EgressPolicy
     private EgressAllowList Allow =>
         Profile == EgressProfile.Operator ? rules.OperatorAllow : rules.HostedAllow;
 
-    /// <summary>Whether a host name is an allow exception, so its addresses aren't checked.</summary>
+    /// <summary>
+    /// Whether a host name is an allow exception, so its addresses aren't checked. The
+    /// exception matches only the same form: an absolute name doesn't match its relative
+    /// spelling, nor the other way round.
+    /// </summary>
     internal bool AllowsHost(string host) =>
         Guarded && EgressAddresses.HostKey(host) is { } key && Allow.Hosts.Contains(key);
+
+    /// <summary>
+    /// Resolves a host name. A guarded policy resolves the form its exceptions are keyed by
+    /// (<see cref="EgressAddresses.HostKey"/>), so the name it authorized is the name it looks
+    /// up; file mode resolves the host as given.
+    /// </summary>
+    internal Task<IPAddress[]> ResolveAsync(string host, CancellationToken token) =>
+        Resolver(Guarded ? EgressAddresses.HostKey(host) ?? host : host, token);
 
     /// <summary>Whether this policy refuses a connection to the address.</summary>
     internal bool Denies(IPAddress address)
@@ -431,9 +492,12 @@ internal sealed class EgressPolicy
         // apply to the IPv4 address a NAT64 or 6to4 address carries.
         var candidates = EgressAddresses.Candidates(address);
         bool Matches(IPNetwork network) => candidates.Any(network.Contains);
-        if (Allow.Networks.Any(Matches))
+        if (Allow.Contains(address))
             return false;
         if (rules.Deny.Any(Matches))
+            return true;
+        // No IPv4 identity is derived from the local-use NAT64 range, so it is denied whole.
+        if (EgressAddresses.Nat64Local.Contains(EgressAddresses.Effective(address)))
             return true;
         return Profile == EgressProfile.Hosted && EgressAddresses.IsInternal(address, translated: true);
     }
@@ -448,7 +512,7 @@ internal sealed class EgressPolicy
         host = host.Trim('[', ']');
         var addresses = IPAddress.TryParse(host, out var literal)
             ? [literal]
-            : await Resolver(host, token).ConfigureAwait(false);
+            : await ResolveAsync(host, token).ConfigureAwait(false);
         if (addresses.Length == 0)
             throw new SocketException((int)SocketError.HostNotFound);
         if (AllowsHost(host))

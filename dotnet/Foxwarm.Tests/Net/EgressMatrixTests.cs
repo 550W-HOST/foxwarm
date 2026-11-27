@@ -410,22 +410,100 @@ public sealed class EgressMatrixTests
     public void HostExceptionsCompareInTheirWireForm()
     {
         var policy = EgressPolicy.Hosted(EgressRules.Parse(Yaml("allow: {hosted: [Bücher.Example.]}")));
-        Assert.True(policy.AllowsHost("xn--bcher-kva.example"));
-        Assert.True(policy.AllowsHost("bücher.example"));
-        Assert.True(policy.AllowsHost("BÜCHER.example."));
-        Assert.True(policy.AllowsHost(new Uri("https://bücher.example/").IdnHost));
-        Assert.False(policy.AllowsHost("buecher.example"));
-        Assert.False(policy.AllowsHost("bucher.example"));
-        // The ASCII spelling in the configuration is the same exception.
+        Assert.True(policy.AllowsHost("xn--bcher-kva.example."));
+        Assert.True(policy.AllowsHost("bücher.example."));
+        Assert.True(policy.AllowsHost("BÜCHER.example。"));
+        Assert.True(policy.AllowsHost(new Uri("https://bücher.example./").IdnHost));
+        Assert.False(policy.AllowsHost("buecher.example."));
+        Assert.False(policy.AllowsHost("bucher.example."));
+        // An absolute exception doesn't match the relative spelling.
+        Assert.False(policy.AllowsHost("bücher.example"));
+        Assert.False(policy.AllowsHost("xn--bcher-kva.example"));
+        // The ASCII spelling in the configuration is the same exception, and an ideographic
+        // full stop ends a name as a dot does.
         var ascii = EgressPolicy.Hosted(EgressRules.Parse(Yaml("allow: {hosted: [xn--bcher-kva.example]}")));
         Assert.True(ascii.AllowsHost("bücher.example"));
+        Assert.True(ascii.AllowsHost(new Uri("https://bücher.example/").IdnHost));
+        Assert.False(ascii.AllowsHost("bücher.example."));
+        Assert.False(ascii.AllowsHost("bücher.example。"));
+        var ideographic = EgressPolicy.Hosted(EgressRules.Parse(Yaml("allow: {hosted: [Bücher.example。]}")));
+        Assert.True(ideographic.AllowsHost("xn--bcher-kva.example."));
+        Assert.False(ideographic.AllowsHost("xn--bcher-kva.example"));
+    }
+
+    [Fact]
+    public async Task AHostExceptionResolvesTheFormItAuthorizes()
+    {
+        await using var fixture = await EgressFixture.StartAsync();
+        // The search list and the absolute name answer differently.
+        fixture.Name("mock-llm", IPAddress.Loopback);
+        fixture.Name("mock-llm.", IPAddress.Parse("127.0.0.2"));
+        fixture.Name("api.example.com.", IPAddress.Parse("127.0.0.3"));
+        fixture.Name("api.example.com", IPAddress.Parse("10.1.2.3"));
+        var policy = fixture.Hosted(
+            EgressRules.Parse(Yaml("allow: {hosted: [mock-llm, api.example.com.]}"))
+        );
+        Assert.Equal([IPAddress.Loopback], await policy.ResolveCheckedAsync("mock-llm", default));
+        Assert.Equal(
+            [IPAddress.Parse("127.0.0.3")],
+            await policy.ResolveCheckedAsync("API.example.com.", default)
+        );
+        // The other forms aren't exceptions: their internal answers are refused.
+        await Assert.ThrowsAsync<EgressDeniedException>(() => policy.ResolveCheckedAsync("mock-llm.", default));
+        await Assert.ThrowsAsync<EgressDeniedException>(() =>
+            policy.ResolveCheckedAsync("api.example.com", default)
+        );
+        Assert.Equal(["mock-llm", "api.example.com.", "mock-llm.", "api.example.com"], fixture.Lookups);
+        // Through a client, the request host is the form resolved.
+        Assert.Null(await GetAsync(policy, $"http://mock-llm:{fixture.Port}/ok"));
+        Assert.True(Denied(await GetAsync(policy, $"http://mock-llm.:{fixture.Port}/ok")));
+    }
+
+    [Fact]
+    public void TheLocalUseNat64RangeIsDeniedWholeUnlessAllowed()
+    {
+        // RFC 8215 leaves the translation prefix and any embedded address to the operator, so
+        // no IPv4 identity is read from it: a public-looking and an internal-looking suffix are
+        // both denied, for both profiles.
+        foreach (var policy in new[] { EgressPolicy.Hosted(), EgressPolicy.Operator() })
+            foreach (var input in new[] { "64:ff9b:1::808:808", "64:ff9b:1:808:800::", "64:ff9b:1::a00:1" })
+                Assert.True(policy.Denies(IPAddress.Parse(input)), $"{policy.Profile} {input}");
+        // An operator running a translator there allows its range; that gives up the embedded
+        // IPv4 checks for it.
+        var rules = EgressRules.Parse(
+            Yaml("deny: [10.0.0.0/8]\nallow:\n  hosted: [\"64:ff9b:1:808::/64\"]\n  operator: [\"64:ff9b:1::/48\"]")
+        );
+        Assert.False(EgressPolicy.Operator(rules).Denies(IPAddress.Parse("64:ff9b:1::a00:1")));
+        Assert.False(EgressPolicy.Hosted(rules).Denies(IPAddress.Parse("64:ff9b:1:808:800::")));
+        Assert.True(EgressPolicy.Hosted(rules).Denies(IPAddress.Parse("64:ff9b:1::808:808")));
+        // The well-known prefix keeps its low-32-bit translation.
+        Assert.False(EgressPolicy.Hosted().Denies(IPAddress.Parse("64:ff9b::808:808")));
+        Assert.True(EgressPolicy.Hosted().Denies(IPAddress.Parse("64:ff9b::a00:1")));
+    }
+
+    [Fact]
+    public void AnIPv4ExceptionAllowsATranslationButNotATunnel()
+    {
+        var rules = EgressRules.Parse(Yaml("deny: [\"2002:808:808::/48\"]\nallow: {hosted: [10.0.0.5, 8.8.8.8]}"));
+        var hosted = EgressPolicy.Hosted(rules);
+        Assert.False(hosted.Denies(IPAddress.Parse("10.0.0.5")));
+        // NAT64 translates to the excepted host itself.
+        Assert.False(hosted.Denies(IPAddress.Parse("64:ff9b::a00:5")));
+        // A 6to4 site behind that router is another host: denies still see the router.
+        Assert.True(hosted.Denies(IPAddress.Parse("2002:a00:5::1")));
+        // An IPv4 exception for a router doesn't undo an IPv6 deny of the site behind it.
+        Assert.True(hosted.Denies(IPAddress.Parse("2002:808:808::1")));
+        // The site takes an IPv6 exception.
+        var site = EgressPolicy.Hosted(EgressRules.Parse(Yaml("allow: {hosted: [\"2002:a00:5::/48\"]}")));
+        Assert.False(site.Denies(IPAddress.Parse("2002:a00:5::1")));
     }
 
     [Fact]
     public void TheDefaultDenySetCoversEveryRangeOfThePlan()
     {
+        // The local-use NAT64 range is denied whole rather than as an internal IPv4 address.
         foreach (var host in Literals)
-            Assert.True(EgressAddresses.IsInternal(Address(host), translated: true), host);
+            Assert.True(EgressPolicy.Hosted().Denies(Address(host)), host);
         foreach (
             var host in new[]
             {
@@ -440,7 +518,6 @@ public sealed class EgressMatrixTests
                 "::ffff:8.8.8.8",
                 "2001:4860:4860::8888",
                 "64:ff9b::808:808",
-                "64:ff9b:1::808:808",
                 "2002:808:808::1",
                 // Teredo isn't decoded.
                 "2001:0:4136:e378:8000:63bf:3fff:fdd2",
