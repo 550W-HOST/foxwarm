@@ -260,7 +260,10 @@ internal sealed partial class ModelConfiguration
         {
             var bytes = await candidate(token);
             var raw = new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
-            var validated = await ValidateAppCandidateAsync(raw);
+            // The saved counts come from the document this save replaces, read under the same
+            // serialization.
+            ConfigurationCounts? saved = Limits is null ? null : await SavedConfigurationCountsAsync(token);
+            var validated = await ValidateAppCandidateAsync(raw, saved);
             if (webhooksLocked)
                 RequireUnchangedWebhooks(validated.Access);
             await ReplaceRawAsync(ConfigDocumentName.Config, bytes, token);
@@ -317,7 +320,7 @@ internal sealed partial class ModelConfiguration
     private async Task<(
         JsonObject Config,
         System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access
-    )> ValidateAppCandidateAsync(string raw)
+    )> ValidateAppCandidateAsync(string raw, ConfigurationCounts? saved = null)
     {
         var config = Effective(ConfigurationYaml.Parse(raw, "app config"), tenantDocument: true);
         AppConfigurationRules.Validate(config);
@@ -328,7 +331,7 @@ internal sealed partial class ModelConfiguration
             await HttpServerSettings.ReadExistingTokenAsync(Paths.DataRoot, credentials) ?? ""
         );
         if (Limits is { } limits)
-            RequireConfigurationCounts(limits, config, access);
+            RequireConfigurationCounts(limits, config, access, saved ?? default);
         return (config, access);
     }
 

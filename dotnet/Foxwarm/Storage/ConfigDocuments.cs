@@ -46,6 +46,10 @@ internal interface IConfigDocumentStore
     /// <summary>The stored bytes, or null when the document doesn't exist.</summary>
     byte[]? Read(ConfigDocumentName name);
 
+    /// <summary>As <see cref="Read"/>, without blocking a thread on remote storage.</summary>
+    Task<byte[]?> ReadAsync(ConfigDocumentName name, CancellationToken token) =>
+        Task.FromResult(Read(name));
+
     /// <summary>
     /// The stored bytes, or null when the document doesn't exist, read as one value of at most
     /// <paramref name="maxBytes"/> bytes. A document that is larger, or that can't be read as

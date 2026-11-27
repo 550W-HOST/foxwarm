@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using Foxwarm.Limits;
+using Foxwarm.Storage;
 
 namespace Foxwarm.Models;
 
@@ -12,28 +13,42 @@ internal sealed partial class ModelConfiguration
     /// </summary>
     internal TenantLimits? Limits { get; set; }
 
-    // A save may keep or reduce a count above its limit (an imported installation), but not
-    // raise a count past it.
-    private void RequireConfigurationCounts(
-        TenantLimits limits,
-        JsonObject candidate,
-        ImmutableDictionary<string, AccessIdentity> access
-    )
+    /// <summary>Counted entries of an app configuration.</summary>
+    internal readonly record struct ConfigurationCounts(int Channels, int Identities, int Webhooks);
+
+    // The counts of the stored app configuration, read asynchronously; an unreadable document
+    // counts nothing.
+    private async Task<ConfigurationCounts> SavedConfigurationCountsAsync(CancellationToken token)
     {
-        var (channels, identities, webhooks) = Counts(candidate["channels"], access);
-        (int Channels, int Identities, int Webhooks) saved;
         try
         {
-            var current = ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
-            saved = Counts(
+            var bytes = await Documents.ReadAsync(ConfigDocumentName.Config, token).ConfigureAwait(false);
+            var current = ConfigurationYaml.Parse(
+                bytes is null ? "" : ConfigDocumentText.Decode(bytes),
+                "app config"
+            );
+            var (channels, identities, webhooks) = Counts(
                 current["channels"],
                 AccessConfiguration.Normalize(current["access"], current.ContainsKey("access"))
             );
+            return new(channels, identities, webhooks);
         }
         catch (InvalidDataException)
         {
-            saved = (0, 0, 0);
+            return default;
         }
+    }
+
+    // A save may keep or reduce a count above its limit (an imported installation), but not
+    // raise a count past it.
+    private static void RequireConfigurationCounts(
+        TenantLimits limits,
+        JsonObject candidate,
+        ImmutableDictionary<string, AccessIdentity> access,
+        ConfigurationCounts saved
+    )
+    {
+        var (channels, identities, webhooks) = Counts(candidate["channels"], access);
         Require("channels", channels, saved.Channels, limits.Channels, "channels");
         Require("accessIdentities", identities, saved.Identities, limits.AccessIdentities, "access identities");
         Require("webhooks", webhooks, saved.Webhooks, limits.Webhooks, "webhooks");
