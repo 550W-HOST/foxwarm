@@ -11,13 +11,44 @@ export function createWorkbenchId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
-export function createPaneNode(tabIds: string[] = [], activeTabId: string | null = tabIds[0] || null, id: string = createWorkbenchId('pane'), collapsed = false): WorkbenchPaneNode {
+export function normalizeRecentIds(
+  recent: readonly string[] | undefined,
+  activeId: string | null,
+  validIds: readonly string[],
+): string[] {
+  const validSet = new Set(validIds)
+  const result: string[] = []
+  const seen = new Set<string>()
+  const push = (id: string | null | undefined) => {
+    if (!id || seen.has(id) || !validSet.has(id)) return
+    seen.add(id)
+    result.push(id)
+  }
+  push(activeId)
+  if (Array.isArray(recent)) {
+    for (const id of recent) {
+      if (typeof id === 'string') push(id)
+    }
+  }
+  return result
+}
+
+export function createPaneNode(
+  tabIds: string[] = [],
+  activeTabId: string | null = tabIds[0] || null,
+  id: string = createWorkbenchId('pane'),
+  collapsed = false,
+  recentTabIds?: readonly string[],
+): WorkbenchPaneNode {
+  const uniqueTabIds = Array.from(new Set(tabIds))
+  const resolvedActiveTabId = activeTabId && uniqueTabIds.includes(activeTabId) ? activeTabId : (uniqueTabIds[0] || null)
   return {
     id,
     kind: 'pane',
-    tabIds: [...tabIds],
-    activeTabId: activeTabId && tabIds.includes(activeTabId) ? activeTabId : (tabIds[0] || null),
+    tabIds: uniqueTabIds,
+    activeTabId: resolvedActiveTabId,
     collapsed,
+    recentTabIds: normalizeRecentIds(recentTabIds, resolvedActiveTabId, uniqueTabIds),
   }
 }
 
@@ -136,13 +167,15 @@ export function mapLayoutTree(node: WorkbenchLayoutNode, updater: (node: Workben
 export function normalizeLayoutNode(node: WorkbenchLayoutNode): WorkbenchLayoutNode {
   if (isPaneNode(node)) {
     const uniqueTabIds = Array.from(new Set(node.tabIds))
+    const resolvedActiveTabId = node.activeTabId && uniqueTabIds.includes(node.activeTabId)
+      ? node.activeTabId
+      : (uniqueTabIds[0] || null)
     return {
       ...node,
       tabIds: uniqueTabIds,
-      activeTabId: node.activeTabId && uniqueTabIds.includes(node.activeTabId)
-        ? node.activeTabId
-        : (uniqueTabIds[0] || null),
+      activeTabId: resolvedActiveTabId,
       collapsed: node.collapsed === true,
+      recentTabIds: normalizeRecentIds(node.recentTabIds, resolvedActiveTabId, uniqueTabIds),
     }
   }
 
@@ -251,7 +284,13 @@ function filterLayoutToValidTabs(node: WorkbenchLayoutNode, validTabIds: Set<str
     if (tabIds.length === 0) {
       return null
     }
-    return createPaneNode(tabIds, node.activeTabId && tabIds.includes(node.activeTabId) ? node.activeTabId : tabIds[0], node.id, node.collapsed)
+    const survivingRecent = Array.isArray(node.recentTabIds)
+      ? node.recentTabIds.filter((tabId) => tabIds.includes(tabId))
+      : []
+    const nextActiveTabId = node.activeTabId && tabIds.includes(node.activeTabId)
+      ? node.activeTabId
+      : (survivingRecent[0] || tabIds[0])
+    return createPaneNode(tabIds, nextActiveTabId, node.id, node.collapsed, survivingRecent)
   }
 
   const children: WorkbenchLayoutNode[] = []
@@ -315,7 +354,14 @@ const SYSTEM_TAB_ID = 'system:agents'
 function renameLayoutTab(node: WorkbenchLayoutNode, from: string, to: string): WorkbenchLayoutNode {
   if (isPaneNode(node)) {
     if (!node.tabIds.includes(from)) return node
-    return { ...node, tabIds: node.tabIds.map(tabId => tabId === from ? to : tabId), activeTabId: node.activeTabId === from ? to : node.activeTabId }
+    return {
+      ...node,
+      tabIds: node.tabIds.map(tabId => tabId === from ? to : tabId),
+      activeTabId: node.activeTabId === from ? to : node.activeTabId,
+      recentTabIds: Array.isArray(node.recentTabIds)
+        ? node.recentTabIds.map(tabId => tabId === from ? to : tabId)
+        : undefined,
+    }
   }
   return { ...node, children: node.children.map(child => renameLayoutTab(child, from, to)) }
 }
@@ -357,12 +403,14 @@ export function normalizePersistedWorkbenchState(persisted: WorkbenchPersistedSt
   const tabsById = sanitizeTabsById(state.tabsById, originalRoot)
   const root = normalizeLayoutNode(filterLayoutToValidTabs(originalRoot, new Set(Object.keys(tabsById))) || createPaneNode())
   const paneIds = getPaneIds(root)
+  const focusedPaneId = state.focusedPaneId && paneIds.includes(state.focusedPaneId)
+    ? state.focusedPaneId
+    : ((Array.isArray(state.recentPaneIds) ? state.recentPaneIds.find((id) => paneIds.includes(id)) : undefined) || paneIds[0] || null)
   return {
     version: 4,
     tabsById,
     root,
-    focusedPaneId: state.focusedPaneId && paneIds.includes(state.focusedPaneId)
-      ? state.focusedPaneId
-      : (paneIds[0] || null),
+    focusedPaneId,
+    recentPaneIds: normalizeRecentIds(state.recentPaneIds, focusedPaneId, paneIds),
   }
 }

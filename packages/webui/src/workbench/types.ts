@@ -28,6 +28,8 @@ export type WorkbenchPaneNode = {
   tabIds: string[]
   activeTabId: string | null
   collapsed: boolean
+  /** Most-recently-active tab IDs in this pane (newest first), pruned to `tabIds`. */
+  recentTabIds?: string[]
 }
 
 export type WorkbenchSplitNode = {
@@ -45,6 +47,8 @@ export type WorkbenchPersistedState = {
   tabsById: Record<string, WorkbenchTab>
   root: WorkbenchLayoutNode
   focusedPaneId: string | null
+  /** Most-recently-focused pane IDs in the workbench (newest first), pruned to existing panes. */
+  recentPaneIds?: string[]
 }
 
 export type WorkbenchDropTarget =

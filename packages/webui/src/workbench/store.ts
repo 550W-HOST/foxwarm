@@ -9,6 +9,7 @@ import {
   getPaneIds,
   mapLayoutTree,
   normalizePersistedWorkbenchState,
+  normalizeRecentIds,
   removePaneFromLayout,
   replacePaneWithSplit,
 } from './utils'
@@ -48,6 +49,7 @@ function getDefaultWorkbenchState(): WorkbenchPersistedState {
       tabsById: {},
       root,
       focusedPaneId: root.id,
+      recentPaneIds: [root.id],
     }
   }
 
@@ -92,13 +94,59 @@ function removeFromArray<T>(items: T[], predicate: (item: T) => boolean): { next
   return { next, removedIndex: index }
 }
 
+function recordRecentTabIds(
+  pane: WorkbenchPaneNode,
+  nextActiveTabId: string | null,
+  validTabIds: readonly string[],
+): string[] {
+  const candidates = [
+    ...(nextActiveTabId ? [nextActiveTabId] : []),
+    ...(pane.activeTabId ? [pane.activeTabId] : []),
+    ...(pane.recentTabIds || []),
+  ]
+  return normalizeRecentIds(candidates, nextActiveTabId, validTabIds)
+}
+
+function recordRecentPaneIds(
+  previousRecent: readonly string[] | undefined,
+  previousFocusedPaneId: string | null,
+  nextFocusedPaneId: string | null,
+  validPaneIds: readonly string[],
+): string[] {
+  const candidates = [
+    ...(nextFocusedPaneId ? [nextFocusedPaneId] : []),
+    ...(previousFocusedPaneId ? [previousFocusedPaneId] : []),
+    ...(previousRecent || []),
+  ]
+  return normalizeRecentIds(candidates, nextFocusedPaneId, validPaneIds)
+}
+
+function selectFocusedPaneAfterRemoval(
+  previousFocusedPaneId: string | null,
+  previousRecent: readonly string[] | undefined,
+  nextPaneIds: readonly string[],
+): string | null {
+  if (previousFocusedPaneId && nextPaneIds.includes(previousFocusedPaneId)) {
+    return previousFocusedPaneId
+  }
+  const previousSurviving = Array.isArray(previousRecent)
+    ? previousRecent.find((id) => nextPaneIds.includes(id))
+    : undefined
+  return previousSurviving || nextPaneIds[0] || null
+}
+
 function getPaneAfterTabRemoval(pane: WorkbenchPaneNode, tabId: string): WorkbenchPaneNode {
   const { next, removedIndex } = removeFromArray(pane.tabIds, (currentId) => currentId === tabId)
-  const fallbackActive = next[Math.min(Math.max(removedIndex, 0), Math.max(0, next.length - 1))] || next[0] || null
+  const remainingRecent = (pane.recentTabIds || []).filter((id) => id !== tabId && next.includes(id))
+  const neighborFallback = next[Math.min(Math.max(removedIndex, 0), Math.max(0, next.length - 1))] || next[0] || null
+  const nextActiveTabId = pane.activeTabId && pane.activeTabId !== tabId && next.includes(pane.activeTabId)
+    ? pane.activeTabId
+    : (remainingRecent[0] || neighborFallback)
   return {
     ...pane,
     tabIds: next,
-    activeTabId: pane.activeTabId === tabId ? fallbackActive : (pane.activeTabId && next.includes(pane.activeTabId) ? pane.activeTabId : fallbackActive),
+    activeTabId: nextActiveTabId,
+    recentTabIds: normalizeRecentIds(remainingRecent, nextActiveTabId, next),
   }
 }
 
@@ -114,11 +162,18 @@ function getInsertedPane(pane: WorkbenchPaneNode, tabId: string, options?: { bef
   }
 
   const tabIds = insertIntoArray(withoutDuplicates, tabId, insertIndex)
+  const shouldActivate = options?.activate !== false
+  const nextActiveTabId = shouldActivate
+    ? tabId
+    : (pane.activeTabId && tabIds.includes(pane.activeTabId) ? pane.activeTabId : (tabIds[0] || null))
   return {
     ...pane,
     tabIds,
-    collapsed: options?.activate === false ? pane.collapsed : false,
-    activeTabId: options?.activate === false ? (pane.activeTabId && tabIds.includes(pane.activeTabId) ? pane.activeTabId : (tabIds[0] || null)) : tabId,
+    collapsed: shouldActivate ? false : pane.collapsed,
+    activeTabId: nextActiveTabId,
+    recentTabIds: shouldActivate
+      ? recordRecentTabIds(pane, nextActiveTabId, tabIds)
+      : normalizeRecentIds(pane.recentTabIds, nextActiveTabId, tabIds),
   }
 }
 
@@ -131,8 +186,10 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     set((state) => {
       const pane = findPaneNode(state.root, paneId)
       if (!pane) return state
+      const paneIds = getPaneIds(state.root)
       return {
         focusedPaneId: pane.id,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, pane.id, paneIds),
       }
     })
   },
@@ -155,33 +212,41 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       const pane = findPaneContainingTab(state.root, tabId)
       if (!pane) return state
 
+      const nextRoot = mapLayoutTree(state.root, (node) => {
+        if (node.kind !== 'pane' || node.id !== pane.id) return node
+        return {
+          ...node,
+          activeTabId: tabId,
+          collapsed: options?.expandPane === false ? node.collapsed : false,
+          recentTabIds: recordRecentTabIds(node, tabId, node.tabIds),
+        }
+      })
       return {
-        root: mapLayoutTree(state.root, (node) => {
-          if (node.kind !== 'pane' || node.id !== pane.id) return node
-          return {
-            ...node,
-            activeTabId: tabId,
-            collapsed: options?.expandPane === false ? node.collapsed : false,
-          }
-        }),
+        root: nextRoot,
         focusedPaneId: pane.id,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, pane.id, getPaneIds(nextRoot)),
       }
     })
   },
 
   setPaneActiveTab: (paneId, tabId, options) => {
-    set((state) => ({
-      root: mapLayoutTree(state.root, (node) => {
+    set((state) => {
+      const nextRoot = mapLayoutTree(state.root, (node) => {
         if (node.kind !== 'pane' || node.id !== paneId) return node
         const nextActiveTabId = tabId && node.tabIds.includes(tabId) ? tabId : (node.tabIds[0] || null)
         return {
           ...node,
           activeTabId: nextActiveTabId,
           collapsed: options?.expandPane === false || !tabId || !node.tabIds.includes(tabId) ? node.collapsed : false,
+          recentTabIds: recordRecentTabIds(node, nextActiveTabId, node.tabIds),
         }
-      }),
-      focusedPaneId: paneId,
-    }))
+      })
+      return {
+        root: nextRoot,
+        focusedPaneId: paneId,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, paneId, getPaneIds(nextRoot)),
+      }
+    })
   },
 
   upsertTab: (tab, options) => {
@@ -196,13 +261,18 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
         [tab.id]: tab,
       }
 
+      const nextRoot = mapLayoutTree(state.root, (node) => {
+        if (node.kind !== 'pane' || node.id !== targetPaneId) return node
+        return getInsertedPane(node, tab.id, { activate, beforeTabId: null })
+      })
+      const nextFocusedPaneId = activate ? targetPaneId : state.focusedPaneId
       return {
         tabsById: nextTabsById,
-        root: mapLayoutTree(state.root, (node) => {
-          if (node.kind !== 'pane' || node.id !== targetPaneId) return node
-          return getInsertedPane(node, tab.id, { activate, beforeTabId: null })
-        }),
-        focusedPaneId: activate ? targetPaneId : state.focusedPaneId,
+        root: nextRoot,
+        focusedPaneId: nextFocusedPaneId,
+        recentPaneIds: activate
+          ? recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, nextFocusedPaneId, getPaneIds(nextRoot))
+          : normalizeRecentIds(state.recentPaneIds, nextFocusedPaneId, getPaneIds(nextRoot)),
       }
     })
   },
@@ -236,9 +306,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       }
 
       const nextPaneIds = getPaneIds(nextRoot)
-      const focusedPaneId = state.focusedPaneId && nextPaneIds.includes(state.focusedPaneId)
-        ? state.focusedPaneId
-        : (nextPaneIds[0] || null)
+      const focusedPaneId = selectFocusedPaneAfterRemoval(state.focusedPaneId, state.recentPaneIds, nextPaneIds)
 
       const nextTabsById = { ...state.tabsById }
       delete nextTabsById[tabId]
@@ -247,6 +315,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
         tabsById: nextTabsById,
         root: nextRoot,
         focusedPaneId,
+        recentPaneIds: normalizeRecentIds(state.recentPaneIds, focusedPaneId, nextPaneIds),
       }
     })
   },
@@ -263,18 +332,25 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       }
       if (!(oldTabId in state.tabsById)) nextTabsById[tab.id] = tab
 
+      const nextRoot = mapLayoutTree(state.root, (node) => {
+        if (node.kind !== 'pane' || !node.tabIds.includes(oldTabId)) return node
+        const tabIds = node.tabIds.map((currentId) => currentId === oldTabId ? tab.id : currentId)
+        const nextActiveTabId = node.activeTabId === oldTabId ? tab.id : node.activeTabId
+        const mappedRecent = (node.recentTabIds || (node.activeTabId ? [node.activeTabId] : []))
+          .map((currentId) => currentId === oldTabId ? tab.id : currentId)
+        return {
+          ...node,
+          tabIds,
+          activeTabId: nextActiveTabId,
+          recentTabIds: normalizeRecentIds(mappedRecent, nextActiveTabId, tabIds),
+        }
+      })
+      const nextFocusedPaneId = pane?.id || state.focusedPaneId
       return {
         tabsById: nextTabsById,
-        root: mapLayoutTree(state.root, (node) => {
-          if (node.kind !== 'pane' || !node.tabIds.includes(oldTabId)) return node
-          const tabIds = node.tabIds.map((currentId) => currentId === oldTabId ? tab.id : currentId)
-          return {
-            ...node,
-            tabIds,
-            activeTabId: node.activeTabId === oldTabId ? tab.id : node.activeTabId,
-          }
-        }),
-        focusedPaneId: pane?.id || state.focusedPaneId,
+        root: nextRoot,
+        focusedPaneId: nextFocusedPaneId,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, nextFocusedPaneId, getPaneIds(nextRoot)),
       }
     })
   },
@@ -306,12 +382,17 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       if (!sourcePane || !targetPane) return state
 
       if (sourcePane.id === targetPaneId) {
+        const nextRoot = mapLayoutTree(state.root, (node) => {
+          if (node.kind !== 'pane' || node.id !== sourcePane.id) return node
+          return getInsertedPane(getPaneAfterTabRemoval(node, tabId), tabId, options)
+        })
+        const nextFocusedPaneId = options?.activate === false ? state.focusedPaneId : targetPaneId
         return {
-          root: mapLayoutTree(state.root, (node) => {
-            if (node.kind !== 'pane' || node.id !== sourcePane.id) return node
-            return getInsertedPane(getPaneAfterTabRemoval(node, tabId), tabId, options)
-          }),
-          focusedPaneId: options?.activate === false ? state.focusedPaneId : targetPaneId,
+          root: nextRoot,
+          focusedPaneId: nextFocusedPaneId,
+          recentPaneIds: options?.activate === false
+            ? normalizeRecentIds(state.recentPaneIds, nextFocusedPaneId, getPaneIds(nextRoot))
+            : recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, nextFocusedPaneId, getPaneIds(nextRoot)),
         }
       }
 
@@ -331,9 +412,16 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
         nextRoot = removePaneFromLayout(nextRoot, sourcePane.id).node
       }
 
+      const nextPaneIds = getPaneIds(nextRoot)
+      const nextFocusedPaneId = options?.activate === false
+        ? selectFocusedPaneAfterRemoval(state.focusedPaneId, state.recentPaneIds, nextPaneIds)
+        : targetPaneId
       return {
         root: nextRoot,
-        focusedPaneId: options?.activate === false ? state.focusedPaneId : targetPaneId,
+        focusedPaneId: nextFocusedPaneId,
+        recentPaneIds: options?.activate === false
+          ? normalizeRecentIds(state.recentPaneIds, nextFocusedPaneId, nextPaneIds)
+          : recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, nextFocusedPaneId, nextPaneIds),
       }
     })
   },
@@ -357,6 +445,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       return {
         root: nextRoot,
         focusedPaneId: nextPaneId,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, nextPaneId, getPaneIds(nextRoot)),
       }
     })
 
@@ -382,6 +471,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
         },
         root: nextRoot,
         focusedPaneId: nextPaneId,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, nextPaneId, getPaneIds(nextRoot)),
       }
     })
 
@@ -415,6 +505,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       return {
         root: nextRoot,
         focusedPaneId: nextPaneId,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, nextPaneId, getPaneIds(nextRoot)),
       }
     })
 
@@ -433,9 +524,11 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
 
       const direction = edge === 'left' || edge === 'right' ? 'row' : 'column'
       const position = edge === 'left' || edge === 'top' ? 'before' : 'after'
+      const nextRoot = replacePaneWithSplit(result.node, targetPaneId, direction, sourcePane, position)
       return {
-        root: replacePaneWithSplit(result.node, targetPaneId, direction, sourcePane, position),
+        root: nextRoot,
         focusedPaneId: sourcePaneId,
+        recentPaneIds: recordRecentPaneIds(state.recentPaneIds, state.focusedPaneId, sourcePaneId, getPaneIds(nextRoot)),
       }
     })
   },
@@ -449,13 +542,13 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
       const nextTabsById = Object.fromEntries(Object.entries(state.tabsById).filter(([tabId]) => !tabIdsToRemove.has(tabId)))
       const nextRoot = removePaneFromLayout(state.root, paneId).node
       const nextPaneIds = getPaneIds(nextRoot)
+      const focusedPaneId = selectFocusedPaneAfterRemoval(state.focusedPaneId, state.recentPaneIds, nextPaneIds)
 
       return {
         tabsById: nextTabsById,
         root: nextRoot,
-        focusedPaneId: state.focusedPaneId && nextPaneIds.includes(state.focusedPaneId)
-          ? state.focusedPaneId
-          : (nextPaneIds[0] || null),
+        focusedPaneId,
+        recentPaneIds: normalizeRecentIds(state.recentPaneIds, focusedPaneId, nextPaneIds),
       }
     })
   },
@@ -488,6 +581,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
     tabsById: state.tabsById,
     root: state.root,
     focusedPaneId: state.focusedPaneId,
+    recentPaneIds: state.recentPaneIds,
   }),
   merge: (persistedState, currentState) => {
     if (!persistedState || typeof persistedState !== 'object') {

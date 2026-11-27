@@ -221,7 +221,7 @@ async function clickReadyControl(page, selector) {
 async function state(page) {
   return page.evaluate(() => {
     const { state } = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4'))
-    return { tabsById: state.tabsById, root: state.root, hash: decodeURIComponent(location.hash), active: state.root.kind === 'pane' ? state.root.activeTabId : state.root.children.map(pane => pane.activeTabId) }
+    return { tabsById: state.tabsById, root: state.root, focusedPaneId: state.focusedPaneId, hash: decodeURIComponent(location.hash), active: state.root.kind === 'pane' ? state.root.activeTabId : state.root.children.map(pane => pane.activeTabId) }
   })
 }
 
@@ -642,7 +642,7 @@ test('whole-pane dragging preserves its tabs and selection across splits, includ
     assert.ok(await page.evaluate(() => window.__paneMoveChats.every(root => root.isConnected)), 'whole-pane movement keeps both existing Chat roots')
     assert.equal(await page.evaluate(() => window.__historyReads.length), await page.evaluate(() => window.__paneMoveHistory), 'whole-pane movement does not initialize history again')
     const moved = await state(page)
-    assert.deepEqual(findFixturePane(moved.root, 'pane-main'), { ...layout.children[0], collapsed: false })
+    assert.deepEqual(findFixturePane(moved.root, 'pane-main'), findFixturePane(initial.root, 'pane-main'))
     assert.deepEqual(moved.tabsById, initial.tabsById, 'moving a pane does not replace, promote, close, or duplicate its tabs')
     assert.equal(moved.root.children[1].direction, 'row')
     assert.deepEqual(moved.root.children[1].children.map(pane => pane.id), ['pane-inner-bottom', 'pane-main'])
@@ -1078,10 +1078,10 @@ test('Workbench tab restore, keyboard Close and active-close fallback retain nor
     await assertTabVisible(page, 'chat:scroll-b-9')
     const close = await (await page.$('[data-tab-id="chat:scroll-b-9"] button[title="Close tab"]')).boundingBox()
     await mousePressAt(page, { x: close.x + close.width / 2, y: close.y + close.height / 2 })
-    await assertTabVisible(page, 'chat:scroll-b-10')
+    await assertTabVisible(page, 'chat:scroll-b-11')
     const snapshot = await state(page)
-    assert.equal(snapshot.root.children[1].activeTabId, 'chat:scroll-b-10')
-    assert.equal(snapshot.hash, '#tab/chat:scroll-b-10')
+    assert.equal(snapshot.root.children[1].activeTabId, 'chat:scroll-b-11')
+    assert.equal(snapshot.hash, '#tab/chat:scroll-b-11')
     assert.equal(snapshot.tabsById['chat:scroll-b-9'], undefined)
   } finally { await page.close() }
 })
@@ -4010,4 +4010,82 @@ test('Code tabs admit and retain one independent frame per Node and migrate a le
     await page.waitForFunction(() => !document.querySelector('[data-code-node="development/review"]'))
     assert(await page.evaluate(() => window.masterCode === document.querySelector('[data-code-node="master"]')))
   } finally { await page.close() }
+})
+
+test('closing active tabs returns to the previously active tab across strip Close, middle-click, keyboard, reload, and sole-tab header Close', async () => {
+  const tabs = [
+    { id: 'chat:e2e-a', type: 'chat', sessionId: 'e2e-a', title: 'e2e-a' },
+    { id: 'chat:e2e-b', type: 'chat', sessionId: 'e2e-b', title: 'e2e-b' },
+    { id: 'chat:e2e-c', type: 'chat', sessionId: 'e2e-c', title: 'e2e-c' },
+    { id: 'system:agents', type: 'agents', title: 'System' },
+    { id: 'system:logs', type: 'logs', title: 'Logs' },
+  ]
+  const page = await openFixture({ tabs, activeTabId: 'chat:e2e-a', hash: '#tab/chat:e2e-a' })
+  try {
+    // Visit order: e2e-a -> system:logs -> chat:e2e-c -> system:agents -> chat:e2e-b.
+    for (const tabId of ['system:logs', 'chat:e2e-c', 'system:agents', 'chat:e2e-b']) {
+      await page.click(`[data-tab-id="${tabId}"]`)
+      await page.waitForFunction(id => document.querySelector(`[data-tab-id="${id}"]`)?.dataset.tabActive === 'true', {}, tabId)
+    }
+
+    // Close inactive chat:e2e-c so MRU skips it later.
+    await page.click('[data-tab-id="chat:e2e-c"] button[title="Close tab"]')
+    await page.waitForFunction(() => !document.querySelector('[data-tab-id="chat:e2e-c"]'))
+    assert.equal((await state(page)).root.activeTabId, 'chat:e2e-b')
+
+    // 1. Reload preserves MRU history; strip Close on chat:e2e-b returns to system:agents (not neighbor chat:e2e-a).
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForWebUiReady(page)
+    await page.waitForSelector('[data-tab-id="chat:e2e-b"][data-tab-active="true"]')
+    await page.click('[data-tab-id="chat:e2e-b"] button[title="Close tab"]')
+    await page.waitForFunction(() => document.querySelector('[data-tab-id="system:agents"]')?.dataset.tabActive === 'true')
+    assert.equal((await state(page)).hash, '#tab/system:agents')
+
+    // 2. Middle-click Close on active system:agents skips closed chat:e2e-c and returns to system:logs.
+    const agentsBox = await (await page.$('[data-tab-id="system:agents"]')).boundingBox()
+    await page.mouse.click(agentsBox.x + agentsBox.width / 2, agentsBox.y + agentsBox.height / 2, { button: 'middle' })
+    await page.waitForFunction(() => document.querySelector('[data-tab-id="system:logs"]')?.dataset.tabActive === 'true')
+    assert.equal((await state(page)).hash, '#tab/system:logs')
+
+    // 3. Keyboard Close (Enter on focused Close button) on active system:logs returns to chat:e2e-a.
+    await page.focus('[data-tab-id="system:logs"] button[title="Close tab"]')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => !document.querySelector('[data-tab-id="system:logs"]'))
+    assert.equal((await state(page)).root.activeTabId, 'chat:e2e-a')
+    assert.equal((await state(page)).hash, '#tab/chat:e2e-a')
+  } finally { await page.close() }
+
+  // 4. Multi-pane sole-tab content-header Close returns focus to the previously focused pane (pane-2, not pane-main).
+  const multiLayout = {
+    id: 'split-mru',
+    kind: 'split',
+    direction: 'row',
+    sizes: [33, 33, 34],
+    children: [
+      { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a', collapsed: false },
+      { id: 'pane-2', kind: 'pane', tabIds: ['chat:e2e-b'], activeTabId: 'chat:e2e-b', collapsed: false },
+      { id: 'pane-3', kind: 'pane', tabIds: ['system:logs'], activeTabId: 'system:logs', collapsed: false },
+    ],
+  }
+  const multiPage = await openFixture({
+    layout: multiLayout,
+    tabs: [
+      { id: 'chat:e2e-a', type: 'chat', sessionId: 'e2e-a', title: 'e2e-a' },
+      { id: 'chat:e2e-b', type: 'chat', sessionId: 'e2e-b', title: 'e2e-b' },
+      { id: 'system:logs', type: 'logs', title: 'Logs' },
+    ],
+    hash: '#tab/chat:e2e-a',
+  })
+  try {
+    // Focus pane-2, then focus pane-3, then close pane-3 via its sole-tab content-header Close button.
+    await multiPage.click('[data-workbench-content-pane="pane-2"]')
+    await multiPage.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/chat:e2e-b')
+    await multiPage.click('[data-workbench-content-pane="pane-3"]')
+    await multiPage.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/system:logs')
+    await multiPage.click('[data-workbench-content-pane="pane-3"] [data-workbench-tab-close]')
+    await multiPage.waitForFunction(() => !document.querySelector('[data-workbench-content-pane="pane-3"]'))
+    const afterClose = await state(multiPage)
+    assert.equal(afterClose.focusedPaneId, 'pane-2', 'closing the sole tab in pane-3 returns focus to previously focused pane-2')
+    assert.equal(afterClose.hash, '#tab/chat:e2e-b')
+  } finally { await multiPage.close() }
 })

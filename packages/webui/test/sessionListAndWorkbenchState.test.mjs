@@ -741,3 +741,97 @@ test('bottom panel placement supports an explicit initial ratio without changing
   const ordinary = replacePaneWithSplit(source, 'editor', 'row', terminal, 'after')
   assert.deepEqual(ordinary.sizes, [50, 50])
 })
+
+test('closing the active tab returns to the previously active tab per pane, skips closed predecessors, falls back to neighbor, and persists across normalization', async () => {
+  const { useWorkbenchStore } = await loadTypeScriptModule('../src/workbench/store.ts')
+  const { normalizePersistedWorkbenchState } = await loadTypeScriptModule('../src/workbench/utils.ts')
+  const makeChat = (id) => ({ id: `chat:${id}`, type: 'chat', sessionId: id, title: id })
+
+  useWorkbenchStore.setState({
+    version: 4,
+    tabsById: { 'chat:a': makeChat('a'), 'chat:b': makeChat('b'), 'chat:c': makeChat('c'), 'chat:d': makeChat('d') },
+    root: { id: 'pane-main', kind: 'pane', tabIds: ['chat:a', 'chat:b', 'chat:c', 'chat:d'], activeTabId: 'chat:a', collapsed: false },
+    focusedPaneId: 'pane-main',
+    recentPaneIds: ['pane-main'],
+  })
+
+  // Visit A -> D -> B -> C; close inactive B; closing C skips closed B and returns to D, then closing D returns to A.
+  useWorkbenchStore.getState().activateTab('chat:d')
+  useWorkbenchStore.getState().activateTab('chat:b')
+  useWorkbenchStore.getState().activateTab('chat:c')
+  assert.deepEqual(useWorkbenchStore.getState().root.recentTabIds, ['chat:c', 'chat:b', 'chat:d', 'chat:a'])
+
+  useWorkbenchStore.getState().removeTab('chat:b')
+  assert.equal(useWorkbenchStore.getState().root.activeTabId, 'chat:c', 'closing an inactive tab keeps current active')
+  assert.deepEqual(useWorkbenchStore.getState().root.recentTabIds, ['chat:c', 'chat:d', 'chat:a'])
+
+  // Simulate reload persistence through normalizePersistedWorkbenchState.
+  const reloaded = normalizePersistedWorkbenchState(structuredClone({
+    version: 4,
+    tabsById: useWorkbenchStore.getState().tabsById,
+    root: useWorkbenchStore.getState().root,
+    focusedPaneId: useWorkbenchStore.getState().focusedPaneId,
+    recentPaneIds: useWorkbenchStore.getState().recentPaneIds,
+  }))
+  assert.deepEqual(reloaded.root.recentTabIds, ['chat:c', 'chat:d', 'chat:a'])
+  useWorkbenchStore.setState(reloaded)
+
+  useWorkbenchStore.getState().removeTab('chat:c')
+  assert.equal(useWorkbenchStore.getState().root.activeTabId, 'chat:d', 'closing active skips closed B and returns to D')
+
+  useWorkbenchStore.getState().removeTab('chat:d')
+  assert.equal(useWorkbenchStore.getState().root.activeTabId, 'chat:a', 'closing D returns to A')
+
+  // Neighbor fallback when remaining tabs have no MRU history (older v4 state or background inserts).
+  const legacyNormalized = normalizePersistedWorkbenchState({
+    version: 4,
+    tabsById: { 'chat:1': makeChat('1'), 'chat:2': makeChat('2'), 'chat:3': makeChat('3') },
+    root: { id: 'pane-legacy', kind: 'pane', tabIds: ['chat:1', 'chat:2', 'chat:3'], activeTabId: 'chat:2', collapsed: false },
+    focusedPaneId: 'pane-legacy',
+  })
+  assert.deepEqual(legacyNormalized.root.recentTabIds, ['chat:2'])
+  useWorkbenchStore.setState(legacyNormalized)
+  useWorkbenchStore.getState().removeTab('chat:2')
+  assert.equal(useWorkbenchStore.getState().root.activeTabId, 'chat:3', 'falls back to adjacent neighbor when no prior history exists')
+
+  // Preview tab replacement preserves prior MRU tab.
+  useWorkbenchStore.setState({
+    version: 4,
+    tabsById: { 'chat:kept': makeChat('kept'), 'chat:other': makeChat('other'), 'chat:prev1': { ...makeChat('prev1'), preview: true } },
+    root: { id: 'pane-main', kind: 'pane', tabIds: ['chat:kept', 'chat:other', 'chat:prev1'], activeTabId: 'chat:kept', collapsed: false, recentTabIds: ['chat:kept'] },
+    focusedPaneId: 'pane-main',
+    recentPaneIds: ['pane-main'],
+  })
+  useWorkbenchStore.getState().replaceTabId('chat:prev1', { ...makeChat('prev2'), preview: true })
+  useWorkbenchStore.getState().activateTab('chat:prev2')
+  useWorkbenchStore.getState().removeTab('chat:prev2')
+  assert.equal(useWorkbenchStore.getState().root.activeTabId, 'chat:kept', 'closing a replaced preview returns to the tab active before it')
+
+  // Multi-pane: per-pane MRU stays in its pane while tabs remain; removing the last tab of a focused pane returns focus to the previously focused pane.
+  useWorkbenchStore.setState({
+    version: 4,
+    tabsById: { 'chat:p1': makeChat('p1'), 'chat:p2a': makeChat('p2a'), 'chat:p2b': makeChat('p2b'), 'chat:p3': makeChat('p3') },
+    root: {
+      id: 'split-root',
+      kind: 'split',
+      direction: 'row',
+      sizes: [33, 33, 34],
+      children: [
+        { id: 'pane-1', kind: 'pane', tabIds: ['chat:p1'], activeTabId: 'chat:p1', collapsed: false },
+        { id: 'pane-2', kind: 'pane', tabIds: ['chat:p2a', 'chat:p2b'], activeTabId: 'chat:p2a', collapsed: false },
+        { id: 'pane-3', kind: 'pane', tabIds: ['chat:p3'], activeTabId: 'chat:p3', collapsed: false },
+      ],
+    },
+    focusedPaneId: 'pane-1',
+    recentPaneIds: ['pane-1'],
+  })
+  useWorkbenchStore.getState().activateTab('chat:p2b')
+  useWorkbenchStore.getState().activateTab('chat:p3')
+  // Closing sole tab in pane-3 removes pane-3 and returns focus to pane-2 (not pane-1).
+  useWorkbenchStore.getState().removeTab('chat:p3')
+  assert.equal(useWorkbenchStore.getState().focusedPaneId, 'pane-2')
+  // Closing active tab p2b in pane-2 stays in pane-2 and returns to p2a.
+  useWorkbenchStore.getState().removeTab('chat:p2b')
+  assert.equal(useWorkbenchStore.getState().focusedPaneId, 'pane-2')
+  assert.equal(useWorkbenchStore.getState().root.children[1].activeTabId, 'chat:p2a')
+})
