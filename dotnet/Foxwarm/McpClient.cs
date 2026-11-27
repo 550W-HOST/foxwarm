@@ -314,6 +314,7 @@ internal sealed partial class McpClient : IAsyncDisposable
         RunAsync(
             async token =>
             {
+                var revision = Revision(configuration.Snapshot()[server]);
                 var config = configuration.Get(server);
                 try
                 {
@@ -356,6 +357,9 @@ internal sealed partial class McpClient : IAsyncDisposable
                                 );
                                 cursor = page.NextCursor;
                             } while (cursor is not null);
+                            // A Session's discovery is the server's last observed outcome.
+                            if (external is null)
+                                RecordObservation(server, revision, true, null, tools.Count);
                             return (IReadOnlyList<JsonObject>)tools;
                         },
                         external
@@ -367,7 +371,10 @@ internal sealed partial class McpClient : IAsyncDisposable
                 }
                 catch (Exception error) when (!token.IsCancellationRequested)
                 {
-                    throw new InvalidOperationException(SafeError(error.Message, config));
+                    var safe = SafeError(error.Message, config);
+                    if (external is null)
+                        RecordObservation(server, revision, false, safe, null);
+                    throw new InvalidOperationException(safe);
                 }
             },
             cancellationToken

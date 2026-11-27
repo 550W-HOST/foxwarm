@@ -1,7 +1,7 @@
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, {type ContextMenuAnchorRect} from './ContextMenu'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, XCircle } from 'lucide-react'
+import { Bell, Bot, CheckCircle2, KeyRound, Palette, Plug, RefreshCw, Settings, ShieldCheck, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelSetupYaml, defaultModelsYaml, formFromPreset, readModelSetupForm, validateModelSetupForm, type ModelSetupForm } from '../setupModels'
 import ModelSetupFormPanel from './ModelSetupFormPanel'
@@ -16,6 +16,7 @@ import FoxLoaderPreview from './FoxLoaderPreview'
 import NotificationSettings from './NotificationSettings'
 import SecretsPanel from './SecretsPanel'
 import ToolAuthorizationPanel from './ToolAuthorizationPanel'
+import McpServersPanel from './McpServersPanel'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
 
 type SetupStatus = {
@@ -104,9 +105,9 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config' | 'authorization' | 'secrets' | 'notifications'
+type SetupTab = 'appearance' | 'models' | 'config' | 'authorization' | 'mcp' | 'secrets' | 'notifications'
 type ModelsView = 'form' | 'yaml'
-const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorization', 'secrets', 'notifications']
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'authorization', 'mcp', 'secrets', 'notifications']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -137,6 +138,9 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const tabHeader = useWorkbenchTabHeader()
   // First-run Setup exists to add a model, so it starts on Models; ordinary Setup starts on Appearance.
   const [activeTab, setActiveTab] = useState<SetupTab>(forced ? 'models' : 'appearance')
+  // MCP loads on first open and then stays mounted, keeping an open form across tab switches.
+  const [mcpOpened, setMcpOpened] = useState(false)
+  useEffect(() => { if (activeTab === 'mcp') setMcpOpened(true) }, [activeTab])
   const [mobileOptions, setMobileOptions] = useState<ContextMenuAnchorRect | null>(null)
   const mobileOptionsRef = useRef<HTMLButtonElement>(null)
 
@@ -159,7 +163,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // Secrets and Authorization load their own data; the Setup Refresh action reloads them too.
+  // Authorization, MCP and Secrets load their own data; the Setup Refresh action reloads them too.
   const [panelRefreshRequest, setPanelRefreshRequest] = useState(0)
   const refreshSetup = () => {
     setPanelRefreshRequest((current) => current + 1)
@@ -183,6 +187,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const notificationsTabRef = useRef<HTMLButtonElement | null>(null)
   const secretsTabRef = useRef<HTMLButtonElement | null>(null)
   const authorizationTabRef = useRef<HTMLButtonElement | null>(null)
+  const mcpTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -298,7 +303,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
-    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, authorization: authorizationTabRef, appearance: appearanceTabRef, secrets: secretsTabRef, notifications: notificationsTabRef })[tab].current?.focus())
+    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, authorization: authorizationTabRef, mcp: mcpTabRef, appearance: appearanceTabRef, secrets: secretsTabRef, notifications: notificationsTabRef })[tab].current?.focus())
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -611,6 +616,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
         {key:'models',label:'Models',checked:activeTab==='models',selection:'radio',icon:<Bot size={16}/>,onSelect:()=>activateTab('models')},
         {key:'config',label:'Config',checked:activeTab==='config',selection:'radio',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
         {key:'authorization',label:'Authorization',checked:activeTab==='authorization',selection:'radio',icon:<ShieldCheck size={16}/>,onSelect:()=>activateTab('authorization')},
+        {key:'mcp',label:'MCP',checked:activeTab==='mcp',selection:'radio',icon:<Plug size={16}/>,onSelect:()=>activateTab('mcp')},
         {key:'secrets',label:'Secrets',checked:activeTab==='secrets',selection:'radio',icon:<KeyRound size={16}/>,onSelect:()=>activateTab('secrets')},
         {key:'notifications',label:'Notifications',checked:activeTab==='notifications',selection:'radio',icon:<Bell size={16}/>,onSelect:()=>activateTab('notifications')},
         {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:refreshSetup},
@@ -698,6 +704,22 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   <span>Authorization</span>
                 </button>
                 <button
+                  ref={mcpTabRef}
+                  id="setup-tab-mcp"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'mcp'}
+                  aria-controls="setup-panel-mcp"
+                  tabIndex={activeTab === 'mcp' ? 0 : -1}
+                  data-setup-tab="mcp"
+                  onClick={() => activateTab('mcp')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'mcp' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong'}`}
+                >
+                  <Plug className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>MCP</span>
+                </button>
+                <button
                   ref={secretsTabRef}
                   id="setup-tab-secrets"
                   type="button"
@@ -744,6 +766,13 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
               {modelsBody}
+            </section>
+
+            <section id="setup-panel-mcp" role="tabpanel" aria-labelledby="setup-tab-mcp" data-setup-section="mcp" hidden={activeTab !== 'mcp'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+              <div className="mx-auto w-full max-w-5xl">
+                {/* Mounted once opened, so an open form survives tab switches. */}
+                {mcpOpened && <McpServersPanel refreshRequest={panelRefreshRequest} />}
+              </div>
             </section>
 
             <section id="setup-panel-secrets" role="tabpanel" aria-labelledby="setup-tab-secrets" data-setup-section="secrets" hidden={activeTab !== 'secrets'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">

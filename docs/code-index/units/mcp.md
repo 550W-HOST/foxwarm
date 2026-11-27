@@ -1,7 +1,7 @@
 # Unit: Outbound MCP client
 
-Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/McpClient.ExternalResults.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
-Secondary files: `dotnet/Foxwarm.Tests/Mcp/McpServerSummaryTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/mainHostMcp.e2e.mjs`, `packages/webui/test/mainHostMcp.peer.mjs`
+Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/McpClient.ExternalResults.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpClient.Setup.cs`, `dotnet/Foxwarm/McpConfiguration.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.SetupMcp.cs`
+Secondary files: `dotnet/Foxwarm.Tests/Mcp/McpServerSummaryTests.cs`, `dotnet/Foxwarm.Tests/Mcp/McpSetupTests.cs`, `packages/webui/test/mainHostSetupMcp.e2e.mjs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/mainHostMcp.e2e.mjs`, `packages/webui/test/mainHostMcp.peer.mjs`
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Loads configured outbound MCP servers, maintains official SDK clients/transports
 
 ## Stable methods and callers
 
-- `McpConfiguration.Get`, `Snapshot`, and `UpdateAsync` own validated, persist-before-publish live server configuration; `McpClient.Summaries` builds the [redacted summaries](#d-mcp-safe-summary). Manual file edits are startup-only.
+- `McpConfiguration.Get`, `Snapshot`, `UpdateAsync`, `ReplaceAsync` and `RemoveAsync` own validated, persist-before-publish live server configuration; all changes run in one mutation lane (`MutateAsync`); `McpClient.Summaries` builds the [redacted summaries](#d-mcp-safe-summary). Manual file edits are startup-only.
 - `McpClient.ListToolsAsync` and `CallAsync` accept the actual trusted Session owner and its captured connection generation from `UnifiedTools`/`ToolRegistry`; nested ToolScript uses the same Session executor. List/call admission requires that trusted Session owner or a verified external context; there is no unowned HTTP connection mode.
 - `WithClientAsync`, `ConnectEntryAsync`, and `ObserveDisconnectAsync` acquire/release pooled bindings for every connection, fence late initialization, and remove disconnected clients. `MatchesConfiguration` rechecks the live configuration at acquisition and publication, including concurrent publication before the mutation hook runs.
 - `InvalidateServer` runs after committed managed configuration changes; `InvalidateOwner` advances the exact owner's connection generation during real identity move/deletion. `BeginShutdown`, `DrainAsync`, and `DisposeAsync` fence new calls and drain admitted operations, initializers, disposal, and disconnect observers.
@@ -42,6 +42,16 @@ Model/admin summaries expose configuration shape, names, and counts, never token
 
 [2026-11-06] The maintained C# `list_mcp_servers` summary keeps the URL scheme, host, port and path but drops user info and fragment and replaces each query value (or bare query item) with `REDACTED`; an unparseable URL becomes `REDACTED`. Path-embedded credentials are not detected. The administrator OAuth status API keeps the configured URL. Error redaction (`McpConfiguration.Redact`) treats full userinfo, passwords, username-only credentials, query values or bare items, and fragments as secrets, matching original and unescaped spellings and either hexadecimal case in percent escapes. When a password is present, its username is treated as an identifier unless it appears in the full userinfo.
 
+### D-mcp-setup-editing
+
+[2026-11-27, user decision] WebUI Setup's **MCP** tab ([Setup view](./webui-setup-view.md#d-setup-tab-layout)) manages outbound servers through administrator-only routes in `WebUIChannel.SetupMcp.cs`.
+
+- **View.** `McpClient.SetupView` returns the form-owned fields (`SetupFields`: transport, url, command, args, env, cwd, headers, token, timeoutSeconds, enable) as stored, except literal credentials, classified exactly as the redactor classifies mcp.json sink fields (`InstanceSecrets.Literals` over `SecretSinks.McpServer`). Each becomes a placeholder `{hidden: field, key?|index?}`; a URL carrying credentials is hidden whole. `${secret:NAME}` references are shown. `oauth` is reduced to scope, client ID and whether a client secret is set.
+- **Save.** `PUT` replaces the server's form-owned fields as a whole through `ReplaceServerAsync` → `McpConfiguration.ReplaceAsync`; other stored fields (`oauth`, `description`, `stderr`) are kept. Inside the lane, the definition callback first compares `Revision` (SHA-256 of the stored server JSON, or `absent`) with the revision the edit started from and refuses with `409` on a mismatch, then `FromSetupView` restores each placeholder from that same stored definition at its original location. A placeholder can't move into another field, and one whose original is gone is refused. Validation, persistence and live apply are `Normalize`, the atomic writer and the existing publication hook (`Published`: OAuth state follows a changed URL, OAuth settings or enablement; the server's bindings close). Every other change of that server, including `mcp_config`/`ctl mcp`, changes its revision.
+- **Delete.** `RemoveServerAsync` → `McpConfiguration.RemoveAsync` in the same lane with the same revision check, then clears the server's stored OAuth record (`ConfigurationChanged(name, clearGrant: true)`) and closes its bindings. `mcp_config` and `ctl mcp` have no delete.
+- **Status.** The last observed outcome per server (time, OK or the safe error, tool count) lives in process memory only. It is recorded by a Session's discovery (`ListToolsAsync` without an external context) and by `ProbeAsync`, and only while the stored definition still has the revision the outcome was obtained with; a committed change of the server forgets it. `ProbeAsync` is the administrator check: one unpooled connection through `ConnectAsync` and the OAuth guard, without notification capability, that pages `tools/list` and closes, bounded at 20 seconds. Loading the tab never connects; Setup checks only on an explicit Check, after a save that leaves the server enabled, and on enabling.
+- Route errors: validation messages are returned as written; other failures pass `McpConfiguration.Redact`.
+
 ### D-mcp-unified-tools
 
 [2026-08-18] MCP discovery and invocation use only `search_tools` and `call_tool`. Dedicated runtime wrappers are removed rather than retained as callable aliases; configuration and safe server summaries remain separate hidden builtins.
@@ -57,6 +67,8 @@ For HTTP transports, the token is a default Bearer Authorization header and expl
 ## Tests
 
 `OutboundMcpEnvironmentTests` exercises the actual stdio peer for safe defaults, explicit overlay, shell-function exclusion and unrelated credential isolation on the executing platform; Linux execution does not qualify Windows process startup.
+
+`McpSetupTests` checks the Setup view's placeholders and references, exact restoration (including a renamed variable), refusal of moved or vanished placeholders and unknown fields, and that refused replacements and removals change nothing.
 
 `McpServerSummaryTests` checks that server summaries omit URL, header, token, env and argument credentials, and that error redaction covers URL credentials.
 

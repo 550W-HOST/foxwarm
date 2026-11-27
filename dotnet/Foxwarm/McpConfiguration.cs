@@ -86,12 +86,69 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
     }
 
     // admit sees every server before and after the update, inside this lane, and may refuse it.
-    internal async Task UpdateAsync(
+    internal Task UpdateAsync(
         string name,
         JsonObject patch,
         bool enabledOnly,
         Action<JsonObject?, JsonObject>? published = null,
         Func<JsonObject, JsonObject, Task>? admit = null
+    ) =>
+        MutateAsync(
+            name,
+            current =>
+            {
+                if (enabledOnly && current is null)
+                    throw new InvalidDataException("MCP server not found: " + name);
+                var merged = current is null ? new JsonObject() : (JsonObject)current.DeepClone();
+                foreach (var (key, value) in patch)
+                    merged[key] = value?.DeepClone();
+                return Normalize(merged, managed: true);
+            },
+            (previous, next) => published?.Invoke(previous, next!),
+            admit
+        );
+
+    // Replaces the complete definition of one server, adding it when absent. definition
+    // receives the stored server inside the lane and may refuse the change.
+    internal Task ReplaceAsync(
+        string name,
+        Func<JsonObject?, JsonObject> definition,
+        Action<JsonObject?, JsonObject>? published = null
+    ) =>
+        MutateAsync(
+            name,
+            current => Normalize(definition(current), managed: true),
+            (previous, next) => published?.Invoke(previous, next!),
+            null
+        );
+
+    // Removes one server. check receives the stored server inside the lane and may refuse;
+    // published receives its last definition.
+    internal Task RemoveAsync(
+        string name,
+        Action<JsonObject?> check,
+        Action<JsonObject>? published = null
+    ) =>
+        MutateAsync(
+            name,
+            current =>
+            {
+                check(current);
+                return current is null
+                    ? throw new InvalidDataException("MCP server not found: " + name)
+                    : null;
+            },
+            (previous, _) => published?.Invoke(previous!),
+            null
+        );
+
+    // Every change of the managed configuration: computes the server's next definition (null
+    // removes it), lets admit refuse it, persists, then publishes. All of it runs in one lane.
+    private async Task MutateAsync(
+        string name,
+        Func<JsonObject?, JsonObject?> change,
+        Action<JsonObject?, JsonObject?> published,
+        Func<JsonObject, JsonObject, Task>? admit
     )
     {
         await mutation.WaitAsync();
@@ -102,12 +159,11 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
                     throw new InvalidOperationException("MCP configuration is shutting down.");
             var next = Snapshot();
             var previous = next[name] is JsonObject old ? (JsonObject)old.DeepClone() : null;
-            if (enabledOnly && next[name] is null)
-                throw new InvalidDataException("MCP server not found: " + name);
-            var merged = next[name] as JsonObject ?? new JsonObject();
-            foreach (var (key, value) in patch)
-                merged[key] = value?.DeepClone();
-            next[name] = Normalize(merged, managed: true);
+            var server = change(previous is null ? null : (JsonObject)previous.DeepClone());
+            if (server is null)
+                next.Remove(name);
+            else
+                next[name] = server;
             if (admit is not null)
                 await admit(Snapshot(), (JsonObject)next.DeepClone());
             try
@@ -118,12 +174,12 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
             {
                 lock (gate)
                     live = next;
-                published?.Invoke(previous, next[name]!.AsObject());
+                published(previous, next[name]?.AsObject());
                 throw;
             }
             lock (gate)
                 live = next;
-            published?.Invoke(previous, next[name]!.AsObject());
+            published(previous, next[name]?.AsObject());
         }
         finally
         {

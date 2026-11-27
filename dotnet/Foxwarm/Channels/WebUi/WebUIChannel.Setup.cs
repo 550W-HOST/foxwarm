@@ -114,6 +114,7 @@ internal sealed partial class WebUIChannel
         RegisterWeixinSetupRoutes(app, configuration);
         RegisterSecretRoutes(app, configuration);
         RegisterAuthorizationSetupRoutes(app, configuration);
+        RegisterMcpSetupRoutes(app, configuration);
         app.MapPost(
             "/api/setup/models",
             async (HttpRequest request) =>

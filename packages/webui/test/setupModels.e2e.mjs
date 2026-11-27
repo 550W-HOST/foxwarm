@@ -286,6 +286,10 @@ async function attachRequestMocks(targetPage, options = {}) {
       }
       return
     }
+    if (url.pathname.endsWith('/api/setup/mcp') && request.method() === 'GET') {
+      void respondJson(request, { servers: [], secrets: [] })
+      return
+    }
     if (url.pathname.endsWith('/api/setup/authorization')) {
       if (request.method() === 'POST') {
         const body = JSON.parse(request.postData() || '{}')
@@ -657,7 +661,7 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Appearance, Models, Config, Authorization, Secrets and Notifications tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models, Config, Authorization, MCP, Secrets and Notifications tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
   const requestStart = requestPaths.length
   await setupPage.setBypassServiceWorker(true)
@@ -689,6 +693,7 @@ test('Setup uses accessible Appearance, Models, Config, Authorization, Secrets a
       { tab: 'models', selected: 'false', status: 'complete' },
       { tab: 'config', selected: 'false', status: null },
       { tab: 'authorization', selected: 'false', status: null },
+      { tab: 'mcp', selected: 'false', status: null },
       { tab: 'secrets', selected: 'false', status: null },
       { tab: 'notifications', selected: 'false', status: null },
     ])
@@ -729,6 +734,9 @@ test('Setup uses accessible Appearance, Models, Config, Authorization, Secrets a
     await setupPage.waitForSelector('[data-setup-tab="authorization"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-setup-section="authorization"]', (panel) => panel.hidden), false)
     await setupPage.waitForSelector('[data-authorization-absent]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="mcp"][aria-selected="true"]')
+    await setupPage.waitForSelector('[data-setup-section="mcp"] [data-mcp-empty]')
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="secrets"][aria-selected="true"]')
     await setupPage.waitForSelector('[data-secret="openai-key"]')
