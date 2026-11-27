@@ -353,6 +353,9 @@ internal sealed partial class ModelConfiguration
     // Hosted mode: the app configuration is a tenant document over a deployment configuration.
     internal bool Hosted => deployment is not null;
 
+    // The profile name a hosted runtime records with its prompt snapshots; null in file mode.
+    internal string? PromptProfile => Hosted ? TenantProfiles.Name(profile) : null;
+
     // The effective app configuration of an app document: the document itself in file mode,
     // otherwise the tenant document with the deployment settings laid over it. A tenant document
     // being installed or read at startup may hold no deployment or unavailable settings.

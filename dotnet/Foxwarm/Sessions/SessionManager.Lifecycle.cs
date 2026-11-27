@@ -164,7 +164,9 @@ internal sealed partial class SessionManager
                         ?.DeepClone(),
                     ["nextBlockId"] = original.AuthorityEnvelope["nextBlockId"]?.DeepClone(),
                 };
-                foreach (var field in new[] { "systemPromptFiles", "verbose", "currentNode" })
+                foreach (
+                    var field in new[] { "systemPromptFiles", "verbose", "currentNode", AgentMemory.ProfileKey }
+                )
                     if (original.AuthorityEnvelope.ContainsKey(field))
                         envelope[field] = original.AuthorityEnvelope[field]?.DeepClone();
                 // A fork stays in its Agent, so it follows the parent's current Node.

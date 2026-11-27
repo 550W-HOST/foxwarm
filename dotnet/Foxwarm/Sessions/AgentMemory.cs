@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.Collections;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -18,9 +19,29 @@ internal sealed partial class AgentMemory(
     IAgentFileStore? files = null,
     // RuntimeCapabilities.MasterNode. Without master, the prompt names no Main-local paths: memory
     // blocks have no path and there is no agent_folder line.
-    bool masterNode = true
+    bool masterNode = true,
+    // The hosted tenant profile the runtime builds prompts for, recorded beside each persisted
+    // snapshot (persistentMemoryProfile); null in file mode, which records none.
+    string? profile = null
 )
 {
+    internal const string ProfileKey = "persistentMemoryProfile";
+
+    internal string? Profile => profile;
+
+    // Whether the persisted snapshot was built under this runtime's profile. A hosted runtime
+    // rebuilds one built under another profile (the tenant moved) or with none recorded, once;
+    // file mode never compares.
+    internal bool ProfileCurrent(JsonObject envelope) =>
+        profile is null || SessionWait.Text(envelope[ProfileKey]) == profile;
+
+    // Whether the persisted snapshot can be sent to `modelKey` as it is.
+    internal bool SnapshotCurrent(JsonObject envelope, string modelKey) =>
+        ConditionalMemory.ReadCurrentModelSnapshotId(
+            SessionWait.Text(envelope["persistentMemorySnapshot"]) ?? ""
+        ) == modelKey
+        && ProfileCurrent(envelope);
+
     private readonly IAgentFileStore files = files ?? new FileAgentFiles(agents);
 
     public async Task<string> BuildAsync(
