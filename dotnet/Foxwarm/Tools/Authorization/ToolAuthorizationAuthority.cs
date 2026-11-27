@@ -145,6 +145,10 @@ internal sealed class ToolAuthorizationAuthority
     // The operator ceiling as last read; ceilingRead tells "no ceiling applies" from "not read".
     private ToolAuthorizationPolicy? ceiling;
     private bool ceilingRead;
+    // Advanced under cacheGate by every invalidation. A value read from the store is published
+    // only when no invalidation happened since its read began; otherwise it is read again, so
+    // a read that started before an invalidation never republishes what it replaced.
+    private long revision;
 
     // The policy file <data root>/state/tool-authorization.yaml.
     internal ToolAuthorizationAuthority(
@@ -188,14 +192,87 @@ internal sealed class ToolAuthorizationAuthority
                 : null;
     }
 
-    private ToolAuthorizationPolicy Cache(ToolAuthorizationPolicy value)
+    private void StorePolicy(ToolAuthorizationPolicy value)
     {
-        var now = Now;
+        cached = value;
+        loadedAt = Now;
+    }
+
+    private void StoreCeiling(ToolAuthorizationPolicy? value)
+    {
+        ceiling = value;
+        ceilingRead = true;
+    }
+
+    private long Revision()
+    {
+        lock (cacheGate)
+            return revision;
+    }
+
+    // Stores and returns a value read since `seen`, unless an invalidation came between.
+    private bool Publish<T>(long seen, T value, Action<T> store)
+    {
         lock (cacheGate)
         {
-            cached = value;
-            loadedAt = now;
-            return value;
+            if (revision != seen)
+                return false;
+            store(value);
+            return true;
+        }
+    }
+
+    // A fresh read published under the current revision. Two failed reads in a row throw
+    // ToolAuthorizationUnavailableException; a read overtaken by an invalidation is repeated
+    // and doesn't count as a failure.
+    private T ReadFresh<T>(Func<T> read, Action<T> store)
+    {
+        var failed = false;
+        while (true)
+        {
+            var seen = Revision();
+            T value;
+            try
+            {
+                value = read();
+            }
+            catch
+            {
+                if (failed)
+                    throw new ToolAuthorizationUnavailableException();
+                failed = true;
+                continue;
+            }
+            if (Publish(seen, value, store))
+                return value;
+        }
+    }
+
+    private async Task<T> ReadFreshAsync<T>(Func<T> read, Action<T> store, CancellationToken cancellationToken)
+    {
+        var failed = false;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var seen = Revision();
+            T value;
+            try
+            {
+                value = read();
+            }
+            catch
+            {
+                if (failed)
+                    throw new ToolAuthorizationUnavailableException();
+                failed = true;
+                if (retryDelay is null)
+                    await Task.Delay(100, cancellationToken);
+                else
+                    await retryDelay(cancellationToken);
+                continue;
+            }
+            if (Publish(seen, value, store))
+                return value;
         }
     }
 
@@ -205,6 +282,7 @@ internal sealed class ToolAuthorizationAuthority
     {
         lock (cacheGate)
         {
+            revision++;
             cached = null;
             ceiling = null;
             ceilingRead = false;
@@ -224,16 +302,6 @@ internal sealed class ToolAuthorizationAuthority
         }
     }
 
-    private ToolAuthorizationPolicy? CacheCeiling(ToolAuthorizationPolicy? value)
-    {
-        lock (cacheGate)
-        {
-            ceiling = value;
-            ceilingRead = true;
-            return value;
-        }
-    }
-
     private ToolAuthorizationPolicy? ReadCeiling() =>
         CeilingSource!.Read() is { } document ? OperatorCeiling.Parse(document.Text) : null;
 
@@ -246,21 +314,7 @@ internal sealed class ToolAuthorizationAuthority
             return null;
         if (CeilingHit(out var value))
             return value;
-        try
-        {
-            return CacheCeiling(ReadCeiling());
-        }
-        catch
-        {
-            try
-            {
-                return CacheCeiling(ReadCeiling());
-            }
-            catch
-            {
-                throw new ToolAuthorizationUnavailableException();
-            }
-        }
+        return ReadFresh(ReadCeiling, StoreCeiling);
     }
 
     internal async Task<ToolAuthorizationPolicy?> LoadCeilingAsync(CancellationToken cancellationToken = default)
@@ -270,26 +324,7 @@ internal sealed class ToolAuthorizationAuthority
         cancellationToken.ThrowIfCancellationRequested();
         if (CeilingHit(out var value))
             return value;
-        try
-        {
-            return CacheCeiling(ReadCeiling());
-        }
-        catch
-        {
-            if (retryDelay is null)
-                await Task.Delay(100, cancellationToken);
-            else
-                await retryDelay(cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                return CacheCeiling(ReadCeiling());
-            }
-            catch
-            {
-                throw new ToolAuthorizationUnavailableException();
-            }
-        }
+        return await ReadFreshAsync(ReadCeiling, StoreCeiling, cancellationToken);
     }
 
     // The layers that precede the Agent layers, in evaluation order: the ceiling when one
@@ -316,21 +351,7 @@ internal sealed class ToolAuthorizationAuthority
         var value = Hit();
         if (value is not null)
             return value;
-        try
-        {
-            return Cache(Read());
-        }
-        catch
-        {
-            try
-            {
-                return Cache(Read());
-            }
-            catch
-            {
-                throw new ToolAuthorizationUnavailableException();
-            }
-        }
+        return ReadFresh(Read, StorePolicy);
     }
 
     internal async Task<ToolAuthorizationPolicy> LoadAsync(
@@ -344,26 +365,7 @@ internal sealed class ToolAuthorizationAuthority
         var value = Hit();
         if (value is not null)
             return value;
-        try
-        {
-            return Cache(Read());
-        }
-        catch
-        {
-            if (retryDelay is null)
-                await Task.Delay(100, cancellationToken);
-            else
-                await retryDelay(cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                return Cache(Read());
-            }
-            catch
-            {
-                throw new ToolAuthorizationUnavailableException();
-            }
-        }
+        return await ReadFreshAsync(Read, StorePolicy, cancellationToken);
     }
 
     internal async Task InstallAsync(byte[] bytes, CancellationToken token)
