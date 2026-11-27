@@ -142,4 +142,40 @@ public sealed class TenantLimitHttpTests
         using var accepted = await f.Client.PostAsync("api/upload?sessionId=uploads", Upload(1024 * 1024 - 4096));
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
     }
+
+    // Content sent chunked: no declared length for the server to check up front.
+    private sealed class Chunked(HttpContent inner) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            inner.CopyToAsync(stream);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    [Fact]
+    public async Task AnUploadRequestIsLimitedAsItStreams()
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { UploadBytes = 64 * 1024 });
+        // A small file inside a body far larger than the file limit and its overhead, made of
+        // fields each within the per-section limit.
+        var multipart = Upload(1024);
+        for (var index = 0; index < 40; index++)
+            multipart.Add(new StringContent(new string('x', 60 * 1024)), "padding" + index);
+        var content = new Chunked(multipart);
+        content.Headers.ContentType = multipart.Headers.ContentType;
+        using var refused = await f.Client.PostAsync("api/upload?sessionId=uploads", content);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, refused.StatusCode);
+        var small = Upload(1024);
+        var smallContent = new Chunked(small);
+        smallContent.Headers.ContentType = small.Headers.ContentType;
+        // The server closes a connection whose oversized body it didn't read; a new one follows.
+        using var fresh = new HttpClient { BaseAddress = f.Base };
+        fresh.DefaultRequestHeaders.Authorization = new("Bearer", Token);
+        using var accepted = await fresh.PostAsync("api/upload?sessionId=uploads", smallContent);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+    }
 }

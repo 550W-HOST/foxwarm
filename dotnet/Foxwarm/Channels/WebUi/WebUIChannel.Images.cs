@@ -15,6 +15,9 @@ internal sealed partial class WebUIChannel
             ? Math.Min(limit, WebUiUploadedFiles.Limit)
             : WebUiUploadedFiles.Limit;
 
+    // Multipart boundaries, part headers and small form fields around the one file.
+    internal const long UploadOverheadBytes = 1024 * 1024;
+
     private string UploadLimitError =>
         $"This file is larger than the {Foxwarm.Limits.TenantLimits.Size(UploadLimit)} upload limit.";
     private static string UploadRoot => WebUiUploadedFiles.StagingRoot;
@@ -29,13 +32,17 @@ internal sealed partial class WebUIChannel
             "/api/upload",
             async (HttpContext context) =>
             {
+                var uploadLimit = UploadLimit;
                 if (
                     context.Features.Get<IHttpMaxRequestBodySizeFeature>() is
                     { IsReadOnly: false } limit
                 )
-                    // Source limits each file, not the complete multipart body.
-                    limit.MaxRequestBodySize = null;
-                var uploadLimit = UploadLimit;
+                    // Source limits each file, not the complete multipart body. A hosted tenant's
+                    // request is limited as it streams too: its file plus bounded multipart
+                    // overhead, whatever length it declares.
+                    limit.MaxRequestBodySize = sessions.Capabilities.Limits is null
+                        ? null
+                        : uploadLimit + UploadOverheadBytes;
                 if (context.Request.ContentLength > uploadLimit)
                     return Results.Json(
                         new JsonObject
@@ -132,10 +139,11 @@ internal sealed partial class WebUIChannel
                 {
                     if (
                         error is InvalidDataException
-                        && error.Message.Contains(
-                            "Multipart body length limit",
-                            StringComparison.Ordinal
-                        )
+                            && error.Message.Contains(
+                                "Multipart body length limit",
+                                StringComparison.Ordinal
+                            )
+                        || error is BadHttpRequestException { StatusCode: 413 }
                     )
                         return Results.Json(
                             new JsonObject { ["error"] = UploadLimitError },
