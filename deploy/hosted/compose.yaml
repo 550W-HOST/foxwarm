@@ -41,7 +41,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
-    secrets: [postgres-password, owner-password, app-password]
+    secrets: [postgres-password, owner-password, app-password, operator-password]
     volumes:
       - postgres:/var/lib/postgresql
       # Creates the schema owner and runtime roles and the foxwarm database on first start.
@@ -88,6 +88,31 @@ services:
       disable: true
     restart: "no"
 
+  operator:
+    profiles: [operator]
+    image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
+    command: [operator, serve]
+    read_only: true
+    user: "1000:1000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      FOXWARM_ROLE: operator
+      FOXWARM_DATABASE_URL_FILE: /run/secrets/operator-database-url
+      FOXWARM_KEK_FILE: /run/secrets/kek
+    secrets: [operator-database-url, kek]
+    volumes:
+      - ./deployment.operator.yaml:/etc/foxwarm/deployment.yaml:ro
+    tmpfs:
+      - /scratch:uid=1000,gid=1000,mode=0700
+    ports:
+      - "127.0.0.1:3003:3003"
+    networks: [backend, frontend]
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   foxwarm-1:
     <<: *replica
     environment:
@@ -127,6 +152,10 @@ secrets:
     file: ./secrets/postgres-password
   owner-password:
     file: ./secrets/owner-password
+  operator-password:
+    file: ./secrets/operator-password
+  operator-database-url:
+    file: ./secrets/operator-database-url
   app-password:
     file: ./secrets/app-password
   database-url:

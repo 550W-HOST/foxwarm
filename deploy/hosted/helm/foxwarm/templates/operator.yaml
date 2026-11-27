@@ -1,0 +1,68 @@
+{{- if .Values.operator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "foxwarm.fullname" . }}-operator
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels: &selector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels: *selector
+      annotations:
+        checksum/deployment-config: {{ include "foxwarm.deploymentConfig" . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "foxwarm.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: operator
+          image: {{ include "foxwarm.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [operator, serve]
+          env:
+            - {name: FOXWARM_ROLE, value: operator}
+            - {name: FOXWARM_DATABASE_URL_FILE, value: /run/secrets/operator/database-url}
+            - {name: FOXWARM_KEK_FILE, value: /run/secrets/operator/kek.json}
+          ports:
+            - {name: operator, containerPort: {{ .Values.operator.port }}}
+          readinessProbe:
+            tcpSocket: {port: operator}
+          securityContext:
+            {{- include "foxwarm.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/foxwarm, readOnly: true}
+            - {name: credentials, mountPath: /run/secrets/operator, readOnly: true}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "foxwarm.fullname" . }}-deployment}
+        - name: credentials
+          secret:
+            secretName: {{ required "operator.existingSecret is required" .Values.operator.existingSecret }}
+            defaultMode: 0440
+            items:
+              - {key: database-url, path: database-url}
+              - {key: kek.json, path: kek.json}
+        - name: scratch
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "foxwarm.fullname" . }}-operator
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: operator
+  ports:
+    - {name: operator, port: {{ .Values.operator.port }}, targetPort: operator}
+{{- end }}

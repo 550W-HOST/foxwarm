@@ -45,6 +45,7 @@ spec:
             items:
               - {key: postgres-password, path: postgres-password}
               - {key: owner-password, path: owner-password}
+              - {key: operator-password, path: operator-password}
               - {key: app-password, path: app-password}
         - name: init
           configMap:

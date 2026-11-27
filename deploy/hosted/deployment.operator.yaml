@@ -1,0 +1,7 @@
+# Local control-plane origin. In a multi-tenant deployment, use the same tenant URL template
+# on the operator and replicas, and terminate TLS on separate operator and tenant hostnames.
+url: http://{slug}.localhost:3001
+bot: {httpHost: 0.0.0.0, httpPort: 3001}
+health: {port: 3002}
+blobs: {backend: postgres}
+operator: {url: 'http://operator.localhost:3003', port: 3003}

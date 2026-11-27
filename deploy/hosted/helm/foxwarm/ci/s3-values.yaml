@@ -3,7 +3,7 @@ image:
   repository: registry.example.com/foxwarm
   tag: hosted-test
 deployment:
-  url: https://foxwarm.example.com
+  url: "https://{slug}.example.test"
   blobs:
     backend: s3
     s3:
@@ -20,3 +20,8 @@ secrets:
   s3SecretAccessKey: test-secret
 migrate:
   databaseUrl: postgres://foxwarm_owner:owner@db.example.com:5432/foxwarm
+
+operator:
+  enabled: true
+  existingSecret: foxwarm-operator-connection
+  url: https://control.example.test

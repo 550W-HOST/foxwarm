@@ -54,6 +54,21 @@ Create three database roles before the first migration: the schema owner, which 
 
 A replica exits with 0 when stopped, 75 when it lost the tenant (restart it; it comes back as a standby), 78 for a configuration, key or schema refusal that a restart won't fix, and 1 for other failures such as an unreachable database.
 
+### Multi-tenant operator service
+
+`foxwarm operator serve` runs the control plane on its own database login and HTTP listener. It takes `FOXWARM_DATABASE_URL_FILE` for the operator role and `FOXWARM_KEK_FILE`, never the migration URL. In the deployment YAML, set `url: "https://{slug}.example.com"` and `operator: {url: "https://control.example.net", port: 3003}`. Route the operator host to this service and the wildcard tenant domain to the replicas. Preserve the public Host header, including any non-default port. Terminate TLS at ingress; keep the control plane internal where possible.
+
+The Compose `operator` profile adds this service with the local example in `deployment.operator.yaml`. The Helm equivalent is `operator.enabled`, `operator.url` and `operator.existingSecret` (keys `database-url` and `kek.json`). On an existing database, provision the operator login and supply its password separately; the Compose init script only runs on an empty directory. The default packaged replicas still use the single-tenant topology pending the multi-tenant forwarding cutover. Enabling the operator service alone does not change that topology.
+
+Create an operator bearer with the migration environment and store it in a private file:
+
+```sh
+(umask 077; foxwarm operator token create > operator.token)
+foxwarm operator --url https://control.example.net --token-file operator.token tenant create alpha hosted alpha.example.com
+```
+
+Give the returned setup token to the tenant administrator. It expires in 24 hours. The first sign-in on the tenant's own origin shows the access token to save. `tenant rotate alpha` invalidates the earlier credential once the owner observes the change (normally by the next five-second renewal) and issues another one-time token. See [the operator API](../../docs/code-index/units/hosted-operator.md) for settings, placement and rotation.
+
 ## Deployment configuration
 
 The mounted YAML holds only deployment settings: `url`, `bot.httpHost`, `bot.httpPort`, `bot.enableWebUI`, `health.port` (required), `blobs` (required: `backend: s3` with its connection, or `backend: postgres`), `asrService`, `nodeProviders`, `journal.retentionDays` and `egress`. Everything else is a tenant setting, stored in the database and edited through Setup in the WebUI. A replica refuses a tenant setting in this file, naming it. The file is read at start, so a change takes effect through a rolling restart. The keys and the split are described in [hosted configuration](../../docs/code-index/units/hosted-config.md).

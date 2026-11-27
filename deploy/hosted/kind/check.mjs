@@ -185,7 +185,7 @@ try {
   const secrets = path.join(work, 'secrets')
   await run('sh', [path.join(hosted, 'generate-secrets.sh'), secrets])
   const file = name => path.join(secrets, name)
-  await kubectl(['create', 'secret', 'generic', 'fixture-secrets', ...['postgres-password', 'owner-password', 'app-password', 's3-access-key-id', 's3-secret-access-key'].map(name => `--from-file=${name}=${file(name)}`)])
+  await kubectl(['create', 'secret', 'generic', 'fixture-secrets', ...['postgres-password', 'owner-password', 'app-password', 'operator-password', 's3-access-key-id', 's3-secret-access-key'].map(name => `--from-file=${name}=${file(name)}`)])
   await kubectl(['create', 'configmap', 'postgres-init', `--from-file=${path.join(hosted, 'postgres-init', '10-foxwarm-roles.sh')}`])
   await kubectl(['apply', '-f', path.join(here, 'fixtures.yaml')])
   await kubectl(['rollout', 'status', 'deploy/postgres', '--timeout', '240s'])

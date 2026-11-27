@@ -15,9 +15,9 @@ sh "$here/generate-secrets.sh" "$work/secrets" >/dev/null
 cp -R "$work/secrets" "$work/stack-secrets"
 # compose.yaml names ./secrets; render it from a copy of this directory with generated ones.
 mkdir "$work/stack"
-cp -R "$here/compose.yaml" "$here/deployment.yaml" "$here/haproxy.cfg" "$here/postgres-init" "$here/drills" "$work/stack/"
+cp -R "$here/compose.yaml" "$here/deployment.yaml" "$here/deployment.operator.yaml" "$here/haproxy.cfg" "$here/postgres-init" "$here/drills" "$work/stack/"
 mv "$work/stack-secrets" "$work/stack/secrets"
-docker compose -f "$work/stack/compose.yaml" config --quiet
+docker compose -f "$work/stack/compose.yaml" --profile operator config --quiet
 echo "compose: compose.yaml renders"
 FOXWARM_DRILL_SECRETS="$work/secrets" docker compose -f "$work/stack/compose.yaml" -f "$work/stack/drills/compose.drill.yaml" --profile drill config --quiet
 echo "compose: compose.yaml with drills/compose.drill.yaml renders"
@@ -40,6 +40,7 @@ parse() { # $1: a deployment configuration file
   esac
 }
 parse "$here/deployment.yaml"
+parse "$here/deployment.operator.yaml"
 parse "$here/drills/deployment.drill.yaml"
 
 chart="$here/helm/foxwarm"
