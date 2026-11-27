@@ -122,3 +122,28 @@ test('pending cross-Node wrapper paths stay readable without borrowing native Co
   assert.equal(await page.$$eval('#read a.foxwarm-code-link', links => links.length), 0)
   assert.deepEqual(await page.evaluate(() => window.clicks), [])
 })
+
+
+test('Agent-folder paths without master stay plain: no Code link and no Node of their own', async () => {
+  await page.goto(url)
+  await page.evaluate(() => {
+    window.renderCase('read', { id: 'folder-read', name: 'read', args: { filePath: '$fw_agentdir/docs/a.md' } },
+      { tool_use_id: 'folder-read', name: 'read', response: { output: 'ok' }, __meta: { resolvedPaths: [
+        { raw: '$fw_agentdir/docs/a.md', resolved: '$fw_agentdir/docs/a.md', nodeId: '@agent' },
+      ] } })
+    // A folder-relative path would otherwise resolve against the Session's Node.
+    window.renderCase('relative', { id: 'folder-write', name: 'write', args: { filePath: 'docs/b.md', content: 'b' } },
+      { tool_use_id: 'folder-write', name: 'write', response: { output: 'ok' }, __meta: { resolvedPaths: [
+        { raw: 'docs/b.md', resolved: '$fw_agentdir/docs/b.md', nodeId: '@agent' },
+      ] } })
+  })
+  for (const id of ['read', 'relative']) {
+    await page.click(`#${id} .foxwarm-tool-header-toggle`)
+    await page.waitForSelector(`#${id} .foxwarm-tool-call-args`)
+  }
+  assert.equal(await page.$eval('#read .foxwarm-tool-call-args .foxwarm-tool-code-path', element => element.textContent), '$fw_agentdir/docs/a.md')
+  assert.equal(await page.$eval('#relative .foxwarm-tool-call-args .foxwarm-tool-code-path', element => element.textContent), 'docs/b.md')
+  assert.equal(await page.$$eval('#read a.foxwarm-code-link, #relative a.foxwarm-code-link', links => links.length), 0)
+  for (const id of ['read', 'relative']) assert.doesNotMatch(await page.$eval(`#${id}`, element => element.textContent), /@agent/)
+  assert.deepEqual(await page.evaluate(() => window.clicks), [])
+})

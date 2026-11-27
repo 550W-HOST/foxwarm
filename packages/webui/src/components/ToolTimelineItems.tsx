@@ -1,5 +1,6 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import { normalizeCodePath } from '../vscodeWeb'
+import { isAgentFolderNode } from '../codeFileLinks'
 import type { ReactNode } from 'react'
 import { FileJson, Download, Timer, Copy, Check } from 'lucide-react'
 import {
@@ -337,10 +338,13 @@ const renderTextResult = (text: string, expanded: boolean): ReactNode => (
 export type { OpenCodeFileHandler } from './CodeFileLink'
 
 type DisplayResolvedPaths = NonNullable<FunctionResponse['__meta']>['resolvedPaths']
-const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown, index = 0): ResolvedCodePath | undefined => {
+/** The file a path resolved to; null for a file in the Agent's folder (`@agent`), which is no Node's. */
+const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown, index = 0): ResolvedCodePath | null | undefined => {
   if (typeof raw !== 'string') return undefined
   const match = paths?.[index]
-  if (!match || match.raw !== raw || typeof match.resolved !== 'string' || !normalizeCodePath(match.resolved)
+  if (!match || match.raw !== raw) return undefined
+  if (isAgentFolderNode(match.nodeId)) return null
+  if (typeof match.resolved !== 'string' || !normalizeCodePath(match.resolved)
     || typeof match.nodeId !== 'string') return undefined
   return { nodeId: match.nodeId, resolvedPath: match.resolved }
 }
@@ -353,13 +357,14 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   filePath?: unknown
   lines?: { startLine?: number; endLine?: number }
   onOpenCodeFile?: OpenCodeFileHandler
-  target?: ResolvedCodePath
+  // null: an Agent-folder file, shown as a plain path.
+  target?: ResolvedCodePath | null
   prefix?: string
   collapsed?: boolean
 }) {
   const pathFade = useThreadCardOverflowFade<HTMLSpanElement>('right', collapsed)
   const displayPath = typeof filePath === 'string' ? filePath : 'Path unavailable'
-  const canOpenCode = !collapsed && typeof filePath === 'string' && !!onOpenCodeFile && (!!target || !!normalizeCodePath(filePath))
+  const canOpenCode = !collapsed && target !== null && typeof filePath === 'string' && !!onOpenCodeFile && (!!target || !!normalizeCodePath(filePath))
   const layoutClass = collapsed
     ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
@@ -373,7 +378,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   return (
     <span className={layoutClass}>
       {prefix}
-      <CodeFileLink label={displayPath} lines={definedLines} target={target} onOpen={onOpenCodeFile} className={pathClass}>{displayPath}</CodeFileLink>
+      <CodeFileLink label={displayPath} lines={definedLines} target={target ?? undefined} onOpen={onOpenCodeFile} className={pathClass}>{displayPath}</CodeFileLink>
     </span>
   )
 })

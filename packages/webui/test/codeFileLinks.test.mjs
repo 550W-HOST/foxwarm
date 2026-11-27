@@ -64,6 +64,10 @@ test('link bases come from the persisted placement, the call Node, or an older c
   assert.deepEqual(linkBaseAfter(response({ resolvedPaths: [{ raw: './src/a.ts', resolved: '/repo/src/a.ts', nodeId: 'n1' }] })), { nodeId: 'n1', cwd: '/repo' })
   assert.deepEqual(linkBaseAfter(response({ resolvedPaths: [{ raw: '/abs/a.ts', resolved: '/abs/a.ts', nodeId: 'n1' }] })), { nodeId: 'n1' })
   assert.deepEqual(linkBaseAfter(response({ resolvedPaths: [{ raw: '../a.ts', resolved: '/a.ts', nodeId: 'n1' }] })), { nodeId: 'n1' })
+  // The Agent's folder without master (`@agent`) is no Node: it gives no base, and the Session's stays.
+  assert.equal(linkBaseAfter(response({ resolvedPaths: [{ raw: 'docs/a.md', resolved: '$fw_agentdir/docs/a.md', nodeId: '@agent' }] })), undefined)
+  assert.deepEqual(linkBaseAfter(response({ target: { source: 'node', node: '@agent' }, placementAfter: { node: 'n1', cwd: '/w' } })), { nodeId: 'n1', cwd: '/w' })
+  assert.equal(linkBaseAfter(response({ target: { source: 'node', node: '@agent' } })), undefined)
 })
 
 test('each model message takes the most recent recorded base before it', () => {
