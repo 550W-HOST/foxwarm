@@ -36,8 +36,9 @@ U14(c), decision C11; hosted only. File mode's journal keeps everything as befor
 ## Journal off switch
 
 - **Setting.** The tenant's `tenants.settings.journal.enabled: false`, applied at activation ([tenant settings](./hosted-egress-limits.md#d-tenant-settings)). The tenant's `retentionDays` overrides the deployment's.
-- **Behavior** (`PgLlmJournalStore.Unrecorded`). Admission returns an ID without writing; attempt starts are kept in this owner's memory; a result writes only its usage-ledger and redaction rows from them. No manifest, object, attempt start or result is written. The usage overview and its coverage stay complete.
-- **Reconstruction** reports such a request as `not-recorded` with a reason; while the journal is off, an ID no row knows reads the same way. Requests recorded earlier keep their content and retention. The list holds only recorded requests.
+- **Behavior** (`PgLlmJournalStore.Unrecorded`). Admission returns an ID of the form `unrecorded-` plus a GUID, without writing; the request's start data (Session, purpose, each attempt's model) stays in this owner's memory only while the request is live: an attempt's result removes its start, a success ends the request, and a request that ends otherwise is dropped an hour after its last attempt. A result writes only its usage-ledger and redaction rows. No manifest, object, attempt start or result is written. The wire diagnostics follow the same switch (`ILlmJournalStore.RecordsContent`): no request, response or error files in scratch.
+- **Usage.** Without a result row the backfill can't repair a missing ledger row, so a ledger row of an unrecorded request that the database rejects is counted durably (`llm_journal_metadata` key `usage-unrecorded-lost`), and the usage coverage reports incomplete from then on, on any owner.
+- **Reconstruction** answers from the ID: an unrecorded request is reported `not-recorded` with a reason on any later owner, whether recording is on or off by then. Requests recorded earlier keep their content and retention. The list holds only recorded requests.
 
 ## Tests
 
@@ -56,4 +57,3 @@ U14(c), decision C11; hosted only. File mode's journal keeps everything as befor
 ## Open Questions
 
 - None.
-
