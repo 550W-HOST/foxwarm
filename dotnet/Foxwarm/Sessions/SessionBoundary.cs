@@ -362,7 +362,13 @@ internal static class SessionBoundary
     ) =>
         $"<foxwarm-system kind=\"session-boundary\" event=\"{boundary}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\"{Placement(placement.Node, placement.Cwd)} time=\"{LocalTime()}\" />";
 
-    /// <summary>Initial execution placement attributes for a Session's opening marker.</summary>
+    internal static string Placement(SessionState state) =>
+        Placement(
+            SessionManager.ResolveExecutionNode(state.AuthorityEnvelope),
+            SessionWait.Text(state.AuthorityEnvelope["cwd"])
+        );
+
+    /// <summary>Execution placement attributes shared by opening and compaction markers.</summary>
     internal static string Placement(string node, string? cwd) =>
         $" currentNode=\"{PlacementValue(node)}\""
         + (string.IsNullOrEmpty(cwd) ? "" : $" cwd=\"{PlacementValue(cwd)}\"");

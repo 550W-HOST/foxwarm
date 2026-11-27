@@ -940,10 +940,7 @@ public sealed partial class LocalSessionTurnHost
         {
             ["system"] =
                 $"<foxwarm-system kind=\"session\" currentSessionId=\"{EscapeFoxwarmAttribute(state.Id)}\""
-                + SessionBoundary.Placement(
-                    SessionManager.ResolveExecutionNode(state.AuthorityEnvelope),
-                    SessionWait.Text(state.AuthorityEnvelope["cwd"])
-                )
+                + SessionBoundary.Placement(state)
                 + " />",
         };
 
