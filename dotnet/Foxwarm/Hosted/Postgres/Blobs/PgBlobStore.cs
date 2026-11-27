@@ -131,6 +131,41 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
             token: token
         );
 
+    // Only the chunks the range covers, and of each only the covered part: chunks are stored
+    // uncompressed out of line, so PostgreSQL reads just those bytes.
+    public Task<byte[]> ReadRangeAsync(string key, long offset, int count, CancellationToken token) =>
+        database.ReadAsync(
+            async (tx, cancel) =>
+            {
+                var (length, _) = await ObjectAsync(tx, key, cancel).ConfigureAwait(false);
+                if (offset >= length || count <= 0)
+                    return Array.Empty<byte>();
+                var end = Math.Min(length, offset + count);
+                var result = new byte[end - offset];
+                var position = 0;
+                for (var index = (int)(offset / ChunkBytes); (long)index * ChunkBytes < end; index++)
+                {
+                    var chunkStart = (long)index * ChunkBytes;
+                    var from = (int)(Math.Max(offset, chunkStart) - chunkStart);
+                    var take = (int)(Math.Min(end, chunkStart + ChunkBytes) - chunkStart - from);
+                    await using var command = tx.Command(
+                        "SELECT substring(data FROM $4 FOR $5) FROM blob_chunks WHERE store = $1 AND key = $2 AND chunk = $3",
+                        store,
+                        key,
+                        index,
+                        from + 1,
+                        take
+                    );
+                    if (await command.ExecuteScalarAsync(cancel).ConfigureAwait(false) is not byte[] part || part.Length != take)
+                        throw Corrupt(key);
+                    part.CopyTo(result, position);
+                    position += take;
+                }
+                return result;
+            },
+            token: token
+        );
+
     public Stream OpenRead(string key)
     {
         var (length, chunks) = database.Read(tx => Object(tx, key));

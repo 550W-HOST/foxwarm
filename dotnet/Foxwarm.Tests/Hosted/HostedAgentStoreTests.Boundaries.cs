@@ -145,4 +145,80 @@ public sealed partial class HostedAgentStoreTests
         Assert.Equal("Agent 'gone' does not exist.", error.Message);
         Assert.NotNull(await fixture.Manager.GetExistingAsync(owner.Id));
     }
+
+    [Fact]
+    public async Task A_creation_refused_by_a_concurrent_write_retires_its_record()
+    {
+        await using var fixture = await StoreFixture.Create(store: true);
+        var store = (PgAgentFileStore)fixture.Store;
+        var (_, entries) = store.Usage();
+        // Room for exactly the new Agent's memory directory, which another write takes first.
+        fixture.Postgres!.AgentStoreLimits = () => AgentStoreLimits.Default with { Files = entries + 1 };
+        var catalog = fixture.Manager.AgentCatalog;
+        catalog.BeforeStoreCreation = _ =>
+            store.WriteAsync("main", "memory/last.md", new byte[] { 1 }, null, default).GetAwaiter().GetResult();
+        await Assert.ThrowsAsync<AgentStoreQuotaException>(() =>
+            fixture.Manager.CreateAgentAsync("child", createMainSession: false, creator: fixture.Inner.Owner)
+        );
+        catalog.BeforeStoreCreation = null;
+        Assert.False(fixture.Manager.AgentMetadata.ContainsKey("child"));
+        Assert.False(fixture.Store.AgentExists("child"));
+        fixture.Postgres.AgentStoreLimits = () => AgentStoreLimits.Default;
+        await fixture.Manager.CreateAgentAsync("child", createMainSession: false, creator: fixture.Inner.Owner);
+        Assert.True(fixture.Store.AgentExists("child"));
+    }
+
+    [Fact]
+    public async Task An_undecidable_ask_denies_and_parsed_roots_are_what_is_validated()
+    {
+        await using var fixture = await StoreFixture.Create(
+            store: true,
+            agents: """{"main":{"rules":[{"id":"odd","match":{"tool":{"source":"builtin"},"path":{"anyNotWithin":"${agent.dir}/../other"}},"action":"ask"},{"id":"rest","match":{"tool":{"source":"builtin"}},"action":"allow"}]}}"""
+        );
+        var result = await fixture.Call("write_memory", new() { ["filePath"] = "x.md", ["content"] = "x" });
+        var error = result.FailureMessage() ?? "";
+        Assert.Contains("odd", error);
+        Assert.DoesNotContain("approv", error, StringComparison.OrdinalIgnoreCase);
+        Assert.False(fixture.Store.FileExists("main", "memory/x.md"));
+        // Surrounding whitespace is the policy's, and a reduced key is what must be a store path.
+        foreach (var root in new[] { " ${agent.memoryDir}/notes ", "${agent.memoryDir}/C:/../notes", "${agent.memoryDir}/C:" })
+            await fixture.Manager.CreateAgentAsync(
+                "boxed" + Math.Abs(root.GetHashCode() % 1000),
+                createMainSession: false,
+                rules: new JsonArray(
+                    new JsonObject
+                    {
+                        ["id"] = "outside",
+                        ["match"] = new JsonObject { ["path"] = new JsonObject { ["anyNotWithin"] = root } },
+                        ["action"] = "deny",
+                    }
+                )
+            );
+        Assert.Null(AgentStorePaths.PolicyRoot("${agent.dir}/C:", "a", out var refused));
+        Assert.True(refused);
+    }
+
+    [Fact]
+    public async Task New_Agent_names_are_bounded_before_a_move_and_restorations_keep_long_names()
+    {
+        var longName = new string('r', AgentCatalog.MaxNewNameLength + 10);
+        await using var fixture = await StoreFixture.Create(
+            store: true,
+            agents: new JsonObject { [longName] = new JsonObject { ["createdBy"] = "main", ["rules"] = new JsonArray() } }.ToJsonString()
+        );
+        var owner = await fixture.Manager.CreateNamedAsync("main", "mover", null, null);
+        var moved = await fixture.Call(
+            "move_session",
+            new()
+            {
+                ["sessionId"] = owner.Id,
+                ["newAgentName"] = new string('m', AgentCatalog.MaxNewNameLength + 1),
+                ["createAgent"] = true,
+            }
+        );
+        Assert.Equal("Agent names can be at most 128 characters.", moved.FailureMessage());
+        Assert.NotNull(await fixture.Manager.GetExistingAsync(owner.Id));
+        await fixture.Manager.AgentCatalog.CreateAsync(longName, restoreRetained: true);
+        Assert.True(fixture.Store.AgentExists(longName));
+    }
 }

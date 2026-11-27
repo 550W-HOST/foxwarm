@@ -131,16 +131,59 @@ internal sealed class PgAgentFileStore : IAgentStore
         return database.Read(tx => StatIn(tx, key, path));
     }
 
+    // Only the requested bytes: an inline slice in SQL, or a ranged blob read. A range that
+    // covers the whole file is digest-verified as a full read is; a partial one only has its
+    // length checked against the row's size.
     public async Task<byte[]> ReadRangeAsync(string? agent, string path, long offset, int count, CancellationToken token)
     {
-        var row = await LookupAsync(agent, path, token).ConfigureAwait(false);
-        if (row.Inline is { } inline)
-        {
-            var start = (int)Math.Min(offset, inline.Length);
-            return inline[start..(int)Math.Min(inline.Length, start + (long)count)];
-        }
-        await using var stream = blobs.OpenRead(row.BlobKey!);
-        return await AgentFileErrors.ReadRangeAsync(stream, offset, count, token).ConfigureAwait(false);
+        AgentFilePaths.Require(path);
+        var key = Key(agent);
+        var row = await database
+            .ReadAsync(
+                async (tx, cancel) =>
+                {
+                    await using var command = tx.Command(
+                        "SELECT kind, size, blob_key, sha256, CASE WHEN inline IS NULL THEN NULL"
+                            + " ELSE substring(inline FROM $3 FOR $4) END FROM agent_files"
+                            + " WHERE agent = $1 AND path = $2",
+                        key,
+                        path,
+                        offset >= int.MaxValue ? int.MaxValue : (int)offset + 1,
+                        Math.Max(count, 0)
+                    );
+                    await using var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false);
+                    if (!await reader.ReadAsync(cancel).ConfigureAwait(false))
+                    {
+                        await reader.CloseAsync().ConfigureAwait(false);
+                        return await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false)
+                            ? ("dir", 0L, (string?)null, (byte[]?)null, (byte[]?)null)
+                            : default;
+                    }
+                    return (
+                        reader.GetString(0),
+                        reader.GetInt64(1),
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetFieldValue<byte[]>(3),
+                        reader.IsDBNull(4) ? null : reader.GetFieldValue<byte[]>(4)
+                    );
+                },
+                snapshot: true,
+                token: token
+            )
+            .ConfigureAwait(false);
+        if (row.Item1 is null)
+            throw AgentFileErrors.NotFound(path);
+        if (row.Item1 == "dir")
+            throw AgentFileErrors.IsDirectory(path);
+        var (_, size, blobKey, sha256, slice) = row;
+        var bytes = slice ?? (blobKey is null ? [] : await blobs.ReadRangeAsync(blobKey, offset, count, token).ConfigureAwait(false));
+        var expected = offset >= size ? 0 : Math.Min(count, size - offset);
+        if (
+            bytes.Length != expected
+            || offset == 0 && expected == size && !SHA256.HashData(bytes).AsSpan().SequenceEqual(sha256)
+        )
+            throw new IOException("Stored content of " + path + " doesn't match its digest.");
+        return bytes;
     }
 
     public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token)
@@ -226,11 +269,14 @@ internal sealed class PgAgentFileStore : IAgentStore
                                 async (tx, cancel) =>
                                 {
                                     var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                                    var limit = limits();
+                                    if (content.Length > limit.FileBytes)
+                                        throw AgentFileErrors.FileTooLarge(path, limit);
                                     var (bytes, entries) = await WriteAdmissionAsync(
                                             tx, key, agent, path, content.Length, expectedGeneration, cancel
                                         )
                                         .ConfigureAwait(false);
-                                    usage.Admit(limits(), bytes, entries);
+                                    usage.Admit(limit, bytes, entries);
                                     throw new AdmittedException();
                                 },
                                 new PgWriteOptions(),
@@ -517,11 +563,13 @@ internal sealed class PgAgentFileStore : IAgentStore
         string agent,
         IReadOnlyList<string> directories,
         IReadOnlyList<KeyValuePair<string, byte[]>> files,
-        CancellationToken token
+        CancellationToken token,
+        bool restoration = false
     )
     {
         AgentCatalog.ValidateName(agent);
-        AgentCatalog.ValidateNewName(agent);
+        if (!restoration)
+            AgentCatalog.ValidateNewName(agent);
         foreach (var directory in directories)
             AgentFilePaths.Require(directory);
         foreach (var file in files)
@@ -539,6 +587,34 @@ internal sealed class PgAgentFileStore : IAgentStore
             agent,
             async () =>
             {
+                // Only directories no file lies below need a row of their own.
+                var empty = directories
+                    .Where(directory => !paths.Any(other => other != directory && AgentFilePaths.Within(other, directory)))
+                    .ToArray();
+                // Initial blobs are admitted first, as a file write's are: in a fenced
+                // transaction that commits nothing, with the root still absent.
+                if (files.Any(file => file.Value.Length > InlineBytes))
+                    try
+                    {
+                        await database
+                            .WriteAsync<bool>(
+                                async (tx, cancel) =>
+                                {
+                                    var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
+                                    if (await RowAtAsync(tx, agent, "", cancel).ConfigureAwait(false) is not null)
+                                        throw new AgentFileConflictException($"Agent '{agent}' already exists.");
+                                    var limit = limits();
+                                    if (files.FirstOrDefault(file => file.Value.Length > limit.FileBytes) is { Key: not null } large)
+                                        throw AgentFileErrors.FileTooLarge(large.Key, limit);
+                                    usage.Admit(limit, files.Sum(file => (long)file.Value.Length), files.Count + empty.Length);
+                                    throw new AdmittedException();
+                                },
+                                new PgWriteOptions(),
+                                token
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (AdmittedException) { }
                 var stored = new List<(string Path, byte[] Content, byte[] Sha256, string? BlobKey)>();
                 foreach (var (path, content) in files)
                 {
@@ -547,10 +623,6 @@ internal sealed class PgAgentFileStore : IAgentStore
                         (path, content, sha256, await StoreLargeAsync(agent, content, sha256, token).ConfigureAwait(false))
                     );
                 }
-                // Only directories no file lies below need a row of their own.
-                var empty = directories
-                    .Where(directory => !paths.Any(other => other != directory && AgentFilePaths.Within(other, directory)))
-                    .ToArray();
                 return await database
                     .WriteAsync(
                         async (tx, cancel) =>
@@ -600,7 +672,11 @@ internal sealed class PgAgentFileStore : IAgentStore
     }
 
     /// <summary>Removes an Agent's root and every file of it in one transaction; a missing Agent is a no-op.</summary>
-    public Task DeleteAgentAsync(string agent, CancellationToken token)
+    public Task DeleteAgentAsync(string agent, CancellationToken token) => RemoveAgentAsync(agent, keepRoot: false, token);
+
+    public Task ClearAgentAsync(string agent, CancellationToken token) => RemoveAgentAsync(agent, keepRoot: true, token);
+
+    private Task RemoveAgentAsync(string agent, bool keepRoot, CancellationToken token)
     {
         AgentCatalog.ValidateName(agent);
         return lanes.RunAsync(
@@ -617,18 +693,21 @@ internal sealed class PgAgentFileStore : IAgentStore
                                 cancel
                             )
                             .ConfigureAwait(false);
-                        await tx.ExecuteAsync(
-                                "DELETE FROM agent_files WHERE agent = $1 AND path = ''",
-                                cancel,
-                                agent
-                            )
-                            .ConfigureAwait(false);
+                        if (!keepRoot)
+                            await tx.ExecuteAsync(
+                                    "DELETE FROM agent_files WHERE agent = $1 AND path = ''",
+                                    cancel,
+                                    agent
+                                )
+                                .ConfigureAwait(false);
                         await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
                         BeforeCommit?.Invoke();
                         return true;
                     },
                     new PgWriteOptions(
-                        Verify: tx => tx.Scalar("SELECT 1 FROM agent_files WHERE agent = $1", agent) is null,
+                        Verify: tx =>
+                            tx.Scalar("SELECT 1 FROM agent_files WHERE agent = $1 AND path <> ''", agent) is null
+                            && (keepRoot || tx.Scalar("SELECT 1 FROM agent_files WHERE agent = $1", agent) is null),
                         Retryable: true
                     ),
                     token

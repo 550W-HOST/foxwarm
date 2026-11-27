@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 using Foxwarm.Tests.Hosted;
 
 namespace Foxwarm.Tests;
@@ -160,5 +161,119 @@ public sealed class PostgresAgentFilesEdgeTests
         Assert.Throws<AgentStoreQuotaException>(() =>
             store.AdmitCreation("beta", [], [new("memory/MEMORY.md", new byte[51])])
         );
+    }
+
+    [Fact]
+    public async Task Pre_admission_applies_the_current_file_limit_and_covers_initial_blobs()
+    {
+        var (database, tenant) = await PostgresAgentFilesTests.OpenAsync();
+        await using var _ = database;
+        var size = PgAgentFileStore.InlineBytes + 1;
+        // The limit is lowered after the call's first check, while it waits for its turn.
+        var calls = 0;
+        var store = new PgAgentFileStore(
+            tenant,
+            new PgBlobStore(tenant, PgAgentFileStore.BlobStoreName),
+            () => Interlocked.Increment(ref calls) <= 1 ? AgentStoreLimits.Default : AgentStoreLimits.Default with { FileBytes = size - 1 }
+        );
+        await store.CreateAgentAsync("alpha", [], [], None);
+        calls = 0;
+        var lowered = await Assert.ThrowsAsync<AgentStoreQuotaException>(() =>
+            store.WriteAsync("alpha", "a.bin", RandomNumberGenerator.GetBytes(size), null, None)
+        );
+        Assert.Equal("fileBytes", lowered.Limit);
+        Assert.Equal(0L, await BlobsAsync(database));
+        // A creation with an initial blob is admitted, root absence included, before the upload.
+        var plain = PostgresAgentFilesTests.Store(tenant);
+        await Assert.ThrowsAsync<AgentFileConflictException>(() =>
+            plain.CreateAgentAsync("alpha", [], [new("big.bin", RandomNumberGenerator.GetBytes(size))], None)
+        );
+        var small = PostgresAgentFilesTests.Store(tenant, AgentStoreLimits.Default with { TotalBytes = size - 1 });
+        await Assert.ThrowsAsync<AgentStoreQuotaException>(() =>
+            small.CreateAgentAsync("beta", [], [new("big.bin", RandomNumberGenerator.GetBytes(size))], None)
+        );
+        Assert.Equal(0L, await BlobsAsync(database));
+    }
+
+    // Records what the Agent store asks of its blob store.
+    private sealed class CountingBlobs(IBlobStore inner) : IBlobStore
+    {
+        internal long RangeBytes;
+        internal int WholeReads;
+
+        public bool Exists(string key) => inner.Exists(key);
+
+        public Task<bool> CreateAsync(string key, ReadOnlyMemory<byte> content, bool keepExisting, CancellationToken token) =>
+            inner.CreateAsync(key, content, keepExisting, token);
+
+        public Task<byte[]> ReadAllAsync(string key, CancellationToken token)
+        {
+            Interlocked.Increment(ref WholeReads);
+            return inner.ReadAllAsync(key, token);
+        }
+
+        public Stream OpenRead(string key)
+        {
+            Interlocked.Increment(ref WholeReads);
+            return inner.OpenRead(key);
+        }
+
+        public async Task<byte[]> ReadRangeAsync(string key, long offset, int count, CancellationToken token)
+        {
+            var bytes = await inner.ReadRangeAsync(key, offset, count, token);
+            Interlocked.Add(ref RangeBytes, bytes.Length);
+            return bytes;
+        }
+
+        public IReadOnlyList<string> List(string prefix) => inner.List(prefix);
+
+        public string? LocalPath(string key) => inner.LocalPath(key);
+    }
+
+    [Fact]
+    public async Task Range_reads_fetch_only_the_requested_bytes()
+    {
+        var (database, tenant) = await PostgresAgentFilesTests.OpenAsync();
+        await using var _ = database;
+        var blobs = new CountingBlobs(new PgBlobStore(tenant, PgAgentFileStore.BlobStoreName));
+        var store = new PgAgentFileStore(tenant, blobs, null);
+        await store.CreateAgentAsync("alpha", [], [], None);
+        var content = RandomNumberGenerator.GetBytes(3 * PgBlobStore.ChunkBytes + 17);
+        await store.WriteAsync("alpha", "big.bin", content, null, None);
+        // Across a chunk boundary, at the end, past the end.
+        var offset = PgBlobStore.ChunkBytes - 100;
+        Assert.Equal(content[offset..(offset + 65536)], await store.ReadRangeAsync("alpha", "big.bin", offset, 65536, None));
+        Assert.Equal(content[^17..], await store.ReadRangeAsync("alpha", "big.bin", content.Length - 17, 65536, None));
+        Assert.Empty(await store.ReadRangeAsync("alpha", "big.bin", content.Length, 10, None));
+        Assert.Equal(65536L + 17, blobs.RangeBytes);
+        Assert.Equal(0, blobs.WholeReads);
+        // Inline content is sliced in the database.
+        await store.WriteAsync("alpha", "small.bin", content[..1000], null, None);
+        Assert.Equal(content[10..20], await store.ReadRangeAsync("alpha", "small.bin", 10, 10, None));
+        Assert.Equal(content[..1000], await store.ReadRangeAsync("alpha", "small.bin", 0, 4096, None));
+        Assert.Equal(0, blobs.WholeReads);
+        // A whole-file range is digest-verified.
+        await database.ScalarAsync(
+            "SET session_replication_role = replica; UPDATE agent_files SET sha256 = '\\x00' WHERE path = 'small.bin'"
+        );
+        await Assert.ThrowsAsync<IOException>(() => store.ReadRangeAsync("alpha", "small.bin", 0, 4096, None));
+        Assert.Equal(content[10..20], await store.ReadRangeAsync("alpha", "small.bin", 10, 10, None));
+    }
+
+    [Fact]
+    public async Task Clearing_an_Agent_keeps_its_root_and_its_usage_exact()
+    {
+        var (database, tenant) = await PostgresAgentFilesTests.OpenAsync();
+        await using var _ = database;
+        var store = PostgresAgentFilesTests.Store(tenant);
+        await store.CreateAgentAsync("main", ["memory"], [new("memory/MEMORY.md", new byte[] { 1, 2 })], None);
+        await store.CreateAgentAsync("other", [], [new("x", new byte[] { 1 })], None);
+        await store.WriteAsync("main", "docs/a.md", new byte[] { 1, 2, 3 }, null, None);
+        await store.MakeDirectoryAsync("main", "empty", None);
+        await store.ClearAgentAsync("main", None);
+        Assert.True(store.AgentExists("main"));
+        Assert.Empty(store.Tree("main", ""));
+        Assert.Equal((1L, 1L), store.Usage());
+        await store.WriteAsync("main", "memory/NOTE.md", new byte[] { 9 }, 0, None);
     }
 }

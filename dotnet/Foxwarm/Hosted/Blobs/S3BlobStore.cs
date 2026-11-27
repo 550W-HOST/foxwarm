@@ -116,6 +116,38 @@ internal sealed class S3BlobStore : IBlobStore
         }
     }
 
+    public async Task<byte[]> ReadRangeAsync(string key, long offset, int count, CancellationToken token)
+    {
+        if (count <= 0)
+            return [];
+        try
+        {
+            using var response = await client
+                .GetObjectAsync(
+                    new GetObjectRequest
+                    {
+                        BucketName = bucket,
+                        Key = root + key,
+                        ByteRange = new ByteRange(offset, offset + count - 1),
+                    },
+                    token
+                )
+                .ConfigureAwait(false);
+            var bytes = new byte[Math.Min(count, response.ContentLength)];
+            await response.ResponseStream.ReadExactlyAsync(bytes, token).ConfigureAwait(false);
+            return bytes;
+        }
+        // A range that starts at or past the end.
+        catch (AmazonS3Exception error) when (error.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+        {
+            return [];
+        }
+        catch (Exception error) when (S3Blobs.Failure(error, key) is { } failure)
+        {
+            throw failure;
+        }
+    }
+
     public Stream OpenRead(string key) =>
         Wait(async () =>
         {

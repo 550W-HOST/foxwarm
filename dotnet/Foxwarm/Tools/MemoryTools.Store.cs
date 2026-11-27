@@ -383,7 +383,7 @@ internal static partial class MemoryTools
         catch (FileNotFoundException)
         {
             // A missing directory on the way is a missing part of the path, as in a folder.
-            if (AgentFilePaths.Ancestors(path.Store).Any(ancestor => store.Stat(agent, ancestor) is null))
+            if (AgentFilePaths.Ancestors(path.Store).Any(ancestor => store.Stat(agent, ancestor) is not { IsDirectory: true }))
                 throw new DirectoryNotFoundException($"Could not find a part of the path '{path.Display}'.");
             throw new FileNotFoundException($"Could not find file '{path.Display}'.", path.Display);
         }

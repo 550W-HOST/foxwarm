@@ -556,6 +556,8 @@ internal static class ToolAuthorizationEvaluation
             if (!matches)
                 continue;
             var effect = AuthorizationDecision.Parse(SessionWait.Text(rule["action"]));
+            if (effect == ToolAuthorizationEffect.Ask && UndecidableStoreRoot(rule, request))
+                effect = ToolAuthorizationEffect.Deny;
             allow |= effect == ToolAuthorizationEffect.Allow;
             ask |= effect == ToolAuthorizationEffect.Ask;
             deny |= effect == ToolAuthorizationEffect.Deny;
@@ -735,9 +737,18 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationRequest request
     ) =>
         AuthorizationDecision.Parse(SessionWait.Text(rule["action"])) is var effect
-        && (effect != ToolAuthorizationEffect.Ask || request.Principal == "internal")
+        && (effect != ToolAuthorizationEffect.Ask || request.Principal == "internal" && !UndecidableStoreRoot(rule, request))
             ? effect
             : ToolAuthorizationEffect.Deny;
+
+    // A legacy rule whose path root the Agent store can't decide: when it applies (it denies or
+    // asks), it denies, as an unknown operation-rule path does.
+    private static bool UndecidableStoreRoot(JsonObject rule, ToolAuthorizationRequest request) =>
+        !OperationRules.IsOperationRule(rule)
+        && rule["match"]?["path"] is JsonObject path
+        && new[] { path["allWithin"], path["anyNotWithin"] }.Any(value =>
+            SessionWait.Text(value) is string text && StoreRootRefused(text, request)
+        );
 
     internal static bool Within(string? path, string root)
     {

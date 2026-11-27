@@ -214,15 +214,15 @@ internal sealed partial class AgentCatalog
     {
         if (store is null || rules is null)
             return;
-        foreach (var rule in rules.OfType<JsonObject>())
+        // The roots as the evaluator sees them: those of the parsed rules.
+        foreach (var rule in AgentRulePolicy.Parse(rules).Value["rules"]!.AsArray().OfType<JsonObject>())
         {
-            var match = rule["match"] as JsonObject ?? rule;
             var roots = new[]
             {
-                match["path"]?["allWithin"],
-                match["path"]?["anyNotWithin"],
-                rule["path"]?["within"],
-                rule["path"]?["notWithin"],
+                rule["match"]?["path"]?["allWithin"],
+                rule["match"]?["path"]?["anyNotWithin"],
+                rule["resources"]?["path"]?["within"],
+                rule["resources"]?["path"]?["notWithin"],
             };
             foreach (var root in roots.Select(SessionWait.Text).OfType<string>())
             {

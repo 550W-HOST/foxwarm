@@ -118,6 +118,7 @@ public sealed partial class HostedAgentStoreTests
         ("read_memory", new() { ["filePath"] = "missing.md" }),
         ("read_memory", new() { ["filePath"] = "sub/.." }),
         ("edit_memory", new() { ["filePath"] = "nope/x.md", ["oldText"] = "x", ["newText"] = "y" }),
+        ("edit_memory", new() { ["filePath"] = "NOTES.md/x.md", ["oldText"] = "x", ["newText"] = "y" }),
         ("edit_memory", new() { ["filePath"] = "sub/..", ["oldText"] = "x", ["newText"] = "y" }),
         ("write_memory", new() { ["filePath"] = "sub/..", ["content"] = "x" }),
         ("delete_memory", new() { ["filePath"] = "sub/.." }),

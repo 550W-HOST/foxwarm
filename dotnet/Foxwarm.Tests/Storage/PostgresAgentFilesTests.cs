@@ -200,7 +200,7 @@ public sealed class PostgresAgentFilesTests
     }
 
     public static TheoryData<string> Writes() =>
-        new() { "write", "conditional", "large", "delete", "deleteTree", "rename", "renameTree", "mkdir", "createAgent", "deleteAgent" };
+        new() { "write", "conditional", "large", "delete", "deleteTree", "rename", "renameTree", "mkdir", "createAgent", "largeAgent", "deleteAgent", "clearAgent" };
 
     [Theory]
     [MemberData(nameof(Writes))]
@@ -225,7 +225,9 @@ public sealed class PostgresAgentFilesTests
             "renameTree" => store.RenameAsync("alpha", "docs", "moved", false, None),
             "mkdir" => store.MakeDirectoryAsync("alpha", "docs/empty", None),
             "createAgent" => store.CreateAgentAsync("beta", ["memory"], [new("memory/MEMORY.md", "m"u8.ToArray())], None),
+            "largeAgent" => store.CreateAgentAsync("beta", [], [new("big.bin", new byte[PgAgentFileStore.InlineBytes + 1])], None),
             "deleteAgent" => store.DeleteAgentAsync("alpha", None),
+            "clearAgent" => store.ClearAgentAsync("alpha", None),
             _ => throw new ArgumentOutOfRangeException(nameof(operation)),
         };
         await Assert.ThrowsAsync<TenantFencedException>(() => attempt);

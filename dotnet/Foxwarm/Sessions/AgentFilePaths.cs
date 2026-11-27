@@ -236,12 +236,14 @@ internal static class AgentStorePaths
                 segments.RemoveAt(segments.Count - 1);
                 continue;
             }
-            if (AgentFilePaths.Problem(segment) is not null)
-            {
-                refused = true;
-                return null;
-            }
             segments.Add(segment);
+        }
+        // The reduced key, below the Agent, must be a store path itself.
+        var relative = string.Join('/', segments.Skip(1));
+        if (AgentFilePaths.Problem(relative, allowRoot: true) is not null)
+        {
+            refused = true;
+            return null;
         }
         return string.Join('/', segments);
     }

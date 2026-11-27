@@ -106,6 +106,8 @@ The Node registry's write-stage hook is the registry's `WriteStage` test propert
 
 The write half (`WriteAsync` with a generation check, `DeleteAsync`, `RenameAsync`, `MakeDirectoryAsync`), its path rules and the hosted implementation are in [hosted Agent store](./hosted-agent-store.md). `IStorageContext.AgentFiles` is the store when the context holds the Agent files (`PostgresStorageContext`), and null in file mode, where `FileAgentFiles` is built from the `AgentCatalog` layout.
 
+**Precondition (Windows).** `FileAgentFiles` must not take ordinary Windows writes until it enforces native component restrictions (reserved device names and other native aliases): the shared validator accepts such components, and the adapter hands them to native file APIs. The SQL store treats them as literal names.
+
 ## D-state-documents
 
 **Derived design.** [2026-11-26] Chosen instead of one interface per state file. Timers, the running-exec registry, channel bindings, the Node registry, MCP OAuth grants, Agent and installation metadata and the encrypted secret documents share one semantics: read the whole document, replace it atomically. One `IStateDocuments` store serves them, with a closed name set: a name is added with its owning class, never chosen by a caller. The file implementation keeps each file's existing failure classification and file mode as per-name rules. A database context maps it to one documents table keyed by tenant and name, with replace under the tenant's lease fence.

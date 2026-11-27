@@ -386,12 +386,25 @@ internal sealed partial class AgentCatalog
                 BeforeStoreCreation?.Invoke(name);
                 // The root, the memory directory, the initial memory and the identity proof
                 // appear together, after the metadata, as the published directory does.
-                await store.CreateAgentAsync(
-                    name,
-                    ["memory"],
-                    StoreInitialFiles(initialMemory, initialSoul, preparationName),
-                    CancellationToken.None
-                );
+                try
+                {
+                    await store.CreateAgentAsync(
+                        name,
+                        ["memory"],
+                        StoreInitialFiles(initialMemory, initialSoul, preparationName),
+                        CancellationToken.None,
+                        restoration: restoreRetained
+                    );
+                }
+                catch (Exception refusal) when (refusal is AgentStoreQuotaException or AgentFilePathTooLongException)
+                {
+                    // A known refusal (the limits moved since admission): nothing of the Agent
+                    // exists, so its metadata record goes again while creation is serialized,
+                    // and the name stays free.
+                    RetireCreationRecord(name, previous);
+                    committed = false;
+                    throw;
+                }
             }
             publishedDirectory = true;
             lock (stateGate)
@@ -456,6 +469,30 @@ internal sealed partial class AgentCatalog
                 Monitor.Exit(stateGate);
             createGate.Release();
             publication?.Invoke(publishedDirectory);
+        }
+    }
+
+    // Restores the metadata of a name as it was before a creation that published none of its
+    // files: the earlier retained record, or none.
+    private void RetireCreationRecord(string name, JsonObject? previous)
+    {
+        lock (stateGate)
+        {
+            var next = MetadataSnapshot();
+            if (previous is null)
+                next.Remove(name);
+            else
+                next[name] = previous.DeepClone();
+            try
+            {
+                AtomicIndexWrite(Payload(List().Where(id => id != "main" && id != name), next).ToJsonText());
+            }
+            catch (AuthorityCommittedException)
+            {
+                // Published, only not yet durable: the refusal stands, and the next durable
+                // write carries the retirement.
+            }
+            metadata = next;
         }
     }
 

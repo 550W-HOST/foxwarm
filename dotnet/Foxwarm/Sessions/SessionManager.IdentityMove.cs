@@ -194,6 +194,9 @@ internal sealed partial class SessionManager
         var targetAgent =
             SessionCreationDefaults.MoveTargetAgent(agentName, create, owner.Agent)
             ?? throw new InvalidDataException("newAgentName is required when creating an Agent.");
+        // Before any revocation, stop or intent: the new Agent's name must be one it can have.
+        if (create)
+            AgentCatalog.ValidateNewName(targetAgent);
         if (purpose == IdentityMovePurpose.MoveSession && creator is not null)
             agents.RequireSessionTarget(creator.Agent, owner.Agent);
         if (

@@ -13,6 +13,20 @@ namespace Foxwarm.Tests.Storage;
 public sealed class S3BlobStoreTests
 {
     [Fact]
+    public async Task Range_reads_return_the_requested_bytes_only()
+    {
+        await using var bucket = await S3TestBucket.CreateAsync();
+        var store = bucket.Store("agent-files", true);
+        var content = new byte[200_000];
+        new Random(3).NextBytes(content);
+        await store.CreateAsync("a/blob", content, false, CancellationToken.None);
+        Assert.Equal(content[1000..1100], await store.ReadRangeAsync("a/blob", 1000, 100, CancellationToken.None));
+        Assert.Equal(content[199_950..], await store.ReadRangeAsync("a/blob", 199_950, 100, CancellationToken.None));
+        Assert.Empty(await store.ReadRangeAsync("a/blob", 200_000, 10, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<IOException>(() => store.ReadRangeAsync("a/none", 0, 10, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Keys_are_tenant_and_store_prefixed()
     {
         await using var bucket = await S3TestBucket.CreateAsync();

@@ -123,11 +123,16 @@ internal interface IAgentStore : IAgentFileStore
         string agent,
         IReadOnlyList<string> directories,
         IReadOnlyList<KeyValuePair<string, byte[]>> files,
-        CancellationToken token
+        CancellationToken token,
+        // Restoration of a retained Agent: an existing name, which the new-name bound doesn't apply to.
+        bool restoration = false
     );
 
     /// <summary>Removes an Agent with all of its files; a missing Agent is a no-op.</summary>
     Task DeleteAgentAsync(string agent, CancellationToken token);
+
+    /// <summary>Removes every file of an Agent in one transaction and keeps its root.</summary>
+    Task ClearAgentAsync(string agent, CancellationToken token);
 
     /// <summary>
     /// Copies the tree at <paramref name="sourcePath"/> of one Agent to

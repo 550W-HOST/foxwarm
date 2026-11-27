@@ -36,8 +36,7 @@ internal sealed partial class AgentCatalog
                 // main is always a member, so its root stays: its files go, as its folder's do,
                 // and its surviving Sessions can still write memory. Startup fills an empty
                 // memory directory with the templates, as for a missing folder.
-                foreach (var entry in store.List("main", ""))
-                    await store.DeleteAsync("main", entry.Name, recursive: true, null, CancellationToken.None);
+                await store.ClearAgentAsync("main", CancellationToken.None);
             }
             else if (store is not null)
                 await store.DeleteAgentAsync(name, CancellationToken.None);
