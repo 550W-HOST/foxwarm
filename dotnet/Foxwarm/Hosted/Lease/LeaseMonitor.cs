@@ -59,6 +59,18 @@ internal sealed class LeaseMonitor : IAsyncDisposable
     /// </summary>
     internal TimeSpan? FencedSinceRenewal { get; private set; }
 
+    /// <summary>
+    /// The <see cref="Stopwatch"/> timestamp of the fence, latched once by the fence itself;
+    /// 0 until then. Every deadline after a fence counts from it.
+    /// </summary>
+    internal long FencedAt => Interlocked.Read(ref fencedAt);
+
+    /// <summary>The start of the last successful renewal as it was at the fence; 0 until then.</summary>
+    internal long FencedRenewalStart => Interlocked.Read(ref fencedRenewalStart);
+
+    private long fencedAt;
+    private long fencedRenewalStart;
+
     /// <summary>Time since the start of the last successful renewal.</summary>
     internal TimeSpan SinceRenewal => Stopwatch.GetElapsedTime(RenewalStart);
 
@@ -88,12 +100,15 @@ internal sealed class LeaseMonitor : IAsyncDisposable
     internal void Fence(string reason)
     {
         TenantDb[] databases;
-        var since = SinceRenewal;
+        var now = Stopwatch.GetTimestamp();
+        var renewal = RenewalStart;
         lock (gate)
         {
             if (fenced.Task.IsCompleted)
                 return;
-            FencedSinceRenewal = since;
+            Interlocked.Exchange(ref fencedRenewalStart, renewal);
+            Interlocked.Exchange(ref fencedAt, now);
+            FencedSinceRenewal = Stopwatch.GetElapsedTime(renewal, now);
             fenced.TrySetResult(reason);
             databases = [.. attached];
         }

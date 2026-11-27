@@ -330,15 +330,20 @@ internal sealed class HostedReplica
             health = health with { Role = ReplicaRole.Fencing, RuntimeStarted = false };
             log($"[hosted] Fenced while draining; the runtime gets {options.DrainBound.TotalSeconds:0.#} s.");
             var drained = await supervisor
-                .JoinAsync("The runtime", FenceTimestamp(current), disposal, () => false)
+                .JoinAsync("The runtime", current.FencedAt, disposal)
                 .ConfigureAwait(false);
-            FenceTimes = new(await current.Fenced.ConfigureAwait(false), current.RenewalStart, atFence, drained ? current.SinceRenewal : null);
+            FenceTimes = new(await current.Fenced.ConfigureAwait(false), current.FencedRenewalStart, atFence, drained ? current.SinceRenewal : null);
             return HostedExit.Fenced;
         }
-        if (disposal.IsFaulted)
+        if (!disposal.IsCompletedSuccessfully)
         {
-            // Unconfirmed: the lease isn't released; it expires, and the process restarts.
-            log("[hosted] The runtime's stop failed: " + disposal.Exception!.GetBaseException().Message);
+            // Unconfirmed (a fault or a cancellation): the lease isn't released; it expires.
+            // The process ends at the drain bound if it hasn't exited by then, and the run
+            // doesn't wait on the heartbeat or the database on its way out.
+            log("[hosted] The runtime's stop wasn't confirmed: " + (disposal.Exception?.GetBaseException().Message ?? "cancelled"));
+            var at = System.Diagnostics.Stopwatch.GetTimestamp();
+            supervisor.ExitBy("The runtime", at + supervisor.DrainTicks);
+            FenceTimes = new("The runtime's stop wasn't confirmed.", current.RenewalStart, current.SinceRenewal, null);
             return HostedExit.Fenced;
         }
         log($"[hosted] The runtime stopped after {stopping.ElapsedMilliseconds} ms.");
@@ -366,13 +371,13 @@ internal sealed class HostedReplica
         log($"[hosted] Stopping the runtime within {options.DrainBound.TotalSeconds:0.#} s after fencing.");
         // The monitor's fence already stopped renewal and closed the database.
         var stopped = await supervisor
-            .FenceAsync("The runtime", FenceTimestamp(current), () => { }, () => { }, null, () => StopStartAsync(start, started), () => false)
+            .FenceAsync("The runtime", current.FencedAt, () => { }, () => { }, null, () => StopStartAsync(start, started))
             .ConfigureAwait(false);
         if (!stopped)
             log("[hosted] The runtime didn't stop within the drain bound; exiting anyway.");
         FenceTimes = new(
             await current.Fenced.ConfigureAwait(false),
-            current.RenewalStart,
+            current.FencedRenewalStart,
             atFence!.Value,
             stopped ? current.SinceRenewal : null
         );
@@ -387,25 +392,25 @@ internal sealed class HostedReplica
         return HostedExit.Fenced;
     }
 
-    // The fence's Stopwatch timestamp, from the monitor's measurement at the fence.
-    private static long FenceTimestamp(LeaseMonitor current) =>
-        current.RenewalStart
-        + (long)((current.FencedSinceRenewal ?? current.SinceRenewal).TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
-
     // Waits for the start to end (its token is cancelled by a stop or a fence) and disposes the
     // runtime if the factory returned one, under the supervisor's deadline counted from now (or
     // from the fence, when one came first). True when the stop was confirmed in time.
     private Task<bool> EndStartAsync(RuntimeStart start, Task started, LeaseMonitor current) =>
         supervisor.JoinAsync(
             "The runtime start",
-            current.Fenced.IsCompleted ? FenceTimestamp(current) : System.Diagnostics.Stopwatch.GetTimestamp(),
-            StopStartAsync(start, started),
-            () => false
+            current.Fenced.IsCompleted ? current.FencedAt : System.Diagnostics.Stopwatch.GetTimestamp(),
+            StopStartAsync(start, started)
         );
 
+    // Confirmed only when nothing the start built can still run: a factory that refused
+    // cleanly, or a runtime disposed cleanly. A factory whose own cleanup failed reports it
+    // (StartupCleanupFailedException), and the stop is then unconfirmed.
     private static async Task StopStartAsync(RuntimeStart start, Task started)
     {
         await started.ContinueWith(_ => { }, TaskScheduler.Default).ConfigureAwait(false);
+        if (start.Runtime is null
+            && started.Exception?.InnerExceptions.FirstOrDefault(error => error is StartupCleanupFailedException) is { } partial)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(partial).Throw();
         if (start.Runtime is { } runtime)
             await runtime.DisposeAsync().ConfigureAwait(false);
     }

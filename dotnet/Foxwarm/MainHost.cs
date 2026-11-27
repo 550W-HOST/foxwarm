@@ -235,21 +235,46 @@ internal sealed class MainHost : IAsyncDisposable
         catch (Exception error)
         {
             MainLog.Fatal("host composition", error);
-            sessions.BeginShutdown();
+            // Every step runs even when an earlier one fails; a failed step leaves services that
+            // may still run, which the caller must know (a hosted owner then releases nothing).
+            List<Exception> failures = [];
+            await Step(() =>
+            {
+                sessions.BeginShutdown();
+                return Task.CompletedTask;
+            });
             if (sessions.ManagedChannels is { } channels)
-                await channels.DisposeAsync();
-            await sessions.ShutdownAsync();
+                await Step(() => channels.DisposeAsync().AsTask());
+            await Step(sessions.ShutdownAsync);
             if (server is not null)
             {
-                await server.InboundMcp.DisposeAsync();
-                await server.App.DisposeAsync();
+                await Step(() => server.InboundMcp.DisposeAsync().AsTask());
+                await Step(() => server.App.DisposeAsync().AsTask());
             }
-            headless?.Dispose();
+            await Step(() =>
+            {
+                headless?.Dispose();
+                return Task.CompletedTask;
+            });
             if (terminals is not null)
-                await terminals.DisposeAsync();
-            await sessions.DisposeAsync();
+                await Step(() => terminals.DisposeAsync().AsTask());
+            await Step(() => sessions.DisposeAsync().AsTask());
             log?.Dispose();
+            if (failures.Count > 0)
+                throw new StartupCleanupFailedException(error, failures);
             throw;
+
+            async Task Step(Func<Task> step)
+            {
+                try
+                {
+                    await step();
+                }
+                catch (Exception failure)
+                {
+                    failures.Add(failure);
+                }
+            }
         }
     }
 
@@ -310,4 +335,15 @@ internal sealed class MainHost : IAsyncDisposable
             Console.WriteLine("Main stopped.");
         log?.Dispose();
     }
+}
+
+/// <summary>
+/// A start that failed and whose cleanup failed too: services it started may still run. The
+/// inner exception is the start's failure. A caller that must know the start left nothing
+/// running (a hosted owner before it releases its lease) treats this as an unconfirmed stop.
+/// </summary>
+internal sealed class StartupCleanupFailedException(Exception failure, IReadOnlyList<Exception> cleanup)
+    : Exception(failure.Message, failure)
+{
+    internal IReadOnlyList<Exception> Cleanup { get; } = cleanup;
 }

@@ -284,6 +284,55 @@ public sealed partial class HostedStartupTests
     }
 
     [Fact]
+    public async Task ACancelledGracefulDisposalIsUnconfirmedReleasesNothingAndIsBounded()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        using var temp = new TempDirectory();
+        var runtime = new StallingRuntime();
+        var exited = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a = Start(
+            Path.Combine(temp.Path, "data"),
+            database.OpenApp(),
+            "replica-a",
+            (context, token) => Task.FromResult<IHostedRuntime>(runtime),
+            exit: code => exited.TrySetResult(Stopwatch.GetTimestamp())
+        );
+        await WaitUntilAsync(() => a.Inner.Health.RuntimeStarted, TimeSpan.FromSeconds(30), "replica A serves");
+        a.Stop.Cancel();
+        await runtime.Disposing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // The stop ends in a cancellation: not a confirmed stop.
+        var stopped = Stopwatch.GetTimestamp();
+        runtime.DisposeGate.SetCanceled();
+        Assert.Equal(HostedExit.Fenced, await a.Run.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal("active", await database.ScalarAsync("SELECT state FROM tenant_leases"));
+        Assert.Equal("replica-a", ReplicaRegistry.LogicalName((string)(await database.ScalarAsync("SELECT owner_replica FROM tenant_leases"))!));
+        // The process ends at the drain bound unless it has exited by then.
+        Assert.InRange(Stopwatch.GetElapsedTime(stopped, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10))), DrainBound - TimeSpan.FromMilliseconds(50), DrainBound + TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task AStartWhoseCleanupFailedReleasesNothing()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var database = await server.CreateDatabaseAsync();
+        using var temp = new TempDirectory();
+        var exited = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a = Start(
+            Path.Combine(temp.Path, "data"),
+            database.OpenApp(),
+            "replica-a",
+            (context, token) => Task.FromException<IHostedRuntime>(
+                new StartupCleanupFailedException(new InvalidOperationException("composition failed"), [new IOException("cleanup failed")])
+            ),
+            exit: code => exited.TrySetResult(Stopwatch.GetTimestamp())
+        );
+        Assert.Equal(HostedExit.Fenced, await a.Run.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal("active", await database.ScalarAsync("SELECT state FROM tenant_leases"));
+        await exited.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
     public async Task APartitionedOwnerFencesStopsAndExitsAndTheStandbyTakesOverAfterExpiry()
     {
         var server = await PostgresServer.SharedAsync();

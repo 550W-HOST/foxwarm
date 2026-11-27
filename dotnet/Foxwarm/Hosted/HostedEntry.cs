@@ -127,15 +127,26 @@ internal static class HostedEntry
         Runtimes.TenantServer? server = null
     )
     {
-        // The runtime owns the tenant context from here; a build that fails releases it.
+        // The runtime owns the tenant context from here; a build that fails releases it. A
+        // release that fails too is reported, so the owner treats the stop as unconfirmed.
         try
         {
             return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, publicListener, server, token)
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception error)
         {
-            await tenant.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await tenant.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception cleanup)
+            {
+                throw new StartupCleanupFailedException(
+                    error is StartupCleanupFailedException partial ? partial.InnerException! : error,
+                    [.. (error as StartupCleanupFailedException)?.Cleanup ?? [], cleanup]
+                );
+            }
             throw;
         }
     }

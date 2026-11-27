@@ -65,22 +65,25 @@ internal delegate Task<IGenerationRuntime> GenerationFactory(
     CancellationToken token
 );
 
-/// <summary>A published tenant runtime generation.</summary>
+/// <summary>
+/// A tenant runtime generation, from its registration (before its runtime is built) to its
+/// retirement. <see cref="Stopped"/> reports the settlement of everything the generation
+/// started: its build, or its release steps, the runtime's disposal and the admitted work.
+/// </summary>
 internal sealed class TenantGeneration
 {
-    internal TenantGeneration(
-        GenerationId id,
-        GrantHandle handle,
-        AdmissionGate gate,
-        GenerationFence fence,
-        IGenerationRuntime runtime
-    )
+    private readonly TaskCompletionSource<StopResult> stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int disposing;
+    private int retiring;
+    private int fenced;
+
+    internal TenantGeneration(GenerationId id, GrantHandle handle, AdmissionGate gate, GenerationFence fence)
     {
         Id = id;
         Handle = handle;
         Gate = gate;
         Fence = fence;
-        Runtime = runtime;
     }
 
     internal GenerationId Id { get; }
@@ -92,38 +95,86 @@ internal sealed class TenantGeneration
 
     internal GenerationFence Fence { get; }
 
-    /// <summary>The supervised fence of this generation, once one began; later fences join it.</summary>
-    internal Task<bool>? Supervision { get; set; }
-
     internal AdmissionGate Gate { get; }
 
-    internal IGenerationRuntime Runtime { get; }
+    /// <summary>The runtime, once the factory returned it.</summary>
+    internal IGenerationRuntime? Runtime { get; set; }
+
+    /// <summary>Set at publication: the gate opened and the runtime serves.</summary>
+    internal bool Published { get; set; }
+
+    /// <summary>The supervisor's watch of this generation's stop, armed at registration.</summary>
+    internal Obligation? Obligation { get; set; }
+
+    /// <summary>True once the stop was confirmed in time; false once the supervisor escalated.</summary>
+    internal Task<bool> Supervision => Obligation!.Decided;
+
+    /// <summary>Whether a loss of the grant has fenced this generation.</summary>
+    internal bool IsFenced => Volatile.Read(ref fenced) != 0;
+
+    internal bool MarkFenced() => Interlocked.Exchange(ref fenced, 1) == 0;
+
+    /// <summary>The settlement of everything the generation started; once.</summary>
+    internal Task<StopResult> Stopped => stopped.Task;
+
+    internal void Settle(StopResult result) => stopped.TrySetResult(result);
 
     /// <summary>Completes when the runtime has been disposed.</summary>
     internal Task Disposed => disposed.Task;
 
-    private readonly TaskCompletionSource disposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private int disposing;
-
-    // Exactly one disposal per generation; later callers join it.
+    // Exactly one disposal per generation; later callers join it. Never runs on the caller's
+    // thread: a synchronous stall in one runtime's disposal can't hold another's.
     internal Task DisposeOnceAsync()
     {
         if (Interlocked.Exchange(ref disposing, 1) == 0)
-            _ = RunAsync();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (Runtime is { } runtime)
+                        await runtime.DisposeAsync().ConfigureAwait(false);
+                    disposed.TrySetResult();
+                }
+                catch (Exception error)
+                {
+                    disposed.TrySetException(error);
+                }
+            });
         return disposed.Task;
+    }
 
-        async Task RunAsync()
-        {
-            try
+    /// <summary>
+    /// Retires a published generation once: runs <paramref name="before"/> (an idle release's
+    /// steps; their failure leaves the decision to the disposal), disposes the runtime, then waits
+    /// for the admitted work to end. Confirmed only when the disposal completed successfully and
+    /// the gate drained; a fault or a cancellation never confirms. Later callers join the first.
+    /// </summary>
+    internal Task<StopResult> RetireAsync(Func<Task>? before = null)
+    {
+        if (Interlocked.Exchange(ref retiring, 1) == 0)
+            _ = Task.Run(async () =>
             {
-                await Runtime.DisposeAsync().ConfigureAwait(false);
-                disposed.TrySetResult();
-            }
-            catch (Exception error)
-            {
-                disposed.TrySetException(error);
-            }
-        }
+                if (before is not null)
+                    try
+                    {
+                        await before().ConfigureAwait(false);
+                    }
+                    catch (Exception) { }
+                bool confirmed;
+                try
+                {
+                    await DisposeOnceAsync().ConfigureAwait(false);
+                    confirmed = true;
+                }
+                catch (Exception)
+                {
+                    confirmed = false;
+                }
+                if (confirmed)
+                    await Gate.DrainedAsync().ConfigureAwait(false);
+                Settle(StopResult.Now(confirmed));
+            });
+        return stopped.Task;
     }
 }
 
@@ -150,8 +201,14 @@ internal enum IdleReleaseOutcome
     Fenced,
 
     /// <summary>
-    /// The runtime's disposal failed, so its stop is unconfirmed: the grant is dropped without
-    /// a release and expires.
+    /// The runtime's stop wasn't confirmed: the grant is lost without a release, the tenant
+    /// stays unavailable on this replica, and the process ends at the hard stop.
     /// </summary>
     StopFailed,
+
+    /// <summary>
+    /// The release didn't stop within the drain bound: its grant was lost (never released), so
+    /// the supervised fence took over, and the process ends if the stop doesn't confirm.
+    /// </summary>
+    Overrun,
 }
