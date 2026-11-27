@@ -398,6 +398,37 @@ public sealed class PostgresConfigDocumentsContractTests : ConfigDocumentsContra
         Assert.Contains("`url`", error.Message);
     }
 
+    // A P1 tenant document may hold a setting that isn't a tenant setting under P2's allowlist,
+    // such as the removed `handoffConfirmation`: the tenant starts without applying it, and
+    // installing it again is refused.
+    [Fact]
+    public async Task A_stored_tenant_document_with_a_non_tenant_key_starts_without_applying_it()
+    {
+        await using var backend = await CreateAsync();
+        const string Stored = "sessionAutoTitle: true\nhandoffConfirmation: true\nbot:\n  name: Fox\n  color: red\n";
+        await backend.Documents.ReplaceAsync(
+            ConfigDocumentName.Config,
+            Encoding.UTF8.GetBytes(Stored),
+            CancellationToken.None
+        );
+        var configuration = backend.Open();
+        Assert.Equal(["handoffConfirmation", "bot.color"], configuration.IgnoredAppPaths);
+        var app = configuration.AppConfiguration;
+        Assert.False(app.ContainsKey("handoffConfirmation"));
+        Assert.False(app["bot"]!.AsObject().ContainsKey("color"));
+        Assert.Equal("Fox", app["bot"]!["name"]!.GetValue<string>());
+        Assert.True(configuration.SessionAutoTitleEnabled);
+        // The stored text is kept as it is; saving it again names the key.
+        Assert.Equal(Stored, configuration.ReadCurrentAppRaw());
+        Assert.Contains(
+            "`handoffConfirmation`",
+            (await Assert.ThrowsAsync<InvalidDataException>(() => configuration.SaveAppAsync(Stored))).Message
+        );
+        // A clean document loads with nothing ignored.
+        await configuration.SaveAppAsync("sessionAutoTitle: true\n");
+        Assert.Empty(backend.Open().IgnoredAppPaths);
+    }
+
     [Fact]
     public async Task A_policy_changed_without_an_installation_stays_cached_until_invalidated()
     {

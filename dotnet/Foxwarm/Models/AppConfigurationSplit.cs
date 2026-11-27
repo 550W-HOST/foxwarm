@@ -98,6 +98,49 @@ internal static class AppConfigurationSplit
         }
     }
 
+    /// <summary>
+    /// A stored tenant <c>config</c> document as a runtime loads it. Deployment and unavailable
+    /// paths refuse the load as they refuse an installation (P1). A path that isn't a tenant
+    /// setting of any kind, such as a removed setting saved before P2's allowlist, is left out of
+    /// the returned document and named in <paramref name="ignored"/>: it is never applied, and the
+    /// tenant still starts. Installation refuses it (<see cref="RequireTenantDocument"/>).
+    /// </summary>
+    internal static JsonObject LoadTenantDocument(
+        JsonObject tenant,
+        TenantProfile profile,
+        out IReadOnlyList<string> ignored
+    )
+    {
+        var allowed = TenantPaths(profile);
+        var unknown = Present(tenant, deployment: false)
+            .Where(path =>
+                !allowed.Contains(path)
+                && !DeploymentPaths.Any(item =>
+                    item == path || item.StartsWith(path + ".", StringComparison.Ordinal)
+                )
+                && !UnavailablePaths.Contains(path)
+                && !OperatorTenantPaths.Contains(path)
+            )
+            .ToArray();
+        ignored = unknown;
+        if (unknown.Length == 0)
+        {
+            RequireTenantDocument(tenant, profile);
+            return tenant;
+        }
+        var kept = (JsonObject)tenant.DeepClone();
+        foreach (var path in unknown)
+        {
+            var dot = path.IndexOf('.');
+            if (dot < 0)
+                kept.Remove(path);
+            else
+                (kept[path[..dot]] as JsonObject)?.Remove(path[(dot + 1)..]);
+        }
+        RequireTenantDocument(kept, profile);
+        return kept;
+    }
+
     /// <summary>Refuses every path but the deployment paths in the deployment configuration.</summary>
     internal static void RequireDeploymentDocument(JsonObject deployment)
     {
