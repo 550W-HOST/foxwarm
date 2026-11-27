@@ -24,7 +24,6 @@ import {
   isLightweightSystemTextLine,
   isSystemLikeText,
   parseFoxwarmMetadataLine,
-  renderAssistantMarkdownSegments,
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
   SessionHashLink,
@@ -40,6 +39,7 @@ import ReasoningCard from './ReasoningCard'
 import { getReasoningRuns, type ReasoningRunPart, type ReasoningBadgeInfo, type ReasoningPresentation } from './reasoningParts'
 import ReasoningTokenBadge from './ReasoningTokenBadge'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
+import { renderCachedAssistantMarkdownSegments } from './markdownRenderer'
 import WebSearchCard from './WebSearchCard'
 import { uniqueWebSearchCitations, type CitationRenderOptions } from './webSearchCitations'
 import { getPartWebSearchAction, type WebSearchAction } from '../webSearchAction'
@@ -386,7 +386,9 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
 const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming, citations, linkBase, onOpenCodeFile }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean; citations?: CitationRenderOptions | false; linkBase?: CodeLinkBase; onOpenCodeFile?: OpenCodeFileHandler }) {
   // File links need the app's Code handler; without one, links keep their ordinary rendering.
   const fileLinks = !!onOpenCodeFile
-  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations, fileLinks ? codeFileLinkRenderer(linkBase) : undefined), [text, artifactSessionId, streaming, citations, fileLinks, linkBase])
+  // A revisit reuses this browser context's sanitized output for the same complete inputs.
+  const segments = useMemo(() => renderCachedAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations,
+    fileLinks ? { key: JSON.stringify(linkBase ?? null), render: codeFileLinkRenderer(linkBase) } : undefined), [text, artifactSessionId, streaming, citations, fileLinks, linkBase])
   const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!handleRenderedCodeLinkClick(event, onOpenCodeFile)) handleMarkdownLinkClick(event)
   }, [onOpenCodeFile])

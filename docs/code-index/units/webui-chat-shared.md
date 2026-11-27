@@ -16,6 +16,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `prepareWebSearchCitations` / `uniqueWebSearchCitations` / `safeWebSearchUrl` — current-text-part citation lexemes, exact annotation-span matching, safe URL normalization, and source-list deduplication; see [hosted-search citation integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity).
 - `renderAssistantMarkdownSegments` / `renderAssistantMarkdownSegmentsWithSanitizer` — render assistant Markdown into sanitized HTML, interactive display-LaTeX, and Mermaid segments without introducing a second parser; an optional `FileLinkRenderer` decides per link destination whether it stays an ordinary link, renders as text, or becomes a Code link ([reply file links](./webui-tool-timeline.md#d-webui-code-file-links))
 - `SpecialBlock` / `MermaidDiagram` — reusable per-block rendered/raw/copy surface and lazy strict Mermaid renderer
+- `renderCachedAssistantMarkdownSegments` — the same output reused across mounts; see [D-webui-assistant-markdown-cache](#d-webui-assistant-markdown-cache)
 - `MarkdownHtmlSegment` — memoized sanitized-HTML leaf whose stable token key lets unchanged streamed blocks retain DOM identity
 - `handleMarkdownLinkClick` — click handler that intercepts links with a confirmation dialog; in app windows it names a new window or the browser ([app windows](./webui-app.md#app-windows-and-new-window-copy))
 - `IconToggleButton`, `MiniToggleButton` — small toggle button components
@@ -122,6 +123,10 @@ WebUI identity image rendering uses the same deployment-relative API helper but 
 - `toolMeta` drives icon/color rendering in tool call bubbles across the chat interface.
 
 ## Design Decisions
+
+### D-webui-assistant-markdown-cache
+
+[2026-11-27] Timeline `MarkdownContent` takes assistant segments from one module-level cache per browser tab, so returning to a Session reuses sanitized output instead of parsing and sanitizing every reply again. The key is the complete set of inputs to the output: a renderer/sanitizer policy version (`ASSISTANT_MARKDOWN_CACHE_POLICY`, to change with the renderer, its extensions or the assistant allowlists), an optional alternative sanitizer key, artifact projection, citation mode with annotations, source text and offset, the file-link base and the full text. Streaming renders (artifact or citation `streaming`) are never stored, so a partial reply cannot be served under its committed key. Entries are frozen segment lists, never DOM or component state; the least recently used are evicted beyond 400 entries or 8 MiB of estimated UTF-16 size, and an output above 512 KiB is rendered but not stored. The DOMPurify allowlists are unchanged.
 
 ### D-webui-llm-error-card-classification
 

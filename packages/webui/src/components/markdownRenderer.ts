@@ -444,6 +444,67 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
 export const renderAssistantMarkdownSegments = (text: string, artifacts?: { enabled: boolean; streaming?: boolean }, citations?: CitationRenderOptions | false, fileLink?: FileLinkRenderer): MarkdownRenderSegment[] => (
   renderAssistantMarkdownSegmentsWithSanitizer(text, undefined, artifacts, citations, fileLink)
 )
+
+/**
+ * Sanitized assistant output is reused by later mounts of the same committed text in this
+ * browser context, such as returning to a Session. The key holds every input of the output:
+ * the renderer/sanitizer policy, artifact projection, citation annotations and offsets, the
+ * file-link base and the complete text. Streaming output is never stored. Entries are
+ * immutable segment lists, never DOM; the least recently used are evicted beyond the bounds.
+ */
+export const ASSISTANT_MARKDOWN_CACHE_LIMITS = Object.freeze({ entries: 400, bytes: 8 * 1024 * 1024, entryBytes: 512 * 1024 })
+// Change with the renderer, its extensions or the assistant sanitizer allowlists.
+const ASSISTANT_MARKDOWN_CACHE_POLICY = 'assistant-markdown-1'
+const assistantMarkdownCache = new Map<string, { segments: readonly MarkdownRenderSegment[]; bytes: number }>()
+const assistantMarkdownCacheStats = { bytes: 0, hits: 0, misses: 0 }
+
+const segmentChars = (segment: MarkdownRenderSegment): number => segment.kind === 'html' ? segment.html.length
+  : segment.kind === 'latex' ? segment.raw.length + segment.source.length + segment.html.length
+    : segment.kind === 'mermaid' ? segment.raw.length + segment.source.length
+      : JSON.stringify(segment.reference).length
+
+export type AssistantMarkdownFileLinks = { key: string; render: FileLinkRenderer }
+
+export const renderCachedAssistantMarkdownSegments = (
+  text: string,
+  artifacts: { enabled: boolean; streaming?: boolean },
+  citations: CitationRenderOptions | false | undefined,
+  fileLinks?: AssistantMarkdownFileLinks,
+  /** Another sanitizer policy under its own key; omitted uses the assistant allowlists. */
+  sanitizer?: { key: string; sanitize: HtmlSanitizer },
+): readonly MarkdownRenderSegment[] => {
+  const render = () => renderAssistantMarkdownSegmentsWithSanitizer(text, sanitizer?.sanitize, artifacts, citations, fileLinks?.render)
+  if (artifacts.streaming || (citations && citations.streaming)) return render()
+  const citationKey = citations === false ? false : citations ? [citations.annotations ?? null, citations.sourceText ?? null, citations.sourceOffset ?? null] : null
+  const key = JSON.stringify([ASSISTANT_MARKDOWN_CACHE_POLICY, sanitizer ? sanitizer.key : null, artifacts.enabled, citationKey, fileLinks ? fileLinks.key : null, text])
+  const cached = assistantMarkdownCache.get(key)
+  if (cached) {
+    assistantMarkdownCacheStats.hits++
+    assistantMarkdownCache.delete(key)
+    assistantMarkdownCache.set(key, cached)
+    return cached.segments
+  }
+  assistantMarkdownCacheStats.misses++
+  const segments = Object.freeze(render().map(segment => Object.freeze(segment)))
+  const bytes = 2 * (key.length + segments.reduce((total, segment) => total + segmentChars(segment), 0))
+  if (bytes > ASSISTANT_MARKDOWN_CACHE_LIMITS.entryBytes) return segments
+  assistantMarkdownCache.set(key, { segments, bytes })
+  assistantMarkdownCacheStats.bytes += bytes
+  for (const [oldest, entry] of assistantMarkdownCache) {
+    if (assistantMarkdownCache.size <= ASSISTANT_MARKDOWN_CACHE_LIMITS.entries && assistantMarkdownCacheStats.bytes <= ASSISTANT_MARKDOWN_CACHE_LIMITS.bytes) break
+    assistantMarkdownCache.delete(oldest)
+    assistantMarkdownCacheStats.bytes -= entry.bytes
+  }
+  return segments
+}
+
+/** Current cache occupancy and lookups, for tests and diagnostics. */
+export const getAssistantMarkdownCacheStats = () => ({ entries: assistantMarkdownCache.size, ...assistantMarkdownCacheStats })
+
+export const clearAssistantMarkdownCache = () => {
+  assistantMarkdownCache.clear()
+  Object.assign(assistantMarkdownCacheStats, { bytes: 0, hits: 0, misses: 0 })
+}
 /** Reuse the same top-level lexer contract for reply-tail deduplication. */
 export function assistantArtifactReferences(text: string): ArtifactReference[] {
   if (!text.includes('<foxwarm-artifact')) return []

@@ -23,7 +23,11 @@ await esbuild.build({
 })
 
 const {
+  ASSISTANT_MARKDOWN_CACHE_LIMITS,
   assistantArtifactReferences,
+  clearAssistantMarkdownCache,
+  getAssistantMarkdownCacheStats,
+  renderCachedAssistantMarkdownSegments,
   renderAssistantMarkdownSegmentsWithSanitizer,
   renderMarkdownSegmentsWithSanitizer,
   renderMarkdownWithSanitizer,
@@ -521,4 +525,71 @@ test('assistant file links render through the supplied resolver; other links kee
   // Without a resolver, links render as before.
   const plain = renderAssistantMarkdownSegmentsWithSanitizer('[gone](unknown.txt)', identitySanitizer, undefined, false)[0].html
   assert.match(plain, /<a target="_blank" rel="noopener noreferrer" href="unknown\.txt">gone<\/a>/)
+})
+
+// Node has no DOM for the production sanitizer; the policy is part of the key.
+const cacheSanitizer = { key: 'identity', sanitize: identitySanitizer }
+const cached = (text, artifacts, citations, fileLinks) => renderCachedAssistantMarkdownSegments(text, artifacts, citations, fileLinks, cacheSanitizer)
+const uncached = (text, artifacts, citations, fileLink) => renderAssistantMarkdownSegmentsWithSanitizer(text, identitySanitizer, artifacts, citations, fileLink)
+
+test('assistant Markdown output is reused only for identical complete inputs', () => {
+  clearAssistantMarkdownCache()
+  const text = 'Reply with **bold**, [a link](src/a.ts) and a table:\n\n| a | b |\n|---|---|\n| 1 | 2 |'
+  const fileLinks = base => ({ key: JSON.stringify(base), render: href => href.startsWith('src/') ? { href: 'https://host/code', attributes: { 'data-code-node': base.nodeId } } : undefined })
+  const first = cached(text, { enabled: true }, {}, fileLinks({ nodeId: 'a' }))
+  assert.deepEqual(first, uncached(text, { enabled: true }, {}, fileLinks({ nodeId: 'a' }).render))
+  assert.equal(cached(text, { enabled: true }, {}, fileLinks({ nodeId: 'a' })), first, 'a revisit reuses the stored output')
+  assert.ok(Object.isFrozen(first) && first.every(Object.isFrozen))
+  assert.deepEqual(getAssistantMarkdownCacheStats(), { entries: 1, bytes: getAssistantMarkdownCacheStats().bytes, hits: 1, misses: 1 })
+  // Every input that changes the output is part of the key.
+  const otherBase = cached(text, { enabled: true }, {}, fileLinks({ nodeId: 'b' }))
+  assert.notEqual(otherBase, first)
+  assert.match(otherBase.map(segment => segment.html).join(''), /data-code-node="b"/)
+  cached(text, { enabled: false }, {}, fileLinks({ nodeId: 'a' }))
+  cached(text, { enabled: true }, false, fileLinks({ nodeId: 'a' }))
+  cached(text, { enabled: true }, { annotations: [{ type: 'url_citation', url: 'https://example.com', title: 'E', start_index: 0, end_index: 5 }], sourceText: text, sourceOffset: 0 }, fileLinks({ nodeId: 'a' }))
+  cached(text, { enabled: true }, {})
+  cached(text + '!', { enabled: true }, {}, fileLinks({ nodeId: 'a' }))
+  assert.equal(getAssistantMarkdownCacheStats().entries, 7)
+  assert.equal(getAssistantMarkdownCacheStats().hits, 1)
+})
+
+test('streamed assistant Markdown is never stored', () => {
+  clearAssistantMarkdownCache()
+  const partial = 'A growing reply with `code'
+  cached(partial, { enabled: true, streaming: true }, {})
+  cached(partial, { enabled: true }, { streaming: true })
+  assert.equal(getAssistantMarkdownCacheStats().entries, 0)
+  // The committed text renders afresh and only then is stored.
+  const committed = cached(partial, { enabled: true }, {})
+  assert.deepEqual(committed, uncached(partial, { enabled: true }, {}))
+  assert.deepEqual([getAssistantMarkdownCacheStats().entries, getAssistantMarkdownCacheStats().hits], [1, 0])
+})
+
+test('the assistant Markdown cache is bounded by entries and bytes and evicts the least recently used', () => {
+  clearAssistantMarkdownCache()
+  const { entries, bytes, entryBytes } = ASSISTANT_MARKDOWN_CACHE_LIMITS
+  cached('entry 0', { enabled: true }, {})
+  for (let index = 1; index < entries + 50; index++) {
+    cached(`entry ${index}`, { enabled: true }, {})
+    // Keep the first entry recently used.
+    if (index % 10 === 0) cached('entry 0', { enabled: true }, {})
+  }
+  const stats = getAssistantMarkdownCacheStats()
+  assert.equal(stats.entries, entries)
+  const hits = stats.hits
+  cached('entry 0', { enabled: true }, {})
+  assert.equal(getAssistantMarkdownCacheStats().hits, hits + 1, 'a recently used entry survives eviction')
+  cached('entry 1', { enabled: true }, {})
+  assert.equal(getAssistantMarkdownCacheStats().hits, hits + 1, 'the oldest unused entry was evicted')
+
+  clearAssistantMarkdownCache()
+  const large = 'x'.repeat(Math.floor(entryBytes / 8))
+  for (let index = 0; index < Math.ceil(bytes / (entryBytes / 4)) + 4; index++) cached(`${index} ${large}`, { enabled: true }, {})
+  assert.ok(getAssistantMarkdownCacheStats().bytes <= bytes)
+  assert.ok(getAssistantMarkdownCacheStats().entries < entries)
+  const oversized = 'y'.repeat(entryBytes)
+  const before = getAssistantMarkdownCacheStats().entries
+  assert.deepEqual(cached(oversized, { enabled: true }, {}), uncached(oversized, { enabled: true }, {}))
+  assert.equal(getAssistantMarkdownCacheStats().entries, before, 'an entry above the per-entry bound is rendered but not stored')
 })
