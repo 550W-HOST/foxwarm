@@ -27,7 +27,7 @@ rules:
 
 This complete example restricts internal calls from the `reviewer` Agent while preserving the internal default for other Agents. It does not create that Agent or change its default Node. Merge rules into the real policy only after reviewing existing ordering.
 
-- Top level: `version: 1`, optional `defaultAction: allow | ask | deny` (omission means `allow`), and optional `rules` (omission means an empty list). Prefer writing both optional fields explicitly.
+- Top level: `version: 1`, optional `defaultAction: allow | ask | deny` (omission means `allow`), and either optional `rules` (omission means an empty list) or `script` with optional static `data` (see [Policy scripts](#policy-scripts)). `rules` and `script` cannot be combined, and `data` requires `script`. Prefer writing `defaultAction` explicitly.
 - Rule: optional unique non-empty `id` (omission assigns `rule-<position>`), optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | ask | deny`, optional `reason`, and optional `approval` (only with `ask`; see [Require approval](#require-approval)).
 - Limits: at most 256 rules and 256 KiB of policy bytes; IDs up to 128 bytes, reasons up to 1,024 bytes, matcher strings up to 512 bytes, and scalar lists up to 64 items.
 - Unknown fields, unsupported versions/operators/path variables, unsafe dotted argument paths, and duplicate IDs are rejected.
@@ -268,7 +268,7 @@ Even a permitted `exec` with a matched cwd can execute commands that access othe
 
 ## Agent-local layers
 
-An Agent can also carry its own ordered rule list. Set it with `create_agent({rules})` or replace it with `set_agent_rules`. The list uses the version-1 rule syntax above, written as a JSON array, but without caller selectors (`agent`, `session`, `externalId`): a layer always applies to calls made by Sessions of its own Agent **and of every Agent created from it**, directly or indirectly.
+An Agent can also carry its own ordered rule list, or a `{ "script": "...", "data": ... }` generator object that returns that list (see [Policy scripts](#policy-scripts)). Set it with `create_agent({rules})` or replace it with `set_agent_rules`. The expanded list uses the version-1 rule syntax above without caller selectors (`agent`, `session`, `externalId`): a layer always applies to calls made by Sessions of its own Agent **and of every Agent created from it**, directly or indirectly.
 
 ```json
 [
@@ -286,9 +286,53 @@ An Agent can also carry its own ordered rule list. Set it with `create_agent({ru
 - **Who can change a layer.** A model may replace the rules of Agents created by its own Agent, directly or indirectly, but never its own or an ancestor's. Administrators can replace any layer. An empty list removes the layer's rules. Changes apply to the next call; no snapshot refresh is involved.
 - **Global `agent:` rules are unchanged.** A global `agent: A` selector still matches only Sessions of A itself, not Agents created from A. Put rules meant for a whole subtree in A's local layer.
 - **Scope.** Layers apply to internal Sessions only. Inbound MCP callers have no Agent and remain governed by the global policy alone.
-- **Compatibility.** Older Main server versions do not enforce Agent-local layers. Do not run an installation that relies on them with such a version.
+- **Compatibility.** Older Main server versions do not enforce Agent-local layers, and versions before reader level 3 cannot read `{ script, data? }` Agent layers (saving one raises `installation.json` `minimumReaderVersion` to 3). Do not run an installation that relies on them with an older version.
 
 Two node-selector details matter for allowlists. A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and the endpoints of file transfers, so scope an environment allowance with `tool: {source: node}` unless those are intended. `node: {current: true}` also matches `master` when a Session is placed there, so put an explicit master deny first. The agent-management templates (`ctl skill load agent-management references/memory-templates/`) include complete reviewed layers for a restricted worker and a channel assistant.
+
+## Policy scripts
+
+When a policy or Agent-local layer repeats the same rule pattern across Agents, Nodes or operations, embed a deterministic generator `script` directly in the policy instead of keeping an external generator script beside it. The script runs at load and save time and returns the complete ordered rule list, which then goes through the exact same normalization and validation as hand-written rules.
+
+Global policy (`state/tool-authorization.yaml`) uses `script` with optional static `data` in place of `rules`:
+
+```yaml
+version: 1
+defaultAction: deny
+data:
+  workers:
+    - { agent: worker-a, node: sandbox/a }
+    - { agent: worker-b, node: sandbox/b }
+script: |
+  rules = [
+    {"id": "coordinator-all", "session": "main/main", "action": "allow"},
+  ]
+  for w in data["workers"]:
+    rules.append({
+      "id": f"allow-{w['agent']}-node",
+      "agent": w["agent"],
+      "tool": {"source": "node"},
+      "node": {"exact": w["node"]},
+      "action": "allow",
+    })
+  return rules
+```
+
+An Agent-local layer uses the object form `{ "script": "...", "data": ... }` anywhere `rules` is accepted (`create_agent`, `set_agent_rules`, `ctl agent create/set-rules --rules`, or System → Agents → Rules):
+
+```json
+{
+  "data": { "ops": ["env.read", "env.write", "env.exec"] },
+  "script": "return [{'id': 'no-master', 'node': {'exact': 'master'}, 'action': 'deny'}] + [{'id': f'allow-{op}', 'op': op, 'node': {'current': True}, 'action': 'allow'} for op in data['ops']] + [{'id': 'deny-rest', 'action': 'deny'}]"
+}
+```
+
+- **Complete list only.** `script` cannot be combined with `rules`; include any fixed rules directly in the returned list. `data` is optional, requires `script`, and is exposed to the script as the top-level variable `data` (JSON/YAML scalars, lists and string-keyed maps, within depth/node/size limits).
+- **Same validation and limits.** The returned value must be a list of at most 256 rules whose serialized JSON is at most 256 KiB, with unique IDs and (for Agent-local layers) no caller selectors. Errors name either the script line number or the offending output `rule[i]` (and its `id` if set).
+- **Enforced determinism.** Policy scripts run in the Monty ToolScript worker with no host functions, zero suspensions, empty environment, no clock, sleep, random, filesystem or module imports, and tight limits (64 KiB script, 16 MiB memory, recursion depth 64, 500 ms CPU, 2 s execution wall clock). Any forbidden call refuses the policy immediately and cannot be caught with `try`/`except`.
+- **Caching and failure.** Unchanged policies are cached by content hash, so Monty does not re-run on repeated checks. Saves validate and expand before writing, leaving the active policy unchanged on error. An unusable scripted policy found at load fails closed like any invalid policy.
+- **Platform support.** Platforms without the packaged ToolScript worker (such as `linux-arm64`) refuse policies that use `script` with an explicit error; plain `rules` policies remain unaffected.
+- **Verification and preview.** Use `ctl config explain-auth --policy-file-path <candidate> --compare` when converting between hand-written rules and a script; an equivalent conversion yields an empty `ruleDiff`. In the WebUI, Setup → Authorization and System → Agents → Rules show a read-only preview of the expanded rules.
 
 ## Operation rules
 

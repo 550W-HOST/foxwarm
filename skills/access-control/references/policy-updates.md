@@ -30,7 +30,7 @@ Persisted generic policy and legacy Agent rules naming `set_tool_rules` fail val
 
 ## Effect timing
 
-Main invalidates its policy cache immediately after a successful setter. Other processes, including Session workers, retain their own successful-parse cache for less than ten seconds. They observe the new file on their next authorization after that cache expires, not through an immediate cross-process broadcast. When checking a Worker, allow that cache window before a relevant authorization attempt; repeatedly querying status is not a cache-invalidation operation.
+Main invalidates its policy cache immediately after a successful setter and caches parsed policies by content hash, so unchanged scripted policies do not re-run their generator script when the timed recheck reads the file again. Other processes retain their own successful-parse cache for less than ten seconds.
 
 Identity edits use `set_config` with `target: config` or WebUI Setup Config and apply supported access changes immediately. Other app settings can require restart, as reported by the save result. Outbound MCP updates through `mcp_config` are different again: they publish live connection configuration without restarting. Do not use one lifecycle as a substitute for another.
 
@@ -43,7 +43,7 @@ config explain-auth --policy-file-path '$fw_tmp/tool-authorization-candidate.yam
   values: { "probes": [ { "sessionId": "<caller-session>", "toolId": "node:<node>/exec", "args": { "command": "true" } } ] }
 ```
 
-Without `policyFilePath` it explains the active policy. A candidate replaces only the global layer and is never installed. `compare` adds per-probe `active`/`candidate`/`changed` (the final decision differs) and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant plus master `read` of the active policy and of the candidate. Up to 256 probes per call. A probe may carry a `label` (up to 200 characters) that is echoed in its result row. `--compact` returns one short row per probe: `index`, `sessionId`, `toolId`, `decision` and `rules` (the layer, rule ID and decision of each layer that matched a rule or did not allow), or `active` and `candidate` of the same shape plus `changed` with `--compare`, and `error` for a probe that failed; it leaves out the facts and rule details. Results beyond about 40,000 characters are saved to a file by the tool output limit, so a batch of hundreds of probes reads best compact or from a ToolScript, which can select from the result before returning it.
+Without `policyFilePath` it explains the active policy. A candidate replaces only the global layer and is never installed. Scripted policies are expanded first, so converting between hand-written rules and a `script` produces an empty `ruleDiff` when the expanded rules match. `compare` adds per-probe `active`/`candidate`/`changed` (the final decision differs) and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant plus master `read` of the active policy and of the candidate. Up to 256 probes per call. A probe may carry a `label` (up to 200 characters) that is echoed in its result row. `--compact` returns one short row per probe: `index`, `sessionId`, `toolId`, `decision` and `rules` (the layer, rule ID and decision of each layer that matched a rule or did not allow), or `active` and `candidate` of the same shape plus `changed` with `--compare`, and `error` for a probe that failed; it leaves out the facts and rule details. Results beyond about 40,000 characters are saved to a file by the tool output limit, so a batch of hundreds of probes reads best compact or from a ToolScript, which can select from the result before returning it.
 
 ## Diagnose a denial
 
@@ -57,7 +57,7 @@ Without `policyFilePath` it explains the active policy. A candidate replaces onl
 | Symptom | Checks |
 | --- | --- |
 | Setter denied | Current setter permission and current master read permission for the exact candidate |
-| Candidate rejected | Strict field names, version, duplicate IDs, bounded sizes, scalar operators, supported path variables, registered Session-target family |
+| Candidate rejected | Strict field names, version, duplicate IDs, bounded sizes, scalar operators, supported path variables, registered Session-target family, or policy `script` syntax/runtime/determinism error (check the reported script line or output `rule[i]`, and confirm the platform ships the ToolScript worker) |
 | Call waits or returns `tool_approval_*` | An `ask` rule or default matched: decide in the WebUI dock, or check `approvers`, the identity's Session scope and `timeoutSeconds`. `tool_approval_unavailable` means the ask applied to an internal step, the call's targets kept changing while it waited, or the Session's pending limit was reached |
 | Tool is visible but call denied | Discovery is conservative; argument/path/target conditions are checked strictly at invocation |
 | External call unexpectedly allowed | Earlier identity-neutral/broad allow rules; `defaultAction: allow` alone is not the cause |
