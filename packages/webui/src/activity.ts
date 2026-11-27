@@ -191,7 +191,10 @@ const RULE_EFFECTS: Record<string, string> = { allow: 'Allow', deny: 'Deny', ask
 
 /** One deciding rule: its policy layer, rule and effect. */
 export function activityRuleLabel(rule: { layer: string; id: string; effect: string }): string {
-  const layer = rule.layer === 'global' ? 'Global rules' : rule.layer.startsWith('agent:') ? `Agent ${rule.layer.slice(6)} rules` : rule.layer
+  const layer = rule.layer === 'global' ? 'Global rules'
+    : rule.layer === 'ceiling' ? 'Operator restriction'
+    : rule.layer.startsWith('agent:') ? `Agent ${rule.layer.slice(6)} rules`
+    : rule.layer
   const id = rule.id === 'defaultAction' ? 'Default action' : rule.id
   return `${layer} · ${id} · ${RULE_EFFECTS[rule.effect] || humanize(rule.effect)}`
 }

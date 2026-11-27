@@ -28,6 +28,7 @@ test('approvers, rules and errors read without machine values', () => {
   assert.equal(activityApproverLabel('administrator'), 'Administrator')
   assert.equal(activityRuleLabel({ layer: 'global', id: 'defaultAction', effect: 'allow' }), 'Global rules · Default action · Allow')
   assert.equal(activityRuleLabel({ layer: 'agent:ops', id: 'no-secret', effect: 'deny' }), 'Agent ops rules · no-secret · Deny')
+  assert.equal(activityRuleLabel({ layer: 'ceiling', id: 'confirm-ls', effect: 'ask' }), 'Operator restriction · confirm-ls · Ask for approval')
   assert.equal(activityErrorLabel('tool_authorization_denied'), 'Denied by a rule')
   assert.equal(activityErrorLabel('image_materialization_failed'), 'Image materialization failed')
 })

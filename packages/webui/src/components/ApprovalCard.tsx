@@ -129,7 +129,7 @@ export function ApprovalDecisionForm({ record, sessionId, onDecide, focusToken =
           {record.rules.map(rule => (
             <li key={`${rule.layer}:${rule.id}`} className="min-w-0 break-words">
               <span className="text-fw-text">{rule.id === 'defaultAction' ? 'Default policy' : `Rule ${rule.id}`}</span>
-              {rule.layer !== 'global' && <span> · {rule.layer.replace(/^agent:/, 'Agent ')}</span>}
+              {rule.layer !== 'global' && <span> · {rule.layer === 'ceiling' ? 'operator restriction' : rule.layer.replace(/^agent:/, 'Agent ')}</span>}
               {rule.reason && <span> — {rule.reason}</span>}
             </li>
           ))}
