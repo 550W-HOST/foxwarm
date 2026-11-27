@@ -22,6 +22,10 @@ internal sealed record SkillInfo(
 {
     internal ISkillFiles Source => Files ?? PhysicalSkillFiles.Instance;
 
+    // Resources this runtime doesn't offer (Skills.MasterNodeResources): not listed, read,
+    // copied or run.
+    internal IReadOnlySet<string> Withheld { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
     internal string SourceLabel =>
         SourceType == "global" ? "global"
         : SourceType == "agent-local" ? $"agent:{SourceAgent}"
@@ -74,6 +78,21 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
 
     internal static bool Conditioned(SkillInfo info, string path) =>
         info.SourceType == "global" && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+
+    // Resources of global skills that describe work only a master Node can do: without one they
+    // are withheld from the skill's listing, reads, copies and script runs.
+    private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> MasterNodeResources =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            ["node-setup"] = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "references/development-workflow.md",
+                "examples/development_workflow.py",
+            },
+        };
+
+    private IReadOnlySet<string>? WithheldResources(string name, string rootType) =>
+        !masterNode && rootType == "global" ? MasterNodeResources.GetValueOrDefault(name) : null;
 
     private bool Unavailable(string name, string rootType) =>
         !masterNode && rootType == "global" && MasterNodeSkills.Contains(name);
@@ -135,7 +154,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
                 continue;
             try
             {
-                result[name] = await BuildAsync(name, root, false);
+                result[name] = await BuildAsync(name, root, false, WithheldResources(name, root.Type));
             }
             catch (Exception error)
                 when (error
@@ -181,7 +200,9 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
                 continue;
             try
             {
-                return await read(await BuildAsync(name, root, resources));
+                return await read(
+                    await BuildAsync(name, root, resources, WithheldResources(name, root.Type))
+                );
             }
             catch (Exception error)
                 when (error
@@ -224,7 +245,8 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
     private static async Task<SkillInfo> BuildAsync(
         string name,
         (string Directory, string Type, string? Agent, ISkillFiles Files) root,
-        bool resources
+        bool resources,
+        IReadOnlySet<string>? withheld = null
     )
     {
         var files = root.Files;
@@ -246,6 +268,8 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
         var description = Description(content);
         var (run, runError) = Run(content, dir, files);
         var (listed, truncated) = resources ? Resources(files, dir) : (Array.Empty<string>(), false);
+        if (withheld is not null)
+            listed = listed.Where(file => !withheld.Contains(file)).ToArray();
         return new SkillInfo(
             name,
             description,
@@ -258,7 +282,10 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot, boo
             run,
             runError,
             files
-        );
+        )
+        {
+            Withheld = withheld ?? new HashSet<string>(StringComparer.Ordinal),
+        };
     }
 
     // The skill `name` resolves to, as load and run resolve it; the caller reads inside it.

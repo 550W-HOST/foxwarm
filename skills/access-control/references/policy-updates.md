@@ -30,9 +30,14 @@ Persisted generic policy and legacy Agent rules naming `set_tool_rules` fail val
 
 ## Effect timing
 
-Main invalidates its policy cache immediately after a successful setter. Other processes, including Session workers, retain their own successful-parse cache for less than ten seconds. They observe the new file on their next authorization after that cache expires, not through an immediate cross-process broadcast. When checking a Worker, allow that cache window before a relevant authorization attempt; repeatedly querying status is not a cache-invalidation operation.
+A successful install applies from the next authorization decision.
 
+<foxwarm-if master-node="true">
 Identity edits use `set_config` with `target: config` or WebUI Setup Config and apply supported access changes immediately. Other app settings can require restart, as reported by the save result. Outbound MCP updates through `mcp_config` are different again: they publish live connection configuration without restarting. Do not use one lifecycle as a substitute for another.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+Identity edits are saved in WebUI Setup's Config tab and apply supported access changes immediately. Outbound MCP updates through `mcp_config` publish live connection configuration without a restart. Do not use one lifecycle as a substitute for another.
+</foxwarm-if>
 
 ## Explain a decision before or without calling
 
@@ -51,7 +56,12 @@ config explain-auth --probes @probes
 ```
 </foxwarm-if>
 
+<foxwarm-if master-node="true">
 Without `policyFilePath` it explains the active policy. A candidate replaces only the global layer and is never installed. `compare` adds per-probe `active`/`candidate`/`changed` (the final decision differs) and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant plus master `read` of the active policy and of the candidate. Up to 256 probes per call. A probe may carry a `label` (up to 200 characters) that is echoed in its result row. `--compact` returns one short row per probe: `index`, `sessionId`, `toolId`, `decision` and `rules` (the layer, rule ID and decision of each layer that matched a rule or did not allow), or `active` and `candidate` of the same shape plus `changed` with `--compare`, and `error` for a probe that failed; it leaves out the facts and rule details. Results beyond about 40,000 characters are saved to a file by the tool output limit, so a batch of hundreds of probes reads best compact or from a ToolScript, which can select from the result before returning it.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+It explains the active policy, including the operator's restrictions. Candidate files and `compare` aren't available in this deployment. `compare` adds per-probe `active`/`candidate`/`changed` (the final decision differs) and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant and read access to the active policy. Up to 256 probes per call. A probe may carry a `label` (up to 200 characters) that is echoed in its result row. `--compact` returns one short row per probe: `index`, `sessionId`, `toolId`, `decision` and `rules` (the layer, rule ID and decision of each layer that matched a rule or did not allow), and `error` for a probe that failed; it leaves out the facts and rule details. Results beyond about 40,000 characters are saved to a file by the tool output limit, so a batch of hundreds of probes reads best compact or from a ToolScript, which can select from the result before returning it.
+</foxwarm-if>
 
 ## Diagnose a denial
 

@@ -40,6 +40,7 @@ Files: `dotnet/Foxwarm/Skills.cs`, `dotnet/Foxwarm/SkillRuns.cs`, `dotnet/Foxwar
 
 - **Convention.** A conditioned passage is a `true` block holding the file-mode lines exactly as they were, followed by a `false` block with the hosted text (possibly empty). Filtering with a master Node therefore yields the unconditioned bytes; file-mode behavior is unchanged. A wrapper may enclose a whole fence but never sits inside one.
 - **Hidden skills.** `MasterNodeSkills` (`foxwarm-maintenance`, `asr-service`) are neither listed, loaded nor run without a master Node.
+- **Withheld resources.** `MasterNodeResources` names resources of a global skill that describe master-only work (`node-setup`'s development workflow document and script). Without a master Node `SkillInfo.Withheld` leaves them out of the listing, whole-skill and directory copies and directory reads, and `ResourcePath` refuses them as non-resources, so reads, copies and `skill run --script` fail the same way.
 - **Catalog.** Front matter isn't conditioned, so names and descriptions are the same in both modes; the hosted catalog differs only by the hidden skills.
 - **Prefix stability.** Filtered text depends only on the runtime's fixed capabilities and the document; it is a tool result persisted once.
 

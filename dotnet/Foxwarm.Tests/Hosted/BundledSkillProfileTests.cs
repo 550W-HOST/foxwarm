@@ -151,4 +151,45 @@ public sealed class BundledSkillProfileTests
             Assert.Contains("<foxwarm-if master-node=\"false\">", content);
         }
     }
+
+    // The master-side development workflow isn't offered without a master Node: its document and
+    // script are left out of the listing and refused as reads, copies and script runs.
+    [Fact]
+    public async Task The_development_workflow_resources_are_withheld_without_master()
+    {
+        using var temp = new TempDirectory();
+        var agents = Catalog(temp);
+        string[] withheld = ["references/development-workflow.md", "examples/development_workflow.py"];
+        foreach (var masterNode in new[] { true, false })
+        {
+            var skills = new Skills(agents, Bundled, masterNode);
+            var (info, _) = await skills.LoadAsync("node-setup", "main");
+            var copied = Skills.CopyPlan(info, null, "/target").Select(file => file.Path).ToArray();
+            foreach (var path in withheld)
+            {
+                Assert.Equal(masterNode, info.Resources.Contains(path));
+                Assert.Equal(masterNode, copied.Contains(path));
+                if (masterNode)
+                    Assert.False(Skills.ResourcePath(info, path).IsDirectory);
+                else
+                    Assert.Equal(
+                        $"`{path}` is not a resource of skill `node-setup`.",
+                        Assert.Throws<InvalidDataException>(() => Skills.ResourcePath(info, path)).Message
+                    );
+            }
+            // `references/` holds only the workflow, so without master it isn't a resource either.
+            if (masterNode)
+                Assert.Contains("references/development-workflow.md", Skills.ResourcePath(info, "references/").Files);
+            else
+                Assert.Throws<InvalidDataException>(() => Skills.ResourcePath(info, "references/"));
+            if (masterNode)
+                Assert.NotNull(await skills.ReadScriptAsync("node-setup", "main", "examples/development_workflow.py"));
+            else
+                await Assert.ThrowsAsync<InvalidDataException>(() =>
+                    skills.ReadScriptAsync("node-setup", "main", "examples/development_workflow.py")
+                );
+            // Other resources stay.
+            Assert.Contains("examples/container/README.md", info.Resources);
+        }
+    }
 }

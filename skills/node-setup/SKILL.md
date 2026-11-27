@@ -9,7 +9,11 @@ Use this skill to explain, bootstrap, troubleshoot, or coordinate development wo
 
 ## Choose a workflow
 
+<foxwarm-if master-node="true">
 - **Delegated development work:** read [the development workflow](references/development-workflow.md) and its runnable [ToolScript example](examples/development_workflow.py): provisioning a fresh Node, source/material transfer, Task assignment, committed or evidence-only delivery, review and explicit release.
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 - **Disposable environments:** read [the container Provider guide](examples/container/README.md). It creates one Docker or Podman container per Node from administrator-defined profiles, without network access. Registration is administrator opt-in.
 - **Existing Linux machines:** read [the Linux SSH adapter guide](examples/linux-ssh/README.md). It includes opt-in registration for existing hosts; it is neither a default backend nor an OS/network sandbox. Python 3 and OpenSSH are administrator prerequisites.
 - **Pairing and bootstrap:** use the sections below. Policy syntax belongs to `access-control`; Agent lifecycle, local rules and restricted-worker templates belong to `agent-management`.
@@ -136,6 +140,7 @@ The configured URL supplies `/node bootstrap-info` and `node_bootstrap_info` exa
 Bootstrap examples use this deployment's public URL, which its operator configures.
 </foxwarm-if>
 
+<foxwarm-if master-node="true">
 Depending on where the node runs, the reachable master URL might be:
 
 - `http://localhost:3001`
@@ -144,6 +149,9 @@ Depending on where the node runs, the reachable master URL might be:
 - a public reverse-proxy domain
 - something else environment-specific
 
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 What Foxwarm **can** do is:
 
 - when serving `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1`
@@ -154,7 +162,11 @@ Tool note:
 
 - the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
 - it returns complete configured addresses when available; otherwise replace `YOUR_MASTER` in the command you copy
+<foxwarm-if master-node="true">
 - it writes the pairing token to its `filePath` and shows `PAIRING_TOKEN` in the commands; substitute the file's contents
+</foxwarm-if>
+<foxwarm-if master-node="false">
+</foxwarm-if>
 - commands are independently copyable; check that the address is reachable from the new Node
 - a configured public URL is not a guarantee that every node can reach it
 
