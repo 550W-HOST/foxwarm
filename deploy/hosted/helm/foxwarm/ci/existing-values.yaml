@@ -1,4 +1,4 @@
-# Render check: PostgreSQL blobs, existing Secrets and an existing Agents claim.
+# Render check: PostgreSQL blobs and existing Secrets.
 image:
   repository: registry.example.com/foxwarm
   tag: hosted-test
@@ -9,6 +9,3 @@ secrets:
   existingSecret: foxwarm-runtime
 migrate:
   existingSecret: foxwarm-migrate
-agents:
-  persistence:
-    existingClaim: foxwarm-agents

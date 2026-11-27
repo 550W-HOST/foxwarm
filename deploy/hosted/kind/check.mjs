@@ -1,11 +1,9 @@
 #!/usr/bin/env node
-// The Helm chart on Kubernetes: a kind cluster with PostgreSQL, VersityGW and a shared Agents
-// volume (fixtures.yaml), the chart installed from values.yaml, then:
+// The Helm chart on Kubernetes: a kind cluster with PostgreSQL and VersityGW (fixtures.yaml),
+// the chart installed from values.yaml, then:
 //   - the migration hook completed before the Deployment created any replica;
 //   - the readiness and liveness probes: both replicas Ready (the standby included), none
 //     restarted, /readyz and /livez answer 200;
-//   - the Agents claim: ReadWriteMany, bound, mounted by both replicas, a file one writes the
-//     other reads;
 //   - one owner and one standby; the owner pod is deleted, the standby takes over at a higher
 //     epoch, the replacement pod stands by, and an ownership monitor never sees two owners.
 // Requests through the Service during the takeover are counted and reported.
@@ -183,7 +181,6 @@ try {
   const nodeImage = process.env.KIND_NODE_IMAGE
   await run('kind', ['create', 'cluster', '--name', cluster, '--wait', '180s', ...(nodeImage ? ['--image', nodeImage] : [])])
   await run('kind', ['load', 'docker-image', image, '--name', cluster])
-  await run('docker', ['exec', `${cluster}-control-plane`, 'sh', '-c', 'mkdir -p /var/local/foxwarm-agents && chown 1000:1000 /var/local/foxwarm-agents && chmod 0770 /var/local/foxwarm-agents'])
   await run('kubectl', ['--context', context, 'create', 'namespace', namespace])
   const secrets = path.join(work, 'secrets')
   await run('sh', [path.join(hosted, 'generate-secrets.sh'), secrets])
@@ -193,7 +190,7 @@ try {
   await kubectl(['apply', '-f', path.join(here, 'fixtures.yaml')])
   await kubectl(['rollout', 'status', 'deploy/postgres', '--timeout', '240s'])
   await kubectl(['rollout', 'status', 'deploy/versitygw', '--timeout', '240s'])
-  log('kind: cluster up; PostgreSQL, VersityGW and the Agents volume ready')
+  log('kind: cluster up; PostgreSQL and VersityGW ready')
 
   // ---- install
   const split = image.lastIndexOf(':')
@@ -254,19 +251,6 @@ try {
   const before = await lease()
   assert(before.owner === roles.owner.replica && before.epoch === roles.owner.epoch, 'the lease names the owner pod')
   log(`probes: ${roles.owner.pod} owns at epoch ${before.epoch}, ${roles.standby.pod} stands by; both Ready, no restarts`)
-
-  // ---- the shared Agents claim
-  const claim = await json(['get', 'pvc', `${release}-agents`])
-  assert(claim.status.phase === 'Bound' && claim.spec.accessModes.includes('ReadWriteMany'), 'the Agents claim is a bound ReadWriteMany claim')
-  for (const pod of pods)
-    assert(pod.spec.volumes.some(volume => volume.name === 'agents' && volume.persistentVolumeClaim?.claimName === `${release}-agents`), `${pod.metadata.name} mounts the Agents claim`)
-  const marker = `kind-check-${Date.now()}`
-  await kubectl(['exec', roles.owner.pod, '--', 'sh', '-c', `echo ${marker} > /agents/.${marker}`])
-  const seen = (await kubectl(['exec', roles.standby.pod, '--', 'cat', `/agents/.${marker}`])).stdout.trim()
-  assert(seen === marker, 'a file the owner writes to /agents is read by the standby')
-  await kubectl(['exec', roles.standby.pod, '--', 'rm', `/agents/.${marker}`])
-  results.agents = { claim: claim.metadata.name, volume: claim.spec.volumeName, accessModes: claim.spec.accessModes }
-  log(`agents: ${claim.metadata.name} (${claim.spec.accessModes.join(',')}) is shared by both replicas`)
 
   // ---- takeover after the owner pod is deleted
   const token = (await kubectl(['exec', roles.owner.pod, '--', '/app/Foxwarm', 'hosted', 'token'])).stdout.trim()

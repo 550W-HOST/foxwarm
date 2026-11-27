@@ -1,7 +1,7 @@
 # Foxwarm hosted mode on Docker Compose: PostgreSQL, VersityGW as the S3 blob store, a one-shot
-# schema migration, two replicas of one tenant sharing the Agents volume, and a round-robin TCP
-# proxy in front of them. Either replica can take a connection: the standby forwards it to the
-# owner. See README.md in this directory.
+# schema migration, two replicas of one tenant, and a round-robin TCP proxy in front of them.
+# Either replica can take a connection: the standby forwards it to the owner. See README.md in
+# this directory.
 #
 #   docker build --target hosted -t foxwarm-hosted:local .     # from the repository root
 #   deploy/hosted/generate-secrets.sh deploy/hosted/secrets
@@ -22,7 +22,6 @@ x-replica: &replica
   secrets: [database-url, kek, s3-access-key-id, s3-secret-access-key]
   volumes:
     - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
-    - agents:/agents
   # The replica's scratch directory: logs, upload staging and temporary files, never tenant state.
   tmpfs:
     - /scratch:uid=1000,gid=1000,mode=0700
@@ -122,8 +121,6 @@ networks:
 volumes:
   postgres: {}
   objects: {}
-  # The shared Agent folders (FOXWARM_AGENTS_DIR); the only state outside the database in P1.
-  agents: {}
 
 secrets:
   postgres-password:

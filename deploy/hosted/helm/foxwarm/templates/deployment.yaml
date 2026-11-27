@@ -98,8 +98,6 @@ spec:
               readOnly: true
             - name: scratch
               mountPath: /scratch
-            - name: agents
-              mountPath: /agents
       volumes:
         - name: deployment-config
           configMap:
@@ -111,14 +109,6 @@ spec:
         - name: scratch
           emptyDir:
             sizeLimit: {{ .Values.scratch.sizeLimit }}
-        - name: agents
-          {{- if .Values.agents.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ .Values.agents.persistence.existingClaim | default (printf "%s-agents" (include "foxwarm.fullname" .)) }}
-          {{- else }}
-          # Without persistence each replica has its own Agent folders: for trials only.
-          emptyDir: {}
-          {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

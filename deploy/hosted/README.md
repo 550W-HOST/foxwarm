@@ -19,7 +19,6 @@ It is the same native build as the default image, on `debian:trixie-slim` with C
 | User | uid and gid 1000 |
 | Root filesystem | can be read-only |
 | `/scratch` | the replica's ephemeral directory (logs, uploads in progress, temporary files); mount an empty tmpfs or emptyDir |
-| `/agents` | the Agent folders, one volume shared by every replica of the tenant |
 | `/etc/foxwarm/deployment.yaml` | the deployment configuration, mounted read-only |
 | Health check | `/app/Foxwarm hosted health`, which probes `/livez` on `health.port` |
 
@@ -61,7 +60,7 @@ The mounted YAML holds only deployment settings: `url`, `bot.httpHost`, `bot.htt
 
 ## Docker Compose
 
-`compose.yaml` runs PostgreSQL 18, VersityGW as the object store, a one-shot `migrate` service, two replicas sharing the `agents` volume, and an HAProxy that spreads connections over the replicas.
+`compose.yaml` runs PostgreSQL 18, VersityGW as the object store, a one-shot `migrate` service, two replicas, and an HAProxy that spreads connections over the replicas.
 
 ```sh
 docker build --target hosted -t foxwarm-hosted:local .
@@ -89,7 +88,6 @@ kubectl exec deploy/foxwarm -- /app/Foxwarm hosted token
 
 - **Values.** `deployment` holds the deployment configuration keys; the chart adds the listener, `health.port` and the S3 credential paths from `ports` and the mounted Secret. `secrets` supplies the runtime URL, the key-encryption key and the S3 credentials, or `secrets.existingSecret` names a Secret with the keys `database-url`, `kek.json`, `s3-access-key-id` and `s3-secret-access-key`. The chart never generates a key-encryption key.
 - **Migrations.** A `pre-install`/`pre-upgrade` hook Job runs `db migrate` with `migrate.databaseUrl` (or `migrate.existingSecret`, key `migrate-database-url`).
-- **Agents.** `agents.persistence` creates a ReadWriteMany claim (or uses `existingClaim`) mounted by every replica. The lease, not the filesystem, keeps a single writer.
 - **Rollout.** Two replicas, `maxSurge: 1` and `maxUnavailable: 0`, `/readyz` and `/livez` probes on the health port, a 60 s termination grace period and a PodDisruptionBudget with `minAvailable: 1`.
 
 ## Upgrades
@@ -119,4 +117,4 @@ The source directory isn't changed. The import verifies what it copied and write
 
 ## Drills
 
-`drills/run.mjs` checks the failover contracts against local processes or this Compose stack: a turn interrupted by killing the owner, a database partition, the upgrade refusals, a rolling update and an import. CI runs them on the Compose stack with `check-render.sh`, which validates the Compose files and the Helm chart, and `kind/check.mjs`, which installs the chart on a kind cluster and checks the migration hook, the probes, the shared Agents claim and a takeover after the owner pod is deleted. See [hosted packaging](../../docs/code-index/units/hosted-packaging.md).
+`drills/run.mjs` checks the failover contracts against local processes or this Compose stack: a turn interrupted by killing the owner, a database partition, the upgrade refusals, a rolling update and an import. CI runs them on the Compose stack with `check-render.sh`, which validates the Compose files and the Helm chart, and `kind/check.mjs`, which installs the chart on a kind cluster and checks the migration hook, the probes and a takeover after the owner pod is deleted. See [hosted packaging](../../docs/code-index/units/hosted-packaging.md).
