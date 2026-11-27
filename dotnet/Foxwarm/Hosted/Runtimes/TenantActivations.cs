@@ -296,15 +296,9 @@ internal sealed class TenantActivations : IAsyncDisposable
             }
             if (!(await stopped.ConfigureAwait(false)).Confirmed)
                 return true;
-            GrantHandle? held = null;
-            lock (gate)
-                if (slot.Grant == generation.Handle && generation.Handle.IsCurrent(clock()))
-                {
-                    held = slot.Grant;
-                    slot.Grant = null;
-                }
-            if (held is not null)
-                await Recorded(slot, () => ReleaseAsync(slot.Lease, held, CancellationToken.None)).ConfigureAwait(false);
+            var pending = TakeStoppedGrant(slot, generation);
+            if (pending is not null)
+                await ReleaseAsync(slot.Lease, pending, CancellationToken.None).ConfigureAwait(false);
             outcome = IdleReleaseOutcome.Released;
             return true;
         }
@@ -376,6 +370,7 @@ internal sealed class TenantActivations : IAsyncDisposable
             }
             if (!(await stopped.ConfigureAwait(false)).Confirmed)
                 return outcome = IdleReleaseOutcome.StopFailed;
+            PendingRelease? pending = null;
             lock (gate)
             {
                 if (held is null || slot.Grant != held || !held.IsCurrent(clock()))
@@ -384,32 +379,14 @@ internal sealed class TenantActivations : IAsyncDisposable
                     outcome = IdleReleaseOutcome.Aborted;
                 else
                 {
-                    outcome = IdleReleaseOutcome.Released;
-                    slot.Grant = null;
+                    pending = BeginRelease(slot, held);
                 }
             }
-            if (outcome == IdleReleaseOutcome.Released)
+            if (pending is not null)
             {
-                renewer.Untrack(held!);
-                bool? released = null;
-                await Recorded(
-                        slot,
-                        async () =>
-                        {
-                            try
-                            {
-                                released = await slot.Lease.ReleaseWithWakeupAsync(held!.Grant, due, token).ConfigureAwait(false);
-                                return true;
-                            }
-                            catch (Exception error) when (error is Npgsql.NpgsqlException or TimeoutException or OperationCanceledException)
-                            {
-                                // Unreleased, the grant expires within one TTL and the recovery scan finds it.
-                                return false;
-                            }
-                        }
-                    )
-                    .ConfigureAwait(false);
-                outcome = released == true ? IdleReleaseOutcome.Released : IdleReleaseOutcome.Fenced;
+                var released = await WriteReleaseAsync(pending,
+                    () => slot.Lease.ReleaseWithWakeupAsync(pending.Grant, due, token)).ConfigureAwait(false);
+                outcome = released ? IdleReleaseOutcome.Released : IdleReleaseOutcome.Fenced;
             }
             return outcome;
         }
@@ -543,11 +520,12 @@ internal sealed class TenantActivations : IAsyncDisposable
                     throw new TenantHeldElsewhereException(slot.Lease.Tenant);
                 held = renewer.Track(acquired);
                 held.OnLoss(OnGrantLost);
-                bool late;
+                PendingRelease? late = null;
                 lock (gate)
                 {
-                    late = disposed;
-                    if (!late && held.IsCurrent(clock()))
+                    if (disposed)
+                        late = BeginRelease(slot, held);
+                    else if (held.IsCurrent(clock()))
                     {
                         slot.Grant = held;
                         // A new grant supersedes every earlier hand-back and unknown outcome.
@@ -555,11 +533,11 @@ internal sealed class TenantActivations : IAsyncDisposable
                         slot.UncertainUntil = 0;
                     }
                 }
-                if (late)
+                if (late is not null)
                 {
                     // Acknowledged after shutdown began: handed back at once, within a bound.
                     using var bound = new CancellationTokenSource(timings.RenewInterval);
-                    await Recorded(slot, () => ReleaseAsync(slot.Lease, held, bound.Token)).ConfigureAwait(false);
+                    await ReleaseAsync(slot.Lease, late, bound.Token).ConfigureAwait(false);
                     throw new TenantFencedException($"Tenant {slot.Lease.Tenant} was acquired during shutdown and handed back.");
                 }
             }
@@ -668,38 +646,18 @@ internal sealed class TenantActivations : IAsyncDisposable
     private async Task FailedStartAsync(Slot slot, GrantHandle held, WakeupRow? wakeup)
     {
         bool autonomous;
+        PendingRelease pending;
         lock (gate)
         {
             // At shutdown the grant is released plainly by the shutdown, without a backoff.
             if (slot.Grant != held || disposed || !held.IsCurrent(clock()))
                 return;
-            slot.Grant = null;
+            pending = BeginRelease(slot, held);
             autonomous = slot.Autonomous;
             slot.Autonomous = false;
         }
-        renewer.Untrack(held);
-        await Recorded(
-                slot,
-                async () =>
-                {
-                    try
-                    {
-                        await slot.Lease.ReleaseAfterFailedStartAsync(
-                                held.Grant,
-                                Backoff((wakeup?.Attempts ?? 0) + 1),
-                                autonomous,
-                                CancellationToken.None
-                            )
-                            .ConfigureAwait(false);
-                        return true;
-                    }
-                    catch (Exception error) when (error is Npgsql.NpgsqlException or TimeoutException)
-                    {
-                        // Unreleased, the grant expires within one TTL and the recovery scan finds it.
-                        return false;
-                    }
-                }
-            )
+        await WriteReleaseAsync(pending, () => slot.Lease.ReleaseAfterFailedStartAsync(
+            pending.Grant, Backoff((wakeup?.Attempts ?? 0) + 1), autonomous, CancellationToken.None))
             .ConfigureAwait(false);
     }
 
@@ -721,7 +679,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         // The one deadline: every stop and every release runs under it, and nothing starts after it.
         using var bound = new CancellationTokenSource(ShutdownBound);
         List<(Slot Slot, TenantGeneration Generation)> generations = [];
-        List<(Slot Slot, GrantHandle Handle)> idle = [];
+        List<(TenantLease Lease, PendingRelease Pending)> idle = [];
         List<Task> activations = [];
         List<Task> handBacks = [];
         lock (gate)
@@ -743,19 +701,18 @@ internal sealed class TenantActivations : IAsyncDisposable
                 if (slot.Grant is { } held && held.IsCurrent(clock())
                     && !new[] { slot.Retiring, slot.Building }.Any(generation => generation?.Handle == held))
                 {
-                    idle.Add((slot, held));
-                    slot.Grant = null;
+                    idle.Add((slot.Lease, BeginRelease(slot, held)));
                 }
                 if (slot.Activation is { } activation)
                     activations.Add(activation);
                 // Hand-backs already under way (placement, idle or failed-start releases).
-                handBacks.AddRange(slot.Releases.Select(item => (Task)item.Operation));
+                handBacks.AddRange(slot.Releases.Select(item => (Task)item.Acknowledged.Task));
             }
         }
         // Cancellation callbacks may block: never on this thread.
         _ = Task.Run(stopping.Cancel);
         var releases = generations.Select(item => ReleaseWhenStoppedAsync(item.Slot, item.Generation, bound.Token))
-            .Concat(idle.Select(item => (Task)Recorded(item.Slot, () => ReleaseAsync(item.Slot.Lease, item.Handle, bound.Token))))
+            .Concat(idle.Select(item => (Task)ReleaseAsync(item.Lease, item.Pending, bound.Token)))
             .ToList();
         var all = Task.WhenAll(releases.Concat(activations).Concat(handBacks).Select(task => task.ContinueWith(_ => { }, TaskScheduler.Default)));
         await Task.WhenAny(all, Task.Delay(Timeout.Infinite, bound.Token)).ConfigureAwait(false);
@@ -801,48 +758,68 @@ internal sealed class TenantActivations : IAsyncDisposable
         var result = await generation.Stopped.ConfigureAwait(false);
         if (!result.Confirmed)
             return;
-        GrantHandle? held = null;
-        lock (gate)
-            if (slot.Grant == generation.Handle && generation.Handle.IsCurrent(clock()))
-            {
-                held = slot.Grant;
-                slot.Grant = null;
-            }
-        if (held is not null)
-            await Recorded(slot, () => ReleaseAsync(slot.Lease, held, token)).ConfigureAwait(false);
+        var pending = TakeStoppedGrant(slot, generation);
+        if (pending is not null)
+            await ReleaseAsync(slot.Lease, pending, token).ConfigureAwait(false);
     }
 
-    // True when the release was written; a failed or cancelled one leaves the lease to expire.
-    private async Task<bool> ReleaseAsync(TenantLease lease, GrantHandle handle, CancellationToken token)
+    private PendingRelease? TakeStoppedGrant(Slot slot, TenantGeneration generation)
     {
-        renewer.Untrack(handle);
+        lock (gate)
+            return slot.Grant == generation.Handle && generation.Handle.IsCurrent(clock())
+                ? BeginRelease(slot, generation.Handle)
+                : null;
+    }
+
+    // Caller holds gate. End renewal and replace the held grant with a pending result before
+    // shutdown can inspect the slot. A late acquisition was never published in slot.Grant.
+    private PendingRelease BeginRelease(Slot slot, GrantHandle held)
+    {
+        renewer.Untrack(held);
+        if (slot.Grant == held)
+            slot.Grant = null;
+        var expiresBy = clock() + (long)(timings.Ttl.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+        var pending = new PendingRelease(held.Grant, expiresBy);
+        slot.Releases.Add(pending);
+        return pending;
+    }
+
+    private Task<bool> ReleaseAsync(TenantLease lease, PendingRelease pending, CancellationToken token) =>
+        WriteReleaseAsync(pending, async () =>
+        {
+            await lease.ReleaseAsync(pending.Grant, token).ConfigureAwait(false);
+            return true;
+        });
+
+    private async Task<bool> WriteReleaseAsync(PendingRelease pending, Func<Task<bool>> write)
+    {
+        var acknowledged = false;
         try
         {
-            await lease.ReleaseAsync(handle.Grant, token).ConfigureAwait(false);
-            return true;
+            if (BeforeReleaseWrite is { } wait)
+                await wait().ConfigureAwait(false);
+            var released = await write().ConfigureAwait(false);
+            // A definite stale epoch is also an acknowledgement: ownership has ended.
+            acknowledged = true;
+            return released;
         }
         catch (Exception error) when (error is Npgsql.NpgsqlException or TimeoutException or OperationCanceledException)
         {
             return false;
         }
+        finally
+        {
+            pending.Acknowledged.SetResult(acknowledged);
+        }
     }
 
-    // Starts a hand-back of this slot's ownership and keeps it on the slot until its outcome is
-    // known (the task's result), a later grant supersedes it, or the lease can no longer be this
-    // replica's (one TTL after the start: renewal ended before it).
-    private Task<bool> Recorded(Slot slot, Func<Task<bool>> release)
-    {
-        var expiresBy = clock() + (long)(timings.Ttl.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
-        var operation = release();
-        lock (gate)
-            slot.Releases.Add(new(operation, expiresBy));
-        return operation;
-    }
+    // Test barrier before a hand-back starts its database call, outside the gate.
+    internal Func<Task>? BeforeReleaseWrite { get; set; }
 
     // Caller holds the gate. Drops resolved hand-backs; true while any remains.
     private static bool Unresolved(Slot slot, long now)
     {
-        slot.Releases.RemoveAll(item => item.ExpiresBy <= now || item.Operation is { IsCompletedSuccessfully: true, Result: true });
+        slot.Releases.RemoveAll(item => item.ExpiresBy <= now || item.Acknowledged.Task is { IsCompletedSuccessfully: true, Result: true });
         return slot.Releases.Count > 0;
     }
 
@@ -856,7 +833,10 @@ internal sealed class TenantActivations : IAsyncDisposable
 
     public async ValueTask DisposeAsync() => await ShutdownAsync().ConfigureAwait(false);
 
-    private sealed record PendingRelease(Task<bool> Operation, long ExpiresBy);
+    private sealed record PendingRelease(LeaseGrant Grant, long ExpiresBy)
+    {
+        internal TaskCompletionSource<bool> Acknowledged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     private sealed class Slot(TenantLease lease)
     {
@@ -872,7 +852,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         // Until this clock value, an acquisition's outcome is unknown (its commit may have
         // taken effect); a shutdown before then isn't clean.
         internal long UncertainUntil { get; set; }
-        // Hand-backs whose outcome isn't known yet (Recorded).
+        // Hand-backs tracked from the moment the grant leaves this slot.
         internal List<PendingRelease> Releases { get; } = [];
         internal long Generations { get; set; }
         internal Task<IdleReleaseOutcome>? Releasing { get; set; }

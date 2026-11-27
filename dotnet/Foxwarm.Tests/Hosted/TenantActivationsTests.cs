@@ -768,6 +768,39 @@ public sealed class TenantActivationsTests
         Assert.Equal("active", await f.LeaseStateAsync());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShutdownSeesTheHandBackBeforeItsDatabaseCallStarts(bool placement)
+    {
+        await using var f = await CreateAsync(shutdownBound: TimeSpan.FromMilliseconds(400));
+        var generation = await f.Activations.ActivateAsync(Tenant);
+        var ready = Fixture.Closed();
+        var proceed = Fixture.Closed();
+        f.Activations.BeforeReleaseWrite = () =>
+        {
+            ready.TrySetResult();
+            return proceed.Task;
+        };
+        Task retire = placement
+            ? f.Activations.RetireForPlacementAsync(generation.Id, "placement changed")
+            : f.Activations.TryReleaseIdleAsync(generation.Id, TimeSpan.Zero);
+        try
+        {
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True((await generation.Stopped).Confirmed);
+            Assert.False(await f.Activations.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5)),
+                "Shutdown counted an outstanding hand-back as clean.");
+            Assert.Equal("active", await f.LeaseStateAsync());
+        }
+        finally
+        {
+            proceed.TrySetResult();
+            await retire.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.Equal("released", await f.LeaseStateAsync());
+    }
+
     // ---- Placement proof and release outcomes (review 4c) ----
 
     private static async Task UntilAsync(Func<bool> condition, TimeSpan limit, string what)
