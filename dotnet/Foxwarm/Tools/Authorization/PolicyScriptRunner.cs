@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.ToolScript;
@@ -11,21 +12,35 @@ namespace Foxwarm.Tools;
 /// </summary>
 internal static class PolicyScriptRunner
 {
+    private const string TransientMarkerKey = "foxwarm.policyScript.transient";
+
+    internal static InvalidDataException Transient(string message, System.Exception? inner = null)
+    {
+        var error = inner is null
+            ? new InvalidDataException(message)
+            : new InvalidDataException(message, inner);
+        error.Data[TransientMarkerKey] = true;
+        return error;
+    }
+
+    internal static bool IsTransient(System.Exception error) =>
+        error is not InvalidDataException || error.Data.Contains(TransientMarkerKey);
     internal const int MaxScriptBytes = 64 * 1024;
     internal const ulong MaxMemoryBytes = 16 * 1024 * 1024;
     internal const ulong MaxRecursionDepth = 64;
     internal const ulong MaxCpuDurationMicros = 500_000;
+    internal static readonly TimeSpan StartupWallClockLimit = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan WallClockLimit = TimeSpan.FromSeconds(2);
     internal const long MaxDataBudgetBytes = 4 * 1024 * 1024;
 
     private static readonly SemaphoreSlim Concurrency = new(2, 2);
     private static long compilationCount;
 
-    // Override only for isolated tests simulating a missing binary or custom worker path.
+    // Test-only overrides for isolated determinism, timeout, and failure-recovery tests.
     internal static Func<string?>? BinaryOverride { get; set; }
-
-    // Test hook invoked inside the concurrency gate right before spawning a Monty worker.
     internal static Action? OnBeforeSpawn { get; set; }
+    internal static TimeSpan? StartupWallClockOverride { get; set; }
+    internal static TimeSpan? ExecutionWallClockOverride { get; set; }
 
     internal static long CompilationCount => Interlocked.Read(ref compilationCount);
 
@@ -45,7 +60,7 @@ internal static class PolicyScriptRunner
             );
         var path = BinaryOverride is not null ? BinaryOverride() : DefaultBinaryPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            throw new InvalidDataException(
+            throw Transient(
                 "Policy scripts require the packaged ToolScript Monty worker, which is not installed."
             );
         return path;
@@ -92,117 +107,190 @@ internal static class PolicyScriptRunner
         try
         {
             Interlocked.Increment(ref compilationCount);
-            OnBeforeSpawn?.Invoke();
-            using var wall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            wall.CancelAfter(WallClockLimit);
-            var token = wall.Token;
 
-            await using var worker = new MontyWorker(binary);
-            var budget = new ToolScriptDataBudget(MaxDataBudgetBytes);
-            var configured = await worker
-                .ConfigureAsync(
-                    scriptName,
-                    DeterministicLimits(),
-                    DeterministicOsPolicy(),
-                    ExecutionClock.Cpu,
-                    budget,
-                    token
-                )
-                .ConfigureAwait(false);
-            if (
-                configured.KindCase != WorkerEvent.KindOneofCase.Ok
-                || !configured.HasExecutionClock
-                || configured.ExecutionClock != ExecutionClock.Cpu
-            )
-                throw new InvalidDataException(
-                    "Policy script worker failed to acknowledge deterministic CPU-clock configuration."
-                );
+            var startupBudget = StartupWallClockOverride ?? StartupWallClockLimit;
+            using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            startup.CancelAfter(startupBudget);
 
-            var feedBudget = new ToolScriptDataBudget(MaxDataBudgetBytes);
-            Feed feed;
+            MontyWorker worker;
             try
             {
-                feedBudget.Charge(8L * Encoding.UTF8.GetByteCount(script));
-                var input = data ?? new JsonObject();
-                var (values, root) = MontyValues.FromJson(input, feedBudget);
-                feed = new Feed { Code = script, Values = values };
-                feed.Inputs.Add(new NamedRef { Name = "data", Value = root });
-            }
-            catch (ToolScriptDataLimitException error)
-            {
-                throw new InvalidDataException(
-                    "Policy script exceeded its data limit: " + error.Message
-                );
-            }
-
-            WorkerEvent reply;
-            try
-            {
-                reply = await worker
-                    .TurnAsync(new ClientRequest { Feed = feed }, feedBudget, _ => { }, token)
-                    .ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                throw new InvalidDataException("Policy script exceeded its execution time limit.");
+                OnBeforeSpawn?.Invoke();
+                startup.Token.ThrowIfCancellationRequested();
+                worker = new MontyWorker(binary);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new InvalidDataException("Policy script exceeded its wall-clock time limit.");
-            }
-            catch (ToolScriptDataLimitException error)
-            {
-                throw new InvalidDataException(
-                    "Policy script exceeded its data limit: " + error.Message
+                throw Transient(
+                    "Policy script worker startup timed out before execution began."
                 );
             }
-            catch (IOException error)
+            catch (System.Exception error)
+                when (error is IOException or Win32Exception or InvalidOperationException)
             {
-                throw new InvalidDataException("Policy script worker failed: " + error.Message);
+                throw Transient(
+                    "Policy script worker failed to start: " + error.Message,
+                    error
+                );
             }
 
-            try
+            await using (worker.ConfigureAwait(false))
             {
-                return reply.KindCase switch
+                WorkerEvent configured;
+                try
                 {
-                    WorkerEvent.KindOneofCase.Complete => ToStrictJson(
-                        reply.Complete.Values,
-                        reply.Complete.Value,
-                        feedBudget
-                    ),
-                    WorkerEvent.KindOneofCase.Error => throw new InvalidDataException(
-                        FormatException(reply.Error.Exception)
-                    ),
-                    WorkerEvent.KindOneofCase.OsCall => throw new InvalidDataException(
-                        FormatRefusedOsCall(script, reply.OsCall)
-                    ),
-                    WorkerEvent.KindOneofCase.NameLookup => throw new InvalidDataException(
-                        FormatRefusedNameLookup(script, reply.NameLookup)
-                    ),
-                    WorkerEvent.KindOneofCase.FunctionCall => throw new InvalidDataException(
-                        FormatRefusedCall(
-                            script,
-                            reply.FunctionCall.Position,
-                            $"host function `{reply.FunctionCall.FunctionName}` is not available in policy scripts."
+                    var budget = new ToolScriptDataBudget(MaxDataBudgetBytes);
+                    configured = await worker
+                        .ConfigureAsync(
+                            scriptName,
+                            DeterministicLimits(),
+                            DeterministicOsPolicy(),
+                            ExecutionClock.Cpu,
+                            budget,
+                            startup.Token
                         )
-                    ),
-                    WorkerEvent.KindOneofCase.ResolveFutures => throw new InvalidDataException(
-                        FormatRefusedCall(
-                            script,
-                            reply.ResolveFutures.Position,
-                            "external async futures are not available in policy scripts."
-                        )
-                    ),
-                    _ => throw new InvalidDataException(
-                        $"Policy script ended with unsupported worker event `{reply.KindCase}`."
-                    ),
-                };
-            }
-            catch (ToolScriptDataLimitException error)
-            {
-                throw new InvalidDataException(
-                    "Policy script exceeded its data limit: " + error.Message
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                    when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw Transient(
+                        "Policy script worker startup timed out while configuring the sandbox."
+                    );
+                }
+                catch (TimeoutException error)
+                {
+                    throw Transient(
+                        "Policy script worker startup timed out while configuring the sandbox.",
+                        error
+                    );
+                }
+                catch (IOException error)
+                {
+                    throw Transient(
+                        "Policy script worker exited during startup: " + error.Message,
+                        error
+                    );
+                }
+
+                if (
+                    configured.KindCase != WorkerEvent.KindOneofCase.Ok
+                    || !configured.HasExecutionClock
+                    || configured.ExecutionClock != ExecutionClock.Cpu
+                )
+                    throw Transient(
+                        "Policy script worker failed to acknowledge deterministic CPU-clock configuration."
+                    );
+
+                var feedBudget = new ToolScriptDataBudget(MaxDataBudgetBytes);
+                Feed feed;
+                try
+                {
+                    feedBudget.Charge(8L * Encoding.UTF8.GetByteCount(script));
+                    var input = data ?? new JsonObject();
+                    var (values, root) = MontyValues.FromJson(input, feedBudget);
+                    feed = new Feed { Code = script, Values = values };
+                    feed.Inputs.Add(new NamedRef { Name = "data", Value = root });
+                }
+                catch (ToolScriptDataLimitException error)
+                {
+                    throw new InvalidDataException(
+                        "Policy script exceeded its data limit: " + error.Message
+                    );
+                }
+
+                // Start the script's wall clock only after Configure is acknowledged so process
+                // startup and AV/OS overhead never consume script execution time.
+                var executionBudget = ExecutionWallClockOverride ?? WallClockLimit;
+                using var execution = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken
                 );
+                execution.CancelAfter(executionBudget);
+
+                WorkerEvent reply;
+                try
+                {
+                    reply = await worker
+                        .TurnAsync(
+                            new ClientRequest { Feed = feed },
+                            feedBudget,
+                            _ => { },
+                            execution.Token
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException error)
+                {
+                    throw Transient(
+                        "Policy script exceeded its execution time limit.",
+                        error
+                    );
+                }
+                catch (OperationCanceledException)
+                    when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw Transient(
+                        "Policy script exceeded its execution wall-clock time limit."
+                    );
+                }
+                catch (ToolScriptDataLimitException error)
+                {
+                    throw new InvalidDataException(
+                        "Policy script exceeded its data limit: " + error.Message
+                    );
+                }
+                catch (IOException error)
+                {
+                    throw Transient(
+                        "Policy script worker exited unexpectedly during execution: "
+                            + error.Message,
+                        error
+                    );
+                }
+
+                try
+                {
+                    return reply.KindCase switch
+                    {
+                        WorkerEvent.KindOneofCase.Complete => ToStrictJson(
+                            reply.Complete.Values,
+                            reply.Complete.Value,
+                            feedBudget
+                        ),
+                        WorkerEvent.KindOneofCase.Error => throw ClassifyScriptError(
+                            reply.Error.Exception
+                        ),
+                        WorkerEvent.KindOneofCase.OsCall => throw new InvalidDataException(
+                            FormatRefusedOsCall(script, reply.OsCall)
+                        ),
+                        WorkerEvent.KindOneofCase.NameLookup => throw new InvalidDataException(
+                            FormatRefusedNameLookup(script, reply.NameLookup)
+                        ),
+                        WorkerEvent.KindOneofCase.FunctionCall => throw new InvalidDataException(
+                            FormatRefusedCall(
+                                script,
+                                reply.FunctionCall.Position,
+                                $"host function `{reply.FunctionCall.FunctionName}` is not available in policy scripts."
+                            )
+                        ),
+                        WorkerEvent.KindOneofCase.ResolveFutures => throw new InvalidDataException(
+                            FormatRefusedCall(
+                                script,
+                                reply.ResolveFutures.Position,
+                                "external async futures are not available in policy scripts."
+                            )
+                        ),
+                        _ => throw Transient(
+                            $"Policy script ended with unsupported worker event `{reply.KindCase}`."
+                        ),
+                    };
+                }
+                catch (ToolScriptDataLimitException error)
+                {
+                    throw new InvalidDataException(
+                        "Policy script exceeded its data limit: " + error.Message
+                    );
+                }
             }
         }
         finally
@@ -335,6 +423,14 @@ internal static class PolicyScriptRunner
         foreach (var item in items)
             array.Add(ToStrictJson(arena, item, holder, budget, depth + 1));
         return array;
+    }
+
+    private static InvalidDataException ClassifyScriptError(RaisedException error)
+    {
+        var message = FormatException(error);
+        return string.Equals(error.ExcType, "TimeoutError", StringComparison.Ordinal)
+            ? Transient(message)
+            : new InvalidDataException(message);
     }
 
     private static string FormatException(RaisedException error)
