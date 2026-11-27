@@ -442,6 +442,8 @@ internal sealed partial class PgLlmJournalStore
                         )
                             is null
                     );
+                // A ledger row of an unrecorded request that couldn't be written leaves a gap.
+                complete = complete && !UnrecordedUsageLost(tx);
                 return new LlmUsageCoverage(earliest is long first ? first : null, complete);
             },
             snapshot: true

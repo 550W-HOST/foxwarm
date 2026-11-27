@@ -19,6 +19,12 @@ internal interface ILlmJournalStore : IAsyncDisposable
     /// <summary>Raised when the usage ledger fails to record a result.</summary>
     event Action? UsageLedgerFailed;
 
+    /// <summary>
+    /// Whether request and response content is recorded; the tenant's journal switch turns it
+    /// off, and the wire diagnostics follow it.
+    /// </summary>
+    bool RecordsContent => true;
+
     Task<string> BeginRequestAsync(
         string? sessionId,
         string purpose,

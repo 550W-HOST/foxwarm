@@ -97,14 +97,42 @@ public sealed class HostedTenantPolicyTests
         var answer = await store.ReconstructAsync(unrecorded);
         Assert.Equal(PgLlmJournalStore.NotRecorded, answer["completeness"]!.GetValue<string>());
         Assert.Contains("wasn't recorded", answer["reason"]!.GetValue<string>());
-        // A later owner knows nothing of the request either: while the journal is off, it reads
-        // as not recorded.
-        await using var next = new PgLlmJournalStore(tenant) { Recording = false };
+        // The request's start data went with its success.
+        Assert.Equal(0, store.UnrecordedLiveCount);
+        // A later owner, with recording on again, still answers that it wasn't recorded.
+        await using var next = new PgLlmJournalStore(tenant);
+        await next.BackfillUsageAsync(CancellationToken.None);
         Assert.Equal(
             PgLlmJournalStore.NotRecorded,
             (await next.ReconstructAsync(unrecorded))["completeness"]!.GetValue<string>()
         );
         Assert.Single(await next.ListAsync(null, null, null, null, 10));
+        Assert.True(next.UsageCoverage().Complete);
+    }
+
+    [Fact]
+    public async Task ALostUsageRowOfAnUnrecordedRequestLeavesTheCoverageIncomplete()
+    {
+        var (database, tenant) = await TenantAsync();
+        await using var _ = database;
+        await using var store = new PgLlmJournalStore(tenant) { Recording = false };
+        await RequestAsync(store, "s", "counted");
+        await store.BackfillUsageAsync(CancellationToken.None);
+        Assert.True(store.UsageCoverage().Complete);
+        PgLlmJournalStore.InsertUsageForTest = () =>
+            throw new Npgsql.PostgresException("synthetic rejection", "ERROR", "ERROR", "22P02");
+        try
+        {
+            await RequestAsync(store, "s", "lost");
+        }
+        finally
+        {
+            PgLlmJournalStore.InsertUsageForTest = null;
+        }
+        Assert.Equal(1L, await database.ScalarAsync("SELECT count(*) FROM llm_usage"));
+        Assert.False(store.UsageCoverage().Complete);
+        await using var next = new PgLlmJournalStore(tenant);
+        Assert.False(next.UsageCoverage().Complete);
     }
 
     [Fact]

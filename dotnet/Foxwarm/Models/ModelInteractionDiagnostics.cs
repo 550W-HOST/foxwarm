@@ -13,6 +13,9 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
     private readonly string logs = Path.Combine(dataRoot, "state", "logs");
     private readonly SemaphoreSlim writes = new(1, 1);
 
+    /// <summary>Whether interactions are written; null always writes.</summary>
+    internal Func<bool>? Recording { get; init; }
+
     internal Interaction Begin(int iteration = 0) => new(this, iteration);
 
     private async Task WriteAsync(string path, JsonNode value)
@@ -100,6 +103,9 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 new JsonObject { ["attempt"] = attempt.Number, ["modelId"] = attempt.ModelId }
             );
             if (requestWritten && attempt.VirtualModel is null)
+                return;
+            // Nothing written for the request: its result and error files aren't either.
+            if (owner.Recording?.Invoke() == false)
                 return;
             var body = attempt.Redact(payload);
             var request = attempt.VirtualModel is null

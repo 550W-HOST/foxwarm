@@ -139,7 +139,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))
             Directory.Delete(runtimeFiles, recursive: true);
-        diagnostics = new(this.root);
+        // The wire diagnostics copy request and response bodies: off with the tenant's journal.
+        diagnostics = new(this.root) { Recording = () => Journal.RecordsContent };
         RecallTargets = new(this.root);
         Nodes = new(this.root, Storage.Documents, Storage.Credentials)
         {

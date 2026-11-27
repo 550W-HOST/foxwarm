@@ -426,20 +426,15 @@ internal sealed partial class PgLlmJournalStore : ILlmJournalStore
     )
     {
         CheckOpen();
-        if (NotRecordedAnswer(requestId, known: true) is { } unrecordedAnswer)
-            return unrecordedAnswer;
+        if (IsUnrecorded(requestId))
+            return NotRecordedAnswer(requestId);
         await Writer.BarrierAsync(token).ConfigureAwait(false);
         try
         {
-            var reconstructed = database.Read(
+            return database.Read(
                 tx => LlmJournalReconstruction.Reconstruct(new PgRows(tx), requestId),
                 snapshot: true
             );
-            // No row knows the request: while the journal is off, it wasn't recorded.
-            return reconstructed["completeness"]?.GetValue<string>() == "legacy-partial"
-                && NotRecordedAnswer(requestId, known: false) is { } offAnswer
-                ? offAnswer
-                : reconstructed;
         }
         // As in the file journal, an inconsistent request is reported rather than thrown; an
         // unavailable database still fails the call.
