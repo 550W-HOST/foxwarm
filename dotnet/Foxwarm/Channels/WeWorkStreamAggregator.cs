@@ -150,6 +150,17 @@ internal sealed class WeWorkStreamAggregator(
         }
     }
 
+    internal WeWorkStreamSnapshot? FinishUnadmitted(string id)
+    {
+        lock (gate)
+        {
+            Cleanup();
+            return streams.GetValueOrDefault(id) is { Finish: false, SessionId: null } state
+                ? FinishWithText(state, "The message could not be accepted for processing.")
+                : null;
+        }
+    }
+
     private WeWorkStreamSnapshot FinishWithText(State state, string? notice)
     {
         if (notice is not null)

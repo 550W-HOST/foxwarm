@@ -107,8 +107,6 @@ public sealed partial class SessionSaveLane
                     };
                 }
             }
-            if (kind == SaveKind.BestEffort)
-                beforeAdmission?.Invoke();
             var prepared = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();
@@ -175,6 +173,7 @@ public sealed partial class SessionSaveLane
             }
             if (kind == SaveKind.BestEffort)
             {
+                beforeAdmission?.Invoke();
                 entry.WithState(Publish); // Ordinary input stays hot even when its save attempt fails.
                 SessionSnapshot? persisted = null;
                 try

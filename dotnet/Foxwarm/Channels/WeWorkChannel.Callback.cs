@@ -311,6 +311,7 @@ internal sealed partial class WeWorkChannel
         JsonObject? passive = null;
         ExternalChannelContext? dispatch = null;
         WeWorkStreamSnapshot? initialPush = null;
+        string? requestStreamId = null;
         // Preparation may await media; only admission/card/result mutation is atomic.
         lock (contextGate)
         {
@@ -332,6 +333,7 @@ internal sealed partial class WeWorkChannel
                             }
                             : delivery
                     );
+                    requestStreamId = stream.Id;
                     if (stream.Delivery.Mode == "websocket")
                         initialPush = stream;
                     else
@@ -405,8 +407,26 @@ internal sealed partial class WeWorkChannel
         if (initialPush is not null)
             _ = ObserveAsync(PushStreamAsync(initialPush, CancellationToken.None));
         if (dispatch is not null)
-            _ = ObserveAsync(router.HandleExternalMessageAsync(dispatch, new(parts!)));
+            _ = ObserveAsync(DispatchInboundAsync(dispatch, new(parts!), requestStreamId));
         return passive;
+    }
+
+    private async Task DispatchInboundAsync(
+        ExternalChannelContext context,
+        ExternalChannelMessage message,
+        string? streamId
+    )
+    {
+        try
+        {
+            await router.HandleExternalMessageAsync(context, message);
+        }
+        finally
+        {
+            if (streamId is not null)
+                lock (contextGate)
+                    PushFinishedStream(streams.FinishUnadmitted(streamId));
+        }
     }
 
     private void ActivateStream(string conversation, string streamId, string sessionId)

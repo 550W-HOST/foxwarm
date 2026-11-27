@@ -325,16 +325,76 @@ public sealed class WeWorkSocketTests
     }
 
     [Theory]
-    [InlineData(false)]
     [InlineData(true)]
+    [InlineData(false)]
+    public async Task Dispatch_without_admission_or_reply_closes_only_the_request_card(
+        bool shutdown
+    )
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(socket: true) },
+            dependencies: peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        f.Manager.AttachChannel("work:wrk-chat", f.Owner);
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => Cmd(frame) == "aibot_subscribe")
+        );
+        peer.Push(WeWorkPeer.Text("active"), "req-active");
+        await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 1);
+
+        var mutationAdmission = f.Owner.Entry.MutationAdmission;
+        try
+        {
+            if (shutdown)
+                f.Manager.BeginShutdown();
+            else
+                f.Owner.Entry.MutationAdmission = () =>
+                    throw new InvalidOperationException("queue fixture failure");
+
+            peer.Push(WeWorkPeer.Text("not-admitted"), "req-unadmitted");
+            await TelegramChannelTests.Until(() =>
+                peer.Frames.Any(frame =>
+                    Req(frame) == "req-unadmitted"
+                    && frame["body"]?["stream"]?["finish"]?.GetValue<bool>() == true
+                )
+            );
+        }
+        finally
+        {
+            f.Owner.Entry.MutationAdmission = mutationAdmission;
+        }
+        var final = peer.Frames.Last(frame => Req(frame) == "req-unadmitted")["body"]!.AsObject();
+        Assert.Equal(
+            "The message could not be accepted for processing.",
+            WeWorkCallbackTests.Content(final)
+        );
+        Assert.True(f.Manager.ChannelRegistry.Get("work")!.IsLifecycleActive!("wrk-chat"));
+        Assert.DoesNotContain(
+            peer.Frames,
+            frame =>
+                Req(frame) == "req-active"
+                && frame["body"]?["stream"]?["finish"]?.GetValue<bool>() == true
+        );
+        Assert.Single(f.Owner.Entry.Snapshot().Queue);
+    }
+
+    [Theory]
+    [InlineData("send-only", "Channel mode set to send-only")]
+    [InlineData("attach", "Attached to session")]
+    [InlineData("/session new", "Created and attached to new session")]
+    [InlineData("/session create main fixture", "Created session")]
+    [InlineData("/session fork --attach", "This conversation is now attached to the fork.")]
     public async Task Changing_the_binding_closes_the_old_card_while_the_session_keeps_running(
-        bool rebind
+        string change,
+        string confirmation
     )
     {
         await using var peer = await WeWorkPeer.StartAsync();
         var releaseAnswer = Signal();
         await using var provider = new ScriptedResponsesSequenceServer(
-            1,
+            change == "/session fork --attach" ? 2 : 1,
             async (_, stream, _) =>
             {
                 await releaseAnswer.Task.WaitAsync(TimeSpan.FromSeconds(15));
@@ -353,9 +413,13 @@ public sealed class WeWorkSocketTests
         );
         await f.Manager.ManagedChannels!.ReloadAsync();
         f.Manager.AttachChannel("work:wrk-chat", f.Owner);
-        var destination = rebind
-            ? await f.Manager.CreateNamedAsync("main", "rebound", null, null)
-            : f.Owner;
+        var input = change switch
+        {
+            "send-only" => "/channel mode send-only",
+            "attach" =>
+                $"/channel attach {(await f.Manager.CreateNamedAsync("main", "rebound", null, null)).Id}",
+            _ => change,
+        };
         await TelegramChannelTests.Until(() =>
             peer.Frames.Any(frame => Cmd(frame) == "aibot_subscribe")
         );
@@ -368,13 +432,7 @@ public sealed class WeWorkSocketTests
             await provider.RequestAt(0).WaitAsync(TimeSpan.FromSeconds(5));
             var channel = f.Manager.ChannelRegistry.Get("work")!;
             await channel.Send("wrk-chat", "already sent", new(), default);
-            peer.Push(
-                WeWorkPeer.Text(
-                    "change-binding",
-                    rebind ? $"/channel attach {destination.Id}" : "/channel mode send-only"
-                ),
-                "req-binding"
-            );
+            peer.Push(WeWorkPeer.Text("change-binding", input), "req-binding");
             await TelegramChannelTests.Until(() =>
                 peer.Frames.Any(frame =>
                     Req(frame) == "req-turn"
@@ -394,18 +452,16 @@ public sealed class WeWorkSocketTests
             var command = peer.Frames.Last(frame => Req(frame) == "req-binding")[
                 "body"
             ]!.AsObject();
-            Assert.Contains(
-                rebind ? "Attached to session" : "Channel mode set to send-only",
-                WeWorkCallbackTests.Content(command)
+            Assert.Contains(confirmation, WeWorkCallbackTests.Content(command));
+            var destination = SessionWait.Text(
+                f.Manager.ChannelBinding("work:wrk-chat")?["sessionId"]
             );
-            Assert.Equal(
-                destination.Id,
-                SessionWait.Text(f.Manager.ChannelBinding("work:wrk-chat")?["sessionId"])
-            );
-            Assert.Equal(!rebind, f.Manager.IsChannelSendOnly("work:wrk-chat"));
+            Assert.NotNull(destination);
+            Assert.Equal(change == "send-only", destination == f.Owner.Id);
+            Assert.Equal(change == "send-only", f.Manager.IsChannelSendOnly("work:wrk-chat"));
             Assert.True(f.Owner.Metadata().Busy);
             releaseAnswer.TrySetResult();
-            await running;
+            await running.WaitAsync(TimeSpan.FromSeconds(15));
             Assert.Contains(
                 f.Owner.History(),
                 row => row.ToJsonString().Contains("late answer", StringComparison.Ordinal)
@@ -420,7 +476,7 @@ public sealed class WeWorkSocketTests
         finally
         {
             releaseAnswer.TrySetResult();
-            await running;
+            await running.WaitAsync(TimeSpan.FromSeconds(15));
         }
     }
 }

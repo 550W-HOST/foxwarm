@@ -73,8 +73,21 @@ internal sealed partial class MessageRouter
         // Attaches this conversation to a Session.
         internal void Attach(SessionOwner owner)
         {
-            runtime.Manager.DetachChannel(source.Target);
-            runtime.Manager.AttachChannel(source.Target, owner);
+            var manager = runtime.Manager;
+            var endPresentation = source.EndSessionPresentation;
+            string? BoundSession() =>
+                SessionWait.Text(manager.ChannelBinding(source.Target)?["sessionId"]);
+            var previous = endPresentation is null ? null : BoundSession();
+            try
+            {
+                manager.DetachChannel(source.Target);
+                manager.AttachChannel(source.Target, owner);
+            }
+            finally
+            {
+                if (previous is not null && previous != BoundSession())
+                    endPresentation!(previous);
+            }
         }
     }
 
