@@ -361,26 +361,19 @@ internal sealed partial class SessionManager
         }
         if (selection is null)
             return [];
-        var files = AgentWorkspace(owner.Agent);
         var checks = new List<PlannedCheck>();
         foreach (var reference in selection)
         {
-            string path;
+            (ResolvedTool Read, WorkspaceTools Files) read;
             try
             {
-                path = memory.ResolveSelectedPath(agent, reference);
+                read = PromptFileRead(owner.Agent, agent, reference);
             }
             catch (Exception error) when (error is ArgumentException or InvalidDataException)
             {
                 continue;
             }
-            checks.Add(
-                new(
-                    "prompt-file-read:" + reference,
-                    new("read", "node", "read", new JsonObject { ["filePath"] = path }),
-                    files
-                )
-            );
+            checks.Add(new("prompt-file-read:" + reference, read.Read, read.Files));
         }
         return checks;
     }

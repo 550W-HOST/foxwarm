@@ -53,6 +53,34 @@ internal sealed partial class SessionManager
         };
     }
 
+    // The read that admits a systemPromptFiles reference of a new Session of an Agent: a master
+    // file, or a file of that Agent's folder in the store.
+    internal (ResolvedTool Read, WorkspaceTools Files) PromptFileRead(string callerAgent, string targetAgent, string reference)
+    {
+        if (agents.PhysicalFolders)
+            return (
+                new("read", "node", "read", new JsonObject { ["filePath"] = memory.ResolveSelectedPath(targetAgent, reference) }),
+                AgentWorkspace(callerAgent)
+            );
+        var path = AgentMemory.SelectedStorePath(reference);
+        return (
+            new(
+                "read",
+                "node",
+                "read",
+                new JsonObject { ["filePath"] = AgentFolderPaths.Variable + "/" + path },
+                ExecutionNode: AgentStorePaths.Endpoint
+            )
+            {
+                AgentFolder = true,
+            },
+            new(new AgentStoreFileOperations(AgentStore!, targetAgent), pendingWrites, "standalone", targetAgent, null)
+            {
+                AgentFolder = new(targetAgent, null),
+            }
+        );
+    }
+
     // Every Main-local file and process effect checks this before it starts; without a master
     // Node it fails as a call to any unavailable Node does. `current`: master is only the
     // Session's current Node, which without a master Node means it has none.

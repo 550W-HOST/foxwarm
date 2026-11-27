@@ -54,6 +54,11 @@ internal sealed partial class AgentMemory
         foreach (var reference in selection)
         {
             token.ThrowIfCancellationRequested();
+            if (!agents.PhysicalFolders)
+            {
+                await AppendStoredSelectionAsync(blocks, agentName, sessionId, modelId, runtime, reference, token);
+                continue;
+            }
             var path = ResolveSelectedPath(agentName, reference);
             if (!RegularSelectedFile(path))
                 throw new InvalidDataException(
@@ -74,14 +79,60 @@ internal sealed partial class AgentMemory
         }
     }
 
-    internal string ResolveSelectedPath(string agentName, string reference)
+    // A selected file in the Agent store: a reference inside the Agent's folder, read and shown
+    // by its folder-relative path, with the folder's checks.
+    private async Task AppendStoredSelectionAsync(
+        StringBuilder blocks,
+        string agentName,
+        string sessionId,
+        string modelId,
+        string runtime,
+        string reference,
+        CancellationToken token
+    )
     {
-        // Selected files are master files, resolved against the Agent folder; without folders
-        // (an Agent store) no reference resolves to one.
-        if (!agents.PhysicalFolders)
+        var path = SelectedStorePath(reference);
+        if (files.Stat(agentName, path) is not { IsDirectory: false })
             throw new InvalidDataException(
                 $"systemPromptFiles entry '{reference}' must resolve to an existing ordinary file."
             );
+        var (visible, body) = FilterFrontMatter(await files.ReadTextAsync(agentName, path, token), sessionId);
+        if (visible)
+            AppendBlock(
+                blocks,
+                agentName,
+                "self",
+                path,
+                ConditionalMemory.FilterConditionalMemorySource(body, modelId, runtime, masterNode)
+            );
+    }
+
+    /// <summary>
+    /// The store path of a selected file without Agent folders: folder-relative or
+    /// <c>$fw_agentdir/</c> references; anything outside the folder is refused.
+    /// </summary>
+    internal static string SelectedStorePath(string reference)
+    {
+        string relative;
+        try
+        {
+            relative = Foxwarm.Tools.AgentFolderPaths.Relative(reference);
+        }
+        catch (InvalidDataException)
+        {
+            throw new InvalidDataException(
+                $"`{reference}` is outside this Agent's folder, so it can't be a prompt file here."
+            );
+        }
+        if (relative.Length == 0 || AgentFilePaths.Problem(relative) is not null)
+            throw new InvalidDataException(
+                $"systemPromptFiles entry '{reference}' must resolve to an existing ordinary file."
+            );
+        return relative;
+    }
+
+    internal string ResolveSelectedPath(string agentName, string reference)
+    {
         var expanded =
             reference == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
             : reference.StartsWith("~/", StringComparison.Ordinal)

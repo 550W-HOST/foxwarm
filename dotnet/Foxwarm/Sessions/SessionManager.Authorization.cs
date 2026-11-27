@@ -786,22 +786,11 @@ internal sealed partial class SessionManager
     {
         // Prompt sources live on Main regardless of the new Session's execution Node.
         // Authorize the selecting caller once; lifecycle rebuilds reuse the admitted selection.
-        var files = AgentWorkspace(source.Agent);
         foreach (var reference in selection)
-            await AuthorizeToolAsync(
-                source,
-                new(
-                    "read",
-                    "node",
-                    "read",
-                    new JsonObject
-                    {
-                        ["filePath"] = memory.ResolveSelectedPath(targetAgent, reference),
-                    }
-                ),
-                files,
-                token
-            );
+        {
+            var (read, files) = PromptFileRead(source.Agent, targetAgent, reference);
+            await AuthorizeToolAsync(source, read, files, token);
+        }
     }
 
     internal bool ToolVisible(

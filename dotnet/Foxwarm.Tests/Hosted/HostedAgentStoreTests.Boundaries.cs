@@ -221,4 +221,60 @@ public sealed partial class HostedAgentStoreTests
         await fixture.Manager.AgentCatalog.CreateAsync(longName, restoreRetained: true);
         Assert.True(fixture.Store.AgentExists(longName));
     }
+
+    [Fact]
+    public async Task Prompt_files_inside_the_Agent_folder_are_read_from_the_store_as_from_folders()
+    {
+        async Task<string> PromptAsync(StoreFixture fixture)
+        {
+            await WriteAgentFileAsync(fixture, "main", "docs/p.md", "PROMPT P\n");
+            await WriteAgentFileAsync(fixture, "main", "docs/q.md", "PROMPT Q\n");
+            var created = await fixture.Call(
+                "create_session",
+                new()
+                {
+                    ["agentName"] = "main",
+                    ["sessionName"] = "selected",
+                    ["systemPromptFiles"] = new JsonArray("docs/p.md", "./docs/x/../q.md"),
+                }
+            );
+            Assert.Null(created.FailureMessage());
+            var owner = await fixture.Manager.RequiredAsync("selected");
+            await fixture.Manager.RefreshSnapshotAsync(owner);
+            return SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"])!;
+        }
+        await using var folders = await StoreFixture.Create(store: false);
+        await using var store = await StoreFixture.Create(store: true);
+        var expected = await PromptAsync(folders);
+        var actual = await PromptAsync(store);
+        Assert.Contains("PROMPT P", actual);
+        Assert.Contains("PROMPT Q", actual);
+        Assert.Equal(expected, actual);
+        // A `$fw_agentdir/` reference names the folder there (in a folder it is a relative name).
+        var variable = await store.Call(
+            "create_session",
+            new() { ["agentName"] = "main", ["sessionName"] = "variable", ["systemPromptFiles"] = new JsonArray("$fw_agentdir/docs/p.md") }
+        );
+        Assert.Null(variable.FailureMessage());
+        // Outside the folder, nothing is a prompt file there; a missing one fails as in a folder.
+        foreach (var reference in new[] { "/etc/hostname", "../other/x.md", "$HOME/x.md", "~/x.md" })
+        {
+            var refused = await store.Call(
+                "create_session",
+                new() { ["agentName"] = "main", ["sessionName"] = "outside", ["systemPromptFiles"] = new JsonArray(reference) }
+            );
+            Assert.Equal($"`{reference}` is outside this Agent's folder, so it can't be a prompt file here.", refused.FailureMessage());
+        }
+        var missing = await store.Call(
+            "create_session",
+            new() { ["agentName"] = "main", ["sessionName"] = "missing", ["systemPromptFiles"] = new JsonArray("docs/none.md") }
+        );
+        Assert.Equal(
+            (await folders.Call(
+                "create_session",
+                new() { ["agentName"] = "main", ["sessionName"] = "missing", ["systemPromptFiles"] = new JsonArray("docs/none.md") }
+            )).FailureMessage(),
+            missing.FailureMessage()
+        );
+    }
 }
