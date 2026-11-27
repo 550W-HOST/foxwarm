@@ -12,7 +12,7 @@ internal static class ToolScriptToolDefinitions
   {
     "type": "function",
     "name": "run_script",
-    "description": "Run Python-subset ToolScript to combine related tool calls without extra model turns. Use sequential call_tool calls to pass results to dependent steps, branch on results, or stop after a failed prerequisite. Keep independent calls in one outer tool batch instead; adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. call_tool is synchronous (no await); its first argument can be a tool name or tool ID. Example: code='created = call_tool(\"task\", args[\"task\"])\nreturn call_tool(\"create_child_session\", dict(args[\"child\"], taskId=created[\"taskId\"]))', with complete Task and child arguments in args. Tools return native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Use return for the result. Returns status and runId; resume time-budget or agent-input pauses with continue_script using runId and continuationId. In background mode, a run that outlasts timeoutSecs continues on its own and a background-script-finished event reports its outcome; wait for it with waitExecIds and the runId, or stop it with `ctl script cancel <run-id>`. Return an object with top-level inlineData, inlineDataItems, or image-bearing parts to pass one or more images to the model. A nested wait takes effect in the calling Session only if it remains the last host call when the script completes normally.",
+    "description": "Run Python-subset ToolScript to combine related tool calls without extra model turns. Use sequential call_tool calls to pass results to dependent steps, branch on results, or stop after a failed prerequisite. Keep independent calls in one outer tool batch instead; adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. call_tool is synchronous (no await); its first argument is a tool name or a tool ID from `ctl tool search`, such as `call_tool(\"mcp:github/list_issues\", {...})`; call MCP and Node tools this way, not through `ctl tool call`. Example: code='created = call_tool(\"task\", args[\"task\"])\nreturn call_tool(\"create_child_session\", dict(args[\"child\"], taskId=created[\"taskId\"]))', with complete Task and child arguments in args. Tools return native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Use return for the result. Returns status and runId; resume time-budget or agent-input pauses with continue_script using runId and continuationId. In background mode, a run that outlasts timeoutSecs continues on its own and a background-script-finished event reports its outcome; wait for it with waitExecIds and the runId, or stop it with `ctl script cancel <run-id>`. Return an object with top-level inlineData, inlineDataItems, or image-bearing parts to pass one or more images to the model. A nested wait takes effect in the calling Session only if it remains the last host call when the script completes normally.",
     "parameters": {
       "type": "object",
       "additionalProperties": false,
@@ -155,6 +155,47 @@ internal static class ToolScriptToolDefinitions
             "cancelled"
           ],
           "description": "Include only runs with this status."
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "name": "run_skill",
+    "description": "Run a runnable skill's entry script as a ToolScript run, with arguments checked against the skill's schema.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skillName"],
+      "properties": {
+        "skillName": {
+          "type": "string",
+          "description": "Skill to run."
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Arguments for the skill, as its run schema describes."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "foreground",
+            "background"
+          ],
+          "description": "Run mode. Defaults to the skill's own mode for its entry, otherwise foreground."
+        },
+        "timeoutSecs": {
+          "type": "number",
+          "description": "Time budget in seconds, as for run_script. Defaults to the skill's own budget for its entry, otherwise 30."
+        },
+        "script": {
+          "type": "string",
+          "description": "ToolScript file of the skill to run instead of its entry, relative to the skill directory. Its arguments are not checked."
+        },
+        "agentName": {
+          "type": "string",
+          "description": "Agent whose available skills to use. Defaults to this Session's Agent."
         }
       }
     }

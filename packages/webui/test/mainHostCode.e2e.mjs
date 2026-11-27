@@ -11,6 +11,9 @@ import sharp from 'sharp'
 import { WebSocket } from 'ws'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { chooseSelectOption, readSelectOptions } from './selectDriver.mjs'
+
+const NODE_SELECT = '[role="combobox"][aria-label="Node"]'
 
 const startedAt = Date.now()
 let currentStage
@@ -23,6 +26,21 @@ function observeNativeDialogs(page, surface) {
   page.on('dialog', dialog => {
     nativeDialogPages.add(page)
     console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'native-dialog', surface, type: dialog.type(), message: dialog.message().slice(0, 2048), elapsedMs: Date.now() - startedAt }))
+  })
+}
+/** Resolves when the first request matching `matches` has completed; rejects when it fails or never completes. */
+function settledRequest(page, matches, label, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    const finish = (request, error) => {
+      if (!matches(request)) return
+      cleanup()
+      if (error) reject(new Error(label + ' failed: ' + error)); else resolve(request)
+    }
+    const onFinished = request => finish(request, null)
+    const onFailed = request => finish(request, request.failure()?.errorText || 'request failed')
+    const timer = setTimeout(() => { cleanup(); reject(new Error('Timed out: ' + label)) }, timeout)
+    const cleanup = () => { clearTimeout(timer); page.off('requestfinished', onFinished); page.off('requestfailed', onFailed) }
+    page.on('requestfinished', onFinished); page.on('requestfailed', onFailed)
   })
 }
 function observePrefixNavigation(page) {
@@ -211,8 +229,8 @@ try {
   const launch = async (nodeId, path) => {
     const firstResult = await page.evaluate(() => window.codeOpenResults.length)
     await page.click('button[aria-label="Open code options"]')
-    await page.waitForFunction(nodeId => [...document.querySelectorAll('select option')].some(option => option.value === nodeId && !option.disabled), {}, nodeId)
-    await page.select('select', nodeId)
+    await until(async () => (await readSelectOptions(page, NODE_SELECT)).some(option => option.value === nodeId && !option.disabled), 'Node ' + nodeId + ' is available')
+    await chooseSelectOption(page, NODE_SELECT, nodeId)
     await page.click('input[placeholder="/"]', { clickCount: 3 }); await page.type('input[placeholder="/"]', path)
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Open code')?.click())
     // Completion includes the workspace write and Explorer focus. Starting the next
@@ -319,6 +337,14 @@ try {
   await setup.waitForFunction(() => document.body.innerText.includes('Models') && document.body.innerText.includes('Setup'))
   stage('original App terminal and cwd')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]')
+  // The panel toggle reattaches a running terminal of its target that no App tab shows. The
+  // official Code terminal is one as soon as the App's registry lists it, which depends on when
+  // the App last refreshed that list. End it and let the opened list show the current registry,
+  // so the toggle starts the App's own terminal.
+  for (const terminal of (await owned.api('GET', '/api/terminals')).body.terminals) assert.equal((await owned.api('DELETE', '/api/terminals/' + encodeURIComponent(terminal.id))).status, 200)
+  await page.click('[data-sidebar-nav="terminal"] button[aria-label="Terminals"]')
+  await page.waitForFunction(() => document.querySelector('[data-terminal-list]')?.textContent.includes('No running terminals'))
+  await page.click('[data-sidebar-nav="terminal"] button[aria-label="Terminals"]'); await page.waitForSelector('[data-terminal-list]', { hidden: true })
   const appTerminalsBefore = (await owned.api('GET', '/api/terminals')).body.terminals
   await page.click('[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]')
   await until(async () => (await owned.api('GET', '/api/terminals')).body.terminals.length === appTerminalsBefore.length + 1, 'original App terminal backend', 30000)
@@ -348,8 +374,14 @@ try {
   const killFromList = `[data-terminal-row=${JSON.stringify(appTerminal.id)}] button[aria-label="Kill terminal"]`
   await page.waitForSelector(killFromList, { visible: true })
   page.once('dialog', dialog => { void dialog.accept() })
+  // The backend forgets the terminal before its DELETE response reaches the App. Reloading in
+  // between aborts the App's request, and the App reports that failure in an alert that blocks
+  // the navigation, so the reload waits for the App's own request and list refresh.
+  const killRequest = settledRequest(page, request => request.method() === 'DELETE' && request.url().endsWith('/api/terminals/' + encodeURIComponent(appTerminal.id)), 'original App terminal kill request')
   await page.locator(killFromList).click()
-  await until(async () => (await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).status === 404, 'original App terminal kill from the sidebar list', 30000)
+  await killRequest
+  await page.waitForSelector(`[data-terminal-row=${JSON.stringify(appTerminal.id)}]`, { hidden: true })
+  assert.equal((await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).status, 404, 'original App terminal kill from the sidebar list')
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
   stage('workbench and workspace restore')

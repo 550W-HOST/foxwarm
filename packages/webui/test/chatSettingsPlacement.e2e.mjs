@@ -214,9 +214,11 @@ test('session menu owns Input and Chat settings and persists the metadata toggle
   await page.waitForFunction(() => window.chatSettingsFixture?.showUserMessageMetadata === false)
   await openMenu()
   const menuText = await page.$eval('[data-session-ui-settings-menu]', menu => menu.textContent || '')
-  for (const label of ['Input', 'Chat', 'Timeline view', 'Detailed', 'Grouped', 'Conversation', 'Full width', 'Show usage badges', 'Show minimap', 'Show user message metadata', 'debug info']) {
+  for (const label of ['Input', 'Chat', 'Timeline view', 'Detailed', 'Grouped', 'Conversation', 'Full width', 'Show usage badges', 'Show minimap', 'Show user message metadata', 'Advanced', 'Debug info']) {
     assert.equal(menuText.includes(label), true, `${label} is present`)
   }
+  // Rarely used entries stay reachable under a collapsed Advanced group.
+  assert.equal(await page.$eval('[data-session-ui-advanced]', details => details.open), false)
   await page.evaluate(() => {
     const textNode = [...document.querySelectorAll('.foxwarm-assistant-message-markdown *')]
       .flatMap(element => [...element.childNodes])

@@ -45,7 +45,7 @@ Typed `system-event` notices are trusted display-only canonical messages. Safe o
 
 Successful builtin Session sends capture the canonical destination and bounded authored body separately from semantic handoff receipts. Direct/unified calls persist `sessionMessages`; ordinary ToolScript host calls attach `sessionMessage` only to their actual completed subcall. Nested runtimes do not replace outer slice presentation. MCP/result data and script text/stdout cannot fabricate these receipts. Incoming inter-agent envelopes, actual delivery count and handoff turn-action/wait semantics remain unchanged.
 
-The standalone generated login retains the existing packaged `public/login.html` and [frontend cookie ownership](../units/webui-login.md#d-login-cookie-ownership); native Desktop login belongs to [host startup](../units/host-runtime.md#desktop-boundary). History preparation/navigation use existing active-tail and continuous-history routes; no new authentication endpoint or history transaction is introduced. Session Worker publication changes remain excluded under the [delivery scope](../overview.md#d-dotnet-delivery-scope).
+The standalone generated login retains the existing packaged `public/login.html` and [frontend cookie ownership](../units/webui-login.md#d-login-cookie-ownership); native Desktop login belongs to the [Windows Desktop host](../units/desktop-windows.md#desktop-boundary). History preparation/navigation use existing active-tail and continuous-history routes; no new authentication endpoint or history transaction is introduced. Session Worker publication changes remain excluded under the [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
 ## Merged original-App qualification
 
@@ -63,12 +63,13 @@ The built Vite 8/Rolldown client keeps its recovery script/styles inline in `ind
 
 ## Windows desktop consumer
 
-The minimal [desktop host](../units/host-runtime.md#desktop-boundary) embeds the same Main composition and built original App in WinForms/WebView2. It owns an authenticated ephemeral loopback endpoint, not a separately launched backend or a connection to an existing test server. Window/tray lifetime, credential initialization, persisted per-user data and Windows prototype limitations are owned by the host unit.
+The minimal [desktop host](../units/desktop-windows.md#desktop-boundary) embeds the same Main composition and built original App in WinUI 3/WebView2. It owns an authenticated ephemeral loopback endpoint, not a separately launched backend or a connection to an existing test server. Window/tray lifetime, credential initialization, persisted per-user data and Windows prototype limitations are owned by the host unit.
 
 ## Canonical units and tests
 
 - [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [Host runtime](../units/host-runtime.md)
+- [Windows Desktop host](../units/desktop-windows.md)
 - [WebUI channel registration](../units/dotnet-webui-core.md)
 - [WebUI history/list](../units/dotnet-webui-history-list.md)
 - [WebUI files/images](../units/dotnet-webui-files-images.md)

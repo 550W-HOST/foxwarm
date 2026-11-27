@@ -20,7 +20,7 @@ public sealed partial class CommandAdministrationTests
             source,
             Message("/session compact-threshold 8.75k")
         );
-        var saved = await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath);
+        var saved = await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath());
         Assert.Equal(8750, SessionWait.Number(JsonNode.Parse(saved)!["compactThresholdTokens"]));
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(
@@ -33,7 +33,7 @@ public sealed partial class CommandAdministrationTests
             8750,
             SessionWait.Number(f.Owner.BuildDto()["effectiveCompactThresholdTokens"])
         );
-        Assert.Equal(saved, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath));
+        Assert.Equal(saved, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()));
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(source, Message("/session compact-threshold"));
         Assert.Contains("`8750`", replies.Single());
@@ -48,7 +48,7 @@ public sealed partial class CommandAdministrationTests
                 1,
                 SessionWait.Number(
                     JsonNode.Parse(
-                        await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath)
+                        await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath())
                     )!["compactThresholdTokens"]
                 )
             );
@@ -71,7 +71,7 @@ public sealed partial class CommandAdministrationTests
             );
             Assert.False(
                 JsonNode
-                    .Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath))!
+                    .Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()))!
                     .AsObject()
                     .ContainsKey("compactThresholdTokens")
             );
@@ -109,19 +109,19 @@ public sealed partial class CommandAdministrationTests
         var fallback = SessionWait.Number(f.Owner.BuildDto()["effectiveCompactThresholdTokens"]);
         await Set(new JsonObject { ["thresholdTokens"] = 8750.9 });
         Assert.Equal(8750, f.Owner.Metadata().CompactThreshold);
-        var saved = await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath);
+        var saved = await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath());
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             f.Owner.Entry.SaveLane.CommitSettingsAsync(
                 new JsonObject { ["compactThresholdTokens"] = 0 },
                 f.Manager.Models
             )
         );
-        Assert.Equal(saved, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath));
+        Assert.Equal(saved, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()));
         Assert.Equal(8750, f.Owner.Metadata().CompactThreshold);
         // Nonpositive/absent tool input inspects; a positive fraction reaches settings unfloored.
         await Set(new JsonObject { ["thresholdTokens"] = 0 });
         await Set(new JsonObject());
-        Assert.Equal(saved, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath));
+        Assert.Equal(saved, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()));
         await Set(new JsonObject { ["thresholdTokens"] = 0.9 });
         Assert.Equal(0, f.Owner.Metadata().CompactThreshold);
         Assert.Equal(
@@ -131,7 +131,7 @@ public sealed partial class CommandAdministrationTests
         Assert.Equal(
             0,
             SessionWait.Number(
-                JsonNode.Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath))![
+                JsonNode.Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()))![
                     "compactThresholdTokens"
                 ]
             )
@@ -140,7 +140,7 @@ public sealed partial class CommandAdministrationTests
         Assert.Null(f.Owner.Metadata().CompactThreshold);
         Assert.False(
             JsonNode
-                .Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath))!
+                .Parse(await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath()))!
                 .AsObject()
                 .ContainsKey("compactThresholdTokens")
         );

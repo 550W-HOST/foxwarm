@@ -48,6 +48,7 @@ internal static class ModelRoutingFingerprint
                     ["asyncCompact"] = !False(config["asyncCompact"]),
                     ["disallowEmptyResponse"] = True(config["disallowEmptyResponse"]),
                     ["keepReasoningOnError"] = True(config["keepReasoningOnError"]),
+                    [AnthropicMessageEffort.Option] = True(config[AnthropicMessageEffort.Option]),
                     ["effort"] = new JsonObject
                     {
                         ["allowed"] = new JsonArray(

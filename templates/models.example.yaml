@@ -145,6 +145,10 @@ providers:
     providerType: anthropic
     baseUrl: https://api.anthropic.com
     apiKey: your-anthropic-key
+    # Optional (Anthropic only, default false): keep the prompt cache when the
+    # Session's effort changes, on models that support per-message effort.
+    # Model objects may override this, including false.
+    # perMessageEffort: true
     models:
       - claude-opus-5-5
       - claude-fable-5-2

@@ -17,8 +17,7 @@ internal static class ToolCallControls
     }
 
     internal static IReadOnlyList<(JsonObject Call, JsonObject? Preset)> Plan(
-        IReadOnlyList<JsonObject> calls,
-        bool handoffConfirmation = false
+        IReadOnlyList<JsonObject> calls
     )
     {
         var all = calls.Any(call =>
@@ -46,34 +45,6 @@ internal static class ToolCallControls
                         );
                     else if (True(original?[Names[0]]))
                         preset = Cancelled();
-                    else if (
-                        handoffConfirmation
-                        && HandoffConfirmation.Handoff(SessionWait.Text(copy["name"]))
-                    )
-                    {
-                        var handoffArgs = copy["args"] as JsonObject ?? new JsonObject();
-                        try
-                        {
-                            HandoffConfirmation.RejectRenamedTurnAction(
-                                SessionWait.Text(copy["name"]),
-                                handoffArgs
-                            );
-                        }
-                        catch (InvalidDataException error)
-                        {
-                            // Same rejection the handler gives when the checkpoint is off.
-                            preset = ToolFailure.Result(error.Message);
-                        }
-                        if (preset is null)
-                            try
-                            {
-                                HandoffConfirmation.Validate(handoffArgs);
-                            }
-                            catch (InvalidDataException error)
-                            {
-                                preset = ToolFailure.Result(error.Message);
-                            }
-                    }
                 }
                 return (Call: copy, Preset: preset);
             })

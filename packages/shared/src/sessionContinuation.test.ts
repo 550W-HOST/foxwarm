@@ -6,7 +6,7 @@ const modelText = (text = 'done'): ContinuationMessage => ({ role: 'model', part
 const userText = (text = 'please continue'): ContinuationMessage => ({ role: 'user', parts: [{ text }] })
 const compactCompleted = (): ContinuationMessage => ({
   role: 'user',
-  parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' }],
+  parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" currentNode="build/worker" cwd="/src" />' }],
 })
 const compactCompletionGoalReminderText = '<foxwarm-system kind="goal-reminder">\nFinish the requested work\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>'
 const compactCompletedWithGoalReminder = (reminder = compactCompletionGoalReminderText): ContinuationMessage => ({

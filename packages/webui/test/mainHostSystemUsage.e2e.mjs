@@ -6,6 +6,7 @@ import { once } from 'node:events'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const options = { env: {} }
 const fixture = await createHostFixture('system-usage', options)
@@ -94,12 +95,12 @@ try {
   assert.match(await page.$eval(`[data-usage-row="${ids.lead}"]`, element => element.textContent), /lead.*2.*\$0\.008 USD/)
   await page.click('[aria-label="Show usage for all agents"]')
 
-  await page.select('select[aria-label="Group usage by"]', 'purpose')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Group usage by"]', 'purpose')
   await until(async () => (await rows(page)).join() === 'purpose:normal-turn', 'purpose rows')
   assert.match(await page.$eval('[data-usage-row="normal-turn"]', element => element.textContent), /Conversation turns/)
-  await page.select('select[aria-label="Group usage by"]', 'model')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Group usage by"]', 'model')
   await until(async () => (await rows(page)).join() === 'model:paid/wire,model:free/open', 'model rows')
-  await page.select('select[aria-label="Group usage by"]', 'session')
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Group usage by"]', 'session')
   await until(async () => (await rows(page)).length === 3, 'session rows')
 
   // New requests refresh the open view without a reload.

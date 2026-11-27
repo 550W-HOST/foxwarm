@@ -63,6 +63,32 @@ test('drag rectangles exclude interactive descendants, floating layers and rows 
   })
 })
 
+test('drag rectangles snap to whole pixels without reaching into controls at fractional positions', async () => {
+  // The brand button ends at 136.5 px and Setup starts at 157 px: rounding the gap's x
+  // (136.5) and width (20.5) separately would report 137 + 21 = 158, a pixel into Setup.
+  await withFixture(`
+    <div data-frame-drag id="row" style="position:fixed;left:0;top:0;width:300.25px;height:48px">
+      <button id="brand" style="position:absolute;left:6px;top:8px;width:130.5px;height:32px"></button>
+      <button id="setup" style="position:absolute;left:157px;top:7.5px;width:32px;height:33.25px"></button>
+      <button id="toggle" style="position:absolute;left:213.4px;top:8px;width:36.2px;height:32px"></button>
+    </div>
+    <div role="menu" id="menu" style="position:fixed;left:250.6px;top:40.3px;width:30px;height:30px"></div>`, async page => {
+    const result = await page.evaluate(() => {
+      const rect = id => document.getElementById(id).getBoundingClientRect().toJSON()
+      return { regions: window.windowFrame.collectFrameDragRects(document), boxes: ['brand', 'setup', 'toggle', 'menu'].map(id => ({ id, ...rect(id) })) }
+    })
+    const touches = ([x, y, w, h], r) => Math.min(x + w, r.right) - Math.max(x, r.left) > 0 && Math.min(y + h, r.bottom) - Math.max(y, r.top) > 0
+    for (const region of result.regions) {
+      assert.ok(region.every(Number.isInteger), `integer rect ${region}`)
+      for (const box of result.boxes) assert.ok(!touches(region, box), `${region} reaches into ${box.id}`)
+    }
+    // The gap between the brand and Setup is reported from the brand's last whole pixel to Setup.
+    assert.ok(result.regions.some(([x, y, w, h]) => x === 137 && x + w === 157 && y <= 8 && y + h >= 40), JSON.stringify(result.regions))
+    // The surface's own fractional edge rounds to the nearest pixel.
+    assert.equal(Math.max(...result.regions.map(([x, , w]) => x + w)), 300)
+  })
+})
+
 test('edge fills extend through gutter and padding, but never across interactive or text content', async () => {
   await withFixture(`
     <div class="shell">
@@ -131,5 +157,46 @@ test('the overlay surface colour is the page under the controls, composited and 
     // Left-hand controls over the gutter, whose colour is opaque.
     assert.equal(await color({ left: 4, right: 0, top: 4, width: 800 }), '#dddddd')
     assert.equal(await color({ left: 0, right: 0, top: 30, width: 800 }), null)
+  })
+})
+
+test('an open full-window layer replaces the page\'s drag surfaces with its own; the topmost layer wins', async () => {
+  await withFixture(`
+    <div class="shell">
+      <div class="panel" data-frame-row="column" data-frame-in-band style="flex:1;height:40px"><div id="page" data-frame-drag style="height:36px"><button id="pageButton"></button></div></div>
+    </div>
+    <dialog id="viewer" data-frame-layer style="position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0">
+      <header data-frame-row="column" data-frame-in-band data-frame-drag style="display:flex;height:40px"><h2 style="flex:1;margin:0">Title</h2><button id="close"></button></header>
+    </dialog>
+    <div id="artifact" role="dialog" aria-modal="true" data-frame-layer style="display:none;position:fixed;inset:0;background:#fff">
+      <header data-frame-row="column" data-frame-in-band data-frame-drag style="display:flex;height:30px"><h3 style="flex:1;margin:0">Artifact</h3><button id="collapse"></button></header>
+    </div>`, async page => {
+    const regions = () => page.evaluate(() => window.windowFrame.collectFrameDragRects(document))
+    const box = id => page.$eval('#' + id, element => element.getBoundingClientRect().toJSON())
+    const pageRegions = await regions()
+    assert.ok(pageRegions.length > 0)
+    assert.equal(await page.evaluate(() => window.windowFrame.activeFrameLayer(document)), null, 'a closed dialog is not a layer')
+    await page.$eval('#viewer', dialog => dialog.showModal())
+    const viewer = await regions()
+    const close = await box('close')
+    assert.ok(viewer.length > 0)
+    for (const region of viewer) {
+      assert.ok(region[1] + region[3] <= 40, `${region} belongs to the layer's title row`)
+      assert.ok(!intersects(region, close), `${region} covers the layer's control`)
+    }
+    assert.notDeepEqual(viewer, pageRegions)
+    // A layer that is itself a floating layer (role=dialog, aria-modal) keeps its own title row;
+    // the later one in the document is on top.
+    await page.$eval('#artifact', element => { element.style.display = 'block' })
+    const artifact = await regions()
+    const collapse = await box('collapse')
+    assert.ok(artifact.length > 0)
+    for (const region of artifact) {
+      assert.ok(region[1] + region[3] <= 30, `${region} belongs to the topmost layer`)
+      assert.ok(!intersects(region, collapse))
+    }
+    await page.$eval('#artifact', element => { element.style.display = 'none' })
+    await page.$eval('#viewer', dialog => dialog.close())
+    assert.deepEqual(await regions(), pageRegions, 'closing the layer restores the page')
   })
 })

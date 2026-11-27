@@ -2317,7 +2317,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-node-surface]')
-    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage', 'Activity'])
+    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Usage', 'Activity'])
     await workbenchScreenshot(page, 'system-tabs.png')
     await page.click('[data-system-tab="agents"]')
     await page.waitForSelector('[data-system-summary="agents"]')
@@ -2529,6 +2529,23 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
 })
 
 
+// Scrolls Chat with the wheel, as a reader does, until `reached` holds in the page. The timeline
+// mounts rows as the reader approaches them and keeps the reading row in place, so a target
+// reached this way stays where it is. Each step waits for the scroll position or content to change.
+async function wheelChatUntil(page, deltaY, reached) {
+  const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  for (let step = 0; step < 60 && !await page.evaluate(reached); step++) {
+    const before = await page.$eval('.foxwarm-chat-messages', element => `${element.scrollTop}:${element.scrollHeight}`)
+    await page.mouse.wheel({ deltaY })
+    await page.waitForFunction(before => {
+      const element = document.querySelector('.foxwarm-chat-messages')
+      return `${element.scrollTop}:${element.scrollHeight}` !== before
+    }, {}, before)
+  }
+  assert.ok(await page.evaluate(reached), 'the wheel reached the target')
+}
+
 test('visible Chat keeps its DOM and initialization across split and normalization', async () => {
   const chatMessages = Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Lifecycle message ' + index + '\n\n' + 'Retained timeline content. '.repeat(10) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } }))
   chatMessages[24] = { role: 'model', parts: [{ functionCall: { id: 'retained-call', name: 'read', args: { filePath: 'fixture.txt' } } }], __meta: { seq: 25, timestamp: 1700000000024 } }
@@ -2553,10 +2570,17 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
     await page.click('[role="textbox"][aria-label="Message"]')
     await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
     await page.keyboard.type('retained draft')
-    await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')) })
-    await page.waitForFunction(() => !document.body.textContent.includes('Scroll upward to load'))
-    await page.waitForSelector('button[aria-label="Expand tool group"]')
-    await page.$eval('button[aria-label="Expand tool group"]', button => button.scrollIntoView({ block: 'center' }))
+    // Read up to the first row and back down to the tool group with the wheel. A programmatic
+    // jump leaves an attached reader following the latest row, so the next window commit would
+    // pin it back to the bottom and take the tool group out of view.
+    await wheelChatUntil(page, -1500, () => document.querySelector('.foxwarm-chat-messages').scrollTop === 0
+      && !!document.querySelector('[data-chat-message-anchor-key="seq-local-1"]'))
+    assert.equal(await page.evaluate(() => document.body.textContent.includes('Scroll upward to load')), false)
+    await wheelChatUntil(page, 200, () => {
+      const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
+      const button = document.querySelector('button[aria-label="Expand tool group"]')?.getBoundingClientRect()
+      return !!button && button.top >= viewport.top && button.bottom <= viewport.bottom
+    })
     await page.click('button[aria-label="Expand tool group"]')
     await page.waitForSelector('[data-tool-group-expanded="true"]')
     await page.waitForFunction(() => !document.querySelector('[data-tool-group-expanded="true"]').style.height)
@@ -2823,7 +2847,7 @@ async function openIdleViewportChat({ reading = false, popup = false } = {}) {
     tabs: [system, chat('e2e-a', false)],
     hash: popup ? '?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=e2e-a' : '#tab/chat:e2e-a',
   })
-  await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-55"]')
   await settleIdleViewport(page)
   await wheelIdleViewport(page, -700)
   await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
@@ -2997,7 +3021,7 @@ test('Appearance Auto keeps independent choices and previews require explicit ap
     await clickReadyControl(page, '[data-theme-preview-mode="light"][data-theme-preview="foxwarm.vector"]')
     assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmTheme), 'foxwarm.default')
     assert.equal(await page.$('[data-theme-preview-dialog] button[aria-label="Delete theme"]'), null)
-    assert.equal(await page.$('[data-theme-manager] select'), null)
+    assert.equal(await page.$('[data-theme-manager] :is(select, [role="combobox"])'), null)
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-theme-preview-close')), true)
     await page.keyboard.down('Shift'); await page.keyboard.press('Tab'); await page.keyboard.up('Shift')
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Use for dark')
@@ -3112,7 +3136,7 @@ test('Imported V3 theme independently binds workbench chrome and accent foregrou
 async function openConversationScrollFixture(phase) {
   const page = await openFixture({ responsiveChat: true, chatMessages: idleViewportMessages,
     timelineView: 'conversation', height: 1100, hash: '#tab/chat:e2e-a', tabs: [chat('e2e-a', false)] })
-  await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+  await page.waitForSelector('[data-chat-message-anchor-key="seq-local-55"]')
   await page.evaluate(phase => {
     let sequence = 0
     let paragraphs = 160
@@ -3236,7 +3260,7 @@ for (const deltaY of [-160, -3]) {
         { id: 'pane-other', kind: 'pane', tabIds: [system.id], activeTabId: system.id },
       ] } })
     try {
-      await page.waitForFunction(() => document.querySelectorAll('[data-chat-message-anchor-key]').length === 55)
+      await page.waitForSelector('[data-chat-message-anchor-key="seq-local-55"]')
       await waitForIdleBottom(page)
       const bounds = await (await page.$('.foxwarm-chat-messages')).boundingBox()
       await page.mouse.move(bounds.x + 100, bounds.y + 120)
@@ -3298,8 +3322,9 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       await page.waitForSelector(`${nodesTrigger}[title="Nodes: 9 online, 15 total"]`)
       assert.equal(await page.$eval(`${nodesTrigger} span:last-child`, element => element.textContent), '9/15')
       assert.match(await page.$eval('[data-node-surface]', element => element.textContent), /Online 9 · Total 15/)
-      assert.equal(await page.$$eval('[data-node-surface] article', cards => cards.length), 15)
-      assert.match(await page.$eval('[data-node-surface] article:nth-child(4)', card => card.textContent), /Online.*Upgrade required/)
+      assert.equal(await page.$$eval('[data-node-surface] [data-system-node-id]', rows => rows.length), 15)
+      // An online Node that needs an upgrade shows both.
+      assert.match(await page.$eval('[data-node-surface] [data-system-node-id="fixture-node-03"]', row => row.textContent), /Online.*Upgrade required/)
       await workbenchScreenshot(page, `nodes-page-${label}.png`)
       const nodePageBadge = await badgePresentation(page, '[data-node-surface] [data-status="online"]')
       assert.deepEqual({ font: nodePageBadge.font, line: nodePageBadge.line, padding: nodePageBadge.padding, radius: nodePageBadge.radius, gap: nodePageBadge.gap, dot: nodePageBadge.dot.slice(0, 3) }, { font: '11px', line: '18px', padding: '3px 7px', radius: '5px', gap: '5px', dot: ['5px', '5px', '50%'] })
@@ -3519,7 +3544,7 @@ test('mobile home is a flat session-first layout and mobile Chats omit desktop t
     await page.click('[role="menu"] button::-p-text(Code)')
     await page.waitForSelector('dialog[open]')
     assert.equal(await page.$eval('dialog', node => node.querySelector('#mobile-tool-title').textContent), 'Code')
-    assert.ok(await page.$('dialog select'))
+    assert.ok(await page.$('dialog [aria-label="Node"]'))
     await workbenchScreenshot(page, 'mobile-code-tools.png')
     await page.keyboard.press('Escape')
     await page.waitForSelector('dialog', {hidden: true})

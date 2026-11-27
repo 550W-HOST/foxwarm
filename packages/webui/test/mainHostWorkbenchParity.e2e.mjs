@@ -93,8 +93,8 @@ try {
 
   // The Debug endpoint and Timeline share the original lazy JSON inspector.
   await click('button[aria-label="Open session options"]')
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'debug info'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info').click())
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Debug info'))
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Debug info').click())
   await page.waitForSelector('[data-json-inspector-dialog] [data-editor-ready="true"]'); await closeJson()
   assert(http.some(row => row.path.endsWith('/debug-file') && row.status === 200))
   // Detailed view exposes a canonical message JSON action; this changes presentation only.

@@ -36,7 +36,7 @@ public sealed class SessionAuthorityRetentionTests(ITestOutputHelper output)
         var initial = new SessionSnapshot(
             "s",
             SessionHistory.FromJson(messages),
-            [PersistentSessionAuthorityStore.FromQueueJson(queued)],
+            [SessionQueueJson.FromJson(queued)],
             false,
             null,
             false,
@@ -85,7 +85,7 @@ public sealed class SessionAuthorityRetentionTests(ITestOutputHelper output)
         Assert.True(
             JsonNode.DeepEquals(
                 queued,
-                PersistentSessionAuthorityStore.ToQueueJson(restored.Queue[0])
+                SessionQueueJson.ToJson(restored.Queue[0])
             )
         );
         Assert.Equal(
@@ -112,7 +112,7 @@ public sealed class SessionAuthorityRetentionTests(ITestOutputHelper output)
         Assert.True(
             JsonNode.DeepEquals(
                 queued,
-                PersistentSessionAuthorityStore.ToQueueJson(unchanged.Queue[0])
+                SessionQueueJson.ToJson(unchanged.Queue[0])
             )
         );
         await entry.SaveLane.SaveStrictAsync();
@@ -126,7 +126,7 @@ public sealed class SessionAuthorityRetentionTests(ITestOutputHelper output)
         Assert.True(
             JsonNode.DeepEquals(
                 queued,
-                PersistentSessionAuthorityStore.ToQueueJson(reopened.Queue[0])
+                SessionQueueJson.ToJson(reopened.Queue[0])
             )
         );
         Assert.Equal(

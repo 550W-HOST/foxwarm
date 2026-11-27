@@ -23,6 +23,8 @@ button { cursor: pointer; touch-action: manipulation; }
 .login-eye-slash { display: none; }
 .login-reveal[aria-pressed=true] .login-eye-slash { display: block; }
 .login-reveal:focus-visible, .login-submit:focus-visible { outline: 2px solid var(--foxwarm-color-accent); outline-offset: 4px; }
+.login-hint { margin: 8px 0 0; color: var(--foxwarm-color-text-muted); font-size: 12px; line-height: 18px; }
+.login-hint code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--foxwarm-color-text) 8%, transparent); color: var(--foxwarm-color-text-strong); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; white-space: nowrap; }
 .login-error { min-height: 20px; margin: 8px 0 16px; color: var(--foxwarm-color-danger); font-size: 12px; line-height: 20px; }
 .login-token-field:has(input[aria-invalid=true]) { border-color: var(--foxwarm-color-danger); }
 .login-submit { position: relative; display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 48px; padding: 0 18px; border: 0; border-radius: 10px; background: var(--foxwarm-color-accent); color: var(--foxwarm-color-accent-text); font-size: 14px; font-weight: 550; transition: filter 180ms, transform 180ms; }

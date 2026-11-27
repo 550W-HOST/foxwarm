@@ -390,6 +390,22 @@ internal sealed partial class SessionManager
                     : $"Session `{targetId}` display name unchanged (from {Format(result.Previous)} to {Format(result.Current)})."
             );
         }
+        if (action is "archive" or "unarchive")
+        {
+            // Main catalog presentation only, like a display name: the Session keeps running.
+            var targetId = OptionalString(args, "sessionId") ?? source.Id;
+            var canonical =
+                SessionCatalog.Text(Catalog.Resolve(targetId)["sessionId"])
+                ?? throw new InvalidDataException($"Session `{targetId}` not found.");
+            var archived = action == "archive";
+            var change = ChangePresentation(catalog => catalog.Archive(canonical, archived));
+            var changed = SessionWait.Number(change.Result["changedCount"]) is > 0;
+            return Output(
+                changed
+                    ? $"Session `{canonical}` {(archived ? "archived" : "unarchived")}."
+                    : $"Session `{canonical}` was already {(archived ? "archived" : "not archived")}."
+            );
+        }
         if (action == "update-parent")
         {
             var requestedTarget = OptionalSessionReference(args);
@@ -465,7 +481,7 @@ internal sealed partial class SessionManager
         }
         if (action != "status")
             throw new InvalidDataException(
-                "session.action must be \"status\", \"list\", \"update-display-name\", or \"update-parent\"."
+                "session.action must be \"status\", \"list\", \"update-display-name\", \"update-parent\", \"archive\" or \"unarchive\"."
             );
         var requestedStatusId = OptionalSessionReference(args) ?? source.Id;
         var statusTarget = IsCurrentSessionReference(source, requestedStatusId)

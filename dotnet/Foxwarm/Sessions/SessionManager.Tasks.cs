@@ -61,7 +61,8 @@ internal sealed partial class SessionManager
         bool trigger,
         string taskId,
         string eventName,
-        string recipient
+        string recipient,
+        Action<SessionDelivery>? delivered = null
     )
     {
         if (sourceId is null)
@@ -71,7 +72,7 @@ internal sealed partial class SessionManager
             var offset = now.ToString("zzz").Replace(":", "", StringComparison.Ordinal);
             var time = now.ToString("yyyy-MM-dd HH:mm:ss") + " " + offset;
             var wrapper =
-                $"<foxwarm-message type=\"task\" taskId=\"{Escape(taskId)}\" event=\"{Escape(eventName)}\" time=\"{Escape(time)}\" hint=\"task notification from an authenticated user\" sourceKind=\"user\">\n{message}\n</foxwarm-message>";
+                $"<foxwarm-message type=\"task\" taskId=\"{Escape(taskId)}\" event=\"{Escape(eventName)}\" recipient=\"{Escape(TaskRecipientRole(recipient))}\" time=\"{Escape(time)}\" hint=\"task notification from an authenticated user\" sourceKind=\"user\">\n{message}\n</foxwarm-message>";
             var item = new QueueItem(
                 QueueItemType.Intersession,
                 [new JsonObject { ["system"] = wrapper }],
@@ -101,7 +102,8 @@ internal sealed partial class SessionManager
                 ["taskId"] = taskId,
                 ["event"] = eventName,
                 ["recipient"] = recipient,
-            }
+            },
+            delivered: delivered
         );
     }
 }

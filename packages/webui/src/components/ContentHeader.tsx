@@ -47,7 +47,7 @@ export default function ContentHeader({ icon, title, subtitle, actions, onBack, 
           </WorkbenchTabIcon>}
 
           <div className="min-w-0">
-            <div className={`truncate font-semibold text-fw-text-strong ${compact ? 'text-base' : 'text-lg'}`}>{title}</div>
+            <div data-content-header-title className={`truncate font-semibold text-fw-text-strong ${compact ? 'text-base' : 'text-lg'}`}>{title}</div>
             {subtitle && (
               <div className="truncate text-sm text-fw-text-muted">
                 {subtitle}

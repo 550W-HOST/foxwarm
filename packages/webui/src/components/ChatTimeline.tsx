@@ -5,11 +5,13 @@ import SessionMessageCard from './SessionMessageCard'
 import { AskUserToolCard, isQuestionAnswerMarker, isStructuredQuestionAnswer, QuestionAnswerBubble } from './QuestionCard'
 import SystemEventCard from './SystemEventCard'
 import { getImageGenerationNotice, getSessionNotice } from '../sessionNotices'
-import ReplyFileGrid from './ReplyFileGrid'
-import { buildReplyFileGroups } from './replyFiles'
+import ReplyFileGrid, { replyFileGalleryEntry } from './ReplyFileGrid'
+import { buildReplyFileGroups, type ReplyFileGroup } from './replyFiles'
+import { ImageGalleryContext, useImageGalleryStore, type ImageGalleryEntry } from './imageGallery'
+import { isSafeImagePreviewMime } from './ImagePreviewDialog'
 import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
 import { getMessageViewportAnchorKey, getMessageStableKey } from '../chatViewportState'
-import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from 'react'
+import { memo, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from 'react'
 import { File as FileIcon, Image as ImageIcon, Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight } from 'lucide-react'
 import {
   IconToggleButton,
@@ -22,7 +24,6 @@ import {
   isLightweightSystemTextLine,
   isSystemLikeText,
   parseFoxwarmMetadataLine,
-  renderAssistantMarkdownSegments,
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
   SessionHashLink,
@@ -33,11 +34,12 @@ import {
   type OpenAIResponsesAnnotation,
   type ViewMode,
 } from './chatShared'
-import ImageParts, { ImageItem } from './ImageParts'
+import ImageParts, { ImageItem, imagePartMimeType, imagePartSource, isImagePart, WebUiImageSessionContext } from './ImageParts'
 import ReasoningCard from './ReasoningCard'
 import { getReasoningRuns, type ReasoningRunPart, type ReasoningBadgeInfo, type ReasoningPresentation } from './reasoningParts'
 import ReasoningTokenBadge from './ReasoningTokenBadge'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
+import { renderCachedAssistantMarkdownSegments } from './markdownRenderer'
 import WebSearchCard from './WebSearchCard'
 import { uniqueWebSearchCitations, type CitationRenderOptions } from './webSearchCitations'
 import { getPartWebSearchAction, type WebSearchAction } from '../webSearchAction'
@@ -109,7 +111,36 @@ interface ChatTimelineProps {
   nestedDepth?: number
   searchTarget?: SessionSearchMatch | null
   renderMessageFooter?: (alignment: 'left' | 'right') => ReactNode
+  /** Top-level only: mount this window of the derived rows. Omitted mounts every row. */
+  renderWindow?: TimelineRenderWindow
+  /** Receives the mounted window after each commit. */
+  renderWindowState?: { current: TimelineRenderWindowState }
 }
+
+const communicationMarkdown = (text: string) => <MarkdownContent citations={false} text={text} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" />
+
+/**
+ * A DOM window over the derived top-level items (rows, counted groups and Activities).
+ * `key` names a source message by stable or viewport-anchor key; null is the position after
+ * the last item and TIMELINE_WINDOW_START the first item, including a prompt snapshot. The
+ * window mounts `before` items before the keyed item through `after` items after it, or
+ * through the last item when `after` is omitted. A key that no loaded message carries mounts
+ * every item.
+ */
+export const TIMELINE_WINDOW_START = ''
+
+export type TimelineRenderWindow = { readonly key: string | null; readonly before: number; readonly after?: number }
+
+export type TimelineRenderWindowState = {
+  /** Derived items above and below the mounted window. */
+  hiddenBefore: number
+  hiddenAfter: number
+  mounted: number
+  /** Stable key of the first source message owned by the first mounted item. */
+  firstKey: string | null
+}
+
+export const EMPTY_TIMELINE_RENDER_WINDOW_STATE: Readonly<TimelineRenderWindowState> = { hiddenBefore: 0, hiddenAfter: 0, mounted: 0, firstKey: null }
 
 const getUsageTotalTokens = (usage: NormalizedTokenUsage) => (
   usage.cachedTokens + usage.inputTokens + usage.outputTokens
@@ -384,7 +415,9 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
 const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming, citations, linkBase, onOpenCodeFile }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean; citations?: CitationRenderOptions | false; linkBase?: CodeLinkBase; onOpenCodeFile?: OpenCodeFileHandler }) {
   // File links need the app's Code handler; without one, links keep their ordinary rendering.
   const fileLinks = !!onOpenCodeFile
-  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations, fileLinks ? codeFileLinkRenderer(linkBase) : undefined), [text, artifactSessionId, streaming, citations, fileLinks, linkBase])
+  // A revisit reuses this browser context's sanitized output for the same complete inputs.
+  const segments = useMemo(() => renderCachedAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations,
+    fileLinks ? { key: JSON.stringify(linkBase ?? null), render: codeFileLinkRenderer(linkBase) } : undefined), [text, artifactSessionId, streaming, citations, fileLinks, linkBase])
   const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!handleRenderedCodeLinkClick(event, onOpenCodeFile)) handleMarkdownLinkClick(event)
   }, [onOpenCodeFile])
@@ -719,6 +752,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
     return []
   }), [msg.parts])
 
+  const isSyntheticSnapshot = msg.__meta?.synthetic === 'persistentMemorySnapshot'
   const messageKind = useMemo(() => getSystemMessagePreviewDescriptor(msg), [msg])
   const renderedText = messageKind.bodyText ?? allLines.join('\n')
   const renderedLines = useMemo(() => renderedText.split(/\r\n|\r|\n/), [renderedText])
@@ -728,13 +762,16 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
       : ''
   ), [allLines, messageKind.kind, messageKind.previewSessionId])
   const preview = useMemo(() => {
-    const bodyLine = allLines.find((line) => line.trim() && !isSystemLikeText(line))
-    const body = messageKind.bodyText?.split(/\r\n|\r|\n/)[0]?.trim()
-      || bodyLine?.trim()
+    const bodyLine = isSyntheticSnapshot
+      ? renderedLines.find((line) => line.trim())
+      : allLines.find((line) => line.trim() && !isSystemLikeText(line))
+    const body = (isSyntheticSnapshot
+      ? bodyLine?.trim()
+      : messageKind.bodyText?.split(/\r\n|\r|\n/)[0]?.trim() || bodyLine?.trim())
       || renderedText.trim()
       || messageKind.kind
     return `${messageKind.previewPrefix}${body}`
-  }, [allLines, messageKind.bodyText, messageKind.kind, messageKind.previewPrefix, renderedText])
+  }, [allLines, isSyntheticSnapshot, messageKind.bodyText, messageKind.kind, messageKind.previewPrefix, renderedLines, renderedText])
   const completionEvent = messageKind.kind === 'event' && msg.parts.some(part => part.system?.includes('type="background-process-finished"'))
   const completionLine = completionEvent ? renderedLines.findIndex(line => line.trim() && !isSystemLikeText(line)) : -1
   const surfaceClass = 'bg-fw-system-surface/55 dark:bg-fw-system-surface/10 text-fw-system-text'
@@ -778,7 +815,9 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
         )}
         {expanded && (
           <pre data-search-surface="system" className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
-            {renderedLines.map((line, lineIdx, lines) => {
+            {isSyntheticSnapshot ? (
+              <span style={{ opacity: 0.92 }}>{renderedText}</span>
+            ) : renderedLines.map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
               const nextIsPrefix = lineIdx < lines.length - 1 && isSystemLikeText(lines[lineIdx + 1])
               return (
@@ -1077,7 +1116,7 @@ const MessageRow = memo(function MessageRow({
             : ''
         }`}
       >
-        {row.question ? <AskUserToolCard call={row.question} response={pairedToolResponse?.parts.find(part => part.functionResponse?.tool_use_id === row.question!.id)?.functionResponse} /> : row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent citations={false} text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
+        {row.question ? <AskUserToolCard call={row.question} response={pairedToolResponse?.parts.find(part => part.functionResponse?.tool_use_id === row.question!.id)?.functionResponse} /> : row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'} renderPreview={communicationMarkdown}>{communicationMarkdown(row.communication.message)}</SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <>
@@ -1309,7 +1348,95 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, liveTiming = true, renderMessageFooter }: ChatTimelineProps) {
+const NO_GALLERY_ENTRIES: readonly ImageGalleryEntry[] = []
+
+type MessageImage = { part: Message['parts'][number]; index: number; title: string }
+const messageImageCache = new WeakMap<Message, MessageImage[]>()
+/**
+ * A message's images in display order with their labels, cached per message object: a user
+ * message's attachment grid first (named), then its other images, numbered like ImageParts
+ * within the message's own images and within each tool's.
+ */
+function messageImages(message: Message): MessageImage[] {
+  const cached = messageImageCache.get(message)
+  if (cached) return cached
+  const images: MessageImage[] = []
+  const associated = new Set<object>()
+  if (message.role === 'user') {
+    for (const item of findAttachmentCorrelations(message.parts).values()) {
+      if (!item.imagePart) continue
+      associated.add(item.imagePart)
+      if (!isOmittedAttachmentPreview(item.imagePart)) images.push({ part: item.imagePart, index: message.parts.indexOf(item.imagePart), title: item.name })
+    }
+  }
+  const counters = new Map<string, number>()
+  message.parts.forEach((part, index) => {
+    if (!isImagePart(part) || associated.has(part)) return
+    const group = part.toolUseId || ''
+    const number = (counters.get(group) || 0) + 1
+    counters.set(group, number)
+    images.push({ part, index, title: `Image ${number}` })
+  })
+  messageImageCache.set(message, images)
+  return images
+}
+
+/**
+ * Every image the timeline presents, in display order, for the full-screen viewer to switch
+ * between ([D-fullscreen-image-preview]). Built from the row model rather than the DOM, so
+ * images in collapsed tool cards, collapsed groups and folded Conversation activity count,
+ * while rows the view mode omits don't. Within a row: a user message's attachment grid,
+ * then its other images, then the images of the tool responses its call card renders; each
+ * reply-file grid follows the row it is placed after. Only loaded history and formats the
+ * viewer renders inline are included.
+ */
+function buildTimelineImageGallery(messages: readonly Message[], groupedRows: readonly TimelineGroupRows[], replyFileSlots: ReadonlyMap<number, readonly ReplyFileGroup[]>, webUiSessionId: string | null) {
+  const entries: ImageGalleryEntry[] = []
+  const keys = new WeakMap<object, string>()
+  const taken = new Set<object>()
+  const indices = new Map(messages.map((message, index) => [message, index]))
+  const addPart = (message: Message, { part, index, title }: MessageImage) => {
+    if (taken.has(part)) return
+    taken.add(part)
+    const mimeType = imagePartMimeType(part)
+    const src = imagePartSource(part, webUiSessionId)
+    if (!src || !isSafeImagePreviewMime(mimeType)) return
+    const key = `part:${getMessageStableKey(message, indices.get(message) ?? -1)}:${index}`
+    keys.set(part, key)
+    entries.push({ key, src, mimeType, title })
+  }
+  const addMessage = (message: Message, only?: number) => {
+    for (const image of messageImages(message)) {
+      if (only === undefined || image.index === only && !image.part.toolUseId && !image.part.functionResponse) addPart(message, image)
+    }
+  }
+  const replies = new Set<string>()
+  const addReplyFiles = (slot: number) => {
+    for (const group of replyFileSlots.get(slot) || []) {
+      for (const file of group.files) {
+        const entry = replyFileGalleryEntry(file)
+        if (!entry || replies.has(entry.key)) continue
+        replies.add(entry.key)
+        entries.push(entry)
+      }
+    }
+  }
+  addReplyFiles(-1)
+  groupedRows.forEach((item, slot) => {
+    for (const row of item.rows) {
+      if (row.communication || row.question) continue
+      if (row.activity) for (const message of row.activity.sources || row.activity.messages) addMessage(message)
+      else {
+        addMessage(row.msg, row.msg.role === 'user' ? undefined : row.conversationPartIndex)
+        if (row.pairedToolResponse && row.conversationPartIndex === undefined) addMessage(row.pairedToolResponse)
+      }
+    }
+    addReplyFiles(slot)
+  })
+  return { entries, keys }
+}
+
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, liveTiming = true, renderMessageFooter, renderWindow, renderWindowState }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
@@ -1466,17 +1593,81 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   }, [messages, groupedRows, sessionId, nestedDepth, activityDetails])
   const renderArtifacts = (slot: number) => (artifactSlots.get(slot) || []).flatMap(group => group.artifacts.map(receipt => <ArtifactView key={`artifact:${receipt.artifactId}:${receipt.revision}`} receipt={receipt} />))
 
+  // The top-level timeline owns the Session's image sequence; nested timelines open into it.
+  const ownsImageGallery = nestedDepth === 0 && !activityDetails
+  const webUiImageSessionId = useContext(WebUiImageSessionContext)
+  const imageGallery = useMemo(() => ownsImageGallery ? buildTimelineImageGallery(messages, groupedRows, replyFileSlots, webUiImageSessionId) : null, [ownsImageGallery, messages, groupedRows, replyFileSlots, webUiImageSessionId])
+  const imageGalleryStore = useImageGalleryStore(imageGallery?.entries ?? NO_GALLERY_ENTRIES, imageGallery?.keys)
+
   const lastGroup = groupedRows[groupedRows.length - 1]
   const lastRow = lastGroup?.rows[lastGroup.rows.length - 1]
   const footerAlignment = lastRow?.msg.role === 'user' && !lastRow.systemLikeMessage && !lastRow.activity && !lastGroup.group ? 'right' : 'left'
+
+  // Only the DOM is windowed: rows, groups, Activity, usage and reply files above are derived
+  // from every loaded message, so a mounted row renders exactly as in the complete timeline.
+  const windowed = !!renderWindow && nestedDepth === 0 && !activityDetails
+  const itemSources = useMemo(() => {
+    if (!windowed) return null
+    const indices = new Map(messages.map((message, index) => [message, index]))
+    const keys = new Map<string, number>()
+    messages.forEach((message, index) => {
+      const stable = getMessageStableKey(message, 0)
+      if (!keys.has(stable)) keys.set(stable, index)
+      const anchor = getMessageViewportAnchorKey(message)
+      if (anchor && !keys.has(anchor)) keys.set(anchor, index)
+    })
+    const ranges = groupedRows.map(item => {
+      let first = Infinity
+      let last = -1
+      for (const row of item.rows) {
+        for (const message of [row.msg, ...(row.activity?.sources || []), ...(row.pairedToolResponse ? [row.pairedToolResponse] : [])]) {
+          const index = indices.get(message)
+          if (index === undefined) continue
+          first = Math.min(first, index)
+          last = Math.max(last, index)
+        }
+      }
+      return { first, last }
+    })
+    return { keys, ranges }
+  }, [windowed, messages, groupedRows])
+  let windowStart = 0
+  let windowEnd = groupedRows.length - 1
+  if (windowed && itemSources && renderWindow && groupedRows.length) {
+    const { key, before, after } = renderWindow
+    const sourceIndex = key === null ? messages.length : key === TIMELINE_WINDOW_START ? 0 : itemSources.keys.get(key)
+    if (sourceIndex !== undefined) {
+      let item = key === null ? groupedRows.length : key === TIMELINE_WINDOW_START ? 0 : itemSources.ranges.findIndex(range => range.last >= sourceIndex)
+      if (item < 0) item = groupedRows.length - 1
+      windowStart = Math.max(0, item - Math.max(0, before))
+      windowEnd = key === null || after === undefined ? groupedRows.length - 1 : Math.min(groupedRows.length - 1, item + Math.max(0, after))
+    }
+    // A selected Search or exec target is always mounted.
+    const targetItem = searchTarget ? groupedRows.findIndex(candidate => candidate.rows.some(row => row.key === searchTarget.rowKey)) : -1
+    if (targetItem >= 0) {
+      windowStart = Math.min(windowStart, targetItem)
+      windowEnd = Math.max(windowEnd, targetItem)
+    }
+  }
+  const firstSource = itemSources?.ranges[windowStart]?.first
+  const windowFirstKey = firstSource !== undefined && Number.isFinite(firstSource) ? getMessageStableKey(messages[firstSource], 0) : null
+  useLayoutEffect(() => {
+    if (!renderWindowState) return
+    renderWindowState.current = {
+      hiddenBefore: groupedRows.length ? windowStart : 0,
+      hiddenAfter: groupedRows.length ? groupedRows.length - 1 - windowEnd : 0,
+      mounted: groupedRows.length ? windowEnd - windowStart + 1 : 0,
+      firstKey: windowFirstKey,
+    }
+  })
 
   const rowProps = { hideMetrics, conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   const timeline = (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
-      {renderReplyFiles(-1)}
-      {renderArtifacts(-1)}
-      {groupedRows.flatMap((item, index) => [
+      {windowStart === 0 && renderReplyFiles(-1)}
+      {windowStart === 0 && renderArtifacts(-1)}
+      {groupedRows.flatMap((item, index) => index < windowStart || index > windowEnd ? [] : [
         ...(item.rows[0].timeMarker ? [<TimelineTimeSeparator key={`${item.key}-time`} marker={item.rows[0].timeMarker} />] : []),
         item.rows[0].activity
           ? <TimelineActivity key={activityKeys.get(item.key) || item.key} identityKey={activityKeys.get(item.key) || item.key} row={item.rows[0]} rowProps={rowProps} expanded={expandedToolGroups.has(activityKeys.get(item.key) || item.key)} onToggle={handleGroupToggle} />
@@ -1486,11 +1677,12 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
         ...renderReplyFiles(index),
         ...renderArtifacts(index),
       ])}
-      {renderMessageFooter?.(footerAlignment)}
+      {windowEnd === groupedRows.length - 1 && renderMessageFooter?.(footerAlignment)}
     </div>
   )
+  const content = ownsImageGallery ? <ImageGalleryContext.Provider value={imageGalleryStore}>{timeline}</ImageGalleryContext.Provider> : timeline
   // Nested timelines read the bases of the enclosing complete timeline.
-  return hasLinkBases ? timeline : <CodeLinkBaseProvider messages={linkBaseMessages}>{timeline}</CodeLinkBaseProvider>
+  return hasLinkBases ? content : <CodeLinkBaseProvider messages={linkBaseMessages}>{content}</CodeLinkBaseProvider>
 })
 
 const ChatTimeline = memo(function ChatTimeline(props: ChatTimelineProps) {

@@ -12,7 +12,10 @@ internal sealed partial class WebUIChannel
     {
         app.MapGet(
             "/api/webui/settings",
-            () => Results.Ok(new JsonObject { ["settings"] = JsonData.WebNode(ReadSettings()) })
+            () =>
+                Results.Ok(
+                    new JsonObject { ["settings"] = JsonData.WebNode(Presented(ReadSettings())) }
+                )
         );
         app.MapPost(
             "/api/webui/settings",
@@ -66,7 +69,7 @@ internal sealed partial class WebUIChannel
                         new JsonObject
                         {
                             ["success"] = true,
-                            ["settings"] = JsonData.WebNode(settings),
+                            ["settings"] = JsonData.WebNode(Presented(settings)),
                         }
                     );
                 }
@@ -120,18 +123,62 @@ internal sealed partial class WebUIChannel
         );
     }
 
+    /// <summary>
+    /// Records the WebUI defaults of a new installation at its first models save: Enter sends
+    /// in browsers that never chose a send key. A failure leaves the previous default.
+    /// </summary>
+    private async Task RecordFirstRunWebUiDefaultsAsync()
+    {
+        await settingsGate.WaitAsync();
+        try
+        {
+            var settings = ReadSettings();
+            settings["sendKeyDefault"] = "enter";
+            new AtomicJsonFile(sessions.DataRoot, Path.Combine("state", "webui.json")).WritePayload(
+                settings
+            );
+        }
+        catch (Exception error)
+        {
+            MainLog.Diagnostic(
+                "First-run WebUI defaults were not saved: " + MainLog.SafeFailure(error),
+                failure: true
+            );
+        }
+        finally
+        {
+            settingsGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The settings as the WebUI reads them. Installations without the first-run record
+    /// keep Ctrl/Cmd+Enter; the default is presented, never written.
+    /// </summary>
+    private static JsonObject Presented(JsonObject settings)
+    {
+        var presented = (JsonObject)settings.DeepClone();
+        presented["sendKeyDefault"] ??= "modEnter";
+        return presented;
+    }
+
     private JsonObject ReadSettings()
     {
         try
         {
             var path = Path.Combine(sessions.DataRoot, "state", "webui.json");
             if (File.Exists(path) && JsonNode.Parse(File.ReadAllText(path)) is JsonObject settings)
-                return new JsonObject
+            {
+                var result = new JsonObject
                 {
                     ["instanceName"] =
                         settings["instanceName"]?.DeepClone() ?? JsonValue.Create(""),
                     ["tabIcon"] = settings["tabIcon"]?.DeepClone() ?? JsonValue.Create(""),
                 };
+                if (SessionWait.Text(settings["sendKeyDefault"]) is "enter" or "modEnter")
+                    result["sendKeyDefault"] = SessionWait.Text(settings["sendKeyDefault"]);
+                return result;
+            }
         }
         catch (Exception error) when (error is IOException or System.Text.Json.JsonException) { }
         return new JsonObject { ["instanceName"] = "", ["tabIcon"] = "" };

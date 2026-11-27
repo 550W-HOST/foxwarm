@@ -176,7 +176,8 @@ internal sealed class SessionChatService(
                     );
                     var changed = await hosted.Entry.SaveLane.AdoptEffectiveSelectionAsync(
                         current,
-                        failover
+                        failover,
+                        AnthropicMessageEffort.Records(leaf)
                     );
                     var rebuild = changed || selectionRecaptured;
                     selectionRecaptured = false;

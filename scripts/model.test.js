@@ -141,14 +141,16 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   assert.equal(result.modelId, 'test/model');
   assert.equal(result.usage.outputTokens, 2);
   assert.equal(requests[0].url, '/responses');
-  assert.equal(requests[0].body.instructions, 'only supplied system');
+  assert.equal(Object.hasOwn(requests[0].body, 'instructions'), false);
+  assert.deepEqual(requests[0].body.input[0], { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'only supplied system' }] });
   assert.equal(requests[0].body.max_output_tokens, 17);
   assert.deepEqual(requests[0].body.tools || [], []);
   assert.equal(JSON.stringify(requests[0].body.input).includes('hello'), true);
   const piped = await invoke(['model', '-m', 'test/model'], env, 'from stdin 漢字');
   assert.deepEqual(piped, { code: 0, stdout: 'route-ok\n', stderr: '' });
   assert.match(JSON.stringify(requests.at(-1).body.input), /from stdin 漢字/);
-  assert.equal(requests.at(-1).body.instructions, '');
+  assert.equal(Object.hasOwn(requests.at(-1).body, 'instructions'), false);
+  assert.equal(requests.at(-1).body.input.some(item => item.role === 'developer'), false, 'no system prompt adds no developer item');
   assert.deepEqual(await invoke(['model', '-p', 'unicode-response'], env), { code: 0, stdout: '回覆😀\n', stderr: '' });
   const anthropic = await invoke(['model', '-m', 'anthro/wire', '-p', 'Anthropic prompt', '-s', 'standalone', '-j', '-t', '.5'], env);
   assert.equal(anthropic.code, 0, anthropic.stderr);

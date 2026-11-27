@@ -77,17 +77,16 @@ internal sealed partial class WebUIChannel
                 var resolved = CatalogRoute(request);
                 if (resolved is null || runtime.Catalog.Get(resolved) is null)
                     return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
-                var path = Path.Combine(sessions.DataRoot, "state", "sessions", resolved + ".json");
-                if (!File.Exists(path))
+                var stored = await sessions.Storage.Authority.ReadRawAsync(
+                    resolved,
+                    request.HttpContext.RequestAborted
+                );
+                if (stored is null)
                     return Results.NotFound(
                         new JsonObject { ["error"] = "Session file not found" }
                     );
                 var payload =
-                    JsonNode
-                        .Parse(
-                            await File.ReadAllTextAsync(path, request.HttpContext.RequestAborted)
-                        )
-                        ?.AsObject()
+                    stored.Document?.AsObject()
                     ?? throw new InvalidDataException("Session file JSON must be an object.");
                 payload.Remove("contextFrontier");
                 WebUiMessageTransport.ProjectMessages(payload["history"]);
@@ -111,7 +110,7 @@ internal sealed partial class WebUIChannel
                 return Results.Ok(
                     new JsonObject
                     {
-                        ["resolvedPath"] = path,
+                        ["resolvedPath"] = stored.Locator,
                         ["payload"] = JsonData.WebNode(payload),
                     }
                 );

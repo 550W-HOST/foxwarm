@@ -47,6 +47,53 @@ public sealed class DesktopNavigationTests
     public void Only_the_app_root_and_Code_documents_get_custom_frames(string? uri, string expected) =>
         Assert.Equal(expected, DesktopNavigation.FrameFor(Origin, uri).ToString());
 
+    private static readonly Uri Remote = new("https://lab.example/foxwarm/");
+
+    [Theory]
+    [InlineData("https://lab.example/foxwarm/", "App")]
+    [InlineData("https://lab.example/foxwarm", "App")]
+    [InlineData("https://lab.example/foxwarm/?foxwarmPopup=tasks", "App")]
+    [InlineData("https://lab.example/foxwarm/vscode-web/?nodeId=master", "App")]
+    [InlineData("https://LAB.example/foxwarm/api/auth/session", "App")]
+    [InlineData("https://lab.example/", "Browser")]
+    [InlineData("https://lab.example/foxwarm-other/", "Browser")]
+    [InlineData("https://lab.example/Foxwarm/", "Browser")]
+    [InlineData("https://lab.example/other/foxwarm/", "Browser")]
+    [InlineData("http://lab.example/foxwarm/", "Browser")]
+    [InlineData("https://lab.example:8443/foxwarm/", "Browser")]
+    [InlineData("about:blank", "Blank")]
+    public void A_remote_scope_is_its_origin_and_base_path(string? uri, string expected) =>
+        Assert.Equal(expected, DesktopNavigation.Classify(Remote, uri).ToString());
+
+    [Theory]
+    [InlineData("https://lab.example/foxwarm/", "WebUi")]
+    [InlineData("https://lab.example/foxwarm", "WebUi")]
+    [InlineData("https://lab.example/foxwarm/?foxwarmPopup=chat&sessionId=a", "WebUi")]
+    [InlineData("https://lab.example/foxwarm/vscode-web/", "Code")]
+    [InlineData("https://lab.example/vscode-web/", "System")]
+    [InlineData("https://lab.example/", "System")]
+    [InlineData("https://lab.example/foxwarm/login.html", "System")]
+    public void A_remote_scope_frames_its_own_root_and_Code(string? uri, string expected) =>
+        Assert.Equal(expected, DesktopNavigation.FrameFor(Remote, uri).ToString());
+
+    [Fact]
+    public void The_document_condition_names_the_origin_and_base_path()
+    {
+        Assert.Equal(
+            "window === window.top && location.origin === \"http://127.0.0.1:49152\"",
+            DesktopNavigation.ScopeCondition(Origin)
+        );
+        Assert.Equal(
+            "window === window.top && location.origin === \"https://lab.example\""
+                + " && (location.pathname.startsWith(\"/foxwarm/\") || location.pathname === \"/foxwarm\")",
+            DesktopNavigation.ScopeCondition(Remote)
+        );
+        // Quotes and script terminators in a path stay inside the string literal.
+        var odd = DesktopNavigation.ScopeCondition(new Uri("https://lab.example/a%22b%3C/script%3E/"));
+        Assert.DoesNotContain("</script>", odd, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"/a%22b%3C/script%3E/\"", odd);
+    }
+
     [Fact]
     public void Window_size_honours_requests_within_the_minimum_and_the_work_area()
     {

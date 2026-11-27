@@ -1,20 +1,16 @@
-base_dir = args["baseDir"].rstrip("/")
-
 print("starting automation example")
 
-listing = call_tool({
-    "source": "node",
-    "name": "read",
-    "args": {"filePath": base_dir},
-})
-listing_preview = listing[:200].replace("\n", " ")
+listing = call_tool(
+    "skill",
+    {"action": "load", "skillName": "toolscript-automation", "path": "examples/"},
+)
+listing_preview = listing["output"][:200].replace("\n", " ")
 print(f"listing: {listing_preview}")
 
-doc = call_tool({
-    "source": "node",
-    "name": "read",
-    "args": {"filePath": base_dir + "/README.md"},
-})
+doc = call_tool(
+    "skill",
+    {"action": "load", "skillName": "toolscript-automation", "path": "examples/README.md"},
+)
 doc_excerpt = doc["content"][:160].replace("\n", " ")
 print(f"documentation: {doc_excerpt}")
 

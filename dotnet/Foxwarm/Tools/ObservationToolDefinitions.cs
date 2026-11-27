@@ -46,11 +46,13 @@ internal static class ObservationToolDefinitions
                 {
                     ["action"] = Field(
                         "string",
-                        "status (default) inspects a Session; list returns a page of Sessions; update-display-name sets or clears its display name; update-parent changes or removes its parent.",
+                        "status (default) inspects a Session; list returns a page of Sessions; update-display-name sets or clears its display name; update-parent changes or removes its parent; archive and unarchive move it into or out of the Session list's archive.",
                         "status",
                         "list",
                         "update-display-name",
-                        "update-parent"
+                        "update-parent",
+                        "archive",
+                        "unarchive"
                     ),
                     ["start"] = Field(
                         "number",
@@ -72,7 +74,7 @@ internal static class ObservationToolDefinitions
                     ),
                     ["sessionId"] = Field(
                         "string",
-                        "Target for status, update-display-name, or update-parent. Defaults to this Session."
+                        "Target for status, update-display-name, update-parent, archive or unarchive. Defaults to this Session."
                     ),
                     ["name"] = Field(
                         "string",

@@ -11,9 +11,10 @@ internal sealed partial class SessionManager
         string name,
         JsonObject? args,
         CancellationToken cancellationToken = default,
-        Action<string, string>? sessionMessageDelivered = null,
+        Action<SessionDelivery>? sessionMessageDelivered = null,
         string? toolScriptRunId = null,
-        string? modelCallId = null
+        string? modelCallId = null,
+        string? scriptRootCallId = null
     )
     {
         var previous = semanticCaller.Value;
@@ -26,7 +27,8 @@ internal sealed partial class SessionManager
                 args,
                 sessionMessageDelivered,
                 toolScriptRunId,
-                modelCallId
+                modelCallId,
+                scriptRootCallId
             );
         }
         finally
@@ -39,9 +41,10 @@ internal sealed partial class SessionManager
         SessionOwner source,
         string name,
         JsonObject? args,
-        Action<string, string>? sessionMessageDelivered,
+        Action<SessionDelivery>? sessionMessageDelivered,
         string? toolScriptRunId,
-        string? modelCallId
+        string? modelCallId,
+        string? scriptRootCallId
     )
     {
         try
@@ -54,8 +57,13 @@ internal sealed partial class SessionManager
                 null,
                 semanticCaller.Value ?? CancellationToken.None
             );
-            HandoffConfirmation.RejectRenamedTurnAction(name, args);
-            HandoffConfirmation.Validate(name, args, HandoffConfirmationEnabled);
+            if (
+                name is "send_to_session" or "create_child_session"
+                && args.ContainsKey("afterSend")
+            )
+                throw new InvalidDataException(
+                    "afterSend was renamed to currentSessionTurnAction. Use continue, end_turn (formerly finish), or wait."
+                );
             switch (name)
             {
                 case "move_session":
@@ -299,7 +307,6 @@ internal sealed partial class SessionManager
                             "agentName",
                             "suffix",
                             "displayName",
-                            "handoffRecall",
                             "message",
                             "currentSessionTurnAction",
                             "runtime",
@@ -308,7 +315,7 @@ internal sealed partial class SessionManager
                             "node",
                             "fork",
                             "taskId",
-                            "handoffConfirmation",
+                            .. RemovedHandoffFields,
                         ],
                         ["suffix"]
                     );
@@ -349,7 +356,9 @@ internal sealed partial class SessionManager
                                 args.ContainsKey("runtime")
                             ),
                             creatorCallId: modelCallId,
-                            model: suggestedModel
+                            model: suggestedModel,
+                            scriptRootCallId: scriptRootCallId,
+                            delivered: sessionMessageDelivered
                         );
                     if (taskId is null)
                     {
@@ -372,7 +381,8 @@ internal sealed partial class SessionManager
                                 callVisible = created.CallVisible;
                                 return created.Child;
                             },
-                            () => callVisible ? null : initialMessage
+                            () => callVisible ? null : initialMessage,
+                            sessionMessageDelivered
                         );
                         child = attached.Child;
                         delivered = attached.AssignmentDelivered;
@@ -417,10 +427,9 @@ internal sealed partial class SessionManager
                         args,
                         [
                             "sessionId",
-                            "handoffRecall",
                             "message",
                             "currentSessionTurnAction",
-                            "handoffConfirmation",
+                            .. RemovedHandoffFields,
                         ],
                         ["sessionId", "message"]
                     );
@@ -430,16 +439,9 @@ internal sealed partial class SessionManager
                         source,
                         requested,
                         RequiredString(args, "message"),
-                        toolScriptRunId: toolScriptRunId
+                        toolScriptRunId: toolScriptRunId,
+                        delivered: sessionMessageDelivered
                     );
-                    try
-                    {
-                        sessionMessageDelivered?.Invoke(target, RequiredString(args, "message"));
-                    }
-                    catch (Exception error)
-                    {
-                        source.Entry.RecordBestEffortFailure(error);
-                    }
                     return (
                         Output(
                             target == requested
@@ -518,6 +520,10 @@ internal sealed partial class SessionManager
             output["__waitTarget"] = waitTarget;
         return output;
     }
+
+    // Persisted ToolScripts, skills and models with older history still pass the removed handoff
+    // review fields; they are accepted and ignored.
+    private static readonly string[] RemovedHandoffFields = ["handoffRecall", "handoffConfirmation"];
 
     private static void Keys(JsonObject args, string[] allowed, string[] required)
     {

@@ -34,11 +34,12 @@ internal sealed class DesktopPopupWindow
         NSWindow? opener,
         WKWebViewConfiguration configuration,
         WKContentRuleList rules,
-        Uri endpoint,
+        Uri scope,
         DesktopWindowFrame frameKind,
         bool blank,
         WKWindowFeatures features,
-        Action<DesktopPopupWindow> closed
+        Action<DesktopPopupWindow> closed,
+        Action<WKWebView, FrameRect> instanceMenu
     )
     {
         this.closed = closed;
@@ -68,14 +69,14 @@ internal sealed class DesktopPopupWindow
         Place(opener, visible);
         // WebKit's configuration copies the opener's user content controller. Each window
         // gets its own, so the frame's script and messages stay with their window, and the
-        // same off-origin resource rules.
+        // same resource rules for the selected instance's scope.
         var controller = new WKUserContentController();
         controller.AddContentRuleList(rules);
         configuration.UserContentController = controller;
         if (frameKind != DesktopWindowFrame.System)
         {
-            Frame = new DesktopFrame(Window, frameKind);
-            Frame.Configure(configuration, endpoint);
+            Frame = new DesktopFrame(Window, frameKind, instanceMenu);
+            Frame.Configure(configuration, scope);
         }
         View = new WKWebView(Window.ContentView!.Bounds, configuration)
         {

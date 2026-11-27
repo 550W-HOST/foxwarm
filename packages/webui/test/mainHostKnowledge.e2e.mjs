@@ -12,7 +12,8 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, responsesSystemPrompt } from './ctlModelCalls.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main'); const globalRoot = join(root, 'global-skills')
@@ -121,7 +122,7 @@ try {
   const agentDir = agent => join(dataRoot, 'agents', agent)
   const snapshot = async id => (await authority(id)).persistentMemorySnapshot
   // The stored memory prefix is frozen independently of request-time execution hints.
-  const prompt = body => (body.instructions || '').split('\n\n--- EXECUTION ENVIRONMENT ---')[0]
+  const prompt = body => responsesSystemPrompt(body).split('\n\n--- EXECUTION ENVIRONMENT ---')[0]
   const toolValue = (rows, id) => rows.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response
   async function refresh(id) { assert.equal((await request('POST', `${path(id)}/refresh-memory`)).status, 200) }
   async function skill(agent, name, description, body = '', files = {}) {
@@ -132,7 +133,7 @@ try {
   async function browserAgent(agent, inherit) {
     await page.click(NEW_SESSION_DIALOG_TRIGGER); await page.waitForSelector('button[aria-label="New agent"]'); await page.click('button[aria-label="New agent"]')
     await page.waitForSelector('input[placeholder="my-agent"]'); await page.type('input[placeholder="my-agent"]', agent)
-    if (inherit) await page.select('form[role="dialog"] select[data-agent-settings-inherit]', inherit)
+    if (inherit) await chooseSelectOption(page, 'form[role="dialog"] [data-agent-settings-inherit]', inherit)
     await page.click('form[role="dialog"] button[type="submit"]'); await page.waitForSelector('form[role="dialog"]', { hidden: true })
     await until(async () => (await request('GET', `${path(agent + '/main')}/state`)).status === 200, `${agent} original creation`)
     plans.set(agent + '/main', [])
@@ -216,14 +217,24 @@ try {
   await page.waitForSelector('[data-architecture-agent-id="leaf"]')
   await page.click('[data-architecture-agent-id="leaf"]')
   await page.waitForSelector('[data-architecture-agent-inspector-id="leaf"]')
-  await page.select('[data-architecture-agent-inspector-id="leaf"] select[data-agent-settings-inherit]', 'base')
-  await page.evaluate(() => [...document.querySelectorAll('[data-architecture-agent-inspector-id="leaf"] button')].find(button => button.textContent.includes('Save agent settings')).click())
+  await page.click('[data-architecture-agent-inspector-id="leaf"] [data-agent-tab="settings"]')
+  await chooseSelectOption(page, '[data-architecture-agent-inspector-id="leaf"] [data-agent-settings-inherit]', 'base')
+  await page.click('[data-architecture-agent-inspector-id="leaf"] [data-agent-settings-save]:not(:disabled)')
   await until(async () => (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf').inherit === 'base', 'original Architecture inherit PUT')
+  // The server applies the PUT before the inspector's own save has reloaded the Agent list; until
+  // then its fields stay disabled and keystrokes go nowhere. Edit again once the inspector has
+  // finished saving and shows the saved Agent (nothing left to save).
+  await page.waitForFunction(() => {
+    const inspector = document.querySelector('[data-architecture-agent-inspector-id="leaf"]')
+    const save = inspector?.querySelector('[data-agent-settings-save]')
+    return save?.textContent === 'Save agent settings' && save.disabled && !inspector.querySelector('input[data-agent-default-cwd]').disabled
+  })
   // New-session placement defaults are edited in the same inspector and reach fresh children.
   // Main is the default Node, so only the working directory needs to be set.
-  assert.equal(await page.$eval('[data-architecture-agent-inspector-id="leaf"] select[data-agent-default-node]', select => select.value), '')
+  assert.equal(await page.$eval('[data-architecture-agent-inspector-id="leaf"] [data-agent-default-node]', select => select.value), '')
   await page.type('[data-architecture-agent-inspector-id="leaf"] input[data-agent-default-cwd]', agentDir('leaf'))
-  await page.evaluate(() => [...document.querySelectorAll('[data-architecture-agent-inspector-id="leaf"] button')].find(button => button.textContent.includes('Save agent settings')).click())
+  assert.equal(await page.$eval('[data-architecture-agent-inspector-id="leaf"] input[data-agent-default-cwd]', input => input.value), agentDir('leaf'))
+  await page.click('[data-architecture-agent-inspector-id="leaf"] [data-agent-settings-save]:not(:disabled)')
   await until(async () => { const leaf = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf'); return !leaf.defaultNode && leaf.defaultCwd === agentDir('leaf') }, 'Architecture default placement PUT')
   assert.equal(await snapshot('leaf/main'), initial); heldKnowledge.release(); await final('leaf/main', 'FROZEN-DONE')
   await turn('leaf/main', 'REUSE', body => { assert.equal(prompt(body), initial); return [call('live-list', 'skill', { action: 'list' })] })

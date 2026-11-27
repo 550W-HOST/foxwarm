@@ -4,6 +4,9 @@ import { Check, Copy, Plus, RefreshCw, X } from 'lucide-react'
 import AndroidPairingDetails from './AndroidPairingDetails'
 import NodeSetupQr from './NodeSetupQr'
 import { API_BASE_PATH } from '../config'
+import Select from './Select'
+
+const BROWSER_PACKAGES = [{ value: 'chrome', label: 'Chrome / Chromium' }, { value: 'firefox', label: 'Firefox 153+' }]
 
 type PendingRequest = { id: string; requestedName: string; nodeType: string; requestedAt: number; connected: boolean }
 type PendingPage = { items: PendingRequest[]; total: number; nextOffset: number | null }
@@ -178,7 +181,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
         <div className="mt-4 flex flex-wrap gap-2">{methods.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={method === item.id} onClick={() => void selectMethod(item.id)} className={`rounded-lg border px-3 py-2 text-sm ${method === item.id ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border hover:bg-fw-hover'}`}>{item.label}</button>)}</div>
         <p className="mt-2 text-xs text-fw-text-muted">{methods.find(item => item.id === method)?.detail}</p>
         {method === 'browser' ? <div className="mt-4 space-y-3 text-sm">
-          <label className="block text-xs font-medium">Browser<select aria-label="Browser package" value={browserKind} onChange={event => setBrowserKind(event.target.value as 'chrome' | 'firefox')} className={fieldClass}><option value="chrome">Chrome / Chromium</option><option value="firefox">Firefox 153+</option></select></label>
+          <label className="block text-xs font-medium">Browser<Select aria-label="Browser package" value={browserKind} onChange={value => setBrowserKind(value as 'chrome' | 'firefox')} className={fieldClass} options={BROWSER_PACKAGES} /></label>
           <ol className="list-decimal space-y-2 pl-5">
             <li><a className="text-fw-accent underline" href={`${API_BASE_PATH.slice(0, -4)}/node/browser-extension${browserKind === 'firefox' ? '-firefox' : ''}.zip`} download>Download Browser Node</a> and extract the ZIP.</li>
             {browserKind === 'firefox' ? <li>Open about:debugging → This Firefox → Load Temporary Add-on, and select manifest.json in the extracted folder. Reload it after restarting Firefox.</li> : <li>Open Chrome or Chromium extensions, enable Developer mode, choose Load unpacked, and select the extracted folder.</li>}

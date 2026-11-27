@@ -18,10 +18,14 @@ function createContentPositions() {
   let observer: ResizeObserver | null = null
   let frame = 0
   let focusCheckFrame = 0
+  // A registration change since the last measurement: a slot, host or layer element, a
+  // host's pane or its visibility.
+  let registrationChanged = true
 
   const measure = () => {
     window.cancelAnimationFrame(frame)
     frame = 0
+    registrationChanged = false
     // Fixed-layer and slot rectangles share the browser's current viewport coordinates.
     // Their origins can differ while a mobile visual viewport pans above a keyboard.
     const layerRect = layer?.getBoundingClientRect()
@@ -74,12 +78,19 @@ function createContentPositions() {
 
   return {
     measure,
+    /** Synchronous positioning for a commit whose registrations or App layout changed. */
+    measureChanged(layoutChanged: boolean) {
+      if (registrationChanged || layoutChanged) measure()
+    },
     registerLayer(element: HTMLElement | null) {
+      if (element !== layer) registrationChanged = true
       layer = element
       schedule()
     },
     registerSlot(paneId: string, element: HTMLElement | null) {
       const previous = slots.get(paneId)
+      if (previous === element) return
+      registrationChanged = true
       if (previous) observer?.unobserve(previous)
       if (element) {
         slots.set(paneId, element)
@@ -88,8 +99,12 @@ function createContentPositions() {
       schedule()
     },
     registerHost(tabId: string, host: PositionedHost | null) {
+      const previous = hosts.get(tabId)
       if (host) hosts.set(tabId, host)
       else hosts.delete(tabId)
+      // Hosts re-register on every commit to refresh their callbacks. Any other geometry
+      // change of that commit is still positioned in the next frame.
+      if (!host || !previous || previous.element !== host.element || previous.paneId !== host.paneId || previous.visible !== host.visible) registrationChanged = true
       schedule()
     },
     start() {
@@ -130,12 +145,22 @@ function createContentPositions() {
 
 const ContentPositions = createContext<ReturnType<typeof createContentPositions> | null>(null)
 
-export function WorkbenchContentProvider({ children }: { children: ReactNode }) {
+/**
+ * `layout` is App state that places slots (pane tree, sidebar, mobile shell); a changed value
+ * repositions in its commit. Other geometry changes arrive through the observers.
+ */
+export function WorkbenchContentProvider({ layout, children }: { layout?: unknown; children: ReactNode }) {
   const positions = useMemo(createContentPositions, [])
   useLayoutEffect(() => positions.start(), [positions])
+  const layoutRef = useRef(layout)
   // Slot refs may be replaced by split/normalization in this same commit. Position
   // before paint, without treating that temporary absence as a tab lifecycle event.
-  useLayoutEffect(() => positions.measure())
+  // Commits that change neither registrations nor layout skip the synchronous reads.
+  useLayoutEffect(() => {
+    const layoutChanged = layoutRef.current !== layout
+    layoutRef.current = layout
+    positions.measureChanged(layoutChanged)
+  })
   return <ContentPositions.Provider value={positions}>{children}</ContentPositions.Provider>
 }
 

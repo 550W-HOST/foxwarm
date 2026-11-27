@@ -85,7 +85,7 @@ async function seed(id, label) { for (let i = 0; i < 7; i++) await send(id, `see
 const command = (id, text) => fixture.api('POST', route(id) + '/message', { text })
 async function selectSession(page, id) {
   await page.evaluate(value => window.foxwarmTest.switchToSession(value), id)
-  await page.waitForFunction(value => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + value), {}, id)
+  await page.waitForFunction(value => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId?.startsWith(value), {}, id)
 }
 try {
   await fixture.start(); const main = await create(); const page = await fixture.openApp(); await saveModelsInOriginalApp(page, yaml.dump(config()), fixture.modelPath)

@@ -36,6 +36,19 @@ function digest(inputs) {
   return hash.digest('hex')
 }
 
+test('Android Tests and Release caches cannot restore or save each other’s entries', () => {
+  const cache = job => job.steps.find(step => step.name === 'Cache Gradle dependencies and wrapper')
+  const testCache = cache(jobs.android)
+  const releaseCache = cache(release.jobs.android)
+  for (const step of [testCache, releaseCache]) {
+    assert.match(step.uses, /^actions\/cache@/)
+    assert.ok(step.with.key.startsWith(step.with['restore-keys'].trim()))
+  }
+  for (const [source, other] of [[testCache, releaseCache], [releaseCache, testCache]]) {
+    assert.ok(!source.with.key.startsWith(other.with['restore-keys'].trim()))
+  }
+})
+
 test('resource cache keys change with pins, build inputs and runner/toolchain configuration', async () => {
   const code = await keyInputs(codeProducer)
   const heif = await keyInputs(jobs['native-test-resources'])

@@ -680,6 +680,30 @@
   "local-deny-scripts / session-status": {
    "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
    "now": "ok"
+  },
+  "empty / help:session --help": {
+   "reason": "session archive and unarchive gained model ingress (advisor, 2026-11-23)",
+   "now": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session archive [<session-id>]\n      Archive a Session.\n  session unarchive [<session-id"
+  },
+  "deny-scripts / help:session --help": {
+   "reason": "session archive and unarchive gained model ingress (advisor, 2026-11-23)",
+   "now": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session archive [<session-id>]\n      Archive a Session.\n  session unarchive [<session-id"
+  },
+  "deny-self-tools / help:session --help": {
+   "reason": "session archive and unarchive gained model ingress (advisor, 2026-11-23)",
+   "now": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session archive [<session-id>]\n      Archive a Session.\n  session unarchive [<session-id"
+  },
+  "deny-node-select-raw / help:session --help": {
+   "reason": "session archive and unarchive gained model ingress (advisor, 2026-11-23)",
+   "now": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session archive [<session-id>]\n      Archive a Session.\n  session unarchive [<session-id"
+  },
+  "ask-exec-deny-read / help:session --help": {
+   "reason": "session archive and unarchive gained model ingress (advisor, 2026-11-23)",
+   "now": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session archive [<session-id>]\n      Archive a Session.\n  session unarchive [<session-id"
+  },
+  "local-deny-scripts / help:session --help": {
+   "reason": "session archive and unarchive gained model ingress (advisor, 2026-11-23)",
+   "now": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session archive [<session-id>]\n      Archive a Session.\n  session unarchive [<session-id"
   }
  }
 }

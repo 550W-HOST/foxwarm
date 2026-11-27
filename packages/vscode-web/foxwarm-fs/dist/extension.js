@@ -435,6 +435,387 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
 // src/configSchemas.ts
 var vscode2 = __toESM(require("vscode"));
 
+// ../../shared/src/toolAuthorizationPolicySchema.ts
+var TOOL_AUTHORIZATION_OPERATIONS = [
+  "env.read",
+  "env.write",
+  "env.exec",
+  "env.browser",
+  "env.tool",
+  "node.list",
+  "node.view",
+  "node.select",
+  "node.lifecycle",
+  "node.trust",
+  "session.list",
+  "session.view",
+  "session.send",
+  "session.deliver",
+  "session.create",
+  "session.control",
+  "session.manage",
+  "history.read",
+  "history.search",
+  "agent.list",
+  "agent.view",
+  "agent.create",
+  "agent.manage",
+  "task.create",
+  "task.list",
+  "task.read",
+  "task.update",
+  "task.complete",
+  "task.cancel",
+  "task.assign",
+  "timer.manage",
+  "channel.send",
+  "user.ask",
+  "config.read",
+  "config.write",
+  "secret.use",
+  "secret.manage",
+  "secret.list",
+  "mcp.call",
+  "mcp.list",
+  "mcp.manage",
+  "mcp.subscribe",
+  "image.generate",
+  "model.request"
+];
+var operationFamilies = [...new Set(TOOL_AUTHORIZATION_OPERATIONS.map((op) => op.slice(0, op.indexOf(".")) + ".*"))];
+var nonBlank = { type: "string", minLength: 1, pattern: "\\S" };
+var scalar = { type: ["string", "number", "boolean", "null"] };
+var scalarList = { type: "array", minItems: 1, maxItems: 64, items: scalar };
+var nameList = { type: "array", minItems: 1, maxItems: 64, items: nonBlank };
+var scalarMatcherObject = {
+  type: "object",
+  additionalProperties: false,
+  minProperties: 1,
+  properties: {
+    equals: { ...scalar, description: "Matches this exact value." },
+    oneOf: { ...scalarList, description: "Matches any of these values." },
+    exists: { type: "boolean", description: "Whether the value must be present (true) or absent (false)." }
+  }
+};
+var matcher = { anyOf: [scalar, scalarList, scalarMatcherObject] };
+var identity = { type: "string", pattern: "^\\s*[A-Za-z0-9._:/*-]+\\s*$" };
+var identityPattern = {
+  anyOf: [identity, { type: "array", minItems: 1, maxItems: 64, items: identity }]
+};
+var nodeMatcher = {
+  description: "Node of the call's effect: an ID pattern (covering descendants), or exactly one of current, provider or exact.",
+  anyOf: [
+    identityPattern,
+    {
+      type: "object",
+      additionalProperties: false,
+      minProperties: 1,
+      maxProperties: 1,
+      properties: {
+        current: { const: true, description: "The caller's current Node." },
+        provider: { ...identityPattern, description: "Exact Provider IDs, without `*` or `/`." },
+        exact: { ...identityPattern, description: "Literal Node IDs, without their descendants." }
+      }
+    }
+  ]
+};
+var secretName = { type: "string", pattern: "^\\s*[a-z0-9._*-]+\\s*$" };
+var secretsMatcher = {
+  type: "object",
+  additionalProperties: false,
+  minProperties: 1,
+  properties: {
+    anyOf: {
+      description: "Secret name patterns using `*`.",
+      anyOf: [secretName, { type: "array", minItems: 1, maxItems: 64, items: secretName }]
+    },
+    owned: { const: true, description: "Secrets owned by the caller's Agent." }
+  }
+};
+var policyPath = {
+  type: "string",
+  minLength: 1,
+  pattern: "^(?:[^$]|\\$(?!\\{[^}]+\\})|\\$\\{(?:agent\\.dir|agent\\.memoryDir|workspace)\\})*$"
+};
+var pathMatcher = {
+  type: "object",
+  additionalProperties: false,
+  anyOf: [{ required: ["allWithin"] }, { required: ["anyNotWithin"] }],
+  properties: {
+    arg: { description: "Path argument names; omitted selects every path of the call.", anyOf: [nonBlank, nameList] },
+    allWithin: { ...policyPath, description: "Matches when every selected path is inside this directory." },
+    anyNotWithin: { ...policyPath, description: "Matches when any selected path is outside this directory." }
+  }
+};
+var sourceValue = { enum: ["builtin", "mcp", "node"] };
+var toolSelector = {
+  description: "Tool name, list of names, or a source/server/name selector.",
+  anyOf: [
+    nonBlank,
+    nameList,
+    {
+      type: "object",
+      additionalProperties: false,
+      minProperties: 1,
+      properties: {
+        source: {
+          anyOf: [
+            sourceValue,
+            { type: "array", minItems: 1, maxItems: 64, items: sourceValue },
+            {
+              type: "object",
+              additionalProperties: false,
+              minProperties: 1,
+              properties: {
+                equals: sourceValue,
+                oneOf: { type: "array", minItems: 1, maxItems: 64, items: sourceValue },
+                exists: { type: "boolean" }
+              }
+            }
+          ]
+        },
+        server: { ...matcher, description: "MCP server name." },
+        name: { ...matcher, description: "Tool name." }
+      }
+    }
+  ]
+};
+var sessionRelation = { enum: ["parent", "child"] };
+var sessionCondition = {
+  type: "object",
+  additionalProperties: false,
+  minProperties: 1,
+  properties: {
+    self: { const: true, description: "The calling Session." },
+    sameAgent: { const: true, description: "A Session of the caller's Agent." },
+    relation: {
+      anyOf: [sessionRelation, { type: "array", minItems: 1, maxItems: 2, uniqueItems: true, items: sessionRelation }]
+    }
+  }
+};
+var argumentMatcher = {
+  anyOf: [
+    scalar,
+    scalarList,
+    scalarMatcherObject,
+    { type: "object", additionalProperties: false, required: ["session"], properties: { session: sessionCondition } },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["agent"],
+      properties: {
+        agent: {
+          type: "object",
+          additionalProperties: false,
+          required: ["sameAgent"],
+          properties: { sameAgent: { type: "boolean" } }
+        }
+      }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["task"],
+      properties: {
+        task: { type: "object", additionalProperties: false, required: ["owned"], properties: { owned: { const: true } } }
+      }
+    }
+  ]
+};
+var argsMatcher = {
+  type: "object",
+  maxProperties: 64,
+  description: "Dotted argument names mapped to value matchers.",
+  propertyNames: { pattern: "^(?!(?:.*\\.)?(?:__proto__|prototype|constructor)(?:\\.|$))[^.]+(?:\\.[^.]+)*$" },
+  additionalProperties: argumentMatcher
+};
+var approval = {
+  type: "object",
+  additionalProperties: false,
+  description: "Approval options of an ask rule.",
+  properties: {
+    timeoutSeconds: { type: "integer", minimum: 30, maximum: 604800, description: "Seconds before an unanswered request expires." },
+    approvers: {
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      description: "Access identity IDs that may decide, in addition to the administrator.",
+      items: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+    }
+  }
+};
+var action = { enum: ["allow", "ask", "deny"] };
+var ruleCommon = {
+  id: { ...nonBlank, description: "Unique rule ID. Omitted IDs are numbered by position." },
+  enabled: { type: "boolean", default: true },
+  action: { ...action, description: "Decision when this rule is the first enabled match." },
+  reason: { type: "string", description: "Shown when the rule denies or asks." },
+  approval
+};
+var approvalRequiresAsk = {
+  if: { required: ["approval"] },
+  then: { properties: { action: { const: "ask" } } }
+};
+var actionIs = (value) => ({ required: ["action"], properties: { action: { const: value } } });
+var shorthandSelectors = ["agent", "session", "externalId", "tool", "node", "secrets", "args", "path"];
+var toolRule = {
+  type: "object",
+  additionalProperties: false,
+  required: ["action"],
+  properties: {
+    ...ruleCommon,
+    agent: { ...matcher, description: "Caller's Agent." },
+    session: { ...identityPattern, description: "Caller's Session ID pattern." },
+    externalId: { ...matcher, description: "Verified inbound identity ID." },
+    tool: toolSelector,
+    node: nodeMatcher,
+    secrets: { ...secretsMatcher, description: "Decides only the stored secrets a call would use." },
+    args: argsMatcher,
+    path: pathMatcher,
+    match: {
+      type: "object",
+      additionalProperties: false,
+      description: "Selectors in the original form. Not combined with top-level selectors.",
+      properties: {
+        agent: matcher,
+        session: matcher,
+        externalId: matcher,
+        tool: toolSelector,
+        targetNode: matcher,
+        args: argsMatcher,
+        path: pathMatcher
+      }
+    }
+  },
+  allOf: [
+    approvalRequiresAsk,
+    { not: { required: ["match"], anyOf: shorthandSelectors.map((key) => ({ required: [key] })) } },
+    {
+      not: {
+        ...actionIs("ask"),
+        anyOf: [{ required: ["externalId"] }, { required: ["match"], properties: { match: { required: ["externalId"] } } }]
+      }
+    },
+    { not: { required: ["secrets", "externalId"] } }
+  ]
+};
+var opName = { enum: ["*", ...operationFamilies, ...TOOL_AUTHORIZATION_OPERATIONS] };
+var sessionTarget = {
+  anyOf: [
+    { type: "object", additionalProperties: false, required: ["session"], properties: { session: sessionCondition } },
+    { type: "object", additionalProperties: false, required: ["id"], properties: { id: identityPattern } }
+  ]
+};
+var operationRule = {
+  type: "object",
+  additionalProperties: false,
+  required: ["op", "action"],
+  properties: {
+    ...ruleCommon,
+    op: {
+      description: "Operation, list of operations, family such as `env.*`, or `*`.",
+      anyOf: [opName, { type: "array", minItems: 1, maxItems: 64, items: opName }]
+    },
+    agent: { ...matcher, description: "Caller's Agent." },
+    session: { ...identityPattern, description: "Caller's Session ID pattern." },
+    externalId: { ...matcher, description: "Verified inbound identity ID." },
+    node: nodeMatcher,
+    path: {
+      type: "object",
+      additionalProperties: false,
+      minProperties: 1,
+      properties: {
+        within: { ...policyPath, description: "The path is on master inside this directory." },
+        notWithin: { ...policyPath, description: "The path is not on master inside this directory." }
+      }
+    },
+    targetSession: sessionTarget,
+    parent: sessionTarget,
+    targetAgent: {
+      type: "object",
+      additionalProperties: false,
+      minProperties: 1,
+      maxProperties: 1,
+      properties: { self: { const: true }, descendant: { const: true }, id: identityPattern }
+    },
+    task: {
+      type: "object",
+      additionalProperties: false,
+      minProperties: 1,
+      maxProperties: 1,
+      properties: { owned: { const: true }, created: { const: true } }
+    },
+    channel: identityPattern,
+    secret: secretsMatcher,
+    mcp: {
+      type: "object",
+      additionalProperties: false,
+      minProperties: 1,
+      properties: { server: identityPattern, tool: identityPattern }
+    },
+    nodeTool: identityPattern,
+    model: identityPattern,
+    with: {
+      type: "object",
+      minProperties: 1,
+      maxProperties: 16,
+      description: "Operation attributes mapped to value matchers.",
+      additionalProperties: matcher
+    }
+  },
+  allOf: [
+    approvalRequiresAsk,
+    { not: { ...actionIs("ask"), required: ["action", "externalId"] } }
+  ]
+};
+var TOOL_AUTHORIZATION_POLICY_SCHEMA = {
+  $id: "https://foxwarm.dev/schemas/tool-authorization.json",
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "Foxwarm tool authorization policy",
+  type: "object",
+  additionalProperties: false,
+  required: ["version"],
+  properties: {
+    version: { const: 1 },
+    defaultAction: { ...action, default: "allow", description: "Decision for internal calls no rule matches. Unmatched external calls are always denied." },
+    rules: {
+      type: "array",
+      maxItems: 256,
+      description: "Ordered rules; the first enabled match decides.",
+      items: {
+        if: { type: "object", required: ["op"] },
+        then: operationRule,
+        else: toolRule
+      }
+    }
+  }
+};
+
+// ../../shared/src/agentRulesSchema.ts
+var CALLER_SELECTORS = ["agent", "session", "sessionPattern", "externalId"];
+function withoutCallerSelectors(rule) {
+  const copy = structuredClone(rule);
+  const properties = copy.properties;
+  for (const key of CALLER_SELECTORS) delete properties[key];
+  const match = properties.match;
+  if (match?.properties) for (const key of CALLER_SELECTORS) delete match.properties[key];
+  return copy;
+}
+var policyRule = TOOL_AUTHORIZATION_POLICY_SCHEMA.properties.rules.items;
+var AGENT_RULES_SCHEMA = {
+  $id: "https://foxwarm.dev/schemas/agent-rules.json",
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "Foxwarm Agent rule layer",
+  description: "Ordered rules every tool call of this Agent and the Agents it creates must pass; a final rule with only `action: deny` makes the layer an allowlist.",
+  type: "array",
+  maxItems: TOOL_AUTHORIZATION_POLICY_SCHEMA.properties.rules.maxItems,
+  items: {
+    if: policyRule.if,
+    then: withoutCallerSelectors(policyRule.then),
+    else: withoutCallerSelectors(policyRule.else)
+  }
+};
+
 // ../../shared/src/configSchemas.ts
 var CONCRETE_PROVIDER_TYPES = [
   "openai-completions",
@@ -628,6 +1009,7 @@ var modelOverrideProperties = {
     enum: ["reasoning_content", "reasoning"],
     description: "Assistant-history reasoning field used by this Chat Completions provider/model. Defaults to reasoning_content."
   },
+  perMessageEffort: { type: "boolean", description: "Anthropic Messages: send effort changes as per-message effort so they keep the prompt cache. Enable only for models that support it. Model entries override the provider default. Default false." },
   keepReasoningOnError: { type: "boolean", description: "Override the provider default for retaining completed encrypted reasoning after a failed normal Responses stream. False disables retention; this does not resume provider execution." },
   extraFields: { type: "object", additionalProperties: true, description: "Provider-specific request fields." },
   extraHeaders: { type: "object", additionalProperties: true, description: "Provider-specific HTTP headers. Values are passed through to the canonical backend loader." },
@@ -687,6 +1069,7 @@ var providerObjectEntry = {
     idleCompactMinContextPercent: modelOverrideProperties.idleCompactMinContextPercent,
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
     disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
+    perMessageEffort: modelOverrideProperties.perMessageEffort,
     keepReasoningOnError: { type: "boolean", default: false, description: "Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution." },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
@@ -702,7 +1085,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "perMessageEffort", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -710,7 +1093,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "perMessageEffort", "sameProviderAs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -1086,11 +1469,6 @@ var APP_CONFIG_SCHEMA = {
     dbWorkers: {
       type: "boolean",
       description: "Run the LanceDB/vector owner in a child process. Defaults to true and requires restart."
-    },
-    handoffConfirmation: {
-      type: "boolean",
-      default: false,
-      description: "Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart."
     },
     sessionAutoTitle: {
       type: "boolean",

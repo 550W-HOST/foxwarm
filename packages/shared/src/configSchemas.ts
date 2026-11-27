@@ -212,6 +212,7 @@ const modelOverrideProperties = {
     enum: ['reasoning_content', 'reasoning'],
     description: 'Assistant-history reasoning field used by this Chat Completions provider/model. Defaults to reasoning_content.',
   },
+  perMessageEffort: { type: 'boolean', description: 'Anthropic Messages: send effort changes as per-message effort so they keep the prompt cache. Enable only for models that support it. Model entries override the provider default. Default false.' },
   keepReasoningOnError: { type: 'boolean', description: 'Override the provider default for retaining completed encrypted reasoning after a failed normal Responses stream. False disables retention; this does not resume provider execution.' },
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
@@ -274,6 +275,7 @@ const providerObjectEntry = {
     idleCompactMinContextPercent: modelOverrideProperties.idleCompactMinContextPercent,
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
     disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
+    perMessageEffort: modelOverrideProperties.perMessageEffort,
     keepReasoningOnError: { type: 'boolean', default: false, description: 'Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution.' },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
@@ -289,7 +291,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'idleCompactMinutes', 'idleCompactMinContextPercent', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'idleCompactMinutes', 'idleCompactMinContextPercent', 'disallowEmptyResponse', 'keepReasoningOnError', 'perMessageEffort', 'sameProviderAs', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -297,7 +299,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'idleCompactMinutes', 'idleCompactMinContextPercent', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'textRedaction', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'idleCompactMinutes', 'idleCompactMinContextPercent', 'disallowEmptyResponse', 'keepReasoningOnError', 'perMessageEffort', 'sameProviderAs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -680,11 +682,6 @@ export const APP_CONFIG_SCHEMA = {
       type: 'boolean',
       description: 'Run the LanceDB/vector owner in a child process. Defaults to true and requires restart.',
     },
-    handoffConfirmation: {
-      type: 'boolean',
-      default: false,
-      description: 'Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
-    },
     sessionAutoTitle: {
       type: 'boolean',
       default: false,
@@ -776,3 +773,6 @@ export const APP_CONFIG_SCHEMA = {
     },
   },
 }
+
+export { TOOL_AUTHORIZATION_OPERATIONS, TOOL_AUTHORIZATION_POLICY_SCHEMA } from './toolAuthorizationPolicySchema'
+export { AGENT_RULES_SCHEMA } from './agentRulesSchema'

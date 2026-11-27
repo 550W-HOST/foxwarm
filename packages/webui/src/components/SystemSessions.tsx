@@ -1,74 +1,78 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
+import { SystemSplit, useSystemSplit } from './SystemSplit'
 import { Bot, ChevronRight, CircleDot, ExternalLink, GitFork, ListFilter, Search, Server, Sparkles } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { RunningCommandList } from './RunningCommands'
 import { formatUsdCost } from '../usageCost'
 import type { TokenUsage } from './TokenUsageDetails'
 import type { WebUiNodeTarget } from '../nodeTargets'
+import Select from './Select'
 import { getRuntimeStateSummary, getSessionRuntimeStateName, isRuntimeStateInactiveName } from '../sessionRuntimeState'
 import { getArchitectureSessionModel, getArchitectureSessionNodeId, type ArchitectureStatusFilter } from '../architectureOperations'
-import { UsagePie, formatBusyDuration, formatRelativeTime, formatTokenCount, getStatusTone, renderMetaBadge } from './SystemShared'
+import { UsagePie, formatBusyDuration, formatTokenCount, getStatusTone, renderMetaBadge } from './SystemShared'
+import { formatActivityTime } from '../activityTime'
 
-export function SessionOperationRow({ session, selected, current, now, nodeLabel, onInspect, onOpen }: {
-  session: Session
-  nodeLabel?: string
-  selected: boolean
-  current: boolean
-  now: number
-  onInspect: () => void
-  onOpen: () => void
-}) {
-  const runtimeState = getSessionRuntimeStateName(session)
-  const runtimeSummary = getRuntimeStateSummary(session.runtimeState, !!session.busy)
-  const queueLength = session.runtimeState?.queueLength ?? session.queueLength ?? 0
-  const activeSince = session.runtimeState?.since || session.busyStartedAt
-  const model = getArchitectureSessionModel(session)
+/** A Session's display name without its Agent's prefix. */
+export const sessionShortName = (session: Session) => {
   const name = session.displayName || session.id
+  const prefix = `${session.agent}/`
+  return session.agent && session.agent !== 'main' && name.startsWith(prefix) ? name.slice(prefix.length) : name
+}
 
+/** Runtime state and duration, shown only while the Session isn't idle. */
+export function SessionStateText({ session, now, className = '' }: { session: Session; now: number; className?: string }) {
+  const state = getSessionRuntimeStateName(session)
+  const queueLength = session.runtimeState?.queueLength ?? session.queueLength ?? 0
+  // A failed request needs attention even though the Session is no longer working.
+  if (state === 'llm-failed') return <span className={`whitespace-nowrap font-medium text-fw-danger ${className}`}>{getRuntimeStateSummary(session.runtimeState, false)}</span>
+  if (isRuntimeStateInactiveName(state)) return queueLength > 0 ? <span className={`whitespace-nowrap font-medium text-fw-warning ${className}`}>{queueLength} queued</span> : null
+  return <span className={`whitespace-nowrap font-medium text-fw-accent ${className}`}>{getRuntimeStateSummary(session.runtimeState, !!session.busy)} · {formatBusyDuration(session.runtimeState?.since || session.busyStartedAt, now)}</span>
+}
+
+export function SessionRows({ sessions, selectedId, currentId, now, nodeLabels, onSelect, onOpen, footer }: {
+  sessions: Session[]
+  selectedId: string | null
+  currentId?: string
+  now: number
+  nodeLabels: Map<string, string>
+  onSelect: (sessionId: string) => void
+  onOpen: (sessionId: string) => void
+  footer?: ReactNode
+}) {
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      data-architecture-session-id={session.id}
-      data-architecture-session-selected={selected ? 'true' : 'false'}
-      onClick={onInspect}
-      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onInspect() } }}
-      className={`group rounded-lg border px-3 py-2.5 outline-none transition-colors ${selected
-        ? 'border-fw-accent-border bg-fw-accent-surface/80 ring-1 ring-fw-focus-ring dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/30 dark:ring-fw-focus-ring'
-        : 'border-fw-border bg-fw-surface-sunken/70 hover:border-fw-border-strong hover:bg-fw-surface dark:border-fw-border dark:bg-fw-canvas/40 dark:hover:border-fw-border-strong dark:hover:bg-fw-hover'} focus-visible:ring-2 focus-visible:ring-fw-focus-ring`}
-    >
-      <div className="flex items-start gap-2.5">
-        <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${getStatusTone(session)}`} />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-semibold text-fw-text-strong" title={name}>{name}</span>
-            {current ? renderMetaBadge('current', 'active') : null}
-            {session.archived ? renderMetaBadge('archived', 'muted') : null}
-          </div>
-          {session.displayName ? <div className="mt-0.5 truncate font-mono text-[10px] text-fw-text-muted">{session.id}</div> : null}
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text-muted">
-            <span className="font-medium text-fw-text-strong">{runtimeSummary}</span>
-            {!isRuntimeStateInactiveName(runtimeState) ? <span>{formatBusyDuration(activeSince, now)}</span> : null}
-            <span>agent {session.agent || 'main'}</span>
-            <span>node {nodeLabel || getArchitectureSessionNodeId(session)}</span>
-            {queueLength > 0 ? <span className="text-fw-warning dark:text-fw-warning">queued {queueLength}</span> : null}
-            {model ? <span className="max-w-[180px] truncate" title={model}>model {model}</span> : null}
-          </div>
-
-        </div>
-        <UsagePie usage={session.tokenUsage} />
-        <button
-          type="button"
-          onClick={(event) => { event.stopPropagation(); onOpen() }}
-          title="Open session"
-          className="rounded-md p-1.5 text-fw-text-muted opacity-70 transition hover:bg-fw-hover hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </button>
-      </div>
+    <div className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface">
+      <ul className="divide-y divide-fw-border-muted" data-system-session-list>
+        {sessions.map(session => {
+          const selected = session.id === selectedId
+          const nodeId = getArchitectureSessionNodeId(session)
+          return (
+            <li key={session.id}>
+              <div role="button" tabIndex={0} data-architecture-session-id={session.id} data-architecture-session-selected={selected ? 'true' : 'false'}
+                onClick={() => onSelect(session.id)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(session.id) } }}
+                className={`group flex min-w-0 items-center gap-2.5 px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fw-focus-ring ${selected ? 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/30' : 'hover:bg-fw-hover'}`}>
+                <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusTone(session)}`} aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-baseline gap-2">
+                    <span className="truncate text-[13px] font-medium text-fw-text-strong" title={session.id}>{sessionShortName(session)}</span>
+                    {session.id === currentId ? renderMetaBadge('current', 'active') : null}
+                    {session.archived ? renderMetaBadge('archived', 'muted') : null}
+                    <SessionStateText session={session} now={now} className="text-[11px]" />
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-fw-text-muted">{[session.agent || 'main', nodeId !== 'master' ? `on ${nodeLabels.get(nodeId) || nodeId}` : '', session.parentSessionId ? 'child' : ''].filter(Boolean).join(' · ')}</div>
+                </div>
+                <span className="shrink-0 text-[11px] tabular-nums text-fw-text-muted">{session.lastMessageTime ? formatActivityTime(session.lastMessageTime) : '—'}</span>
+                <button type="button" aria-label={`Open ${session.id}`} title="Open session" onClick={event => { event.stopPropagation(); onOpen(session.id) }} className="rounded-md p-1 text-fw-text-muted opacity-60 hover:bg-fw-surface hover:text-fw-text focus:opacity-100 group-hover:opacity-100"><ExternalLink className="h-3.5 w-3.5" /></button>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      {sessions.length === 0 ? <div className="py-10 text-center text-sm text-fw-text-muted">No matching sessions.</div> : null}
+      {footer}
     </div>
   )
 }
+
 const InspectorField = ({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) => (
   <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 py-1.5 text-xs">
     <dt className="text-fw-text-muted">{label}</dt>
@@ -111,7 +115,7 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
   const tool = runtime?.tool
 
   return (
-    <aside data-architecture-inspector-session-id={session.id} className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface xl:sticky xl:top-4">
+    <aside data-architecture-inspector-session-id={session.id} className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface">
       <div className="border-b border-fw-border-muted p-4 dark:border-fw-border">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -132,7 +136,7 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
         </div>
       </div>
 
-      <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-4">
+      <div className="p-4">
         <section>
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Runtime</h3>
           <dl className="mt-1">
@@ -179,7 +183,7 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
           <dl className="mt-1">
             <InspectorField label="Messages" value={String(session.messageCount || 0)} />
-            <InspectorField label="Updated" value={formatRelativeTime(session.lastMessageTime)} />
+            <InspectorField label="Updated" value={session.lastMessageTime ? formatActivityTime(session.lastMessageTime) : 'No messages yet'} />
             <InspectorField label="Tokens" value={formatTokenCount(totalTokens)} />
             {tokenUsage.cost !== undefined ? <InspectorField label="Estimated cost" value={formatUsdCost(tokenUsage.cost)} /> : null}
             <InspectorField label="Cached" value={formatTokenCount(tokenUsage.cachedTokens)} />
@@ -222,13 +226,7 @@ function FilterSelect({ label, icon, value, onChange, options }: {
   options: Array<{ value: string; label: string }>
 }) {
   return (
-    <label className="relative min-w-0 flex-1 sm:w-44 sm:flex-none">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fw-text-muted">{icon}</span>
-      <select aria-label={label} value={value} onChange={event => onChange(event.target.value)} className="h-9 w-full appearance-none truncate rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border dark:text-fw-text-strong">
-        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-      <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
-    </label>
+    <Select variant="toolbar" aria-label={label} icon={icon} value={value} onChange={onChange} options={options} className="flex-1 sm:w-44 sm:flex-none" />
   )
 }
 
@@ -272,5 +270,30 @@ export function SessionFilterBar({ filters, onChange, statusOptions, agents, tot
         <UsagePie global usage={usage} />
       </div>
     </div>
+  )
+}
+
+/** System › Sessions list view: the filters, the Session rows and the inspected Session. */
+export function SystemSessionsList({ phone, detailRequest, toolbar, sessions, selectedId, currentId, now, nodeLabels, onSelect, onOpen, footer, detail }: {
+  phone: boolean
+  /** A new value opens the inspected Session's details on a narrow pane. */
+  detailRequest: number
+  toolbar: ReactNode
+  sessions: Session[]
+  selectedId: string | null
+  currentId?: string
+  now: number
+  nodeLabels: Map<string, string>
+  onSelect: (sessionId: string) => void
+  onOpen: (sessionId: string) => void
+  footer?: ReactNode
+  detail: ReactNode
+}) {
+  const split = useSystemSplit(phone)
+  useEffect(() => { if (detailRequest) split.open() }, [detailRequest])
+  return (
+    <SystemSplit split={split} name="sessions" backLabel="Sessions" detailWidth="minmax(340px,400px)" toolbar={toolbar}
+      list={<SessionRows sessions={sessions} selectedId={split.narrow ? null : selectedId} currentId={currentId} now={now} nodeLabels={nodeLabels} onSelect={id => { onSelect(id); split.open() }} onOpen={onOpen} footer={footer} />}
+      detail={detail} />
   )
 }

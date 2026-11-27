@@ -1,0 +1,231 @@
+{
+  "description": "Tool authorization policies with the Main server parser's verdict. The shared schema must accept every valid policy and reject every invalid one except those marked server-only (rules the parser checks across fields) or yaml-syntax.",
+  "cases": [
+    {
+      "name": "minimal",
+      "yaml": "version: 1\n",
+      "valid": true
+    },
+    {
+      "name": "empty-rules",
+      "yaml": "version: 1\ndefaultAction: deny\nrules: []\n",
+      "valid": true
+    },
+    {
+      "name": "legacy-match",
+      "yaml": "version: 1\ndefaultAction: allow\nrules:\n  - id: reviewer-read-master\n    enabled: true\n    match:\n      agent: reviewer\n      tool: { source: node, name: read }\n      targetNode: master\n      path:\n        arg: filePath\n        allWithin: '${agent.dir}'\n    action: allow\n    reason: Read the review workspace\n  - id: reviewer-deny-other-tools\n    match:\n      agent: reviewer\n    action: deny\n  - id: empty-match\n    match: {}\n    action: allow\n",
+      "valid": true
+    },
+    {
+      "name": "shorthand-selectors",
+      "yaml": "version: 1\ndefaultAction: deny\nrules:\n  - session: developer/main\n    action: allow\n  - agent: [developer, developer-worker]\n    node: 'development/*'\n    action: allow\n  - agent: [developer, developer-worker]\n    tool: { source: builtin, name: task }\n    args:\n      action: [get, update, complete]\n      taskId: { task: { owned: true } }\n    action: allow\n  - agent: { oneOf: [developer, developer-worker] }\n    tool: { source: builtin, name: send_to_session }\n    args: { sessionId: { session: { relation: parent } } }\n    action: allow\n  - tool: wait\n    action: allow\n  - tool: [read, write]\n    node: { exact: [master] }\n    path: { anyNotWithin: '${workspace}/shared' }\n    action: deny\n  - node: { current: true }\n    action: allow\n  - node: { provider: development }\n    action: allow\n  - tool: { source: [builtin, mcp], server: { exists: false }, name: { equals: status } }\n    args: { 'options.mode': { oneOf: [fast, 1, true, null] }, count: 3 }\n    action: allow\n",
+      "valid": true
+    },
+    {
+      "name": "session-relations",
+      "yaml": "version: 1\nrules:\n  - match:\n      agent: reviewer\n      tool: { source: builtin, name: [send_to_session] }\n      args: { sessionId: { session: { sameAgent: true, self: true, relation: [parent, child] } } }\n    action: allow\n  - action: deny\n    tool: {source: builtin, name: create_session}\n    args: {agentName: {agent: {sameAgent: false}}}\n",
+      "valid": true
+    },
+    {
+      "name": "external-peer",
+      "yaml": "version: 1\nrules:\n  - id: peer-send-review\n    match:\n      externalId: peer\n      tool: { source: builtin, name: send_to_session }\n      args: { sessionId: project/review }\n    action: allow\n  - externalId: [peer, other]\n    action: deny\n",
+      "valid": true
+    },
+    {
+      "name": "secrets",
+      "yaml": "version: 1\nrules:\n  - agent: deploy-worker\n    secrets: { anyOf: ['staging-*'] }\n    action: allow\n  - secrets: { anyOf: 'prod-*' }\n    action: deny\n    reason: Production credentials are changed by the user.\n  - agent: deploy-worker\n    secrets: { owned: true }\n    action: ask\n",
+      "valid": true
+    },
+    {
+      "name": "ask-approval",
+      "yaml": "version: 1\ndefaultAction: ask\nrules:\n  - id: confirm-production\n    agent: ops\n    tool: { source: node, name: exec }\n    node: production\n    action: ask\n    reason: Commands on production\n    approval:\n      timeoutSeconds: 1800\n      approvers: [alex, ops.team-1]\n  - id: plain-ask\n    tool: exec\n    action: ask\n    approval: {}\n",
+      "valid": true
+    },
+    {
+      "name": "operation-rules",
+      "yaml": "version: 1\ndefaultAction: allow\nrules:\n  - id: no-node-switching\n    op: node.select\n    action: deny\n    reason: Stay on the assigned Node\n  - id: reviewer-reads-workspace\n    agent: reviewer\n    op: env.read\n    path: { within: '${agent.dir}', notWithin: '${agent.memoryDir}' }\n    action: allow\n  - id: reviewer-no-other-reads\n    agent: reviewer\n    session: 'reviewer/*'\n    op: [env.read, env.write]\n    node: [master, 'dev/*']\n    action: deny\n  - op: '*'\n    externalId: peer\n    action: deny\n  - op: session.*\n    targetSession: { session: { self: true } }\n    action: allow\n  - op: session.create\n    parent: { id: ['team/main'] }\n    targetAgent: { descendant: true }\n    with: { kind: child, fork: false }\n    action: allow\n  - op: task.update\n    task: { owned: true }\n    action: allow\n  - op: channel.send\n    channel: 'alpha:123'\n    action: ask\n    approval: { timeoutSeconds: 30 }\n  - op: secret.use\n    secret: { anyOf: [prod-*], owned: true }\n    action: deny\n  - op: mcp.call\n    mcp: { server: project-tools, tool: lookup_* }\n    action: allow\n  - op: env.tool\n    nodeTool: custom_*\n    action: allow\n  - op: model.request\n    model: local/wire\n    enabled: false\n    action: deny\n  - op: agent.view\n    targetAgent: { id: team }\n    action: allow\n",
+      "valid": true
+    },
+    {
+      "name": "missing-version",
+      "yaml": "rules: []\n",
+      "valid": false
+    },
+    {
+      "name": "wrong-version",
+      "yaml": "version: 2\n",
+      "valid": false
+    },
+    {
+      "name": "unknown-root-field",
+      "yaml": "version: 1\npolicy: {}\n",
+      "valid": false
+    },
+    {
+      "name": "rules-null",
+      "yaml": "version: 1\nrules: null\n",
+      "valid": false
+    },
+    {
+      "name": "missing-action",
+      "yaml": "version: 1\nrules:\n  - tool: exec\n",
+      "valid": false
+    },
+    {
+      "name": "unknown-action",
+      "yaml": "version: 1\nrules:\n  - tool: exec\n    action: block\n",
+      "valid": false
+    },
+    {
+      "name": "unknown-rule-field",
+      "yaml": "version: 1\nrules:\n  - tool: exec\n    action: deny\n    note: x\n",
+      "valid": false
+    },
+    {
+      "name": "mixed-match-and-shorthand",
+      "yaml": "version: 1\nrules:\n  - match: {}\n    tool: exec\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "node-in-match",
+      "yaml": "version: 1\nrules:\n  - match: {node: master}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "approval-without-ask",
+      "yaml": "version: 1\nrules:\n  - tool: exec\n    action: deny\n    approval: {timeoutSeconds: 60}\n",
+      "valid": false
+    },
+    {
+      "name": "approval-timeout-range",
+      "yaml": "version: 1\nrules:\n  - tool: exec\n    action: ask\n    approval: {timeoutSeconds: 10}\n",
+      "valid": false
+    },
+    {
+      "name": "ask-external",
+      "yaml": "version: 1\nrules:\n  - externalId: peer\n    action: ask\n",
+      "valid": false
+    },
+    {
+      "name": "ask-external-match",
+      "yaml": "version: 1\nrules:\n  - match: {externalId: peer}\n    action: ask\n",
+      "valid": false
+    },
+    {
+      "name": "secrets-external",
+      "yaml": "version: 1\nrules:\n  - externalId: peer\n    secrets: {owned: true}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "bad-tool-source",
+      "yaml": "version: 1\nrules:\n  - tool: {source: shell, name: exec}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "bad-path-variable",
+      "yaml": "version: 1\nrules:\n  - tool: read\n    path: {allWithin: '${home}'}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "path-without-containment",
+      "yaml": "version: 1\nrules:\n  - tool: read\n    path: {arg: filePath}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "two-node-matchers",
+      "yaml": "version: 1\nrules:\n  - node: {current: true, exact: master}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "node-current-false",
+      "yaml": "version: 1\nrules:\n  - node: {current: false}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "bad-identity-pattern",
+      "yaml": "version: 1\nrules:\n  - session: 'a b'\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "unsafe-argument",
+      "yaml": "version: 1\nrules:\n  - tool: exec\n    args: {'a.__proto__': x}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "session-condition-false",
+      "yaml": "version: 1\nrules:\n  - tool: {source: builtin, name: view_session}\n    args: {sessionId: {session: {self: false}}}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "unknown-operation",
+      "yaml": "version: 1\nrules:\n  - op: env.delete\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "unknown-operation-family",
+      "yaml": "version: 1\nrules:\n  - op: shell.*\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "operation-tool-selector",
+      "yaml": "version: 1\nrules:\n  - op: env.exec\n    tool: exec\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "operation-target-two-forms",
+      "yaml": "version: 1\nrules:\n  - op: session.view\n    targetSession: {id: a, session: {self: true}}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "operation-ask-external",
+      "yaml": "version: 1\nrules:\n  - op: env.exec\n    externalId: peer\n    action: ask\n",
+      "valid": false
+    },
+    {
+      "name": "operation-empty-with",
+      "yaml": "version: 1\nrules:\n  - op: node.lifecycle\n    with: {}\n    action: deny\n",
+      "valid": false
+    },
+    {
+      "name": "approver-pattern",
+      "yaml": "version: 1\nrules:\n  - tool: exec\n    action: ask\n    approval: {approvers: ['-bad']}\n",
+      "valid": false
+    },
+    {
+      "name": "yaml-syntax",
+      "yaml": "version: 1\nrules: [\n",
+      "valid": false,
+      "schema": "yaml-syntax"
+    },
+    {
+      "name": "duplicate-id",
+      "yaml": "version: 1\nrules:\n  - id: a\n    action: deny\n  - id: a\n    action: allow\n",
+      "valid": false,
+      "schema": "server-only"
+    },
+    {
+      "name": "operation-undeclared-resource",
+      "yaml": "version: 1\nrules:\n  - op: node.list\n    node: master\n    action: deny\n",
+      "valid": false,
+      "schema": "server-only"
+    },
+    {
+      "name": "secret-use-with-other-ops",
+      "yaml": "version: 1\nrules:\n  - op: [secret.use, env.read]\n    action: deny\n",
+      "valid": false,
+      "schema": "server-only"
+    },
+    {
+      "name": "session-target-unregistered",
+      "yaml": "version: 1\nrules:\n  - tool: {source: builtin, name: exec}\n    args: {sessionId: {session: {self: true}}}\n    action: deny\n",
+      "valid": false,
+      "schema": "server-only"
+    },
+    {
+      "name": "obsolete-builtin",
+      "yaml": "version: 1\nrules:\n  - tool: {source: builtin, name: set_tool_rules}\n    action: deny\n",
+      "valid": false,
+      "schema": "server-only"
+    }
+  ]
+}

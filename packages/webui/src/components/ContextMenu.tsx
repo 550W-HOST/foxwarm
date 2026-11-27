@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Check } from 'lucide-react'
+import { MENU_VIEWPORT_GUTTER, placeAnchoredMenuVertically, useMenuDismissal } from './menuPositioning'
 
 export type ContextMenuAnchorRect = {
   left: number
@@ -46,8 +47,10 @@ interface ContextMenuProps {
   onClose: () => void
 }
 
-const VIEWPORT_PADDING = 8
-const ANCHOR_GAP = 6
+const VIEWPORT_PADDING = MENU_VIEWPORT_GUTTER
+
+/** Popup surface shared by context menus and the Select list. */
+export const MENU_SURFACE_CLASS = 'rounded-xl border border-fw-border/90 bg-fw-surface/95 shadow-2xl ring-1 ring-fw-focus-ring/5 backdrop-blur dark:border-fw-border/90 dark:bg-fw-surface/95'
 
 export default function ContextMenu({
   open,
@@ -63,49 +66,11 @@ export default function ContextMenu({
 
   const visibleEntries = useMemo(() => entries.filter(Boolean), [entries])
 
-  useEffect(() => {
-    if (!open) return
-
-    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        onClose()
-      }
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose()
-      }
-    }
-
-    const handleResize = () => {
-      onClose()
-    }
-
-    const handleScroll = () => {
-      // A point-anchored context menu has a stable viewport position. Keep it
-      // open when unrelated content (for example, a streaming chat) scrolls
-      // underneath it. Rect-anchored menus still close because their trigger
-      // can move with the scrolled content.
-      if (preferredPlacement !== 'point') {
-        onClose()
-      }
-    }
-
-    document.addEventListener('mousedown', handlePointerDown)
-    document.addEventListener('touchstart', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('resize', handleResize)
-    window.addEventListener('scroll', handleScroll, true)
-
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown)
-      document.removeEventListener('touchstart', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('resize', handleResize)
-      window.removeEventListener('scroll', handleScroll, true)
-    }
-  }, [open, onClose, preferredPlacement])
+  // A point-anchored context menu has a stable viewport position. Keep it open
+  // when unrelated content (for example, a streaming chat) scrolls underneath
+  // it. Rect-anchored menus still close because their trigger can move with the
+  // scrolled content.
+  useMenuDismissal({ open, menuRef, onDismiss: onClose, keepOnScroll: preferredPlacement === 'point' })
 
   useLayoutEffect(() => {
     if (!open || !menuRef.current) {
@@ -126,11 +91,7 @@ export default function ContextMenu({
       } else {
         left = anchorRect.left
       }
-      top = anchorRect.bottom + ANCHOR_GAP
-
-      if (top + rect.height > viewportHeight - VIEWPORT_PADDING && anchorRect.top - rect.height - ANCHOR_GAP >= VIEWPORT_PADDING) {
-        top = anchorRect.top - rect.height - ANCHOR_GAP
-      }
+      top = placeAnchoredMenuVertically({ anchorTop: anchorRect.top, anchorBottom: anchorRect.bottom, menuHeight: rect.height, viewportHeight }).top
     }
 
     left = Math.min(Math.max(VIEWPORT_PADDING, left), Math.max(VIEWPORT_PADDING, viewportWidth - rect.width - VIEWPORT_PADDING))
@@ -146,7 +107,7 @@ export default function ContextMenu({
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[80] min-w-[220px] overflow-hidden rounded-xl border border-fw-border/90 bg-fw-surface/95 py-1.5 shadow-2xl ring-1 ring-fw-focus-ring/5 backdrop-blur dark:border-fw-border/90 dark:bg-fw-surface/95"
+      className={`fixed z-[80] min-w-[220px] overflow-hidden py-1.5 ${MENU_SURFACE_CLASS}`}
       style={position ? { left: `${position.left}px`, top: `${position.top}px` } : { left: 0, top: 0, visibility: 'hidden' }}
       role="menu"
     >
@@ -231,7 +192,7 @@ export default function ContextMenu({
 }
 
 // A single choice shows a plain check on the chosen row; a toggle shows a small box, empty when off.
-function SelectionMark({ checked, kind }: { checked: boolean; kind: 'radio' | 'toggle' }) {
+export function SelectionMark({ checked, kind }: { checked: boolean; kind: 'radio' | 'toggle' }) {
   if (kind === 'radio') {
     return <span aria-hidden="true" data-context-menu-mark="radio" className="flex h-4 w-4 shrink-0 items-center justify-center text-fw-accent">{checked ? <Check size={15} strokeWidth={2.5} /> : null}</span>
   }

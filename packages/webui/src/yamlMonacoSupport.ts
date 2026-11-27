@@ -59,6 +59,11 @@ export function loadYamlMonacoSupport(): Promise<YamlMonacoSupport> {
       import('monaco-editor/esm/vs/language/json/json.worker.js?worker'),
     ])
 
+    // Disposing an editor cancels its pending language requests, and Monaco rejects them with a
+    // cancellation error that nothing awaits. That is expected, not a failure.
+    window.addEventListener('unhandledrejection', event => {
+      if (event.reason instanceof Error && event.reason.name === 'Canceled' && event.reason.message === 'Canceled') event.preventDefault()
+    })
     editorWorkerConstructor = editorWorkerModule.default
     yamlWorkerConstructor = yamlWorkerModule.default
     jsonWorkerConstructor = jsonWorkerModule.default

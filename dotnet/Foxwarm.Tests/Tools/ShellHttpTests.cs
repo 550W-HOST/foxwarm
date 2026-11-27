@@ -276,7 +276,7 @@ public sealed partial class ShellHttpTests
         Assert.Null(fixture.Owner.WaitSnapshot());
         Assert.Equal(1, fixture.Wakes);
         var document = JsonNode.Parse(
-            await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath)
+            await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath())
         )!;
         Assert.Single(SessionWait.Strings(document["meta"]?["acceptedExternalEventIds"]));
         Assert.Contains(

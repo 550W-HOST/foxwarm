@@ -28,6 +28,8 @@ HTTP/WebUI or command ingress
 
 If the authority file is missing while Archive rows exist, `PersistentSessionAuthorityStore.LoadAsync` throws an integrity error: Archive is not a substitute source for active Session history. If no authority and no Archive rows exist, the store returns `null`; the caller then decides whether this is a permitted new lifetime. `SessionManager.Admission` rejects an already catalog-registered/member lifetime with `Cataloged Session authority is missing` and preserves existing identity reservations rather than creating an empty Session.
 
+Domain code reaches this authority only through the [Session authority backend](../units/storage-context.md): owners open bound stores through it, and Main's other readers (Task anchor, debug view, identity reservation, deletion, identity move and recovery) use its read, move and delete operations. A database-backed hosted mode stores the same value as a head plus immutable history segments ([D-session-authority-representations](../units/storage-context.md#d-session-authority-representations)); file mode keeps complete documents.
+
 ## Ordered save lane
 
 **Derived ownership design.** Serialization implements the [active authority](#active-json-authority) contract and the directly selected requirement that admitted input survive busy turns. Existing hot-first and strict callers establish different failure semantics; the save lane is not a blanket promise that every returned operation was durably committed.

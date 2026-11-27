@@ -43,7 +43,8 @@ internal sealed partial class SessionToolExecutor
                         ),
                     ScriptBudget,
                     hosted,
-                    BroadMcpServerVisible(sessions, hosted)
+                    BroadMcpServerVisible(sessions, hosted),
+                    visible
                 );
             case CtlToolHelp toolHelp:
             {
@@ -74,6 +75,31 @@ internal sealed partial class SessionToolExecutor
                 if (Programmatic)
                     throw new InvalidDataException(message);
                 return ToolFailure.Result(message);
+            }
+            case CtlSkillHelp skillHelp:
+            {
+                // Shown when running that skill might be allowed, like the help of a command.
+                var request = new CtlHelpRequest(skillHelp.Command.Noun, skillHelp.Command.Verb);
+                if (
+                    CtlHelp.Render(request, visible) is not { } commandHelp
+                    || !sessions.ToolVisible(hosted, "builtin", "run_skill", fixedArgs: skillHelp.Args)
+                )
+                    return CtlFailure(CtlHelp.Unknown(request), visible);
+                try
+                {
+                    var info = await sessions.SkillCatalog.RunnableAsync(
+                        SessionWait.Text(skillHelp.Args["skillName"])!.Trim(),
+                        Skills.RequestedAgent(SessionWait.Text(skillHelp.Args["agentName"]), hosted.Agent)
+                    );
+                    return new JsonObject { ["output"] = CtlHelp.Skill(commandHelp, info, info.Run!) };
+                }
+                catch (Exception error)
+                    when (error is InvalidDataException or IOException or UnauthorizedAccessException)
+                {
+                    if (Programmatic)
+                        throw new InvalidDataException(error.Message);
+                    return ToolFailure.Result(error.Message);
+                }
             }
             default:
                 // Commands naming a capability resolve to it before dispatch.

@@ -72,7 +72,7 @@ for (const root of ['00-ui-single', '00-ui-tree', 'tree', 'bad-tree']) {
   await seed(root, { pinned: root.startsWith('00-') }); await seed(root + '-child', { parentSessionId: root, pinned: true }); await seed(root + '-grand', { parentSessionId: root + '-child', archived: true })
 }
 await seed('bad-tree-foreign', { parentSessionId: 'bad-tree', currentNode: 'invalid node' }, { currentNode: 'invalid node' })
-await seed('self-cycle', { parentSessionId: 'self-cycle' }); await seed('worker-target'); await seed('worker-orphan')
+await seed('self-cycle', { parentSessionId: 'self-cycle' }); await seed('worker-target'); await seed('worker-orphan'); await seed('00-ui-unrelated', { pinned: true })
 await seedCatalog(fixture.data, rows); seedArchiveBranches(fixture.data, rows)
 const channelsFile = join(state, 'channels.json')
 function audit() { const db = new DatabaseSync(join(state, 'archive-store.sqlite'), { readOnly: true }); try { return ['archive_messages', 'archive_blocks', 'archive_branches'].map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY 1,2').all()) } finally { db.close() } }
@@ -118,20 +118,30 @@ try {
   const childHistory = (await saved('child-source')).history; assert(childHistory.some(row => row.role === 'tool' && JSON.stringify(row).includes('deleted successfully'))); assert.equal(childHistory.at(-1).parts[0].text, 'DONE-source-child')
   await send('locked/main', 'isolated'); assert(await dto('isolated-target')); assert((await saved('locked/main')).history.some(row => JSON.stringify(row).includes('tool_authorization_denied')))
   page = await fixture.openApp(); await page.setViewport({ width: 1440, height: 1200 }); await page.evaluate(() => window.foxwarmTest.switchToSession('source'))
-  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('session source')); await sleep(350)
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'source'); await sleep(350)
   const sourceBytes = await readFile(fileFor('source'), 'utf8'), commandAudit = audit(), providerCount = records.length
   await page.evaluate(() => window.foxwarmTest.sendMessage('/session delete command-target'))
   await until(async () => (await page.evaluate(() => document.body.innerText)).includes('command-target') && (await page.evaluate(() => document.body.innerText)).includes('deleted.'), 'actual temporary delete command Chat response')
   assert.equal(await readFile(fileFor('source'), 'utf8'), sourceBytes); assert.deepEqual(audit(), commandAudit); assert.equal(records.length, providerCount)
   const bindings = JSON.parse(await readFile(channelsFile, 'utf8')).channels; assert(!bindings['webui:chat']); assert.equal(bindings['discord:alias'].sessionId, 'source-alias'); assert.equal(bindings['discord:alias'].mode, 'send-only')
+  const rowSelector = id => '[data-session-id="' + id + '"]'
   for (const [id, recursive] of [['00-ui-single', false], ['00-ui-tree', true]]) {
-    await page.waitForSelector('[data-session-id="' + id + '"]'); await page.click('[data-session-id="' + id + '"]', { button: 'right' })
-    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete' && !button.disabled))
-    await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Delete').click())
-    await page.waitForSelector('.foxwarm-session-delete-modal'); await page.waitForFunction(() => document.querySelector('.foxwarm-session-delete-confirm-button') && !document.querySelector('.foxwarm-session-delete-confirm-button').disabled)
-    if (recursive) await page.click('.foxwarm-session-delete-modal input[type="checkbox"]')
-    await page.click('.foxwarm-session-delete-confirm-button'); await until(async () => !(await dto(id)), 'original Sidebar deletes ' + id)
+    await page.waitForSelector(rowSelector(id)); await page.click(rowSelector(id), { button: 'right' })
+    // Enabled state and activation are read in one page turn: a summary reload can disable the item between round trips.
+    await page.waitForFunction(() => { const item = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Delete' && !button.disabled); item?.click(); return !!item })
+    await page.waitForSelector('.foxwarm-session-delete-modal'); assert.equal(await page.$eval('.foxwarm-session-delete-session-id', element => element.textContent), id)
+    if (recursive) {
+      await page.waitForSelector('.foxwarm-session-delete-modal input[type="checkbox"]'); await page.click('.foxwarm-session-delete-modal input[type="checkbox"]')
+      // Another row leaving the Sidebar keeps the open dialog and its descendant choice.
+      await remove('00-ui-unrelated'); await page.waitForFunction(() => !document.querySelector('[data-session-id="00-ui-unrelated"]'))
+    }
+    await page.waitForFunction(label => { const button = document.querySelector('.foxwarm-session-delete-confirm-button'); if (!button || button.disabled || button.textContent.trim() !== label) return false; button.click(); return true },
+      {}, recursive ? 'Delete 3 sessions' : 'Delete session')
+    await until(async () => !(await dto(id)), 'original Sidebar deletes ' + id)
     if (recursive) assert.equal(await dto(id + '-grand'), null); else { assert(await dto(id + '-grand')); assert.equal((await dto(id + '-child')).parentSessionId, null) }
+    // The REST answer can precede the Sidebar's deletion event. Removing the row moves the rows below it up, so the
+    // next right-click, whose point is computed before the mouse event, waits until the Sidebar has removed them.
+    await page.waitForFunction(ids => ids.every(id => !document.querySelector(`[data-session-id="${id}"]`)), {}, recursive ? [id, id + '-child'] : [id])
   }
   // A busy target is stopped and retried, not silently deleted or replayed.
   await message('live', 'CASE:held-provider'); await until(() => held.has('held-provider'), 'actual held provider')

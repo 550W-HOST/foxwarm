@@ -54,7 +54,7 @@ public sealed partial class LiveActivityTests
         );
         taskReminder["__meta"] = new JsonObject { ["taskReminder"] = true };
         var compacted = System(
-            "<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"(none)\" currentSessionId=\"s\" time=\"t\" />"
+            "<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"(none)\" currentSessionId=\"s\" currentNode=\"build/worker\" cwd=\"/src\" time=\"t\" />"
         );
         var compactGoal = Row(
             "user",

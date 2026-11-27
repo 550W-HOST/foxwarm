@@ -25,7 +25,11 @@ async function click(text, selector = '[data-node-actions]') {
   const button = await page.evaluateHandle((text, selector) => [...document.querySelectorAll(`${selector} button`)].find(button => (button.textContent.trim() === text || button.getAttribute('aria-label') === text) && !button.disabled), text, selector)
   await button.asElement().click(); await button.dispose()
 }
-async function open(id, action = 'Start command') { await click(action, `[data-system-node-id="${id}"]`); await page.waitForFunction(() => document.querySelector('[data-node-actions]')?.open && !document.querySelector('[data-node-actions] [role="status"]')) }
+async function open(id, action = 'Start command') {
+  await page.click(`[data-system-node-id="${id}"] [data-node-menu]`)
+  const item = await page.waitForSelector(`::-p-xpath(//*[@role="menuitem"][normalize-space(.)="${action}"])`)
+  await item.click(); await item.dispose()
+  await page.waitForFunction(() => document.querySelector('[data-node-actions]')?.open && !document.querySelector('[data-node-actions] [role="status"]')) }
 async function close() { await click('Close Node actions'); await page.waitForSelector('[data-node-actions]', { hidden: true }) }
 async function create(id, parentNode) { const result = await api('POST', '/api/nodes/onboarding/create', { nodeId: id, baseUrl: host, parentNode }); assert.equal(result.status, 200); return result.body.authToken }
 async function client(id, auth, native) {
@@ -66,8 +70,10 @@ try {
     } else void request.continue()
   })
   await page.waitForSelector('[data-system-node-id="saved-cli"]')
-  assert.equal(await page.$('[data-system-node-id="master"] button:not([data-system-node-session])'), null)
-  assert.equal(await page.$('[data-system-node-id="fixture/target"] button'), null)
+  // Only Nodes with managed credentials have actions.
+  assert.equal(await page.$('[data-system-node-id="master"] [data-node-menu]'), null)
+  assert.equal(await page.$('[data-system-node-id="fixture/target"] [data-node-menu]'), null)
+  assert.ok(await page.$('[data-system-node-id="saved-cli"] button[aria-label="More actions for saved-cli"]'))
   assert.equal(requests.filter(request => request.url.includes('restart-command') || request.url.includes('reissue-token')).length, 0)
   await open('saved-cli')
   assert.equal(await page.$eval('[aria-label="Installation directory"]', input => input.value), installDir)

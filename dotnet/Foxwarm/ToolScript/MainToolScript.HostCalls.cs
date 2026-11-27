@@ -77,11 +77,30 @@ internal sealed partial class MainToolScript
                     JsonNode? result;
                     try
                     {
+                        // Every committed delivery of the call, in order, including those of a
+                        // nested run. Presented at once so a background hand-off can tell which
+                        // deliveries the tool row already shows.
                         context.SessionMessageDelivered = delivery =>
                         {
-                            var evidence = (JsonObject)delivery.DeepClone();
-                            evidence["id"] = subcall["id"]!.DeepClone();
-                            subcall["sessionMessage"] = evidence;
+                            void Record()
+                            {
+                                if (subcall["sessionMessages"] is not JsonArray deliveries)
+                                    subcall["sessionMessages"] = deliveries = new JsonArray();
+                                var evidence = (JsonObject)delivery.DeepClone();
+                                evidence["id"] = Foxwarm.Tools.SessionToolExecutor.DeliveryId(
+                                    Required(subcall, "id"),
+                                    deliveries.Count
+                                );
+                                deliveries.Add(evidence);
+                                if (context.Detach is { Detached: true } handedOff)
+                                    handedOff.Deliveries.Add((JsonObject)evidence.DeepClone());
+                                Emit();
+                            }
+                            if (context.Detach is { } detach)
+                                lock (detach.Gate)
+                                    Record();
+                            else
+                                Record();
                         };
                         context.ExecPlacementObserved = placement =>
                             subcall["exec"] = placement.DeepClone();

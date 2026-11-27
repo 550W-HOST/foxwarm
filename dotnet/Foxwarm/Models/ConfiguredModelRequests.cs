@@ -92,6 +92,7 @@ internal static class ConfiguredModelRequests
             TextRedactionOmitsOversized = purpose == "compact-plan",
             KeepReasoningOnError =
                 model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
+            PerMessageEffort = AnthropicMessageEffort.Configured(model),
             BaseUri = model.BaseUri,
             RequestModel = model.UpstreamModelId,
             MaxOutputTokens = model.MaxOutput,

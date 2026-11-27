@@ -7,16 +7,16 @@ import { SquarePen, ChevronDown, ChevronUp, Code2, MessageSquareText, Search, Sq
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
-import ChatTimeline from './ChatTimeline'
+import ChatTimeline, { EMPTY_TIMELINE_RENDER_WINDOW_STATE, TIMELINE_WINDOW_START, type TimelineRenderWindow, type TimelineRenderWindowState } from './ChatTimeline'
 import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields, type SessionSearchMatch } from './chatSessionSearch'
-import { ExecLinkContext, counterpartRole, findExecLink, flashExecLink, indexExecLinks, type ExecLinkController, type ExecLinkRole } from './execLinks'
+import { ExecLinkContext, counterpartRole, findExecLink, findExecLinkMessageIndex, flashExecLink, indexExecLinks, type ExecLinkController, type ExecLinkRole } from './execLinks'
 import ContextScrollbar from './ContextScrollbar'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '../contextScrollbarSettings'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import RunningCommands from './RunningCommands'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
-import { isInternalTimelineMessage, type Message } from './chatShared'
+import { isEffortChangeMessage, isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -58,6 +58,13 @@ const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
 const HISTORY_PRELOAD_DISTANCE_PX = 500
+// The committed timeline mounts derived items (rows, counted groups, Activities), not source
+// messages: the newest items or those around a target, then bounded pieces as the reader
+// approaches an edge, keeping the same 500px buffer that paging uses.
+const TIMELINE_WINDOW_INITIAL_ITEMS = 24
+const TIMELINE_WINDOW_STEP_ITEMS = 16
+const TIMELINE_WINDOW_TARGET_BEFORE_ITEMS = 12
+const INITIAL_TIMELINE_WINDOW: TimelineRenderWindow = { key: null, before: TIMELINE_WINDOW_INITIAL_ITEMS }
 const SEARCH_HISTORY_STORAGE_KEY = 'foxwarm.chat.search-history'
 const SEARCH_HISTORY_LIMIT = 20
 
@@ -209,6 +216,27 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
   const [continuousWindowKey, setContinuousWindowKey] = useState<string | null>(null)
   const [continuousProtectedRange, setContinuousProtectedRange] = useState<ProtectedHistoryRange | null>(null)
+  // The window belongs to one Session and history mode; a change mounts the newest items in
+  // the same render, before any restore reads the new timeline.
+  const timelineWindowOwner = `${viewportSessionId}\n${historyMode}`
+  const timelineWindowOwnerRef = useRef(timelineWindowOwner)
+  timelineWindowOwnerRef.current = timelineWindowOwner
+  const [timelineWindowEntry, setTimelineWindowEntry] = useState({ owner: timelineWindowOwner, window: INITIAL_TIMELINE_WINDOW })
+  const timelineWindow = timelineWindowEntry.owner === timelineWindowOwner ? timelineWindowEntry.window : INITIAL_TIMELINE_WINDOW
+  const setTimelineWindow = useCallback((update: TimelineRenderWindow | ((current: TimelineRenderWindow) => TimelineRenderWindow)) => {
+    setTimelineWindowEntry(entry => {
+      const owner = timelineWindowOwnerRef.current
+      const current = entry.owner === owner ? entry.window : INITIAL_TIMELINE_WINDOW
+      const next = typeof update === 'function' ? update(current) : update
+      return next === entry.window && entry.owner === owner ? entry : { owner, window: next }
+    })
+  }, [])
+  // Counts pieces mounted above the reader; each is a prepend for `HistoryCommit`.
+  const [timelineWindowPrepends, setTimelineWindowPrepends] = useState(0)
+  const timelineWindowStateRef = useRef<TimelineRenderWindowState>({ ...EMPTY_TIMELINE_RENDER_WINDOW_STATE })
+  const timelineFillFrameRef = useRef<number | null>(null)
+  const archiveLoadingRef = useRef(false)
+  archiveLoadingRef.current = historyMode === 'continuous' && archivePage.loading
   const currentHistoryRef = useRef({ mode: historyMode, messages })
   currentHistoryRef.current = { mode: historyMode, messages }
   const continuousWindowRangeRef = useRef({ start: 0, count: CONTINUOUS_HISTORY_WINDOW_SIZE })
@@ -233,11 +261,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const [searchNavigation, setSearchNavigation] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchAppliedNavigationRef = useRef(0)
+  // An exec-link jump that waits for its counterpart to mount owns the position, as a Search
+  // navigation does: the commit that mounts the counterpart is not a reading-row prepend.
+  const execJumpPendingRef = useRef(false)
   const searchHistoryRef = useRef<string[]>([])
   const searchHistoryIndexRef = useRef<number | null>(null)
   const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
-  const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  // The ID line adds something only beside a working directory; the ID itself stays in Copy ID.
+  const sessionHeaderSubtitle = sessionRecord?.cwd?.trim() ? formatSessionHeaderSubtitle(sessionId, sessionRecord.cwd) : null
   const sentVersionEnabled = sessionRecord?.textRedaction === true
   const sentVersion = useMemo(() => ({ sessionId, enabled: sentVersionEnabled }), [sessionId, sentVersionEnabled])
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
@@ -384,10 +416,44 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     return () => { observer.disconnect(); root.style.removeProperty('--chat-mobile-header-height') }
   }, [mobileUi])
 
+  // A Search, exec or scrollbar jump mounts from the target through the latest row, as the
+  // complete timeline did, and never unmounts a row it already mounted. A restored saved
+  // anchor (`bounded`) mounts only the rows around it.
+  const showTimelineAround = useCallback((message: Message | undefined, bounded = false) => {
+    if (!message) return
+    const key = getMessageStableKey(message, 0)
+    if (bounded) {
+      setTimelineWindow({ key, before: TIMELINE_WINDOW_TARGET_BEFORE_ITEMS, after: TIMELINE_WINDOW_INITIAL_ITEMS })
+      return
+    }
+    const loaded = currentHistoryRef.current.messages
+    const targetIndex = loaded.indexOf(message)
+    const firstKey = timelineWindowStateRef.current.firstKey
+    const firstIndex = firstKey === null ? -1 : loaded.findIndex(candidate => getMessageStableKey(candidate, 0) === firstKey)
+    setTimelineWindow(current => current.after === undefined && firstIndex >= 0 && targetIndex >= firstIndex
+      ? current
+      : { key, before: TIMELINE_WINDOW_TARGET_BEFORE_ITEMS })
+  }, [])
+
+  const extendTimelineWindow = useCallback((direction: 'earlier' | 'later') => {
+    if (direction === 'earlier') setTimelineWindowPrepends(count => count + 1)
+    setTimelineWindow(current => direction === 'earlier'
+      ? { ...current, before: current.before + TIMELINE_WINDOW_STEP_ITEMS }
+      : current.key === null || current.after === undefined ? current : { ...current, after: current.after + TIMELINE_WINDOW_STEP_ITEMS })
+  }, [])
+
   const setBottomFollow = useCallback((following: boolean, pendingUserLeave = false) => {
     shouldAutoScrollRef.current = following
     pendingUserLeaveBottomRef.current = pendingUserLeave
     setFollowingBottom(following)
+    // Rejoining the bottom from a window that ends before the latest row mounts the newest
+    // rows. Leaving it pins the first mounted item before later rows can arrive, so rows above
+    // the reader are never removed under it. Each change happens once: a pinned window stays
+    // pinned while following, so repeated follow toggles do not re-render.
+    const firstKey = timelineWindowStateRef.current.firstKey
+    setTimelineWindow(current => following
+      ? current.after === undefined ? current : INITIAL_TIMELINE_WINDOW
+      : current.key !== null || !firstKey ? current : { key: firstKey, before: 0 })
     if (following && historyMode === 'continuous') {
       // A following reader sees the live tail; a window kept while reading would leave later rows unmounted.
       setContinuousWindowKey(null)
@@ -450,7 +516,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' | 'toward-bottom' = 'none') => {
     const container = messagesContainerRef.current
-    const distanceFromBottom = historyMode === 'continuous' && !continuousWindowAtLatestRef.current ? Number.POSITIVE_INFINITY : container
+    // A window that ends before the latest row has no bottom to rejoin; active history always
+    // reaches it unless the render window ends earlier.
+    const distanceFromBottom = !continuousWindowAtLatestRef.current ? Number.POSITIVE_INFINITY : container
       ? container.scrollHeight - container.scrollTop - container.clientHeight
       : Number.POSITIVE_INFINITY
     const next = updateChatBottomFollow({
@@ -461,7 +529,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     })
     setBottomFollow(next.following, next.pendingUserLeave)
     return next
-  }, [historyMode, setBottomFollow])
+  }, [setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
     const container = messagesContainerRef.current
@@ -514,11 +582,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const keepAttachedBottom = useCallback((rowsChanged = false) => {
     const container = messagesContainerRef.current
     if (!container) return
+    // Decide before reading geometry: the read lays out the document synchronously, and only
+    // an attached reader whose position may be pinned needs it.
+    if (!shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pointerScrollInteractionRef.current || !isContentLayoutReady()) return
     const range = { scrollHeight: container.scrollHeight, clientHeight: container.clientHeight }
     const previous = attachedRangeRef.current
     attachedRangeRef.current = range
     if (!rowsChanged && previous?.scrollHeight === range.scrollHeight && previous.clientHeight === range.clientHeight) return
-    if (!shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pointerScrollInteractionRef.current || !isContentLayoutReady()) return
     if (range.scrollHeight - container.scrollTop - range.clientHeight > 0.5) container.scrollTop = range.scrollHeight
   }, [isContentLayoutReady])
 
@@ -554,6 +624,20 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     return true
   }, [isContentLayoutReady, setBottomFollow, viewportSessionId, historyMode])
 
+  const extendTimelineForAnchor = useCallback((state: Extract<ChatViewportState, { kind: 'anchor' }>): boolean => {
+    const container = messagesContainerRef.current
+    const anchor = committedTimelineRef.current
+      ? Array.from(committedTimelineRef.current.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR)).find(element => element.getAttribute('data-chat-message-anchor-key') === state.messageKey)
+      : null
+    if (!container || !anchor) return false
+    const offset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+    const mounted = timelineWindowStateRef.current
+    if (offset < state.offsetPx - 2 && container.scrollTop <= 0.5 && mounted.hiddenBefore) extendTimelineWindow('earlier')
+    else if (offset > state.offsetPx + 2 && container.scrollHeight - container.scrollTop - container.clientHeight <= 0.5 && mounted.hiddenAfter) extendTimelineWindow('later')
+    else return false
+    return true
+  }, [extendTimelineWindow])
+
   const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
     for (const candidate of anchors) {
       const state: ChatViewportState = { kind: 'anchor', ...candidate }
@@ -577,6 +661,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
     currentViewportGeometryRef.current = null
+    // Reader input supersedes an exec-link jump still waiting for its counterpart.
+    execJumpPendingRef.current = false
   }, [])
 
   const handleBottomNavigation = useCallback(() => {
@@ -628,6 +714,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     if (container) {
       markUserViewportInteraction()
       setBottomFollow(false)
+      setTimelineWindow({ key: TIMELINE_WINDOW_START, before: 0, after: TIMELINE_WINDOW_INITIAL_ITEMS })
       if (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         pendingScrollToTrueTopRef.current = true
         setShowFullTimeline(true)
@@ -660,8 +747,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     leaveBottomFollow()
     if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
     pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
+    const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
+    // The overview spans the whole loaded history: navigating it mounts every row, as the
+    // complete timeline did, so its measured thumb maps onto real geometry.
+    setTimelineWindow({ key: TIMELINE_WINDOW_START, before: 0 })
     if (historyMode === 'continuous') {
-      const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
       if (index >= 0) {
         setContinuousProtectedRange(null)
         setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
@@ -691,7 +781,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   const captureHistoryCommit = useCallback(() => {
     if (shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pendingScrollToTrueTopRef.current
-      || pendingContextScrollbarNavigationRef.current || searchAppliedNavigationRef.current !== searchNavigation) return
+      || pendingContextScrollbarNavigationRef.current || searchAppliedNavigationRef.current !== searchNavigation || execJumpPendingRef.current) return
     const container = messagesContainerRef.current
     const timeline = committedTimelineRef.current
     if (!container || !timeline || !timeline.querySelector('[data-search-row], [data-chat-message-anchor-key]')) return
@@ -717,11 +807,21 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     continuousPagingIntentRef.current = null
     setContinuousProtectedRange(protectedRange)
     setContinuousWindowKey(key)
+    // A page moved into the reading window mounts whole, as the reader asked for it,
+    // from the window start or the protected reading range, whichever is earlier.
+    const loaded = currentHistoryRef.current.messages
+    const keyIndex = loaded.findIndex(message => getMessageStableKey(message, 0) === key)
+    const protectedIndex = protectedRange ? loaded.findIndex(message => getMessageViewportAnchorKey(message) === protectedRange.startKey) : -1
+    setTimelineWindow({ key: protectedIndex >= 0 && keyIndex >= 0 && protectedIndex < keyIndex ? getMessageStableKey(loaded[protectedIndex], 0) : key, before: 0 })
   }, [readProtectedHistoryRange])
 
-  const loadEarlierArchivePage = useCallback(() => loadArchivePage('earlier', rows => {
-    if (currentHistoryRef.current.mode === 'continuous' && rows.length && !shouldAutoScrollRef.current) showContinuousWindow(getMessageStableKey(rows[0], 0))
-  }), [loadArchivePage, showContinuousWindow])
+  const loadEarlierArchivePage = useCallback(() => {
+    // Scroll events before the loading state renders must not mount another piece.
+    archiveLoadingRef.current = currentHistoryRef.current.mode === 'continuous'
+    return loadArchivePage('earlier', rows => {
+      if (currentHistoryRef.current.mode === 'continuous' && rows.length && !shouldAutoScrollRef.current) showContinuousWindow(getMessageStableKey(rows[0], 0))
+    })
+  }, [loadArchivePage, showContinuousWindow])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -749,6 +849,15 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         && (windowStart > 0 || archivePage.hasEarlier)
       const laterContinuous = historyMode === 'continuous' && pagingIntent === 'later' && distanceFromBottom < HISTORY_PRELOAD_DISTANCE_PX
         && windowStart + windowCount < messages.length
+
+      // Loaded items outside the mounted window are mounted before the window moves. An
+      // earlier Archive page is still requested in the same buffer; it mounts whole on arrival.
+      const mounted = timelineWindowStateRef.current
+      const mountEarlier = mounted.hiddenBefore > 0 && scrollTop < HISTORY_PRELOAD_DISTANCE_PX && !archiveLoadingRef.current
+      if ((mountEarlier || mounted.hiddenAfter > 0 && distanceFromBottom < HISTORY_PRELOAD_DISTANCE_PX) && !(earlierContinuous && windowStart === 0)) {
+        extendTimelineWindow(mountEarlier ? 'earlier' : 'later')
+        return
+      }
       if (earlierContinuous || laterContinuous || (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < HISTORY_PRELOAD_DISTANCE_PX)) {
         // This reading navigation supersedes an older host-resize correction.
         pendingContentResizeRef.current = null
@@ -765,6 +874,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
           // Active context is local: retain its existing native-event geometry priority.
           captureHistoryCommit()
           setShowFullTimeline(true)
+          // The revealed rows above mount with the expansion, as one prepend, so the reading
+          // row keeps an offset that needs rows above it.
+          extendTimelineWindow('earlier')
         }
       }
     }
@@ -854,7 +966,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, captureHistoryCommit, leaveBottomFollow, markUserViewportInteraction, messages, historyMode, continuousWindowKey, archivePage, loadEarlierArchivePage, showContinuousWindow, setBottomFollow, showFullTimeline, updateBottomFollowState])
+  }, [captureCurrentViewportState, captureHistoryCommit, extendTimelineWindow, leaveBottomFollow, markUserViewportInteraction, messages, historyMode, continuousWindowKey, archivePage, loadEarlierArchivePage, showContinuousWindow, setBottomFollow, showFullTimeline, updateBottomFollowState])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -943,15 +1055,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   useLayoutEffect(() => keepAttachedBottom())
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    const snapshotText = webUiIdentityMode || historyMode === 'continuous' ? '' : persistentMemorySnapshot.trim()
-
-    if (!snapshotText) {
+    if (webUiIdentityMode || historyMode === 'continuous' || !persistentMemorySnapshot.trim()) {
       return null
     }
 
     return {
       role: 'tool',
-      parts: [{ text: `<foxwarm-system kind="snapshot" hint="snapshot" />\n${snapshotText}` }],
+      parts: [{ text: persistentMemorySnapshot }],
       __meta: {
         timestamp: -1,
         synthetic: 'persistentMemorySnapshot',
@@ -984,9 +1094,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     return messages.slice(-DEFAULT_VISIBLE_TIMELINE_MESSAGES)
   }, [continuousWindowStart, continuousWindowEnd, historyMode, messages, showFullTimeline])
 
-  const displayingLatest = historyMode === 'active' || !archivePage.hasLater && continuousWindowStart + visibleMessages.length >= messages.length
+  // A window bounded after a target does not mount the live tail, its status or previews.
+  const timelineClippedAfter = timelineWindow.key !== null && timelineWindow.after !== undefined
+  const displayingLatest = !timelineClippedAfter && (historyMode === 'active' || !archivePage.hasLater && continuousWindowStart + visibleMessages.length >= messages.length)
   continuousWindowAtLatestRef.current = displayingLatest
   const hiddenMessageCount = messages.length - visibleMessages.length
+  // Mounting a piece above the reader is a prepend like loading an earlier page.
+  const historyRevision = useMemo(() => [historyMode === 'continuous' ? visibleMessages : showFullTimeline, timelineWindowPrepends], [historyMode, visibleMessages, showFullTimeline, timelineWindowPrepends])
 
   useEffect(() => {
     if (historyMode !== 'continuous' || !archivePage.hasLater) return
@@ -1018,18 +1132,61 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   // Conversation hides model bookkeeping; technical views retain the existing snapshot and rows.
   const timelineMessages = useMemo(() => {
+    const shown = visibleMessages.some(isEffortChangeMessage) ? visibleMessages.filter(message => !isEffortChangeMessage(message)) : visibleMessages
     const baseMessages = timelineView === 'conversation'
-      ? visibleMessages.filter(message => !isInternalTimelineMessage(message))
-      : snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+      ? shown.filter(message => !isInternalTimelineMessage(message))
+      : snapshotSystemMessage ? [snapshotSystemMessage, ...shown] : shown
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [timelineView, snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
-  useLayoutEffect(() => keepAttachedBottom(true), [keepAttachedBottom, timelineMessages, queuedMessages])
+  useLayoutEffect(() => keepAttachedBottom(true), [keepAttachedBottom, timelineMessages, queuedMessages, timelineWindow])
+
+  // The visible area is mounted before paint; the 500px reading buffer follows one bounded
+  // piece per frame, so a long history never mounts in one task.
+  const checkTimelineBuffer = useCallback(() => {
+    if (timelineFillFrameRef.current !== null) return
+    timelineFillFrameRef.current = window.requestAnimationFrame(() => {
+      timelineFillFrameRef.current = null
+      const container = messagesContainerRef.current
+      const mounted = timelineWindowStateRef.current
+      if (!container || (!mounted.hiddenBefore && !mounted.hiddenAfter) || pendingViewportRestoreRef.current?.kind === 'state') return
+      const { scrollTop, scrollHeight, clientHeight } = container
+      // A requested earlier page mounts with every item above the reader when it arrives.
+      if (mounted.hiddenBefore && scrollTop < HISTORY_PRELOAD_DISTANCE_PX && !archiveLoadingRef.current) extendTimelineWindow('earlier')
+      else if (mounted.hiddenAfter && scrollHeight - scrollTop - clientHeight < HISTORY_PRELOAD_DISTANCE_PX) extendTimelineWindow('later')
+    })
+  }, [extendTimelineWindow])
+  useEffect(() => () => {
+    if (timelineFillFrameRef.current !== null) window.cancelAnimationFrame(timelineFillFrameRef.current)
+    timelineFillFrameRef.current = null
+  }, [])
+  useLayoutEffect(() => {
+    const mounted = timelineWindowStateRef.current
+    // A target window that reached the last item mounts the live tail again.
+    if (timelineWindow.key !== null && timelineWindow.after !== undefined && !mounted.hiddenAfter && mounted.mounted) {
+      setTimelineWindow({ key: timelineWindow.key, before: timelineWindow.before })
+      return
+    }
+    // A detached reader's first mounted item stays mounted while later rows arrive, so rows
+    // above the reader are never removed under it.
+    if (!shouldAutoScrollRef.current && timelineWindow.key === null && mounted.firstKey) {
+      setTimelineWindow({ key: mounted.firstKey, before: 0 })
+      return
+    }
+    if (!mounted.hiddenBefore && !mounted.hiddenAfter) return
+    const container = messagesContainerRef.current
+    if (mounted.hiddenBefore && container && container.clientHeight > 0 && container.scrollHeight <= container.clientHeight) {
+      extendTimelineWindow('earlier')
+      return
+    }
+    checkTimelineBuffer()
+  }, [checkTimelineBuffer, extendTimelineWindow, timelineWindow, timelineMessages])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
     leaveBottomFollow()
     const inGroup = match.groupKey && (match.surface === 'call' || match.surface === 'response' || match.surface === 'reasoning' || match.surface === 'system')
     const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
+    showTimelineAround(messages[requiredIndex])
     if (historyMode === 'continuous') {
       setContinuousProtectedRange(null)
       setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
@@ -1037,7 +1194,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     else if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
     setSearchMatchId(match.id)
     setSearchNavigation(value => value + 1)
-  }, [leaveBottomFollow, messages, historyMode, showFullTimeline])
+  }, [leaveBottomFollow, messages, historyMode, showFullTimeline, showTimelineAround])
 
   const closeSearch = useCallback(() => {
     recordSearchHistory(searchQuery)
@@ -1157,6 +1314,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     if (!(target === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId)) return
     leaveBottomFollow()
     if (revealExecLink(execId, target)) return
+    execJumpPendingRef.current = true
     let match: SessionSearchMatch | null = null
     if (timelineView !== 'conversation') {
       const query = `[${execId}]`
@@ -1166,19 +1324,28 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         match = { ...field, id: `exec:${execId}:${target}`, offset: field.text.indexOf(query), ordinal: 0, query }
         const inGroup = match.groupKey && (match.surface === 'response' || match.surface === 'system')
         const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
+        showTimelineAround(messages[requiredIndex])
         if (historyMode === 'continuous') {
           setContinuousProtectedRange(null)
           setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
         } else if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
       }
     }
+    // A loaded counterpart outside the mounted window is mounted first.
+    if (!match) showTimelineAround(messages[findExecLinkMessageIndex(messages, execId, target)])
     setExecJump(previous => ({ target: match, execId, role: target, navigation: (previous?.navigation ?? 0) + 1 }))
-  }, [activeMessages, execLinkIndex, historyMode, leaveBottomFollow, messages, revealExecLink, showCommentary, showFullTimeline, showInterAgentMessages, timelineView])
+  }, [activeMessages, execLinkIndex, historyMode, leaveBottomFollow, messages, revealExecLink, showCommentary, showFullTimeline, showInterAgentMessages, showTimelineAround, timelineView])
   useLayoutEffect(() => {
     if (!execJump || execJump.navigation === execJumpAppliedRef.current) return
-    if (revealExecLink(execJump.execId, execJump.role)) execJumpAppliedRef.current = execJump.navigation
-  }, [execJump, revealExecLink, timelineMessages, showFullTimeline])
-  useLayoutEffect(() => { setExecJump(null) }, [sessionId, searchOpen, timelineView])
+    if (revealExecLink(execJump.execId, execJump.role)) {
+      execJumpAppliedRef.current = execJump.navigation
+      execJumpPendingRef.current = false
+    }
+  }, [execJump, revealExecLink, timelineMessages, showFullTimeline, timelineWindow])
+  useLayoutEffect(() => {
+    setExecJump(null)
+    execJumpPendingRef.current = false
+  }, [sessionId, searchOpen, timelineView])
   const execLinkController = useMemo<ExecLinkController>(() => ({
     hasCounterpart: (execId, role) => (counterpartRole(role) === 'receipt' ? execLinkIndex.receipts : execLinkIndex.completions).has(execId),
     jump: jumpToExec,
@@ -1286,6 +1453,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
     if (pending.kind === 'state') {
       if (applyViewportState(pending.state)) {
+        // An anchor without enough mounted rows above or below to reach its offset
+        // mounts another piece and restores again.
+        if (pending.state.kind === 'anchor' && extendTimelineForAnchor(pending.state)) return
         pendingViewportRestoreRef.current = null
         return
       }
@@ -1303,6 +1473,18 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
       if (historyMode === 'active' && pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
         setShowFullTimeline(true)
         return
+      }
+
+      if (pending.state.kind === 'anchor') {
+        const messageKey = pending.state.messageKey
+        const anchored = visibleMessages.find(message => getMessageViewportAnchorKey(message) === messageKey)
+        // A loaded anchor outside the mounted window mounts the rows around it.
+        const anchorMounted = !!committedTimelineRef.current && Array.from(committedTimelineRef.current.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+          .some(element => element.getAttribute('data-chat-message-anchor-key') === messageKey)
+        if (anchored && !anchorMounted && timelineWindow.key !== getMessageStableKey(anchored, 0)) {
+          showTimelineAround(anchored, true)
+          return
+        }
       }
 
       // Prepared rows mount before the Workbench assigns its first pane rectangle.
@@ -1350,7 +1532,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, isContentLayoutReady, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousHistoryReady, continuousWindowStart, continuousWindowKey, continuousProtectedRange, visibleMessages])
+  }, [applyViewportAnchorCandidates, applyViewportState, extendTimelineForAnchor, historyLoaded, isContentLayoutReady, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, showTimelineAround, timelineMessages, timelineWindow, viewportSessionId, historyMode, archivePage.loaded, continuousHistoryReady, continuousWindowStart, continuousWindowKey, continuousProtectedRange, visibleMessages])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1358,7 +1540,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     if (scrollToContextScrollbarAnchor(pending.anchorKey, pending.fraction)) {
       pendingContextScrollbarNavigationRef.current = null
     }
-  }, [scrollToContextScrollbarAnchor, showFullTimeline, timelineMessages])
+    // The navigation's own window change may be the commit that mounts its target.
+  }, [scrollToContextScrollbarAnchor, showFullTimeline, timelineMessages, timelineWindow])
 
   useEffect(() => {
     const content = messagesContentRef.current
@@ -1374,6 +1557,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     const observer = new ResizeObserver(() => {
       syncScrollbarGutter()
       keepAttachedBottom()
+      checkTimelineBuffer()
       if (resizeRestoreFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeRestoreFrameRef.current)
       }
@@ -1428,7 +1612,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         resizeRestoreFrameRef.current = null
       }
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, keepAttachedBottom])
+  }, [applyViewportAnchorCandidates, applyViewportState, checkTimelineBuffer, keepAttachedBottom])
 
   useLayoutEffect(() => () => {
     // A mode switch has already changed the rendered source by cleanup time.
@@ -1630,13 +1814,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   return (
     <SessionQuestionsContext.Provider value={sessionQuestions}>
-    <div ref={chatRootRef} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} data-chat-session-id={sessionId} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
         compact={mobileUi}
-        subtitle={webUiIdentityMode || mobileUi ? null : (
+        subtitle={webUiIdentityMode || mobileUi || !sessionHeaderSubtitle ? null : (
           <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
             {sessionHeaderSubtitle}
           </span>
@@ -1807,18 +1991,21 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
                 void loadArchivePage(direction).then(rows => {
                   if (interactionVersion !== userInteractionVersionRef.current) return
                   if (state) pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion }
-                  if (rows.length && direction !== 'later' && direction !== 'latest') setContinuousWindowKey(getMessageStableKey(rows[0], 0))
+                  if (rows.length && direction !== 'later' && direction !== 'latest') {
+                    setContinuousWindowKey(getMessageStableKey(rows[0], 0))
+                    setTimelineWindow({ key: getMessageStableKey(rows[0], 0), before: 0 })
+                  }
                 })
               }}>{archivePage.error ? 'Retry' : 'Load earlier messages'}</button>}
             </div>}
-            <HistoryCommit revision={historyMode === 'continuous' ? visibleMessages : showFullTimeline} beforeCommit={captureHistoryCommit}>
+            <HistoryCommit revision={historyRevision} beforeCommit={captureHistoryCommit}>
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <OpenModelSettingsContext.Provider value={webUiIdentityMode ? null : onOpenModelSettings ?? null}>
                 <ToolCallActivityContext.Provider value={!displayingLatest ? NO_RUNNING_TOOL_CALLS : toolCallActivity?.runningCallIds ?? (sessionRecord?.runtimeState?.perCallToolActivity ? NO_RUNNING_TOOL_CALLS : undefined)}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                 <SentVersionContext.Provider value={sentVersion}>
-                  <ExecLinkContext.Provider value={execLinkController}><ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : execJump?.target ?? null} renderMessageFooter={displayingLatest && queueFooterCount > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} liveTiming={!pendingSend} /></ExecLinkContext.Provider>
+                  <ExecLinkContext.Provider value={execLinkController}><ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : execJump?.target ?? null} renderMessageFooter={displayingLatest && queueFooterCount > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} liveTiming={!pendingSend} renderWindow={timelineWindow} renderWindowState={timelineWindowStateRef} /></ExecLinkContext.Provider>
                 </SentVersionContext.Provider>
                 </ToolScriptProgressContext.Provider>
                 </ToolCallActivityContext.Provider>

@@ -247,8 +247,11 @@ public sealed class TimerPauseAndRunsTests
             rows = Rows(temp.Path)
                 .OfType<JsonObject>()
                 .ToDictionary(row => SessionWait.Text(row["id"])!);
+            // The store writes a run to the file before publishing it in memory, so the
+            // in-memory list is awaited too.
             return rows["full"]["recentRuns"]?[0]?["outcome"]?.ToString() == "failed"
-                && rows["old"]["recentRuns"] is JsonArray { Count: > 0 };
+                && rows["old"]["recentRuns"] is JsonArray { Count: > 0 }
+                && timers.List("other").Single()?["lastRun"] is not null;
         });
         var fullRuns = rows["full"]["recentRuns"]!.AsArray();
         Assert.Equal(MainTimers.RecentRunLimit, fullRuns.Count);

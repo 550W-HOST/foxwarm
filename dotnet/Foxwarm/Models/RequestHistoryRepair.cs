@@ -12,7 +12,9 @@ internal static partial class RequestHistoryRepair
     internal static RequestHistory SelectAndRepair(RequestHistory history)
     {
         var source = history
-            .Rows.Where(row => CanonicalMessage.IsVisible(row.Message))
+            .Rows.Where(row =>
+                CanonicalMessage.IsVisible(row.Message) || EffortChangeRecord.Is(row.Message)
+            )
             .Select(row => new RequestHistory.Row((JsonObject)row.Message.DeepClone(), row.Origin))
             .ToArray();
         source = AnthropicSearchHistory.RemoveAbandonedCalls(source);
@@ -26,7 +28,7 @@ internal static partial class RequestHistoryRepair
             )
             {
                 var row = source[cursor].Message;
-                if (Interruption(row))
+                if (Interruption(row) || EffortChangeRecord.Is(row))
                     continue;
                 return request
                     ? SessionWait.Text(row["role"]) == "model"

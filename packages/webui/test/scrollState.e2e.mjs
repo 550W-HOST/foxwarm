@@ -18,8 +18,7 @@ let sidebarSecondarySessionId
 
 async function waitForChat(sessionId) {
   await page.waitForFunction((expected) => {
-    const subtitle = document.querySelector('.foxwarm-chat-root header')?.textContent || document.querySelector('.foxwarm-chat-root')?.textContent || ''
-    return subtitle.includes(`session ${expected}`)
+    return document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === expected
   }, { timeout: 15_000 }, sessionId)
   await page.waitForSelector('.foxwarm-chat-messages', { timeout: 15_000 })
 }
@@ -103,6 +102,30 @@ async function waitForTimelineScrollHandler() {
     container.dispatchEvent(new Event('scroll'))
     return false
   }, { timeout: 5_000 })
+}
+
+// The timeline mounts the newest rows of the 100-message active slice first and more as the
+// reader approaches them. Prepend cases start once the slice's first row is mounted, so the
+// next read near the top expands the full history.
+async function mountActiveSlice(sessionId) {
+  const firstKey = await page.evaluate(async (id) => {
+    const history = await (await fetch(`./api/sessions/${encodeURIComponent(id)}/history`)).json()
+    const seq = history.messages.at(-100)?.__meta?.seq
+    return seq ? `seq-local-${seq}` : null
+  }, sessionId)
+  assert.ok(firstKey, 'the active slice starts with a stable row')
+  const mounted = key => !!document.querySelector(`[data-chat-timeline="committed"] [data-chat-message-anchor-key="${key}"]`)
+  for (let piece = 0; piece < 20 && !await page.evaluate(mounted, firstKey); piece++) {
+    const rows = await page.$$eval('[data-chat-timeline="committed"] [data-search-row]', nodes => nodes.length)
+    await page.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      container.scrollTop = 0
+      container.dispatchEvent(new Event('scroll'))
+    })
+    await page.waitForFunction(rows => document.querySelectorAll('[data-chat-timeline="committed"] [data-search-row]').length > rows, { timeout: 15_000 }, rows)
+  }
+  assert.ok(await page.evaluate(mounted, firstKey), 'the active slice is mounted')
+  assert.ok(await page.evaluate(() => document.body.textContent?.includes('Scroll upward to load')), 'mounting the slice does not expand history')
 }
 
 before(async () => {
@@ -223,6 +246,7 @@ test('full timeline prepend preserves a stable row while content below resizes',
   await openPersistentChat(primarySessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
   await waitForTimelineScrollHandler()
+  await mountActiveSlice(primarySessionId)
 
   const expected = await page.evaluate(() => {
     const container = document.querySelector('.foxwarm-chat-messages')
@@ -266,6 +290,7 @@ test('continued user scrolling cancels the stale prepend restore target', async 
   await openPersistentChat(primarySessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
   await waitForTimelineScrollHandler()
+  await mountActiveSlice(primarySessionId)
 
   const positions = await page.evaluate(() => {
     const container = document.querySelector('.foxwarm-chat-messages')
@@ -342,13 +367,12 @@ test('tab remount restores an old message anchor and bottom-follow state', async
   assert.notEqual(restoredOffset, null)
   assert.ok(Math.abs(restoredOffset - expectedAnchor.offset) <= 2, `restored offset changed from ${expectedAnchor.offset} to ${restoredOffset}`)
 
-  await page.evaluate(() => {
+  // The restored window ends before the latest row; return to the bottom explicitly.
+  await page.click('[aria-label="Scroll to bottom"]')
+  await page.waitForFunction(() => {
     const container = document.querySelector('.foxwarm-chat-messages')
-    if (container instanceof HTMLElement) {
-      container.scrollTop = container.scrollHeight
-      container.dispatchEvent(new Event('scroll'))
-    }
-  })
+    return !document.querySelector('[aria-label="Scroll to bottom"]') && container.scrollHeight - container.scrollTop - container.clientHeight <= 2
+  }, { timeout: 15_000 })
   await selectTab(secondarySessionId)
   await selectTab(primarySessionId)
   await page.waitForSelector('[aria-label="Context overview"]', { timeout: 15_000 })
@@ -386,7 +410,7 @@ test('an old active anchor survives switching away again while its return prefix
     await openPersistentChat(secondarySessionId)
     await selectTab(primarySessionId)
     await prefixHeld
-    await page.waitForFunction(() => document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]').length === 100)
+    await page.waitForFunction(() => document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]').length > 0)
     assert.equal(await readAnchorOffset(expected.key), null, 'the saved old anchor has not arrived yet')
 
     // Do not choose a different reading point during this intermediate mount.

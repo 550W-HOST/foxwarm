@@ -131,34 +131,39 @@ internal sealed partial class McpClient
                     : throw new InvalidOperationException("The server changed in the meantime.")
         );
 
-    private async Task UpdateConfigurationAsync(
+    private Task UpdateConfigurationAsync(
         string name,
         JsonObject patch,
         bool enabledOnly,
         Func<JsonObject, JsonObject, Task>? admit = null
-    )
+    ) =>
+        configuration.UpdateAsync(
+            name,
+            patch,
+            enabledOnly,
+            (previous, next) => Published(name, previous, next),
+            admit
+        );
+
+    // After a committed change of one server: account state follows a changed endpoint, OAuth
+    // settings or enablement, and every binding of the server closes.
+    private void Published(string name, JsonObject? previous, JsonObject next)
     {
-        void Published(JsonObject? previous, JsonObject next)
+        var authorizationChanged =
+            (previous?["oauth"] is not null || next["oauth"] is not null)
+            && (
+                SessionWait.Text(previous?["url"]) != SessionWait.Text(next["url"])
+                || !JsonNode.DeepEquals(previous?["oauth"], next["oauth"])
+            );
+        try
         {
-            var authorizationChanged =
-                (previous?["oauth"] is not null || next["oauth"] is not null)
-                && (
-                    SessionWait.Text(previous?["url"]) != SessionWait.Text(next["url"])
-                    || !JsonNode.DeepEquals(previous?["oauth"], next["oauth"])
-                );
-            try
-            {
-                if (
-                    authorizationChanged
-                    || !JsonNode.DeepEquals(previous?["enable"], next["enable"])
-                )
-                    OAuth.ConfigurationChanged(name, authorizationChanged);
-            }
-            finally
-            {
-                InvalidateServer(name);
-            }
+            if (authorizationChanged || !JsonNode.DeepEquals(previous?["enable"], next["enable"]))
+                OAuth.ConfigurationChanged(name, authorizationChanged);
         }
-        await configuration.UpdateAsync(name, patch, enabledOnly, Published, admit);
+        finally
+        {
+            ForgetObservation(name);
+            InvalidateServer(name);
+        }
     }
 }

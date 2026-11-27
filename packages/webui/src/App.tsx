@@ -1,6 +1,7 @@
 import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHistory'
 import { subscribeWindowFrame, windowFrameActive } from './windowFrame'
-import { SessionMessageNamesContext } from './components/SessionMessageCard'
+import { SessionMessageNamesContext, TaskLinkContext } from './components/SessionMessageCard'
+import type { TaskFocusRequest } from './components/TasksView'
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type Modifier } from '@dnd-kit/core'
 import { getEventCoordinates } from '@dnd-kit/utilities'
@@ -33,9 +34,11 @@ import { getNodeTargetAvailability, MASTER_NODE_TARGET, parseWebUiNodeTargets, t
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 import type { TerminalListOptions } from './components/TerminalList'
 import { parseTerminalRegistry, requestTerminalKill, terminalKillConfirmation, type TerminalRegistryRecord } from './terminalRegistry'
-import { useChatPreferences } from './chatPreferences'
+import { reloadInstallationChatDefaults, useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
+import { FoxwarmMark } from './components/FoxwarmMark'
 import { FoxPaneLoader } from './components/FoxLoaders'
+import type { SetupTab } from './components/SetupView'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
@@ -485,6 +488,7 @@ function App() {
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
+  const [setupTabRequest, setSetupTabRequest] = useState<{ tab: SetupTab; nonce: number } | null>(null)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   // Under a window frame every pane's tab strip is a title row, so a sole tab keeps it.
@@ -715,8 +719,15 @@ function App() {
   }
 
   const setupOobeRef = useRef(false)
-  // First-run Setup creates the default `main` Session with a welcome. Place it next to
-  // Setup so closing Setup lands in the conversation instead of an empty pane.
+  // A first-run save receipt names the welcome Session; it opens once status confirms that setup is done.
+  const firstRunReceiptRef = useRef<{ sessionId: string | null } | null>(null)
+  const [welcomeSessionId, setWelcomeSessionId] = useState<string | null>(null)
+  const handleModelsSaved = useCallback((receipt: { firstSessionId?: unknown }) => {
+    if (!setupOobeRef.current || !('firstSessionId' in receipt)) return
+    firstRunReceiptRef.current = { sessionId: typeof receipt.firstSessionId === 'string' && receipt.firstSessionId ? receipt.firstSessionId : null }
+  }, [])
+  // A first-run save without a welcome Session in its receipt: if `main` exists anyway, place
+  // it next to Setup so closing Setup lands in a conversation instead of an empty pane.
   const openFirstRunSession = async () => {
     try {
       const res = await fetch(`${API_BASE_PATH}/sessions/main/state`)
@@ -738,7 +749,17 @@ function App() {
       const completedFirstRun = setupOobeRef.current && !isOobe
       setupOobeRef.current = isOobe
       setSetupOobe(isOobe)
-      if (completedFirstRun) void openFirstRunSession()
+      if (completedFirstRun) {
+        void reloadInstallationChatDefaults()
+        const welcome = firstRunReceiptRef.current?.sessionId
+        firstRunReceiptRef.current = null
+        if (welcome) setWelcomeSessionId(welcome)
+        else {
+          // No welcome was created: ordinary Setup takes over, still on Models.
+          setFocusModelsRequest((current) => current + 1)
+          void openFirstRunSession()
+        }
+      }
       if (isOobe && route.tabId !== SETUP_TAB_ID) {
         setRoute({ view: 'tab', tabId: SETUP_TAB_ID })
         window.location.hash = SETUP_HASH
@@ -747,6 +768,22 @@ function App() {
       console.error('Failed to fetch setup status:', error)
     }
   }
+
+  // After the first save, the welcome Session replaces Setup: the user lands in the conversation.
+  useEffect(() => {
+    if (setupOobe || !welcomeSessionId) return
+    setWelcomeSessionId(null)
+    const existing = Object.values(useWorkbenchStore.getState().tabsById).find(tab => isChatTab(tab) && tab.sessionId === welcomeSessionId)
+    const tab = existing || makeChatTab(welcomeSessionId, welcomeSessionId)
+    upsertTab(isChatTab(tab) ? { ...tab, preview: false } : tab, { activate: true })
+    if (useWorkbenchStore.getState().tabsById[SETUP_TAB_ID]) {
+      if (currentRouteTabIdRef.current === SETUP_TAB_ID) closingRouteTabIdsRef.current.add(SETUP_TAB_ID)
+      removeTab(SETUP_TAB_ID)
+    }
+    navigateToTab(tab.id)
+    void fetchSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setupOobe, welcomeSessionId])
 
   // Lifecycle refreshes and the background poll can overlap; only the latest request applies.
   const terminalFetchSequence = useRef(0)
@@ -1098,6 +1135,14 @@ function App() {
     upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
     navigateToTab(TASKS_TAB_ID)
   }
+  const [taskFocus, setTaskFocus] = useState<TaskFocusRequest | null>(null)
+  // Stable for the communication cards' context; the tab helpers are recreated each render.
+  const openTasksTabRef = useRef(openTasksTab)
+  openTasksTabRef.current = openTasksTab
+  const openTask = useCallback((taskId: string) => {
+    setTaskFocus(current => ({ taskId, nonce: (current?.nonce || 0) + 1 }))
+    openTasksTabRef.current()
+  }, [])
 
   const openLogsTab = () => {
     upsertTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }, { activate: true })
@@ -1590,8 +1635,10 @@ function App() {
     openAgentsView()
   }
 
-  const openSetupView = (options?: { focusModels?: boolean }) => {
+  const openSetupView = (options?: { focusModels?: boolean; tab?: SetupTab }) => {
     if (options?.focusModels) setFocusModelsRequest((current) => current + 1)
+    const requestedTab = options?.tab
+    if (requestedTab) setSetupTabRequest(current => ({ tab: requestedTab, nonce: (current?.nonce || 0) + 1 }))
     const tab = tabsById[SETUP_TAB_ID] || makeSetupTab()
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
@@ -1714,7 +1761,7 @@ function App() {
       )
     }
 
-    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView mobileHome={tab.id.startsWith('mobile:')} onBack={onBack} onOpenSession={openChatTab} /></Suspense>
+    if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView mobileHome={tab.id.startsWith('mobile:')} onBack={onBack} onOpenSession={openChatTab} focus={taskFocus} /></Suspense>
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
@@ -1749,6 +1796,7 @@ function App() {
             agentRequest={agentSettingsRequest}
             sessionsRequest={sessionsFilterRequest}
             usageRequest={usageRequest}
+            onOpenSetupAuthorization={() => openSetupView({ tab: 'authorization' })}
             onOpenAgentMemory={(memoryRoot: string, filePath?: string) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
@@ -1766,7 +1814,9 @@ function App() {
             forced={setupOobe}
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
+            onModelsSaved={handleModelsSaved}
             focusModelsRequest={focusModelsRequest}
+            tabRequest={setupTabRequest}
             onFocusModelsRequestHandled={handleFocusModelsRequestHandled}
             webUiSettings={webUiSettings}
             onInstanceNameChange={saveWebUiInstanceName}
@@ -2094,8 +2144,11 @@ function App() {
   }
 
   const mobilePaneId = focusedPaneId || paneIds[0]
+  // State that places the content slots; the content hosts reposition when it changes.
+  const workbenchContentLayout = useMemo(() => [root, isMobile, showSessionList, mobilePaneId, sidebarWidth, sidebarCollapsed, setupOobe],
+    [root, isMobile, showSessionList, mobilePaneId, sidebarWidth, sidebarCollapsed, setupOobe])
   const communicationNames = useMemo(() => Object.fromEntries(sessions.flatMap(session => [session.id, ...(session.aliases || [])].map(id => [id, session.displayName || session.id]))),[sessions])
-  const renderStableContent = () => <SessionMessageNamesContext.Provider value={communicationNames}><WorkbenchContentLayer>{allTabs.map(tab => {
+  const renderStableContent = () => <SessionMessageNamesContext.Provider value={communicationNames}><TaskLinkContext.Provider value={openTask}><WorkbenchContentLayer>{allTabs.map(tab => {
     const pane = findPaneContainingTab(root, tab.id)
     if (!pane) return null
     const visible = (isMobile || !pane.collapsed) && pane.activeTabId === tab.id
@@ -2109,7 +2162,7 @@ function App() {
       navigationPending={pendingChatNavigation?.paneId === pane.id ? pendingChatNavigation : null}
       canClose={!(tab.type === 'setup' && setupOobe)}
       renderContent={() => renderTabContent(tab, isMobile ? handleBackToList : undefined, visible)} />
-  })}</WorkbenchContentLayer></SessionMessageNamesContext.Provider>
+  })}</WorkbenchContentLayer></TaskLinkContext.Provider></SessionMessageNamesContext.Provider>
 
   const renderWorkbenchSurface = (content: ReactNode) => (
     <DndContext
@@ -2143,7 +2196,7 @@ function App() {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <WorkbenchContentProvider>
+      <WorkbenchContentProvider layout={workbenchContentLayout}>
         {content}
         {renderStableContent()}
         <DragOverlay
@@ -2165,6 +2218,31 @@ function App() {
       </WorkbenchContentProvider>
     </DndContext>
   )
+
+  // First run is a single step: connecting a model. Nothing else of the workbench is shown,
+  // so nothing can be started before the first save creates the welcome Session.
+  if (setupOobe) {
+    const firstRun = (
+      <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
+        <SetupView
+          forced
+          showBrand={!windowFramed}
+          onSetupChanged={() => { void fetchSetupStatus() }}
+          onModelsSaved={handleModelsSaved}
+        />
+      </Suspense>
+    )
+    if (windowFramed) {
+      return <div data-first-run-surface data-foxwarm-popup-framed="" className="foxwarm-fixed-viewport-shell flex h-full min-h-0 flex-col overflow-hidden">
+        <header className="foxwarm-popup-title-row" data-frame-row="column" data-frame-drag>
+          <FoxwarmMark className="h-4 w-4 shrink-0" />
+          <span className="foxwarm-popup-title">Foxwarm</span>
+        </header>
+        <div className="foxwarm-popup-card min-h-0 flex-1 overflow-hidden bg-fw-canvas">{firstRun}</div>
+      </div>
+    }
+    return <div data-first-run-surface className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">{firstRun}</div>
+  }
 
   if (isMobile) {
     const mobilePaneProps = mobilePaneId ? getPaneProps(mobilePaneId) : undefined
@@ -2255,6 +2333,7 @@ function App() {
             unreadSessionIds={unreadSessionIds}
             onToggleIdleNotificationMode={toggleIdleNotificationMode}
             bounded={boundedPresentation}
+            branding={webUiSettings}
           />
           <div
             className="foxwarm-sidebar-resize absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"

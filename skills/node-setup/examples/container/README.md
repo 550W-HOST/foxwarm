@@ -84,7 +84,7 @@ create_child_session(agentName="worker", suffix="task-1234", node="sandbox/task-
 node(action="destroy", nodeId="sandbox/task-1234", confirmation="destroy node sandbox/task-1234")
 ```
 
-Create doesn't select the Node or assign work. Give each assignment a fresh Node ID, for example one named after the assignment, and never reuse one: authorization rules that follow a Session's current Node compare IDs, so a reused ID would reach the new container from an old Session. `create` refuses an ID that still exists. The [agent-management](../../../agent-management/SKILL.md) restricted-worker template shows the rules for a worker Agent.
+Create doesn't select the Node or assign work. Give each assignment a fresh Node ID, for example one named after the assignment, and never reuse one: authorization rules that follow a Session's current Node compare IDs, so a reused ID would reach the new container from an old Session. `create` refuses an ID that still exists. The `agent-management` skill's restricted-worker template shows the rules for a worker Agent.
 
 Node IDs use letters, digits, dots, underscores and hyphens. `create` generates one when it is omitted, but prefer an explicit ID derived from the assignment. Use `ensure` only to reconnect deliberately to a container that should still exist, such as a long-lived assistant's: it needs an explicit ID, creates the container if it is missing, starts or resumes it if it is stopped or paused, and never changes its profile.
 

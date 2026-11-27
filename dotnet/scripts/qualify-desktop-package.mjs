@@ -15,6 +15,7 @@ import puppeteer from 'puppeteer-core'
 import { validateDesktopPackage } from './validate-desktop-package.mjs'
 import { missingImports } from '../../scripts/release/windows-imports.mjs'
 import { killProcessTree, runCleanup } from './desktop-cleanup.mjs'
+import { describeProcesses, listProcesses, processTree, survivors } from './desktop-processes.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 
 assert.equal(process.platform, 'win32', 'Desktop runtime qualification requires Windows and WebView2')
@@ -30,22 +31,24 @@ async function desktop(action, pid) {
   return JSON.parse(stdout.trim().split(/\r?\n/).pop())
 }
 const modules = async pid => (await desktop('modules', pid)).modules.map(name => name.toLowerCase())
-async function processes() {
-  const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    'Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress'],
-  { windowsHide: true, timeout: 60_000, maxBuffer: 64 << 20 })
-  return JSON.parse(stdout).map(row => ({ pid: row.ProcessId, ppid: row.ParentProcessId, args: row.CommandLine || '' }))
-}
-async function descendants(pid) {
-  const all = await processes(), found = []
-  for (let parents = [pid]; parents.length;) {
-    const next = all.filter(row => parents.includes(row.ppid) && !found.some(seen => seen.pid === row.pid))
-    found.push(...next)
-    parents = next.map(row => row.pid)
+// Processes are matched by PID and creation time, see desktop-processes.mjs.
+const descendants = async pid => processTree(await listProcesses(run), pid)
+// Every process the Desktop started before it was asked to exit ends with it, except WebView2's,
+// which WebView2 ends by itself. A timeout names the ones still running.
+async function childrenEnded(captured, label) {
+  const owned = captured.filter(row => !/^msedgewebview2\.exe$/i.test(row.name))
+  let rows = [], left = []
+  try {
+    await until(async () => {
+      rows = await listProcesses(run)
+      left = survivors(rows, owned)
+      return !left.length
+    }, label, 30_000)
+  } catch (error) {
+    if (!left.length) throw error
+    throw new Error(`${error.message}; still running:\n${describeProcesses(left, rows)}\nCaptured before the exit:\n${describeProcesses(captured, rows)}`)
   }
-  return found
 }
-const alive = async pid => (await processes()).some(row => row.pid === pid)
 const sql = async (statement, parameters = []) => JSON.parse((await run('python', ['-c',
   'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))',
   join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { windowsHide: true })).stdout)
@@ -158,7 +161,7 @@ async function attach() {
   assert(!identity.visibleCookies.includes('foxwarm_token'), 'Desktop authentication cookie must be HttpOnly')
   const cookies = await page.cookies()
   const auth = cookies.find(cookie => cookie.name === 'foxwarm_token')
-  assert(auth?.httpOnly && auth.sameSite === 'Strict', 'Native WebView2 authentication cookie is missing')
+  assert(auth?.httpOnly && auth.sameSite === 'Lax', 'Expected native WebView2 authentication cookie to be HttpOnly and SameSite=Lax')
   return page
 }
 async function start() {
@@ -224,18 +227,46 @@ try {
 
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, true)
   assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
-  await page.evaluate(() => { location.hash = 'setup' })
-  await page.waitForSelector('#setup-tab-models')
+  // A new installation opens on the first-run surface: the Models step alone, without the
+  // workbench, the Setup rail or anything else that could start a Session first.
+  await page.waitForSelector('[data-first-run-surface] [data-setup-first-run]')
+  assert.deepEqual(await page.evaluate(() => ({
+    title: document.querySelector('#setup-first-run-title')?.textContent,
+    setupRail: !!document.querySelector('#setup-tab-models'),
+    tabStrip: !!document.querySelector('[data-tab-id]'),
+    openSetup: !!document.querySelector('[aria-label="Open setup"]'),
+  })), { title: 'Connect a model', setupRail: false, tabStrip: false, openSetup: false })
   for (const name of ['foxwarm-fs', 'foxwarm-scm', 'foxwarm-terminal', 'foxwarm-webui']) {
     const base = `/vscode-web/extensions/${name}/`
     assert.equal((await api('GET', base + 'package.json')).body.browser, './dist/extension.js')
     assert.equal((await api('GET', base + 'dist/extension.js')).status, 200)
   }
   assert.equal((await fetch(origin + '/node/run.ps1')).status, 200)
-  stage = 'Setup save and native ToolScript turn'
-  const models = JSON.stringify({ default: 'fixture', providers: { fixture: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], asyncCompact: false } } })
-  assert.equal((await api('POST', '/api/setup/models', { yaml: models })).status, 200)
+  stage = 'first-run Models save and welcome handoff'
+  // The first-run form saves exact YAML through its editor and Save and continue, as a user would.
+  const models = `default: fixture\nproviders:\n  fixture:\n    providerType: openai-responses\n    baseUrl: ${provider}\n    models: [wire]\n    asyncCompact: false\n`
+  await page.waitForSelector('[data-setup-first-run] [data-models-view="yaml"]')
+  await page.click('[data-setup-first-run] [data-models-view="yaml"]')
+  const editor = '[data-setup-first-run] [aria-label="Models YAML editor"] [role="textbox"]'
+  await page.waitForSelector(editor)
+  await page.focus(editor)
+  await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')
+  await page.keyboard.sendCharacter(models.replaceAll('\n', '\r\n'))
+  const save = await page.waitForFunction(() => [...document.querySelectorAll('[data-setup-first-run] button')]
+    .find(button => button.textContent === 'Save and continue' && !button.disabled))
+  await save.click()
+  await until(async () => (await readFile(join(data, 'state/models.yaml'), 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === models,
+    'first-run Models saved')
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, false)
+  // The save's welcome Session replaces the first-run surface.
+  await page.waitForFunction(() => location.hash === '#tab/' + encodeURIComponent('chat:main')
+    && document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main'
+    && document.querySelector('.foxwarm-chat-messages [data-chat-message-anchor-key]'), { timeout: 30_000 })
+  assert.equal(await page.$('[data-first-run-surface]'), null)
+  assert.equal(await page.$('[data-tab-id="system:setup"]'), null)
+  assert.deepEqual((await api('GET', '/api/sessions')).body.sessions.map(row => row.id), ['main'])
+
+  stage = 'native ToolScript turn'
   const created = await api('POST', '/api/sessions', {})
   assert.equal(created.status, 200)
   const session = created.body.sessionId
@@ -281,13 +312,10 @@ try {
   browser?.disconnect(); browser = undefined
   const children = await descendants(mainPid)
   const menu = await desktop('exit', mainPid)
-  assert.deepEqual(menu.items, ['Open', 'Exit'])
+  assert.deepEqual(menu.items, ['Open', 'Switch instance…', null, 'Exit'])
   await stopped('the notification icon Exit item')
   assert.match(await readFile(join(data, 'state/logs/foxwarm.log'), 'utf8'), /Main stopped\./)
-  await until(async () => {
-    for (const row of children) if (await alive(row.pid) && !/msedgewebview2\.exe/i.test(row.args)) return false
-    return true
-  }, 'Desktop child processes ended', 30_000)
+  await childrenEnded(children, 'Desktop child processes ended')
 
   stage = 'restart with retained data'
   await start()
@@ -306,7 +334,7 @@ try {
   const trayPid = child.pid
   assert.equal((await desktop('tray', trayPid)).registered, true, 'A sign-in start has no notification icon')
   assert.equal((await desktop('window', trayPid)).visible, false, 'A sign-in start must not show the window')
-  assert(!(await descendants(trayPid)).some(row => /msedgewebview2\.exe/i.test(row.args)), 'WebView2 must start with the window')
+  assert(!(await descendants(trayPid)).some(row => /^msedgewebview2\.exe$/i.test(row.name)), 'WebView2 must start with the window')
   // A further sign-in start exits by itself and leaves the window hidden.
   await run(executable, ['--tray'], { cwd, env, windowsHide: true, timeout: 30_000 })
   assert.equal((await desktop('window', trayPid)).visible, false, 'A further sign-in start must not show the window')
@@ -322,12 +350,9 @@ try {
   await exitRequest()
   await stopped('the exit request')
   assert.equal(await mainStops(), stopsBefore + 1, 'The exit request must stop Main through its normal shutdown')
-  await until(async () => {
-    for (const row of trayChildren) if (await alive(row.pid) && !/msedgewebview2\.exe/i.test(row.args)) return false
-    return true
-  }, 'Desktop child processes ended after the exit request', 30_000)
+  await childrenEnded(trayChildren, 'Desktop child processes ended after the exit request')
   Object.assign(summary, {
-    extractedDesktop: true, importsComplete: true, noCoreClr: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true,
+    extractedDesktop: true, importsComplete: true, noCoreClr: true, nativeWebView2Cookie: true, setup: true, firstRunWelcome: true, nativeToolScript: true,
     nativeExecHelper: true, canonicalAgentRoot: true, configuredAgentRoot: true, webSocketCookie: true, artifactDependencies: true,
     extensionBundles: 4, vectorChild: true, mainLoadsNoLanceDb: true, trayIcon: true, closeToTray: true, trayOpen: true, trayExit: true,
     restartPreserved: true, mainShutdown: true, trayStart: true, furtherStartOpens: true, exitRequest: true,

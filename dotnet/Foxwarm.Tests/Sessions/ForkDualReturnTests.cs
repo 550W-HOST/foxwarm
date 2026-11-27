@@ -292,10 +292,16 @@ public sealed class ForkDualReturnTests
         Assert.DoesNotContain(Assignment, assignment);
     }
 
-    [Fact]
-    public async Task ToolScript_fork_cannot_see_the_inner_call_and_still_receives_its_message()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToolScript_fork_gets_a_script_result_for_the_root_call_and_still_receives_its_message(
+        bool nested
+    )
     {
         ScriptFixture f = null!;
+        const string create =
+            "call_tool('create_child_session', {'suffix':'worker','fork':True,'message':args['m']})";
         await using var peer = new ScriptedResponsesSequenceServer(
             2,
             async (_, stream, request) =>
@@ -304,13 +310,24 @@ public sealed class ForkDualReturnTests
                     await Respond(
                         stream,
                         Call(
+                            "parent-read",
+                            "read",
+                            new() { ["filePath"] = Path.Combine(f.Work, "known.txt") }
+                        ),
+                        Call(
                             "script",
                             "run_script",
                             new()
                             {
-                                ["code"] =
-                                    "return call_tool('create_child_session', {'suffix':'worker','fork':True,'message':args['m']})",
-                                ["args"] = new JsonObject { ["m"] = Assignment },
+                                // A nested run still belongs to the model call that started the outer one.
+                                ["code"] = nested
+                                    ? "return call_tool('run_script', {'code': args['inner'], 'args': args})"
+                                    : "return " + create,
+                                ["args"] = new JsonObject
+                                {
+                                    ["m"] = Assignment,
+                                    ["inner"] = "return " + create,
+                                },
                             }
                         )
                     );
@@ -322,6 +339,7 @@ public sealed class ForkDualReturnTests
             suppliedOptions: Options(peer.BaseUri)
         );
         f = fixture;
+        await File.WriteAllTextAsync(Path.Combine(f.Work, "known.txt"), "parent-only content");
         var childId = f.Owner.Id + "_worker";
         f.Manager.TopologyChanged += () =>
         {
@@ -331,15 +349,24 @@ public sealed class ForkDualReturnTests
 
         await RunParentAsync(f);
         Assert.Equal(2, peer.RequestCount);
+        // The parent's result for the script is the run's own result.
+        Assert.Contains(
+            childId,
+            f.Owner.History()
+                .Where(row => SessionWait.Text(row["role"]) == "tool")
+                .SelectMany(row => row["parts"]!.AsArray())
+                .Single(part => SessionWait.Text(part!["functionResponse"]!["tool_use_id"]) == "script")!
+                .ToJsonString()
+        );
         var child = f.Manager.Find(childId)!;
-        Assert.Equal(SessionBoundary.ForkSkippedCall(f.Owner.Id), Output(child, "script"));
+        Assert.Equal(SessionBoundary.ForkScriptCall(f.Owner.Id, childId), Output(child, "script"));
+        Assert.Equal(SessionBoundary.ForkSkippedCall(f.Owner.Id), Output(child, "parent-read"));
+        // The instruction is delivered once, as a message.
         var delivered = Assert.Single(child.Entry.Snapshot().Queue);
         Assert.Equal(QueueItemType.Intersession, delivered.Type);
-        Assert.Contains(
-            Assignment,
-            new JsonArray(
-                delivered.Parts!.Select(part => (JsonNode)part.DeepClone()).ToArray()
-            ).ToJsonString()
-        );
+        var parts = new JsonArray(
+            delivered.Parts!.Select(part => (JsonNode)part.DeepClone()).ToArray()
+        ).ToJsonString();
+        Assert.Equal(1, Occurrences(parts, Assignment));
     }
 }

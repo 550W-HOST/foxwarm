@@ -63,8 +63,22 @@
   {
     "id": "skills",
     "tool": { "source": "builtin", "name": "skill" },
-    "args": { "action": ["list", "load"], "agentName": { "exists": false } },
+    "args": { "action": ["list", "load", "copy"], "agentName": { "exists": false } },
     "action": "allow"
+  },
+  {
+    "id": "no-advisor-runs",
+    "tool": { "source": "builtin", "name": "run_skill" },
+    "args": { "skillName": "advisor" },
+    "action": "deny",
+    "reason": "The advisor forks this Session, which workers cannot do; its instructions stay loadable."
+  },
+  {
+    "id": "skill-runs",
+    "tool": { "source": "builtin", "name": "run_skill" },
+    "args": { "agentName": { "exists": false } },
+    "action": "allow",
+    "reason": "Skill scripts run as this Session: each call they make is checked against these rules."
   },
   {
     "id": "session-controls",

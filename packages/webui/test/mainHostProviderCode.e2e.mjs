@@ -5,8 +5,10 @@ import { execFileSync } from 'node:child_process'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { chooseSelectOption, readSelectOptions } from './selectDriver.mjs'
 
 const NODE = 'relay/svc'
+const NODE_SELECT = '[role="combobox"][aria-label="Node"]'
 const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
 await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
 const cli = process.env.FOXWARM_CLI_EXECUTABLE || resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode')
@@ -34,6 +36,7 @@ await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', provi
 
 const errors = [], notFound = []
 let page
+const offersNode = async () => (await readSelectOptions(page, NODE_SELECT)).some(option => option.value === NODE && !option.disabled)
 const channelLog = async () => (await readFile(join(target, 'channel.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line))
 const codeFrame = () => until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').pathname.endsWith('/vscode-web/') && frame.parentFrame() === page.mainFrame()), 'embedded official workbench', 40000)
 const text = frame => frame.evaluate(() => document.body.innerText)
@@ -62,9 +65,8 @@ try {
 
   // Open the Provider Node folder through the original Code launcher.
   await page.click('button[aria-label="Open code options"]')
-  const nodeSelect = await page.waitForSelector('select')
-  await until(() => nodeSelect.evaluate((select, node) => [...select.options].some(option => option.value === node && !option.disabled), NODE), 'Provider Node offered for Code')
-  await nodeSelect.select(NODE)
+  await until(offersNode, 'Provider Node offered for Code')
+  await chooseSelectOption(page, NODE_SELECT, NODE)
   await page.evaluate(path => {
     const input = [...document.querySelectorAll('input')].find(item => item.placeholder === '/')
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
@@ -135,9 +137,8 @@ try {
   // A terminal tab in the original WebUI on the same Node.
   await page.evaluate(() => { location.hash = '' })
   await page.click('[data-sidebar-nav="terminal"] button[aria-label="Terminals"]')
-  const terminalSelect = await page.waitForSelector('select')
-  await until(() => terminalSelect.evaluate((select, node) => [...select.options].some(option => option.value === node && !option.disabled), NODE), 'Provider Node offered for Terminal')
-  await terminalSelect.select(NODE)
+  await until(offersNode, 'Provider Node offered for Terminal')
+  await chooseSelectOption(page, NODE_SELECT, NODE)
   await page.evaluate(path => {
     const input = [...document.querySelectorAll('input')].find(item => item.placeholder === '/tmp')
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set

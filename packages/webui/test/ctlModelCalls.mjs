@@ -1,7 +1,9 @@
+import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-// Mock-model tool calls for host e2e tests. Models reach every builtin outside the native
-// declarations, and the generic dispatch and discovery front ends, through `ctl`.
+// Mock-model tool calls and Responses request readers for host e2e tests. Models reach every
+// builtin outside the native declarations, and the generic dispatch and discovery front ends,
+// through `ctl`.
 export const NATIVE_TOOLS = new Set([
   'read', 'write', 'edit', 'exec', 'run_script', 'continue_script', 'wait', 'ask_user',
   'send_to_session', 'create_child_session', 'task', 'submit_compact_plan', 'ctl', 'generate_image',
@@ -86,6 +88,22 @@ export function functionCall(id, name, args = {}) {
   const call = modelCall(name, args)
   return { type: 'function_call', call_id: id, name: call.name, arguments: JSON.stringify(call.args) }
 }
+
+// A Responses request carries the system prompt as its leading `input` item, one developer
+// message with one input_text part, and no top-level `instructions`. Mock models read the prompt
+// and the conversation apart, so history checks can't be satisfied by prompt text.
+const leadingPrompt = body => {
+  assert.equal(Object.hasOwn(body, 'instructions'), false, 'Responses requests carry no top-level instructions')
+  const first = body.input?.[0]
+  return first?.type === 'message' && first.role === 'developer' && first.content?.length === 1 && first.content[0].type === 'input_text'
+    ? first.content[0].text : undefined
+}
+
+/** The system prompt of a Responses request, or '' when the request starts without one. */
+export const responsesSystemPrompt = body => leadingPrompt(body) ?? ''
+
+/** The `input` items of a Responses request after its system prompt. */
+export const responsesHistory = body => (body.input ?? []).slice(leadingPrompt(body) === undefined ? 0 : 1)
 
 /** Maps `{ id, name, args }` call plans written in the former direct form to their model calls. */
 export const ctlCalls = calls => calls.map(call => ({ ...call, ...modelCall(call.name, call.args) }))

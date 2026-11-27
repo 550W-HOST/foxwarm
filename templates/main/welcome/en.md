@@ -5,7 +5,7 @@ Hi, I'm Foxwarm 🦊. I work on the computer where Foxwarm is installed: I can e
 - You're in `main`, the default Session of the default Agent `main`.
 - A **Session** is one conversation for one piece of work. Start another with **+** above the Session list.
 - An **Agent** keeps long-term memory and files for its Sessions. One is enough to start with.
-- Commands and file changes run on the computer where Foxwarm is installed, which may not be the device in front of you.
+- Commands and file changes run on the computer where Foxwarm is installed, without asking you first. If you'd like to confirm commands before they run, tell me and I'll add an approval rule.
 
 **When you need more, just ask me to**
 

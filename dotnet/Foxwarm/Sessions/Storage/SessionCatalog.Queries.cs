@@ -509,6 +509,49 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
         }
     }
 
+    /// <summary>Latest message time of each Agent's Sessions (milliseconds), from the agent/recency index.</summary>
+    internal Dictionary<string, double> AgentLastActivity()
+    {
+        lock (gate)
+        {
+            EnsureInitialized();
+            var result = new Dictionary<string, double>(StringComparer.Ordinal);
+            using var command = Command(
+                db!,
+                "SELECT agent,MIN(recent_rank) FROM session_catalog GROUP BY agent"
+            );
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                if (!reader.IsDBNull(1))
+                    result[reader.GetString(0)] = -reader.GetDouble(1);
+            return result;
+        }
+    }
+
+    /// <summary>Sessions per current Node, from the maintained node count table.</summary>
+    internal JsonArray NodeCounts()
+    {
+        lock (gate)
+        {
+            EnsureInitialized();
+            const string sql =
+                "SELECT current_node,session_count FROM catalog_node_count ORDER BY current_node";
+            using var command = Command(db!, sql);
+            using var reader = command.ExecuteReader();
+            var result = new JsonArray();
+            while (reader.Read())
+                result.Add(
+                    new JsonObject
+                    {
+                        ["node"] = reader.GetString(0),
+                        ["count"] = reader.GetInt64(1),
+                    }
+                );
+            QueryObserved?.Invoke(sql, result.Count);
+            return result;
+        }
+    }
+
     internal JsonArray AgentCounts()
     {
         lock (gate)

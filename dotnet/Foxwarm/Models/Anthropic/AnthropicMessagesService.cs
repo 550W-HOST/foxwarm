@@ -40,7 +40,10 @@ internal sealed class AnthropicMessagesService(
         };
         if (!string.IsNullOrEmpty(options.Token))
             headers["x-api-key"] = options.Token;
-        using var request = ProviderHttpRequest.Create(endpoint, body, options, headers);
+        var requestOptions = AnthropicMessageEffort.Uses(body)
+            ? AnthropicMessageEffort.MergeBetaHeader(headers, options)
+            : options;
+        using var request = ProviderHttpRequest.Create(endpoint, body, requestOptions, headers);
         using var activity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var streaming = body["stream"]!.GetValue<bool>();
         var reasoning = false;

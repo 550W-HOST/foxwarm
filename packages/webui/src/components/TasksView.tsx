@@ -2,10 +2,11 @@ import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, {type ContextMenuAnchorRect, type ContextMenuEntry} from './ContextMenu'
 import { createPortal } from 'react-dom'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Check, ClipboardList, Copy, X, Plus, RefreshCw, List, Columns3, SlidersHorizontal, Search, ChevronDown } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardList, Copy, X, Plus, RefreshCw, List, Columns3, SlidersHorizontal, Search } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SessionSelector from './SessionSelector'
+import Select from './Select'
 import { TaskStatusBadge, TASK_STATUS_LABELS as STATUS_LABELS } from './StatusBadge'
 import './TasksView.css'
 import { copyTextToClipboard } from './chatShared'
@@ -154,7 +155,10 @@ function SessionReference({ sessionId, agent, compact = true, onOpenSession }: {
   </span>
 }
 
-export default function TasksView({ onBack, onOpenSession: navigateToSession, mobileHome = false }: { onBack?: () => void; onOpenSession?: (sessionId: string) => void; mobileHome?: boolean }) {
+/** A request to show one Task; the nonce repeats a request for the same Task. */
+export interface TaskFocusRequest { taskId: string; nonce: number }
+
+export default function TasksView({ onBack, onOpenSession: navigateToSession, mobileHome = false, focus }: { onBack?: () => void; onOpenSession?: (sessionId: string) => void; mobileHome?: boolean; focus?: TaskFocusRequest | null }) {
   const tabHeader = useWorkbenchTabHeader()
   const rootRef = useRef<HTMLElement>(null)
   const filterRef = useRef<HTMLDivElement>(null)
@@ -234,6 +238,13 @@ export default function TasksView({ onBack, onOpenSession: navigateToSession, mo
     document.addEventListener('pointerdown', closeOutside)
     return () => document.removeEventListener('pointerdown', closeOutside)
   }, [filtersOpen])
+
+  // A linked Task opens in All, so its row is in the list whatever its status.
+  useEffect(() => {
+    if (!focus) return
+    setScope('all')
+    setSelectedId(focus.taskId)
+  }, [focus])
 
   useEffect(() => {
     if (!selectedId || !isNarrow) return
@@ -386,8 +397,8 @@ export default function TasksView({ onBack, onOpenSession: navigateToSession, mo
   }
 
   const detailPanel = selectedId && (
-    <aside ref={detailRef} data-task-details data-task-narrow={isNarrow || undefined} {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="tasks-detail-panel text-fw-text">
-      <div className="mb-4 flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
+    <aside ref={detailRef} data-task-details data-task-narrow={isNarrow || undefined} data-frame-layer={isNarrow || undefined} {...(isNarrow ? { role: 'dialog', 'aria-modal': 'true' } : {})} aria-label="Task details" aria-busy={detailsLoading} className="tasks-detail-panel text-fw-text">
+      <div className="tasks-detail-head mb-4 flex items-center justify-between gap-2" data-frame-row={isNarrow ? 'column' : undefined} data-frame-drag={isNarrow ? '' : undefined}><h3 className="text-sm font-semibold">Task details</h3><button type="button" className={buttonClass} aria-label="Close task details" onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button></div>
       {taskWarning && <p role="alert" data-task-warning="detail" className="mb-4 rounded border border-fw-danger/40 bg-fw-danger/10 p-2 text-xs text-fw-danger lg:hidden">{taskWarning}</p>}
       {detailsLoading ? <p role="status" className="text-sm text-fw-text-muted">Loading task details…</p>
         : detailsError ? <p role="alert" className="text-sm text-fw-danger">{detailsError}</p>
@@ -468,10 +479,10 @@ export default function TasksView({ onBack, onOpenSession: navigateToSession, mo
           </div>
           <div className="tasks-toolbar-actions" data-task-filters>
             <label className="tasks-search"><Search size={14} aria-hidden="true" /><input aria-label="Search tasks" placeholder="Search tasks" value={search} onChange={event => setSearch(event.target.value)} /></label>
-            <label className="tasks-agent-select" htmlFor="task-agent-filter"><span className="sr-only">Agent</span><select id="task-agent-filter" data-task-agent-filter value={agentFilter} onChange={event => setAgentFilter(event.target.value)}><option value="">All agents</option>{agentOptions.map(agent => <option key={agent} value={agent}>{agent}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
+            <Select variant="toolbar" aria-label="Agent" data-task-agent-filter value={agentFilter} onChange={setAgentFilter} className="tasks-agent-select" options={[{ value: '', label: 'All agents' }, ...agentOptions.map(agent => ({ value: agent, label: agent }))]} />
             <div ref={filterRef} className="tasks-filter-control">
               <button type="button" className="task-button task-icon-button" aria-label="Relationship filter" title="Relationship filter" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(value => !value)}><SlidersHorizontal size={15} /></button>
-              {filtersOpen && <div className="tasks-filter-popover"><label htmlFor="task-agent-relation">Relationship</label><select id="task-agent-relation" data-task-agent-relation value={agentRelation} onChange={event => setAgentRelation(event.target.value as typeof AGENT_RELATIONS[number])}>{AGENT_RELATIONS.map(relation => <option key={relation} value={relation}>{AGENT_RELATION_LABELS[relation]}</option>)}</select></div>}
+              {filtersOpen && <div className="tasks-filter-popover"><label htmlFor="task-agent-relation">Relationship</label><Select id="task-agent-relation" data-task-agent-relation value={agentRelation} onChange={value => setAgentRelation(value as typeof AGENT_RELATIONS[number])} className="w-full rounded border border-fw-border bg-fw-canvas px-2 py-1.5 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border" options={AGENT_RELATIONS.map(relation => ({ value: relation, label: AGENT_RELATION_LABELS[relation] }))} /></div>}
             </div>
             <div role="group" aria-label="Task view" className="tasks-view-toggle">
               {(['table', 'board'] as const).map(mode => <button key={mode} type="button" aria-label={mode === 'table' ? 'Table' : 'Board'} title={mode === 'table' ? 'Table' : 'Board'} aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === 'table' ? <List size={16} /> : <Columns3 size={16} />}</button>)}

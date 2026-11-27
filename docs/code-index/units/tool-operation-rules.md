@@ -74,7 +74,7 @@ A completed script's result `parts` may carry `inlineDataRef` image references, 
 
 ## Generated layers
 
-Generated layers keep generator 2 and their version-1 rules. Adding an operation rule changes the stored digest, so the layer counts as edited. `IsolationMigrationRules.EndsInDeny` never accepts an operation rule as the terminal deny, so an op rule appended after it leaves the layer without one and the existing safeguard fails it closed.
+Generated layers keep their version-1 rules (generator 3 added only version-1 skill rules, [isolation migration](./isolation-migration.md)). Adding an operation rule changes the stored digest, so the layer counts as edited. `IsolationMigrationRules.EndsInDeny` never accepts an operation rule as the terminal deny, so an op rule appended after it leaves the layer without one and the existing safeguard fails it closed.
 
 ## Tests
 

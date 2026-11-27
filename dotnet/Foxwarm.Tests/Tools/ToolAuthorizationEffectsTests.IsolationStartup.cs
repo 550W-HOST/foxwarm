@@ -16,7 +16,7 @@ public sealed partial class ToolAuthorizationEffectsTests
     // The layer R1 (generator 1) wrote: identical except that `session` status had no target limit.
     private static JsonArray GeneratorOneLayer(string isolation)
     {
-        var rules = LayerFor(isolation);
+        var rules = GeneratorTwoLayer(isolation);
         foreach (var rule in rules.OfType<JsonObject>())
             if (
                 rule["id"]!.GetValue<string>().StartsWith(IsolationMigrationRules.SessionStatusRule)
@@ -26,6 +26,22 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     private static string Digest(JsonArray rules) => new IsolationMigrationPlan(rules, [], []).Digest;
+
+    // The layer generator 2 wrote: without skill copy, skill runs and the advisor deny.
+    private static JsonArray GeneratorTwoLayer(string isolation)
+    {
+        var rules = new JsonArray();
+        foreach (var rule in LayerFor(isolation).OfType<JsonObject>())
+        {
+            var id = rule["id"]!.GetValue<string>();
+            if (id == "isolation-advisor-runs" || id.StartsWith("isolation-skill-run", StringComparison.Ordinal))
+                continue;
+            if (id.StartsWith("isolation-skill", StringComparison.Ordinal))
+                rule["match"]!["args"]!["action"] = new JsonArray("list", "load");
+            rules.Add(rule.DeepClone());
+        }
+        return rules;
+    }
 
     private static async Task<bool> PermitsBuiltin(
         SessionManager manager,
@@ -163,11 +179,13 @@ public sealed partial class ToolAuthorizationEffectsTests
             await manager.LoadAsync();
             var migrated = Row(manager);
             var marker = migrated["legacyIsolation"]!.AsObject();
-            Assert.Equal(2, marker["generator"]!.GetValue<int>());
+            Assert.Equal(IsolationMigrationRules.GeneratorVersion, marker["generator"]!.GetValue<int>());
             Assert.Null(marker["automatic"]);
             var entry = manager.StartupIsolationMigration!["agents"]!.AsArray().Single()!;
-            Assert.Equal("upgraded", entry["outcome"]!.GetValue<string>());
-            Assert.Equal(2, entry["statusRulesLimited"]!.GetValue<int>());
+            // An unedited layer is generated again by the current generator (3).
+            Assert.Equal(edited ? "upgraded" : "regenerated", entry["outcome"]!.GetValue<string>());
+            if (edited)
+                Assert.Equal(2, entry["statusRulesLimited"]!.GetValue<int>());
             if (edited)
             {
                 // An edited layer keeps its digest so it is still recognised as edited.
@@ -329,5 +347,85 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Null(manager.AgentMetadata["beta"]);
         // The migrated Agent is bounded by both its own layer and the global policy.
         await AssertParity(manager, temp.Path, "with global policy");
+    }
+
+    [Fact]
+    public async Task Startup_regenerates_unedited_generator_2_layers_with_skill_copy_and_runs()
+    {
+        foreach (var edited in new[] { false, true })
+        {
+            using var temp = new TempDirectory();
+            var rules = GeneratorTwoLayer(MigrationIsolation);
+            var digest = Digest(rules);
+            if (edited)
+                rules.Insert(
+                    0,
+                    Obj(
+                        """{"id":"operator","action":"deny","match":{"tool":{"source":"builtin","name":"image_crop"}}}"""
+                    )
+                );
+            var row = Obj(MigrationIsolation);
+            row["rules"] = rules;
+            row["inheritable"] = false;
+            row["defaultNode"] = "bound-node";
+            row["legacyIsolation"] = new JsonObject
+            {
+                ["node"] = "bound-node",
+                ["migratedAt"] = 1,
+                ["generator"] = 2,
+                ["rulesDigest"] = digest,
+                ["fenceDigest"] = IsolationMigrationRules.FenceDigest(Obj(MigrationIsolation)),
+            };
+            await Seed(temp.Path, row);
+            await AssertGeneratorTwoUpgrade(temp.Path, edited, digest);
+            // A restart has nothing left to change.
+            Assert.Empty((await RestartedReport(temp.Path))["agents"]!.AsArray());
+        }
+    }
+
+    private static async Task AssertGeneratorTwoUpgrade(string root, bool edited, string digest)
+    {
+        {
+            await using var manager = Manager(root);
+            await manager.LoadAsync();
+            var migrated = Row(manager);
+            var marker = migrated["legacyIsolation"]!.AsObject();
+            Assert.Equal(3, marker["generator"]!.GetValue<int>());
+            var entry = manager.StartupIsolationMigration!["agents"]!.AsArray().Single()!;
+            var opaque = await manager.RequiredAsync("opaque");
+            Task<bool> Allowed(string name, string args) =>
+                PermitsBuiltin(manager, opaque, root, name, args);
+            if (edited)
+            {
+                // An edited layer is the administrator's and is kept as stored.
+                Assert.Equal("upgraded", entry["outcome"]!.GetValue<string>());
+                Assert.NotNull(entry["reason"]);
+                Assert.Equal(digest, marker["rulesDigest"]!.GetValue<string>());
+                Assert.Equal("operator", migrated["rules"]![0]!["id"]!.GetValue<string>());
+                Assert.False(await Allowed("run_skill", """{"skillName":"demo"}"""));
+                Assert.False(await Allowed("skill", """{"action":"copy","skillName":"demo","targetPath":"x"}"""));
+            }
+            else
+            {
+                Assert.Equal("regenerated", entry["outcome"]!.GetValue<string>());
+                Assert.True(JsonNode.DeepEquals(LayerFor(MigrationIsolation), migrated["rules"]));
+                Assert.Equal(Digest(migrated["rules"]!.AsArray()), marker["rulesDigest"]!.GetValue<string>());
+                Assert.True(await Allowed("run_skill", """{"skillName":"demo"}"""));
+                Assert.True(await Allowed("run_skill", """{"skillName":"demo","agentName":"alpha","script":"x.py"}"""));
+                Assert.False(await Allowed("run_skill", """{"skillName":"demo","agentName":"other"}"""));
+                Assert.False(await Allowed("run_skill", """{"skillName":"advisor"}"""));
+                Assert.True(await Allowed("skill", """{"action":"copy","skillName":"demo","targetPath":"x"}"""));
+                Assert.False(await Allowed("create_child_session", """{"sessionName":"fork","fork":true}"""));
+            }
+            // Reading resources was already covered by the generator 2 `skill` rule.
+            Assert.True(await Allowed("skill", """{"action":"load","skillName":"demo","path":"references/x.md"}"""));
+        }
+    }
+
+    private static async Task<JsonObject> RestartedReport(string root)
+    {
+        await using var restarted = Manager(root);
+        await restarted.LoadAsync();
+        return restarted.StartupIsolationMigration!;
     }
 }

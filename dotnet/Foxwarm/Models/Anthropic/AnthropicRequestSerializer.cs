@@ -10,12 +10,20 @@ internal static class AnthropicRequestSerializer
         IEnumerable<JsonObject> history,
         Uri baseUri,
         string? concreteModelId = null,
-        ModelHistoryCompatibility? compatibility = null
+        ModelHistoryCompatibility? compatibility = null,
+        bool messageEffort = false
     )
     {
         var messages = new JsonArray();
         foreach (var raw in history)
         {
+            // Recorded in place once; only the model it was recorded for replays it.
+            if (EffortChangeRecord.Read(raw) is { } change)
+            {
+                if (messageEffort && change.ModelId == concreteModelId)
+                    messages.Add(AnthropicMessageEffort.Message(change));
+                continue;
+            }
             var message = CanonicalMessage.FromNode(raw);
             if (!message.IsModelVisible)
                 continue;
@@ -212,6 +220,7 @@ internal static class AnthropicRequestSerializer
         ResponsesClientOptions options
     )
     {
+        var messageEffort = AnthropicMessageEffort.Applies(options);
         var body = new JsonObject
         {
             ["model"] = options.RequestModel,
@@ -223,7 +232,8 @@ internal static class AnthropicRequestSerializer
                 history,
                 options.BaseUri,
                 options.ConcreteModelId,
-                options.HistoryCompatibility
+                options.HistoryCompatibility,
+                messageEffort
             ),
         };
         if (options.Tools is { Count: > 0 })
@@ -268,7 +278,11 @@ internal static class AnthropicRequestSerializer
         else if (options.Effort is not null)
         {
             var output = body["output_config"] as JsonObject ?? new JsonObject();
-            output["effort"] = options.Effort;
+            // Recorded changes keep the top level at the effort in force before the first one.
+            var recordedBase = messageEffort
+                ? AnthropicMessageEffort.BaseEffort(history, options.ConcreteModelId!)
+                : null;
+            output["effort"] = recordedBase ?? options.Effort;
             if (output.Parent is null)
                 body["output_config"] = output;
         }

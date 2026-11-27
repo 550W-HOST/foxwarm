@@ -1,5 +1,6 @@
 import type { NodeTargetService, WebUiNodeTarget } from '../nodeTargets'
 import { formatNodeTargetLabel, getNodeTargetAvailability, preserveSelectedNodeTarget } from '../nodeTargets'
+import Select from './Select'
 
 type NodeTargetSelectProps = {
   value: string
@@ -12,20 +13,17 @@ type NodeTargetSelectProps = {
 export default function NodeTargetSelect({ value, nodes, requiredService, onChange, disabled = false }: NodeTargetSelectProps) {
   const options = preserveSelectedNodeTarget(nodes, value)
   return (
-    <select
+    <Select
+      aria-label="Node"
       value={value}
-      onChange={(event) => onChange(event.target.value)}
+      onChange={onChange}
       disabled={disabled}
       className="w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-sm text-fw-text-strong disabled:bg-fw-surface-sunken disabled:text-fw-text disabled:opacity-100 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong dark:disabled:bg-fw-canvas dark:disabled:text-fw-text"
-    >
-      {options.map((node) => {
-        const availability = getNodeTargetAvailability(node, requiredService)
-        return (
-          <option key={node.id} value={node.id} disabled={!availability.available}>
-            {formatNodeTargetLabel(node, requiredService)}
-          </option>
-        )
-      })}
-    </select>
+      options={options.map((node) => ({
+        value: node.id,
+        label: formatNodeTargetLabel(node, requiredService),
+        disabled: !getNodeTargetAvailability(node, requiredService).available,
+      }))}
+    />
   )
 }

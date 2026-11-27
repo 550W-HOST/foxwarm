@@ -44,6 +44,11 @@ export const indexExecLinks = (messages: readonly Message[]): ExecLinkIndex => {
   return { receipts, completions }
 }
 
+/** Index of the loaded message that holds an item's receipt or completion, or -1. */
+export const findExecLinkMessageIndex = (messages: readonly Message[], execId: string, role: ExecLinkRole): number => messages.findIndex(message => message.parts.some(part => role === 'receipt'
+  ? !!part.functionResponse && leadingExecId(receiptText(part.functionResponse.response)) === execId
+  : !!part.system && COMPLETION_FRAME.exec(part.system)?.[1] === execId))
+
 export interface ExecLinkController {
   /** Whether the counterpart of this item is in loaded history. */
   hasCounterpart: (execId: string, role: ExecLinkRole) => boolean

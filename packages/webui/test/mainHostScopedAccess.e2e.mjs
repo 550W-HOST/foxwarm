@@ -10,6 +10,8 @@ import sharp from 'sharp'
 import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
 import { restoreStateSnapshot, stateSnapshot } from './stateSeeds.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
+import { chooseSelectOption } from './selectDriver.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
 options.cwd = host.root
@@ -211,13 +213,38 @@ try {
   const context = await browser.createBrowserContext(), page = await context.newPage()
   page.on('pageerror', error => browserErrors.push(error.message)); page.on('request', request => { if (new URL(request.url()).pathname.includes('/api/')) scopedRequests.push(new URL(request.url()).pathname) })
   await page.goto(host.origin + '/nested/app/#setup', { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', aliceToken); await page.click('button[type="submit"]')
-  await page.waitForSelector('[data-webui-role="webui"] .foxwarm-chat-root')
+  await page.waitForSelector('[data-webui-role="webui"] .foxwarm-chat-root'); await waitForWebUiReady(page)
   assert.equal(await page.$('#setup-tab-config'), null); assert.equal(await page.$('.foxwarm-model-selector-trigger'), null)
-  await page.select('select[aria-label="Session"]', moved)
-  await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.select('select[aria-label="Session"]', moved)
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
+  await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page)
+  await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
   await page.waitForSelector('[data-continuous-history]')
-  await page.evaluate(() => { const element = document.querySelector('.foxwarm-chat-messages'); element.scrollTop = 0; element.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); element.dispatchEvent(new Event('scroll')) })
+  // Read upward with the wheel, as a user does, until the earlier page loads and the older
+  // lazy image enters the viewport and loads.
+  const scroller = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(scroller.x + scroller.width / 2, scroller.y + scroller.height / 2)
+  const olderImageLoaded = () => page.evaluate(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))
+  for (let step = 0; step < 80 && !await olderImageLoaded(); step++) {
+    const before = await page.$eval('.foxwarm-chat-messages', element => ({
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      loading: !!document.querySelector('[data-continuous-history]')?.textContent.includes('Loading'),
+    }))
+    if (before.loading) {
+      await page.waitForFunction(previousHeight => {
+        const element = document.querySelector('.foxwarm-chat-messages')
+        return !document.querySelector('[data-continuous-history]')?.textContent.includes('Loading') || element.scrollHeight !== previousHeight
+      }, {}, before.scrollHeight)
+      continue
+    }
+    await page.mouse.wheel({ deltaY: -1500 })
+    await page.waitForFunction(before => {
+      const element = document.querySelector('.foxwarm-chat-messages')
+      if ([...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3)) return true
+      const loading = !!document.querySelector('[data-continuous-history]')?.textContent.includes('Loading')
+      return element.scrollTop !== before.scrollTop || element.scrollHeight !== before.scrollHeight || loading
+    }, {}, before)
+  }
   await page.waitForFunction(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))
   const downloads = join(host.root, 'scoped-native-downloads'); await mkdir(downloads)
   const cdp = await page.createCDPSession(); await cdp.send('Network.enable')
@@ -244,7 +271,7 @@ try {
   await context.close()
   const administrator = await host.openApp()
   await administrator.evaluate(() => window.foxwarmTest.switchToSession('chat'))
-  await administrator.waitForFunction(() => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session chat'))
+  await administrator.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId?.startsWith('chat'))
   await administrator.waitForSelector('.foxwarm-model-selector-trigger')
   assert.equal(await administrator.$('[data-webui-role="webui"]'), null)
   await host.stop()

@@ -45,7 +45,6 @@ internal sealed partial class HostModels
     internal ModelConfiguration? ConfigurationOwner => owner;
     internal TextRedactionKnownLabels KnownLabels { get; private init; } =
         TextRedactionKnownLabels.Default;
-    internal bool HandoffConfirmationEnabled { get; private init; }
     private IReadOnlyList<int> defaultRetryIntervals = DefaultRetryIntervalsMs;
     internal double PresentationContextLimit { get; private init; } = 200000;
     internal double CompactKeepFraction { get; private init; } = .3;
@@ -73,7 +72,6 @@ internal sealed partial class HostModels
     internal HostModels(ModelConfiguration owner)
     {
         this.owner = owner;
-        HandoffConfirmationEnabled = owner.HandoffConfirmationEnabled;
     }
 
     private HostModels(string key, Dictionary<string, ConcreteHostModel> entries, string[] display)
@@ -288,6 +286,7 @@ internal sealed partial class HostModels
                     "idleCompactMinContextPercent",
                     "disallowEmptyResponse",
                     "keepReasoningOnError",
+                    AnthropicMessageEffort.Option,
                     "webSearch",
                     "imageGeneration",
                     "sameProviderAs",
@@ -380,7 +379,6 @@ internal sealed partial class HostModels
         return new HostModels(selected, models, ordered)
         {
             KnownLabels = TextRedactionKnownLabels.FromDefaults(defaults),
-            HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
             defaultRetryIntervals = ReadRetryIntervals(defaults),
             PresentationContextLimit = PositiveSetting(
                 llm["contextLimit"],

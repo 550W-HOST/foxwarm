@@ -1,3 +1,4 @@
+import { SystemSplit, useSystemSplit } from './SystemSplit'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Check, ChevronRight, Code2, Copy, ExternalLink, MessageSquare, Webhook } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -18,7 +19,7 @@ async function webhookRequest<T>(path: string): Promise<T> {
 }
 
 /** Reloads on deliveries, handler progress and configuration saves while mounted. */
-function useWebhookList() {
+export function useWebhookList() {
   const [webhooks, setWebhooks] = useState<WebhookRow[]>([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
@@ -89,7 +90,7 @@ function WebhookRowCard({ webhook, selected, now, onSelect }: { webhook: Webhook
   const last = webhook.deliveries[0]
   return (
     <button type="button" onClick={onSelect} data-system-webhook-id={webhook.id} data-system-webhook-selected={selected || undefined}
-      className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${selected ? 'border-fw-accent-border bg-fw-accent-section' : 'border-fw-border bg-fw-surface hover:bg-fw-hover'}`}>
+      className={`w-full rounded-xl border px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fw-focus-ring ${selected ? 'border-fw-accent-border bg-fw-accent-section' : 'border-fw-border bg-fw-surface hover:bg-fw-hover'}`}>
       <div className="flex min-w-0 items-center gap-2">
         <ActionIcon webhook={webhook} />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong">{webhook.id}</span>
@@ -145,7 +146,7 @@ function WebhookInspector({ webhook, now, onInspectSession, onOpenSession }: {
   }
   const target = webhook.targetSessionId
   return (
-    <aside className="min-w-0 rounded-xl border border-fw-border bg-fw-surface p-4 xl:sticky xl:top-4 xl:self-start" data-system-webhook-inspector={webhook.id}>
+    <aside className="min-w-0 rounded-xl border border-fw-border bg-fw-surface p-4" data-system-webhook-inspector={webhook.id}>
       <div className="flex items-start gap-2">
         <ActionIcon webhook={webhook} />
         <h2 className="min-w-0 flex-1 break-words text-sm font-semibold text-fw-text-strong">{webhook.id}</h2>
@@ -227,11 +228,13 @@ function WebhookInspector({ webhook, now, onInspectSession, onOpenSession }: {
   )
 }
 
-export default function SystemWebhooks({ onInspectSession, onOpenSession }: {
+export default function SystemWebhooks({ phone, onInspectSession, onOpenSession }: {
+  phone: boolean
   onInspectSession: (sessionId: string) => void
   onOpenSession: (sessionId: string) => void
 }) {
   const { webhooks, loaded, error, reload } = useWebhookList()
+  const split = useSystemSplit(phone)
   const now = useMinuteClock()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const ordered = useMemo(() => orderWebhooks(webhooks), [webhooks])
@@ -242,25 +245,27 @@ export default function SystemWebhooks({ onInspectSession, onOpenSession }: {
   const selected = webhooks.find(webhook => webhook.id === selectedId) || null
   const attention = webhooks.filter(webhookNeedsAttention).length
   return (
-    <div className="space-y-4" data-system-webhooks>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-        <p className="text-xs text-fw-text-muted">Each webhook is an access identity in Setup › Config.</p>
-        <div className="text-xs text-fw-text-muted" data-system-summary="webhooks">
-          <strong className="font-semibold tabular-nums text-fw-text-strong">{webhooks.length}</strong> webhooks · <strong className="font-semibold tabular-nums text-fw-text-strong">{attention}</strong> need attention
-        </div>
-      </div>
-      {error ? <div className="flex items-center justify-between gap-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger"><span>{error}</span><button type="button" onClick={() => { void reload() }} className="font-medium underline">Retry</button></div> : null}
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <main className="min-w-0 space-y-2" data-system-webhook-list>
-          {ordered.map(webhook => <WebhookRowCard key={webhook.id} webhook={webhook} selected={webhook.id === selectedId} now={now} onSelect={() => setSelectedId(webhook.id)} />)}
+    <div className={split.narrow ? '' : 'h-full'} data-system-webhooks>
+      <SystemSplit split={split} name="webhooks" backLabel="Webhooks" detailWidth="minmax(340px,400px)"
+        toolbar={<div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+            <p className="text-xs text-fw-text-muted">Each webhook is an access identity in Setup › Config.</p>
+            <div className="text-xs text-fw-text-muted" data-system-summary="webhooks">
+              <strong className="font-semibold tabular-nums text-fw-text-strong">{webhooks.length}</strong> webhooks · <strong className="font-semibold tabular-nums text-fw-text-strong">{attention}</strong> need attention
+            </div>
+          </div>
+          {error ? <div className="flex items-center justify-between gap-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger"><span>{error}</span><button type="button" onClick={() => { void reload() }} className="font-medium underline">Retry</button></div> : null}
+        </div>}
+        list={<div className="space-y-2" data-system-webhook-list>
+          {ordered.map(webhook => <WebhookRowCard key={webhook.id} webhook={webhook} selected={!split.narrow && webhook.id === selectedId} now={now} onSelect={() => { setSelectedId(webhook.id); split.open() }} />)}
           {loaded && !error && ordered.length === 0 ? (
             <div className="rounded-xl border border-dashed border-fw-border-strong px-6 py-10 text-center text-sm text-fw-text-muted">
               No webhooks yet. Add an identity with a <code className="font-mono">webhook</code> surface in Setup › Config to receive events from GitHub, Cloudflare or your own tools.
             </div>
           ) : null}
-        </main>
-        <WebhookInspector key={selected?.id || ''} webhook={selected} now={now} onInspectSession={onInspectSession} onOpenSession={onOpenSession} />
-      </div>
+        </div>}
+        detail={<WebhookInspector key={selected?.id || ''} webhook={selected} now={now} onInspectSession={onInspectSession} onOpenSession={onOpenSession} />}
+      />
     </div>
   )
 }

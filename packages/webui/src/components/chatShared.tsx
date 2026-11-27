@@ -144,7 +144,7 @@ export interface FunctionResponse {
   __meta?: {
     resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>
     toolScriptSubCalls?: ToolScriptSubCall[]
-    sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>
+    sessionMessages?: SessionDeliveryRecord[]
     approval?: ToolApprovalMeta
     /** What the call resolved to; `node` is its execution Node for `source: 'node'`. */
     target?: { source?: string; name?: string; node?: string }
@@ -203,6 +203,8 @@ export interface MessagePart {
   phase?: 'commentary' | 'final_answer'
   text?: string
   system?: string
+  /** Request bookkeeping replayed by per-message-effort models; never displayed. */
+  effortChange?: { modelId: string; previousEffort: string; effort: string }
   thinking?: string
   providerMeta?: MessagePartProviderMeta
   functionCall?: FunctionCall
@@ -228,8 +230,20 @@ export interface MessagePart {
   }
 }
 
+/** UI-only evidence of one committed Session-sourced delivery; `task` describes a Task notification. */
+export interface SessionDeliveryRecord {
+  id: string
+  targetSessionId: string
+  message: string
+  truncated?: boolean
+  deliverySeq?: string
+  task?: { taskId: string; event: string; title?: string; recipient: string }
+}
+
 export interface ToolScriptSubCall {
+  /** Rows written before delivery lists kept one delivery. */
   sessionMessage?: { targetSessionId: string; message: string; truncated?: boolean };
+  sessionMessages?: SessionDeliveryRecord[];
   id: string
   name: string
   status: 'running' | 'completed' | 'failed'
@@ -479,6 +493,11 @@ const isInternalSystemPart = (part: MessagePart): boolean => {
     || (tag.attrs.kind === 'session-boundary' && tag.attrs.event === 'first-run')
 }
 
+/** A recorded effort change renders nothing for the model and has no timeline row in any view. */
+export const isEffortChangeMessage = (message: Message): boolean => (
+  message.role === 'user' && message.modelVisible === false && message.parts.length === 1 && !!message.parts[0].effortChange
+)
+
 export const isInternalTimelineMessage = (message: Message): boolean => {
   if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true
   if (isTaskReminderMessage(message)) return true
@@ -584,6 +603,15 @@ export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessa
       previewPrefix: '',
       bodyText: llmError.bodyText,
       lineCount: llmError.lineCount,
+    }
+  }
+
+  if (message.__meta?.synthetic === 'persistentMemorySnapshot') {
+    return {
+      kind: 'snapshot',
+      source: 'foxwarm-system',
+      previewPrefix: '',
+      bodyText: message.parts.map(part => part.text ?? '').join(''),
     }
   }
 

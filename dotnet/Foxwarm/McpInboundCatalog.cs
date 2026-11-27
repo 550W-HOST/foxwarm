@@ -769,7 +769,8 @@ internal sealed partial class McpInboundCatalog
                         match.Source == "builtin" ? null : match.Scope,
                         SessionWait.Text(match.Tool["description"]) ?? "",
                         schema,
-                        match.Tool["outputSchema"]
+                        match.Tool["outputSchema"],
+                        Ingress
                     ),
                 }
             ),

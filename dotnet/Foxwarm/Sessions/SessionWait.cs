@@ -96,7 +96,7 @@ internal static class SessionWait
                 && targets.Contains(source, StringComparer.Ordinal);
             if (listed)
             {
-                deferred.Add(PersistentSessionAuthorityStore.ToQueueJson(item));
+                deferred.Add(SessionQueueJson.ToJson(item));
                 if (!satisfied.Contains(item.SourceSessionId!, StringComparer.Ordinal))
                     all["satisfiedSessions"] = new JsonArray(
                         satisfied
@@ -110,14 +110,14 @@ internal static class SessionWait
                 if (pending.Length > 0)
                     return [];
                 var flush = deferred
-                    .Select(row => PersistentSessionAuthorityStore.FromQueueJson(row!.AsObject()))
+                    .Select(row => SessionQueueJson.FromJson(row!.AsObject()))
                     .ToArray();
                 meta.Remove("wait");
                 return flush;
             }
             var remaining = targets.Except(satisfied, StringComparer.Ordinal).ToArray();
             var result = deferred
-                .Select(row => PersistentSessionAuthorityStore.FromQueueJson(row!.AsObject()))
+                .Select(row => SessionQueueJson.FromJson(row!.AsObject()))
                 .ToList();
             result.Add(item.CloneItem());
             if (remaining.Length > 0)
@@ -181,7 +181,7 @@ internal static class SessionWait
             if (all["deferredQueue"] is not JsonArray deferred)
                 throw SessionAuthorityErrors.Invalid("Invalid deferred wait queue.");
             foreach (var row in deferred)
-                _ = PersistentSessionAuthorityStore.FromQueueJson(
+                _ = SessionQueueJson.FromJson(
                     row?.AsObject()
                         ?? throw SessionAuthorityErrors.Invalid("Invalid deferred item.")
                 );

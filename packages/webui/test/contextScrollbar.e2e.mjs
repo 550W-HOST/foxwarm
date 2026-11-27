@@ -167,12 +167,14 @@ test('track remains sticky inside the native timeline scroll chain for wheel and
 
 test('a tall persistent snapshot has its own ContextScrollbar anchor and keeps a nonzero viewport thumb', async () => {
   await mount(1000, 50000, 720, false, false, false, true)
-  const snapshot = await page.$('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
-  assert.ok(snapshot)
-  assert.equal(await snapshot.evaluate(element => element.getAttribute('data-chat-message-anchor-key')), null, 'snapshot remains excluded from generic Chat viewport persistence')
-  await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 300; element.dispatchEvent(new Event('scroll')) })
+  const scrollerBox = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(scrollerBox.x + scrollerBox.width / 2, scrollerBox.y + scrollerBox.height / 2)
+  await page.mouse.wheel({ deltaY: -200 })
   await page.waitForSelector('button[aria-label="Scroll to top"]')
   await page.click('button[aria-label="Scroll to top"]')
+  // The opening window mounts the newest rows; the top of the history mounts the snapshot.
+  const snapshot = await page.waitForSelector('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
+  assert.equal(await snapshot.evaluate(element => element.getAttribute('data-chat-message-anchor-key')), null, 'snapshot remains excluded from generic Chat viewport persistence')
   await page.waitForFunction(() => {
     const container = document.querySelector('.foxwarm-chat-messages')
     const snapshotAnchor = document.querySelector('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
@@ -259,7 +261,9 @@ test('overview dims as a whole at rest, strengthens its thumb on hover, and keep
 test('explicit top action expands lazy history before reaching the true first row', async () => {
   await mount(1000, 1000, 720, false, true)
   assert.equal(await page.$('[data-chat-message-anchor-key="seq-local-1100"]'), null, 'fixture starts with only the recent lazy subset')
-  await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 300; element.dispatchEvent(new Event('scroll')) })
+  const scrollerBox = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(scrollerBox.x + scrollerBox.width / 2, scrollerBox.y + scrollerBox.height / 2)
+  await page.mouse.wheel({ deltaY: -200 })
   await page.waitForSelector('button[aria-label="Scroll to top"]')
   await page.click('button[aria-label="Scroll to top"]')
   await page.waitForSelector('[data-chat-message-anchor-key="seq-local-1100"]')

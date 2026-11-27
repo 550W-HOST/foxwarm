@@ -322,7 +322,9 @@ internal sealed partial class SessionManager
         bool userInitiated = false,
         string runtime = "foxwarm",
         string? creatorCallId = null,
-        JsonObject? model = null
+        JsonObject? model = null,
+        string? scriptRootCallId = null,
+        Action<SessionDelivery>? delivered = null
     )
     {
         var instructed = !string.IsNullOrEmpty(initialMessage);
@@ -375,7 +377,8 @@ internal sealed partial class SessionManager
                     initialNode: initialNode,
                     creatorCallId: creatorCallId,
                     instructed: instructed,
-                    suggestedModel: model
+                    suggestedModel: model,
+                    scriptRootCallId: scriptRootCallId
                 );
             else
             {
@@ -426,7 +429,6 @@ internal sealed partial class SessionManager
                         + "\nYou are a child session (new, empty context). "
                         + SessionBoundary.Completion(
                             parentId,
-                            HandoffConfirmationEnabled,
                             taskId,
                             runtime == ClaudeRuntimeState.Kind
                         );
@@ -472,7 +474,7 @@ internal sealed partial class SessionManager
         }
         try
         {
-            await SendAsync(parent, child.Id, initialMessage!);
+            await SendAsync(parent, child.Id, initialMessage!, delivered: delivered);
         }
         catch (Exception error)
         {
@@ -520,7 +522,8 @@ internal sealed partial class SessionManager
         JsonObject? toolArgs = null,
         bool trigger = true,
         JsonObject? taskNotification = null,
-        string? toolScriptRunId = null
+        string? toolScriptRunId = null,
+        Action<SessionDelivery>? delivered = null
     )
     {
         var targetId = ResolveSessionReference(source, requestedTarget);
@@ -553,8 +556,9 @@ internal sealed partial class SessionManager
         if (taskId.Length > 128)
             taskId = taskId[..128];
         var taskEvent = taskNotification?["event"]?.GetValue<string>() ?? "";
+        var taskRecipient = taskNotification?["recipient"]?.GetValue<string>();
         var taskHint =
-            taskNotification?["recipient"]?.GetValue<string>() == "new"
+            taskRecipient == "new"
                 ? "Task assignment from Foxwarm, not direct user input. Complete this task with the task tool when the assigned work is finished; completion automatically notifies the task creator. Do not send a separate routine completion message."
                 : "task notification from Foxwarm; not direct user input";
         var deliverySeq = selfSend ? null : DeliverySeqFor(source);
@@ -572,7 +576,7 @@ internal sealed partial class SessionManager
                     + "hint=\"inter-agent message from another session, not direct end-user input\">\n"
                     + message
                     + "\n</foxwarm-message>"
-            : $"<foxwarm-message type=\"task\" taskId=\"{Escape(taskId)}\" event=\"{Escape(taskEvent)}\" sourceSessionId=\"{Escape(source.Id)}\"{deliveryAttribute} time=\"{Escape(time)}\" hint=\"{Escape(taskHint)}\">\n"
+            : $"<foxwarm-message type=\"task\" taskId=\"{Escape(taskId)}\" event=\"{Escape(taskEvent)}\" recipient=\"{Escape(TaskRecipientRole(taskRecipient))}\" sourceSessionId=\"{Escape(source.Id)}\"{deliveryAttribute} time=\"{Escape(time)}\" hint=\"{Escape(taskHint)}\">\n"
                 + message
                 + "\n</foxwarm-message>";
         var item = new QueueItem(
@@ -606,8 +610,30 @@ internal sealed partial class SessionManager
             target.Registry.Trigger(target.Id);
         if (relation == "direct-child" && successfulSendReceipt.Value is { } receipt)
             receipt.Target = target.Id;
+        if (delivered is not null)
+        {
+            // Presentation evidence only: the delivery is already committed and must not fail.
+            try
+            {
+                delivered(new SessionDelivery(target.Id, message, deliverySeq));
+            }
+            catch (Exception error)
+            {
+                source.Entry.RecordBestEffortFailure(error);
+            }
+        }
         return target.Id;
     }
+
+    /// <summary>The recipient role named on a Task notification envelope and its delivery record.</summary>
+    internal static string TaskRecipientRole(string? recipient) =>
+        recipient switch
+        {
+            "new" or "note" => "owner",
+            "previous" => "previous-owner",
+            "completion" => "creator",
+            _ => recipient ?? "",
+        };
 
     public async Task<string?> RefreshSnapshotAsync(SessionOwner session)
     {
@@ -900,7 +926,7 @@ internal sealed partial class SessionManager
             pending
             || Catalog.Get(id) is not null
             || sessions.ContainsKey(id)
-            || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))
+            || Storage.Authority.Exists(id)
         )
             return true;
         var archive = Path.Combine(root, "state", "archive-store.sqlite");
@@ -911,6 +937,8 @@ internal sealed partial class SessionManager
             {
                 DataSource = archive,
                 Mode = SqliteOpenMode.ReadOnly,
+                // A pool's prune timer would capture this caller's async context.
+                Pooling = false,
             }.ToString()
         );
         await connection.OpenAsync();
@@ -932,7 +960,7 @@ internal sealed partial class SessionManager
         return await command.ExecuteScalarAsync() is not null;
     }
 
-    private PersistentSessionAuthorityStore MakeStore(string id, string agent)
+    private ISessionAuthority MakeStore(string id, string agent)
     {
         IdentitySlot slot;
         lock (lifecycle)
@@ -940,34 +968,27 @@ internal sealed partial class SessionManager
                 identities.GetValueOrDefault(id)
                 ?? throw new InvalidOperationException("Session identity was not claimed.");
 
-        PersistentSessionAuthorityStore store = null!;
-        store = new PersistentSessionAuthorityStore(
-            root,
+        return Storage.Authority.Open(
             id,
             agent,
-            authorityStageHook: authorityStageHook is null
-                ? null
-                : stage => authorityStageHook(store.SessionId, stage),
-            canonicalCommitBarrier: canonicalCommitBarrier is null
-                ? null
-                : (commit, token) => canonicalCommitBarrier(store.SessionId, commit, token),
-            publishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot),
-            mainFields: () => Catalog.Get(store.SessionId),
-            checkLifetime: () =>
-            {
-                lock (lifecycle)
-                    if (
-                        !identities.TryGetValue(store.SessionId, out var current)
-                        || current != slot
-                        || slot.Retired
-                    )
-                        throw new InvalidOperationException(
-                            "Session authority lifetime has retired."
-                        );
-            },
-            archiveCommitted: OnArchiveCommitted
+            new SessionAuthorityCallbacks(
+                PublishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot),
+                MainFields: current => Catalog.Get(current),
+                CheckLifetime: current =>
+                {
+                    lock (lifecycle)
+                        if (
+                            !identities.TryGetValue(current, out var claimed)
+                            || claimed != slot
+                            || slot.Retired
+                        )
+                            throw new InvalidOperationException(
+                                "Session authority lifetime has retired."
+                            );
+                },
+                ArchiveCommitted: OnArchiveCommitted
+            )
         );
-        return store;
     }
 
     private static string Escape(string text) =>

@@ -63,7 +63,7 @@ test('Conversation honors real delete and clear commands across paging, remount 
     await page.waitForSelector('[data-chat-message-anchor-key="seq-local-1"]')
     assert.equal((await rows()).includes('seq-local-140'), false)
     await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
-    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('session main'))
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main')
     await open()
     await page.waitForSelector('[data-chat-message-anchor-key="seq-local-139"]')
     assert.equal((await rows()).includes('seq-local-140'), false)

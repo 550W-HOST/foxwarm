@@ -43,6 +43,8 @@ before(async () => {
     Date.now = () => window.fixture.now
     window.fixture.setNow = value => { window.fixture.now = value }
     window.fetch = async input => {
+      // Chat preferences read the installation's send-key default once; only CTX expansion is counted.
+      if (String(input).includes('/webui/settings')) return new Response(JSON.stringify({settings:{}}),{status:200,headers:{'Content-Type':'application/json'}})
       window.fixture.fetches.push(String(input))
       const parent = String(input).includes('/40/expand')
       return new Response(JSON.stringify({sessionId:'fixture/main',blockId:parent?40:41,expansionKind:parent?'child-blocks':'messages',messages:parent?[${JSON.stringify(ctx(41))}]:[
@@ -710,7 +712,8 @@ test('Conversation clocks share logical request timing across a commentary prefi
     stamp(804,95877,'tool',result('segment-task','task',95815,95877,'{"taskId":"fixture-task","status":"open","sentNotifications":0}')),
     stamp(805,127872,'model',[{functionCall:{id:'segment-wait',name:'wait',args:{waitAnySessions:['fixture/worker']}}}],request('wait-request',95900,127872)),
     stamp(806,127922,'tool',result('segment-wait','wait',127872,127922,'Waiting registered')),
-    stamp(807,1004404,'user',[{system:'<foxwarm-message type="task" taskId="fixture-task" event="completed" sourceSessionId="fixture/worker">\nFixture task complete\n</foxwarm-message>'}]),
+    // A notice that stays in Activity, so the wake is measured inside one span; completions are Task cards.
+    stamp(807,1004404,'user',[{system:'<foxwarm-message type="task" taskId="fixture-task" event="released" recipient="previous-owner" sourceSessionId="fixture/worker">\nFixture task released\n</foxwarm-message>'}]),
     stamp(808,1050000,'model',[call('segment-read')],request('read-request',1004500,1050000)),
     stamp(809,1051000,'tool',result('segment-read','exec',1050000,1051000,'SEGMENT_RESULT')),
     stamp(810,1074464,'model',[{text:'SEGMENT_FINAL'}],request('final-request',1051000,1074448)),

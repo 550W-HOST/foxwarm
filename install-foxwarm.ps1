@@ -87,6 +87,31 @@ function Start-Control {
   }
 }
 
+# The scalar value of bot.$Key in config.yaml, the setting Main reads: a key directly under the
+# top-level bot mapping, without quotes or a trailing comment. Keys elsewhere, at the top level
+# or nested deeper, are not Main's setting. foxwarmctl.ps1 reads it the same way.
+function Get-BotSetting($DataRoot, $Key) {
+  $config = Join-Path $DataRoot 'state\config.yaml'
+  if (-not (Test-Path -LiteralPath $config)) { return $null }
+  $inBot = $false
+  $indent = $null
+  foreach ($line in [System.IO.File]::ReadAllLines($config)) {
+    if ($line -match '^\s*(#|$)') { continue }
+    if ($line -match '^\S') { $inBot = $line -match '^bot:\s*(#.*)?$'; $indent = $null; continue }
+    if (-not $inBot -or $line -notmatch '^( +)(.*)$') { continue }
+    $lead = $Matches[1]
+    $rest = $Matches[2]
+    if ($null -eq $indent) { $indent = $lead }
+    if ($lead -ne $indent) { continue }
+    if ($rest -match ('^' + [regex]::Escape($Key) + ':(?:\s+(.*))?$')) {
+      $value = ($Matches[1] -replace '\s+#.*$', '').Trim()
+      if ($value -match '^"(.*)"$' -or $value -match "^'(.*)'$") { $value = $Matches[1] }
+      return $value
+    }
+  }
+  return $null
+}
+
 function Show-SignIn($DataRoot) {
   $TokenFile = Join-Path $DataRoot 'state\token'
   $Token = $null
@@ -97,19 +122,11 @@ function Show-SignIn($DataRoot) {
     }
     Start-Sleep -Milliseconds 500
   }
-  $Port = 3001
-  $HostName = 'localhost'
-  $Config = Join-Path $DataRoot 'state\config.yaml'
-  if (Test-Path -LiteralPath $Config) {
-    $match = Select-String -LiteralPath $Config -Pattern '^\s*httpPort:\s*(\d+)' | Select-Object -First 1
-    if ($match) { $Port = [int]$match.Matches[0].Groups[1].Value }
-    # A specific bot.httpHost is the only address Main answers on.
-    $match = Select-String -LiteralPath $Config -Pattern '^\s*httpHost:\s*[''"]?([0-9A-Fa-f:.]+)' | Select-Object -First 1
-    if ($match) {
-      $listen = $match.Matches[0].Groups[1].Value
-      if ($listen -notin '0.0.0.0', '::') { $HostName = if ($listen.Contains(':')) { "[$listen]" } else { $listen } }
-    }
-  }
+  $Port = Get-BotSetting $DataRoot 'httpPort'
+  if ($Port -notmatch '^\d+$') { $Port = 3001 }
+  # A specific bot.httpHost is the only address Main answers on.
+  $listen = Get-BotSetting $DataRoot 'httpHost'
+  $HostName = if (-not $listen -or $listen -in '0.0.0.0', '::') { 'localhost' } elseif ($listen.Contains(':')) { "[$listen]" } else { $listen }
   Write-Host ''
   Write-Step "Program dir: $Dir"
   Write-Step "Data dir: $DataRoot"
@@ -121,7 +138,18 @@ function Show-SignIn($DataRoot) {
     Write-Warning "The sign-in token is not ready yet. When startup finishes, read $TokenFile"
     Write-Step "WebUI: http://${HostName}:$Port/"
   }
-  Write-Step "Control: & '$Dir\foxwarmctl.cmd' status | stop | restart | update"
+  if ($Loopback) { Write-LoopbackHint $DataRoot }
+  # Older releases have no link command.
+  $verbs = 'status | stop | restart | update'
+  if (Select-String -LiteralPath (Join-Path $Dir 'foxwarmctl.ps1') -Pattern '^\s*''link''' -Quiet) { $verbs += ' | link' }
+  Write-Step "Control: & '$Dir\foxwarmctl.cmd' $verbs"
+}
+
+# A new installation listens on this computer only. An existing installation, or data that Main
+# has already used, keeps its binding: config.yaml is never replaced.
+$Loopback = $false
+function Write-LoopbackHint($DataRoot) {
+  Write-Step "Only this computer can connect. To allow other devices, set bot.httpHost to 0.0.0.0 in '$(Join-Path $DataRoot 'state\config.yaml')' and run: & '$Dir\foxwarmctl.cmd' restart"
 }
 
 function Resolve-InstallerPath($Value, $BaseDir) {
@@ -211,6 +239,9 @@ try {
   if ($manifest.rid -ne 'win-x64') { throw "$Package is for $($manifest.rid), not win-x64." }
   $release = $manifest.version
 
+  # Main creates the token when it first serves HTTP, so data without a token and without a
+  # config.yaml belongs to no installation yet.
+  $Loopback = -not (Test-Path -LiteralPath (Join-Path $Data 'state\config.yaml')) -and -not (Test-Path -LiteralPath (Join-Path $Data 'state\token'))
   New-Item -ItemType Directory -Force -Path (Join-Path $Data 'state'), (Join-Path $Data 'agents') | Out-Null
   $Data = (Resolve-Path $Data).Path
   [System.IO.File]::WriteAllText($Pointer, $Data, $Utf8)
@@ -234,11 +265,24 @@ try {
   New-Item -ItemType Junction -Path (Join-Path $RuntimeDir 'current') -Target $target | Out-Null
   foreach ($file in 'foxwarmctl.ps1', 'foxwarmctl.cmd') { Copy-Item (Join-Path $target $file) (Join-Path $Dir $file) -Force }
   Write-Step "Installed Foxwarm $release in $Dir"
+  if ($Loopback) {
+    # The release's initial settings, which first-run Setup would otherwise write, plus the
+    # loopback address. Main's own default, used without this installer, stays 0.0.0.0.
+    $template = Join-Path $target 'templates\config.example.yaml'
+    $text = if (Test-Path -LiteralPath $template) { ([System.IO.File]::ReadAllText($template) -replace "`r`n", "`n").TrimEnd("`n") + "`n`n" } else { '' }
+    $text += "bot:`n  # 127.0.0.1 accepts only this computer; 0.0.0.0 also accepts other devices.`n  httpHost: 127.0.0.1`n"
+    try {
+      # CreateNew: a config.yaml that appeared meanwhile is never replaced.
+      $stream = [System.IO.File]::Open((Join-Path $Data 'state\config.yaml'), 'CreateNew', 'Write')
+      try { $bytes = $Utf8.GetBytes($text); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    } catch [System.IO.IOException] { $Loopback = $false }
+  }
 } finally {
   Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 if ($NoStart) {
+  if ($Loopback) { Write-LoopbackHint $Data }
   Write-Step "Start it with: & '$Dir\foxwarmctl.cmd' start"
   return
 }

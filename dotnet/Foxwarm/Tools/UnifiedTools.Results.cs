@@ -180,9 +180,14 @@ internal static partial class UnifiedTools
         if (shown.Any(tool => tool.Kind == SearchKinds.Declared))
             builder.Append("\nCall declared tools directly, not through ctl.");
         if (shown.Any(tool => tool.Kind == SearchKinds.Tool))
+        {
             builder.Append(
                 "\nCall a tool with `tool call <tool-id> --args @args` and its arguments in values.args; `tool call <tool-id> --help` shows its arguments."
             );
+            // Only model callers have ToolScript; inbound MCP callers don't.
+            if (ingress == CtlRegistry.Ingress)
+                builder.Append(" In ToolScript, call it directly with `call_tool(\"<tool-id>\", args)`.");
+        }
         if (total > tools.Length)
             builder.Append("\nRaise --limit or narrow the query or --source to see more.");
         foreach (var warning in warnings)
@@ -221,14 +226,15 @@ internal static partial class UnifiedTools
     }
 
     // `tool call <tool-id> --help` for a tool called through `tool call`: its description and
-    // arguments.
+    // arguments. The ToolScript form is shown only to model callers, which have ToolScript.
     internal static string ToolHelp(
         string source,
         string name,
         string? scope,
         string description,
         JsonNode? schema,
-        JsonNode? outputSchema
+        JsonNode? outputSchema,
+        string ingress = CtlRegistry.Ingress
     )
     {
         var builder = new StringBuilder("Tool: " + Descriptor(source, name, scope) + "\n");
@@ -242,7 +248,9 @@ internal static partial class UnifiedTools
         if (outputSchema is not null)
             builder.Append("\nResult: ").Append(SchemaType(outputSchema, 0)).Append('\n');
         builder.Append(
-            "\nCall it with `tool call <tool-id> --args @args` and its arguments in values.args."
+            ingress == CtlRegistry.Ingress
+                ? "\nCall it with `tool call <tool-id> --args @args` and its arguments in values.args, or in ToolScript with `call_tool(\"<tool-id>\", args)`."
+                : "\nCall it with `tool call <tool-id> --args @args` and its arguments in values.args."
         );
         var help = builder.ToString();
         return help.Length <= CtlHelp.MaxLength

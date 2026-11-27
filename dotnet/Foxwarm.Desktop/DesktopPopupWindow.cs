@@ -40,7 +40,7 @@ internal sealed partial class DesktopPopupWindow : Window
         Content = content;
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Foxwarm.ico"));
         if (frameKind != DesktopWindowFrame.System)
-            frame = new DesktopFrame(this, view, webViews.IsAppUri, frameKind);
+            frame = new DesktopFrame(this, view, webViews.IsAppUri, frameKind, webViews.InstanceMenu is { } menu ? anchor => menu(this, anchor) : null);
         Place(opener, width, height);
         Closed += (_, _) =>
         {
@@ -64,7 +64,7 @@ internal sealed partial class DesktopPopupWindow : Window
         // window.close() from the page, including the opener closing its popup.
         core.WindowCloseRequested += (_, _) => CloseLater();
         if (frame is not null)
-            await frame.InstallAsync(core, webViews.Endpoint);
+            await frame.InstallAsync(core, webViews.Scope);
         else
         {
             // Without the frame there is no page-to-host channel at all.

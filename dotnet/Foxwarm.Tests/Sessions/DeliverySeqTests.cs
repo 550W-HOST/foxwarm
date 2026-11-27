@@ -80,9 +80,12 @@ public sealed class DeliverySeqTests
         string a = "",
             b = "";
         var ownerRequests = -1;
+        var bodies = new System.Collections.Concurrent.ConcurrentQueue<string>();
         await using var peer = new ScriptedResponsesSequenceServer(
             20,
             async (_, stream, request) =>
+            {
+                bodies.Enqueue(request.Body);
                 await Respond(
                     stream,
                     // The created child runs its own first turn against the same provider and
@@ -133,7 +136,8 @@ public sealed class DeliverySeqTests
                             ),
                             _ => new JsonArray(Final()),
                         }
-                )
+                );
+            }
         );
         await using var f = await ScriptFixture.Create(suppliedOptions: Options(peer.BaseUri));
         var targetA = await f.Manager.CreateNamedAsync("main", "peer-a", null, null);
@@ -205,12 +209,18 @@ public sealed class DeliverySeqTests
             new[] { $"{batch}.2.1", $"{batch}.2.2" },
             responses["p2"]["__meta"]!["toolScriptSubCalls"]!
                 .AsArray()
-                .Select(call => SessionWait.Text(call!["sessionMessage"]!["deliverySeq"]))
+                .Select(call => SessionWait.Text(call!["sessionMessages"]![0]!["deliverySeq"]))
         );
+        // The Task, child and send records are presentation metadata: no provider request
+        // carries them, while the requests after the calls replay their results.
+        Assert.Equal("assigned", SessionWait.Text(responses["t1"]["__meta"]!["sessionMessages"]![0]!["task"]!["event"]));
+        Assert.Equal($"{batch}.3", SessionWait.Text(responses["p3"]["__meta"]!["sessionMessages"]![0]!["deliverySeq"]));
+        Assert.Contains(bodies, body => body.Contains("parallel to a", StringComparison.Ordinal) && body.Contains("function_call_output", StringComparison.Ordinal));
+        Assert.DoesNotContain(bodies, body => body.Contains("sessionMessages", StringComparison.Ordinal) || body.Contains("toolScriptSubCalls", StringComparison.Ordinal));
         Assert.Equal(
             $"{script}.1.1",
             SessionWait.Text(
-                responses["s1"]["__meta"]!["toolScriptSubCalls"]![0]!["sessionMessage"]![
+                responses["s1"]["__meta"]!["toolScriptSubCalls"]![0]!["sessionMessages"]![0]![
                     "deliverySeq"
                 ]
             )

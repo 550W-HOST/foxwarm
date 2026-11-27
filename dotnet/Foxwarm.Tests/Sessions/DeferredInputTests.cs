@@ -186,10 +186,10 @@ public sealed class DeferredInputTests
     {
         var item = Wrapped("later");
         DeferredQueueInput.Mark([item]);
-        var stored = PersistentSessionAuthorityStore.ToQueueJson(item);
+        var stored = SessionQueueJson.ToJson(item);
         Assert.True(stored["queuedInput"]!.GetValue<bool>());
         Assert.Equal("preserved", stored["fixture"]!.GetValue<string>());
-        var reopened = PersistentSessionAuthorityStore.FromQueueJson(stored).CloneItem();
+        var reopened = SessionQueueJson.FromJson(stored).CloneItem();
         Assert.True(reopened.QueuedInput);
         var parts = new JsonArray(
             new JsonObject

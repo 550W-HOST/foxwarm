@@ -5,15 +5,53 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
-public sealed partial class HandoffConfirmationTests
+// The handoff review checkpoint was removed. Persisted ToolScripts, skills and models with older
+// history keep passing its fields, and existing configs keep the startup key; both are ignored.
+public sealed class RemovedHandoffFieldsTests
 {
+    private static JsonObject Obj(string raw) => JsonNode.Parse(raw)!.AsObject();
+
+    private const string Models =
+        """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://127.0.0.1:1","models":["wire"]}}}""";
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("false")]
+    public async Task Configs_with_the_old_startup_key_still_start(string value)
+    {
+        using var temp = new TempDirectory();
+        var root = Path.Combine(temp.Path, "data");
+        Directory.CreateDirectory(Path.Combine(root, "state"));
+        await File.WriteAllTextAsync(
+            Path.Combine(root, "state", "models.yaml"),
+            "default: a\nproviders: {a: {providerType: openai-responses, baseUrl: 'http://127.0.0.1:1', models: [wire]}}\n"
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(root, "state", "config.yaml"),
+            "handoffConfirmation: " + value + "\n"
+        );
+        var configuration = new ModelConfiguration(root);
+        Assert.Equal("a", configuration.Models.DefaultKey);
+    }
+
+    [Fact]
+    public void Handoff_schemas_do_not_declare_the_removed_fields()
+    {
+        foreach (var definition in AgentToolDefinitions.Definitions().OfType<JsonObject>())
+        {
+            var parameters = definition["parameters"]!.AsObject();
+            Assert.False(parameters["properties"]!.AsObject().ContainsKey("handoffRecall"));
+            Assert.False(parameters["properties"]!.AsObject().ContainsKey("handoffConfirmation"));
+        }
+    }
+
     [Theory]
     [InlineData("direct")]
     [InlineData("unified")]
     [InlineData("native")]
     [InlineData("management")]
     [InlineData("script")]
-    public async Task Supported_send_and_child_paths_require_final_consent_before_effects(
+    public async Task Supported_send_and_child_paths_ignore_the_removed_fields(
         string path
     )
     {
@@ -29,12 +67,7 @@ public sealed partial class HandoffConfirmationTests
             "",
             713
         );
-        var models = HostModels.Parse(
-            Obj(
-                """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://127.0.0.1:1","models":["wire"]}}}"""
-            ),
-            new JsonObject { ["handoffConfirmation"] = true }
-        );
+        var models = HostModels.Parse(Obj(Models), new JsonObject { ["handoffConfirmation"] = true });
         await using var manager = new SessionManager(data, work, options, models);
         await manager.LoadMainHostAsync();
         var parent = await manager.CreateNamedAsync("main", "parent", null, null);
@@ -98,40 +131,19 @@ public sealed partial class HandoffConfirmationTests
 
         foreach (var name in new[] { "send_to_session", "create_child_session" })
         {
-            JsonObject Input(JsonNode? confirmation) =>
-                new()
-                {
-                    [name == "send_to_session" ? "sessionId" : "suffix"] =
-                        name == "send_to_session" ? target.Id : "worker",
-                    ["handoffRecall"] = "The assigned recipient needs the bounded work result.",
-                    ["message"] = "handoff payload",
-                    ["handoffConfirmation"] = confirmation,
-                };
-            foreach (var ending in new[] { "missing", "nonempty", "wrong", "nonterminal" })
+            // Old callers sent the review fields in this order; values are no longer checked.
+            var input = new JsonObject
             {
-                var invalid = Input(
-                    ending switch
-                    {
-                        "nonempty" => "Reviewed and found an unresolved blocker.",
-                        "wrong" => "Reviewed. I confirm this handoff may proceed.",
-                        "nonterminal" => Review() + " Cancel instead.",
-                        _ => null,
-                    }
-                );
-                if (ending == "missing")
-                    invalid.Remove("handoffConfirmation");
-                var rejected = await Execute(name, invalid);
-                Assert.NotNull(rejected["error"] ?? rejected["result"]?["error"]);
-                Assert.Equal(
-                    name == "send_to_session" ? 0 : 1,
-                    target.Entry.Snapshot().Queue.Count
-                );
-                Assert.Null(manager.Catalog.Get(parent.Id + "_worker"));
-            }
-            var approved = Input(Review());
+                [name == "send_to_session" ? "sessionId" : "suffix"] =
+                    name == "send_to_session" ? target.Id : "worker",
+                ["handoffRecall"] = "The assigned recipient needs the bounded work result.",
+                ["message"] = "handoff payload",
+                ["currentSessionTurnAction"] = "continue",
+                ["handoffConfirmation"] = 123,
+            };
             if (name == "create_child_session")
-                approved.Remove("message");
-            var result = await Execute(name, approved);
+                input.Remove("message");
+            var result = await Execute(name, input);
             Assert.Null(result["error"]);
             Assert.Null(result["result"]?["error"]);
             if (name == "send_to_session")
@@ -145,10 +157,22 @@ public sealed partial class HandoffConfirmationTests
                 Assert.DoesNotContain("handoffRecall", delivered);
                 Assert.DoesNotContain("handoffConfirmation", delivered);
                 Assert.DoesNotContain("bounded work result", delivered);
-                Assert.DoesNotContain("I confirm this handoff should proceed.", delivered);
             }
             else
-                Assert.NotNull(manager.Catalog.Get(parent.Id + "_worker"));
+            {
+                var worker = await manager.RequiredAsync(parent.Id + "_worker");
+                var boundary = string.Join(
+                    "\n",
+                    worker
+                        .Entry.Snapshot()
+                        .History.Materialize()
+                        .SelectMany(message => message["parts"]!.AsArray())
+                        .Select(part => part?["system"]?.GetValue<string>())
+                        .Where(value => value is not null)
+                );
+                Assert.Contains("send_to_session(", boundary);
+                Assert.DoesNotContain("handoffRecall", boundary);
+            }
         }
 
         var task = await manager.Tasks.ExecuteAsync(
@@ -169,7 +193,7 @@ public sealed partial class HandoffConfirmationTests
                 ["handoffRecall"] =
                     "The child needs the stored assignment and this additional result.",
                 ["message"] = "additional task context",
-                ["handoffConfirmation"] = Review(),
+                ["handoffConfirmation"] = "Reviewed. I confirm this handoff should proceed.",
             }
         );
         Assert.Null(assigned["error"]);
@@ -181,5 +205,18 @@ public sealed partial class HandoffConfirmationTests
         Assert.Contains("additional task context", assignmentText);
         Assert.DoesNotContain("The child needs the stored assignment", assignmentText);
         Assert.DoesNotContain("I confirm this handoff should proceed.", assignmentText);
+
+        // Unknown arguments other than the removed fields are still rejected before effects.
+        var unknown = await Execute(
+            "send_to_session",
+            new JsonObject
+            {
+                ["sessionId"] = target.Id,
+                ["message"] = "must not arrive",
+                ["handoffReview"] = "not a former field",
+            }
+        );
+        Assert.NotNull(unknown["error"] ?? unknown["result"]?["error"]);
+        Assert.Single(target.Entry.Snapshot().Queue);
     }
 }

@@ -349,7 +349,7 @@ public sealed partial class RemoteExecProtocolTests
         Assert.Single(fixture.Owner.Entry.Snapshot().Queue);
         Assert.Equal(1, fixture.Wakes);
         var saved = JsonNode.Parse(
-            await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath)
+            await File.ReadAllTextAsync(fixture.Owner.AuthorityStore.AuthorityPath())
         )!;
         Assert.Contains(
             "remote-exec-completion:" + id,

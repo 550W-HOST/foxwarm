@@ -46,7 +46,7 @@ for (const runtime of ['dotnet']) {
     } catch (error) { errors.push(error.stack); response.writeHead(500); response.end(String(error)) }
   })
   model.listen(0, '127.0.0.1'); await once(model, 'listening')
-  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: cli-code-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: cli-code-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
   await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, asyncCompact: false, effort: { allowed: ['none'], default: 'none' }, models: ['wire'] } } }))
   const online = () => until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.find(row => row.id === 'code-cli' && row.online), 'real CLI Code services online', 22000)
@@ -81,8 +81,8 @@ for (const runtime of ['dotnet']) {
     assert.equal((await rawApi('GET', gitUrl('content') + '&path=renamed.txt&ref=' + commit)).bytes.toString(), 'first\nselected second\nselected third\nlast\n')
     const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'code-owner' }); assert.equal(created.status, 200); const id = created.body.sessionId
     page = await fixture.openApp(); page.on('pageerror', error => errors.push(error.message))
-    await page.evaluate(id => { window.codePreviousHelper = window.foxwarmTest; window.codeAlreadySelected = [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(id)); window.foxwarmTest.switchToSession(id) }, id)
-    await page.waitForFunction(id => [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(id)) && (window.codeAlreadySelected || window.foxwarmTest !== window.codePreviousHelper), {}, id)
+    await page.evaluate(id => { window.codePreviousHelper = window.foxwarmTest; window.codeAlreadySelected = [...document.querySelectorAll('.foxwarm-chat-root')].some(root => root.dataset.chatSessionId?.includes(id)); window.foxwarmTest.switchToSession(id) }, id)
+    await page.waitForFunction(id => [...document.querySelectorAll('.foxwarm-chat-root')].some(root => root.dataset.chatSessionId?.includes(id)) && (window.codeAlreadySelected || window.foxwarmTest !== window.codePreviousHelper), {}, id)
     await page.evaluate(() => window.foxwarmTest.sendMessage('CLI-CODE'))
     await until(async () => { const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')); return state.history.some(row => row.parts?.some(part => part.text?.includes('CLI-CODE-DONE'))) }, 'normal model remote file turn', 30000)
     await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')

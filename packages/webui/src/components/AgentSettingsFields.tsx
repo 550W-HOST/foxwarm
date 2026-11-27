@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { FolderOpen, MemoryStick } from 'lucide-react'
+import Select from './Select'
 import type { WebUiNodeTarget } from '../nodeTargets'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 
@@ -75,10 +76,7 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
         {inheritanceChain}
         <label className={labelClass}>
           Inherit agent
-          <select data-agent-settings-inherit value={value.inheritAgent} disabled={disabled} onChange={event => set({ inheritAgent: event.target.value })} className={controlClass}>
-            <option value="">None</option>
-            {inheritOptions.map(agent => <option key={agent.id} value={agent.id}>{agent.id}</option>)}
-          </select>
+          <Select data-agent-settings-inherit value={value.inheritAgent} disabled={disabled} onChange={inheritAgent => set({ inheritAgent })} className={controlClass} options={[{ value: '', label: 'None' }, ...inheritOptions.map(agent => ({ value: agent.id, label: agent.id }))]} />
         </label>
       </section>
 
@@ -86,13 +84,11 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
         <h3 className={sectionTitle}><FolderOpen className="h-3.5 w-3.5" /> Session defaults</h3>
         <label className={labelClass}>
           Node
-          <select data-agent-default-node value={startNode === 'master' && !installDefault ? '' : startNode} disabled={disabled} onChange={event => set({ defaultNode: event.target.value })} className={controlClass}>
-            <option value="">{installDefault ? `Installation default (${nodeDisplayName(nodeOptions, installDefault)})` : `${nodeDisplayName(nodes, 'master')} (default)`}</option>
-            {installDefault ? <option value="master">{nodeDisplayName(nodes, 'master')}</option> : null}
-            {nodeOptions.filter(node => node.id !== 'master').map(node => (
-              <option key={node.id} value={node.id}>{node.displayName}{node.online ? '' : ' · offline'}</option>
-            ))}
-          </select>
+          <Select data-agent-default-node value={startNode === 'master' && !installDefault ? '' : startNode} disabled={disabled} onChange={defaultNode => set({ defaultNode })} className={controlClass} options={[
+            { value: '', label: installDefault ? `Installation default (${nodeDisplayName(nodeOptions, installDefault)})` : `${nodeDisplayName(nodes, 'master')} (default)` },
+            ...(installDefault ? [{ value: 'master', label: nodeDisplayName(nodes, 'master') }] : []),
+            ...nodeOptions.filter(node => node.id !== 'master').map(node => ({ value: node.id, label: `${node.displayName}${node.online ? '' : ' · offline'}` })),
+          ]} />
         </label>
         <label className={labelClass}>
           Working directory

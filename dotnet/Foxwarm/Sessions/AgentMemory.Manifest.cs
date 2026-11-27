@@ -127,6 +127,7 @@ internal sealed partial class SessionManager
     internal AgentListEntry[] AgentListEntries()
     {
         var counts = Catalog.AgentActivityCounts();
+        var lastActivity = Catalog.AgentLastActivity();
         var local = LocalProjections();
         var persisted = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in local.Select(row => SessionCatalog.Text(row["id"])!).Chunk(200))
@@ -135,6 +136,9 @@ internal sealed partial class SessionManager
         foreach (var row in local)
         {
             var current = Metadata(row);
+            // A live row can be newer than its persisted catalog entry.
+            if (SessionCatalog.Number(row["lastMessageTime"]) is { } time && time > lastActivity.GetValueOrDefault(current.Agent))
+                lastActivity[current.Agent] = time;
             var previous = persisted.GetValueOrDefault(current.Id) is { } old
                 ? Metadata(old)
                 : null;
@@ -168,9 +172,68 @@ internal sealed partial class SessionManager
 
     internal AgentMemoryManifest AgentManifest(string name) => memory.Manifest(name);
 
+    // Root-first creator ancestry ending with the Agent, or null when it cannot be resolved.
+    private JsonNode? CreatorChainOrNull(string name)
+    {
+        try
+        {
+            return JsonData.Node(agents.CreatorChainOf(name));
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The installation additions file every Agent's prompt includes after the framework prompt.</summary>
+    internal JsonObject PromptSources() =>
+        new()
+        {
+            ["installation"] = new JsonObject
+            {
+                ["path"] = agents.FrameworkLocalPath,
+                ["exists"] = File.Exists(agents.FrameworkLocalPath),
+            },
+        };
+
+    /// <summary>
+    /// The framework prompt text new Sessions receive, filtered for the installation's default
+    /// model. Agents have no default model of their own, so the text is the same for every Agent;
+    /// a virtual default model (failover, session hash) is followed to its first target.
+    /// </summary>
+    internal async Task<JsonObject> FrameworkPromptViewAsync(CancellationToken token)
+    {
+        string? defaultKey = null,
+            modelKey = null;
+        if (models.All.Count > 0)
+        {
+            var selected = models.Resolve(null);
+            defaultKey = selected.Key;
+            var concrete = selected;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            while (
+                concrete.IsVirtual
+                && concrete.Targets.Length > 0
+                && seen.Add(concrete.Key)
+                && models.Contains(concrete.Targets[0])
+            )
+                concrete = models.Resolve(concrete.Targets[0]);
+            modelKey = concrete.IsVirtual ? null : concrete.Key;
+        }
+        var view = await memory.FrameworkPromptAsync(modelKey ?? "", token);
+        return new JsonObject
+        {
+            ["text"] = view?.Text,
+            ["modelDependent"] = view?.ModelDependent ?? false,
+            ["model"] = modelKey,
+            ["defaultModel"] = defaultKey,
+        };
+    }
+
     internal object[] AgentRegistry()
     {
         var counts = Catalog.AgentActivityCounts();
+        var lastActivity = Catalog.AgentLastActivity();
         var local = LocalProjections();
         var persisted = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in local.Select(row => SessionCatalog.Text(row["id"])!).Chunk(200))
@@ -179,6 +242,9 @@ internal sealed partial class SessionManager
         foreach (var row in local)
         {
             var current = Metadata(row);
+            // A live row can be newer than its persisted catalog entry.
+            if (SessionCatalog.Number(row["lastMessageTime"]) is { } time && time > lastActivity.GetValueOrDefault(current.Agent))
+                lastActivity[current.Agent] = time;
             var previous = persisted.GetValueOrDefault(current.Id) is { } old
                 ? Metadata(old)
                 : null;
@@ -203,6 +269,10 @@ internal sealed partial class SessionManager
                         ["inherit"] = AgentInherit(name),
                         ["inheritanceChain"] = JsonData.Node(AgentChain(name)),
                         ["createdBy"] = agents.CreatedBy(name),
+                        ["creatorChain"] = CreatorChainOrNull(name),
+                        ["rules"] =
+                            (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.DeepClone()
+                            ?? new JsonArray(),
                         ["ruleCount"] =
                             (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
                         ["defaultNode"] = agents.DefaultNode(name),
@@ -213,6 +283,10 @@ internal sealed partial class SessionManager
                         ),
                         ["isolationMigration"] = IsolationMigrationSummary(name),
                         ["sessionCount"] = owned.Total,
+                        ["lastActivity"] =
+                            lastActivity.GetValueOrDefault(name) is > 0 and var last
+                                ? last
+                                : (double?)null,
                         ["activeSessionCount"] = owned.Active,
                         ["queuedSessionCount"] = owned.Queued,
                         ["memoryRoot"] = manifest.MemoryRoot,

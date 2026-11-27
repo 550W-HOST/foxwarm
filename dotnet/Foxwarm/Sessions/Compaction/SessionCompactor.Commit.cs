@@ -149,8 +149,7 @@ internal sealed partial class SessionCompactor
                 new JsonObject
                 {
                     ["system"] = CompletionMarker(
-                        live.Id,
-                        SessionWait.Text(live.AuthorityEnvelope["parentSessionId"]),
+                        live,
                         CompactedSkillNames(consumed),
                         now
                     ),
@@ -282,7 +281,12 @@ internal sealed partial class SessionCompactor
             }
             if (
                 name != "load_skill"
-                && !(name == "skill" && SessionWait.Text(args?["action"]) == "load")
+                && !(
+                    name == "skill"
+                    && SessionWait.Text(args?["action"]) == "load"
+                    // A resource read is an ordinary read, not a skill load.
+                    && args?.ContainsKey("path") != true
+                )
             )
                 continue;
             var skill = SessionWait.Text(args?["skillName"]);
@@ -297,13 +301,13 @@ internal sealed partial class SessionCompactor
     }
 
     private static string CompletionMarker(
-        string id,
-        string? parent,
+        SessionState state,
         IReadOnlyList<string> skills,
         long now
     )
     {
         static string Attribute(string value) => LocalSessionTurnHost.EscapeFoxwarmAttribute(value);
+        var parent = SessionWait.Text(state.AuthorityEnvelope["parentSessionId"]);
         var hint =
             skills.Count == 0
                 ? ""
@@ -314,6 +318,6 @@ internal sealed partial class SessionCompactor
                             + ". If you still need them, run `ctl skill load <name>` again."
                     )
                     + "\"";
-        return $"<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"{Attribute(string.IsNullOrEmpty(parent) ? "(none)" : parent)}\" currentSessionId=\"{Attribute(id)}\" time=\"{ArchiveBlockRecord.LocalTimestamp(now)}\"{hint} />";
+        return $"<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"{Attribute(string.IsNullOrEmpty(parent) ? "(none)" : parent)}\" currentSessionId=\"{Attribute(state.Id)}\"{SessionBoundary.Placement(state)} time=\"{ArchiveBlockRecord.LocalTimestamp(now)}\"{hint} />";
     }
 }

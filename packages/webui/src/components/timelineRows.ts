@@ -5,6 +5,7 @@ import {
   formatToolLabel,
   getLlmErrorMessageDetails,
   getToolResponseStatus,
+  isEffortChangeMessage,
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
   parseFoxwarmMetadataLine,
@@ -249,6 +250,7 @@ const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKi
 const isToolGroupableMessage = (msg: Message): boolean => (!getSessionNotice(msg) || !!getLlmErrorMessageDetails(msg)) && (msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg))
 
 const isHeavySystemLikeMessage = (message: Message): boolean => {
+  if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true
   if (getSessionNotice(message)) return true
   if (getLlmErrorMessageDetails(message)) return true
   if (message.role === 'model') return false
@@ -293,7 +295,7 @@ const getConversationInputKind = (message: Message): 'activity' | 'user' | 'lega
 
 /** Select a retry/error from complete active history, never a viewport or nested slice. */
 export function getHistoryTailLlmError(messages: readonly Message[]): Message | undefined {
-  const tail = messages.findLast(message => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview)
+  const tail = messages.findLast(message => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview && !isEffortChangeMessage(message))
   return tail && getLlmErrorMessageDetails(tail) ? tail : undefined
 }
 
@@ -584,6 +586,8 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   && a.literalUserText === b.literalUserText
   && a.communication?.key === b.communication?.key && a.communication?.direction === b.communication?.direction
   && a.communication?.peerSessionId === b.communication?.peerSessionId && a.communication?.message === b.communication?.message && a.communication?.truncated === b.communication?.truncated
+  && a.communication?.origin === b.communication?.origin && a.communication?.task?.taskId === b.communication?.task?.taskId
+  && a.communication?.task?.event === b.communication?.task?.event && a.communication?.task?.recipient === b.communication?.task?.recipient && a.communication?.task?.title === b.communication?.task?.title
   && a.activity === b.activity
   && a.question === b.question
   && a.prevMsg === b.prevMsg
@@ -895,7 +899,14 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
       if (msg.role === 'user') {
         const inputKind = getConversationInputKind(msg)
-        if (inputKind === 'activity') addActivity(index, msg)
+        // A background run's finish event carries what the run delivered after its hand-off.
+        if (inputKind === 'activity' && deliveries?.length) {
+          addActivity(index, msg)
+          if (showInterAgentMessages) {
+            flushActivity()
+            for (const communication of deliveries) emitRow(index, null, false, null, { key: `${messageKeys[index]}-communication-${communication.key}`, communication })
+          }
+        } else if (inputKind === 'activity') addActivity(index, msg)
         else {
           flushActivity()
           emitRow(index, null, false, null, { key: messageKeys[index], literalUserText: inputKind === 'user' })

@@ -93,7 +93,7 @@ public sealed class PersistencePrimitiveTests
             "compact-commit",
             signals["queue"]!.AsArray().Last()!["type"]!.GetValue<string>()
         );
-        var signal = PersistentSessionAuthorityStore.FromQueueJson(
+        var signal = SessionQueueJson.FromJson(
             signals["queue"]!.AsArray().Last()!.AsObject()
         );
         Assert.Equal(QueueItemType.CompactCommit, signal.Type);

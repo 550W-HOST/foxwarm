@@ -44,8 +44,10 @@ operator-level snapshot procedure for the whole data root.
 The Python standard-library helper creates a Git-friendly, fixed-size chunk
 representation of one SQLite database:
 
+Copy the helper to the Node where it runs with `ctl skill copy foxwarm-maintenance <dir> --path scripts`.
+
 ```bash
-HELPER=/path/to/foxwarm/skills/foxwarm-maintenance/scripts/sqlite-chunks.py
+HELPER=<dir>/sqlite-chunks.py
 python3 "$HELPER" create SOURCE.sqlite NEW-SNAPSHOT-DIRECTORY
 python3 "$HELPER" verify SNAPSHOT-DIRECTORY
 python3 "$HELPER" restore SNAPSHOT-DIRECTORY NEW.sqlite

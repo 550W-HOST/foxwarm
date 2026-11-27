@@ -1,22 +1,34 @@
 import { createPortal } from 'react-dom'
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { Annotation, Compartment, EditorSelection, EditorState, Facet, Prec, StateField, Transaction, type Extension } from '@codemirror/state'
+import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view'
+import { history, insertNewline, isolateHistory, redo, standardKeymap, undo } from '@codemirror/commands'
 import {
   canConvertPasteToBlock,
-  makeComposerDraft,
-  serializeComposerDraft,
-  type ComposerDraft,
-  type ComposerDraftSegment,
+  makePlainComposerDraft,
   type ComposerAttachmentSegment,
+  type ComposerDraft,
   type ComposerPastedTextSegment,
 } from '../composerDraft'
+import {
+  addComposerChips,
+  composerChipExtensions,
+  composerChipField,
+  createComposerState,
+  documentToDraft,
+  getComposerChips,
+  insertChipsSpec,
+  serializeComposerSegment,
+  snapOutsideChips,
+  updateComposerChip,
+  type ComposerChip,
+} from '../composerEditorModel'
 import { countPastedTextCharacters, getPastedTextPreview } from '../pastedText'
 import { PastedTextModal } from './PastedTextBlock'
 import ImagePreviewDialog, { isSafeImagePreviewMime } from './ImagePreviewDialog'
+import { ImageGalleryContext, useImageGalleryStore, type ImageGalleryEntry } from './imageGallery'
 
-const MAX_UNDO_ENTRIES = 80
-const MAX_UNDO_BYTES = 2_000_000
-const TYPING_COALESCE_MS = 750
-const CARET_ANCHOR_TEXT = '\u200B'
+const NO_DRAFT_IMAGES: readonly ImageGalleryEntry[] = []
 
 export interface InlineComposerEditorHandle {
   focus: () => void
@@ -45,48 +57,203 @@ interface InlineComposerEditorProps {
   onCompositionPresenceChange?: (hasText: boolean) => void
 }
 
-type HistoryGroup = { kind: string; at: number } | null
+type Transcription = { draftId: string; from: number; to: number; text: string }
+type ChipEnvironment = { resolveAttachmentFile: (ref: string) => File | undefined }
 
-type SelectionOffsets = { anchor: number; focus: number }
-type EditorState = { draft: ComposerDraft; selection: SelectionOffsets | null }
-type DraftSnapshot = EditorState & { size: number }
-type Transcription = { draftId: string; offset: number; node: Text | null; text: string; base: EditorState; historyRecorded: boolean }
+/** Marks edits made by the composer itself; they are allowed while the editor is disabled. */
+const composerEdit = Annotation.define<boolean>()
+const composerDisabled = Facet.define<boolean, boolean>({ combine: values => values.some(Boolean) })
+const chipEnvironment = Facet.define<{ current: ChipEnvironment }, { current: ChipEnvironment } | null>({ combine: values => values[0] || null })
 
-function getDraftByteSize(draft: ComposerDraft): number {
-  return new TextEncoder().encode(serializeComposerDraft(draft)).byteLength
+const CHIP_SELECTOR = '[data-composer-pasted-text-id], [data-composer-attachment-ref]'
+
+function chipKey(chip: ComposerChip): string {
+  return chip.segment.type === 'attachment'
+    ? `attachment:${chip.segment.ref}:${chip.revision}`
+    : `pasted:${chip.segment.id}:${chip.revision}:${chip.segment.text.length}`
 }
 
-function cloneDraft(draft: ComposerDraft): ComposerDraft {
-  return makeComposerDraft(draft.segments.map(segment => ({ ...segment })))
+class ComposerChipWidget extends WidgetType {
+  constructor(readonly chip: ComposerChip, readonly number: number, readonly selected: boolean, readonly disabled: boolean) { super() }
+
+  eq(other: ComposerChipWidget) {
+    return chipKey(other.chip) === chipKey(this.chip) && other.chip.segment === this.chip.segment
+      && other.number === this.number && other.selected === this.selected && other.disabled === this.disabled
+  }
+
+  toDOM(view: EditorView) {
+    const segment = this.chip.segment
+    const chip = document.createElement('span')
+    chip.dataset.composerChipKey = chipKey(this.chip)
+    chip.setAttribute('role', 'group')
+    chip.tabIndex = -1
+    if (segment.type === 'pasted-text') this.renderPastedText(chip, segment)
+    else this.renderAttachment(chip, segment, view.state.facet(chipEnvironment)?.current.resolveAttachmentFile(segment.ref))
+    this.applyState(chip)
+    return chip
+  }
+
+  updateDOM(dom: HTMLElement) {
+    if (dom.dataset.composerChipKey !== chipKey(this.chip)) return false
+    this.applyState(dom)
+    return true
+  }
+
+  /** Clicks and keys on chip controls belong to the controls, not to the editor. */
+  ignoreEvent(event: Event) {
+    return event.target instanceof Element && !!event.target.closest('button')
+  }
+
+  private renderPastedText(chip: HTMLElement, segment: ComposerPastedTextSegment) {
+    const count = countPastedTextCharacters(segment.text)
+    chip.className = 'foxwarm-composer-pasted-text-chip foxwarm-pasted-text-block mx-0.5 inline-flex max-w-[min(24rem,100%)] items-center gap-1.5 rounded-md border border-fw-accent-border/60 bg-fw-accent-surface px-2 py-0.5 align-middle text-left text-xs leading-5 text-fw-accent shadow-sm hover:bg-fw-accent-surface-strong focus:outline-none focus:ring-2 focus:ring-fw-focus-ring dark:bg-fw-accent-surface-strong/25 dark:hover:bg-fw-accent-surface-strong/40'
+    chip.dataset.composerPastedTextId = segment.id
+    const icon = document.createElement('span')
+    icon.className = 'shrink-0'
+    icon.setAttribute('aria-hidden', 'true')
+    icon.textContent = '▤'
+    const preview = document.createElement('span')
+    preview.className = 'foxwarm-composer-pasted-text-preview min-w-0 truncate'
+    preview.textContent = getPastedTextPreview(segment.text)
+    const counter = document.createElement('span')
+    counter.className = 'foxwarm-composer-pasted-text-count shrink-0 text-fw-text-muted'
+    counter.textContent = count.toLocaleString()
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'inline-flex min-w-0 items-center gap-1.5 rounded text-left focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
+    open.dataset.composerBlockOpen = 'true'
+    open.setAttribute('aria-label', `Edit pasted text, ${count} characters`)
+    open.append(icon, preview, counter)
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'ml-1 shrink-0 rounded px-1 text-fw-text-muted hover:text-fw-danger focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
+    remove.dataset.composerBlockRemove = 'true'
+    remove.setAttribute('aria-label', 'Remove pasted text block')
+    remove.textContent = '×'
+    chip.append(open, remove)
+  }
+
+  private renderAttachment(chip: HTMLElement, segment: ComposerAttachmentSegment, file: File | undefined) {
+    chip.className = 'foxwarm-composer-attachment-chip'
+    chip.dataset.composerAttachmentRef = segment.ref
+    chip.dataset.attachmentMissing = String(!file)
+    chip.title = `${segment.name}${file ? '' : ' · Reattach required'}`
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.dataset.composerBlockOpen = 'true'
+    open.setAttribute('aria-label', `Attachment ${segment.name}${file ? '' : ', reattach required'}`)
+    chip.append(open)
+  }
+
+  private applyState(chip: HTMLElement) {
+    chip.setAttribute('aria-disabled', String(this.disabled))
+    chip.toggleAttribute('data-composer-block-selected', this.selected)
+    for (const button of chip.querySelectorAll('button')) {
+      button.disabled = this.disabled
+      button.tabIndex = this.disabled ? -1 : 0
+    }
+    if (this.chip.segment.type === 'attachment') {
+      const open = chip.querySelector('button')
+      if (open) open.textContent = `FILE ${this.number}`
+    }
+  }
 }
 
-function sameDraft(left: ComposerDraft, right: ComposerDraft): boolean {
-  return serializeComposerDraft(left) === serializeComposerDraft(right)
+function buildChipDecorations(state: EditorState): DecorationSet {
+  const disabled = state.facet(composerDisabled)
+  const selections = state.selection.ranges.filter(range => !range.empty)
+  let attachmentNumber = 0
+  return Decoration.set(getComposerChips(state).map(chip => {
+    const number = chip.segment.type === 'attachment' ? ++attachmentNumber : 0
+    const selected = selections.some(range => range.from < chip.to && range.to > chip.from)
+    return Decoration.replace({ widget: new ComposerChipWidget(chip, number, selected, disabled) }).range(chip.from, chip.to)
+  }))
 }
 
-function isChip(node: Node | null): boolean {
-  return node instanceof HTMLElement && (
-    node.dataset.composerPastedTextId !== undefined
-    || node.dataset.composerAttachmentRef !== undefined
-  )
+const chipDecorations = StateField.define<DecorationSet>({
+  create: buildChipDecorations,
+  update(decorations, tr) {
+    const changed = tr.startState.field(composerChipField) !== tr.state.field(composerChipField)
+      || tr.startState.facet(composerDisabled) !== tr.state.facet(composerDisabled)
+      || (tr.selection && !tr.startState.selection.eq(tr.state.selection))
+    return changed ? buildChipDecorations(tr.state) : decorations.map(tr.changes)
+  },
+  provide: field => [EditorView.decorations.from(field), EditorView.atomicRanges.of(view => view.state.field(field))],
+})
+
+/** While disabled, only the composer's own edits (transcription, replacement) change the draft. */
+const blockDisabledEdits = EditorState.transactionFilter.of(tr => (
+  tr.docChanged && tr.startState.facet(composerDisabled) && !tr.annotation(composerEdit) ? [] : tr
+))
+
+/** An IME composition is its own undo step, separate from typing before it. */
+const isolateComposition = EditorState.transactionExtender.of(tr => (
+  tr.annotation(Transaction.userEvent) === 'input.type.compose.start' ? { annotations: isolateHistory.of('before') } : null
+))
+
+/**
+ * Keeps the caret visible inside the editor's own scroller without scrolling
+ * page ancestors. Scroll requests can arrive while the view is updating, when
+ * layout can't be read, so the adjustment runs in the next measure phase.
+ */
+const scrollOwnScroller = EditorView.scrollHandler.of((view, range) => {
+  view.requestMeasure({
+    key: scrollOwnScroller,
+    read() {
+      const rect = view.coordsAtPos(range.head, range.assoc || 1)
+      if (!rect) return null
+      const scroller = view.scrollDOM
+      const box = scroller.getBoundingClientRect()
+      const content = getComputedStyle(view.contentDOM)
+      const top = box.top + parseFloat(content.paddingTop)
+      const bottom = box.top + scroller.clientHeight - parseFloat(content.paddingBottom)
+      if (rect.bottom > bottom) return rect.bottom - bottom
+      if (rect.top < top) return rect.top - top
+      return null
+    },
+    write(delta) {
+      if (delta) view.scrollDOM.scrollTop += delta
+    },
+  })
+  return true
+})
+
+const composerTheme = EditorView.theme({
+  '&': { backgroundColor: 'transparent' },
+  '&.cm-focused': { outline: 'none' },
+  '.cm-scroller': { fontFamily: 'inherit', lineHeight: 'inherit', maxHeight: '200px', overflowX: 'hidden', overflowY: 'auto' },
+  // minWidth lets wrapped content shrink to the scroller, so chips can cap at the line width.
+  // caretColor replaces the base theme's black caret with the native caret in
+  // the text color; the console treatment's accent caret (index.css) is more specific.
+  '.cm-content': { boxSizing: 'border-box', padding: '8px 16px', minHeight: '60px', minWidth: '0', fontFamily: 'inherit', caretColor: 'auto' },
+  '.cm-line': { padding: '0' },
+})
+
+function disabledExtensions(disabled: boolean): Extension {
+  return [
+    composerDisabled.of(disabled),
+    EditorView.editable.of(!disabled),
+    EditorState.readOnly.of(disabled),
+    EditorView.contentAttributes.of({ 'aria-disabled': String(disabled) }),
+  ]
 }
 
-function isCaretAnchor(node: Node | null): node is HTMLElement {
-  return node instanceof HTMLElement && node.dataset.composerCaretAnchor !== undefined
+// The composer owns Enter (send key or exact newline); during IME composition
+// Enter belongs to the input method.
+const editingKeymap = keymap.of(standardKeymap.filter(binding => binding.key !== 'Enter'))
+
+function placeholderAttributes(placeholder: string): Extension {
+  return EditorView.contentAttributes.of(placeholder ? { 'data-placeholder': placeholder, 'aria-placeholder': placeholder } : {})
 }
 
-function isTrailingNewlineScaffold(node: Node | null): node is HTMLBRElement {
-  return node instanceof HTMLBRElement && node.dataset.composerTrailingNewline !== undefined
-}
+const historyBindings = keymap.of([
+  { key: 'Mod-z', run: undo, preventDefault: true },
+  { key: 'Mod-y', mac: 'Mod-Shift-z', run: redo, preventDefault: true },
+  { key: 'Mod-Shift-z', run: redo, preventDefault: true },
+])
 
-function getCaretAnchor(node: Node | null): HTMLElement | null {
-  if (!node) return null
-  return isCaretAnchor(node) ? node : node.parentElement?.closest<HTMLElement>('[data-composer-caret-anchor]') || null
-}
-
-function removeCaretAnchorSentinel(text: string): string {
-  const index = text.indexOf(CARET_ANCHOR_TEXT)
-  return index < 0 ? text : `${text.slice(0, index)}${text.slice(index + CARET_ANCHOR_TEXT.length)}`
+function newPastedTextId(): string {
+  return globalThis.crypto?.randomUUID?.() || `paste-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
 const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineComposerEditorProps>(function InlineComposerEditor({
@@ -102,1182 +269,493 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   onCommandKeyDown,
   onCompositionPresenceChange,
 }, forwardedRef) {
-  const editorRef = useRef<HTMLDivElement | null>(null)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const viewRef = useRef<EditorView | null>(null)
+  const callbacksRef = useRef({ onChange, onAttachFiles, onCommandKeyDown, onCompositionPresenceChange, resolveAttachmentFile })
+  callbacksRef.current = { onChange, onAttachFiles, onCommandKeyDown, onCompositionPresenceChange, resolveAttachmentFile }
   const disabledRef = useRef(disabled)
   disabledRef.current = disabled
-  const authoritativeDraftRef = useRef(value)
-  const blockMapRef = useRef(new Map<string, ComposerPastedTextSegment>())
-  const attachmentMapRef = useRef(new Map<string, ComposerAttachmentSegment>())
-  const attachmentUrlMapRef = useRef(new Map<string, string>())
-  const undoRef = useRef<DraftSnapshot[]>([])
-  const redoRef = useRef<DraftSnapshot[]>([])
-  const historyGroupRef = useRef<HistoryGroup>(null)
-  const beforeInputRef = useRef<EditorState | null>(null)
-  const compositionBaseRef = useRef<EditorState | null>(null)
-  const composingRef = useRef(false)
-  const compositionEndingRef = useRef(false)
-  const compositionFinalizeFrameRef = useRef<number | null>(null)
+  const placeholderRef = useRef(placeholder)
+  placeholderRef.current = placeholder
+  const draftIdRef = useRef(draftId)
+  draftIdRef.current = draftId
+  const disabledCompartment = useRef(new Compartment()).current
+  const placeholderCompartment = useRef(new Compartment()).current
   const lastEmittedRef = useRef('')
-  const lastDraftIdRef = useRef('')
-  const activeChipRef = useRef<HTMLElement | null>(null)
-  const lastSelectionRef = useRef<SelectionOffsets | null>(null)
-  const caretWasPlacedRef = useRef(false)
+  const suppressEmitRef = useRef(false)
+  const compositionPresenceRef = useRef(false)
+  const compositionFrameRef = useRef<number | null>(null)
   const transcriptionRef = useRef<Transcription | null>(null)
+  const caretWasPlacedRef = useRef(false)
   const focusAfterTranscriptionRef = useRef(false)
+  const openChipKeyRef = useRef<string | null>(null)
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
   const [activeAttachmentRef, setActiveAttachmentRef] = useState<string | null>(null)
 
-  const readNodeSegments = useCallback((node: Node, output: ComposerDraftSegment[]) => {
-    if (getCaretAnchor(node) || isTrailingNewlineScaffold(node)) return
-    if (node.nodeType === Node.TEXT_NODE) {
-      output.push({ type: 'text', text: node.nodeValue || '' })
-      return
-    }
-    if (!(node instanceof HTMLElement)) return
-    if (isChip(node)) {
-      const attachmentRef = node.dataset.composerAttachmentRef
-      if (attachmentRef) {
-        const attachment = attachmentMapRef.current.get(attachmentRef)
-        if (attachment) output.push({ ...attachment })
-        return
-      }
-      const segment = blockMapRef.current.get(node.dataset.composerPastedTextId || '')
-      if (segment) output.push({ ...segment })
-      return
-    }
-    if (node.tagName === 'BR') {
-      output.push({ type: 'text', text: '\n' })
-      return
-    }
-    const outputStart = output.length
-    for (const child of node.childNodes) readNodeSegments(child, output)
-    if ((node.tagName === 'DIV' || node.tagName === 'P') && outputStart > 0) {
-      output.splice(outputStart, 0, { type: 'text', text: '\n' })
-    }
+  const setCompositionPresence = useCallback((present: boolean) => {
+    if (compositionPresenceRef.current === present) return
+    compositionPresenceRef.current = present
+    callbacksRef.current.onCompositionPresenceChange?.(present)
   }, [])
 
-  const readDraftFromNode = useCallback((root: ParentNode): ComposerDraft => {
-    const segments: ComposerDraftSegment[] = []
-    for (const child of root.childNodes) readNodeSegments(child, segments)
-    return makeComposerDraft(segments)
-  }, [readNodeSegments])
+  const emit = useCallback((view: EditorView) => {
+    if (suppressEmitRef.current) return
+    const draft = documentToDraft(view.state)
+    const key = JSON.stringify(draft)
+    if (key === lastEmittedRef.current) return
+    lastEmittedRef.current = key
+    callbacksRef.current.onChange(draft)
+  }, [])
 
-  const readDraft = useCallback((): ComposerDraft => {
-    const editor = editorRef.current
-    if (!editor) return makeComposerDraft([])
-    const hasCanonicalContent = [...editor.childNodes].some(node => {
-      if (isCaretAnchor(node)) return false
-      if (isTrailingNewlineScaffold(node)) return false
-      if (isChip(node)) return true
-      if (node.nodeType === Node.TEXT_NODE) return (node.nodeValue || '').length > 0
-      if (node instanceof HTMLElement && node.tagName === 'BR') return false
-      return (node.textContent || '').length > 0 || (node instanceof Element && !!node.querySelector('[data-composer-pasted-text-id]'))
+  // Interim IME text is not emitted. Composition can end without a later
+  // transaction (or without DOM composition events, as with EditContext), so
+  // the committed draft is emitted from the first frame after it ends.
+  const scheduleCompositionFlush = useCallback((view: EditorView) => {
+    if (compositionFrameRef.current !== null) return
+    compositionFrameRef.current = requestAnimationFrame(() => {
+      compositionFrameRef.current = null
+      if (viewRef.current !== view) return
+      if (view.composing) { scheduleCompositionFlush(view); return }
+      setCompositionPresence(false)
+      emit(view)
     })
-    return hasCanonicalContent ? readDraftFromNode(editor) : makeComposerDraft([])
-  }, [readDraftFromNode])
+  }, [emit, setCompositionPresence])
 
-  const getNodeUnits = useCallback((node: Node): number => {
-    if (getCaretAnchor(node) || isTrailingNewlineScaffold(node)) return 0
-    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue?.length || 0
-    if (isChip(node) || (node instanceof HTMLElement && node.tagName === 'BR')) return 1
-    return [...node.childNodes].reduce((sum, child) => sum + getNodeUnits(child), 0)
+  const insertChips = useCallback((view: EditorView, segments: (ComposerAttachmentSegment | ComposerPastedTextSegment)[], range = view.state.selection.main) => {
+    if (segments.length === 0) return
+    view.dispatch({ ...insertChipsSpec(view.state, segments, range.from, range.to), annotations: isolateHistory.of('full') })
   }, [])
 
-  const getPointOffset = useCallback((target: Node | null, targetOffset: number): number | null => {
-    const editor = editorRef.current
-    if (!editor || !target || (target !== editor && !editor.contains(target))) return null
-    const targetAnchor = getCaretAnchor(target)
-    const targetElement = target instanceof Element ? target : target.parentElement
-    const targetChip = targetElement?.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') || null
-    const normalizedTarget: Node = targetAnchor || targetChip || target
-    let traversed = 0
-    let result: number | null = null
-    const visit = (node: Node) => {
-      if (result !== null) return
-      if (node === normalizedTarget) {
-        if (isCaretAnchor(node)) {
-          result = traversed
-          return
+  const removeChip = useCallback((view: EditorView, chip: ComposerChip) => {
+    if (disabledRef.current) return
+    view.dispatch({
+      changes: { from: chip.from, to: chip.to },
+      selection: EditorSelection.cursor(chip.from),
+      userEvent: 'delete.chip',
+      annotations: isolateHistory.of('full'),
+    })
+    view.focus()
+  }, [])
+
+  const openChip = useCallback((chip: ComposerChip) => {
+    if (disabledRef.current) return
+    openChipKeyRef.current = chip.segment.type === 'attachment' ? chip.segment.ref : chip.segment.id
+    if (chip.segment.type === 'attachment') setActiveAttachmentRef(chip.segment.ref)
+    else setActiveBlockId(chip.segment.id)
+  }, [])
+
+  const insertAttachmentsAt = useCallback((view: EditorView, files: File[], point?: { x: number; y: number }) => {
+    if (disabledRef.current || files.length === 0) return
+    let range = caretWasPlacedRef.current ? view.state.selection.main : EditorSelection.cursor(view.state.doc.length)
+    if (point) {
+      const pos = view.posAtCoords(point, false)
+      range = EditorSelection.cursor(snapOutsideChips(view.state, pos))
+    }
+    const segments = callbacksRef.current.onAttachFiles(files)
+    view.focus()
+    insertChips(view, segments, range)
+  }, [insertChips])
+
+  const createState = useCallback((draft: ComposerDraft) => createComposerState(draft, [
+    composerChipExtensions,
+    chipDecorations,
+    chipEnvironment.of(callbacksRef as { current: ChipEnvironment }),
+    disabledCompartment.of(disabledExtensions(disabledRef.current)),
+    placeholderCompartment.of(placeholderAttributes(placeholderRef.current)),
+    EditorView.contentAttributes.of(view => ({ 'data-empty': view.state.doc.length === 0 ? 'true' : 'false' })),
+    blockDisabledEdits,
+    history(),
+    isolateComposition,
+    Prec.highest(EditorView.domEventHandlers({
+      keydown(event, view) {
+        if (view.state.facet(composerDisabled)) {
+          const key = event.key.toLowerCase()
+          return ((event.ctrlKey || event.metaKey) && ['x', 'v', 'z', 'y'].includes(key)) || ['Enter', 'Backspace', 'Delete'].includes(event.key)
         }
-        if (isChip(node)) {
-          result = traversed + (target === node && targetOffset === 0 ? 0 : 1)
-          return
+        if (event.isComposing || view.composing) return false
+        if (callbacksRef.current.onCommandKeyDown(event)) return true
+        if (event.key !== 'Enter') return false
+        insertNewline(view)
+        return true
+      },
+      beforeinput(event, view) {
+        if (event.inputType !== 'historyUndo' && event.inputType !== 'historyRedo') return false
+        if (!view.state.facet(composerDisabled)) (event.inputType === 'historyUndo' ? undo : redo)(view)
+        return true
+      },
+      paste(event, view) {
+        if (view.state.facet(composerDisabled)) return true
+        const fileItems = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file')
+        const files = fileItems.map(item => item.getAsFile()).filter((file): file is File => !!file)
+        if (files.length > 0) {
+          insertAttachmentsAt(view, files)
+          return true
         }
-        if (node.nodeType === Node.TEXT_NODE) {
-          result = traversed + Math.min(targetOffset, node.nodeValue?.length || 0)
-        } else {
-          const children = [...node.childNodes]
-          result = traversed + children.slice(0, Math.min(targetOffset, children.length)).reduce((sum, child) => sum + getNodeUnits(child), 0)
+        const text = event.clipboardData?.getData('text/plain') || ''
+        if (fileItems.length > 0) {
+          if (text) view.dispatch(view.state.replaceSelection(text), { userEvent: 'input.paste', scrollIntoView: true })
+          return true
         }
+        if (!canConvertPasteToBlock(text)) return false
+        insertChips(view, [{ type: 'pasted-text', id: newPastedTextId(), text }])
+        return true
+      },
+      // Dropped files become attachments through the composer's drop target;
+      // dragging a selection that contains chips would turn them into text.
+      drop(event) {
+        return !!event.dataTransfer?.files.length
+      },
+      // A collapsed selection copies nothing, as in a plain text field.
+      copy(_event, view) {
+        return view.state.selection.ranges.every(range => range.empty)
+      },
+      cut(_event, view) {
+        return view.state.selection.ranges.every(range => range.empty)
+      },
+      dragstart(_event, view) {
+        const chips = getComposerChips(view.state)
+        return view.state.selection.ranges.some(range => chips.some(chip => range.from < chip.to && range.to > chip.from))
+      },
+      focus() {
+        caretWasPlacedRef.current = true
+        return false
+      },
+    })),
+    editingKeymap,
+    historyBindings,
+    EditorView.lineWrapping,
+    EditorView.contentAttributes.of({
+      role: 'textbox',
+      'aria-label': 'Message',
+      'aria-multiline': 'true',
+      spellcheck: 'true',
+      autocorrect: 'on',
+      autocapitalize: 'sentences',
+      class: 'foxwarm-chat-composer-textarea text-[16px] leading-6 text-fw-text-strong dark:text-fw-text-strong',
+    }),
+    EditorView.editorAttributes.of({ class: 'foxwarm-inline-composer-editor' }),
+    scrollOwnScroller,
+    composerTheme,
+    EditorView.updateListener.of(update => {
+      const owner = transcriptionRef.current
+      if (owner && update.docChanged) {
+        owner.from = update.changes.mapPos(owner.from, -1)
+        owner.to = Math.max(owner.from, update.changes.mapPos(owner.to, 1))
+      }
+      if (update.view.composing) {
+        setCompositionPresence(update.state.doc.toString().trim().length > 0)
+        if (update.docChanged) scheduleCompositionFlush(update.view)
         return
       }
-      if (node.nodeType === Node.TEXT_NODE || isChip(node) || (node instanceof HTMLElement && node.tagName === 'BR')) {
-        traversed += getNodeUnits(node)
-        return
+      if (update.docChanged || update.transactions.some(tr => tr.effects.some(effect => effect.is(updateComposerChip) || effect.is(addComposerChips)))) {
+        setCompositionPresence(false)
+        emit(update.view)
       }
-      for (const child of node.childNodes) visit(child)
-    }
-    visit(editor)
-    return result
-  }, [getNodeUnits])
+    }),
+  ]), [disabledCompartment, emit, insertAttachmentsAt, insertChips, placeholderCompartment, scheduleCompositionFlush, setCompositionPresence])
 
-  const getSelectionOffsets = useCallback((): SelectionOffsets | null => {
-    const selection = window.getSelection()
-    if (!selection) return null
-    const anchor = getPointOffset(selection.anchorNode, selection.anchorOffset)
-    const focus = getPointOffset(selection.focusNode, selection.focusOffset)
-    return anchor === null || focus === null ? null : { anchor, focus }
-  }, [getPointOffset])
+  const resetState = useCallback((draft: ComposerDraft) => {
+    const view = viewRef.current
+    if (!view) return
+    transcriptionRef.current = null
+    view.setState(createState(draft))
+    lastEmittedRef.current = JSON.stringify(documentToDraft(view.state))
+    setCompositionPresence(false)
+    setActiveBlockId(null)
+    setActiveAttachmentRef(null)
+  }, [createState, setCompositionPresence])
 
-  const updateBlockSelectionPresentation = useCallback(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    const selection = window.getSelection()
-    const anchor = selection && !selection.isCollapsed ? getPointOffset(selection.anchorNode, selection.anchorOffset) : null
-    const focus = selection && !selection.isCollapsed ? getPointOffset(selection.focusNode, selection.focusOffset) : null
-    const selectionStart = anchor === null || focus === null ? null : Math.min(anchor, focus)
-    const selectionEnd = anchor === null || focus === null ? null : Math.max(anchor, focus)
-    for (const chip of editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]')) {
-      const parent = chip.parentNode
-      const index = parent ? [...parent.childNodes].indexOf(chip) : -1
-      const chipStart = parent && index >= 0 ? getPointOffset(parent, index) : null
-      const selected = selectionStart !== null && selectionEnd !== null && chipStart !== null
-        && selectionStart < chipStart + 1 && selectionEnd > chipStart
-      chip.toggleAttribute('data-composer-block-selected', selected)
-    }
-  }, [getPointOffset])
-
-  const getPointAtOffset = useCallback((requestedOffset: number): { node: Node; offset: number } | null => {
-    const editor = editorRef.current
-    if (!editor) return null
-    let remaining = Math.max(0, Math.min(requestedOffset, getNodeUnits(editor)))
-    const locate = (parent: Node): { node: Node; offset: number } => {
-      const children = [...parent.childNodes]
-      for (let index = 0; index < children.length; index += 1) {
-        const child = children[index]
-        if (isTrailingNewlineScaffold(child)) continue
-        if (isCaretAnchor(child)) {
-          if (remaining === 0) return { node: child.firstChild || child, offset: child.firstChild ? CARET_ANCHOR_TEXT.length : 0 }
-          continue
-        }
-        if (child.nodeType === Node.TEXT_NODE) {
-          const length = child.nodeValue?.length || 0
-          if (remaining <= length) return { node: child, offset: remaining }
-          remaining -= length
-          continue
-        }
-        if (isChip(child) || (child instanceof HTMLElement && child.tagName === 'BR')) {
-          if (remaining === 0) return { node: parent, offset: index }
-          remaining -= 1
-          if (remaining === 0) return { node: parent, offset: index + 1 }
-          continue
-        }
-        const units = getNodeUnits(child)
-        if (remaining <= units) return locate(child)
-        remaining -= units
-      }
-      return { node: parent, offset: children.length }
-    }
-    return locate(editor)
-  }, [getNodeUnits])
-
-  const restoreSelection = useCallback((offsets: SelectionOffsets | null) => {
-    const editor = editorRef.current
-    if (!editor || !offsets) return false
-    const anchor = getPointAtOffset(offsets.anchor)
-    const focus = getPointAtOffset(offsets.focus)
-    const selection = window.getSelection()
-    if (!anchor || !focus || !selection) return false
-    editor.focus()
-    try {
-      selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset)
-    } catch {
-      const range = document.createRange()
-      range.setStart(anchor.node, anchor.offset)
-      range.setEnd(focus.node, focus.offset)
-      selection.removeAllRanges()
-      selection.addRange(range)
-    }
-    return true
-  }, [getPointAtOffset])
-
-  const getCanonicalBoundaryPoint = useCallback((requestedOffset: number, direction: -1 | 1): { node: Node; offset: number } | null => {
-    const editor = editorRef.current
-    if (!editor) return null
-    const offset = Math.max(0, Math.min(requestedOffset, getNodeUnits(editor)))
-    let traversed = 0
-    const boundaryIndexes: number[] = []
-    const children = [...editor.childNodes]
-    for (let index = 0; index <= children.length; index += 1) {
-      if (traversed === offset) boundaryIndexes.push(index)
-      if (index < children.length) traversed += getNodeUnits(children[index])
-      if (traversed > offset) break
-    }
-    if (boundaryIndexes.length === 0) return getPointAtOffset(offset)
-    return { node: editor, offset: direction < 0 ? boundaryIndexes[0] : boundaryIndexes.at(-1)! }
-  }, [getNodeUnits, getPointAtOffset])
-
-  const moveAcrossAtomicBoundary = useCallback((direction: -1 | 1, extend: boolean): boolean => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection?.rangeCount || !selection.anchorNode || !selection.focusNode) return false
-    if (!extend && !selection.isCollapsed) return false
-    const focusOffset = getPointOffset(selection.focusNode, selection.focusOffset)
-    if (focusOffset === null) return false
-    const chips = [...editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]')]
-      .map(chip => {
-        const parent = chip.parentNode
-        const index = parent ? [...parent.childNodes].indexOf(chip) : -1
-        return index < 0 || !parent ? null : getPointOffset(parent, index)
-      })
-      .filter((offset): offset is number => offset !== null)
-    const crossesChip = direction > 0 ? chips.includes(focusOffset) : chips.includes(focusOffset - 1)
-    const inOwnedAnchor = !!getCaretAnchor(selection.focusNode)
-    if (!crossesChip && !inOwnedAnchor) return false
-    const targetOffset = crossesChip ? focusOffset + direction : focusOffset
-    const target = getCanonicalBoundaryPoint(targetOffset, direction)
-    if (!target) return false
-    try {
-      if (extend) selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, target.node, target.offset)
-      else {
-        const range = document.createRange()
-        range.setStart(target.node, target.offset)
-        range.collapse(true)
-        selection.removeAllRanges()
-        selection.addRange(range)
-      }
-    } catch {
-      return false
-    }
-    return crossesChip
-  }, [getCanonicalBoundaryPoint, getPointOffset])
-
-  const ensureCaretVisibleAfterLineBreak = useCallback(() => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection?.isCollapsed || !selection.rangeCount) return
-    const caretOffset = getPointOffset(selection.focusNode, selection.focusOffset)
-    if (caretOffset === null) return
-    let targetRect: DOMRect | undefined
-    if (serializeComposerDraft(readDraft()).endsWith('\n') && caretOffset === getNodeUnits(editor)) {
-      targetRect = editor.querySelector<HTMLElement>('[data-composer-trailing-newline]')?.getBoundingClientRect()
-    } else {
-      const range = selection.getRangeAt(0).cloneRange()
-      targetRect = range.getClientRects()[0] || range.getBoundingClientRect()
-    }
-    if (!targetRect || (!targetRect.height && !targetRect.width)) return
-    const editorRect = editor.getBoundingClientRect()
-    const visibleTop = editorRect.top + editor.clientTop
-    const visibleBottom = visibleTop + editor.clientHeight
-    if (targetRect.bottom > visibleBottom) editor.scrollTop += targetRect.bottom - visibleBottom
-    else if (targetRect.top < visibleTop) editor.scrollTop -= visibleTop - targetRect.top
-  }, [getNodeUnits, getPointOffset, readDraft])
-
-  const captureEditorState = useCallback((): EditorState => ({
-    draft: readDraft(),
-    selection: getSelectionOffsets(),
-  }), [getSelectionOffsets, readDraft])
-
-  const updateEmptyState = useCallback(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    editor.dataset.empty = serializeComposerDraft(readDraft()).length === 0 ? 'true' : 'false'
-  }, [readDraft])
-
-  const updateCompositionPresentation = useCallback(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    const hasCanonicalText = serializeComposerDraft(readDraft()).length > 0
-    const hasAnchorText = [...editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')]
-      .some(anchor => removeCaretAnchorSentinel(anchor.textContent || '').length > 0)
-    editor.dataset.compositionVisible = hasCanonicalText || hasAnchorText ? 'true' : 'false'
-    onCompositionPresenceChange?.((composingRef.current || compositionEndingRef.current) && (
-      serializeComposerDraft(readDraft()).trim().length > 0 || [...editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')]
-        .some(anchor => removeCaretAnchorSentinel(anchor.textContent || '').trim().length > 0)
-    ))
-  }, [readDraft, onCompositionPresenceChange])
-
-  const emitDraft = useCallback(() => {
-    const next = readDraft()
-    const editor = editorRef.current
-    if (editor && serializeComposerDraft(next).length === 0 && editor.childNodes.length > 0) {
-      const restoreEmptyCaret = document.activeElement === editor
-      editor.replaceChildren()
-      if (restoreEmptyCaret) {
-        const range = document.createRange()
-        range.setStart(editor, 0)
-        range.collapse(true)
-        const selection = window.getSelection()
-        selection?.removeAllRanges()
-        selection?.addRange(range)
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    const view = new EditorView({ parent: host, state: createState(value) })
+    viewRef.current = view
+    lastEmittedRef.current = JSON.stringify(documentToDraft(view.state))
+    // iOS moves a collapsed caret past either end of the document into the
+    // neighboring page text while the editor keeps focus, where no caret is
+    // painted. CodeMirror ignores selections outside its content, so put the
+    // DOM selection back at the editor's own selection. Real focus moves
+    // change the active element and are left alone.
+    const keepCaretInEditor = () => {
+      const selection = document.getSelection()
+      if (!selection || selection.rangeCount === 0 || !selection.isCollapsed || view.composing) return
+      if (document.activeElement !== view.contentDOM || view.contentDOM.contains(selection.focusNode)) return
+      view.focus()
+      if (!view.contentDOM.contains(document.getSelection()?.focusNode ?? null)) {
+        const { node, offset } = view.domAtPos(view.state.selection.main.head)
+        document.getSelection()?.collapse(node, offset)
       }
     }
-    authoritativeDraftRef.current = next
-    lastEmittedRef.current = serializeComposerDraft(next)
-    if (editor) editor.dataset.compositionVisible = 'false'
-    updateEmptyState()
-    onChange(next)
-  }, [onChange, readDraft, updateEmptyState])
-
-  const createChip = useCallback((segment: ComposerPastedTextSegment): HTMLElement => {
-    blockMapRef.current.set(segment.id, { ...segment })
-    const chip = document.createElement('span')
-    chip.className = 'foxwarm-composer-pasted-text-chip foxwarm-pasted-text-block mx-0.5 inline-flex max-w-[min(24rem,100%)] items-center gap-1.5 rounded-md border border-fw-accent-border/60 bg-fw-accent-surface px-2 py-0.5 align-middle text-left text-xs leading-5 text-fw-accent shadow-sm hover:bg-fw-accent-surface-strong focus:outline-none focus:ring-2 focus:ring-fw-focus-ring dark:bg-fw-accent-surface-strong/25 dark:hover:bg-fw-accent-surface-strong/40'
-    chip.contentEditable = 'false'
-    chip.tabIndex = -1
-    chip.setAttribute('role', 'group')
-    chip.setAttribute('aria-disabled', String(disabled))
-    chip.dataset.composerPastedTextId = segment.id
-    const icon = document.createElement('span')
-    icon.className = 'shrink-0'
-    icon.setAttribute('aria-hidden', 'true')
-    icon.textContent = '▤'
-    const preview = document.createElement('span')
-    preview.className = 'foxwarm-composer-pasted-text-preview min-w-0 truncate'
-    preview.textContent = getPastedTextPreview(segment.text)
-    const count = document.createElement('span')
-    count.className = 'foxwarm-composer-pasted-text-count shrink-0 text-fw-text-muted'
-    count.textContent = countPastedTextCharacters(segment.text).toLocaleString()
-    const open = document.createElement('button')
-    open.type = 'button'
-    open.className = 'inline-flex min-w-0 items-center gap-1.5 rounded text-left focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
-    open.tabIndex = disabled ? -1 : 0
-    open.disabled = disabled
-    open.dataset.composerBlockOpen = 'true'
-    open.setAttribute('aria-label', `Edit pasted text, ${countPastedTextCharacters(segment.text)} characters`)
-    open.append(icon, preview, count)
-    const remove = document.createElement('button')
-    remove.type = 'button'
-    remove.className = 'ml-1 shrink-0 rounded px-1 text-fw-text-muted hover:text-fw-danger focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
-    remove.tabIndex = disabled ? -1 : 0
-    remove.disabled = disabled
-    remove.dataset.composerBlockRemove = 'true'
-    remove.setAttribute('aria-label', 'Remove pasted text block')
-    remove.textContent = '×'
-    chip.append(open, remove)
-    return chip
-  }, [disabled])
-
-  const createAttachmentChip = useCallback((segment: ComposerAttachmentSegment): HTMLElement => {
-    attachmentMapRef.current.set(segment.ref, { ...segment })
-    const chip = document.createElement('span')
-    chip.className = 'foxwarm-composer-attachment-chip'
-    chip.contentEditable = 'false'
-    chip.tabIndex = -1
-    chip.setAttribute('role', 'group')
-    chip.setAttribute('aria-disabled', String(disabled))
-    chip.dataset.composerAttachmentRef = segment.ref
-    const file = resolveAttachmentFile(segment.ref)
-    chip.dataset.attachmentMissing = String(!file)
-    if (isSafeImagePreviewMime(segment.mimeType) && file) {
-      const oldUrl = attachmentUrlMapRef.current.get(segment.ref)
-      if (oldUrl) URL.revokeObjectURL(oldUrl)
-      attachmentUrlMapRef.current.set(segment.ref, URL.createObjectURL(file))
+    // Registered after CodeMirror's own listener, which records the new DOM selection first.
+    document.addEventListener('selectionchange', keepCaretInEditor)
+    return () => {
+      document.removeEventListener('selectionchange', keepCaretInEditor)
+      if (compositionFrameRef.current !== null) cancelAnimationFrame(compositionFrameRef.current)
+      compositionFrameRef.current = null
+      view.destroy()
+      viewRef.current = null
     }
-    const open = document.createElement('button')
-    open.type = 'button'
-    open.tabIndex = disabled ? -1 : 0
-    open.disabled = disabled
-    open.dataset.composerBlockOpen = 'true'
-    open.textContent = 'FILE 1'
-    open.setAttribute('aria-label', `Attachment ${segment.name}${file ? '' : ', reattach required'}`)
-    chip.title = `${segment.name}${file ? '' : ' · Reattach required'}`
-    chip.append(open)
-    return chip
-  }, [disabled, resolveAttachmentFile])
-
-  const createCaretAnchor = useCallback(() => {
-    const anchor = document.createElement('span')
-    anchor.className = 'foxwarm-composer-caret-anchor'
-    anchor.dataset.composerCaretAnchor = 'true'
-    anchor.setAttribute('aria-hidden', 'true')
-    anchor.textContent = CARET_ANCHOR_TEXT
-    return anchor
+    // The view is created once; later drafts arrive through draftId changes or replaceDraft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const installCaretAnchors = useCallback((editor: HTMLElement) => {
-    const numbers = new Map<string, number>()
-    for (const chip of editor.querySelectorAll<HTMLElement>('[data-composer-attachment-ref]')) {
-      const ref = chip.dataset.composerAttachmentRef!
-      if (!numbers.has(ref)) numbers.set(ref, numbers.size + 1)
-      const button = chip.querySelector('button')
-      if (button) button.textContent = `FILE ${numbers.get(ref)}`
-    }
-    for (const scaffold of editor.querySelectorAll<HTMLElement>('[data-composer-trailing-newline]')) scaffold.remove()
-    for (const anchor of editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')) anchor.remove()
-    editor.normalize()
-    const trailingBrowserBreak = editor.lastChild
-    if (trailingBrowserBreak instanceof HTMLBRElement) {
-      trailingBrowserBreak.remove()
-      const withoutTrailingBreak = serializeComposerDraft(readDraftFromNode(editor))
-      if (withoutTrailingBreak.length > 0 && !withoutTrailingBreak.endsWith('\n')) editor.append(trailingBrowserBreak)
-    }
-    const contentNodes = [...editor.childNodes].filter(node => node.nodeType !== Node.TEXT_NODE || (node.nodeValue || '').length > 0)
-    if (isChip(contentNodes[0])) contentNodes[0].before(createCaretAnchor())
-    for (let index = 1; index < contentNodes.length; index += 1) {
-      const previous = contentNodes[index - 1]
-      const current = contentNodes[index]
-      if (isChip(current) && (isChip(previous) || (previous.nodeType === Node.TEXT_NODE && (previous.nodeValue || '').endsWith('\n')))) {
-        current.before(createCaretAnchor())
-      }
-    }
-    if (isChip(contentNodes.at(-1) || null)) editor.append(createCaretAnchor())
-    if (serializeComposerDraft(readDraftFromNode(editor)).endsWith('\n')) {
-      const scaffold = document.createElement('br')
-      scaffold.dataset.composerTrailingNewline = 'true'
-      scaffold.setAttribute('aria-hidden', 'true')
-      editor.append(scaffold)
-    }
-  }, [createCaretAnchor, readDraftFromNode])
+  const mountedDraftIdRef = useRef(draftId)
+  useEffect(() => {
+    if (mountedDraftIdRef.current === draftId) return
+    mountedDraftIdRef.current = draftId
+    caretWasPlacedRef.current = false
+    focusAfterTranscriptionRef.current = false
+    resetState(value)
+  }, [draftId, resetState, value])
 
-  const renderDraft = useCallback((draft: ComposerDraft) => {
-    const editor = editorRef.current
-    if (!editor) return
-    blockMapRef.current.clear()
-    attachmentMapRef.current.clear()
-    for (const url of attachmentUrlMapRef.current.values()) URL.revokeObjectURL(url)
-    attachmentUrlMapRef.current.clear()
-    const fragment = document.createDocumentFragment()
-    for (const segment of draft.segments) {
-      fragment.append(segment.type === 'text'
-        ? document.createTextNode(segment.text)
-        : segment.type === 'pasted-text'
-          ? createChip(segment)
-          : createAttachmentChip(segment))
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({ effects: disabledCompartment.reconfigure(disabledExtensions(disabled)) })
+    if (disabled) {
+      setActiveBlockId(null)
+      setActiveAttachmentRef(null)
+    } else if (focusAfterTranscriptionRef.current) {
+      focusAfterTranscriptionRef.current = false
+      view.focus()
     }
-    editor.replaceChildren(fragment)
-    installCaretAnchors(editor)
-    editor.dataset.compositionVisible = 'false'
-    onCompositionPresenceChange?.(false)
-    updateEmptyState()
-  }, [createAttachmentChip, createChip, installCaretAnchors, updateEmptyState, onCompositionPresenceChange])
+  }, [disabled, disabledCompartment])
 
-  const placeCaret = useCallback((container: Node, offset: number) => {
-    const editor = editorRef.current
-    if (!editor) return
-    editor.focus()
-    const range = document.createRange()
-    range.setStart(container, offset)
-    range.collapse(true)
-    const selection = window.getSelection()
-    selection?.removeAllRanges()
-    selection?.addRange(range)
-  }, [])
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: placeholderCompartment.reconfigure(placeholderAttributes(placeholder)) })
+  }, [placeholder, placeholderCompartment])
 
-  const reconcileCaretAnchors = useCallback((shouldRestoreSelection = true) => {
-    const editor = editorRef.current
-    if (!editor) return
-    const selection = window.getSelection()
-    let desiredSelection = getSelectionOffsets()
-    const pointWithinAnchor = (node: Node | null, offset: number) => {
-      if (!node) return null
-      const anchor = getCaretAnchor(node)
-      if (!anchor || !editor.contains(anchor)) return null
-      const raw = anchor.textContent || ''
-      const rawOffset = node.nodeType === Node.TEXT_NODE ? Math.min(offset, raw.length) : raw.length
-      const before = removeCaretAnchorSentinel(raw.slice(0, rawOffset)).length
-      const base = getPointOffset(anchor, 0) || 0
-      return base + before
-    }
-    const anchorOffset = pointWithinAnchor(selection?.anchorNode || null, selection?.anchorOffset || 0)
-    const focusOffset = pointWithinAnchor(selection?.focusNode || null, selection?.focusOffset || 0)
-    if (anchorOffset !== null || focusOffset !== null) {
-      desiredSelection = {
-        anchor: anchorOffset ?? desiredSelection?.anchor ?? 0,
-        focus: focusOffset ?? desiredSelection?.focus ?? 0,
-      }
-    }
-    for (const anchor of editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')) {
-      const authoredText = removeCaretAnchorSentinel(anchor.textContent || '')
-      if (authoredText) anchor.before(document.createTextNode(authoredText))
-    }
-    installCaretAnchors(editor)
-    if (shouldRestoreSelection) restoreSelection(desiredSelection)
-  }, [getPointOffset, getSelectionOffsets, installCaretAnchors, restoreSelection])
+  const flushForSubmit = useCallback((): ComposerDraft => {
+    const view = viewRef.current
+    if (!view) return makePlainComposerDraft()
+    setCompositionPresence(false)
+    emit(view)
+    return documentToDraft(view.state)
+  }, [emit, setCompositionPresence])
 
   const focusEnd = useCallback(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    placeCaret(editor, editor.childNodes.length)
-  }, [placeCaret])
-
-  const trimHistory = useCallback(() => {
-    let total = [...undoRef.current, ...redoRef.current].reduce((sum, item) => sum + item.size, 0)
-    while (undoRef.current.length + redoRef.current.length > MAX_UNDO_ENTRIES || total > MAX_UNDO_BYTES) {
-      const removed = undoRef.current.length > 0 ? undoRef.current.shift() : redoRef.current.shift()
-      total -= removed?.size || 0
-    }
+    const view = viewRef.current
+    if (!view) return
+    view.focus()
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length), scrollIntoView: true })
   }, [])
 
-  const recordHistory = useCallback((base: EditorState, kind: string, coalesce = false) => {
-    const current = readDraft()
-    if (sameDraft(base.draft, current)) return
-    const now = Date.now()
-    const previousGroup = historyGroupRef.current
-    if (!(coalesce && previousGroup?.kind === kind && now - previousGroup.at <= TYPING_COALESCE_MS)) {
-      undoRef.current.push({ draft: cloneDraft(base.draft), selection: base.selection, size: getDraftByteSize(base.draft) })
-      trimHistory()
-    }
-    historyGroupRef.current = { kind, at: now }
-    redoRef.current = []
-  }, [readDraft, trimHistory])
-
-  const cancelCompositionFinalize = useCallback(() => {
-    if (compositionFinalizeFrameRef.current !== null) cancelAnimationFrame(compositionFinalizeFrameRef.current)
-    compositionFinalizeFrameRef.current = null
+  const findChip = useCallback((key: string): ComposerChip | null => {
+    const view = viewRef.current
+    if (!view) return null
+    return getComposerChips(view.state).find(chip => (chip.segment.type === 'attachment' ? chip.segment.ref : chip.segment.id) === key) || null
   }, [])
-
-  const finalizeComposition = useCallback(() => {
-    cancelCompositionFinalize()
-    const base = compositionBaseRef.current
-    onCompositionPresenceChange?.(false)
-    compositionBaseRef.current = null
-    compositionEndingRef.current = false
-    composingRef.current = false
-    beforeInputRef.current = null
-    if (!base || disabledRef.current) {
-      updateCompositionPresentation()
-      return
-    }
-    reconcileCaretAnchors()
-    recordHistory(base, 'composition')
-    emitDraft()
-  }, [cancelCompositionFinalize, emitDraft, reconcileCaretAnchors, recordHistory, updateCompositionPresentation, onCompositionPresenceChange])
-
-  const flushForSubmit = useCallback(() => {
-    const editor = editorRef.current
-    const current = readDraft()
-    const hasPendingComposition = composingRef.current || compositionEndingRef.current || compositionBaseRef.current !== null
-    const hasCommittedAnchorText = !!editor && [...editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')]
-      .some(anchor => removeCaretAnchorSentinel(anchor.textContent || '').length > 0)
-    if (!hasPendingComposition && !hasCommittedAnchorText && sameDraft(authoritativeDraftRef.current, current)) {
-      return cloneDraft(current)
-    }
-    cancelCompositionFinalize()
-    const base = compositionBaseRef.current || {
-      draft: cloneDraft(authoritativeDraftRef.current),
-      selection: null,
-    }
-    compositionBaseRef.current = null
-    compositionEndingRef.current = false
-    composingRef.current = false
-    beforeInputRef.current = null
-    if (editor) editor.dataset.compositionVisible = 'false'
-    onCompositionPresenceChange?.(false)
-    reconcileCaretAnchors(false)
-    const next = readDraft()
-    if (!sameDraft(base.draft, next)) {
-      recordHistory(base, 'composition')
-      emitDraft()
-    }
-    return cloneDraft(next)
-  }, [cancelCompositionFinalize, emitDraft, readDraft, reconcileCaretAnchors, recordHistory, onCompositionPresenceChange])
-
-  const applyHistoryDraft = useCallback((snapshot: DraftSnapshot) => {
-    renderDraft(snapshot.draft)
-    authoritativeDraftRef.current = snapshot.draft
-    lastEmittedRef.current = serializeComposerDraft(snapshot.draft)
-    onChange(cloneDraft(snapshot.draft))
-    if (!restoreSelection(snapshot.selection)) focusEnd()
-  }, [focusEnd, onChange, renderDraft, restoreSelection])
-
-  const undo = useCallback(() => {
-    const previous = undoRef.current.pop()
-    if (!previous) return
-    const current = captureEditorState()
-    redoRef.current.push({ draft: cloneDraft(current.draft), selection: current.selection, size: getDraftByteSize(current.draft) })
-    trimHistory()
-    historyGroupRef.current = null
-    applyHistoryDraft(previous)
-  }, [applyHistoryDraft, captureEditorState, trimHistory])
-
-  const redo = useCallback(() => {
-    const next = redoRef.current.pop()
-    if (!next) return
-    const current = captureEditorState()
-    undoRef.current.push({ draft: cloneDraft(current.draft), selection: current.selection, size: getDraftByteSize(current.draft) })
-    trimHistory()
-    historyGroupRef.current = null
-    applyHistoryDraft(next)
-  }, [applyHistoryDraft, captureEditorState, trimHistory])
-
-  const replaceDraft = useCallback((nextDraft: ComposerDraft, shouldFocusEnd = false) => {
-    transcriptionRef.current = null
-    cancelCompositionFinalize()
-    compositionBaseRef.current = null
-    compositionEndingRef.current = false
-    composingRef.current = false
-    beforeInputRef.current = null
-    renderDraft(nextDraft)
-    authoritativeDraftRef.current = nextDraft
-    undoRef.current = []
-    redoRef.current = []
-    historyGroupRef.current = null
-    lastEmittedRef.current = serializeComposerDraft(nextDraft)
-    setActiveAttachmentRef(null)
-    if (shouldFocusEnd) focusEnd()
-  }, [cancelCompositionFinalize, focusEnd, renderDraft])
 
   const beginTranscription = useCallback(() => {
-    if (!editorRef.current || disabledRef.current || transcriptionRef.current) return false
+    const view = viewRef.current
+    if (!view || disabledRef.current || transcriptionRef.current) return false
     // A pointer on the microphone may have blurred an in-progress composition.
-    // Flush its committed text before reserving the transcription position.
     flushForSubmit()
-    const selection = caretWasPlacedRef.current
-      ? (document.activeElement === editorRef.current ? getSelectionOffsets() : null) || lastSelectionRef.current
-      : null
-    const offset = selection?.focus ?? getNodeUnits(editorRef.current)
-    transcriptionRef.current = {
-      draftId, offset, node: null, text: '',
-      base: { draft: cloneDraft(readDraft()), selection: { anchor: offset, focus: offset } },
-      historyRecorded: false,
-    }
+    const pos = caretWasPlacedRef.current ? view.state.selection.main.head : view.state.doc.length
+    transcriptionRef.current = { draftId: draftIdRef.current, from: pos, to: pos, text: '' }
     return true
-  }, [draftId, flushForSubmit, getNodeUnits, getSelectionOffsets, readDraft])
+  }, [flushForSubmit])
 
   const updateTranscription = useCallback((text: string) => {
+    const view = viewRef.current
     const owner = transcriptionRef.current
-    const editor = editorRef.current
-    if (!editor || !owner || owner.draftId !== draftId || owner.text === text) return
-    if (!owner.node || !editor.contains(owner.node)) {
-      if (text) {
-        const point = getCanonicalBoundaryPoint(owner.offset, 1)
-        if (!point) return
-        const range = document.createRange()
-        range.setStart(point.node, point.offset)
-        owner.node = document.createTextNode(text)
-        range.insertNode(owner.node)
-      }
-    } else {
-      owner.node.data = text
-    }
+    if (!view || !owner || owner.draftId !== draftIdRef.current || owner.text === text) return
+    // Partial results stay out of history; endTranscription records one step.
+    view.dispatch({
+      changes: { from: owner.from, to: owner.to, insert: text },
+      annotations: [composerEdit.of(true), Transaction.addToHistory.of(false)],
+    })
+    owner.to = owner.from + text.length
     owner.text = text
-    // A former trailing-newline scaffold must not create a line break in the
-    // middle of an incoming transcript. Rebuild it once on completion.
-    for (const scaffold of editor.querySelectorAll('[data-composer-trailing-newline]')) scaffold.remove()
-    if (!owner.historyRecorded && !sameDraft(owner.base.draft, readDraft())) {
-      recordHistory(owner.base, 'transcription')
-      owner.historyRecorded = true
-    }
-    emitDraft()
-    if (!editor.contains(owner.node)) owner.node = null
-  }, [draftId, emitDraft, getCanonicalBoundaryPoint, readDraft, recordHistory])
-
-  const endTranscription = useCallback((shouldFocus = false) => {
-    const owner = transcriptionRef.current
-    if (!owner || owner.draftId !== draftId) return
-    transcriptionRef.current = null
-    reconcileCaretAnchors(false)
-    historyGroupRef.current = null
-    const offset = owner.offset + owner.text.length
-    lastSelectionRef.current = { anchor: offset, focus: offset }
-    if (shouldFocus) {
-      if (disabledRef.current) focusAfterTranscriptionRef.current = true
-      else restoreSelection(lastSelectionRef.current)
-    }
-  }, [draftId, reconcileCaretAnchors, restoreSelection])
-
-  const insertTextAtSelection = useCallback((text: string) => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection?.rangeCount) return
-    const range = selection.getRangeAt(0)
-    if (!editor.contains(range.commonAncestorContainer)) return
-    range.deleteContents()
-    const textNode = document.createTextNode(text)
-    range.insertNode(textNode)
-    placeCaret(textNode, textNode.data.length)
-    editor.normalize()
-  }, [placeCaret])
-
-  const mutate = useCallback((kind: string, action: () => void) => {
-    if (disabledRef.current) return false
-    const base = captureEditorState()
-    action()
-    reconcileCaretAnchors()
-    recordHistory(base, kind)
-    emitDraft()
-    return true
-  }, [captureEditorState, emitDraft, reconcileCaretAnchors, recordHistory])
-
-  // Caret anchors are editable scaffolding, not content containers. Native
-  // hit-testing and restored selections may land inside them; inserting a block
-  // there would make reconciliation flatten its label via anchor.textContent.
-  const getBlockInsertionRange = useCallback((): Range | null => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection?.rangeCount) return null
-    const range = selection.getRangeAt(0).cloneRange()
-    if (!editor.contains(range.commonAncestorContainer)) return null
-    const boundary = (node: Node, offset: number) => {
-      const element = node instanceof Element ? node : node.parentElement
-      const atomic = element?.closest<HTMLElement>('[data-composer-caret-anchor], [data-composer-pasted-text-id], [data-composer-attachment-ref]')
-      if (!atomic?.parentNode || !editor.contains(atomic)) return { node, offset }
-      const afterAtomic = !isCaretAnchor(atomic) && !(node === atomic && offset === 0)
-      return { node: atomic.parentNode, offset: [...atomic.parentNode.childNodes].indexOf(atomic) + (afterAtomic ? 1 : 0) }
-    }
-    const start = boundary(range.startContainer, range.startOffset)
-    const end = boundary(range.endContainer, range.endOffset)
-    range.setStart(start.node, start.offset)
-    range.setEnd(end.node, end.offset)
-    return range
   }, [])
 
-  const insertPastedText = useCallback((text: string) => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection?.rangeCount) return
-    mutate('paste-block', () => {
-      const range = getBlockInsertionRange()
-      if (!range) return
-      range.deleteContents()
-      const segment: ComposerPastedTextSegment = { type: 'pasted-text', id: globalThis.crypto?.randomUUID?.() || `paste-${Date.now()}-${Math.random().toString(16).slice(2)}`, text }
-      const chip = createChip(segment)
-      range.insertNode(chip)
-      placeCaret(chip.parentNode || editor, [...(chip.parentNode || editor).childNodes].indexOf(chip) + 1)
-    })
-  }, [createChip, getBlockInsertionRange, mutate, placeCaret])
-
-  const insertAttachments = useCallback((files: File[], point?: { x: number; y: number }) => {
-    const editor = editorRef.current
-    if (!editor || disabledRef.current || files.length === 0) return
-    const currentSelection = window.getSelection()
-    const hadEditorSelection = !!currentSelection?.rangeCount && editor.contains(currentSelection.getRangeAt(0).commonAncestorContainer)
-    const desiredSelection = hadEditorSelection ? getSelectionOffsets() : lastSelectionRef.current
-    editor.focus()
-    if (!restoreSelection(desiredSelection)) focusEnd()
-    if (point) {
-      const caret = document.caretPositionFromPoint?.(point.x, point.y)
-      if (caret?.offsetNode && editor.contains(caret.offsetNode)) placeCaret(caret.offsetNode, caret.offset)
-      else {
-        const rangeAtPoint = document.caretRangeFromPoint?.(point.x, point.y)
-        if (rangeAtPoint && editor.contains(rangeAtPoint.startContainer)) placeCaret(rangeAtPoint.startContainer, rangeAtPoint.startOffset)
+  const endTranscription = useCallback((shouldFocus = false) => {
+    const view = viewRef.current
+    const owner = transcriptionRef.current
+    if (!view || !owner || owner.draftId !== draftIdRef.current) return
+    transcriptionRef.current = null
+    if (owner.text) {
+      suppressEmitRef.current = true
+      try {
+        view.dispatch({ changes: { from: owner.from, to: owner.to }, annotations: [composerEdit.of(true), Transaction.addToHistory.of(false)] })
+      } finally {
+        suppressEmitRef.current = false
       }
+      view.dispatch({
+        changes: { from: owner.from, insert: owner.text },
+        selection: EditorSelection.cursor(owner.from + owner.text.length),
+        userEvent: 'input.transcription',
+        annotations: [composerEdit.of(true), isolateHistory.of('full')],
+      })
     }
-    const segments = onAttachFiles(files)
-    mutate('insert-attachments', () => {
-      const range = getBlockInsertionRange()
-      if (!range) return
-      range.deleteContents()
-      const fragment = document.createDocumentFragment()
-      let last: HTMLElement | null = null
-      for (const segment of segments) {
-        last = createAttachmentChip(segment)
-        fragment.append(last)
-      }
-      range.insertNode(fragment)
-      if (last?.parentNode) placeCaret(last.parentNode, [...last.parentNode.childNodes].indexOf(last) + 1)
-    })
-  }, [createAttachmentChip, focusEnd, getBlockInsertionRange, getSelectionOffsets, mutate, onAttachFiles, placeCaret, restoreSelection])
-
-  const removeChip = useCallback((chip: HTMLElement) => {
-    mutate('remove-block', () => {
-      const parent = chip.parentNode
-      if (!parent) return
-      const index = [...parent.childNodes].indexOf(chip)
-      blockMapRef.current.delete(chip.dataset.composerPastedTextId || '')
-      chip.remove()
-      placeCaret(parent, Math.max(0, index))
-    })
-  }, [mutate, placeCaret])
+    if (shouldFocus) {
+      if (disabledRef.current) focusAfterTranscriptionRef.current = true
+      else view.focus()
+    }
+  }, [])
 
   useImperativeHandle(forwardedRef, () => ({
-    focus: () => editorRef.current?.focus(),
+    focus: () => viewRef.current?.focus(),
     focusEnd,
     flushForSubmit,
-    insertAttachments,
-    openAttachment: (ref) => {
-      if (disabledRef.current) return
-      const chip = [...(editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-attachment-ref]') || [])].find(node => node.dataset.composerAttachmentRef === ref)
-      if (!chip) return
-      activeChipRef.current = chip
-      setActiveAttachmentRef(ref)
+    insertAttachments: (files, point) => {
+      const view = viewRef.current
+      if (view) insertAttachmentsAt(view, files, point)
     },
-    removeAttachment: (ref) => {
-      if (disabledRef.current) return
-      const chip = [...(editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-attachment-ref]') || [])].find(node => node.dataset.composerAttachmentRef === ref)
-      if (chip) removeChip(chip)
+    openAttachment: ref => {
+      const chip = findChip(ref)
+      if (chip) openChip(chip)
     },
-    replaceDraft,
+    removeAttachment: ref => {
+      const view = viewRef.current
+      const chip = findChip(ref)
+      if (view && chip) removeChip(view, chip)
+    },
+    replaceDraft: (draft, shouldFocusEnd = false) => {
+      resetState(draft)
+      if (shouldFocusEnd) focusEnd()
+    },
     beginTranscription,
     updateTranscription,
     endTranscription,
-  }), [beginTranscription, endTranscription, flushForSubmit, focusEnd, insertAttachments, removeChip, replaceDraft, updateTranscription])
+  }), [beginTranscription, endTranscription, findChip, flushForSubmit, focusEnd, insertAttachmentsAt, openChip, removeChip, resetState, updateTranscription])
 
-  const adjacentChip = useCallback((direction: -1 | 1): HTMLElement | null => {
-    const editor = editorRef.current
-    const selection = window.getSelection()
-    if (!editor || !selection?.isCollapsed || !selection.rangeCount) return null
-    const range = selection.getRangeAt(0)
-    const container = range.startContainer
-    const offset = range.startOffset
-    const caretAnchor = getCaretAnchor(container)
-    if (caretAnchor) {
-      const candidate = direction < 0 ? caretAnchor.previousSibling : caretAnchor.nextSibling
-      return isChip(candidate) ? candidate as HTMLElement : null
-    }
-    if (container === editor) {
-      const candidate = editor.childNodes[offset + (direction < 0 ? -1 : 0)]
-      return isChip(candidate) ? candidate as HTMLElement : null
-    }
-    if (container.nodeType === Node.TEXT_NODE && ((direction < 0 && offset === 0) || (direction > 0 && offset === (container.nodeValue || '').length))) {
-      const candidate = direction < 0 ? container.previousSibling : container.nextSibling
-      return isChip(candidate) ? candidate as HTMLElement : null
-    }
-    return null
-  }, [])
+  const handleClick = useCallback((event: React.MouseEvent) => {
+    const view = viewRef.current
+    const button = event.target instanceof Element ? event.target.closest('button') : null
+    const element = button?.closest<HTMLElement>(CHIP_SELECTOR)
+    if (!view || !button || !element || disabledRef.current) return
+    const chip = findChip(element.dataset.composerAttachmentRef || element.dataset.composerPastedTextId || '')
+    if (!chip) return
+    event.preventDefault()
+    if (button.dataset.composerBlockRemove) removeChip(view, chip)
+    else openChip(chip)
+  }, [findChip, openChip, removeChip])
 
-  const serializeSelection = useCallback((range: Range): string => {
-    const fragment = range.cloneContents()
-    return serializeComposerDraft(readDraftFromNode(fragment))
-  }, [readDraftFromNode])
-
-  useEffect(() => {
-    document.addEventListener('selectionchange', updateBlockSelectionPresentation)
-    updateBlockSelectionPresentation()
-    return () => {
-      document.removeEventListener('selectionchange', updateBlockSelectionPresentation)
-      for (const chip of editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-block-selected]') || []) {
-        chip.removeAttribute('data-composer-block-selected')
-      }
-    }
-  }, [updateBlockSelectionPresentation])
-
-  useEffect(() => {
-    const draftChanged = lastDraftIdRef.current !== draftId
-    if (!draftChanged) return
-    transcriptionRef.current = null
-    lastSelectionRef.current = null
-    caretWasPlacedRef.current = false
-    focusAfterTranscriptionRef.current = false
-    const serialized = serializeComposerDraft(value)
-    cancelCompositionFinalize()
-    compositionBaseRef.current = null
-    compositionEndingRef.current = false
-    composingRef.current = false
-    beforeInputRef.current = null
-    renderDraft(value)
-    authoritativeDraftRef.current = value
-    undoRef.current = []
-    redoRef.current = []
-    historyGroupRef.current = null
-    lastEmittedRef.current = serialized
-    lastDraftIdRef.current = draftId
-    setActiveBlockId(null)
-    setActiveAttachmentRef(null)
-  }, [cancelCompositionFinalize, draftId, renderDraft, value])
-
-  useEffect(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    editor.contentEditable = String(!disabled)
-    editor.setAttribute('aria-disabled', String(disabled))
-    for (const chip of editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]')) {
-      chip.tabIndex = -1
-      chip.setAttribute('aria-disabled', String(disabled))
-      for (const button of chip.querySelectorAll<HTMLButtonElement>('button')) {
-        button.disabled = disabled
-        button.tabIndex = disabled ? -1 : 0
-      }
-    }
-    if (disabled) {
-      cancelCompositionFinalize()
-      setActiveBlockId(null)
-      setActiveAttachmentRef(null)
-      activeChipRef.current = null
-      beforeInputRef.current = null
-      compositionBaseRef.current = null
-      compositionEndingRef.current = false
-      composingRef.current = false
-    } else if (focusAfterTranscriptionRef.current) {
-      focusAfterTranscriptionRef.current = false
-      restoreSelection(lastSelectionRef.current)
-    }
-  }, [cancelCompositionFinalize, disabled, restoreSelection])
-
-  useEffect(() => cancelCompositionFinalize, [cancelCompositionFinalize])
-  useEffect(() => () => {
-    for (const url of attachmentUrlMapRef.current.values()) URL.revokeObjectURL(url)
-  }, [])
-
-  const activeBlock = activeBlockId ? blockMapRef.current.get(activeBlockId) || null : null
-  const activeAttachment = activeAttachmentRef ? attachmentMapRef.current.get(activeAttachmentRef) || null : null
-  const activeImageSrc = activeAttachment && isSafeImagePreviewMime(activeAttachment.mimeType) && resolveAttachmentFile(activeAttachment.ref) ? attachmentUrlMapRef.current.get(activeAttachment.ref) : undefined
   const closeModal = useCallback(() => {
     setActiveBlockId(null)
-    requestAnimationFrame(() => activeChipRef.current?.focus())
+    setActiveAttachmentRef(null)
+    const key = openChipKeyRef.current
+    requestAnimationFrame(() => {
+      const button = [...(hostRef.current?.querySelectorAll<HTMLElement>(CHIP_SELECTOR) || [])]
+        .find(element => (element.dataset.composerAttachmentRef || element.dataset.composerPastedTextId) === key)
+        ?.querySelector<HTMLButtonElement>('[data-composer-block-open]')
+      if (button) button.focus()
+      else viewRef.current?.focus()
+    })
   }, [])
 
+  // Replaces a chip's text and metadata as one undoable step.
+  const replaceChip = useCallback((chip: ComposerChip, segment: ComposerPastedTextSegment) => {
+    const view = viewRef.current
+    if (!view || disabledRef.current) return false
+    const text = serializeComposerSegment(segment)
+    view.dispatch({
+      changes: { from: chip.from, to: chip.to, insert: text },
+      effects: addComposerChips.of([{ from: chip.from, to: chip.from + text.length, segment, revision: chip.revision + 1 }]),
+      selection: EditorSelection.cursor(chip.from + text.length),
+      userEvent: 'input.chip',
+      annotations: isolateHistory.of('full'),
+    })
+    return true
+  }, [])
+
+  const activeBlockChip = activeBlockId ? findChip(activeBlockId) : null
+  const activeBlock = activeBlockChip?.segment.type === 'pasted-text' ? activeBlockChip.segment : null
+  const activeAttachmentChip = activeAttachmentRef ? findChip(activeAttachmentRef) : null
+  const activeAttachment = activeAttachmentChip?.segment.type === 'attachment' ? activeAttachmentChip.segment : null
+  const activeAttachmentFile = activeAttachment ? resolveAttachmentFile(activeAttachment.ref) : undefined
+  // While an image is previewed, the viewer switches among the draft's own previewable
+  // images in draft order. Object URLs are made from the editor-owned Files for that time only.
+  const draftImages = useMemo((): ImageGalleryEntry[] | null => {
+    if (!activeAttachment || !activeAttachmentFile || !isSafeImagePreviewMime(activeAttachment.mimeType)) return null
+    const view = viewRef.current
+    const images = (view ? getComposerChips(view.state) : []).flatMap(chip => {
+      if (chip.segment.type !== 'attachment' || !isSafeImagePreviewMime(chip.segment.mimeType)) return []
+      const file = chip.segment.ref === activeAttachment.ref ? activeAttachmentFile : resolveAttachmentFile(chip.segment.ref)
+      return file ? [{ segment: chip.segment, file }] : []
+    })
+    const sequence = images.some(image => image.segment.ref === activeAttachment.ref) ? images : [{ segment: activeAttachment, file: activeAttachmentFile }]
+    return sequence.map(({ segment, file }) => ({ key: `draft:${segment.ref}`, src: URL.createObjectURL(file), mimeType: segment.mimeType, title: segment.name }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the draft cannot change under the modal viewer
+  }, [activeAttachment, activeAttachmentFile])
+  useEffect(() => () => { for (const image of draftImages || []) URL.revokeObjectURL(image.src) }, [draftImages])
+  const activeImageSrc = activeAttachment ? draftImages?.find(image => image.key === `draft:${activeAttachment.ref}`)?.src : undefined
+  const draftGallery = useImageGalleryStore(draftImages || NO_DRAFT_IMAGES)
+
   return (
-    <div className="relative">
-      <div
-        ref={editorRef}
-        role="textbox"
-        aria-label="Message"
-        aria-multiline="true"
-        aria-disabled={disabled}
-        contentEditable={!disabled}
-        suppressContentEditableWarning
-        spellCheck
-        data-placeholder={placeholder}
-        className="foxwarm-chat-composer-textarea foxwarm-inline-composer-editor relative min-h-[60px] max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-4 py-2 text-[16px] leading-6 text-fw-text-strong outline-none focus:ring-0 dark:text-fw-text-strong"
-        onBeforeInput={(event) => {
-          if (disabled) { event.preventDefault(); return }
-          const nativeEvent = event.nativeEvent as InputEvent
-          if (composingRef.current || compositionEndingRef.current || nativeEvent.isComposing) {
-            beforeInputRef.current = null
-            return
-          }
-          if (nativeEvent.inputType === 'historyUndo') { event.preventDefault(); undo(); return }
-          if (nativeEvent.inputType === 'historyRedo') { event.preventDefault(); redo(); return }
-          if (nativeEvent.inputType === 'insertParagraph' || nativeEvent.inputType === 'insertLineBreak') {
-            event.preventDefault()
-            if (mutate('line-break', () => insertTextAtSelection('\n'))) ensureCaretVisibleAfterLineBreak()
-            return
-          }
-          beforeInputRef.current = captureEditorState()
-        }}
-        onInput={(event) => {
-          if (disabled) {
-            event.preventDefault()
-            renderDraft(authoritativeDraftRef.current)
-            beforeInputRef.current = null
-            return
-          }
-          const nativeEvent = event.nativeEvent as InputEvent
-          if (compositionEndingRef.current) {
-            finalizeComposition()
-            return
-          }
-          if (composingRef.current || nativeEvent.isComposing) {
-            beforeInputRef.current = null
-            updateCompositionPresentation()
-            return
-          }
-          event.currentTarget.dataset.compositionVisible = 'false'
-          reconcileCaretAnchors()
-          if (beforeInputRef.current) {
-            const coalesce = nativeEvent.inputType === 'insertText' || nativeEvent.inputType.startsWith('deleteContent')
-            recordHistory(beforeInputRef.current, nativeEvent.inputType || 'input', coalesce)
-          }
-          beforeInputRef.current = null
-          emitDraft()
-        }}
-        onCompositionStart={(event) => {
-          if (disabledRef.current) return
-          cancelCompositionFinalize()
-          compositionEndingRef.current = false
-          composingRef.current = true
-          compositionBaseRef.current = captureEditorState()
-          event.currentTarget.dataset.compositionVisible = 'false'
-        }}
-        onCompositionEnd={() => {
-          if (disabledRef.current || !compositionBaseRef.current) {
-            cancelCompositionFinalize()
-            compositionBaseRef.current = null
-            compositionEndingRef.current = false
-            composingRef.current = false
-            updateCompositionPresentation()
-            return
-          }
-          compositionEndingRef.current = true
-          beforeInputRef.current = null
-          cancelCompositionFinalize()
-          compositionFinalizeFrameRef.current = requestAnimationFrame(finalizeComposition)
-        }}
-        onPaste={(event) => {
-          if (disabled) { event.preventDefault(); return }
-          const fileItems = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file')
-          const files = fileItems.map(item => item.getAsFile()).filter((file): file is File => !!file)
-          if (files.length > 0) {
-            event.preventDefault()
-            insertAttachments(files)
-            return
-          }
-          const text = event.clipboardData?.getData('text/plain') || ''
-          event.preventDefault()
-          if (fileItems.length > 0) {
-            if (text) mutate('paste-text', () => insertTextAtSelection(text))
-            return
-          }
-          if (canConvertPasteToBlock(text)) insertPastedText(text)
-          else mutate('paste-text', () => insertTextAtSelection(text))
-        }}
-        onCopy={(event) => {
-          const selection = window.getSelection()
-          if (!selection?.rangeCount || selection.isCollapsed) return
-          event.preventDefault()
-          event.clipboardData.setData('text/plain', serializeSelection(selection.getRangeAt(0)))
-        }}
-        onCut={(event) => {
-          if (disabled) { event.preventDefault(); return }
-          const selection = window.getSelection()
-          if (!selection?.rangeCount || selection.isCollapsed) return
-          event.preventDefault()
-          event.clipboardData.setData('text/plain', serializeSelection(selection.getRangeAt(0)))
-          mutate('cut', () => selection.getRangeAt(0).deleteContents())
-        }}
-        onKeyDown={(event) => {
-          const nativeEvent = event.nativeEvent
-          if (disabled) {
-            if ((event.ctrlKey || event.metaKey) && ['x', 'v', 'z', 'y'].includes(event.key.toLowerCase())) event.preventDefault()
-            if (['Enter', 'Backspace', 'Delete'].includes(event.key)) event.preventDefault()
-            return
-          }
-          if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
-            historyGroupRef.current = null
-          }
-          if (composingRef.current || compositionEndingRef.current || nativeEvent.isComposing) return
-          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); return }
-          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); return }
-          const targetChip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') : null
-          if (targetChip && event.target instanceof HTMLButtonElement) return
-          const selectionCaretAnchor = getCaretAnchor(window.getSelection()?.anchorNode || null)
-          if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-            if (moveAcrossAtomicBoundary(event.key === 'ArrowLeft' ? -1 : 1, event.shiftKey)) {
-              event.preventDefault()
-              return
-            }
-          }
-          if (event.key === 'Home' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && (targetChip || selectionCaretAnchor)) {
-            const editor = editorRef.current
-            const firstChip = editor ? [...editor.childNodes].find(node => !isCaretAnchor(node) && (node.nodeType !== Node.TEXT_NODE || (node.nodeValue || '').length > 0)) : null
-            const leadingAnchor = editor?.querySelector<HTMLElement>(':scope > [data-composer-caret-anchor]:first-child') || null
-            if (isChip(firstChip || null) && leadingAnchor && (targetChip === firstChip || selectionCaretAnchor === leadingAnchor)) {
-              event.preventDefault()
-              placeCaret(leadingAnchor.firstChild || leadingAnchor, leadingAnchor.firstChild ? CARET_ANCHOR_TEXT.length : 0)
-              return
-            }
-          }
-          if (targetChip && event.key === 'ArrowLeft') {
-            const previousAnchor = targetChip.previousSibling
-            if (isCaretAnchor(previousAnchor)) {
-              event.preventDefault()
-              placeCaret(previousAnchor.firstChild || previousAnchor, previousAnchor.firstChild ? CARET_ANCHOR_TEXT.length : 0)
-              return
-            }
-          }
-          if (targetChip && event.target === targetChip && (event.key === 'Enter' || event.key === ' ')) {
-            event.preventDefault()
-            activeChipRef.current = targetChip
-            if (targetChip.dataset.composerAttachmentRef) setActiveAttachmentRef(targetChip.dataset.composerAttachmentRef)
-            else setActiveBlockId(targetChip.dataset.composerPastedTextId || null)
-            return
-          }
-          if (onCommandKeyDown(nativeEvent)) return
-          if (event.key === 'Enter' && !nativeEvent.isComposing && !composingRef.current) {
-            event.preventDefault()
-            if (mutate('line-break', () => insertTextAtSelection('\n'))) ensureCaretVisibleAfterLineBreak()
-            return
-          }
-          if (event.key === 'Backspace' || event.key === 'Delete') {
-            const selection = window.getSelection()
-            const editor = editorRef.current
-            if (editor && selection?.rangeCount && !selection.isCollapsed && editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
-              event.preventDefault()
-              mutate('delete-selection', () => selection.getRangeAt(0).deleteContents())
-              return
-            }
-            const direction = event.key === 'Backspace' ? -1 : 1
-            let chip = adjacentChip(direction)
-            if (!chip && selectionCaretAnchor) {
-              const selection = window.getSelection()
-              const offset = selection ? getPointOffset(selection.focusNode, selection.focusOffset) : null
-              const boundary = offset === null ? null : getCanonicalBoundaryPoint(offset, direction)
-              if (boundary) placeCaret(boundary.node, boundary.offset)
-              chip = adjacentChip(direction)
-            }
-            if (chip) { event.preventDefault(); removeChip(chip) }
-          }
-        }}
-        onClick={(event) => {
-          historyGroupRef.current = null
-          if (disabled) return
-          const chip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') : null
-          if (!chip) return
-          if (event.target instanceof Element && event.target.closest('[data-composer-block-remove]')) {
-            event.preventDefault()
-            event.stopPropagation()
-            removeChip(chip)
-            return
-          }
-          if (event.target !== chip && !(event.target instanceof Element && event.target.closest('[data-composer-block-open]'))) return
-          activeChipRef.current = chip
-          if (chip.dataset.composerAttachmentRef) setActiveAttachmentRef(chip.dataset.composerAttachmentRef)
-          else setActiveBlockId(chip.dataset.composerPastedTextId || null)
-        }}
-        onPointerDown={() => {
-          historyGroupRef.current = null
-        }}
-        onFocus={() => { caretWasPlacedRef.current = true }}
-        onBlur={(event) => {
-          if (caretWasPlacedRef.current) lastSelectionRef.current = getSelectionOffsets() || lastSelectionRef.current
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onBlur()
-        }}
-        onKeyUp={() => { lastSelectionRef.current = getSelectionOffsets() }}
-        onPointerUp={() => { lastSelectionRef.current = getSelectionOffsets() }}
-      />
-      {!disabled && activeBlock && (
+    <div
+      className="relative"
+      onClick={handleClick}
+      onKeyDown={(event) => {
+        // Chip controls are outside CodeMirror's input handling; keep history keys working there.
+        const view = viewRef.current
+        const key = event.key.toLowerCase()
+        if (!view || !(event.target instanceof HTMLButtonElement) || !(event.ctrlKey || event.metaKey) || (key !== 'z' && key !== 'y')) return
+        event.preventDefault()
+        // The focused chip may be removed by this step; keep focus in the editor.
+        view.focus()
+        if (key === 'y' || event.shiftKey) redo(view)
+        else undo(view)
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onBlur()
+      }}
+    >
+      <div ref={hostRef} />
+      {!disabled && activeBlock && activeBlockChip && (
         <PastedTextModal
           text={activeBlock.text}
           onClose={closeModal}
           onSave={(text) => {
-            const chip = activeChipRef.current
-            if (!chip) return
-            if (!mutate('edit-block', () => {
-              const updated = { ...activeBlock, text }
-              blockMapRef.current.set(updated.id, updated)
-              chip.querySelector<HTMLElement>('.foxwarm-composer-pasted-text-preview')!.textContent = getPastedTextPreview(text)
-              chip.querySelector<HTMLElement>('.foxwarm-composer-pasted-text-count')!.textContent = countPastedTextCharacters(text).toLocaleString()
-              chip.setAttribute('aria-label', `Edit pasted text, ${countPastedTextCharacters(text)} characters`)
-            })) return
-            closeModal()
+            const chip = findChip(activeBlock.id)
+            if (chip && replaceChip(chip, { ...activeBlock, text })) closeModal()
           }}
           onRestoreToText={(text) => {
-            const chip = activeChipRef.current
-            if (!chip) return
-            if (!mutate('restore-block', () => {
-              const textNode = document.createTextNode(text)
-              chip.replaceWith(textNode)
-              blockMapRef.current.delete(activeBlock.id)
-              placeCaret(textNode, textNode.data.length)
-            })) return
-            closeModal()
+            const view = viewRef.current
+            const chip = findChip(activeBlock.id)
+            if (!view || !chip || disabledRef.current) return
+            view.dispatch({
+              changes: { from: chip.from, to: chip.to, insert: text },
+              selection: EditorSelection.cursor(chip.from + text.length),
+              userEvent: 'input.chip',
+              annotations: isolateHistory.of('full'),
+            })
+            setActiveBlockId(null)
+            requestAnimationFrame(() => viewRef.current?.focus())
           }}
         />
       )}
-      {!disabled && activeAttachment && activeImageSrc && <ImagePreviewDialog src={activeImageSrc} mimeType={activeAttachment.mimeType} title={activeAttachment.name} onClose={() => setActiveAttachmentRef(null)} />}
-      {!disabled && activeAttachment && !activeImageSrc && createPortal(
+      {!disabled && activeAttachment && activeImageSrc && <ImageGalleryContext.Provider value={draftGallery}>
+        <ImagePreviewDialog src={activeImageSrc} mimeType={activeAttachment.mimeType} title={activeAttachment.name} galleryItem={`draft:${activeAttachment.ref}`} onClose={() => setActiveAttachmentRef(null)} />
+      </ImageGalleryContext.Provider>}
+      {!disabled && activeAttachment && activeAttachmentChip && !activeImageSrc && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActiveAttachmentRef(null) }}>
           <div role="dialog" aria-modal="true" aria-label="Attachment information" className="w-full max-w-lg rounded-lg border border-fw-border bg-fw-surface p-4 shadow-xl">
             <div className="font-medium text-fw-text-strong">{activeAttachment.name}</div>
             <div className="mt-1 text-sm text-fw-text-muted">{activeAttachment.mimeType || 'application/octet-stream'} · {activeAttachment.size.toLocaleString()} B</div>
-            {!resolveAttachmentFile(activeAttachment.ref) && <div className="mt-2 text-sm text-fw-warning">This attachment must be reattached or removed before sending.</div>}
+            {!activeAttachmentFile && <div className="mt-2 text-sm text-fw-warning">This attachment must be reattached or removed before sending.</div>}
             <div className="mt-4 flex flex-wrap justify-end gap-2">
-              {!resolveAttachmentFile(activeAttachment.ref) && (
+              {!activeAttachmentFile && (
                 <label className="cursor-pointer rounded border border-fw-border px-3 py-1.5 text-sm text-fw-text">
                   Reattach
                   <input type="file" className="hidden" onChange={(event) => {
                     const file = event.currentTarget.files?.[0]
-                    const chip = [...(editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-attachment-ref]') || [])]
-                      .find(candidate => candidate.dataset.composerAttachmentRef === activeAttachment.ref) || null
-                    if (!file || !chip) return
+                    const view = viewRef.current
+                    if (!file || !view || disabledRef.current) return
                     onReattachFile(activeAttachment.ref, file)
-                    mutate('reattach-file', () => {
-                      const updated: ComposerAttachmentSegment = { ...activeAttachment, name: file.name || activeAttachment.name, mimeType: file.type || 'application/octet-stream', size: file.size }
-                      attachmentMapRef.current.set(updated.ref, updated)
-                      const replacement = createAttachmentChip(updated)
-                      chip.replaceWith(replacement)
-                      activeChipRef.current = replacement
+                    const segment: ComposerAttachmentSegment = { ...activeAttachment, name: file.name || activeAttachment.name, mimeType: file.type || 'application/octet-stream', size: file.size }
+                    view.dispatch({
+                      effects: updateComposerChip.of({ from: activeAttachmentChip.from, segment, previous: activeAttachment }),
+                      annotations: isolateHistory.of('full'),
                     })
                     setActiveAttachmentRef(null)
                   }} />
                 </label>
               )}
               <button type="button" className="rounded border border-fw-border px-3 py-1.5 text-sm text-fw-danger" onClick={() => {
-                const chip = [...(editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-attachment-ref]') || [])]
-                  .find(candidate => candidate.dataset.composerAttachmentRef === activeAttachment.ref) || null
-                if (chip) removeChip(chip)
+                const view = viewRef.current
+                if (view) removeChip(view, activeAttachmentChip)
                 setActiveAttachmentRef(null)
               }}>Remove</button>
               <button type="button" className="rounded bg-fw-accent px-3 py-1.5 text-sm text-fw-accent-text" onClick={() => setActiveAttachmentRef(null)}>Close</button>

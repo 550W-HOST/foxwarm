@@ -275,7 +275,6 @@ internal sealed partial class SessionToolExecutor(
     private readonly List<string> handoffTargets = [];
     internal SessionOwner Hosted => hosted;
     internal MainBrowserTools Browser => sessions.Browser;
-    internal bool HandoffConfirmationEnabled => sessions.HandoffConfirmationEnabled;
     private SessionManager Manager => sessions;
     private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
 
@@ -914,7 +913,7 @@ internal sealed partial class SessionToolExecutor(
     {
         sessions.SetDeliverySeq(hosted, invocation.Value?.DeliverySeq(script: false));
         var (response, completionTarget) = await Manager
-            .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args)
+            .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args, RecordDelivery)
             .ConfigureAwait(false);
         var action = SessionWait.Text(args["action"]);
         var visible =
@@ -1099,6 +1098,34 @@ internal sealed partial class SessionToolExecutor(
             )
         )!.AsObject();
 
+    // Keeps one committed delivery of the current call as UI-only evidence, in delivery order.
+    // A call can cause several: an assignment notifies the new and previous owner.
+    private void RecordDelivery(SessionDelivery delivery)
+    {
+        if (invocation.Value is not { } current)
+            return;
+        var deliveries = current.SessionMessages ??= new JsonArray();
+        var record = new JsonObject
+        {
+            ["id"] = DeliveryId(current.CallId, deliveries.Count),
+            ["targetSessionId"] = delivery.TargetSessionId,
+            ["message"] = SessionOwner.Bound(delivery.Message, 32768),
+        };
+        if (delivery.Message.Length > 32768)
+            record["truncated"] = true;
+        if (delivery.DeliverySeq is not null)
+            record["deliverySeq"] = delivery.DeliverySeq;
+        if (delivery.Task is not null)
+            record["task"] = delivery.Task.DeepClone();
+        deliveries.Add(record);
+    }
+
+    /// <summary>The first delivery keeps its call's ID; later ones add their 1-based position.</summary>
+    internal static string DeliveryId(string callId, int index) =>
+        index == 0
+            ? callId
+            : callId + "#" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     private async Task<JsonObject> ExecuteAgentAsync(
         string name,
         JsonObject args,
@@ -1113,27 +1140,15 @@ internal sealed partial class SessionToolExecutor(
             name,
             args,
             cancellationToken,
-            (target, body) =>
-            {
-                if (invocation.Value is not { } current)
-                    return;
-                var delivery = new JsonObject
-                {
-                    ["id"] = current.CallId,
-                    ["targetSessionId"] = target,
-                    ["message"] = SessionOwner.Bound(body, 32768),
-                };
-                if (body.Length > 32768)
-                    delivery["truncated"] = true;
-                if (deliverySeq is not null)
-                    delivery["deliverySeq"] = deliverySeq;
-                current.SessionMessages = new JsonArray(delivery);
-            },
+            RecordDelivery,
             scriptScope.Value?.RunId,
             // Only a direct model call is visible as such in the Session's own history.
             !unattended && !Programmatic
                 ? invocation.Value?.CallId
-                : null
+                : null,
+            // A call of an attended script that has not detached runs under the model call
+            // that started the script, which is still the last row of the history.
+            !unattended && !ScriptDetached ? scriptScope.Value?.RootCallId : null
         );
         if (
             !unattended
@@ -1287,7 +1302,6 @@ internal sealed partial class SessionToolExecutor(
                 "create_child_session",
                 "send_to_session",
                 "refresh_session_snapshot",
-                "skill",
                 "set_agent_inherit",
                 "set_agent_rules",
                 "session",
@@ -1312,6 +1326,8 @@ internal sealed partial class SessionToolExecutor(
         )
             handlers[name] = (owner, args, token) =>
                 owner.ExecuteToolScriptAsync(name, args, token);
+        handlers["run_skill"] = (owner, args, token) => owner.ExecuteRunSkillAsync(args, token);
+        handlers["skill"] = (owner, args, token) => owner.ExecuteSkillAsync(args, token);
         foreach (
             var name in new[] { "create_timer", "list_timers", "update_timer", "delete_timer" }
         )

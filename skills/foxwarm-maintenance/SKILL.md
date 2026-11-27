@@ -45,10 +45,13 @@ Read [Backup and Restore](references/BACKUP-RESTORE.md) for the restore-set
 contents, consistency boundaries, and the bundled SQLite chunk helper:
 
 ```bash
-python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py create SOURCE.sqlite NEW-SNAPSHOT-DIRECTORY
-python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py verify SNAPSHOT-DIRECTORY
-python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py restore SNAPSHOT-DIRECTORY NEW.sqlite
+ctl skill copy foxwarm-maintenance <dir> --path scripts
+python3 <dir>/sqlite-chunks.py create SOURCE.sqlite NEW-SNAPSHOT-DIRECTORY
+python3 <dir>/sqlite-chunks.py verify SNAPSHOT-DIRECTORY
+python3 <dir>/sqlite-chunks.py restore SNAPSHOT-DIRECTORY NEW.sqlite
 ```
+
+On master, `<dir>` can instead be the skill's own `scripts` directory; `ctl skill load foxwarm-maintenance` shows its path there.
 
 Run these from the program repository. They operate on one SQLite component,
 not a complete installation. Online SQLite backups must include committed WAL
@@ -75,6 +78,15 @@ from runnable outputs under `runtime/`, even on the first startup.
 Read [Post-Upgrade Checks](references/POST-UPGRADE.md) from the target revision
 when planning an upgrade. Source, initialized configuration, and Agent memory
 have separate ownership; an update must not silently replace the latter two.
+
+When an Agent updates or restarts the installation it runs in, start the update
+or restart command with an ordinary `exec`. On the Main server, exec launches
+commands detached from Main, so the command outlives the restart. After Main
+starts again, it reconciles the recorded execution and delivers the completion
+event to the Session that started it, and a Session that was busy when Main
+stopped resumes automatically. Don't detach the command yourself with `nohup`,
+`setsid` or `&`: the exec then returns at once, and no completion event reports
+the real outcome.
 
 Use the installation's existing launch configuration, including its data root
 and environment. A source update, successful build, and running replacement are

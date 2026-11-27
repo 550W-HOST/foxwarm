@@ -3,7 +3,10 @@ namespace Foxwarm;
 /// <summary>Where a Desktop host sends a top-level navigation or a new-window request.</summary>
 internal enum DesktopTarget
 {
-    /// <summary>The app's own origin: stays in the app (a new window opens an app window).</summary>
+    /// <summary>
+    /// The selected instance (its origin and base path): stays in the app (a new window opens
+    /// an app window).
+    /// </summary>
     App,
 
     /// <summary>
@@ -12,7 +15,7 @@ internal enum DesktopTarget
     /// </summary>
     Blank,
 
-    /// <summary>Another HTTP(S) origin: the default browser.</summary>
+    /// <summary>Another HTTP(S) page, outside the scope: the default browser.</summary>
     Browser,
 
     /// <summary>Anything else: refused.</summary>
@@ -27,8 +30,10 @@ internal enum DesktopWindowFrame
 }
 
 /// <summary>
-/// Navigation and window policy shared by the Windows and macOS hosts. Same-origin pages
-/// stay in the app, including new windows; other web pages go to the default browser.
+/// Navigation and window policy shared by the Windows and macOS hosts. The app's scope is
+/// the selected instance: its origin plus its base path (<c>/</c> for the local instance, for
+/// example <c>/foxwarm/</c> for a remote behind a path). Pages in the scope stay in the app,
+/// including new windows; other web pages go to the default browser.
 /// </summary>
 internal static class DesktopNavigation
 {
@@ -43,11 +48,46 @@ internal static class DesktopNavigation
     /// <summary>Offset of a new window from its opener's top-left corner, in DIPs.</summary>
     internal const double Cascade = 32;
 
-    internal static bool IsApp(Uri origin, string? text) =>
+    /// <summary>Whether a URL is in the scope: same scheme, host and port, and within the base path.</summary>
+    internal static bool IsApp(Uri scope, string? text) =>
         Uri.TryCreate(text, UriKind.Absolute, out var uri)
-        && uri.Scheme == origin.Scheme
-        && string.Equals(uri.Host, origin.Host, StringComparison.OrdinalIgnoreCase)
-        && uri.Port == origin.Port;
+        && uri.Scheme == scope.Scheme
+        && string.Equals(uri.Host, scope.Host, StringComparison.OrdinalIgnoreCase)
+        && uri.Port == scope.Port
+        && InBasePath(scope.AbsolutePath, uri.AbsolutePath);
+
+    /// <summary>
+    /// A base path <c>/a/</c> holds <c>/a</c> and everything below <c>/a/</c>, but not <c>/ab</c>.
+    /// Paths are compared as escaped by <see cref="Uri"/>, case-sensitively.
+    /// </summary>
+    internal static bool InBasePath(string basePath, string path)
+    {
+        if (basePath == "/")
+            return true;
+        return path.StartsWith(basePath, StringComparison.Ordinal)
+            || path == basePath.TrimEnd('/');
+    }
+
+    /// <summary>
+    /// A JavaScript expression that is true only in a top-level document of the scope. The
+    /// hosts guard their document-start frame state with it.
+    /// </summary>
+    internal static string ScopeCondition(Uri scope)
+    {
+        var origin = System.Text.Json.Nodes.JsonValue.Create(scope.GetLeftPart(UriPartial.Authority))!.ToJsonText();
+        var condition = "window === window.top && location.origin === " + origin;
+        var basePath = scope.AbsolutePath;
+        if (basePath == "/")
+            return condition;
+        var prefix = System.Text.Json.Nodes.JsonValue.Create(basePath)!.ToJsonText();
+        var exact = System.Text.Json.Nodes.JsonValue.Create(basePath.TrimEnd('/'))!.ToJsonText();
+        return condition
+            + " && (location.pathname.startsWith("
+            + prefix
+            + ") || location.pathname === "
+            + exact
+            + ")";
+    }
 
     internal static bool IsBlank(string? text)
     {
@@ -58,11 +98,11 @@ internal static class DesktopNavigation
     }
 
     /// <summary>Classifies a top-level navigation or a new-window request.</summary>
-    internal static DesktopTarget Classify(Uri origin, string? text)
+    internal static DesktopTarget Classify(Uri scope, string? text)
     {
         if (IsBlank(text))
             return DesktopTarget.Blank;
-        if (IsApp(origin, text))
+        if (IsApp(scope, text))
             return DesktopTarget.App;
         return Uri.TryCreate(text, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
             ? DesktopTarget.Browser
@@ -70,13 +110,13 @@ internal static class DesktopNavigation
     }
 
     /// <summary>The title area is selected once, from the requested URL of a new window.</summary>
-    internal static DesktopWindowFrame FrameFor(Uri origin, string? text)
+    internal static DesktopWindowFrame FrameFor(Uri scope, string? text)
     {
-        if (!IsApp(origin, text) || !Uri.TryCreate(text, UriKind.Absolute, out var uri))
+        if (!IsApp(scope, text) || !Uri.TryCreate(text, UriKind.Absolute, out var uri))
             return DesktopWindowFrame.System;
-        if (uri.AbsolutePath == origin.AbsolutePath)
+        if (uri.AbsolutePath == scope.AbsolutePath || uri.AbsolutePath == scope.AbsolutePath.TrimEnd('/'))
             return DesktopWindowFrame.WebUi;
-        var codePath = origin.AbsolutePath.TrimEnd('/') + Code.CodeWorkbench.RoutePath;
+        var codePath = scope.AbsolutePath.TrimEnd('/') + Code.CodeWorkbench.RoutePath;
         return uri.AbsolutePath.Equals(codePath, StringComparison.OrdinalIgnoreCase)
             || uri.AbsolutePath.Equals(codePath + "/", StringComparison.OrdinalIgnoreCase)
             ? DesktopWindowFrame.Code

@@ -114,8 +114,10 @@ internal sealed partial class SessionCompactor
             }
             name = "skill";
         }
+        // A resource read (`skill load <name> <path>`) prunes like an ordinary read.
         return name == "skill"
             && SessionWait.Text(args["action"]) == "load"
+            && !args.ContainsKey("path")
             && !string.IsNullOrWhiteSpace(SessionWait.Text(args["skillName"]));
     }
 

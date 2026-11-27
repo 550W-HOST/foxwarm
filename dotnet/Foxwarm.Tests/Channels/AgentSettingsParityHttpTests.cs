@@ -121,7 +121,7 @@ public sealed class AgentSettingsParityHttpTests
                 f.Owner.UpdateSettingsAsync(new JsonObject { ["effort"] = "high" }, child: true)
             );
             var disk = JsonNode.Parse(
-                await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath)
+                await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath())
             )!;
             Assert.Null(disk["childModelDefault"]);
             Assert.Null(disk["childEffortDefault"]);

@@ -120,7 +120,7 @@ public sealed class ChannelCandidateLifetimeTests
                 candidate.Id,
                 SessionWait.Text(
                     JsonNode.Parse(
-                        await File.ReadAllTextAsync(child.AuthorityStore.AuthorityPath)
+                        await File.ReadAllTextAsync(child.AuthorityStore.AuthorityPath())
                     )!["parentSessionId"]
                 )
             );

@@ -104,6 +104,7 @@ export const formatMessageForContextEstimate = (message: Message): string => {
 
 export const getContextScrollbarMessageTone = (message: Message): ContextScrollbarTone => {
   if (message.__meta?.contextBlock) return 'context-block'
+  if (message.__meta?.synthetic === 'persistentMemorySnapshot') return 'system'
   const isHeavySystem = getLlmErrorMessageDetails(message) !== null || (message.role !== 'model' && (
     message.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system || '')) ||
     message.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))

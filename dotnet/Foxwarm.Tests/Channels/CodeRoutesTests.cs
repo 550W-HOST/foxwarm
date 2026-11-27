@@ -25,13 +25,18 @@ public sealed class CodeRoutesTests
             Path.Combine(Temp.Path, "installation/packages/vscode-web/assets/vscode-web");
         internal string Work => Path.Combine(Temp.Path, "work");
 
-        internal static async Task<Fixture> Create(bool separateInstallation = false)
+        internal static async Task<Fixture> Create(
+            bool separateInstallation = false,
+            bool sourceCheckout = false
+        )
         {
             var f = new Fixture();
             Directory.CreateDirectory(f.Data);
             Directory.CreateDirectory(f.Work);
             Directory.CreateDirectory(Path.Combine(f.Temp.Path, "resources"));
             Directory.CreateDirectory(Path.Combine(f.Temp.Path, "installation"));
+            if (sourceCheckout)
+                Directory.CreateDirectory(Path.Combine(f.Temp.Path, "installation", ".git"));
             var config = new ModelConfiguration(
                 HostPaths.ForDataRoot(
                     f.Data,
@@ -116,10 +121,14 @@ public sealed class CodeRoutesTests
         Assert.Equal("/" + attack, configuration["folderUri"]!["path"]!.GetValue<string>());
     }
 
-    [Fact]
-    public async Task Missing_Code_assets_return_the_actionable_noncacheable_setup_page()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Missing_Code_assets_return_the_actionable_noncacheable_setup_page(
+        bool sourceCheckout
+    )
     {
-        await using var f = await Fixture.Create(separateInstallation: true);
+        await using var f = await Fixture.Create(separateInstallation: true, sourceCheckout);
         using var response = await f.Client.GetAsync("/vscode-web");
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
@@ -127,8 +136,10 @@ public sealed class CodeRoutesTests
         var html = await response.Content.ReadAsStringAsync();
         Assert.Contains("<!doctype html>", html);
         Assert.Contains("Code is not installed", html);
-        Assert.Contains("npm run build:code", html);
-        Assert.Contains("npm run download:code", html);
+        // The npm preparation commands only work in a source checkout; packages get the release download.
+        Assert.Equal(sourceCheckout, html.Contains("npm run build:code"));
+        Assert.Equal(sourceCheckout, html.Contains("npm run download:code"));
+        Assert.Equal(sourceCheckout, html.Contains("Choose one preparation method"));
         Assert.Contains(WebUtility.HtmlEncode(Path.GetDirectoryName(f.InstalledAssets)!), html);
         Assert.Contains($"releases/download/v{ProductVersion.Value}", html);
         Assert.Contains($"foxwarm-code-{ProductVersion.Value}.fwassets", html);

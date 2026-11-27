@@ -1,0 +1,372 @@
+import test, { after, before } from 'node:test'
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { readFile, readdir } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import puppeteer from 'puppeteer-core'
+import { build } from './browserFixtureBundle.mjs'
+
+// The committed timeline mounts a window of derived rows: the newest rows on opening, more as
+// the reader approaches the top, and the rows around a Search target. Bottom-follow keeps
+// working while a reply streams, and a revisit reuses the sanitized Markdown.
+
+const testDir = path.dirname(fileURLToPath(import.meta.url))
+const packageDir = path.resolve(testDir, '..')
+const chatEntry = path.resolve(packageDir, 'src/components/Chat.tsx')
+const rendererEntry = path.resolve(packageDir, 'src/components/markdownRenderer.ts')
+const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
+
+let browser
+let server
+let fixtureUrl
+
+const PLAIN_BEFORE_TOOLS = 120
+const TOOL_CALLS = 60
+// An old Task exchange among the plain turns: a sent assignment (call and result) and a received completion.
+const TASK_AFTER = 40
+const TASK_MESSAGES = 3
+// An old background command receipt (call and result) whose completion event arrives just before the final reply.
+const RECEIPT_AFTER = 10
+const RECEIPT_MESSAGES = 2
+
+async function buildFixtureBundle() {
+  const source = `
+    import React from 'react'
+    import { createRoot } from 'react-dom/client'
+    import Chat from ${JSON.stringify(chatEntry)}
+    import { ASSISTANT_MARKDOWN_CACHE_LIMITS, getAssistantMarkdownCacheStats } from ${JSON.stringify(rendererEntry)}
+
+    window.markdownCacheStats = () => ({ ...getAssistantMarkdownCacheStats(), limits: ASSISTANT_MARKDOWN_CACHE_LIMITS })
+    const messages = []
+    let seq = 0
+    const push = (role, parts) => messages.push({ role, parts, __meta: { seq: ++seq, timestamp: 1700000000000 + seq * 1000 } })
+    // Ordinary turns, then one long tool run that Conversation folds into a single Activity.
+    for (let index = 0; index < ${PLAIN_BEFORE_TOOLS}; index++) {
+      if (index % 2 === 0) push('user', [{ text: 'Question ' + index + ' about WINDOW_MARKER_' + index }])
+      else push('model', [{ text: 'Answer ' + index + ' with **Markdown** and a list:\\n\\n- one\\n- two\\n\\nWINDOW_MARKER_' + index }])
+      if (index === ${RECEIPT_AFTER}) {
+        push('model', [{ functionCall: { id: 'call-background', name: 'exec', args: { command: 'npm test', summary: 'Run the suite' } } }])
+        push('tool', [{ functionResponse: { name: 'exec', tool_use_id: 'call-background', response: { output: '[brave-fox] Still running after 15s, moved to background. Output so far:\\nRUNNING_SUITE\\n---\\nNode: \`master\`\\nLog file: /tmp/exec/fixture/output.log' } } }])
+      }
+      if (index === ${TASK_AFTER}) {
+        const assignment = 'You have been assigned a task: task_window01 — Window review\\nStatus: active\\nTASK_WINDOW_DESCRIPTION'
+        push('model', [{ functionCall: { id: 'task-window', name: 'task', args: { action: 'create', title: 'Window review', ownerSessionId: 'fixture/worker', notifySession: true } } }])
+        push('tool', [{ functionResponse: { name: 'task', tool_use_id: 'task-window', response: { taskId: 'task_window01', status: 'active', sentNotifications: 1 }, __meta: { sessionMessages: [{ id: 'task-window', targetSessionId: 'fixture/worker', message: assignment, task: { taskId: 'task_window01', event: 'assigned', title: 'Window review', recipient: 'owner' } }] } } }])
+        push('user', [{ system: '<foxwarm-message type="task" taskId="task_window01" event="completed" recipient="creator" sourceSessionId="fixture/worker">\\nTask completed: task_window01 — Window review\\nStatus: completed\\nTASK_WINDOW_RESULT\\n</foxwarm-message>' }])
+      }
+    }
+    push('user', [{ text: 'Run the tools please' }])
+    for (let index = 0; index < ${TOOL_CALLS}; index++) {
+      push('model', [{ functionCall: { id: 'call-' + index, name: 'exec', args: { command: 'echo ' + index } } }])
+      push('tool', [{ functionResponse: { name: 'exec', tool_use_id: 'call-' + index, response: { output: 'out ' + index } } }])
+    }
+    push('user', [{ system: '<foxwarm-system kind="event" type="background-process-finished">\\n[brave-fox] Finished: exit code 0, 2m 4s\\nCommand: \`npm test\`\\nNode: \`master\`\\nSUITE_TAIL\\n---\\nLog file: /tmp/exec/fixture/output.log\\n</foxwarm-system>' }])
+    push('model', [{ text: 'Final reply after the tools, LAST_MARKER' }])
+
+    window.fetch = async input => {
+      const url = String(input)
+      if (url.includes('/history')) return new Response(JSON.stringify({
+        session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, modelKey: 'fixture/model' },
+        messages, queuedMessages: [], queueLength: 0,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.includes('/models')) return new Response(JSON.stringify({ models: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } })
+    }
+
+    class FixtureWebSocket {
+      static CLOSED = 3
+      static instances = []
+      constructor() {
+        this.readyState = 0
+        FixtureWebSocket.instances.push(this)
+        queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); this.emit({ type: 'connected' }) })
+      }
+      close() { this.readyState = FixtureWebSocket.CLOSED }
+      send(raw) {
+        const payload = JSON.parse(raw)
+        if (payload.type !== 'set-subscriptions') return
+        queueMicrotask(() => {
+          this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: { 'fixture/main': 'fixture/main' } })
+          this.emit({ type: 'subscriptions-applied', revision: payload.revision })
+        })
+      }
+      emit(payload) {
+        const message = ['session-event', 'session-state', 'message'].includes(payload.type) ? { ...payload, sessionId: 'fixture/main' } : payload
+        this.onmessage?.({ data: JSON.stringify(message) })
+      }
+    }
+    window.WebSocket = FixtureWebSocket
+    let streamLines = []
+    window.appendStreamLine = line => {
+      streamLines.push(line)
+      FixtureWebSocket.instances.at(-1)?.emit({ type: 'session-event', event: { type: 'model-stream-update', streamId: 'fixture-stream', text: streamLines.join('\\n\\n') } })
+    }
+
+    const root = createRoot(document.getElementById('root'))
+    window.renderFixture = (generation, timelineView) => root.render(React.createElement(Chat, {
+      key: generation, sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture', timelineView,
+    }))
+    window.unmountFixture = () => root.render(React.createElement('div'))
+    const params = new URLSearchParams(location.search)
+    window.renderFixture(0, params.get('view') || 'detailed')
+  `
+  const result = await build({
+    stdin: { contents: source, resolveDir: packageDir, sourcefile: 'chat-timeline-window-fixture.tsx' },
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    target: 'chrome120',
+    write: false,
+    define: { 'process.env.NODE_ENV': JSON.stringify('test') },
+    logLevel: 'silent',
+  })
+  return result.outputFiles[0].text
+}
+
+before(async () => {
+  const assets = path.join(packageDir, 'dist/assets')
+  const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
+  assert.ok(cssName, 'build WebUI before running the timeline window cases')
+  const css = await readFile(path.join(assets, cssName), 'utf8')
+  const bundle = await buildFixtureBundle()
+  server = createServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    response.end(`<!doctype html><html><head><style>${css}</style><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  fixtureUrl = `http://127.0.0.1:${server.address().port}`
+  browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+})
+
+after(async () => {
+  await browser?.close()
+  await new Promise(resolve => server ? server.close(resolve) : resolve())
+})
+
+const TOTAL_MESSAGES = PLAIN_BEFORE_TOOLS + RECEIPT_MESSAGES + TASK_MESSAGES + 1 + TOOL_CALLS * 2 + 2
+
+async function openChat(view = 'detailed') {
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 760 })
+  await page.goto(`${fixtureUrl}/?view=${view}`, { waitUntil: 'load' })
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('LAST_MARKER'))
+  await settle(page)
+  return page
+}
+
+const settle = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 30)))))
+
+const mounted = page => page.$$eval('[data-chat-timeline="committed"] [data-chat-message-anchor-key]', nodes => nodes.map(node => node.getAttribute('data-chat-message-anchor-key')))
+
+const position = page => page.$eval('.foxwarm-chat-messages', container => ({
+  scrollTop: container.scrollTop,
+  distanceFromBottom: container.scrollHeight - container.scrollTop - container.clientHeight,
+}))
+
+const readingAnchor = page => page.evaluate(() => {
+  const container = document.querySelector('.foxwarm-chat-messages')
+  const viewport = container.getBoundingClientRect()
+  const anchor = [...container.querySelectorAll('[data-chat-message-anchor-key]')].find(element => element.getBoundingClientRect().bottom > viewport.top + 1)
+  return { key: anchor?.getAttribute('data-chat-message-anchor-key'), offset: anchor ? anchor.getBoundingClientRect().top - viewport.top : null }
+})
+
+test('opening mounts the newest rows and scrolling up extends the window without moving the reader', async () => {
+  const page = await openChat()
+  try {
+    const opening = await mounted(page)
+    assert.ok(opening.length > 0 && opening.length < TOTAL_MESSAGES / 2, `opening mounts a bounded window: ${opening.length}`)
+    assert.ok(opening.includes(`seq-local-${TOTAL_MESSAGES}`), 'the latest row is mounted')
+    assert.ok(!opening.includes('seq-local-1'), 'the oldest row is not mounted')
+    assert.ok((await position(page)).distanceFromBottom <= 2, 'opening is at the bottom')
+
+    // Read upward in wheel steps: every extension keeps the row under the reader in place.
+    await page.mouse.move(500, 300)
+    let previousCount = opening.length
+    let extensions = 0
+    for (let step = 0; step < 400 && !(await mounted(page)).includes('seq-local-1'); step++) {
+      await page.mouse.wheel({ deltaY: -400 })
+      await settle(page)
+      const before = await readingAnchor(page)
+      await settle(page)
+      const after = await readingAnchor(page)
+      assert.equal(after.key, before.key)
+      assert.ok(Math.abs(after.offset - before.offset) < 3, `no jump while extending: ${JSON.stringify({ before, after })}`)
+      const count = (await mounted(page)).length
+      if (count > previousCount) extensions++
+      previousCount = count
+    }
+    assert.ok((await mounted(page)).includes('seq-local-1'), 'reading up mounts the oldest loaded row')
+    assert.ok(extensions >= 2, `the window grows in bounded pieces: ${extensions}`)
+  } finally { await page.close() }
+})
+
+test('Conversation counts rendered rows, so a folded tool run does not crowd out earlier turns', async () => {
+  const page = await openChat('grouped')
+  try {
+    const opening = await mounted(page)
+    // The tool run (120 source messages) is one Activity row; the window still reaches the
+    // ordinary turns before it.
+    assert.ok(opening.includes(`seq-local-${PLAIN_BEFORE_TOOLS + RECEIPT_MESSAGES + TASK_MESSAGES}`), `the turn before the tool run is mounted: ${opening.slice(0, 3)}`)
+    assert.ok(!opening.includes('seq-local-1'), 'the window is still bounded')
+    assert.ok((await position(page)).distanceFromBottom <= 2)
+  } finally { await page.close() }
+})
+
+// Enters the whole query as one input, so no partial query navigates first.
+async function search(page, query) {
+  await page.focus('[aria-label="Search messages"]')
+  await page.keyboard.sendCharacter(query)
+}
+
+// Samples the target's offset in the Chat viewport on every frame until the target has landed
+// and held for `holdFrames` frames and `holdMs` ms (or `timeoutMs` elapses without landing).
+async function trackJump(page, selector, jump, { holdFrames = 20, holdMs = 400, timeoutMs = 6000 } = {}) {
+  await page.evaluate((selector, holdFrames, holdMs, timeoutMs) => {
+    const samples = window.jumpSamples = []
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const start = performance.now()
+    let landedAt = null, landedFrames = 0
+    const sample = () => {
+      const now = performance.now()
+      const rect = container.querySelector(selector)?.getBoundingClientRect(), viewport = container.getBoundingClientRect()
+      const offset = rect && rect.bottom > viewport.top && rect.top < viewport.bottom ? rect.top - viewport.top : null
+      samples.push({ elapsed: now - start, offset })
+      if (offset !== null && landedAt === null) landedAt = now
+      if (landedAt !== null) landedFrames += 1
+      const done = landedAt !== null ? landedFrames >= holdFrames && now - landedAt >= holdMs : now - start >= timeoutMs
+      if (!done) requestAnimationFrame(sample)
+      else window.jumpSamplesDone = true
+    }
+    window.jumpSamplesDone = false
+    requestAnimationFrame(sample)
+  }, selector, holdFrames, holdMs, timeoutMs)
+  await jump()
+  await page.waitForFunction(() => window.jumpSamplesDone, { timeout: timeoutMs + holdMs + 15_000 })
+  const samples = await page.evaluate(() => window.jumpSamples)
+  const landed = samples.findIndex(sample => sample.offset !== null)
+  assert.ok(landed >= 0, `the jump shows ${selector}`)
+  const moves = samples.slice(landed).map(sample => sample.offset === null ? Infinity : Math.abs(sample.offset - samples[landed].offset))
+  return { landedAfterMs: samples[landed].elapsed, framesAfterLanding: moves.length, largestMove: Math.max(...moves) }
+}
+
+test('a Search jump to an old row mounts it and shows it', async () => {
+  const page = await openChat()
+  try {
+    assert.ok(!(await mounted(page)).includes('seq-local-3'))
+    await page.click('[aria-label="Find in chat"]')
+    const jump = await trackJump(page, '[data-chat-message-anchor-key="seq-local-3"]', () => search(page, 'Question 2 about'))
+    assert.ok(jump.framesAfterLanding > 10 && jump.largestMove <= 1, `the target holds its position after landing: ${JSON.stringify(jump)}`)
+    await page.waitForFunction(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const row = container.querySelector('[data-chat-message-anchor-key="seq-local-3"]')
+      if (!row) return false
+      const viewport = container.getBoundingClientRect()
+      const rect = row.getBoundingClientRect()
+      return rect.bottom > viewport.top && rect.top < viewport.bottom
+    })
+    assert.ok((await mounted(page)).length < TOTAL_MESSAGES, 'the target window is bounded too')
+    // Returning to the bottom mounts the newest rows again.
+    await page.click('[aria-label="Close search"]')
+    await page.click('[aria-label="Scroll to bottom"]')
+    await page.waitForSelector(`[data-chat-message-anchor-key="seq-local-${TOTAL_MESSAGES}"]`)
+    await page.waitForFunction(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      return container.scrollHeight - container.scrollTop - container.clientHeight <= 2
+    })
+  } finally { await page.close() }
+})
+
+test('an exec link jump to an unmounted counterpart lands on it and holds it there', async () => {
+  const page = await openChat()
+  try {
+    const receipt = '[data-exec-link][data-exec-ref="brave-fox"][data-exec-role="receipt"]'
+    const completion = '[data-exec-link][data-exec-ref="brave-fox"][data-exec-role="completion"]'
+    assert.equal(await page.$(receipt), null, 'the old receipt is outside the opening window')
+    await page.waitForFunction(selector => {
+      const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
+      const link = document.querySelector(selector)?.getBoundingClientRect()
+      return !!link && link.top >= viewport.top && link.bottom <= viewport.bottom
+    }, {}, completion)
+    // Revealing the full active history with the jump must not restore the previous reading row over it.
+    const jump = await trackJump(page, receipt, () => page.click(completion))
+    assert.ok(jump.framesAfterLanding > 10 && jump.largestMove <= 1, `the receipt holds its position after landing: ${JSON.stringify(jump)}`)
+  } finally { await page.close() }
+})
+
+const taskCards = page => page.$$eval('[data-chat-timeline="committed"] [data-session-communication][data-task-event]', nodes => nodes.map(node => ({
+  event: node.getAttribute('data-task-event'), title: node.querySelector('[data-task-title]')?.textContent ?? null,
+  body: node.querySelector('[data-search-surface="communication"]').textContent, inActivity: !!node.closest('[data-timeline-activity]'),
+})))
+
+test('old Task cards are ordinary window rows: they mount on approach and a Search jump mounts and reveals them', async () => {
+  let page = await openChat('conversation')
+  try {
+    assert.deepEqual(await taskCards(page), [], 'the old Task exchange is outside the opening window')
+    await page.mouse.move(500, 300)
+    for (let step = 0; step < 400 && (await taskCards(page)).length < 2; step++) {
+      await page.mouse.wheel({ deltaY: -400 })
+      await settle(page)
+    }
+    const cards = await taskCards(page)
+    assert.deepEqual(cards.map(card => [card.event, card.title, card.inActivity]), [['assigned', 'Window review', false], ['completed', 'Window review', false]])
+    assert.ok(cards[0].body.startsWith('TASK_WINDOW_DESCRIPTION') && cards[1].body.startsWith('TASK_WINDOW_RESULT'), JSON.stringify(cards))
+  } finally { await page.close() }
+  page = await openChat('conversation')
+  try {
+    await page.click('[aria-label="Find in chat"]')
+    // The lead line is outside the collapsed preview; Search finds it in the full body, mounts the row and reveals it.
+    const target = '[data-session-communication="received"][data-task-event="completed"]'
+    const jump = await trackJump(page, target, () => search(page, 'Task completed: task_window01'))
+    assert.ok(jump.framesAfterLanding > 10 && jump.largestMove <= 1, `the Task card holds its position after landing: ${JSON.stringify(jump)}`)
+    await page.waitForFunction(selector => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const card = container.querySelector(selector)
+      if (!card || !card.querySelector('[data-search-surface="communication"]').textContent.startsWith('Task completed:')) return false
+      const viewport = container.getBoundingClientRect(), rect = card.getBoundingClientRect()
+      return rect.bottom > viewport.top && rect.top < viewport.bottom
+    }, {}, target)
+    // The match is highlighted inside the card's body surface.
+    assert.ok(await page.evaluate(selector => {
+      const surface = document.querySelector(selector + ' [data-search-surface="communication"]')
+      return [...CSS.highlights.values()].some(highlight => [...highlight].some(range => surface.contains(range.startContainer)))
+    }, target))
+    assert.ok((await mounted(page)).length < TOTAL_MESSAGES, 'the target window is bounded')
+  } finally { await page.close() }
+})
+
+test('a streamed reply keeps bottom-follow with a windowed timeline', async () => {
+  const page = await openChat()
+  try {
+    const opening = (await mounted(page)).length
+    for (let index = 0; index < 30; index++) {
+      await page.evaluate(line => window.appendStreamLine(line), `stream line ${index} ${'content '.repeat(14)}`)
+      await new Promise(resolve => setTimeout(resolve, 15))
+    }
+    await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').textContent.includes('stream line 29'))
+    await settle(page)
+    assert.ok((await position(page)).distanceFromBottom <= 2, 'the streamed reply stays in view')
+    assert.ok((await mounted(page)).length <= opening + 1, 'streaming does not mount older rows')
+  } finally { await page.close() }
+})
+
+test('a revisit reuses sanitized Markdown, and the cache stays bounded', async () => {
+  const page = await openChat()
+  try {
+    const first = await page.evaluate(() => window.markdownCacheStats())
+    assert.ok(first.entries > 0 && first.misses > 0)
+    const html = await page.$eval('[data-chat-timeline="committed"]', node => node.innerHTML)
+    // Leave and return, as switching away from the Session and back does.
+    await page.evaluate(() => window.unmountFixture())
+    await settle(page)
+    await page.evaluate(() => window.renderFixture(1, 'detailed'))
+    await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('LAST_MARKER'))
+    await settle(page)
+    const second = await page.evaluate(() => window.markdownCacheStats())
+    assert.ok(second.hits - first.hits >= first.entries, `the revisit reuses each mounted reply: ${JSON.stringify({ first, second })}`)
+    assert.equal(second.misses, first.misses, 'no reply is rendered again')
+    assert.equal(await page.$eval('[data-chat-timeline="committed"]', node => node.innerHTML), html, 'the revisit renders the same output')
+    assert.ok(second.entries <= second.limits.entries && second.bytes <= second.limits.bytes)
+  } finally { await page.close() }
+})

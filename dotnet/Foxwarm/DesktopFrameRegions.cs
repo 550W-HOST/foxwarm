@@ -10,9 +10,10 @@ internal readonly record struct FrameRect(double X, double Y, double Width, doub
 }
 
 /// <summary>
-/// The one page-to-host message of the Desktop hosts' custom window frame: drag rectangles
-/// for the window's title area and the page's color scheme. Both hosts accept it only from
-/// their own top-level document and ignore anything that doesn't match this exact shape.
+/// The Desktop hosts' custom window frame message: drag rectangles for the window's title
+/// area and the page's color scheme. Both hosts accept it only from a top-level document of
+/// the selected instance and ignore anything that doesn't match this exact shape. The only
+/// other page-to-host message is <see cref="DesktopInstanceMenuRequest"/>.
 /// </summary>
 internal sealed record DesktopFrameRegions(IReadOnlyList<FrameRect> Regions, bool Dark)
 {
@@ -72,28 +73,36 @@ internal sealed record DesktopFrameRegions(IReadOnlyList<FrameRect> Regions, boo
         if (array.GetArrayLength() > RegionLimit)
             return null;
         var regions = new List<FrameRect>(array.GetArrayLength());
-        Span<double> values = stackalloc double[4];
         foreach (var item in array.EnumerateArray())
         {
-            if (item.ValueKind != JsonValueKind.Array || item.GetArrayLength() != 4)
+            if (ParseRect(item) is not { } rect)
                 return null;
-            var index = 0;
-            foreach (var number in item.EnumerateArray())
-            {
-                if (
-                    number.ValueKind != JsonValueKind.Number
-                    || !number.TryGetDouble(out var value)
-                    || !double.IsFinite(value)
-                    || Math.Abs(value) > CoordinateLimit
-                )
-                    return null;
-                values[index++] = value;
-            }
-            if (values[2] < 0 || values[3] < 0)
-                return null;
-            regions.Add(new FrameRect(values[0], values[1], values[2], values[3]));
+            regions.Add(rect);
         }
         return regions;
+    }
+
+    /// <summary>One <c>[x, y, w, h]</c> rectangle: finite, bounded numbers and no negative size.</summary>
+    internal static FrameRect? ParseRect(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Array || item.GetArrayLength() != 4)
+            return null;
+        Span<double> values = stackalloc double[4];
+        var index = 0;
+        foreach (var number in item.EnumerateArray())
+        {
+            if (
+                number.ValueKind != JsonValueKind.Number
+                || !number.TryGetDouble(out var value)
+                || !double.IsFinite(value)
+                || Math.Abs(value) > CoordinateLimit
+            )
+                return null;
+            values[index++] = value;
+        }
+        if (values[2] < 0 || values[3] < 0)
+            return null;
+        return new FrameRect(values[0], values[1], values[2], values[3]);
     }
 
     /// <summary>

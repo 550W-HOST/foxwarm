@@ -58,7 +58,7 @@ public sealed class AgentSnapshotParityTests
         {
             await seed.LoadAsync();
             var owner = await seed.CreateNamedAsync("main", "turn", null, null);
-            authority = owner.AuthorityStore.AuthorityPath;
+            authority = owner.AuthorityStore.AuthorityPath();
             memory = Path.Combine(seed.MemoryDirectory("main"), "PROOF.md");
             Directory.CreateDirectory(Path.GetDirectoryName(memory)!);
             await File.WriteAllTextAsync(memory, "Previous committed prompt.");
@@ -191,7 +191,7 @@ public sealed class AgentSnapshotParityTests
         var memory = Path.Combine(manager.AgentDirectory("main"), "memory", "REFRESH.md");
         Directory.CreateDirectory(Path.GetDirectoryName(memory)!);
         await File.WriteAllTextAsync(memory, "fresh deferred content");
-        var before = await File.ReadAllTextAsync(owner.AuthorityStore.AuthorityPath);
+        var before = await File.ReadAllTextAsync(owner.AuthorityStore.AuthorityPath());
         var response = await executor.ExecuteAsync(
             new JsonObject
             {
@@ -206,7 +206,7 @@ public sealed class AgentSnapshotParityTests
             "",
             owner.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]!.ToString()
         );
-        Assert.Equal(before, await File.ReadAllTextAsync(owner.AuthorityStore.AuthorityPath));
+        Assert.Equal(before, await File.ReadAllTextAsync(owner.AuthorityStore.AuthorityPath()));
         // A previously materialized virtual owner keeps the last actual leaf identity on refresh.
         await owner.Entry.SaveLane.CommitMemorySnapshotAsync(
             ConditionalMemory.BuildCurrentModelSnapshot("b/two", "old content")

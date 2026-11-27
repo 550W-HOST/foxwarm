@@ -190,7 +190,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         if (supplied is not null)
         {
             code = supplied;
-            path = "<inline>";
+            path = context.SourceSkill?.Path ?? "<inline>";
         }
         else
             (path, code) = await context.ReadSource(
@@ -249,6 +249,8 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             };
             if (sourceNode is not null)
                 record["sourceNode"] = sourceNode;
+            if (context.SourceSkill is { } skill)
+                record["sourceSkill"] = skill.Provenance();
             if (detachable)
             {
                 record["detachable"] = true;

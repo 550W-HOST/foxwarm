@@ -104,6 +104,13 @@ internal static partial class OperationDeclarations
         ),
         Site("Sessions/SessionManager.FileDelivery.cs", "SendFileAsync", 1, Tool, "builtin:send_file#primary"),
         Site(
+            "Tools/SessionToolExecutor.Skills.cs",
+            "CopySkillAsync",
+            1,
+            File,
+            "builtin:skill#target-write"
+        ),
+        Site(
             "Sessions/SessionManager.FileDelivery.cs",
             "ExportImageAsync",
             1,
@@ -221,7 +228,8 @@ internal static partial class OperationDeclarations
             Assess,
             "builtin:run_script#model-request",
             "builtin:start_toolscript_run#model-request",
-            "builtin:continue_script#model-request"
+            "builtin:continue_script#model-request",
+            "builtin:run_skill#model-request"
         ),
         Site(Output, "SaveToolOutputAsync", 1, File, "*#output-spill"),
         Site(Output, "SaveToolOutputAsync", 2, File, "*#output-spill"),
@@ -290,6 +298,11 @@ internal static partial class OperationDeclarations
         (Auth, "AssessToolAsync", "the shared assessment of every internal request"),
         (Auth, "EffectiveDecision", "the combined decision of the effective layers"),
         ("McpExternalContext.cs", "Require", "the inbound check of one external request"),
+        (
+            "Sessions/SessionManager.Approvals.cs",
+            "CurrentApproversAsync",
+            "who may decide a pending approval under the effective layers in effect now"
+        ),
     ];
 
     // Sites that are the gate or the plumbing of the calls above, not obligations of their own.

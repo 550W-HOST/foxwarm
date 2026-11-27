@@ -27,7 +27,10 @@ document.querySelector('meta[name="theme-color"]')?.setAttribute('content', colo
 
 const leaf = !!(parseFoxwarmPopupTarget(location.search) || parseFoxwarmEmbeddedTarget(location.search))
 root.toggleAttribute('data-foxwarm-boot-leaf', leaf)
-const startedAt = performance.now()
+// From readiness the screen is gone within 300ms: an unfinished draw-in is
+// fast-forwarded to its final frame, then the screen fades and is removed.
+const FINISH_DRAW_MS = 140
+const FADE_MS = 120
 let contentReady = false
 let ready = false
 let failure: string | null = null
@@ -141,10 +144,34 @@ function markReady() {
     finishSplash()
     return
   }
+  const { drawing, duration } = finishDrawing(screen)
+  screen.style.transitionDuration = `${FADE_MS}ms`
+  // Both timers count from readiness, so a late leave timer does not also delay removal.
   leaveTimer = window.setTimeout(() => {
+    for (const animation of drawing) animation.finish()
     screen!.dataset.state = 'leaving'
-    removeTimer = window.setTimeout(finishSplash, 480)
-  }, Math.max(0, 1500 - (performance.now() - startedAt)))
+  }, duration)
+  removeTimer = window.setTimeout(finishSplash, duration + FADE_MS)
+}
+
+/** Speed up unfinished draw-in animations so they end within FINISH_DRAW_MS. */
+function finishDrawing(screen: HTMLElement): { drawing: Animation[], duration: number } {
+  if (!screen.getAnimations) return { drawing: [], duration: 0 }
+  // Draw-in strokes and the nose fade are finite; the dozing loops are infinite.
+  const drawing = screen.getAnimations({ subtree: true }).filter(animation => {
+    const end = animation.effect?.getComputedTiming().endTime
+    return animation.playState !== 'finished' && typeof end === 'number' && Number.isFinite(end)
+  })
+  let remaining = 0
+  for (const animation of drawing) {
+    const end = animation.effect!.getComputedTiming().endTime as number
+    remaining = Math.max(remaining, end - Number(animation.currentTime ?? 0))
+  }
+  if (remaining <= 0) return { drawing: [], duration: 0 }
+  // One shared rate keeps the stroke order and easing, only faster.
+  const rate = Math.max(1, remaining / FINISH_DRAW_MS)
+  for (const animation of drawing) animation.playbackRate = rate
+  return { drawing, duration: remaining / rate }
 }
 
 function onStartupError(event: Event) {

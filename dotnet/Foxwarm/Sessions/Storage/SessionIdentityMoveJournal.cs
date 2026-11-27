@@ -172,12 +172,6 @@ internal sealed class SessionIdentityMoveJournal(string root)
         DirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
     }
 
-    internal string AuthorityPath(string id)
-    {
-        SafeId(id);
-        return Path.Combine(root, "state", "sessions", id + ".json");
-    }
-
     private string Artifact(string area, string id, string suffix)
     {
         SafeId(id);
@@ -201,13 +195,22 @@ internal sealed class SessionIdentityMoveJournal(string root)
         return path;
     }
 
-    internal void MoveArtifacts(string from, string to, int version = 2)
+    /// <summary>
+    /// Moves every per-Session artifact of an identity move, starting with the authority, which
+    /// its backend moves. Missing sources are skipped so recovery can replay a partial move.
+    /// </summary>
+    internal void MoveArtifacts(
+        string from,
+        string to,
+        int version,
+        Action<string, string> moveAuthority
+    )
     {
         if (version is not (1 or 2))
             throw new InvalidDataException("Unsupported identity move intent version.");
+        moveAuthority(from, to);
         var artifacts = new List<(string, string)>
         {
-            ("state/sessions", ".json"),
             ("logs/sessions", ".jsonl"),
             ("logs/sessions", ".blocks.jsonl"),
             ("state/sessions", ".frontier.json"),
@@ -215,25 +218,29 @@ internal sealed class SessionIdentityMoveJournal(string root)
         if (version == 1)
             artifacts.Add(("state/sessions-blob", ".images"));
         foreach (var (area, suffix) in artifacts)
+            MoveArtifact(area, suffix, from, to);
+    }
+
+    /// <summary>Moves one file or directory artifact, refusing symbolic links.</summary>
+    internal void MoveArtifact(string area, string suffix, string from, string to)
+    {
+        var source = Artifact(area, from, suffix);
+        var target = Artifact(area, to, suffix);
+        if (!File.Exists(source) && !Directory.Exists(source))
+            return;
+        if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Identity artifact cannot be a symbolic link.");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        if (Directory.Exists(source))
         {
-            var source = Artifact(area, from, suffix);
-            var target = Artifact(area, to, suffix);
-            if (!File.Exists(source) && !Directory.Exists(source))
-                continue;
-            if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException("Identity artifact cannot be a symbolic link.");
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            if (Directory.Exists(source))
-            {
-                if (Directory.Exists(target))
-                    Directory.Delete(target, true);
-                Directory.Move(source, target);
-            }
-            else
-                File.Move(source, target, true);
-            DirectorySync.Sync(Path.GetDirectoryName(source)!);
-            DirectorySync.Sync(Path.GetDirectoryName(target)!);
+            if (Directory.Exists(target))
+                Directory.Delete(target, true);
+            Directory.Move(source, target);
         }
+        else
+            File.Move(source, target, true);
+        DirectorySync.Sync(Path.GetDirectoryName(source)!);
+        DirectorySync.Sync(Path.GetDirectoryName(target)!);
     }
 }
 

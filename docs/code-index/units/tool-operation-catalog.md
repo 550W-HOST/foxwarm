@@ -27,12 +27,12 @@ This is the reference table for [tool operation authorization](./tool-operation-
 | `session.send` | target Session | — | send family: aliases, `<parent>`, `<main>`; external send (canonical) |
 | `session.deliver` | target Session | — | file family: an omitted target is the caller when no channel target is given |
 | `session.create` | target Agent (`targetAgent`), Node, parent (`parent`), prospective target (`targetSession`: its Agent, fixed ID when known, child relation) | `kind: session\|child\|timer\|source`, `placement: inherited\|explicit`, `runtime`, `fork` | `create_session`, `create_child_session`, a timer's creation-target probe (`kind: timer`), and `create_agent` main and missing-source Sessions |
-| `session.control` | target Session | `change: stop\|rename\|compact\|snapshot\|settings` | the per-tool `sessionId` |
+| `session.control` | target Session | `change: stop\|rename\|archive\|compact\|snapshot\|settings` | the per-tool `sessionId` |
 | `session.manage` | target Session, new parent, new Agent | `change: reparent\|move\|delete` | `update-parent`, `move_session`, `delete_session`, `create_agent` `convertSession` |
 | `history.read` | target Session | `mode: exact\|vector` | archive tools, exact recall, Session-scoped vector recall |
 | `history.search` | target Agent (always the caller's own) | — | vector `recall` with `scope: current-agent`; `recall` rejects `agentName` |
 | `agent.list` | — | — | rows filtered |
-| `agent.view` | target Agent | — | `skill` (an omitted target is the caller's Agent); the inherited Agent of `create_agent` / `set_agent_inherit` |
+| `agent.view` | target Agent | — | `skill` and `run_skill` (an omitted target is the caller's Agent); the inherited Agent of `create_agent` / `set_agent_inherit` |
 | `agent.create` | prospective Agent | — | `create_agent`, `move_session(createAgent)` |
 | `agent.manage` | target Agent | `change: rules\|inherit` | `set_agent_rules`, `set_agent_inherit` |
 | `task.create` | — | `assigned` | normalized `task` action and owner presence |
@@ -95,6 +95,7 @@ Notation:
 | `node:browser_*`; custom Node tool; MCP tool | `env.browser`; `env.tool`; `mcp.call` | P |
 | `run_script`, `start_toolscript_run` | from a file: `env.read(source)`; inline: **Self** | P; S `node:read` of the file source (master and remote); N each `call_tool`/`ctl()`; R `model-request`: `model.request` per host call, assessed as this invocation |
 | `continue_script` | **Self** | N; R `model-request` |
+| `run_skill` | `agent.view(skill-agent)`: the skill subsystem discloses the entry, or with `script` another ToolScript file of the skill, as `skill load` discloses `SKILL.md` | P; N each `call_tool`/`ctl()`; R `model-request`, assessed as this invocation (with `script` among its raw arguments). No source-read sub-request. |
 | `list/get/cancel_toolscript_run`, `cancel_transfer`, `wait`, `image_crop` | **Self** (owner-scoped) | — |
 | `submit_compact_plan` | **Self** | S `argsFilePath` read, invalid-plan save and repair edit as Node read/write/edit |
 | `ctl` | front end | resolves to the target capability |
@@ -103,13 +104,13 @@ Notation:
 | `create_child_session` | `session.create(kind: child, parent: caller, targetAgent, node, prospective child)`; `[task.assign(task, prospective child)]` | P; Task-local rights; the final child ID is bound after allocation. Subsumed: initial message, fork. |
 | `create_session` | `session.create(kind: session, …)`; its Session is the caller's child when `parentSessionId` resolves to the caller | P; S each prompt file as `node:master/read` |
 | `task` (one branch per action) | `task.create(assigned)` with `[task.assign]` / `task.list` / `task.read` / `task.assign(caller)` for claim / `task.assign` / `task.update` / `task.complete` / `task.cancel` | P. Subsumed: notifications. |
-| `session` (one branch per action) | status: `session.view` / list: `session.list` / rename: `session.control(rename)` / set-parent, clear-parent: `session.manage(reparent)` | P |
+| `session` (one branch per action) | status: `session.view` / list: `session.list` / rename: `session.control(rename)` / archive, unarchive: `session.control(archive)` / set-parent, clear-parent: `session.manage(reparent)` | P |
 | `view_session` | `session.view` | P |
 | `stop_session`, `compact_session`, `refresh_session_snapshot`, `set_session_model`, `set_session_child_model`, `set_session_compact_threshold` | `session.control(stop\|compact\|snapshot\|settings)` | P |
 | `move_session` / `delete_session` | `session.manage(move)`, `[agent.create]`, `[env.read]`/`[env.write]` memory legs / `session.manage(delete)` | P |
 | `recall` | `history.read(target, mode)`, or `history.search` for Agent scope | P |
 | `get_archived_messages/blocks` | `history.read(exact)` | P |
-| `list_agents` / `skill` | `agent.list` / `agent.view` | P |
+| `list_agents` / `skill` | `agent.list` / `agent.view`; `skill` `copy`: `agent.view(skill-agent)` for the files the skill subsystem discloses | P; `skill` `copy`: S `target-write`, one `node:<node>/write` per destination file, checked as the target leg of `copy_between_nodes` before the first write ([skills](./skills.md#skill-access)) |
 | `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session (its ID, Node and runtime; none for `convertSession`); existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]` in its ID's Agent; tree `[env.read]` of the source Agent's and `[env.write]` of the new Agent's memory directory for `inheritMemory`; `[session.manage(move)]` of the source (default the caller) into the new Agent for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
 | `set_agent_rules` / `set_agent_inherit` | `agent.manage(rules)` / `agent.manage(inherit)`, `[agent.view(inherit)]` | P. Subsumed: the `refreshSnapshots` refresh of the target Agent and inheriting Agents. |
 | `node` (one branch per action) | list: `node.list` / inspect: `node.view` / select: `node.select` / create, ensure, destroy: `node.lifecycle(action)` | P; S `node:<selected>/get_default_cwd` probe for a remote Node that advertises it (optional: a denial only omits the default cwd); R the final Node identity at the lifecycle effect (create: the Provider parent; ensure: the existing or parent identity; destroy: the Node) |

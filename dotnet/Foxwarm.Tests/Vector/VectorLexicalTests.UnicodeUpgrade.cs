@@ -21,7 +21,7 @@ public sealed partial class VectorLexicalTests
                 VectorFixture.Message("violet ΑΑΣ꟎ durable ꟎꟒꟔")
             );
             await manager.ForceVectorIndexAsync(owner);
-            authorityPath = owner.AuthorityStore.AuthorityPath;
+            authorityPath = owner.AuthorityStore.AuthorityPath();
         }
         var authority = await File.ReadAllTextAsync(authorityPath);
         var archive = f.Archive(id);

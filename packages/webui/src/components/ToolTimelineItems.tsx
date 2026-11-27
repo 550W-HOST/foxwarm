@@ -731,7 +731,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   return renderTextResult(formatToolResponseText(resp), expanded)
 }
 
-const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
+// run_skill (`ctl skill run`) starts an ordinary run, so its card shows the run's subcalls too.
+const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script', 'run_skill'])
 
 const isToolScriptCall = (original: FunctionCall): boolean => {
   const call = ctlAsUnified(original)

@@ -48,8 +48,8 @@ public sealed partial class SessionCommandEffectsTests
             Assert.True(JsonNode.DeepEquals(bodies[0]["input"], bodies[1]["input"]));
             Assert.True(JsonNode.DeepEquals(bodies[0]["tools"], bodies[1]["tools"]));
             Assert.Equal(
-                bodies[0]["instructions"]!.ToString(),
-                bodies[1]["instructions"]!.ToString()
+                ResponsesRequestShape.SystemPrompt(bodies[0]),
+                ResponsesRequestShape.SystemPrompt(bodies[1])
             );
             Assert.DoesNotContain("later context", bodies[1]["input"]!.ToJsonString());
             Assert.DoesNotContain(

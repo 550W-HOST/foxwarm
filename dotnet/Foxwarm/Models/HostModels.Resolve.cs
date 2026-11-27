@@ -121,6 +121,25 @@ internal sealed partial class HostModels
             ?? provider["keepReasoningOnError"]?.DeepClone()
             ?? JsonValue.Create(false);
         foreach (var scope in new[] { provider, model })
+            if (scope?.ContainsKey(AnthropicMessageEffort.Option) == true)
+            {
+                if (
+                    scope[AnthropicMessageEffort.Option] is not JsonValue flag
+                    || !flag.TryGetValue<bool>(out _)
+                )
+                    throw new InvalidDataException(
+                        AnthropicMessageEffort.Option + " must be boolean."
+                    );
+                if (type != "anthropic")
+                    throw new InvalidDataException(
+                        AnthropicMessageEffort.Option + " is only supported on anthropic."
+                    );
+            }
+        config[AnthropicMessageEffort.Option] =
+            model?[AnthropicMessageEffort.Option]?.DeepClone()
+            ?? provider[AnthropicMessageEffort.Option]?.DeepClone()
+            ?? JsonValue.Create(false);
+        foreach (var scope in new[] { provider, model })
             if (scope?.ContainsKey("streamContentInactivityTimeoutMs") == true)
             {
                 if (scope["streamContentInactivityTimeoutMs"] is null)

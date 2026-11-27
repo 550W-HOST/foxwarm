@@ -187,6 +187,7 @@ public sealed class CompactContextTests
                     ("skill", "current-skill"),
                     ("load_skill", "legacy-skill"),
                     ("ctl", "ctl-skill"),
+                    ("ctl", "resource-skill"),
                 }
             )
             {
@@ -201,7 +202,14 @@ public sealed class CompactContextTests
                                     ["name"] = name,
                                     ["args"] =
                                         name == "ctl"
-                                            ? new JsonObject { ["command"] = "skill load " + skill }
+                                            ? new JsonObject
+                                            {
+                                                // A resource read is not a skill load.
+                                                ["command"] =
+                                                    "skill load "
+                                                    + skill
+                                                    + (skill == "resource-skill" ? " references/x.md" : ""),
+                                            }
                                             : new JsonObject
                                             {
                                                 ["action"] = "load",
@@ -327,6 +335,7 @@ public sealed class CompactContextTests
             Assert.Contains("currentSessionId=\"" + childId + "\"", marker);
             Assert.Contains("`current-skill`, `legacy-skill`, `ctl-skill`", marker);
             Assert.DoesNotContain("recent-skill", marker);
+            Assert.DoesNotContain("resource-skill", marker);
             Assert.Contains("ctl skill load &lt;name&gt;", marker);
             Assert.Equal(
                 marker,

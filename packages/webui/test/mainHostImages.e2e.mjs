@@ -65,7 +65,7 @@ try {
   assert.equal((await fixture.api('POST', '/api/sessions', { sessionId: 'main' })).status, 200)
   const page = await fixture.openApp(); page.on('framenavigated', () => {}); page.on('response', async response => { if (response.url().endsWith('/api/upload')) frames.push({ upload: await response.json() }) })
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
-  await page.waitForFunction(() => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session main'))
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatSessionId === 'main')
   const devtools = await page.createCDPSession(); await devtools.send('Network.enable'); devtools.on('Network.webSocketFrameReceived', frame => frames.push({ realtime: frame.response.payloadData }))
   await page.type('[role="textbox"][aria-label="Message"]', 'IMAGES:responses ')
   await page.$eval('#file-upload', (input, data) => { const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(atob(data), char => char.charCodeAt(0))], 'original.png', { type: 'image/png' })); Object.defineProperty(input, 'files', { configurable: true, value: transfer.files }); input.dispatchEvent(new Event('change', { bubbles: true })) }, png.toString('base64'))

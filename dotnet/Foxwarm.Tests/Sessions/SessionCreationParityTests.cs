@@ -81,9 +81,7 @@ public sealed partial class SessionCreationParityTests
                 .Concat(KnowledgeToolDefinitions.Definitions())
                 .Concat(UnifiedToolDefinitions.All().OfType<JsonObject>())
         )
-            definitions.Add(
-                HandoffConfirmation.Definition(definition, f.Manager.HandoffConfirmationEnabled)
-            );
+            definitions.Add(definition.DeepClone());
         f.Registry = SessionToolExecutor.CreateRegistry(
             definitions,
             f.Manager.OutboundMcp,

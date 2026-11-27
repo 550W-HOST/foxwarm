@@ -63,7 +63,8 @@ internal sealed partial class SessionManager
     internal Task DeliverToolScriptRunEventAsync(
         SessionOwner owner,
         JsonObject outcome,
-        string segment
+        string segment,
+        IReadOnlyList<JsonObject>? deliveries = null
     )
     {
         var runId = SessionWait.Text(outcome["runId"]) ?? "";
@@ -71,7 +72,11 @@ internal sealed partial class SessionManager
             owner,
             runId,
             ToolScriptRunEvent(outcome),
-            "toolscript-run:" + runId + ":" + segment
+            "toolscript-run:" + runId + ":" + segment,
+            // UI-only evidence of what the run delivered after it was handed off.
+            deliveries is { Count: > 0 }
+                ? new JsonArray(deliveries.Select(item => (JsonNode)item.DeepClone()).ToArray())
+                : null
         );
     }
 

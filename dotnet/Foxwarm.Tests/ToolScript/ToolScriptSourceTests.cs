@@ -8,8 +8,7 @@ namespace Foxwarm.Tests;
 
 public sealed class ToolScriptSourceTests
 {
-    [Fact]
-    public async Task Bundled_automation_skill_loads_and_runs_from_explicit_Main_source_with_normal_host_calls()
+    internal static string BundledSkills()
     {
         var repository = new DirectoryInfo(AppContext.BaseDirectory);
         while (
@@ -20,34 +19,33 @@ public sealed class ToolScriptSourceTests
         )
             repository = repository.Parent;
         Assert.NotNull(repository);
-        var skills = Path.Combine(repository.FullName, "skills");
+        return Path.Combine(repository.FullName, "skills");
+    }
+
+    // The bundled example run with `skill run --script`, paused for agent input and continued;
+    // it reads its own files through `skill load`, so no path argument is needed.
+    internal static async Task AssertBundledExampleRuns(
+        Func<string, JsonObject, Task<JsonObject>> call,
+        string skills
+    )
+    {
         var examples = Path.Combine(skills, "toolscript-automation", "examples");
-        var path = Path.Combine(examples, "automation_basic.py");
-        await using var f = await ScriptFixture.Create(skills);
-        var loaded = await f.Call(
+        var loaded = await call(
             "skill",
             new JsonObject { ["action"] = "load", ["skillName"] = "toolscript-automation" }
         );
         Assert.True(loaded["error"] is null, loaded.ToJsonString());
         Assert.Contains("examples/automation_basic.py", SessionWait.Text(loaded["output"]));
-        var waiting = await f.Call(
-            "run_script",
+        var waiting = await call(
+            "ctl",
             new JsonObject
             {
-                ["node"] = "master",
-                ["filePath"] = path,
-                ["args"] = new JsonObject { ["baseDir"] = examples },
+                ["command"] = "skill run toolscript-automation --script examples/automation_basic.py",
             }
         );
         Assert.True(SessionWait.Text(waiting["status"]) == "waiting", waiting.ToJsonString());
         Assert.Equal("agent", SessionWait.Text(waiting["waitingReason"]));
-        var record = await f.Manager.ToolScript.Store.ReadAsync(
-            SessionWait.Text(waiting["runId"])!,
-            default
-        );
-        Assert.Equal("master", SessionWait.Text(record!["sourceNode"]));
-        Assert.Equal(path, SessionWait.Text(record["scriptPath"]));
-        var completed = await f.Call(
+        var completed = await call(
             "continue_script",
             new JsonObject
             {
@@ -58,18 +56,22 @@ public sealed class ToolScriptSourceTests
         );
         Assert.True(SessionWait.Text(completed["status"]) == "completed", completed.ToJsonString());
         Assert.Equal("EXAMPLE_OK", SessionWait.Text(completed["result"]?["label"]));
-        var listing = await f.Call("read", new JsonObject { ["filePath"] = examples });
-        var listingText = SessionWait.Text(listing["output"])!;
-        // The demonstration intentionally returns only 200 characters. A long
-        // native temporary root can consume that preview before the file names.
-        Assert.Contains("automation_basic.py", listingText);
-        Assert.Equal(listingText[..Math.Min(200, listingText.Length)].Replace("\n", " "),
-            SessionWait.Text(completed["result"]?["listingPreview"]));
+        var listing = SessionWait.Text(completed["result"]?["listingPreview"])!;
+        Assert.StartsWith("DIRECTORY: toolscript-automation/examples/ ", listing);
+        Assert.Contains("- examples/automation_basic.py", listing);
         var documentation = await File.ReadAllTextAsync(Path.Combine(examples, "README.md"));
         Assert.Equal(
             documentation[..160].Replace("\n", " "),
             SessionWait.Text(completed["result"]?["documentationExcerpt"])
         );
+    }
+
+    [Fact]
+    public async Task Bundled_automation_skill_loads_and_runs_its_example_with_normal_host_calls()
+    {
+        var skills = BundledSkills();
+        await using var f = await ScriptFixture.Create(skills);
+        await AssertBundledExampleRuns(f.Call, skills);
     }
 
     [Theory]

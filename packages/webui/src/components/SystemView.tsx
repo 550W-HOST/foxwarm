@@ -6,14 +6,15 @@ import type { TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
 import SystemNodes from './SystemNodes'
 import SystemTimers, { SessionTimersSection } from './SystemTimers'
-import SystemWebhooks from './SystemWebhooks'
+import SystemWebhooks, { useWebhookList } from './SystemWebhooks'
 import SystemUsage from './SystemUsage'
 import SystemActivity from './SystemActivity'
 import type { ActivityFilters } from '../activity'
 import type { UsagePeriod } from '../usageOverview'
-import { AgentRegistryCard, AgentRegistryInspector, type AgentMemoryFile, type AgentRegistryChanges, type AgentRegistryEntry } from './SystemAgents'
-import { SessionFilterBar, SessionInspector, SessionOperationRow } from './SystemSessions'
-import { addLoadedUsage, emptyLoadedUsage, renderMetaBadge, type LoadedUsage } from './SystemShared'
+import SystemAgents, { type AgentRegistryChanges, type AgentRegistryEntry, type AgentTab } from './SystemAgents'
+import type { InstallationPrompt } from './SystemAgentLayers'
+import { SessionFilterBar, SessionInspector, SystemSessionsList } from './SystemSessions'
+import { renderMetaBadge } from './SystemShared'
 import { buildAgentCreationBody, type AgentSettingsChanges } from '../agentCreation'
 import { useNodeDirectory } from '../useNodeDirectory'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -21,7 +22,7 @@ import { API_BASE_PATH } from '../config'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync } from '../sessionListRefresh'
 import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
 import { webUiRealtime } from '../realtime'
-import { filterArchitectureSessions, getArchitectureSessionModel, getArchitectureSessionNodeId, groupArchitectureSessionsByNode, orderArchitectureAgents, type ArchitectureStatusFilter } from '../architectureOperations'
+import { filterArchitectureSessions, getArchitectureSessionModel, getArchitectureSessionNodeId, type ArchitectureStatusFilter } from '../architectureOperations'
 import { makeVscodeWebUrl } from '../vscodeWeb'
 import { useMobileChatViewport } from '../chatPreferences'
 import MobilePageHeader from './MobilePageHeader'
@@ -36,15 +37,16 @@ export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
   { id: 'sessions', label: 'Sessions' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'timers', label: 'Timers' },
-  { id: 'webhooks', label: 'Webhooks' },
   { id: 'usage', label: 'Usage' },
   { id: 'activity', label: 'Activity' },
+  // Shown once a webhook exists, or when a route opens it.
+  { id: 'webhooks', label: 'Webhooks' },
 ]
 
 const SECTION_SUBTITLES: Record<SystemSection, string> = {
-  agents: 'Agent workspaces, inheritance, isolation and memory.',
+  agents: 'Agent workspaces, inheritance and memory.',
   sessions: 'Session state, placement and usage, and how sessions work together.',
-  nodes: 'Connected nodes, the sessions running on them, and new node setup.',
+  nodes: 'Connected nodes and how to add more.',
   timers: 'Scheduled messages and scripts, their next runs and recent results.',
   webhooks: 'Events from outside services, where they go and what arrived recently.',
   usage: 'Model requests, tokens and estimated cost across the installation.',
@@ -62,6 +64,8 @@ interface SystemViewProps {
   onCreateSession?: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
   onAgentsChanged?: () => void | Promise<void>
   onOpenAgentMemory?: (memoryRoot: string, filePath?: string) => void
+  /** Opens Setup on its Authorization tab. */
+  onOpenSetupAuthorization?: () => void
   /** Opens the Agents section with this Agent's settings; a new nonce repeats the request. */
   agentRequest?: { agent: string; nonce: number } | null
   /** Opens the Sessions list filtered by this state; a new nonce repeats the request. */
@@ -69,6 +73,9 @@ interface SystemViewProps {
   /** Opens the Usage section for this period; a new nonce repeats the request. */
   usageRequest?: { period: UsagePeriod; nonce: number } | null
 }
+
+/** The Agents inspector's selection, kept while System is unmounted (one System tab exists). */
+const agentSelectionMemory: { agent: string | null; tab: AgentTab; request: number } = { agent: null, tab: 'overview', request: 0 }
 
 export default function SystemView({
   currentSession,
@@ -80,6 +87,7 @@ export default function SystemView({
   onCreateSession,
   onAgentsChanged,
   onOpenAgentMemory,
+  onOpenSetupAuthorization,
   agentRequest,
   sessionsRequest,
   usageRequest,
@@ -96,6 +104,7 @@ export default function SystemView({
   const [childIds, setChildIds] = useState<Map<string, string[]>>(new Map())
   const [focusPathIds, setFocusPathIds] = useState<Set<string>>(new Set())
   const [agentCounts, setAgentCounts] = useState<Array<{ agent: string; count: number }>>([])
+  const [nodeCounts, setNodeCounts] = useState<Array<{ node: string; count: number }>>([])
   const [globalSummary, setGlobalSummary] = useState<{ total: number; busy: number; queued: number; managed: number } & TokenUsage>({ total: 0, busy: 0, queued: 0, managed: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0 })
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<ArchitectureStatusFilter>('all')
@@ -118,12 +127,25 @@ export default function SystemView({
     else if (rect.right > bounds.right - 16) strip.scrollLeft += rect.right - (bounds.right - 16)
   }, [phone, section])
   const setSection = useCallback((next: SystemSection) => { setSectionState(next); onSectionChangeRef.current?.(next) }, [])
+  const webhookList = useWebhookList()
   const [agentRegistry, setAgentRegistry] = useState<AgentRegistryEntry[]>([])
-  const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>(agentRequest?.agent || 'main')
+  // An Agent request applies once; a remount doesn't replay it.
+  const pendingAgentRequest = agentRequest && agentRequest.nonce !== agentSelectionMemory.request ? agentRequest : null
+  const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>(pendingAgentRequest?.agent || agentSelectionMemory.agent || 'main')
+  const [installationPrompt, setInstallationPrompt] = useState<InstallationPrompt>(null)
+  const [agentTab, setAgentTab] = useState<AgentTab>(pendingAgentRequest ? 'settings' : agentSelectionMemory.tab)
+  // Opening a file in Code replaces this tab's content; coming back restores the inspected Agent.
+  useEffect(() => { agentSelectionMemory.agent = selectedRegistryAgentId; agentSelectionMemory.tab = agentTab }, [selectedRegistryAgentId, agentTab])
+  // Requests that open a selection's details when the pane shows the list alone.
+  const [agentDetailRequest, setAgentDetailRequest] = useState(0)
+  const [sessionDetailRequest, setSessionDetailRequest] = useState(0)
   useEffect(() => {
-    if (!agentRequest) return
+    if (!agentRequest || agentRequest.nonce === agentSelectionMemory.request) return
+    agentSelectionMemory.request = agentRequest.nonce
     setSection('agents')
     setSelectedRegistryAgentId(agentRequest.agent)
+    setAgentTab('settings')
+    setAgentDetailRequest(value => value + 1)
   }, [agentRequest?.agent, agentRequest?.nonce])
   useEffect(() => {
     if (!sessionsRequest) return
@@ -142,9 +164,6 @@ export default function SystemView({
     setTimersSessionFilter(sessionId)
     setSection('timers')
   }
-  const [agentMemoryFiles, setAgentMemoryFiles] = useState<AgentMemoryFile[]>([])
-  const [agentMemoryLoading, setAgentMemoryLoading] = useState(false)
-  const [agentMemoryError, setAgentMemoryError] = useState('')
   const [agentRegistryError, setAgentRegistryError] = useState('')
   const [now, setNow] = useState(Date.now())
   const generationRef = useRef(0)
@@ -162,10 +181,10 @@ export default function SystemView({
       const payload = await response.json(); return { ...payload.roots, items: payload.roots?.sessions || [], nextCursor: payload.roots?.nextCursor || null, architecturePayload: payload }
     } })
     const rows = [...result.items]; const ids = new Map<string, string[]>(); const totals = new Map<string, number>(); const cursors = new Map<string, string | null>()
-    let summary = globalSummary; let counts = agentCounts
-    for (const page of result.pages as any[]) { const payload = page.architecturePayload; summary = payload.summary || summary; counts = payload.agentCounts || counts
+    let summary = globalSummary; let counts = agentCounts; let nodes = nodeCounts
+    for (const page of result.pages as any[]) { const payload = page.architecturePayload; summary = payload.summary || summary; counts = payload.agentCounts || counts; nodes = payload.nodeCounts || nodes
       for (const group of payload.children || []) { ids.set(group.parentSessionId, (group.sessions || []).map((row: Session) => row.id)); totals.set(group.parentSessionId, Number(group.total || 0)); cursors.set(group.parentSessionId, group.nextCursor || null); rows.push(...(group.sessions || [])) } }
-    return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childIds: ids, childTotals: totals, childCursors: cursors, rows, summary, agentCounts: counts, revision: result.revision }
+    return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childIds: ids, childTotals: totals, childCursors: cursors, rows, summary, agentCounts: counts, nodeCounts: nodes, revision: result.revision }
   }
 
   const collectArchitectureBranches = async (targets: Map<string, number>, agent: string | null, expectedRevision?: string) => replayCursorBranches<Session>({ targets, pageCap: 20, parentBatchCap: 20, expectedRevision,
@@ -202,7 +221,7 @@ export default function SystemView({
     if (focus.missing && requestFocus && (rowStoreRef.current.epochs.get(requestFocus) || 0) <= startEpoch) mergeDeltaRows(rowStoreRef.current, [], [requestFocus])
     pruneEpochRows(rowStoreRef.current, keep)
     setSessions([...rowStoreRef.current.rows.values()]); setRootIds(roots.rootIds); setRootCursor(roots.rootCursor); setRootTarget(target)
-    setChildIds(ids); setChildTotals(totals); setChildCursors(cursors); setAgentCounts(roots.agentCounts); setGlobalSummary(roots.summary)
+    setChildIds(ids); setChildTotals(totals); setChildCursors(cursors); setAgentCounts(roots.agentCounts); setNodeCounts(roots.nodeCounts); setGlobalSummary(roots.summary)
     setFocusPathIds(new Set(focus.path))
     branchTargetsRef.current = new Map(branchTargets)
   })
@@ -224,6 +243,7 @@ export default function SystemView({
       if (!response.ok) throw new Error(payload.error || `Agent query failed (${response.status})`)
       const nextAgents = Array.isArray(payload.agents) ? payload.agents as AgentRegistryEntry[] : []
       setAgentRegistry(nextAgents)
+      setInstallationPrompt(payload.prompt?.installation || null)
       setSelectedRegistryAgentId(previous => previous && nextAgents.some(agent => agent.id === previous) ? previous : nextAgents.find(agent => agent.id === 'main')?.id || nextAgents[0]?.id || null)
       setAgentRegistryError('')
     } catch (error) {
@@ -237,21 +257,6 @@ export default function SystemView({
     const timer = window.setInterval(() => { void loadAgentRegistry() }, 30_000)
     return () => window.clearInterval(timer)
   }, [loadAgentRegistry, section])
-
-  useEffect(() => {
-    if (section !== 'agents' || !selectedRegistryAgentId) { setAgentMemoryFiles([]); return }
-    let disposed = false
-    setAgentMemoryLoading(true); setAgentMemoryError('')
-    void fetch(`${API_BASE_PATH}/agents/${encodeURIComponent(selectedRegistryAgentId)}/memory`)
-      .then(async response => {
-        const payload = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(payload.error || `Memory query failed (${response.status})`)
-        if (!disposed) setAgentMemoryFiles(Array.isArray(payload.files) ? payload.files : [])
-      })
-      .catch(error => { if (!disposed) { setAgentMemoryFiles([]); setAgentMemoryError(error instanceof Error ? error.message : String(error)) } })
-      .finally(() => { if (!disposed) setAgentMemoryLoading(false) })
-    return () => { disposed = true }
-  }, [selectedRegistryAgentId, section])
 
   const architectureSubscriptionIds = useMemo(() => [...rootIds, ...[...childIds].flatMap(([parent, ids]) => [parent, ...ids])].filter((id, index, all) => all.indexOf(id) === index), [rootIds, childIds])
   useEffect(() => {
@@ -327,17 +332,6 @@ export default function SystemView({
     return map
   }, [childIds, sessionMap, filteredSessionSet, focusPathIds])
 
-  const loadedAgentUsage = useMemo(() => {
-    const totals = new Map<string, LoadedUsage>()
-    for (const session of sessions) {
-      const agent = session.agent || 'main'
-      const total = totals.get(agent) || emptyLoadedUsage()
-      addLoadedUsage(total, session)
-      totals.set(agent, total)
-    }
-    return totals
-  }, [sessions])
-
   const summary = {
     agentCount: agentCounts.length,
     sessionCount: globalSummary.total,
@@ -350,13 +344,14 @@ export default function SystemView({
     totalOutputTokens: globalSummary.outputTokens,
     cost: globalSummary.cost,
   }
+  const agentCount = agentRegistry.length || summary.agentCount
 
   const visibleSessions = useMemo(
     () => filterArchitectureSessions(sessions, statusFilter, searchQuery, { nodeId: nodeFilter, model: modelFilter })
       .sort((left, right) => (right.lastMessageTime || 0) - (left.lastMessageTime || 0) || left.id.localeCompare(right.id)),
     [sessions, statusFilter, searchQuery, nodeFilter, modelFilter],
   )
-  const groupedSessions = useMemo(() => groupArchitectureSessionsByNode(sessions), [sessions])
+  const nodeSessionCounts = useMemo(() => new Map(nodeCounts.map(item => [item.node, Number(item.count) || 0])), [nodeCounts])
   const modelOptions = useMemo(() => {
     const counts = new Map<string, number>()
     for (const session of sessions) { const model = getArchitectureSessionModel(session); if (model) counts.set(model, (counts.get(model) || 0) + 1) }
@@ -366,7 +361,7 @@ export default function SystemView({
 
   const displayNodes = useMemo(() => {
     const byId = new Map(nodeTargets.map(node => [node.id, node]))
-    for (const nodeId of groupedSessions.keys()) {
+    for (const nodeId of nodeSessionCounts.keys()) {
       if (!byId.has(nodeId)) {
         byId.set(nodeId, { id: nodeId, type: 'unavailable', displayName: nodeId, online: false, services: {}, unavailable: true })
       }
@@ -377,7 +372,7 @@ export default function SystemView({
       if (left.online !== right.online) return left.online ? -1 : 1
       return left.displayName.localeCompare(right.displayName)
     })
-  }, [nodeTargets, groupedSessions])
+  }, [nodeTargets, nodeSessionCounts])
 
   const nodeMap = useMemo(() => new Map(displayNodes.map(node => [node.id, node])), [displayNodes])
   const inspectedSession = inspectedSessionId ? sessionMap.get(inspectedSessionId) || null : null
@@ -414,8 +409,6 @@ export default function SystemView({
     { id: 'queued', label: 'Queued', count: sessions.filter(session => Number(session.runtimeState?.queueLength ?? session.queueLength ?? 0) > 0).length },
   ]
 
-  const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
-  const orderedAgentRegistry = useMemo(() => orderArchitectureAgents(agentRegistry), [agentRegistry])
 
   const createAgentFromRegistry = async (agentId: string, settings: AgentSettingsChanges) => {
     if (onCreateAgent) await onCreateAgent(agentId, settings)
@@ -464,19 +457,45 @@ export default function SystemView({
     { id: 'waiting' as const, label: 'waiting', value: summary.waitingCount },
     { id: 'queued' as const, label: 'queued', value: summary.queuedSessions },
   ]
-  const nodeOptions = displayNodes.map(node => ({ id: node.id, label: node.displayName || node.id, count: groupedSessions.get(node.id)?.length || 0 }))
-  const showSessionFromNode = (sessionId: string) => {
+  const nodeLabels = useMemo(() => new Map(displayNodes.map(node => [node.id, node.displayName || node.id])), [displayNodes])
+  const nodeOptions = displayNodes.map(node => ({ id: node.id, label: node.displayName || node.id, count: sessions.filter(session => getArchitectureSessionNodeId(session) === node.id).length }))
+  /** Shows a Session in the Sessions list with its details. */
+  const showSession = (sessionId: string) => {
     setStatusFilter('all'); setSearchQuery(''); setNodeFilter(null); setModelFilter(null)
     setSessionsView('list')
     setSection('sessions')
     inspectSession(sessionId)
+    setSessionDetailRequest(value => value + 1)
+  }
+  const showAgentSessions = (agentId: string) => {
+    setStatusFilter('all'); setSearchQuery(''); setNodeFilter(null); setModelFilter(null); setSelectedAgent(agentId)
+    setSessionsView('list')
+    setSection('sessions')
+  }
+  const showNodeSessions = (nodeId: string) => {
+    setStatusFilter('all'); setSearchQuery(''); setModelFilter(null); setNodeFilter(nodeId)
+    setSessionsView('list')
+    setSection('sessions')
+  }
+  // Creates the empty installation additions file through Code's file route, then opens it.
+  const createInstallationPrompt = async () => {
+    if (!installationPrompt) return
+    const params = new URLSearchParams({ nodeId: 'master', path: installationPrompt.path, create: 'true', overwrite: 'false' })
+    const response = await fetch(`${API_BASE_PATH}/vscode-web/fs/write-file?${params}`, { method: 'PUT', body: new Uint8Array() })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      // Created meanwhile by someone else: open it as it is.
+      if (payload.code !== 'FileExists') throw new Error(payload.message || payload.error || `Couldn't create the file (${response.status})`)
+    }
+    await loadAgentRegistry()
+    openAgentMemory(installationPrompt.path.replace(/[\\/][^\\/]*$/, ''), installationPrompt.path)
   }
   const tabClass = (active: boolean, kind = 'foxwarm-system-tab', touch = false) => `${kind} shrink-0 whitespace-nowrap rounded-md font-medium ${touch ? 'min-h-9 px-3.5 text-[13px]' : 'px-3 py-1 text-xs'} ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
 
   const sectionTabs = (
     <div ref={sectionTabsRef} className={phone ? 'mobile-system-tabs -mx-4 overflow-x-auto px-4' : undefined}>
       <div className={`inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5 ${phone ? 'mobile-glass-surface' : ''}`} role="tablist">
-        {SYSTEM_SECTIONS.map(item => (
+        {SYSTEM_SECTIONS.filter(item => item.id !== 'webhooks' || section === 'webhooks' || webhookList.webhooks.length > 0).map(item => (
           <button key={item.id} type="button" role="tab" aria-selected={section === item.id} data-active={section === item.id} data-system-tab={item.id} onClick={() => setSection(item.id)} className={tabClass(section === item.id, 'foxwarm-system-tab', phone)}>{item.label}</button>
         ))}
       </div>
@@ -486,116 +505,141 @@ export default function SystemView({
     {summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
     {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
   </> : null
+  const renderSessionInspector = () => (
+  <SessionInspector
+    session={inspectedSession}
+    parent={inspectedParent}
+    children={inspectedChildren}
+    childTotal={inspectedChildTotal}
+    hasMoreChildren={!!(inspectedSession && childCursors.get(inspectedSession.id))}
+    now={now}
+    current={!!inspectedSession && inspectedSession.id === currentSession}
+    node={inspectedNode}
+    onInspect={inspectSession}
+    onOpen={onSelectSession}
+    onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
+    extra={inspectedSession ? <>
+      <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} />
+      <section className="mt-4 flex items-center justify-between gap-2 border-t border-fw-border-muted pt-4" data-session-activity={inspectedSession.id}>
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
+        <button type="button" onClick={() => showActivity({ sessionId: inspectedSession.id, tree: true })} className="text-xs font-medium text-fw-accent hover:underline" data-session-activity-open>View activity</button>
+      </section>
+    </> : null}
+  />
+  )
+  const sessionsHeaderRow = (
+  <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+    <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Session view">
+      <button type="button" aria-pressed={sessionsView === 'list'} data-sessions-view="list" data-active={sessionsView === 'list'} onClick={() => setSessionsView('list')} className={tabClass(sessionsView === 'list', 'foxwarm-system-view-tab')}>List</button>
+      <button type="button" aria-pressed={sessionsView === 'timeline'} data-sessions-view="timeline" data-active={sessionsView === 'timeline'} onClick={() => setSessionsView('timeline')} className={tabClass(sessionsView === 'timeline', 'foxwarm-system-view-tab')}>Timeline</button>
+    </div>
+    <div className="flex flex-wrap items-center gap-1 text-xs" data-system-summary="sessions">
+      {sessionsSummary.map(item => (
+        <button key={item.id} type="button" aria-pressed={sessionsView === 'list' && statusFilter === item.id}
+          onClick={() => { setSessionsView('list'); setStatusFilter(statusFilter === item.id ? 'all' : item.id) }}
+          className={`rounded-md px-2 py-1 ${sessionsView === 'list' && statusFilter === item.id ? 'bg-fw-accent-section text-fw-accent' : 'text-fw-text-muted hover:bg-fw-hover'}`}>
+          <strong className="font-semibold tabular-nums text-fw-text-strong">{item.value}</strong> {item.label}
+        </button>
+      ))}
+    </div>
+  </div>
+  )
+  const sessionsFilterBar = (
+  <SessionFilterBar
+    filters={{ query: searchQuery, status: statusFilter, agent: selectedAgent, nodeId: nodeFilter, model: modelFilter }}
+    onChange={patch => {
+      if (patch.query !== undefined) setSearchQuery(patch.query)
+      if (patch.status !== undefined) setStatusFilter(patch.status)
+      if (patch.agent !== undefined) setSelectedAgent(patch.agent)
+      if (patch.nodeId !== undefined) setNodeFilter(patch.nodeId)
+      if (patch.model !== undefined) setModelFilter(patch.model)
+    }}
+    statusOptions={statusFilters}
+    agents={agents}
+    totalSessions={summary.sessionCount}
+    nodes={nodeOptions}
+    models={modelOptions}
+    usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens, cost: summary.cost }}
+  />
+  )
+  const sessionToolbar = <div className="space-y-3">{sessionsHeaderRow}{sessionsFilterBar}</div>
+  // The list holds a bounded window: say how much of it is shown and how much exists.
+  const sessionLoadMore = (
+    <>
+      <div className="flex items-center justify-between border-t border-fw-border-muted px-3 py-2 text-xs text-fw-text-muted" data-system-session-count>
+        <span>{visibleSessions.length} of {sessions.length} loaded sessions · {summary.sessionCount} in total</span>
+      </div>
+      {rootCursor ? <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full border-t border-fw-border-muted px-3 py-2.5 text-sm font-medium text-fw-accent hover:bg-fw-section">Load 50 more root sessions…</button> : null}
+    </>
+  )
+  const agentToolbar = (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-fw-text-muted" data-system-summary="agents">{agentCount} agent{agentCount === 1 ? '' : 's'}</span>
+      <AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} />
+    </div>
+  )
+  const inspectSessionFromSection = (sessionId: string) => sessionMap.has(sessionId) ? showSession(sessionId) : onSelectSession(sessionId)
+  // Sections whose list and details fill the pane and scroll separately when it is wide.
+  const splitSection = section === 'agents' || section === 'timers' || section === 'webhooks' || (section === 'sessions' && sessionsView === 'list')
   const content = (
     section === 'sessions' ? (
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-          <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Session view">
-            <button type="button" aria-pressed={sessionsView === 'list'} data-sessions-view="list" data-active={sessionsView === 'list'} onClick={() => setSessionsView('list')} className={tabClass(sessionsView === 'list', 'foxwarm-system-view-tab')}>List</button>
-            <button type="button" aria-pressed={sessionsView === 'timeline'} data-sessions-view="timeline" data-active={sessionsView === 'timeline'} onClick={() => setSessionsView('timeline')} className={tabClass(sessionsView === 'timeline', 'foxwarm-system-view-tab')}>Timeline</button>
-          </div>
-          <div className="flex flex-wrap items-center gap-1 text-xs" data-system-summary="sessions">
-            {sessionsSummary.map(item => (
-              <button key={item.id} type="button" aria-pressed={sessionsView === 'list' && statusFilter === item.id}
-                onClick={() => { setSessionsView('list'); setStatusFilter(statusFilter === item.id ? 'all' : item.id) }}
-                className={`rounded-md px-2 py-1 ${sessionsView === 'list' && statusFilter === item.id ? 'bg-fw-accent-section text-fw-accent' : 'text-fw-text-muted hover:bg-fw-hover'}`}>
-                <strong className="font-semibold tabular-nums text-fw-text-strong">{item.value}</strong> {item.label}
-              </button>
-            ))}
-          </div>
+      sessionsView === 'timeline' ? (
+        <div className="space-y-4 pb-4">
+          {sessionsHeaderRow}
+          <Suspense fallback={<div className="p-6 text-sm text-fw-text-muted">Loading timeline…</div>}><SessionSequenceView currentSession={currentSession} onSelectSession={onSelectSession} /></Suspense>
         </div>
-        {sessionsView === 'timeline' ? <Suspense fallback={<div className="p-6 text-sm text-fw-text-muted">Loading timeline…</div>}><SessionSequenceView currentSession={currentSession} onSelectSession={onSelectSession} /></Suspense> : <>
-          <div className="border-b border-fw-border-muted pb-4">
-            <SessionFilterBar
-              filters={{ query: searchQuery, status: statusFilter, agent: selectedAgent, nodeId: nodeFilter, model: modelFilter }}
-              onChange={patch => {
-                if (patch.query !== undefined) setSearchQuery(patch.query)
-                if (patch.status !== undefined) setStatusFilter(patch.status)
-                if (patch.agent !== undefined) setSelectedAgent(patch.agent)
-                if (patch.nodeId !== undefined) setNodeFilter(patch.nodeId)
-                if (patch.model !== undefined) setModelFilter(patch.model)
-              }}
-              statusOptions={statusFilters}
-              agents={agents}
-              totalSessions={summary.sessionCount}
-              nodes={nodeOptions}
-              models={modelOptions}
-              usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens, cost: summary.cost }}
-            />
-          </div>
-          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <main className="min-w-0 space-y-2" data-system-session-list>
-              <div className="flex items-center justify-between px-1 text-xs text-fw-text-muted">
-                <span>{visibleSessions.length} of {sessions.length} loaded sessions</span>
-                <span>{summary.sessionCount} total</span>
-              </div>
-              {visibleSessions.map(session => (
-                <SessionOperationRow
-                  key={session.id}
-                  session={session}
-                  selected={inspectedSession?.id === session.id}
-                  current={currentSession === session.id}
-                  now={now}
-                  nodeLabel={nodeMap.get(getArchitectureSessionNodeId(session))?.displayName}
-                  onInspect={() => inspectSession(session.id)}
-                  onOpen={() => onSelectSession(session.id)}
-                />
-              ))}
-              {visibleSessions.length === 0 ? <div className="rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">No matching sessions.</div> : null}
-              {rootCursor ? (
-                <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full rounded-xl border border-dashed border-fw-border-strong bg-fw-section/60 px-3 py-2.5 text-sm font-medium text-fw-accent hover:bg-fw-section">
-                  Load 50 more root sessions…
-                </button>
-              ) : null}
-            </main>
-            <SessionInspector
-              session={inspectedSession}
-              parent={inspectedParent}
-              children={inspectedChildren}
-              childTotal={inspectedChildTotal}
-              hasMoreChildren={!!(inspectedSession && childCursors.get(inspectedSession.id))}
-              now={now}
-              current={!!inspectedSession && inspectedSession.id === currentSession}
-              node={inspectedNode}
-              onInspect={inspectSession}
-              onOpen={onSelectSession}
-              onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
-              extra={inspectedSession ? <>
-                <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} />
-                <section className="mt-4 flex items-center justify-between gap-2 border-t border-fw-border-muted pt-4" data-session-activity={inspectedSession.id}>
-                  <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
-                  <button type="button" onClick={() => showActivity({ sessionId: inspectedSession.id, tree: true })} className="text-xs font-medium text-fw-accent hover:underline" data-session-activity-open>View activity</button>
-                </section>
-              </> : null}
-            />
-          </div>
-        </>}
-      </div>
+      ) : (
+        <SystemSessionsList
+          phone={phone}
+          detailRequest={sessionDetailRequest}
+          toolbar={sessionToolbar}
+          sessions={visibleSessions}
+          selectedId={inspectedSessionId}
+          currentId={currentSession}
+          now={now}
+          nodeLabels={nodeLabels}
+          onSelect={inspectSession}
+          onOpen={onSelectSession}
+          footer={sessionLoadMore}
+          detail={renderSessionInspector()}
+        />
+      )
     ) : section === 'agents' ? (
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <main className="min-w-0">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
-            <div><h2 className="text-sm font-semibold text-fw-text-strong">Agent registry</h2><p className="mt-0.5 text-xs text-fw-text-muted">Manage persistent workspace owners and open self-owned memory in Code.</p></div>
-            <div className="flex items-center gap-2"><span className="text-xs text-fw-text-muted" data-system-summary="agents">{agentRegistry.length || summary.agentCount} agents</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
-          </div>
-          {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger">{agentRegistryError}</div> : null}
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} usage={loadedAgentUsage.get(agent.id)} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
-            {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">No agents found.</div> : null}
-          </div>
-        </main>
-        <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} installDefaultNode={agentDefaultNode} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
-      </div>
+      <SystemAgents
+        phone={phone}
+        now={now}
+        agents={agentRegistry}
+        error={agentRegistryError}
+        sessions={sessions}
+        nodes={displayNodes}
+        installDefaultNode={agentDefaultNode}
+        installationPrompt={installationPrompt}
+        selectedId={selectedRegistryAgentId}
+        onSelect={setSelectedRegistryAgentId}
+        tab={agentTab}
+        onTabChange={setAgentTab}
+        detailRequest={agentDetailRequest}
+        toolbar={agentToolbar}
+        onCreateSession={agentId => { void createSessionFromRegistry(agentId) }}
+        onInspectSession={showSession}
+        onOpenSession={onSelectSession}
+        onShowAgentSessions={showAgentSessions}
+        onOpenInCode={openAgentMemory}
+        onCreateInstallationPrompt={createInstallationPrompt}
+        onOpenSetupAuthorization={onOpenSetupAuthorization}
+        onSave={saveRegistryAgent}
+        onDelete={deleteRegistryAgent}
+      />
     ) : section === 'webhooks' ? (
-      <SystemWebhooks onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
+      <SystemWebhooks phone={phone} onInspectSession={inspectSessionFromSection} onOpenSession={onSelectSession} />
     ) : section === 'usage' ? (
-      <SystemUsage request={usageRequest} onOpenSession={onSelectSession} />
+      <div className="pb-4"><SystemUsage request={usageRequest} onOpenSession={onSelectSession} /></div>
     ) : section === 'activity' ? (
-      <SystemActivity request={activityRequest} onOpenSession={onSelectSession} />
+      <div className="pb-4"><SystemActivity request={activityRequest} onOpenSession={onSelectSession} /></div>
     ) : section === 'timers' ? (
-      <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
+      <SystemTimers phone={phone} sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={inspectSessionFromSection} onOpenSession={onSelectSession} />
     ) : (
-      <SystemNodes nodes={nodeTargets} error={nodeTargetsError} sessions={sessions} onNodesChanged={reloadNodes} onSelectSession={showSessionFromNode} />
+      <SystemNodes nodes={nodeTargets} error={nodeTargetsError} sessions={sessions} sessionCounts={nodeSessionCounts} phone={phone} onNodesChanged={reloadNodes} onShowSessions={showNodeSessions} />
     )
   )
 
@@ -604,7 +648,7 @@ export default function SystemView({
   // share one element tree with `content` at the same position, so crossing the phone
   // breakpoint restyles the page without remounting the open section, its modals or its state.
   return (
-    <div className={phone ? 'mobile-page-root mobile-system-page h-full min-h-0 overflow-hidden bg-fw-canvas' : 'h-full overflow-y-auto bg-fw-canvas'} data-system-section={section} data-system-scroll={phone ? undefined : ''}>
+    <div className={phone ? 'mobile-page-root mobile-system-page h-full min-h-0 overflow-hidden bg-fw-canvas' : 'flex h-full min-h-0 flex-col overflow-hidden bg-fw-canvas'} data-system-section={section}>
       {phone ? (
         <MobilePageHeader title="System"
           leading={onBack ? <button type="button" onClick={onBack} aria-label="Back" className="mobile-header-circle"><ArrowLeft size={20} /></button> : null}
@@ -612,9 +656,9 @@ export default function SystemView({
           {sectionTabs}
         </MobilePageHeader>
       ) : null}
-      <div className={phone ? 'h-full overflow-y-auto overflow-x-hidden px-4' : 'mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6'} data-system-scroll={phone ? '' : undefined}>
+      <div className={phone ? 'h-full overflow-y-auto overflow-x-hidden px-4' : 'mx-auto flex min-h-0 w-full max-w-[1500px] flex-1 flex-col px-4 pt-4 md:px-5 md:pt-5 lg:px-6 lg:pt-6'} data-system-scroll={phone ? '' : undefined}>
         {phone ? null : (
-          <header className="mb-4">
+          <header className="mb-4 shrink-0">
             <WorkbenchHeaderDragArea className="flex flex-wrap items-start justify-between gap-4">
               <div className="flex items-center gap-3">
                 {tabHeader ? <WorkbenchTabClose className="inline-flex items-center justify-center rounded-lg p-2 text-fw-text hover:bg-fw-hover" /> : onBack ? (
@@ -638,7 +682,12 @@ export default function SystemView({
             </nav>
           </header>
         )}
-        {content}
+        {/* On desktop the header stays put; the section scrolls below it, or fills it and scrolls
+            its list and details separately. Phones scroll the whole page. The same elements
+            render on both, so crossing the breakpoint keeps the section and its modals mounted. */}
+        <div className={phone ? '' : 'min-h-0 flex-1 overflow-y-auto'} data-system-scroll={phone ? undefined : ''}>
+          <div className={!phone && splitSection ? 'h-full pb-4' : ''}>{content}</div>
+        </div>
       </div>
     </div>
   )

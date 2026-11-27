@@ -12,8 +12,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 {
     private readonly PendingWriteRefs pendingWrites = new();
     private readonly string root;
-    private readonly Action<string, AtomicJsonWriteStage>? authorityStageHook;
-    private readonly Func<string, int, CancellationToken, Task>? canonicalCommitBarrier;
+    internal Foxwarm.Storage.IStorageContext Storage { get; }
     private readonly HostPaths? hostPaths;
     internal Foxwarm.Images.ImageBlobStore Images { get; }
     internal Foxwarm.Artifacts.ArtifactStore Artifacts { get; }
@@ -65,8 +64,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     internal string MemoryDirectory(string agent) => agents.MemoryDirectory(agent);
 
-    internal bool HandoffConfirmationEnabled { get; }
-
     public SessionManager(
         string root,
         string workspace,
@@ -75,16 +72,21 @@ internal sealed partial class SessionManager : IAsyncDisposable
         string? skillsRoot = null,
         HostPaths? hostPaths = null,
         Action<string, AtomicJsonWriteStage>? authorityStageHook = null,
-        Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null
+        Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null,
+        Foxwarm.Storage.IStorageContext? storage = null
     )
     {
         this.hostPaths = hostPaths;
-        this.authorityStageHook = authorityStageHook;
-        this.canonicalCommitBarrier = canonicalCommitBarrier;
+        // The test hooks belong to the default file context; a supplied context brings its own.
+        Storage =
+            storage
+            ?? new Foxwarm.Storage.FileStorageContext(
+                root,
+                new(authorityStageHook, canonicalCommitBarrier)
+            );
         Images = new(root);
         Artifacts = new(Path.Combine(root, "state", "artifacts"), ArtifactPreparation);
         ToolScript = new(root);
-        HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))
@@ -168,7 +170,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             agents,
             skills,
             FrameworkPrompt.TemplatePath(hostPaths?.ResourceRoot ?? AppContext.BaseDirectory),
-            models
+            models,
+            skillAccess: CatalogSkillAccess
         );
         executor = new LocalExecManager(
             this.root,
@@ -254,9 +257,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in MainLocalToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in AgentToolDefinitions.Definitions())
-            definitions.Add(
-                HandoffConfirmation.Definition(definition.AsObject(), HandoffConfirmationEnabled)
-            );
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in TimerToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         if (Foxwarm.ToolScript.MontyWorker.IsSupported)
@@ -367,11 +368,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             return null;
         var row = Catalog.Get(canonical);
         var agent = SessionCatalog.Text(row?["agent"]) ?? "main";
-        var path = Path.Combine(root, "state", "sessions", canonical + ".json");
-        if (File.Exists(path))
+        if (Storage.Authority.ReadEnvelope(canonical, agent) is { } rootValue)
         {
-            var document = SessionAuthorityDocument.Load(path, canonical, agent);
-            var rootValue = document.CloneRoot();
             if (rootValue["nextMessageSeq"] is JsonValue value)
             {
                 if (value.TryGetValue<long>(out var detachedNext))
@@ -653,7 +651,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public Task<SessionOwner> CreateAsync() => CreateNamedAsync("main", null, null, null);
 
-    private SessionOwner MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
+    private SessionOwner MakeSession(string id, string agent, ISessionAuthority store)
     {
         var hosted = new SessionOwner(id, agent, models)
         {

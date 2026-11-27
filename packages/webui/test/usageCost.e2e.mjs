@@ -156,7 +156,7 @@ test('An unavailable usage report leaves the status bar without a Total instead 
   }
 })
 
-test('System keeps global and loaded-window recorded estimates separate', async () => {
+test('System shows the catalog-wide recorded estimate with its scope and no loaded-window totals', async () => {
   await mount()
   await page.evaluate(() => { for (const section of document.querySelectorAll('body > section')) if (section.id !== 'architecture') section.style.display = 'none'; window.scrollTo(0, 0) })
   await page.waitForSelector('#architecture [aria-label="Global token usage"]')
@@ -168,8 +168,8 @@ test('System keeps global and loaded-window recorded estimates separate', async 
   assert.match(await text('[role="dialog"][aria-label="Token usage"] [data-usage-pie-scope]'), /Conversation turns of existing sessions/)
   assert.match(await text('#architecture [aria-label="Global token usage"]'), /Conversation turns/)
   await page.keyboard.press('Escape')
+  // Agent rows carry no usage totals of the loaded window, which would read as the Agent's total.
   await page.click('#architecture [data-system-tab="agents"]')
-  await page.waitForSelector('#architecture [data-architecture-agent-id="main"] [aria-label="Loaded token usage"]')
-  await page.click('#architecture [data-architecture-agent-id="main"] [aria-label="Loaded token usage"]')
-  assert.match(await text('[role="dialog"][aria-label="Token usage"]'), /\$0\.125 USD/)
+  await page.waitForSelector('#architecture [data-architecture-agent-id="main"]')
+  assert.equal(await page.$('#architecture [aria-label="Loaded token usage"]'), null)
 })

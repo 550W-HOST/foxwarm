@@ -25,7 +25,7 @@ public sealed class ImageLegacyLifecycleTests
         {
             await seed.LoadAsync();
             var owner = await seed.CreateNamedAsync("main", "old", null, null);
-            authorityPath = owner.AuthorityStore.AuthorityPath;
+            authorityPath = owner.AuthorityStore.AuthorityPath();
         }
         var bytes = ImageCodecTests.Raster(SKEncodedImageFormat.Png);
         var legacyPath = Path.Combine(data, "state", "sessions-blob", "old.images", "picture.png");

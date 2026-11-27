@@ -252,23 +252,38 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
         if (connection.Retirement is not null)
             return connection.Retirement;
         var usedNodes = connection.Context.Fence();
-        connection.Retirement = RetireCoreAsync(connection, usedNodes);
-        retirements.Add(connection.Retirement);
+        connection.Retirement = RetireAndReleaseAsync(connection, usedNodes);
+        // A retirement that finished synchronously has already released its slot.
+        if (!connection.Retirement.IsCompleted)
+            retirements.Add(connection.Retirement);
         _ = connection.Retirement.ContinueWith(
-            task =>
-            {
-                _ = task.Exception;
-                lock (gate)
-                {
-                    live.Remove(connection.Context.Id);
-                    retirements.Remove(task);
-                }
-            },
+            task => _ = task.Exception,
             CancellationToken.None,
-            TaskContinuationOptions.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default
         );
         return connection.Retirement;
+    }
+
+    // The slot is released before the retirement task completes, so a caller that awaits it,
+    // such as DELETE, sees the capacity already freed.
+    private async Task RetireAndReleaseAsync(Connection connection, string[] usedNodes)
+    {
+        try
+        {
+            await RetireCoreAsync(connection, usedNodes);
+        }
+        finally
+        {
+            // Retire holds the gate until Retirement is assigned and recorded, so an
+            // asynchronous completion finds it here; a synchronous one runs before then.
+            lock (gate)
+            {
+                live.Remove(connection.Context.Id);
+                if (connection.Retirement is { } retirement)
+                    retirements.Remove(retirement);
+            }
+        }
     }
 
     private async Task RetireCoreAsync(Connection connection, string[] usedNodes)

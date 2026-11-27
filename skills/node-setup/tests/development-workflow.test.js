@@ -83,14 +83,14 @@ test('Monty provision and release use only the public node and session tools in 
   assert.deepEqual(calls.map(request => [request.name, request.args.action]), [['node', 'create'], ['node', 'inspect'], ['delete_session', undefined], ['node', 'destroy']])
 });
 
-test('Monty assignment preserves caller handoff fields and verifies actual Task notification', async () => {
+test('Monty assignment preserves caller child fields and verifies actual Task notification', async () => {
   const calls = [];
   const task = { id: 'task_fixture', title: 'Inspect parser', assignmentNotificationStatus: 'sent' };
   const result = await run({
     phase: 'assign',
     prepared: { phase: 'prepare', status: 'completed', nodeId: 'fixture/build', workDir: '/workspace/task', base: 'a'.repeat(40), materials: [] },
     task: { title: task.title, description: 'Bounded read-only task' },
-    child: { suffix: 'parser', handoffRecall: 'Caller-written recall', handoffConfirmation: 'Caller-written review' },
+    child: { suffix: 'parser', message: 'Caller-written note' },
   }, request => {
     calls.push(request);
     if (request.name === 'create_child_session') return { output: 'Native child receipt', sentNotifications: 1 };
@@ -102,9 +102,7 @@ test('Monty assignment preserves caller handoff fields and verifies actual Task 
   const child = calls.find(request => request.name === 'create_child_session').args;
   assert.equal(child.displayName, task.title);
   assert.equal(child.node, 'fixture/build');
-  assert.equal(child.handoffRecall, 'Caller-written recall');
-  assert.equal(child.handoffConfirmation, 'Caller-written review');
-  assert.equal(Object.keys(child).at(-1), 'handoffConfirmation');
+  assert.equal(child.message, 'Caller-written note');
   assert.equal('forceModel' in child, false);
   assert.deepEqual(calls.map(request => request.name), ['task', 'create_child_session', 'task']);
 });

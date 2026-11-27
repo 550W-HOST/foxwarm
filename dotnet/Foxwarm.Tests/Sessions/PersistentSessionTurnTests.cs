@@ -22,7 +22,7 @@ public sealed class PersistentSessionTurnTests
         var snapshot = new SessionSnapshot(
             "s",
             [message],
-            [PersistentSessionAuthorityStore.FromQueueJson(queued)],
+            [SessionQueueJson.FromJson(queued)],
             false,
             null,
             false,
@@ -45,14 +45,14 @@ public sealed class PersistentSessionTurnTests
         );
         var beforeMeta = snapshot.Meta.DeepClone();
         var beforeEnvelope = snapshot.AuthorityEnvelope.DeepClone();
-        var beforeQueue = PersistentSessionAuthorityStore.ToQueueJson(snapshot.Queue[0]);
+        var beforeQueue = SessionQueueJson.ToJson(snapshot.Queue[0]);
         await store.CommitCanonicalAppendAsync(snapshot, [message]);
         Assert.True(JsonNode.DeepEquals(beforeMeta, snapshot.Meta));
         Assert.True(JsonNode.DeepEquals(beforeEnvelope, snapshot.AuthorityEnvelope));
         Assert.True(
             JsonNode.DeepEquals(
                 beforeQueue,
-                PersistentSessionAuthorityStore.ToQueueJson(snapshot.Queue[0])
+                SessionQueueJson.ToJson(snapshot.Queue[0])
             )
         );
         Assert.True(JsonNode.DeepEquals(message, snapshot.History[0].ToJson()));

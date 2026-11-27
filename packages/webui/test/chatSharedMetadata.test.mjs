@@ -35,6 +35,7 @@ const {
   getSystemMessagePreviewDescriptor,
   parseFoxwarmMetadataLine,
   isInternalTimelineMessage,
+  isEffortChangeMessage,
 } = await import(pathToFileURL(bundledPath).href)
 
 test('foxwarm metadata tags are recognized as system-like small metadata lines', () => {
@@ -268,10 +269,22 @@ test('LLM error classification requires retry metadata and a single text-only mo
   }
 })
 
+test('synthetic persistent memory snapshots classify without a synthetic marker and preserve literal tags', () => {
+  const raw = '<foxwarm-current-model model-id="a/b" />\n\n<foxwarm-system kind="event" type="literal">\nQuoted body\n</foxwarm-system>'
+  const snapshot = { role: 'tool', parts: [{ text: raw }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
+  assert.deepEqual(getSystemMessagePreviewDescriptor(snapshot), {
+    kind: 'snapshot',
+    source: 'foxwarm-system',
+    previewPrefix: '',
+    bodyText: raw,
+  })
+  assert.equal(isInternalTimelineMessage(snapshot), true)
+})
+
 test('internal runtime rows are recognized for timeline omission', () => {
   const settings = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-settings-changed" reason="effective-selection" modelId="a/b" oldModel="a/a" newModel="a/b" seq="4" />' }] }
   const firstRun = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="first-run" currentSessionId="main" currentNode="master" seq="1" />\nFoxwarm setup has just finished.' }] }
-  const snapshot = { role: 'tool', parts: [{ text: '<foxwarm-system kind="snapshot" hint="snapshot" />\n<foxwarm-current-model model-id="a/b" />' }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
+  const snapshot = { role: 'tool', parts: [{ text: '<foxwarm-current-model model-id="a/b" />' }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
   const withTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }, settings.parts[0]] }
   const taskReminder = { role: 'user', parts: [{ system: '<foxwarm-system kind="task-reminder" seq="9">Continue the active tasks:\ntask_0123456789ab — Ship it (active)</foxwarm-system>' }], __meta: { taskReminder: true, seq: 9 } }
   for (const message of [settings, firstRun, snapshot, withTime, taskReminder]) assert.equal(isInternalTimelineMessage(message), true)
@@ -283,4 +296,15 @@ test('internal runtime rows are recognized for timeline omission', () => {
   const onlyTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }] }
   const unflaggedReminder = { ...taskReminder, __meta: { seq: 9 } }
   for (const message of [childBoundary, userText, event, welcome, onlyTime, unflaggedReminder]) assert.equal(isInternalTimelineMessage(message), false)
+})
+
+test('recorded effort changes are recognized only in their persisted non-context shape', () => {
+  const change = { role: 'user', modelVisible: false, parts: [{ effortChange: { modelId: 'a/b', previousEffort: 'high', effort: 'low' } }], __meta: { seq: 5 } }
+  assert.equal(isEffortChangeMessage(change), true)
+  for (const message of [
+    { ...change, modelVisible: undefined },
+    { ...change, role: 'model' },
+    { ...change, parts: [...change.parts, { text: 'more' }] },
+    { role: 'user', modelVisible: false, parts: [{ text: 'effortChange' }] },
+  ]) assert.equal(isEffortChangeMessage(message), false)
 })

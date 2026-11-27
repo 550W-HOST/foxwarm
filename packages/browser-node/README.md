@@ -49,7 +49,7 @@ Firefox `browser_click` dispatches DOM activation with a synthetic mouse event, 
 - Every mutating action returns the tab's URL, title and whether a navigation occurred. A successful click (or Chrome key press) reports the accepted action even when it follows a link or submits the page. Old references and pending requests still expire on navigation; obtain a fresh snapshot for the destination.
 - `browser_wait` has fixed element, visible-text and URL conditions and a bounded timeout. `browser_evaluate` evaluates page-context JavaScript, awaits Promises and follows the same Ask/Auto rule. Explicit JavaScript can access sensitive page data; ordinary-content password omission is not a JavaScript sandbox.
 
-You can leave a development Node selected and use `search_tools` with this Browser Node's ID, followed by an explicit `call_tool` target such as `node:my-browser/browser_read`. Node and Session authorization still applies. These tools operate your shared browser.
+You can leave a development Node selected and find this Browser Node's tools with `ctl tool search --source node --node-id my-browser`, then call one by its tool ID, such as `ctl tool call node:my-browser/browser_read --args @args`, or `call_tool("node:my-browser/browser_read", args)` in ToolScript. Node and Session authorization still applies. These tools operate your shared browser.
 
 The first version targets ordinary top-document HTTP(S) pages. It does not provide frame/OOPIF automation, cookie/network APIs, arbitrary CDP passthrough or browser-global shortcuts. Real logged-in sites and different OS/compositor states require their own qualification.
 

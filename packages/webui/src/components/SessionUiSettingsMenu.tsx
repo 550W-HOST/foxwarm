@@ -223,24 +223,28 @@ export default function SessionUiSettingsMenu({
               >
                 <span>Show minimap</span>{toggle(timelineView !== 'conversation' && contextScrollbarSettings.showMinimap)}
               </button>
-              <button type="button" onClick={() => onShowUserMessageMetadataChange(!showUserMessageMetadata)} className={toggleRowClass}>
-                <span>Show user message metadata</span>{toggle(showUserMessageMetadata)}
-              </button>
             </div>
           </div>
 
-          {onOpenDebugInfo && <div className="px-4 py-3">
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false)
-                onOpenDebugInfo()
-              }}
-              className="w-full rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
-            >
-              debug info
-            </button>
-          </div>}
+          {/* Rarely needed: message metadata and the Session's debug snapshot. */}
+          <details data-session-ui-advanced className="px-4 py-3">
+            <summary className="cursor-pointer select-none text-xs font-medium text-fw-text-muted hover:text-fw-text">Advanced</summary>
+            <div className="mt-2 space-y-1">
+              <button type="button" onClick={() => onShowUserMessageMetadataChange(!showUserMessageMetadata)} className={toggleRowClass}>
+                <span>Show user message metadata</span>{toggle(showUserMessageMetadata)}
+              </button>
+              {onOpenDebugInfo && <button
+                type="button"
+                onClick={() => {
+                  setOpen(false)
+                  onOpenDebugInfo()
+                }}
+                className="w-full rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
+              >
+                Debug info
+              </button>}
+            </div>
+          </details>
         </div>
       )}
     </div>

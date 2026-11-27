@@ -500,7 +500,12 @@ internal sealed partial class SessionManager
                 await IdentityStageAsync(operation, "before-mutation");
                 mutated = true;
                 details["stage"] = "paths";
-                IdentityJournal.MoveArtifacts(record.OldId, record.NewId, record.Version);
+                IdentityJournal.MoveArtifacts(
+                    record.OldId,
+                    record.NewId,
+                    record.Version,
+                    Storage.Authority.MoveIdentity
+                );
                 details["pathsMoved"] = true;
                 details["stage"] = "archive";
                 SqliteArchiveIdentityMove.Rename(ArchiveDatabase, record.OldId, record.NewId);
@@ -621,7 +626,12 @@ internal sealed partial class SessionManager
                     });
                     await Attempt(() =>
                     {
-                        IdentityJournal.MoveArtifacts(record.NewId, record.OldId, record.Version);
+                        IdentityJournal.MoveArtifacts(
+                            record.NewId,
+                            record.OldId,
+                            record.Version,
+                            Storage.Authority.MoveIdentity
+                        );
                         return Task.CompletedTask;
                     });
                     await Attempt(() =>

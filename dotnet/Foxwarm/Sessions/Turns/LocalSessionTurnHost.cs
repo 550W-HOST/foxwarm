@@ -258,10 +258,7 @@ public sealed partial class LocalSessionTurnHost
                     if (tools is SessionToolExecutor batchTools)
                         batchTools.BeginBatch(appended[^1]);
                     var toolParts = await ExecuteToolBatchAsync(
-                            ToolCallControls.Plan(
-                                calls,
-                                tools is SessionToolExecutor mode && mode.HandoffConfirmationEnabled
-                            ),
+                            ToolCallControls.Plan(calls),
                             registered.Token
                         )
                         .ConfigureAwait(false);
@@ -430,7 +427,7 @@ public sealed partial class LocalSessionTurnHost
         JsonObject? externalRuntime = null
     )
     {
-        if (message is not null && store is PersistentSessionAuthorityStore persistent)
+        if (message is not null && store is ISessionAuthority persistent)
             await persistent.Images.ExternalizeMessageAsync(message);
         var rows = await entry
             .SaveLane.CommitCanonicalAppendWithResultAsync(state =>
@@ -488,13 +485,7 @@ public sealed partial class LocalSessionTurnHost
                 SessionBoundary.ConsecutiveChildReminders(envelope)
                 < SessionBoundary.MaxConsecutiveChildReminders
             )
-                await entry
-                    .SaveLane.QueueChildReminderAsync(
-                        parent,
-                        tools is SessionToolExecutor toolMode
-                            && toolMode.HandoffConfirmationEnabled
-                    )
-                    .ConfigureAwait(false);
+                await entry.SaveLane.QueueChildReminderAsync(parent).ConfigureAwait(false);
             else if (!SessionBoundary.ChildReminderCapNotified(envelope))
                 await NotifyParentOfMissingReportAsync(parent, parts).ConfigureAwait(false);
         }
@@ -703,6 +694,13 @@ public sealed partial class LocalSessionTurnHost
                 if (message["__meta"] is not JsonObject meta)
                     message["__meta"] = meta = new JsonObject();
                 meta["questionAnswer"] = answer.DeepClone();
+            }
+            // Display-only deliveries a background run made after its hand-off.
+            if (item.OpenFields?["sessionMessages"] is JsonArray deliveries)
+            {
+                if (message["__meta"] is not JsonObject meta)
+                    message["__meta"] = meta = new JsonObject();
+                meta["sessionMessages"] = deliveries.DeepClone();
             }
             // Administrator-only evidence of who sent WebUI input; scoped projections remove it.
             if (item.OpenFields?["sender"] is JsonObject sender)
@@ -949,10 +947,7 @@ public sealed partial class LocalSessionTurnHost
         {
             ["system"] =
                 $"<foxwarm-system kind=\"session\" currentSessionId=\"{EscapeFoxwarmAttribute(state.Id)}\""
-                + SessionBoundary.Placement(
-                    SessionManager.ResolveExecutionNode(state.AuthorityEnvelope),
-                    SessionWait.Text(state.AuthorityEnvelope["cwd"])
-                )
+                + SessionBoundary.Placement(state)
                 + " />",
         };
 

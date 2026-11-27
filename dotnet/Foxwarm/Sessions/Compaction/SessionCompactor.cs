@@ -15,7 +15,7 @@ internal sealed partial class SessionCompactor
 {
     private readonly SessionOwner hosted;
     private readonly SessionManager? sessions;
-    private readonly PersistentSessionAuthorityStore store;
+    private readonly ISessionAuthority store;
     private readonly HostModels models;
     private readonly ResponsesClientOptions baseOptions;
     private readonly ModelRequestOwner requests;
@@ -68,7 +68,7 @@ internal sealed partial class SessionCompactor
     public SessionCompactor(
         SessionOwner hosted,
         SessionManager sessions,
-        PersistentSessionAuthorityStore store,
+        ISessionAuthority store,
         HostModels models,
         ResponsesClientOptions baseOptions,
         ModelRequestOwner requests,
@@ -304,6 +304,9 @@ internal sealed partial class SessionCompactor
                 entry.NotifyProcessorReleased();
                 run.PipelineDone.TrySetResult();
                 await FinishAsync(run);
+                // A Stop that found this claim but no turn: a turn processor finalizes it.
+                if (entry.HasUnobservedStop)
+                    _ = hosted.StartProcessing();
             }
         }
     }

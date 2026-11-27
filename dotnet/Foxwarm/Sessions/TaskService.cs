@@ -48,6 +48,12 @@ internal sealed class TaskService : IDisposable
     internal async Task<JsonObject> ExecuteAsUserAsync(JsonObject args)
     {
         var normalized = (JsonObject)args.DeepClone();
+        // A user's create or assign notifies unless it opts out; comments notify only on request.
+        if (
+            Text(normalized["action"]) is "create" or "assign"
+            && !normalized.ContainsKey("notifySession")
+        )
+            normalized["notifySession"] = true;
         TaskStoreResult result;
         string? fullDescription;
         await mutationLane.WaitAsync().ConfigureAwait(false);
@@ -126,7 +132,8 @@ internal sealed class TaskService : IDisposable
         JsonObject args,
         string? actor,
         int? httpLimit = null,
-        long? anchor = null
+        long? anchor = null,
+        Action<SessionDelivery>? delivered = null
     )
     {
         TaskStore.Validate(args, httpLimit);
@@ -213,7 +220,8 @@ internal sealed class TaskService : IDisposable
                 actor!,
                 assignment,
                 warnings,
-                receipt
+                receipt,
+                delivered: delivered
             );
         }
         if (result.CommentOwner is { } commentOwner && commentOwner != actor)
@@ -228,7 +236,8 @@ internal sealed class TaskService : IDisposable
                     true,
                     resultTaskId!,
                     "note",
-                    "note"
+                    "note",
+                    TaskDelivery(delivered, resultTaskId!, "note", title, "note")
                 );
                 receipt.Count++;
             }
@@ -245,7 +254,8 @@ internal sealed class TaskService : IDisposable
                 result.Payload["task"]!.AsObject(),
                 actor!,
                 warnings,
-                receipt
+                receipt,
+                delivered
             );
         }
         if (warnings.Count > 0)
@@ -276,7 +286,7 @@ internal sealed class TaskService : IDisposable
         string sourceSessionId,
         Func<Task<SessionOwner>> create,
         string? additionalMessage = null
-    ) => CreateAttachedChildAsync(taskId, sourceSessionId, create, () => additionalMessage);
+    ) => CreateAttachedChildAsync(taskId, sourceSessionId, create, () => additionalMessage, null);
 
     /// <param name="additionalMessage">Read after creation, so a creator can omit an instruction
     /// the new child already has in context.</param>
@@ -284,7 +294,8 @@ internal sealed class TaskService : IDisposable
         string taskId,
         string sourceSessionId,
         Func<Task<SessionOwner>> create,
-        Func<string?> additionalMessage
+        Func<string?> additionalMessage,
+        Action<SessionDelivery>? delivered
     )
     {
         var source = resolveSessionId(sourceSessionId) ?? sourceSessionId;
@@ -341,18 +352,19 @@ internal sealed class TaskService : IDisposable
         var assignment = attached.Assignment;
         if (assignment is null)
             return new AttachedChildResult(child, true, null, 0);
-        var delivered = await DeliverAssignmentAsync(
+        var assignmentDelivered = await DeliverAssignmentAsync(
             attached.Payload["task"]!.AsObject(),
             fullDescription,
             source,
             assignment,
             warnings,
             receipt,
-            additionalMessage()
+            additionalMessage(),
+            delivered
         );
         return new AttachedChildResult(
             child,
-            delivered,
+            assignmentDelivered,
             warnings.Count == 0 ? null : string.Join(" ", warnings),
             receipt.Count
         );
@@ -365,10 +377,12 @@ internal sealed class TaskService : IDisposable
         TaskAssignmentPlan plan,
         List<string> warnings,
         NotificationReceipt receipt,
-        string? additionalMessage = null
+        string? additionalMessage = null,
+        Action<SessionDelivery>? delivered = null
     )
     {
         var taskId = Text(task["id"])!;
+        var title = Text(task["title"]) ?? taskId;
         var newOwnerDelivered = plan.NewOwner is null;
         if (plan.PreviousOwner is { } previous)
             await DeliverAsync(
@@ -382,7 +396,14 @@ internal sealed class TaskService : IDisposable
                 warnings,
                 receipt,
                 "previous",
-                plan.NewOwner is null ? "released" : "transferred"
+                plan.NewOwner is null ? "released" : "transferred",
+                TaskDelivery(
+                    delivered,
+                    taskId,
+                    plan.NewOwner is null ? "released" : "transferred",
+                    title,
+                    "previous"
+                )
             );
         if (plan.NewOwner is { } next)
             newOwnerDelivered = await DeliverAsync(
@@ -396,7 +417,14 @@ internal sealed class TaskService : IDisposable
                 warnings,
                 receipt,
                 "new",
-                plan.PreviousOwner is null ? "assigned" : "transferred"
+                plan.PreviousOwner is null ? "assigned" : "transferred",
+                TaskDelivery(
+                    delivered,
+                    taskId,
+                    plan.PreviousOwner is null ? "assigned" : "transferred",
+                    title,
+                    "new"
+                )
             );
         return newOwnerDelivered;
     }
@@ -405,7 +433,8 @@ internal sealed class TaskService : IDisposable
         JsonObject task,
         string actor,
         List<string> warnings,
-        NotificationReceipt receipt
+        NotificationReceipt receipt,
+        Action<SessionDelivery>? delivered
     )
     {
         var taskId = Text(task["id"])!;
@@ -428,7 +457,8 @@ internal sealed class TaskService : IDisposable
             warnings,
             receipt,
             "completion",
-            "completed"
+            "completed",
+            TaskDelivery(delivered, taskId, "completed", Text(task["title"]) ?? taskId, "completion")
         );
     }
 
@@ -466,7 +496,8 @@ internal sealed class TaskService : IDisposable
         List<string> warnings,
         NotificationReceipt receipt,
         string recipient,
-        string eventName
+        string eventName,
+        Action<SessionDelivery>? delivered
     )
     {
         var canonicalTarget = resolveSessionId(target) ?? target;
@@ -484,7 +515,8 @@ internal sealed class TaskService : IDisposable
                 trigger,
                 taskId,
                 eventName,
-                recipient
+                recipient,
+                delivered
             );
             receipt.Count++;
             store.MarkNotification(taskId, field, "sent", revision);
@@ -512,6 +544,30 @@ internal sealed class TaskService : IDisposable
             return false;
         }
     }
+
+    // Adds the Task's identity and the recipient's role to a delivery reported by SendAsync.
+    private static Action<SessionDelivery>? TaskDelivery(
+        Action<SessionDelivery>? delivered,
+        string taskId,
+        string eventName,
+        string title,
+        string recipient
+    ) =>
+        delivered is null
+            ? null
+            : delivery =>
+                delivered(
+                    delivery with
+                    {
+                        Task = new JsonObject
+                        {
+                            ["taskId"] = taskId,
+                            ["event"] = eventName,
+                            ["title"] = title,
+                            ["recipient"] = SessionManager.TaskRecipientRole(recipient),
+                        },
+                    }
+                );
 
     private static string Summary(
         JsonObject task,
@@ -570,7 +626,11 @@ internal sealed class TaskService : IDisposable
     internal async Task<(
         JsonObject Payload,
         string? CompletionTarget
-    )> ExecuteForToolWithReceiptAsync(SessionOwner source, JsonObject args)
+    )> ExecuteForToolWithReceiptAsync(
+        SessionOwner source,
+        JsonObject args,
+        Action<SessionDelivery>? delivered = null
+    )
     {
         var normalized = (JsonObject)args.DeepClone();
         if (Text(normalized["action"]) == "list" && !normalized.ContainsKey("scope"))
@@ -579,7 +639,8 @@ internal sealed class TaskService : IDisposable
             await ExecuteAsync(
                 normalized,
                 source.Id,
-                anchor: source.Entry.Snapshot().NextMessageSeq - 1
+                anchor: source.Entry.Snapshot().NextMessageSeq - 1,
+                delivered: delivered
             )
         ).Payload;
         var task = payload["task"] as JsonObject;

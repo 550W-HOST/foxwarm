@@ -76,10 +76,34 @@ try {
   await page.waitForSelector('[data-continuous-history]')
   await page.waitForSelector('[data-chat-message-anchor-key="seq-local-240"]')
   assert(await page.$eval('.foxwarm-chat-messages', element => getComputedStyle(element).overflowY !== 'hidden'))
-  await page.evaluate(() => { const scroller = document.querySelector('.foxwarm-chat-messages'); scroller.scrollTop = 0; scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, bubbles: true })); scroller.dispatchEvent(new Event('scroll')) })
+  // Read upward with the wheel, as a user does, to request the earlier page and bring the
+  // archived image into the viewport without programmatic scrollTop/scrollIntoView jumps.
+  const scrollerBox = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(scrollerBox.x + scrollerBox.width / 2, scrollerBox.y + scrollerBox.height / 2)
+  const olderImageLoaded = () => page.evaluate(() => [...document.querySelectorAll('img[src*="/api/blobs/"]')].some(img => img.naturalWidth === 3))
+  for (let step = 0; step < 80 && !await olderImageLoaded(); step++) {
+    const before = await page.$eval('.foxwarm-chat-messages', element => ({
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      loading: !!document.querySelector('[data-continuous-history]')?.textContent.includes('Loading'),
+    }))
+    if (before.loading) {
+      await page.waitForFunction(previousHeight => {
+        const element = document.querySelector('.foxwarm-chat-messages')
+        return !document.querySelector('[data-continuous-history]')?.textContent.includes('Loading') || element.scrollHeight !== previousHeight
+      }, {}, before.scrollHeight)
+      continue
+    }
+    await page.mouse.wheel({ deltaY: -1500 })
+    await page.waitForFunction(before => {
+      const element = document.querySelector('.foxwarm-chat-messages')
+      if ([...document.querySelectorAll('img[src*="/api/blobs/"]')].some(img => img.naturalWidth === 3)) return true
+      const loading = !!document.querySelector('[data-continuous-history]')?.textContent.includes('Loading')
+      return element.scrollTop !== before.scrollTop || element.scrollHeight !== before.scrollHeight || loading
+    }, {}, before)
+  }
   await until(() => pages.some(value => new URL(value.url).searchParams.has('beforeSeq')), 'bounded earlier request from original App')
   assert(pages.every(value => value.body.messages.length <= 100))
-  await page.waitForSelector('img[src*="/api/blobs/"]')
   await page.waitForFunction(() => [...document.querySelectorAll('img[src*="/api/blobs/"]')].some(img => img.naturalWidth === 3))
   // The original is still available behind the compacted active context, including its image.
   const imagePage = (await host.api('GET', route(seed.parent) + '/history/continuous?afterSeq=149')).body

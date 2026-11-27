@@ -199,7 +199,7 @@ try {
     if (response.url().includes('/debug-file')) debugResponse = response
   })
   await page.click('button[title="Session options"]')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Debug info')?.click())
   await page.waitForSelector('[data-json-inspector-dialog] [data-editor-ready="true"]')
   assert(debugResponse)
   assert.equal(debugResponse.status(), 200)
