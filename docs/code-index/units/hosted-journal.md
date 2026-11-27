@@ -1,6 +1,6 @@
 # Unit: Hosted LLM journal, text-redaction cache and journal retention
 
-Files: `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.Usage.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.Redaction.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.Retention.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgJournalWriter.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/JournalRetentionOptions.cs`, `dotnet/Foxwarm/Hosted/Postgres/TextRedaction/PgTextRedactionStore.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Journal.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0500_llm_journal.sql`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0501_text_redaction.sql`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.cs`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.Writer.cs`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.Usage.cs`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.Backends.cs`, `dotnet/Foxwarm.Tests/Models/TextRedactionStoreContractTests.Postgres.cs`, `dotnet/Foxwarm.Tests/Sessions/RequestPrefixTests.RedactionTakeover.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedStartupTests.Journal.cs`, `dotnet/Foxwarm.Tests/Hosted/JournalRetentionOptionsTests.cs`
+Files: `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.Usage.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.Redaction.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.Retention.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgLlmJournalStore.Unrecorded.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/PgJournalWriter.cs`, `dotnet/Foxwarm/Hosted/Postgres/Journal/JournalRetentionOptions.cs`, `dotnet/Foxwarm/Hosted/Postgres/TextRedaction/PgTextRedactionStore.cs`, `dotnet/Foxwarm/Hosted/PostgresStorageContext.Journal.cs`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0500_llm_journal.sql`, `dotnet/Foxwarm/Hosted/Schema/Migrations/0501_text_redaction.sql`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.cs`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.Writer.cs`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.Usage.cs`, `dotnet/Foxwarm.Tests/Models/LlmJournalContractTests.Backends.cs`, `dotnet/Foxwarm.Tests/Models/TextRedactionStoreContractTests.Postgres.cs`, `dotnet/Foxwarm.Tests/Sessions/RequestPrefixTests.RedactionTakeover.cs`, `dotnet/Foxwarm.Tests/Hosted/HostedStartupTests.Journal.cs`, `dotnet/Foxwarm.Tests/Hosted/JournalRetentionOptionsTests.cs`
 Secondary files: `dotnet/Foxwarm/Models/LlmJournalReconstruction.cs`, `dotnet/Foxwarm/Models/TextRedactionRecordStore.cs`, `dotnet/Foxwarm.Tests/Models/TextRedactionStoreContractTests.cs`, `dotnet/Foxwarm/Hosted/HostedEntry.cs`, `dotnet/Foxwarm/Models/LlmRequestJournal.cs`, `dotnet/Foxwarm/Models/TextRedactionStore.cs`
 
 The tenant's [LLM request journal](./model-journal.md) and [text-redaction cache](./model-text-redaction-persistence.md) in PostgreSQL, behind the file stores' interfaces ([storage context](./storage-context.md#model-request-journal-and-text-redaction)), and the hosted-only journal retention.
@@ -28,10 +28,16 @@ The tenant's [LLM request journal](./model-journal.md) and [text-redaction cache
 
 U14(c), decision C11; hosted only. File mode's journal keeps everything as before.
 
-- **Setting.** The deployment's `journal: {retentionDays}`. Unset means unlimited, the P1 default. `JournalRetentionOptions.FromDeployment` accepts only a positive whole number and refuses anything else, naming the key; `BuildRuntimeAsync` turns that into `HostedStartupException` (exit 78) before the key ring is opened. There is no `journal.enabled` in P1 ([Open Questions](#open-questions)).
+- **Setting.** The deployment's `journal: {retentionDays}`. Unset means unlimited, the P1 default. `JournalRetentionOptions.FromDeployment` accepts only a positive whole number and refuses anything else, naming the key; `BuildRuntimeAsync` turns that into `HostedStartupException` (exit 78) before the key ring is opened. A tenant's own `retentionDays` overrides it ([journal off switch](#journal-off-switch)).
 - **Job.** `BuildRuntimeAsync` starts it in the owner after the host is built. The first pass runs a minute after start, then one runs each day. It stops when the journal is disposed or on a fence; the next owner runs its own.
 - **Pass.** `PurgeAsync(cutoff)` walks requests created before the cutoff in `(created_at, request_id)` batches of 500, each one writer command. It keeps a request whose delta descendants include a retained request, so every retained request stays reconstructable. It deletes the other requests' results, starts and object references, then the objects no remaining request (`llm_journal_request_objects`) or attempt (`prompt_object_id`) references.
 - **Kept.** `llm_usage` and `llm_redaction` are never deleted, so the usage overview and its coverage stay complete.
+
+## Journal off switch
+
+- **Setting.** The tenant's `tenants.settings.journal.enabled: false`, applied at activation ([tenant settings](./hosted-egress-limits.md#d-tenant-settings)). The tenant's `retentionDays` overrides the deployment's.
+- **Behavior** (`PgLlmJournalStore.Unrecorded`). Admission returns an ID without writing; attempt starts are kept in this owner's memory; a result writes only its usage-ledger and redaction rows from them. No manifest, object, attempt start or result is written. The usage overview and its coverage stay complete.
+- **Reconstruction** reports such a request as `not-recorded` with a reason; while the journal is off, an ID no row knows reads the same way. Requests recorded earlier keep their content and retention. The list holds only recorded requests.
 
 ## Tests
 
@@ -49,4 +55,5 @@ U14(c), decision C11; hosted only. File mode's journal keeps everything as befor
 
 ## Open Questions
 
-- [2026-11-26] **Per-tenant journal off switch (P2).** A tenant setting that writes no journal content: admission returns an ID, attempt start and result write only the usage-ledger and redaction rows from the start data kept in memory, reconstruction reports the request as not recorded, and the list is empty. It comes with P2's per-tenant settings; P1 has only `retentionDays`.
+- None.
+
