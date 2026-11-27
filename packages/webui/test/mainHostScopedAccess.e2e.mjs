@@ -219,15 +219,31 @@ try {
   await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') }); await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page)
   await chooseSelectOption(page, '[role="combobox"][aria-label="Session"]', moved)
   await page.waitForSelector('[data-continuous-history]')
-  await page.evaluate(() => { const element = document.querySelector('.foxwarm-chat-messages'); element.scrollTop = 0; element.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); element.dispatchEvent(new Event('scroll')) })
-  // The earlier page mounts above the kept reading row; read upward with the wheel until the
-  // older lazy image is near the viewport and loaded.
+  // Read upward with the wheel, as a user does, until the earlier page loads and the older
+  // lazy image enters the viewport and loads.
   const scroller = await (await page.$('.foxwarm-chat-messages')).boundingBox()
   await page.mouse.move(scroller.x + scroller.width / 2, scroller.y + scroller.height / 2)
   const olderImageLoaded = () => page.evaluate(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))
-  for (let step = 0; step < 60 && !await olderImageLoaded(); step++) {
+  for (let step = 0; step < 80 && !await olderImageLoaded(); step++) {
+    const before = await page.$eval('.foxwarm-chat-messages', element => ({
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      loading: !!document.querySelector('[data-continuous-history]')?.textContent.includes('Loading'),
+    }))
+    if (before.loading) {
+      await page.waitForFunction(previousHeight => {
+        const element = document.querySelector('.foxwarm-chat-messages')
+        return !document.querySelector('[data-continuous-history]')?.textContent.includes('Loading') || element.scrollHeight !== previousHeight
+      }, {}, before.scrollHeight)
+      continue
+    }
     await page.mouse.wheel({ deltaY: -1500 })
-    await new Promise(resolve => setTimeout(resolve, 100))
+    await page.waitForFunction(before => {
+      const element = document.querySelector('.foxwarm-chat-messages')
+      if ([...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3)) return true
+      const loading = !!document.querySelector('[data-continuous-history]')?.textContent.includes('Loading')
+      return element.scrollTop !== before.scrollTop || element.scrollHeight !== before.scrollHeight || loading
+    }, {}, before)
   }
   await page.waitForFunction(() => [...document.querySelectorAll('img')].some(image => image.src.includes('/blobs/') && image.naturalWidth === 3))
   const downloads = join(host.root, 'scoped-native-downloads'); await mkdir(downloads)

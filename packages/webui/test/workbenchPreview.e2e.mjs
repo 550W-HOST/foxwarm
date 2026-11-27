@@ -2529,6 +2529,23 @@ test('Footer Terminal is a reusable bottom pane that collapses without PTY delet
 })
 
 
+// Scrolls Chat with the wheel, as a reader does, until `reached` holds in the page. The timeline
+// mounts rows as the reader approaches them and keeps the reading row in place, so a target
+// reached this way stays where it is. Each step waits for the scroll position or content to change.
+async function wheelChatUntil(page, deltaY, reached) {
+  const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  for (let step = 0; step < 60 && !await page.evaluate(reached); step++) {
+    const before = await page.$eval('.foxwarm-chat-messages', element => `${element.scrollTop}:${element.scrollHeight}`)
+    await page.mouse.wheel({ deltaY })
+    await page.waitForFunction(before => {
+      const element = document.querySelector('.foxwarm-chat-messages')
+      return `${element.scrollTop}:${element.scrollHeight}` !== before
+    }, {}, before)
+  }
+  assert.ok(await page.evaluate(reached), 'the wheel reached the target')
+}
+
 test('visible Chat keeps its DOM and initialization across split and normalization', async () => {
   const chatMessages = Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Lifecycle message ' + index + '\n\n' + 'Retained timeline content. '.repeat(10) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } }))
   chatMessages[24] = { role: 'model', parts: [{ functionCall: { id: 'retained-call', name: 'read', args: { filePath: 'fixture.txt' } } }], __meta: { seq: 25, timestamp: 1700000000024 } }
@@ -2553,10 +2570,17 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
     await page.click('[role="textbox"][aria-label="Message"]')
     await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
     await page.keyboard.type('retained draft')
-    await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')) })
-    await page.waitForFunction(() => !document.body.textContent.includes('Scroll upward to load'))
-    await page.waitForSelector('button[aria-label="Expand tool group"]')
-    await page.$eval('button[aria-label="Expand tool group"]', button => button.scrollIntoView({ block: 'center' }))
+    // Read up to the first row and back down to the tool group with the wheel. A programmatic
+    // jump leaves an attached reader following the latest row, so the next window commit would
+    // pin it back to the bottom and take the tool group out of view.
+    await wheelChatUntil(page, -1500, () => document.querySelector('.foxwarm-chat-messages').scrollTop === 0
+      && !!document.querySelector('[data-chat-message-anchor-key="seq-local-1"]'))
+    assert.equal(await page.evaluate(() => document.body.textContent.includes('Scroll upward to load')), false)
+    await wheelChatUntil(page, 200, () => {
+      const viewport = document.querySelector('.foxwarm-chat-messages').getBoundingClientRect()
+      const button = document.querySelector('button[aria-label="Expand tool group"]')?.getBoundingClientRect()
+      return !!button && button.top >= viewport.top && button.bottom <= viewport.bottom
+    })
     await page.click('button[aria-label="Expand tool group"]')
     await page.waitForSelector('[data-tool-group-expanded="true"]')
     await page.waitForFunction(() => !document.querySelector('[data-tool-group-expanded="true"]').style.height)
