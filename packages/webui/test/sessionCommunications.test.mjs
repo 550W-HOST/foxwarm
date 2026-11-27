@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 const dir=mkdtempSync(join(tmpdir(),'session-communications-')),file=join(dir,'bundle.cjs')
 build({entryPoints:[new URL('../src/components/sessionCommunications.ts',import.meta.url).pathname],bundle:true,platform:'node',format:'cjs',outfile:file,logLevel:'silent'}).then(()=>{
- const {projectSessionCommunications,receivedSessionCommunication}=createRequire(import.meta.url)(file)
+ const {projectSessionCommunications,receivedSessionCommunication,taskMessageLayout}=createRequire(import.meta.url)(file)
  test('structured incoming messages retain the sender and strip only their transport envelope',()=>{
   const input={role:'user',parts:[{system:'<foxwarm-message type="inter-agent" sourceSessionId="review/main">\nReport\n<foxwarm-system kind="quoted-example">\nKeep this authored example.\n</foxwarm-system>\n</foxwarm-message>'}]}
   const received=receivedSessionCommunication(input)
@@ -110,5 +110,22 @@ build({entryPoints:[new URL('../src/components/sessionCommunications.ts',import.
   // Malformed task evidence is not shown.
   const malformed={role:'tool',parts:[{functionResponse:{tool_use_id:'x',response:{},__meta:{sessionMessages:[{id:'x',targetSessionId:'p',message:'m',task:{taskId:'t'}}]}}}]}
   assert.equal(projectSessionCommunications([malformed]).has(malformed),false)
+ })
+
+ test('generated Task lead lines give the header title and the preview starts at the content',()=>{
+  const card=(event,message,extra={})=>({key:'k',direction:'received',peerSessionId:'lead/main',message,task:{taskId:'task_1',event,recipient:event==='completed'?'creator':'owner'},...extra})
+  assert.deepEqual(taskMessageLayout(card('assigned','You have been assigned a task: task_1 — Review — the cards\nStatus: active\nRead the change.\n\nAdditional instruction:\nUse the harness.')),{title:'Review — the cards',preview:'Read the change.\n\nAdditional instruction:\nUse the harness.'})
+  assert.deepEqual(taskMessageLayout(card('transferred','You have been assigned a task: task_1 — Review\nStatus: active\n\nAdditional instruction:\nGo')),{title:'Review',preview:'Additional instruction:\nGo'})
+  assert.deepEqual(taskMessageLayout(card('completed','Task completed: task_1 — Review\nStatus: completed\n## Result\nDone.\nTask owner usage: wire; estimated cost $0.01 USD.')),{title:'Review',preview:'## Result\nDone.\nTask owner usage: wire; estimated cost $0.01 USD.'})
+  assert.deepEqual(taskMessageLayout(card('note','Note on task task_1 — Review\nIs the old format still read?')),{title:'Review',preview:'Is the old format still read?'})
+  // Nothing after the lead: the title still shows and the body is not replaced.
+  assert.deepEqual(taskMessageLayout(card('assigned','You have been assigned a task: task_1 — Review\nStatus: open')),{title:'Review',preview:null})
+  // The sender reads the title from its delivery record.
+  assert.equal(taskMessageLayout({...card('assigned','You have been assigned a task: task_1 — Review\nStatus: active\nBody'),direction:'sent',task:{taskId:'task_1',event:'assigned',recipient:'owner',title:'Recorded'}}).title,'Recorded')
+  // Other forms, another Task's ID, truncated bodies and non-Task cards keep the body unchanged with no title.
+  for (const message of ['Please review task_1 — Review\nStatus: active','You have been assigned a task: task_2 — Review\nStatus: active\nBody','You have been assigned a task: task_1 — Review\nBody without status','You have been assigned a task: task_1 — \nStatus: active\nBody'])
+   assert.equal(taskMessageLayout(card('assigned',message)),null,message)
+  assert.equal(taskMessageLayout(card('assigned','You have been assigned a task: task_1 — Review\nStatus: active\nBody',{truncated:true})),null)
+  assert.equal(taskMessageLayout({key:'k',direction:'received',peerSessionId:'p',message:'You have been assigned a task: task_1 — Review\nStatus: active\nBody'}),null)
  })
 }).finally(()=>rmSync(dir,{recursive:true,force:true}))

@@ -107,6 +107,9 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
         for (const subCall of response.__meta?.toolScriptSubCalls || []) {
           if (Array.isArray(subCall.sessionMessages)) sent += subCall.sessionMessages.length
           else if (subCall.status === 'completed' && subCall.sessionMessage) sent++
+          // A scripted child creation counts when its delivery record names the created Session.
+          if (subCall.status === 'completed' && (subCall.name || '').replace(/^builtin:/, '') === 'create_child_session'
+            && typeof subCall.sessionMessages?.[0]?.targetSessionId === 'string') created++
         }
         if (response.response?.error !== undefined && response.response?.error !== null) continue
         const tool = call ? target(call) : { source: 'builtin', name: response.name, args: undefined }

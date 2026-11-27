@@ -117,6 +117,8 @@ interface ChatTimelineProps {
   renderWindowState?: { current: TimelineRenderWindowState }
 }
 
+const communicationMarkdown = (text: string) => <MarkdownContent citations={false} text={text} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" />
+
 /**
  * A DOM window over the derived top-level items (rows, counted groups and Activities).
  * `key` names a source message by stable or viewport-anchor key; null is the position after
@@ -1108,7 +1110,7 @@ const MessageRow = memo(function MessageRow({
             : ''
         }`}
       >
-        {row.question ? <AskUserToolCard call={row.question} response={pairedToolResponse?.parts.find(part => part.functionResponse?.tool_use_id === row.question!.id)?.functionResponse} /> : row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent citations={false} text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
+        {row.question ? <AskUserToolCard call={row.question} response={pairedToolResponse?.parts.find(part => part.functionResponse?.tool_use_id === row.question!.id)?.functionResponse} /> : row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'} renderPreview={communicationMarkdown}>{communicationMarkdown(row.communication.message)}</SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <>

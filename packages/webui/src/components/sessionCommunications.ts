@@ -52,6 +52,41 @@ export function taskEventLabel(task: SessionCommunicationTask): string {
   }
 }
 
+/** The generated first line of a Task notification body by event, followed by `<taskId> — <title>`. */
+function taskLead(task: SessionCommunicationTask): { lead: string, status: boolean } | null {
+  switch (task.event) {
+    case 'assigned': case 'transferred': return { lead: 'You have been assigned a task: ', status: true }
+    case 'completed': return { lead: 'Task completed: ', status: true }
+    case 'note': return { lead: 'Note on task ', status: false }
+    default: return null
+  }
+}
+
+export interface TaskMessageLayout {
+  /** The Task title, for the card header. */
+  title: string
+  /** The body after the generated lead lines, for the collapsed preview; null when nothing follows them. */
+  preview: string | null
+}
+
+/**
+ * Splits the first-party Task notification body into its title and the content after the generated
+ * lead (`<lead><taskId> — <title>`, then `Status: …` for assignments and completions). A body in any
+ * other form, or naming another Task, has no layout and is shown unchanged.
+ */
+export function taskMessageLayout(communication: SessionCommunication): TaskMessageLayout | null {
+  const task = communication.task
+  const shape = task && taskLead(task)
+  if (!task || !shape || communication.truncated) return null
+  const lines = communication.message.split('\n')
+  const prefix = `${shape.lead}${task.taskId} — `
+  if (!lines[0].startsWith(prefix)) return null
+  const parsed = lines[0].slice(prefix.length).trim()
+  if (!parsed || shape.status && !/^Status: \S+$/.test(lines[1] || '')) return null
+  const rest = lines.slice(shape.status ? 2 : 1).join('\n').replace(/^\s*\n/, '')
+  return { title: communication.direction === 'sent' && task.title?.trim() || parsed, preview: rest.trim() ? rest : null }
+}
+
 // The Session tag and Session-opening boundaries share a Session's first input with its envelope.
 const OPENING_EVENTS = new Set(['new-child', 'history-inherited', 'user-child-created'])
 function isSessionOpeningTag(text: string): boolean {

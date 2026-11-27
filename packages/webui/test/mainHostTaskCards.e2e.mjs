@@ -95,6 +95,7 @@ try {
   const cards = id => page.$$eval(`[data-workbench-content-tab="chat:${id}"] [data-chat-timeline=committed] [data-session-communication]`, nodes => nodes.map(node => ({
     direction: node.getAttribute('data-session-communication'), event: node.getAttribute('data-task-event'), label: node.getAttribute('aria-label'),
     text: node.textContent.replace(/\s+/g, ' ').trim(), inActivity: !!node.closest('[data-timeline-activity]'),
+    title: node.querySelector('[data-task-title]')?.textContent ?? null, body: node.querySelector('[data-search-surface="communication"]').textContent,
   })))
   await open('main')
   await page.waitForFunction(selector => document.querySelectorAll(selector + ' [data-session-communication]').length >= 3, {}, timeline)
@@ -103,6 +104,15 @@ try {
   assert(assigned && assigned.direction === 'sent' && !assigned.inActivity && assigned.text.includes('Task assigned') && assigned.text.includes('Review the cards.'), JSON.stringify(shown))
   assert(completed && completed.direction === 'received' && !completed.inActivity && completed.text.includes('Task completed') && completed.text.includes(RESULT), JSON.stringify(shown))
   assert(shown.some(card => card.direction === 'sent' && !card.event && card.text.includes('Heads-up from the workflow.')), JSON.stringify(shown))
+  // The header names the Task; the collapsed preview starts after the generated lead lines.
+  assert.equal(assigned.title, 'Card review'); assert.equal(completed.title, 'Card review')
+  assert(assigned.body.startsWith('Review the cards.') && !assigned.body.includes('Status:'), assigned.body)
+  assert(completed.body.startsWith(RESULT) && !completed.body.includes('Task completed:'), completed.body)
+  // Expanding shows the full body as delivered.
+  const completedCard = `${timeline} [data-session-communication="received"][data-task-event="completed"]`
+  await page.click(`${completedCard} [aria-label="Expand message"]`)
+  await page.waitForFunction(selector => document.querySelector(selector + ' [data-search-surface="communication"]').textContent.startsWith('Task completed: '), {}, completedCard)
+  await page.click(`${completedCard} [aria-label="Collapse message"]`)
   // Cards follow source order: the assignment and send after the script, the completion after them.
   assert(shown.indexOf(assigned) < shown.indexOf(completed))
 
@@ -110,6 +120,11 @@ try {
   await page.click(`[data-workbench-content-tab="chat:main"] button[aria-label="Find in chat"]`)
   await page.type('[data-chat-search] input[aria-label="Search messages"]', 'delivery records are complete')
   await page.waitForFunction(() => /1\/1/.test(document.querySelector('[data-chat-search]')?.textContent || ''))
+  // Search still indexes the lead lines the preview omits, and reveals the full body.
+  await page.click('[data-chat-search] input[aria-label="Search messages"]', { clickCount: 3 })
+  await page.type('[data-chat-search] input[aria-label="Search messages"]', 'Status: completed')
+  await page.waitForFunction(() => /1\/1/.test(document.querySelector('[data-chat-search]')?.textContent || ''))
+  await page.waitForFunction(selector => document.querySelector(selector + ' [data-search-surface="communication"]').textContent.startsWith('Task completed: '), {}, completedCard)
   await page.keyboard.press('Escape')
 
   // The Task link opens Tasks with that Task selected.

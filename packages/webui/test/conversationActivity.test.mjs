@@ -113,8 +113,13 @@ test('recorded deliveries count every Task notification, scripted subcall and ba
     { id: 'c', name: 'run_script', status: 'completed', sessionMessages: [record('c'), record('c#2')] },
     { id: 'd', name: 'send_to_session', status: 'completed', sessionMessage: { targetSessionId: 'peer', message: 'legacy' } },
   ] } } }] }
-  // A scripted child creation counts its delivery, not a top-level child session.
-  assert.equal(summary([script, scripted]), '1 call · 4 sent')
+  // A scripted child creation counts when its record names the child; without a record it adds nothing.
+  assert.equal(summary([script, scripted]), '1 call · 1 child session · 4 sent')
+  const unrecorded = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'script', name: 'run_script', response: { status: 'completed' }, __meta: { toolScriptSubCalls: [{ id: 'b', name: 'create_child_session', status: 'completed' }] } } }] }
+  assert.equal(summary([script, unrecorded]), '1 call')
+  // Older subcall rows may lack a name.
+  const unnamed = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'script', name: 'run_script', response: { status: 'completed' }, __meta: { toolScriptSubCalls: [{ id: 'x', status: 'completed', sessionMessage: { targetSessionId: 'peer', message: 'm' } }] } } }] }
+  assert.equal(summary([script, unnamed]), '1 call · 1 sent')
   const background = { role: 'user', parts: [{ system: '<foxwarm-system kind="event" type="background-script-finished">\nrunId: r\n</foxwarm-system>' }], __meta: { seq: 9, sessionMessages: [record('e'), record('f')] } }
   assert.equal(summary([background]), '2 sent')
 })
