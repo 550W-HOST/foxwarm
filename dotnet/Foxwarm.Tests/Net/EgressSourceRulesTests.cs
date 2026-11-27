@@ -5,12 +5,14 @@ using System.Net.WebSockets;
 namespace Foxwarm.Tests.Net;
 
 /// <summary>
-/// Keeps outbound connections of the Main server inside <c>EgressHttp</c>. The rule reads the
-/// compiled <c>Foxwarm</c> assembly's IL (<see cref="EgressIlScan"/>): no type but the
-/// reviewed owners below constructs an HTTP client, a terminal handler, a WebSocket client, a
-/// socket or a TLS stream, connects a WebSocket without the factory's invoker, gives the MCP
-/// SDK a transport without the factory's client, or asks for HTTP/3 (QUIC connections don't
-/// pass the factory's connect callback).
+/// A construction lint for the Main server's outbound connections, over the compiled
+/// <c>Foxwarm</c> assembly's IL (<see cref="EgressIlScan"/>): no type but the reviewed owners
+/// below constructs an HTTP client, a terminal handler, a WebSocket client, a socket or a TLS
+/// stream (directly, as a base class or through <c>IHttpClientFactory</c>), connects a
+/// WebSocket without the factory's invoker, gives the MCP SDK a transport without a client, or
+/// chooses an HTTP version (HTTP/3's QUIC connections don't pass the factory's connect
+/// callback). It doesn't establish where a supplied client came from; explicit injection of
+/// the policy's clients and review of dependencies that open connections cover that.
 /// </summary>
 public sealed class EgressSourceRulesTests
 {
@@ -23,19 +25,32 @@ public sealed class EgressSourceRulesTests
             "replica infrastructure: a standby forwards the public listener to the owner replica",
     };
 
+    // Single constructs a type may use, with why.
+    private static readonly Dictionary<(string Type, string Construct), string> Uses = new()
+    {
+        [("Foxwarm.McpOAuthService", "HttpRequestMessage.Version")] =
+            "the OAuth retry copies the original request's version",
+        [("Foxwarm.McpOAuthService", "HttpRequestMessage.VersionPolicy")] =
+            "the OAuth retry copies the original request's version policy",
+    };
+
+    private static bool Allowed(EgressIlScan.Hit hit) =>
+        Owners.ContainsKey(hit.Type) || Uses.ContainsKey((hit.Type, hit.Construct));
+
     private static string Assembly(Type type) => type.Assembly.Location;
 
     [Fact]
     public void OnlyReviewedOwnersBuildOutboundConnections()
     {
         var hits = EgressIlScan.Scan(Assembly(typeof(Foxwarm.Net.EgressHttp)));
-        var unexpected = hits.Where(hit => !Owners.ContainsKey(hit.Type)).Select(hit => hit.ToString()).ToArray();
+        var unexpected = hits.Where(hit => !Allowed(hit)).Select(hit => hit.ToString()).ToArray();
         Assert.Empty(unexpected);
         // The scan sees the owners' own constructions, so it reads the right IL.
         Assert.Contains(hits, hit => hit.Type == "Foxwarm.Net.EgressHttp" && hit.Construct == "new System.Net.Http.SocketsHttpHandler");
         Assert.Contains(hits, hit => hit.Type == "Foxwarm.Net.EgressPolicy" && hit.Construct == "new System.Net.Sockets.Socket");
-        // Every owner still needs its exception.
+        // Every owner and use still needs its exception.
         Assert.All(Owners.Keys, owner => Assert.Contains(hits, hit => hit.Type == owner));
+        Assert.All(Uses.Keys, use => Assert.Contains(hits, hit => (hit.Type, hit.Construct) == use));
     }
 
     [Theory]
@@ -53,6 +68,13 @@ public sealed class EgressSourceRulesTests
     [InlineData(nameof(ForbiddenIdioms.Http3), "HttpVersion.Version30")]
     [InlineData(nameof(ForbiddenIdioms.ClientVersionPolicy), "HttpClient.DefaultVersionPolicy")]
     [InlineData(nameof(ForbiddenIdioms.SdkOwnedClient), "new ModelContextProtocol.Client.HttpClientTransport without a client")]
+    [InlineData("OwnClient..ctor", "base constructor of System.Net.Http.HttpClient")]
+    [InlineData("OwnSocket..ctor", "base constructor of System.Net.Sockets.Socket")]
+    [InlineData(nameof(ForbiddenIdioms.Factory), "IHttpClientFactory.CreateClient")]
+    [InlineData(nameof(ForbiddenIdioms.NamedFactory), "IHttpClientFactory.CreateClient")]
+    [InlineData(nameof(ForbiddenIdioms.RequestVersion), "HttpRequestMessage.Version")]
+    [InlineData(nameof(ForbiddenIdioms.RequestVersion), "HttpRequestMessage.VersionPolicy")]
+    [InlineData(nameof(ForbiddenIdioms.WebSocketVersion), "ClientWebSocketOptions.HttpVersion")]
     public void TheRuleFindsEachIdiom(string method, string construct)
     {
         var hits = EgressIlScan.Scan(
@@ -124,6 +146,22 @@ internal sealed class ForbiddenIdioms
     internal static void ClientVersionPolicy(HttpClient client) =>
         client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher;
 
+    internal sealed class OwnClient() : HttpClient(new SocketsHttpHandler());
+
+    internal sealed class OwnSocket() : Socket(SocketType.Stream, ProtocolType.Tcp);
+
+    internal static HttpClient Factory(System.Net.Http.IHttpClientFactory factory) => factory.CreateClient();
+
+    internal static HttpClient NamedFactory(System.Net.Http.IHttpClientFactory factory) => factory.CreateClient("models");
+
+    internal static void RequestVersion(HttpRequestMessage request)
+    {
+        request.Version = HttpVersion.Version20;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionOrHigher;
+    }
+
+    internal static void WebSocketVersion(ClientWebSocket socket) => socket.Options.HttpVersion = HttpVersion.Version20;
+
     internal static object SdkOwnedClient() =>
         new ModelContextProtocol.Client.HttpClientTransport(
             new ModelContextProtocol.Client.HttpClientTransportOptions { Endpoint = new Uri("http://x") }
@@ -158,8 +196,5 @@ internal sealed class AllowedIdioms
             ownsHttpClient: true
         );
 
-    // Copying a request's own version (the OAuth retry) is no upgrade.
-    internal static HttpRequestMessage Copy(HttpRequestMessage request) =>
-        new(request.Method, request.RequestUri) { Version = request.Version, VersionPolicy = request.VersionPolicy };
 }
 #pragma warning restore CA2000, CS1998

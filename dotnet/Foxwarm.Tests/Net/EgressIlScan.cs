@@ -8,9 +8,14 @@ using System.Reflection.PortableExecutable;
 namespace Foxwarm.Tests.Net;
 
 /// <summary>
-/// Reads the IL of a compiled assembly for the outbound-connection constructs the egress rule
-/// forbids. It sees what the compiler emitted, so spelling (target-typed <c>new()</c>,
-/// expression bodies, aliases, fully qualified names) makes no difference.
+/// A construction lint over the IL of one compiled assembly: it finds the places that build an
+/// outbound HTTP client, terminal handler, WebSocket client, socket or TLS stream themselves
+/// (by constructor, base constructor or <c>IHttpClientFactory</c>), connect a WebSocket without
+/// the factory's invoker, give the MCP SDK a transport without a client, or choose an HTTP
+/// version. It sees what the compiler emitted, so spelling (target-typed <c>new()</c>,
+/// expression bodies, aliases, fully qualified names) makes no difference. It doesn't track
+/// where a supplied client came from, reflection, or connections a dependency opens on its own;
+/// explicit client and handler injection and review of new dependencies cover those.
 /// </summary>
 internal static class EgressIlScan
 {
@@ -100,6 +105,29 @@ internal static class EgressIlScan
             {
                 var token = BitConverter.ToInt32(il, offset);
                 var (declaring, name, parameters) = Member(reader, MetadataTokens.EntityHandle(token));
+                var calls = value == OpCodes.Call.Value || value == OpCodes.Callvirt.Value;
+                // A subclass's constructor calling a listed type's constructor.
+                if (calls && name == ".ctor" && ForbiddenConstructors.Contains(declaring))
+                    yield return "base constructor of " + declaring;
+                else if (
+                    calls
+                    && name == "CreateClient"
+                    && declaring
+                        is "System.Net.Http.IHttpClientFactory"
+                            or "System.Net.Http.HttpClientFactoryExtensions"
+                )
+                    yield return "IHttpClientFactory.CreateClient";
+                // The HTTP version of a request or a WebSocket handshake.
+                else if (
+                    calls
+                    && (
+                        declaring == "System.Net.Http.HttpRequestMessage"
+                            && name is "set_Version" or "set_VersionPolicy"
+                        || declaring == "System.Net.WebSockets.ClientWebSocketOptions"
+                            && name is "set_HttpVersion" or "set_HttpVersionPolicy"
+                    )
+                )
+                    yield return declaring[(declaring.LastIndexOf('.') + 1)..] + "." + name[4..];
                 if (value == OpCodes.Newobj.Value)
                 {
                     if (ForbiddenConstructors.Contains(declaring) || ownHandlers.Contains(declaring))
