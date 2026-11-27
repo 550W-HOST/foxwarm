@@ -156,7 +156,7 @@ export default function ToolAuthorizationPanel({ active, refreshRequest }: ToolA
           <p data-authorization-absent className="mt-2 text-sm text-fw-text-muted">No policy yet. Agents can use every tool their own rules allow; connected clients can’t use any.</p>
         )}
         {policy?.error && (
-          <p role="alert" data-authorization-invalid className="mt-2 text-sm text-fw-danger">The saved policy is invalid, so every tool call is refused until it’s fixed: {policy.error}</p>
+          <p role="alert" data-authorization-invalid className="mt-2 text-sm text-fw-danger">The saved policy is invalid, so Agents can’t respond and no tool can run until it’s fixed: {policy.error}</p>
         )}
         {loadError && <p role="alert" className="mt-2 text-sm text-fw-danger">{loadError}</p>}
       </div>
