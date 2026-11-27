@@ -10,7 +10,9 @@ internal sealed record ExternalChannelContext(
     string? Sender,
     string? Username,
     Func<string, Task> Reply,
-    string? SelfName = null
+    string? SelfName = null,
+    Action<string>? BeforeQueueAdmission = null,
+    Action<string>? EndSessionPresentation = null
 )
 {
     internal string Target => Instance + ":" + Conversation;

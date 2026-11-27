@@ -64,8 +64,7 @@ internal sealed partial class MessageRouter
         if (message.IngressMetadataParts is { } metadata)
             parts = metadata.Concat(parts).ToArray();
         runtime.Manager.RecordLastChannel(owner, source);
-        var sendOnly =
-            SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["mode"]) == "send-only";
+        var sendOnly = runtime.Manager.IsChannelSendOnly(source.Target);
         var item = new QueueItem(
             QueueItemType.User,
             SessionBoundary.ExternalChannelInput(parts, source, sendOnly),
@@ -81,7 +80,13 @@ internal sealed partial class MessageRouter
             OpenFields: new JsonObject { ["userInput"] = true }
         );
         // Ordinary channel input uses the existing best-effort queue lane; external identity is not Session authority.
-        await runtime.SubmitChannelAsync(owner, item);
+        await runtime.SubmitChannelAsync(
+            owner,
+            item,
+            source.BeforeQueueAdmission is { } beforeAdmission
+                ? () => beforeAdmission(owner.Id)
+                : null
+        );
     }
 
     private async Task<bool> TryExternalCommandAsync(

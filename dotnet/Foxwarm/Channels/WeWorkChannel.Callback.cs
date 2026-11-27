@@ -310,8 +310,7 @@ internal sealed partial class WeWorkChannel
         }
         JsonObject? passive = null;
         ExternalChannelContext? dispatch = null;
-        WeWorkStreamSnapshot? oldPush = null,
-            initialPush = null;
+        WeWorkStreamSnapshot? initialPush = null;
         // Preparation may await media; only admission/card/result mutation is atomic.
         lock (contextGate)
         {
@@ -320,10 +319,11 @@ internal sealed partial class WeWorkChannel
             if (parts is { Count: > 0 } && user != "unknown")
             {
                 var conversation = chatId.Length > 0 ? chatId : user;
+                var sendOnly = sessions.IsChannelSendOnly(id + ":" + conversation);
                 WeWorkStreamSnapshot? stream = null;
-                if (streamEnabled && messageIsAibot)
+                if (streamEnabled && messageIsAibot && !sendOnly)
                 {
-                    var started = streams.Begin(
+                    stream = streams.Begin(
                         conversation,
                         delivery.Mode == "webhook"
                             ? delivery with
@@ -332,22 +332,27 @@ internal sealed partial class WeWorkChannel
                             }
                             : delivery
                     );
-                    stream = started.Current;
-                    responseUrls.Remove(conversation);
-                    if (started.Old?.Delivery.Mode == "websocket")
-                        oldPush = started.Old;
                     if (stream.Delivery.Mode == "websocket")
                         initialPush = stream;
                     else
                         passive = stream.Payload();
                 }
-                else if (responseUrl.Length > 0)
+                else if (!sendOnly && responseUrl.Length > 0)
                 {
                     responseUrls.Remove(conversation);
                     if (responseUrls.Count >= 1024)
                         responseUrls.Remove(responseUrls.Keys.First());
                     responseUrls[conversation] = responseUrl;
                 }
+                var replyOptions = new ChannelSendOptions(
+                    TurnFinal: true,
+                    WebhookUrl: delivery.Mode == "websocket" && (stream is not null || sendOnly)
+                        ? null
+                        : replyWebhook,
+                    StreamId: stream?.Id,
+                    ChatId: chatId,
+                    ChatType: chatType
+                );
                 dispatch = new ExternalChannelContext(
                     id,
                     "wework",
@@ -355,27 +360,21 @@ internal sealed partial class WeWorkChannel
                     user,
                     username,
                     text =>
-                        stream is not null
-                            ? SendTextAsync(
-                                conversation,
-                                text,
-                                new(
-                                    WebhookUrl: replyWebhook,
-                                    StreamId: stream.Id,
-                                    ChatId: chatId,
-                                    ChatType: chatType
-                                ),
-                                CancellationToken.None
-                            )
-                        : responseUrl.Length > 0
-                            ? SendResponseAsync(responseUrl, text, CancellationToken.None)
-                        : SendTextAsync(
+                        SendTextAsync(
                             conversation,
                             text,
-                            new(WebhookUrl: replyWebhook, ChatId: chatId, ChatType: chatType),
-                            CancellationToken.None
+                            replyOptions,
+                            CancellationToken.None,
+                            requestReply: true,
+                            requestResponseUrl: responseUrl
                         ),
-                    Nonempty(Text(config["selfName"])) ? Text(config["selfName"]).Trim() : null
+                    Nonempty(Text(config["selfName"])) ? Text(config["selfName"]).Trim() : null,
+                    BeforeQueueAdmission: stream is not null
+                        ? sessionId => ActivateStream(conversation, stream.Id, sessionId)
+                        : null,
+                    EndSessionPresentation: streamEnabled
+                        ? sessionId => EndSessionPresentation(conversation, sessionId)
+                        : null
                 );
             }
             if (msgId.Length > 0)
@@ -403,12 +402,37 @@ internal sealed partial class WeWorkChannel
                     }.ToJsonText()
             );
         }
-        if (oldPush is not null)
-            _ = ObserveAsync(PushStreamAsync(oldPush, CancellationToken.None));
         if (initialPush is not null)
             _ = ObserveAsync(PushStreamAsync(initialPush, CancellationToken.None));
         if (dispatch is not null)
             _ = ObserveAsync(router.HandleExternalMessageAsync(dispatch, new(parts!)));
         return passive;
+    }
+
+    private void ActivateStream(string conversation, string streamId, string sessionId)
+    {
+        lock (contextGate)
+        {
+            var binding = sessions.ChannelBinding(id + ":" + conversation);
+            if (Text(binding?["sessionId"]) == sessionId && Text(binding?["mode"]) != "send-only")
+            {
+                PushFinishedStream(streams.Activate(streamId, sessionId));
+                responseUrls.Remove(conversation);
+            }
+            else
+                PushFinishedStream(streams.FinishAfterBindingChange(streamId));
+        }
+    }
+
+    private void EndSessionPresentation(string conversation, string sessionId)
+    {
+        lock (contextGate)
+            PushFinishedStream(streams.EndSessionPresentation(conversation, sessionId));
+    }
+
+    private void PushFinishedStream(WeWorkStreamSnapshot? finished)
+    {
+        if (finished?.Delivery.Mode == "websocket")
+            _ = ObserveAsync(PushStreamAsync(finished, CancellationToken.None));
     }
 }

@@ -120,6 +120,19 @@ public sealed class WeWorkTurnTests
             );
             var other = await WeWorkCallbackTests.Refresh(b, WeWorkCallbackTests.Id(independent));
             Assert.Equal(WeWorkCallbackTests.Content(snapshot), WeWorkCallbackTests.Content(other));
+            var command = await WeWorkCallbackTests.Post(a, WeWorkPeer.Text("command", "/whoami"));
+            var commandFinal = await WeWorkCallbackTests.Refresh(
+                a,
+                WeWorkCallbackTests.Id(command)
+            );
+            Assert.True(commandFinal["stream"]!["finish"]!.GetValue<bool>());
+            Assert.Contains("User ID: alice", WeWorkCallbackTests.Content(commandFinal));
+            var stillRunning = await WeWorkCallbackTests.Refresh(a, WeWorkCallbackTests.Id(first));
+            Assert.False(stillRunning["stream"]!["finish"]!.GetValue<bool>());
+            Assert.Equal(
+                WeWorkCallbackTests.Content(snapshot),
+                WeWorkCallbackTests.Content(stillRunning)
+            );
             var next = await WeWorkCallbackTests.Post(a, WeWorkPeer.Text("busy", "steer latest"));
             await TelegramChannelTests.Until(() =>
                 f.Owner.Entry.WithState(state => state.Queue.Count) == 1
@@ -268,7 +281,8 @@ public sealed class WeWorkTurnTests
     {
         var now = DateTimeOffset.UtcNow;
         var aggregator = new WeWorkStreamAggregator(30000, () => now);
-        var first = aggregator.Begin("conversation", new("webhook")).Current;
+        var first = aggregator.Begin("conversation", new("webhook"));
+        aggregator.Activate(first.Id, "main/source");
         aggregator.Apply(
             "conversation",
             "",

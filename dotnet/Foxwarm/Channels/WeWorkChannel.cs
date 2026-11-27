@@ -174,21 +174,10 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         ChannelSendOptions options,
         ChannelTurnProgress? progress,
         CancellationToken token
-    )
-    {
-        if (options.TurnSuspended || streams.Get(conversation) is not { Finish: false } active)
-            return Task.CompletedTask;
-        return AggregateAsync(
-            conversation,
-            text,
-            options with
-            {
-                StreamId = active.Id,
-            },
-            progress,
-            token
-        );
-    }
+    ) =>
+        options.TurnSuspended
+            ? Task.CompletedTask
+            : AggregateAsync(conversation, text, options, progress, token);
 
     private async Task<bool> AggregateAsync(
         string conversation,
@@ -200,45 +189,60 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     {
         if (!streamEnabled)
             return false;
-        var (handled, changed) = streams.Apply(conversation, text, options, progress);
-        if (changed?.Delivery.Mode == "websocket")
-            await PushStreamAsync(changed, token);
+        bool handled;
+        Task? push = null;
+        lock (contextGate)
+        {
+            (handled, var changed) = streams.Apply(conversation, text, options, progress);
+            // Queue snapshots in the order their local state changes, including supersession.
+            if (changed?.Delivery.Mode == "websocket")
+                push = PushStreamAsync(changed, token);
+        }
+        if (push is not null)
+            await push;
         return handled;
     }
 
-    internal async Task SendTextAsync(
+    internal Task SendTextAsync(
         string conversation,
         string text,
         ChannelSendOptions options,
         CancellationToken token
+    ) => SendTextAsync(conversation, text, options, token, requestReply: false);
+
+    private async Task SendTextAsync(
+        string conversation,
+        string text,
+        ChannelSendOptions options,
+        CancellationToken token,
+        bool requestReply,
+        string? requestResponseUrl = null
     )
     {
         try
         {
-            if (options.StreamId is not null && !streamEnabled)
-                return;
             if (
-                await AggregateAsync(conversation, text, options, null, token)
-                || options.StreamId is not null
+                (!requestReply || options.StreamId is not null)
+                && await AggregateAsync(conversation, text, options, null, token)
             )
                 return;
             text = WeWorkStreamAggregator.StripThinkTags(text);
             var explicitWebhook = Nonempty(options.WebhookUrl) ? options.WebhookUrl : null;
-            if (explicitWebhook is null && options.TurnFinal)
+            var response = requestResponseUrl;
+            if (!requestReply && explicitWebhook is null && options.TurnFinal)
             {
-                string? response;
                 lock (contextGate)
                 {
                     response = responseUrls.GetValueOrDefault(conversation);
                     if (response is not null)
                         responseUrls.Remove(conversation);
                 }
-                if (response is not null)
-                {
-                    await SendResponseAsync(response, text, token);
-                    health.Recover(SendingPath);
-                    return;
-                }
+            }
+            if (Nonempty(response))
+            {
+                await SendResponseAsync(response!, text, token);
+                health.Recover(SendingPath);
+                return;
             }
             if (explicitWebhook is null && WebSocketEnabled)
             {

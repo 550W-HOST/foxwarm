@@ -30,6 +30,9 @@ internal sealed partial class SessionManager
 
     internal JsonObject? ChannelBinding(string target) => deletionChannels.Binding(target);
 
+    internal bool IsChannelSendOnly(string target) =>
+        SessionWait.Text(ChannelBinding(target)?["mode"]) == "send-only";
+
     internal void AttachConfiguredChannel(string target, string id) =>
         deletionChannels.Bind(target, id, durable: false);
 

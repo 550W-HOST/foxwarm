@@ -12,7 +12,17 @@ internal sealed partial class MessageRouter
         var target =
             await runtime.GetOwnerAsync(id)
             ?? throw new UserCommandException("❌ Session `" + id + "` not found.");
-        command.Attach(target);
+        var endPresentation = command.Source.EndSessionPresentation;
+        var previous = endPresentation is null ? null : command.CurrentId;
+        try
+        {
+            command.Attach(target);
+        }
+        finally
+        {
+            if (previous is not null && previous != command.CurrentId)
+                endPresentation!(previous);
+        }
         await command.Reply(
             "✅ Attached to session `"
                 + target.Id
@@ -68,11 +78,15 @@ internal sealed partial class MessageRouter
             );
             return;
         }
+        var endPresentation = mode == "send-only" ? command.Source.EndSessionPresentation : null;
+        var previous = endPresentation is null ? null : command.CurrentId;
         manager.SetChannelBinding(
             target,
             "mode",
             mode == "normal" ? null : JsonValue.Create("send-only")
         );
+        if (previous is not null)
+            endPresentation!(previous);
         await command.Reply("✅ Channel mode set to " + mode);
     }
 

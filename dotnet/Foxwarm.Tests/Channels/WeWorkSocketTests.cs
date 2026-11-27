@@ -128,7 +128,7 @@ public sealed class WeWorkSocketTests
     }
 
     [Fact]
-    public async Task WebSocket_latest_cards_supersede_cleanly_and_request_reply_stream_beats_explicit_webhook_while_direct_override_bypasses_card()
+    public async Task Only_ordinary_input_supersedes_the_active_card_and_commands_keep_their_own_card()
     {
         await using var peer = await WeWorkPeer.StartAsync();
         await using var f = await ExternalChannelFixture.CreateAsync(
@@ -140,10 +140,8 @@ public sealed class WeWorkSocketTests
             peer.Frames.Any(frame => Cmd(frame) == "aibot_subscribe")
         );
         peer.Push(WeWorkPeer.Text("old"), "req-old");
-        await TelegramChannelTests.Until(() =>
-            peer.Frames.Any(frame => Cmd(frame) == "aibot_respond_msg")
-        );
         var channel = f.Manager.ChannelRegistry.Get("work")!;
+        await TelegramChannelTests.Until(() => channel.IsLifecycleActive!("wrk-chat"));
         await channel.Send("wrk-chat", "substantive", new(), default);
         await channel.Progress!("wrk-chat", new("tool-calls-start", [new("r", "read")]), default);
         peer.Push(WeWorkPeer.Text("new"), "req-new");
@@ -160,12 +158,25 @@ public sealed class WeWorkSocketTests
         await TelegramChannelTests.Until(() =>
             peer.Frames.Any(frame =>
                 Req(frame) == "req-command"
+                && frame["body"]?["stream"]?["finish"]?.GetValue<bool>() == true
                 && (frame["body"]?["stream"]?["content"]?.GetValue<string>() ?? "").Contains(
                     "alice",
                     StringComparison.Ordinal
                 )
             )
         );
+        Assert.DoesNotContain(
+            peer.Frames,
+            frame =>
+                Req(frame) == "req-new"
+                && frame["body"]?["stream"]?["finish"]?.GetValue<bool>() == true
+        );
+        await channel.Progress!("wrk-chat", new("tool-calls-start", [new("r2", "exec")]), default);
+        await channel.Send("wrk-chat", "ordinary final", new(TurnFinal: true), default);
+        var ordinaryFinal = peer.Frames.Last(frame => Req(frame) == "req-new")["body"]!.AsObject();
+        Assert.True(ordinaryFinal["stream"]!["finish"]!.GetValue<bool>());
+        Assert.Contains("exec", WeWorkCallbackTests.Content(ordinaryFinal));
+        Assert.EndsWith("</think>\nordinary final", WeWorkCallbackTests.Content(ordinaryFinal));
         // Reuse only the adapter already registered by managed ownership for direct option qualification.
         await f.Manager.ManagedChannels.ChangeAsync("stop", "work");
         await using var direct = new WeWorkChannel(
@@ -188,5 +199,228 @@ public sealed class WeWorkSocketTests
         );
         Assert.Single(peer.Calls);
         Assert.Equal("text", peer.Calls.Single().Body["msgtype"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Idle_continue_closes_its_card_and_sends_the_second_reply_proactively()
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(socket: true) },
+            dependencies: peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        f.Manager.AttachChannel("work:wrk-chat", f.Owner);
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => Cmd(frame) == "aibot_subscribe")
+        );
+
+        peer.Push(WeWorkPeer.Text("continue", "/continue"), "req-continue");
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => Cmd(frame) == "aibot_send_msg")
+        );
+
+        var streamFrames = peer.Frames.Where(frame => Req(frame) == "req-continue").ToArray();
+        Assert.Equal(2, streamFrames.Length);
+        Assert.False(streamFrames[0]["body"]!["stream"]!["finish"]!.GetValue<bool>());
+        Assert.True(streamFrames[1]["body"]!["stream"]!["finish"]!.GetValue<bool>());
+        Assert.Contains(
+            "Continuing interrupted turn",
+            WeWorkCallbackTests.Content(streamFrames[1]["body"]!.AsObject())
+        );
+        var followup = peer.Frames.Single(frame => Cmd(frame) == "aibot_send_msg")["body"]!;
+        Assert.Equal("wrk-chat", followup["chatid"]!.GetValue<string>());
+        Assert.Contains(
+            "Session has no interrupted turn to continue.",
+            followup["markdown"]!["content"]!.GetValue<string>()
+        );
+        Assert.Empty(peer.Calls);
+    }
+
+    [Theory]
+    [InlineData(false, "Unauthorized")]
+    [InlineData(true, "is unavailable")]
+    public async Task Rejected_inbound_finishes_the_request_card_without_admitting_a_turn(
+        bool authorized,
+        string expected
+    )
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(socket: true) },
+            dependencies: peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        if (authorized)
+            f.Manager.AttachConfiguredChannel("work:wrk-chat", "main/fixture-missing");
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => Cmd(frame) == "aibot_subscribe")
+        );
+
+        peer.Push(
+            WeWorkPeer.Text("rejected", user: authorized ? "alice" : "fixture-stranger"),
+            "req-rejected"
+        );
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame =>
+                Req(frame) == "req-rejected"
+                && frame["body"]?["stream"]?["finish"]?.GetValue<bool>() == true
+            )
+        );
+
+        var final = peer.Frames.Last(frame => Req(frame) == "req-rejected")["body"]!.AsObject();
+        Assert.Contains(
+            expected,
+            WeWorkCallbackTests.Content(final),
+            StringComparison.OrdinalIgnoreCase
+        );
+        Assert.False(f.Manager.ChannelRegistry.Get("work")!.IsLifecycleActive!("wrk-chat"));
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+    }
+
+    [Fact]
+    public async Task Send_only_accepts_input_and_replies_to_mode_command_without_allocating_cards()
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(socket: true) },
+            dependencies: peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        f.Manager.AttachChannel(
+            "work:wrk-chat",
+            f.Owner,
+            updates: new() { ["mode"] = "send-only" }
+        );
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => Cmd(frame) == "aibot_subscribe")
+        );
+
+        peer.Push(WeWorkPeer.Text("ordinary", "send-only input"), "req-ordinary");
+        await TelegramChannelTests.Until(() =>
+            f.Owner.Entry.WithState(state => state.Queue.Count) == 1
+        );
+        var channel = f.Manager.ChannelRegistry.Get("work")!;
+        await channel.Send("wrk-chat", "explicit reply", new(), default);
+        peer.Push(WeWorkPeer.Text("normal", "/channel mode normal"), "req-normal");
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Count(frame => Cmd(frame) == "aibot_send_msg") == 2
+        );
+        Assert.DoesNotContain(peer.Frames, frame => Cmd(frame) == "aibot_respond_msg");
+        Assert.Equal(
+            new[] { "explicit reply", "✅ Channel mode set to normal" },
+            peer.Frames.Where(frame => Cmd(frame) == "aibot_send_msg")
+                .Select(frame => frame["body"]!["markdown"]!["content"]!.GetValue<string>())
+        );
+
+        peer.Push(WeWorkPeer.Text("normal-input"), "req-normal-input");
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => Req(frame) == "req-normal-input")
+        );
+        await TelegramChannelTests.Until(() =>
+            f.Owner.Entry.WithState(state => state.Queue.Count) == 2
+        );
+        Assert.True(channel.IsLifecycleActive!("wrk-chat"));
+        Assert.Empty(peer.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Changing_the_binding_closes_the_old_card_while_the_session_keeps_running(
+        bool rebind
+    )
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        var releaseAnswer = Signal();
+        await using var provider = new ScriptedResponsesSequenceServer(
+            1,
+            async (_, stream, _) =>
+            {
+                await releaseAnswer.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                await LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    200,
+                    "text/event-stream",
+                    WeWorkTurnTests.Complete(new JsonArray(TelegramHostTests.Output("late answer")))
+                );
+            }
+        );
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(socket: true) },
+            provider.BaseUri,
+            peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        f.Manager.AttachChannel("work:wrk-chat", f.Owner);
+        var destination = rebind
+            ? await f.Manager.CreateNamedAsync("main", "rebound", null, null)
+            : f.Owner;
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => Cmd(frame) == "aibot_subscribe")
+        );
+
+        peer.Push(WeWorkPeer.Text("in-progress"), "req-turn");
+        await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 1);
+        var running = f.Owner.StartProcessing();
+        try
+        {
+            await provider.RequestAt(0).WaitAsync(TimeSpan.FromSeconds(5));
+            var channel = f.Manager.ChannelRegistry.Get("work")!;
+            await channel.Send("wrk-chat", "already sent", new(), default);
+            peer.Push(
+                WeWorkPeer.Text(
+                    "change-binding",
+                    rebind ? $"/channel attach {destination.Id}" : "/channel mode send-only"
+                ),
+                "req-binding"
+            );
+            await TelegramChannelTests.Until(() =>
+                peer.Frames.Any(frame =>
+                    Req(frame) == "req-turn"
+                    && frame["body"]?["stream"]?["finish"]?.GetValue<bool>() == true
+                )
+                && peer.Frames.Any(frame =>
+                    Req(frame) == "req-binding"
+                    && frame["body"]?["stream"]?["finish"]?.GetValue<bool>() == true
+                )
+            );
+            var old = peer.Frames.Last(frame => Req(frame) == "req-turn")["body"]!.AsObject();
+            Assert.Contains("already sent", WeWorkCallbackTests.Content(old));
+            Assert.EndsWith(
+                "</think>\nAutomatic replies from this session will no longer be sent to this conversation.",
+                WeWorkCallbackTests.Content(old)
+            );
+            var command = peer.Frames.Last(frame => Req(frame) == "req-binding")[
+                "body"
+            ]!.AsObject();
+            Assert.Contains(
+                rebind ? "Attached to session" : "Channel mode set to send-only",
+                WeWorkCallbackTests.Content(command)
+            );
+            Assert.Equal(
+                destination.Id,
+                SessionWait.Text(f.Manager.ChannelBinding("work:wrk-chat")?["sessionId"])
+            );
+            Assert.Equal(!rebind, f.Manager.IsChannelSendOnly("work:wrk-chat"));
+            Assert.True(f.Owner.Metadata().Busy);
+            releaseAnswer.TrySetResult();
+            await running;
+            Assert.Contains(
+                f.Owner.History(),
+                row => row.ToJsonString().Contains("late answer", StringComparison.Ordinal)
+            );
+            Assert.DoesNotContain(
+                peer.Frames,
+                frame => frame.ToJsonString().Contains("late answer", StringComparison.Ordinal)
+            );
+            Assert.DoesNotContain(peer.Frames, frame => Cmd(frame) == "aibot_send_msg");
+            Assert.Empty(peer.Calls);
+        }
+        finally
+        {
+            releaseAnswer.TrySetResult();
+            await running;
+        }
     }
 }

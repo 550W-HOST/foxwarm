@@ -111,6 +111,34 @@ public sealed class WeWorkCallbackTests
         payload["stream"]!["content"]!.GetValue<string>();
 
     [Fact]
+    public async Task Command_followup_uses_its_HTTP_response_url_after_finishing_the_card()
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        var port = WeWorkPeer.Port();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(port) },
+            dependencies: peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        f.Manager.AttachChannel("work:wrk-chat", f.Owner);
+        using var callback = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
+        var message = WeWorkPeer.Text("continue-http", "/continue");
+        message["response_url"] = new Uri(peer.Address, "terminal-response").ToString();
+
+        var initial = await Post(callback, message);
+        await TelegramChannelTests.Until(() => !peer.Calls.IsEmpty);
+        var finished = await Refresh(callback, Id(initial));
+        Assert.True(finished["stream"]!["finish"]!.GetValue<bool>());
+        Assert.Contains("Continuing interrupted turn", Content(finished));
+        var followup = Assert.Single(peer.Calls);
+        Assert.Equal("/terminal-response", followup.Path);
+        Assert.Contains(
+            "Session has no interrupted turn to continue.",
+            followup.Body["markdown"]!["content"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
     public async Task Configured_separate_listener_verifies_GET_and_preserves_POST_compatibility_XML_JSON_crypto_passive_dedup_and_latest_routing()
     {
         await using var peer = await WeWorkPeer.StartAsync();
@@ -170,6 +198,9 @@ public sealed class WeWorkCallbackTests
             .Progress!("wrk-chat", new("tool-calls-start", [new("r", "read")]), default);
         var second = await Post(client, WeWorkPeer.Text("second", user: "bob"), signed: false);
         Assert.NotEqual(Id(first), Id(second));
+        await TelegramChannelTests.Until(() =>
+            owner.Entry.WithState(state => state.Queue.Count) == 2
+        );
         var old = await Refresh(client, Id(first));
         Assert.True(old["stream"]!["finish"]!.GetValue<bool>());
         Assert.Equal("substantive 文本", Content(old));

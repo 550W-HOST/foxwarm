@@ -64,6 +64,7 @@ internal sealed class WeWorkStreamAggregator(
         internal string Conversation = conversation;
         internal string Id = "fw_" + Guid.NewGuid().ToString("N")[..24];
         internal WeWorkDelivery Delivery = delivery;
+        internal string? SessionId;
         internal bool Finish;
         internal long UpdatedAt;
         internal string Content = "";
@@ -77,6 +78,8 @@ internal sealed class WeWorkStreamAggregator(
     private const string Open = "<think>",
         Close = "</think>";
     private const string TruncationSuffix = "\n\n…[内容过长，已截断]";
+    private const string BindingChanged =
+        "Automatic replies from this session will no longer be sent to this conversation.";
     private readonly string frameStyle = thinkFrame == "closed" ? "closed" : "open";
     private long Now => (now?.Invoke() ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
 
@@ -91,10 +94,7 @@ internal sealed class WeWorkStreamAggregator(
             }
     }
 
-    internal (WeWorkStreamSnapshot? Old, WeWorkStreamSnapshot Current) Begin(
-        string conversation,
-        WeWorkDelivery delivery
-    )
+    internal WeWorkStreamSnapshot Begin(string conversation, WeWorkDelivery delivery)
     {
         lock (gate)
         {
@@ -104,25 +104,69 @@ internal sealed class WeWorkStreamAggregator(
                 throw new InvalidDataException(
                     "conversationId is required to begin a WeWork stream"
                 );
-            WeWorkStreamSnapshot? old = null;
-            if (conversations.GetValueOrDefault(conversation) is { Finish: false } previous)
-            {
-                var text = string.Join(
-                    "\n\n",
-                    previous
-                        .Blocks.OfType<TextBlock>()
-                        .Select(block => block.Text)
-                        .Where(text => text.Length > 0)
-                );
-                previous.Blocks = text.Length > 0 ? [new TextBlock(text) { Final = true }] : [];
-                previous.Finish = true;
-                old = Update(previous);
-            }
             var state = new State(conversation, delivery);
-            conversations[conversation] = state;
             streams[state.Id] = state;
-            return (old, Update(state));
+            return Update(state);
         }
+    }
+
+    internal WeWorkStreamSnapshot? Activate(string id, string sessionId)
+    {
+        lock (gate)
+        {
+            Cleanup();
+            if (streams.GetValueOrDefault(id) is not { Finish: false } state)
+                return null;
+            var conversation = state.Conversation;
+            var previous = conversations.GetValueOrDefault(conversation);
+            state.SessionId = sessionId;
+            conversations[conversation] = state;
+            return previous is { Finish: false } && previous != state
+                ? FinishWithText(previous, previous.SessionId == sessionId ? null : BindingChanged)
+                : null;
+        }
+    }
+
+    internal WeWorkStreamSnapshot? EndSessionPresentation(string conversation, string sessionId)
+    {
+        lock (gate)
+        {
+            Cleanup();
+            var active = conversations.GetValueOrDefault(conversation.Trim());
+            return active is { Finish: false } && active.SessionId == sessionId
+                ? FinishWithText(active, BindingChanged)
+                : null;
+        }
+    }
+
+    internal WeWorkStreamSnapshot? FinishAfterBindingChange(string id)
+    {
+        lock (gate)
+        {
+            Cleanup();
+            return streams.GetValueOrDefault(id) is { Finish: false } state
+                ? FinishWithText(state, BindingChanged)
+                : null;
+        }
+    }
+
+    private WeWorkStreamSnapshot FinishWithText(State state, string? notice)
+    {
+        if (notice is not null)
+        {
+            state.Blocks.RemoveAll(block => block is ToolGroup);
+            state.Blocks.Add(new TextBlock(notice) { Final = true });
+        }
+        else
+        {
+            var text = string.Join(
+                "\n\n",
+                state.Blocks.OfType<TextBlock>().Select(block => block.Text)
+            );
+            state.Blocks = text.Length > 0 ? [new TextBlock(text) { Final = true }] : [];
+        }
+        state.Finish = true;
+        return Update(state);
     }
 
     internal WeWorkStreamSnapshot? Get(string value, bool byId = false, bool touch = false)
@@ -148,20 +192,13 @@ internal sealed class WeWorkStreamAggregator(
         lock (gate)
         {
             Cleanup();
-            var latest = conversations.GetValueOrDefault(conversation.Trim());
-            var id =
-                options.StreamId
-                ?? (
-                    string.IsNullOrWhiteSpace(options.WebhookUrl) && latest is { Finish: false }
-                        ? latest.Id
-                        : null
-                );
-            if (id is null)
-                return (false, null);
-            var state = latest ?? streams.GetValueOrDefault(id.Trim());
-            if (state is null || state.Conversation != conversation)
-                return (true, null);
-            if (state.Finish)
+            conversation = conversation.Trim();
+            var state =
+                options.StreamId is { } id ? streams.GetValueOrDefault(id.Trim())
+                : string.IsNullOrWhiteSpace(options.WebhookUrl)
+                    ? conversations.GetValueOrDefault(conversation)
+                : null;
+            if (state is not { Finish: false } || state.Conversation != conversation)
                 return (false, null);
             var before = state.Content;
             var finished = state.Finish;

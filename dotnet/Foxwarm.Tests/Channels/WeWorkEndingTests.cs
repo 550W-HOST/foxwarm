@@ -135,6 +135,7 @@ public sealed class WeWorkEndingTests
         Assert.Equal(initialFrame, WeWorkCallbackTests.Content(initial));
         var id = WeWorkCallbackTests.Id(initial);
         var transport = f.Manager.ChannelRegistry.Get("work")!;
+        await TelegramChannelTests.Until(() => transport.IsLifecycleActive!("wrk-chat"));
         await transport.Send(
             "wrk-chat",
             string.Concat(Enumerable.Repeat("过程🦊", 200)),
@@ -172,6 +173,7 @@ public sealed class WeWorkEndingTests
             WeWorkCallbackTests.Content(await WeWorkCallbackTests.Refresh(callback, id))
         );
         var direct = await WeWorkCallbackTests.Post(callback, WeWorkPeer.Text("direct"));
+        await TelegramChannelTests.Until(() => transport.IsLifecycleActive!("wrk-chat"));
         await transport.Send("wrk-chat", "answer without process", new(true), default);
         Assert.Equal(
             "answer without process",
