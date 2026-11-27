@@ -22,7 +22,6 @@ internal sealed record HostedBootstrap(
     string? DeploymentConfigPath = null,
     string? KekFile = null,
     string? KekPreviousFile = null,
-    string? AgentsRoot = null,
     string OperatorRole = HostedBootstrap.DefaultOperatorRole
 )
 {
@@ -61,7 +60,6 @@ internal sealed record HostedBootstrap(
             Path(environment, DeploymentConfiguration.Variable),
             Path(environment, "FOXWARM_KEK_FILE"),
             Path(environment, "FOXWARM_KEK_PREVIOUS_FILE"),
-            Path(environment, "FOXWARM_AGENTS_DIR"),
             Name(environment, "FOXWARM_OPERATOR_ROLE", DefaultOperatorRole)
         );
     }
@@ -72,15 +70,6 @@ internal sealed record HostedBootstrap(
             DeploymentConfigPath
                 ?? throw new HostedBootstrapException(
                     $"Hosted mode needs {DeploymentConfiguration.Variable}, the path of the deployment configuration."
-                )
-        );
-
-    /// <summary>The shared Agent folders (<c>FOXWARM_AGENTS_DIR</c>); required by an owner.</summary>
-    internal string RequireAgentsRoot() =>
-        System.IO.Path.GetFullPath(
-            AgentsRoot
-                ?? throw new HostedBootstrapException(
-                    "Hosted mode needs FOXWARM_AGENTS_DIR, the shared volume of Agent folders."
                 )
         );
 

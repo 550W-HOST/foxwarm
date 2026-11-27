@@ -79,6 +79,12 @@ internal sealed class ImageBlobFiles(string dataRoot) : IBlobStore
     public Task<byte[]> ReadAllAsync(string key, CancellationToken token) =>
         File.ReadAllBytesAsync(PathFor(key), token);
 
+    public async Task<byte[]> ReadRangeAsync(string key, long offset, int count, CancellationToken token)
+    {
+        await using var stream = new FileStream(PathFor(key), FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous);
+        return await Foxwarm.Sessions.AgentFileErrors.ReadRangeAsync(stream, offset, count, token);
+    }
+
     public Stream OpenRead(string key) =>
         new FileStream(
             PathFor(key),

@@ -28,6 +28,12 @@ internal interface IBlobStore
     /// <summary>Streams the stored bytes; the caller disposes the stream.</summary>
     Stream OpenRead(string key);
 
+    /// <summary>
+    /// Up to <paramref name="count"/> stored bytes from <paramref name="offset"/>, fetching only
+    /// those; past the end, none. A missing key fails like a file read.
+    /// </summary>
+    Task<byte[]> ReadRangeAsync(string key, long offset, int count, CancellationToken token);
+
     /// <summary>Keys of the content directly under <paramref name="prefix"/>, without it.</summary>
     IReadOnlyList<string> List(string prefix);
 

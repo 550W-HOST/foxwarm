@@ -483,18 +483,38 @@ internal static class OperationRules
             return OperationMatch.Unknown;
         foreach (var (name, rootValue) in matcher)
         {
-            var root = ToolAuthorizationEvaluation.PolicyRoot(SessionWait.Text(rootValue)!, request);
-            if (root is null)
+            var text = SessionWait.Text(rootValue)!;
+            var root = ToolAuthorizationEvaluation.PolicyRoot(text, request);
+            var store = ToolAuthorizationEvaluation.PolicyStoreRoot(text, request);
+            // A root the Agent store can't decide is unknown, so a restrictive rule applies.
+            if (ToolAuthorizationEvaluation.StoreRootRefused(text, request))
+                return OperationMatch.Unknown;
+            if (root is null && store is null)
                 return OperationMatch.No;
             var master = path.Node == "master";
-            var within = master && ToolAuthorizationEvaluation.Within(path.Resolved, root);
+            // An Agent store path is inside a store root only; a master path inside a physical
+            // root only.
+            var agentStore = path.Node == AgentStorePaths.Endpoint;
+            var within =
+                master && root is not null && ToolAuthorizationEvaluation.Within(path.Resolved, root)
+                || agentStore
+                    && store is not null
+                    && path.Resolved is { } stored
+                    && AgentStorePaths.Within(stored, store);
             var holds = name == "within" ? within : !within;
             var partial =
                 !within
                 && path.Tree
-                && master
-                && path.Resolved is { } resolved
-                && ToolAuthorizationEvaluation.Within(root, System.IO.Path.GetFullPath(resolved));
+                && (
+                    master
+                        && root is not null
+                        && path.Resolved is { } resolved
+                        && ToolAuthorizationEvaluation.Within(root, System.IO.Path.GetFullPath(resolved))
+                    || agentStore
+                        && store is not null
+                        && path.Resolved is { } tree
+                        && AgentStorePaths.Within(store, tree)
+                );
             if (!holds && !(partial && restrictive))
                 return OperationMatch.No;
             if (holds && partial && !restrictive)

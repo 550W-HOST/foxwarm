@@ -15,7 +15,7 @@ internal sealed partial class AgentCatalog
                 );
         }
         RequireNoCreatorChildren(name);
-        if (!Directory.Exists(SourceDirectory(name)))
+        if (!DirectoryExists(name))
             throw new InvalidDataException($"Agent \"{name}\" not found.");
     }
 
@@ -31,7 +31,17 @@ internal sealed partial class AgentCatalog
             RequireNoCreatorChildren(name);
             if (beforeStage is not null)
                 await beforeStage(name, "directory");
-            Directory.Delete(SourceDirectory(name), recursive: true);
+            if (store is not null && name == "main")
+            {
+                // main is always a member, so its root stays: its files go, as its folder's do,
+                // and its surviving Sessions can still write memory. Startup fills an empty
+                // memory directory with the templates, as for a missing folder.
+                await store.ClearAgentAsync("main", CancellationToken.None);
+            }
+            else if (store is not null)
+                await store.DeleteAgentAsync(name, CancellationToken.None);
+            else
+                Directory.Delete(SourceDirectory(name), recursive: true);
             // Canonical command deletion retains the metadata map verbatim. The
             // retained envelope additionally needs its directory membership removed.
             if (retainMetadata && canonicalLayout)
@@ -75,7 +85,7 @@ internal sealed partial class AgentCatalog
         await createGate.WaitAsync();
         try
         {
-            if (Directory.Exists(SourceDirectory(name)))
+            if (DirectoryExists(name))
                 throw new InvalidDataException(
                     "Retained-record cleanup requires an absent Agent directory."
                 );

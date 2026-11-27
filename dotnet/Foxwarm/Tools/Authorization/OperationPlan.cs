@@ -23,6 +23,9 @@ internal sealed record PlanContext(string CurrentNode)
 
     // The memory directory of an Agent, and the Agent of a Session; null when unknown.
     internal Func<string, string?>? MemoryDirectory { get; init; }
+
+    // Where Agent memory copies read and write: master, or the Agent store's endpoint.
+    internal string? MemoryNode { get; init; }
     internal Func<string, string?>? SessionAgent { get; init; }
 
     // The Node a new Session of an Agent starts on without an explicit or inherited Node (its
@@ -707,6 +710,9 @@ internal sealed partial record OperationPlan(
                     return value is not null;
                 case "memory-target":
                     value = MemoryRoot(SessionWait.Text(args["agentName"]));
+                    return value is not null;
+                case "memory-node":
+                    value = context.MemoryNode;
                     return value is not null;
                 case "agent-main-node":
                     // The new Agent's main Session: no initial Node, so its effective default.

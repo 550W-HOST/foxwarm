@@ -210,12 +210,7 @@ internal sealed partial class SessionManager
                 for (var attempt = 0; attempt < 32; attempt++)
                 {
                     var name = agent + "_" + RandomBase36Fraction(6);
-                    var directory = agents.SourceDirectory(name);
-                    if (
-                        !agents.Exists(name)
-                        && !Directory.Exists(directory)
-                        && !File.Exists(directory)
-                    )
+                    if (!agents.Exists(name) && !agents.DirectoryReserved(name))
                         return name;
                 }
                 throw new InvalidOperationException("Unable to allocate a guest Agent.");

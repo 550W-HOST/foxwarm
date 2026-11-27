@@ -28,7 +28,12 @@ public sealed class HostedCapabilityProfileTests
         internal static async Task<Fixture> Create(
             RuntimeCapabilities capabilities,
             string? agentDefaultNode = null,
-            JsonObject? extraApp = null
+            JsonObject? extraApp = null,
+            // The storage context for the data root; null is the file context.
+            Func<string, Foxwarm.Storage.IStorageContext>? storage = null,
+            // The installed layout (Agent folders under the data root, main among them), as a
+            // host's paths give it; otherwise the retained layout with main as the workspace.
+            bool installedLayout = false
         )
         {
             var f = new Fixture();
@@ -65,9 +70,8 @@ public sealed class HostedCapabilityProfileTests
                 Path.Combine(f.Data, "state", "models.yaml"),
                 "default: local/wire\nproviders:\n  local:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    models: [wire]\n"
             );
-            var configuration = new ModelConfiguration(
-                HostPaths.ForDataRoot(f.Data, f.Temp.Path, environment: _ => null)
-            );
+            var paths = HostPaths.ForDataRoot(f.Data, f.Temp.Path, environment: _ => null);
+            var configuration = new ModelConfiguration(paths);
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
                 "wire",
@@ -82,7 +86,9 @@ public sealed class HostedCapabilityProfileTests
                 options,
                 new HostModels(configuration),
                 f.Skills,
-                capabilities: capabilities
+                storage: storage?.Invoke(f.Data),
+                capabilities: capabilities,
+                hostPaths: installedLayout ? paths : null
             );
             await f.Manager.LoadMainHostAsync();
             f.Owner = await f.Manager.CreateNamedAsync("main", "profile", null, null);
@@ -91,11 +97,11 @@ public sealed class HostedCapabilityProfileTests
             return f;
         }
 
-        // The executor a Session's turns use: the manager's registry over the Agent directory.
+        // The executor a Session's turns use: the manager's registry over the Agent's files.
         internal SessionToolExecutor Executor(SessionOwner owner)
         {
             var tools = new SessionToolExecutor(
-                new WorkspaceTools(Manager.AgentDirectory(owner.Agent)),
+                Manager.AgentWorkspace(owner.Agent),
                 owner,
                 Manager,
                 Manager.ToolRegistry

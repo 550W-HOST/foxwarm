@@ -21,8 +21,10 @@ internal sealed partial class SessionManager
         "paused",
     ];
 
+    // An Agent store has the canonical layout only, so its main never shares the workspace.
     private bool RetainedMainLayout(string agent) =>
         agent == "main"
+        && agents.PhysicalFolders
         && Path.GetFullPath(agents.AgentDirectory(agent)) == Path.GetFullPath(toolWorkspace);
 
     /// <summary>

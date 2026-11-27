@@ -158,10 +158,10 @@ internal static class HostedEntry
             var keys = new HostedKeyRing(tenant.Database, current, previous);
             keys.OpenOrCreate();
             tenant.KeyRing = keys;
-            paths = HostPaths.ForDataRoot(bootstrap.RequireScratchRoot()) with
-            {
-                AgentsRoot = bootstrap.RequireAgentsRoot(),
-            };
+            // The Agents' files are in the tenant's Agent store; the host's Agents root is a
+            // directory of the replica that nothing creates (the scratch guard checks it).
+            var scratch = bootstrap.RequireScratchRoot();
+            paths = HostPaths.ForDataRoot(scratch) with { AgentsRoot = Path.Combine(scratch, "agents") };
             configuration = new ModelConfiguration(
                 paths,
                 new ConfigurationSources(

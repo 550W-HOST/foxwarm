@@ -37,7 +37,7 @@ internal sealed partial class Skills
         var truncated = false;
         if (path is null)
         {
-            var (files, more) = Resources(info.Directory);
+            var (files, more) = Resources(info.Source, info.Directory);
             truncated = more;
             items = [("SKILL.md", Under(targetPath, "SKILL.md")), .. files.Select(file => (file, Under(targetPath, file)))];
         }
@@ -53,7 +53,7 @@ internal sealed partial class Skills
             .Select(item =>
             {
                 var full = System.IO.Path.Combine(info.Directory, item.Path);
-                return new SkillCopyFile(item.Path, full, item.Target, new FileInfo(full).Length);
+                return new SkillCopyFile(item.Path, full, item.Target, info.Source.Length(full));
             })
             .ToArray();
         if (truncated || plan.Length > MaxCopyFiles || plan.Sum(file => file.Bytes) > MaxCopyBytes)
@@ -76,16 +76,16 @@ internal sealed partial class Skills
         if (relative.Length > 0 && RelativeShape(relative))
         {
             var segments = relative.Split('/');
-            full = Contained(info.Directory, segments, directoryLast: false, skipNames: true);
+            full = Contained(info.Source, info.Directory, segments, directoryLast: false, skipNames: true);
             if (full is not null && directory)
                 full = null;
-            full ??= Contained(info.Directory, segments, directoryLast: true, skipNames: true);
+            full ??= Contained(info.Source, info.Directory, segments, directoryLast: true, skipNames: true);
         }
         if (full is null)
             throw NotAResource(info.Name, path);
-        if (!Directory.Exists(full))
+        if (!info.Source.DirectoryExists(full))
             return new SkillResource(info, relative, full, false, [], false);
-        var (files, truncated) = Resources(info.Directory, full);
+        var (files, truncated) = Resources(info.Source, info.Directory, full);
         // A directory without listable resources (empty, or only links and skipped names) is
         // not one either.
         if (files.Length == 0)

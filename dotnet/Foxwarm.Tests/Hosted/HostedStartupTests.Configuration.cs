@@ -20,9 +20,11 @@ public sealed partial class HostedStartupTests
     {
         internal static HostedFiles Create(string root)
         {
+            // Agents: where the host's Agents root is, inside the scratch directory; nothing
+            // may create it, since the Agents' files are in the Agent store.
             var files = new HostedFiles(
                 Path.Combine(root, "scratch"),
-                Path.Combine(root, "agents"),
+                Path.Combine(root, "scratch", "agents"),
                 Path.Combine(root, "kek", "current.key")
             );
             InstanceKeys.OpenOrCreate(files.Kek);
@@ -30,7 +32,7 @@ public sealed partial class HostedStartupTests
         }
 
         internal HostedBootstrap Bootstrap =>
-            new(null, null, PostgresServer.Tenant, PostgresServer.AppRole, ScratchRoot: Scratch, KekFile: Kek, AgentsRoot: Agents);
+            new(null, null, PostgresServer.Tenant, PostgresServer.AppRole, ScratchRoot: Scratch, KekFile: Kek);
     }
 
     private static Replica StartHosted(

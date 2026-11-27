@@ -1,26 +1,6 @@
 # Fixtures of the chart check on kind (check.mjs): PostgreSQL and VersityGW as in the Compose
-# stack, and the Agents volume. check.mjs creates the `fixture-secrets` Secret (from
-# generate-secrets.sh) and the `postgres-init` ConfigMap (from ../postgres-init) first.
-#
-# The Agents volume: kind's default storage class provisions ReadWriteOnce volumes only, so this
-# is a static hostPath PersistentVolume on the single kind node that declares ReadWriteMany. The
-# chart's claim (accessModes [ReadWriteMany], this storage class) binds to it, and both replicas
-# mount the same directory, as they would mount an NFS or CephFS volume.
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: foxwarm-ci-agents
-spec:
-  storageClassName: foxwarm-agents-rwx
-  accessModes: [ReadWriteMany]
-  capacity:
-    storage: 1Gi
-  persistentVolumeReclaimPolicy: Retain
-  hostPath:
-    # Created on the node, owned by uid 1000, by check.mjs.
-    path: /var/local/foxwarm-agents
-    type: Directory
----
+# stack. check.mjs creates the `fixture-secrets` Secret (from generate-secrets.sh) and the
+# `postgres-init` ConfigMap (from ../postgres-init) first.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

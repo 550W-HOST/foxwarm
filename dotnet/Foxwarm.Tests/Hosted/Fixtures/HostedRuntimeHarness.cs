@@ -92,8 +92,7 @@ internal sealed class HostedRuntimeHarness : IAsyncDisposable
             tenant,
             PostgresServer.AppRole,
             ScratchRoot: scratch,
-            KekFile: withKey ? kek : null,
-            AgentsRoot: Path.Combine(temp.Path, tenant, "agents")
+            KekFile: withKey ? kek : null
         );
         var port = FreePort();
         var deployment = DeploymentConfiguration.Parse(

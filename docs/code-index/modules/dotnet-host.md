@@ -22,6 +22,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Hosted configuration](../units/hosted-config.md): the deployment/tenant configuration split, tenant configuration documents, the tenant data key and instance credentials.
 - [Hosted journal](../units/hosted-journal.md): the tenant's LLM journal and usage ledger, the text-redaction cache and journal retention.
 - [Hosted blobs](../units/hosted-blobs.md): image and artifact blobs on S3 or PostgreSQL, the backend selection and streamed channel image sends.
+- [Hosted Agent store](../units/hosted-agent-store.md): Agent files in PostgreSQL rows and blobs, the store's write half, path rules and limits.
 - [Hosted Session authority](../units/hosted-session-authority.md): heads, immutable segments and envelope parts, the one-transaction commit with its Archive rows, and the segment policy.
 - [Hosted import](../units/hosted-import.md): `foxwarm hosted import`, copying a stopped file installation into an `importing` tenant, verifying it and activating it.
 - [Hosted packaging and failover drills](../units/hosted-packaging.md): the `hosted` image target, the Compose stack, the Helm chart, `hosted token` and `hosted health`, and the drills and measurements.

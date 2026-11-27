@@ -58,16 +58,6 @@ migrate:
   backoffLimit: 3
   activeDeadlineSeconds: 600
 
-# The shared Agent folders (FOXWARM_AGENTS_DIR). Every replica mounts the same volume, so it
-# needs ReadWriteMany; the tenant lease, not the filesystem, keeps a single writer.
-agents:
-  persistence:
-    enabled: true
-    existingClaim: ""
-    storageClass: ""
-    accessModes: [ReadWriteMany]
-    size: 10Gi
-
 # The replica's scratch directory: logs, upload staging and temporary files.
 scratch:
   sizeLimit: 2Gi

@@ -56,6 +56,7 @@ internal sealed partial class SessionManager
             SessionAgent = id => AuthorizationTarget(id)?.Agent,
             DefaultCwdProbe = DefaultCwdProbe,
             SecretsUnknown = assessment?.SecretsUnknown == true,
+            MemoryNode = agents.MemoryCopyNode,
             // Where an Agent memory copy reads or writes, also for an Agent the call creates.
             MemoryDirectory = agent =>
             {

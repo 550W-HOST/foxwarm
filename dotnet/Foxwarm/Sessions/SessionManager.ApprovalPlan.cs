@@ -354,7 +354,7 @@ internal sealed partial class SessionManager
         }
         if (selection is null)
             return [];
-        var files = new WorkspaceTools(AgentDirectory(owner.Agent));
+        var files = AgentWorkspace(owner.Agent);
         var checks = new List<PlannedCheck>();
         foreach (var reference in selection)
         {

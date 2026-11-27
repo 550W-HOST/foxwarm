@@ -24,6 +24,12 @@ internal interface IStorageContext
 
     /// <summary>Artifact revisions and their resources.</summary>
     IBlobStore ArtifactBlobs { get; }
+
+    /// <summary>
+    /// The Agent store, when the context holds the Agent files; null when they are the Agent
+    /// folders of the Agent catalog's layout (<see cref="FileAgentFiles"/>), as in file mode.
+    /// </summary>
+    IAgentStore? AgentFiles { get; }
 }
 
 /// <summary>Construction seams of the file stores, used only by tests.</summary>
@@ -81,4 +87,6 @@ internal sealed class FileStorageContext : IStorageContext
     public IBlobStore ImageBlobs { get; }
 
     public IBlobStore ArtifactBlobs { get; }
+
+    public IAgentStore? AgentFiles => null;
 }

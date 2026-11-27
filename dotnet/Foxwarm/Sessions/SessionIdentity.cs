@@ -58,6 +58,6 @@ public static partial class SessionIdentity
                 .Replace('/', '_');
     }
 
-    [GeneratedRegex("^[a-zA-Z0-9_-]+$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[a-zA-Z0-9_-]+\z", RegexOptions.CultureInvariant)]
     private static partial Regex AgentName();
 }

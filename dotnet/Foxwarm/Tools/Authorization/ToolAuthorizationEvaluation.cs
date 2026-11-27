@@ -376,9 +376,10 @@ internal static class ToolAuthorizationEvaluation
                     && request.CurrentNode is not null
                     && request.CurrentNode == node;
             var slash = node.IndexOf('/');
+            // The Agent store's endpoint is its own provider, never a remote Node's.
             var provider =
                 slash > 0 ? node[..slash]
-                : node == "master" ? "master"
+                : node is "master" or AgentStorePaths.Endpoint ? node
                 : "authenticated-remote";
             return Pattern(map["provider"]!, provider);
         }
@@ -537,7 +538,7 @@ internal static class ToolAuthorizationEvaluation
                 !rule["enabled"]!.GetValue<bool>()
                 || !Ordinary(match)
                 || !Identity(match, request, deny: Restrictive(rule))
-                || !Paths(match["path"] as JsonObject, request)
+                || !Paths(match["path"] as JsonObject, request, Restrictive(rule))
             )
                 continue;
             var unknown = false;
@@ -555,6 +556,8 @@ internal static class ToolAuthorizationEvaluation
             if (!matches)
                 continue;
             var effect = AuthorizationDecision.Parse(SessionWait.Text(rule["action"]));
+            if (effect == ToolAuthorizationEffect.Ask && UndecidableStoreRoot(rule, request))
+                effect = ToolAuthorizationEffect.Deny;
             allow |= effect == ToolAuthorizationEffect.Allow;
             ask |= effect == ToolAuthorizationEffect.Ask;
             deny |= effect == ToolAuthorizationEffect.Deny;
@@ -607,7 +610,7 @@ internal static class ToolAuthorizationEvaluation
         return Ordinary(match)
             && Identity(match, request, deny: Restrictive(rule))
             && Arguments(match["args"] as JsonObject, request)
-            && Paths(match["path"] as JsonObject, request);
+            && Paths(match["path"] as JsonObject, request, Restrictive(rule));
     }
 
     // Whether a version-1 `secrets` rule matches the call and its complete secret set.
@@ -618,7 +621,7 @@ internal static class ToolAuthorizationEvaluation
             && Identity(match, request, deny: Restrictive(rule))
             && SecretNames(match["secrets"]!, request, Restrictive(rule))
             && Arguments(match["args"] as JsonObject, request)
-            && Paths(match["path"] as JsonObject, request);
+            && Paths(match["path"] as JsonObject, request, Restrictive(rule));
     }
 
     // The request of an unrestricted exec on master with the caller's identity facts.
@@ -659,6 +662,10 @@ internal static class ToolAuthorizationEvaluation
 
     internal static string? PolicyRoot(string text, ToolAuthorizationRequest request) =>
         Base(text, request);
+
+    /// <summary>The Agent store root a policy root names, if any (see <see cref="StoreBase"/>).</summary>
+    internal static string? PolicyStoreRoot(string text, ToolAuthorizationRequest request) =>
+        StoreBase(text, request);
 
     private static HashSet<string> OwnedSecrets(ToolAuthorizationRequest request) =>
         new(
@@ -701,7 +708,7 @@ internal static class ToolAuthorizationEvaluation
                 && Identity(match, request, deny: Restrictive(rule))
                 && SecretNames(match["secrets"]!, request, Restrictive(rule))
                 && Arguments(match["args"] as JsonObject, request)
-                && Paths(match["path"] as JsonObject, request)
+                && Paths(match["path"] as JsonObject, request, Restrictive(rule))
             )
                 return new(RuleEffect(rule, request), rule, null);
         }
@@ -730,9 +737,18 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationRequest request
     ) =>
         AuthorizationDecision.Parse(SessionWait.Text(rule["action"])) is var effect
-        && (effect != ToolAuthorizationEffect.Ask || request.Principal == "internal")
+        && (effect != ToolAuthorizationEffect.Ask || request.Principal == "internal" && !UndecidableStoreRoot(rule, request))
             ? effect
             : ToolAuthorizationEffect.Deny;
+
+    // A legacy rule whose path root the Agent store can't decide: when it applies (it denies or
+    // asks), it denies, as an unknown operation-rule path does.
+    private static bool UndecidableStoreRoot(JsonObject rule, ToolAuthorizationRequest request) =>
+        !OperationRules.IsOperationRule(rule)
+        && rule["match"]?["path"] is JsonObject path
+        && new[] { path["allWithin"], path["anyNotWithin"] }.Any(value =>
+            SessionWait.Text(value) is string text && StoreRootRefused(text, request)
+        );
 
     internal static bool Within(string? path, string root)
     {
@@ -746,8 +762,50 @@ internal static class ToolAuthorizationEvaluation
             );
     }
 
+    // A path fact inside a rule root: a master path inside the physical root, or an Agent store
+    // path inside the store root. A root has at most one kind; no path of the other kind is
+    // inside it.
+    private static bool Inside(AuthorizationPath path, string? root, string? store) =>
+        path.Node == AgentStorePaths.Endpoint
+            ? store is not null && path.Resolved is { } resolved && AgentStorePaths.Within(resolved, store)
+            : path.Node == "master" && root is not null && Within(path.Resolved, root);
+
+    // The Agent store root a rule root names: over an Agent store (store paths as the request's
+    // Agent roots), `${agent.dir}` or `${agent.memoryDir}`, optionally followed by a relative
+    // store path. Any other root names no store path, and neither does a malformed suffix.
+    private static string? StoreBase(string text, ToolAuthorizationRequest request) =>
+        request.Principal == "internal" && StoreRoots(request)
+            ? AgentStorePaths.PolicyRoot(text, request.AgentDirectory!, out _)
+            : null;
+
+    /// <summary>
+    /// Whether a policy root names the Agent's files in a way the Agent store can't decide: a
+    /// suffix that leaves the Agent's namespace or isn't a store path. Such a root is refused
+    /// where rules are set and fails closed where an existing rule has one.
+    /// </summary>
+    internal static bool StoreRootRefused(string text, ToolAuthorizationRequest request)
+    {
+        if (request.Principal != "internal" || !StoreRoots(request))
+            return false;
+        _ = AgentStorePaths.PolicyRoot(text, request.AgentDirectory!, out var refused);
+        return refused;
+    }
+
+    // Whether the request's Agent roots are Agent store paths: a physical root is absolute.
+    private static bool StoreRoots(ToolAuthorizationRequest request) =>
+        request.AgentDirectory is { } directory && !Path.IsPathFullyQualified(directory);
+
     private static string? Base(string text, ToolAuthorizationRequest request)
     {
+        // Over an Agent store the Agent roots are store paths: no master path is inside them.
+        if (
+            StoreRoots(request)
+            && (
+                text.Contains("${agent.dir}", StringComparison.Ordinal)
+                || text.Contains("${agent.memoryDir}", StringComparison.Ordinal)
+            )
+        )
+            return null;
         if (
             request.Principal == "external"
             && (
@@ -764,7 +822,9 @@ internal static class ToolAuthorizationEvaluation
         );
     }
 
-    private static bool Paths(JsonObject? match, ToolAuthorizationRequest request)
+    // restrictive: the rule denies or asks, so a root the Agent store can't interpret makes
+    // it apply rather than vanish.
+    private static bool Paths(JsonObject? match, ToolAuthorizationRequest request, bool restrictive = false)
     {
         if (match is null)
             return true;
@@ -779,21 +839,29 @@ internal static class ToolAuthorizationEvaluation
                 .ToArray();
         if (paths.Count == 0)
             return false;
+        if (
+            new[] { match["allWithin"], match["anyNotWithin"] }.Any(value =>
+                SessionWait.Text(value) is string text && StoreRootRefused(text, request)
+            )
+        )
+            return restrictive;
         if (SessionWait.Text(match["allWithin"]) is string all)
         {
             var root = Base(all, request);
+            var store = StoreBase(all, request);
             if (
-                root is null
-                || !paths.All(path => path.Node == "master" && Within(path.Resolved, root))
+                root is null && store is null
+                || !paths.All(path => Inside(path, root, store))
             )
                 return false;
         }
         if (SessionWait.Text(match["anyNotWithin"]) is string any)
         {
             var root = Base(any, request);
+            var store = StoreBase(any, request);
             if (
-                root is null
-                || !paths.Any(path => path.Node != "master" || !Within(path.Resolved, root))
+                root is null && store is null
+                || !paths.Any(path => !Inside(path, root, store))
             )
                 return false;
         }
@@ -848,7 +916,7 @@ internal static class ToolAuthorizationEvaluation
                 && Ordinary(match)
                 && Identity(match, request, deny: Restrictive(rule))
                 && Arguments(match["args"] as JsonObject, request)
-                && Paths(match["path"] as JsonObject, request)
+                && Paths(match["path"] as JsonObject, request, Restrictive(rule))
             )
                 return new(RuleEffect(rule, request), rule);
         }

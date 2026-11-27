@@ -63,6 +63,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     internal string MemoryDirectory(string agent) => agents.MemoryDirectory(agent);
 
+    // The memory root of an existing Agent: its memory directory, or over an Agent store the
+    // store path `<agent>/memory`. Throws when the Agent does not exist.
+    internal string MemoryRoot(string agent) => agents.AuthorizationMemoryRoot(agent);
+
     /// <summary>
     /// Test-only seam: when set, builds the storage context of a manager constructed without
     /// one (and without file-store test hooks), so existing tests can run against another
@@ -72,6 +76,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     /// <summary>The runtime's capability profile, fixed at construction.</summary>
     internal RuntimeCapabilities Capabilities { get; }
+
+    // The Agent store, when the Agents' files are in one: with a storage context that has one
+    // and no master Node. A runtime with a master Node keeps Agent folders on it, whatever its
+    // Session stores are.
+    internal IAgentStore? AgentStore => Capabilities.MasterNode ? null : Storage.AgentFiles;
+
+    internal AgentCatalog AgentCatalog => agents;
 
     public SessionManager(
         string root,
@@ -174,7 +185,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             recoveringMove is { OwnsAgent: true, Phase: "rolling-back" }
                 ? recoveringMove.OwnedAgent
                 : null,
-            canonicalLayout: hostPaths is not null,
+            // An Agent store has one layout: membership is its roots.
+            canonicalLayout: hostPaths is not null || AgentStore is not null,
             treeLimits: () =>
                 (
                     (int)(
@@ -189,7 +201,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     )
                 ),
             installDefaultNode: () => models.ConfigurationOwner?.AgentDefaultNode,
-            documents: Storage.Documents
+            documents: Storage.Documents,
+            store: AgentStore
         );
         skills = new Skills(
             agents,
@@ -206,6 +219,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             FrameworkPrompt.TemplatePath(hostPaths?.ResourceRoot ?? AppContext.BaseDirectory),
             models,
             skillAccess: CatalogSkillAccess,
+            files: AgentStore,
             masterNode: Capabilities.MasterNode
         );
         executor = new LocalExecManager(
@@ -324,7 +338,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         tools = SessionToolExecutor.CreateRegistry(
             definitions,
             mcp,
-            owner => agents.AgentDirectory(owner.Agent),
+            // Over an Agent store there is no folder; the spool then never reaches master.
+            owner => agents.PhysicalFolders ? agents.AgentDirectory(owner.Agent) : "",
             Nodes,
             NodeProviders,
             Capabilities
@@ -759,7 +774,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             store,
             new RequestChatService(chat, hosted),
             new SessionToolExecutor(
-                new WorkspaceTools(agents.AgentDirectory(agent), pendingWrites, hosted.Id, agent),
+                AgentWorkspace(agent, pendingWrites, hosted.Id),
                 hosted,
                 this,
                 tools

@@ -61,8 +61,8 @@ internal sealed partial class SessionManager
             owner.Id,
             node,
             toolWorkspace,
-            agents.AgentDirectory(owner.Agent),
-            agents.MemoryDirectory(owner.Agent),
+            agents.AuthorizationAgentRoot(owner.Agent),
+            agents.AuthorizationMemoryRoot(owner.Agent),
             NodeTargets: targets,
             CurrentNode: CurrentNode(owner),
             NodeForest: targets is { Count: > 0 } ? Nodes.Registry.Forest() : null
@@ -755,7 +755,7 @@ internal sealed partial class SessionManager
     {
         // Prompt sources live on Main regardless of the new Session's execution Node.
         // Authorize the selecting caller once; lifecycle rebuilds reuse the admitted selection.
-        var files = new WorkspaceTools(AgentDirectory(source.Agent));
+        var files = AgentWorkspace(source.Agent);
         foreach (var reference in selection)
             await AuthorizeToolAsync(
                 source,

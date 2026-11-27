@@ -331,11 +331,11 @@ internal static partial class OperationDeclarations
                     ),
                     OpIf("arg:createAgent", "agent.create", "targetAgent=arg:newAgentName"),
                     // A new Agent may start with a copy of the moved Session's Agent memory.
-                    OpIf("move-memory", "env.read", "node==master", "path=move-memory-source") with
+                    OpIf("move-memory", "env.read", "node=memory-node", "path=move-memory-source") with
                     {
                         Tree = true,
                     },
-                    OpIf("move-memory", "env.write", "node==master", "path=move-memory-target") with
+                    OpIf("move-memory", "env.write", "node=memory-node", "path=move-memory-target") with
                     {
                         Tree = true,
                     }
@@ -425,11 +425,11 @@ internal static partial class OperationDeclarations
                         "with.placement==inherited",
                         "with.runtime==foxwarm"
                     ),
-                    OpIf("arg:inheritMemory", "env.read", "node==master", "path=memory-source") with
+                    OpIf("arg:inheritMemory", "env.read", "node=memory-node", "path=memory-source") with
                     {
                         Tree = true,
                     },
-                    OpIf("arg:inheritMemory", "env.write", "node==master", "path=memory-target") with
+                    OpIf("arg:inheritMemory", "env.write", "node=memory-node", "path=memory-target") with
                     {
                         Tree = true,
                     },

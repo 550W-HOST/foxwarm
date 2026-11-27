@@ -160,11 +160,9 @@ internal sealed partial class SessionManager
                             "Deletion target membership disappeared."
                         );
                     var snapshot = operation.Owners[id].Entry.Snapshot();
-                    ValidateExecutionEnvironment(
-                        snapshot.AuthorityEnvelope,
-                        agents.AgentDirectory(operation.Owners[id].Agent),
-                        Directory.GetCurrentDirectory()
-                    );
+                    // Before any turn stops or queued message drops: the owner's Agent exists.
+                    agents.RequireMember(operation.Owners[id].Agent);
+                    ValidateExecutionEnvironment(snapshot.AuthorityEnvelope, "", "");
                 }
                 await DeleteStageAsync(operation, "prepare", operation.Selection.Root);
                 var busy = new List<string>();

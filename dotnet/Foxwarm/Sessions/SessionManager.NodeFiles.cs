@@ -6,8 +6,27 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    private WorkspaceTools AgentFileWorkspace(SessionOwner owner) =>
-        new(AgentDirectory(owner.Agent));
+    internal WorkspaceTools AgentFileWorkspace(SessionOwner owner) => AgentWorkspace(owner.Agent);
+
+    // The Main-local file tools of an Agent: over its folder, or over an Agent store, which
+    // has no folder, a target that refuses every effect as a call to the missing master does.
+    // Without a master Node those calls are refused before they reach it.
+    internal WorkspaceTools AgentWorkspace(
+        string agent,
+        PendingWriteRefs? pending = null,
+        string? sessionId = null,
+        object? lifetime = null,
+        string? cwd = null
+    )
+    {
+        if (agents.PhysicalFolders)
+            return pending is null
+                ? new(agents.AgentDirectory(agent))
+                : new(agents.AgentDirectory(agent), pending, sessionId!, agent, lifetime, cwd);
+        if (!agents.Exists(agent))
+            throw new InvalidDataException($"Agent '{agent}' does not exist.");
+        return new(NoAgentFolderOperations.Instance, pending ?? new(), sessionId ?? "standalone", agent, lifetime);
+    }
 
     // Every Main-local file and process effect checks this before it starts; without a master
     // Node it fails as a call to any unavailable Node does. `current`: master is only the

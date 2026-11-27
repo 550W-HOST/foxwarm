@@ -11,9 +11,3 @@ deployment:
       region: us-east-1
       bucket: foxwarm
       pathStyle: true
-agents:
-  persistence:
-    # The static ReadWriteMany volume of fixtures.yaml.
-    storageClass: foxwarm-agents-rwx
-    accessModes: [ReadWriteMany]
-    size: 1Gi

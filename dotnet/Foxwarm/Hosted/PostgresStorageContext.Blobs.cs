@@ -31,7 +31,17 @@ internal sealed partial class PostgresStorageContext
         s3Client = client;
         imageBlobs = new S3BlobStore(client, settings.S3!.Bucket, tenant, ImageBlobsName, conditional);
         artifactBlobs = new S3BlobStore(client, settings.S3!.Bucket, tenant, ArtifactBlobsName, conditional);
-        // The authority was built over the PostgreSQL image store; build it again over these.
+        agentFileBlobs = new S3BlobStore(
+            client,
+            settings.S3!.Bucket,
+            tenant,
+            PgAgentFileStore.BlobStoreName,
+            conditional
+        );
+        agentFiles = null;
+        CreateAgentFiles(ref agentFiles);
+        // The authority and the Agent store were built over the PostgreSQL stores; build them
+        // again over these.
         authority = null;
         CreateAuthority(ref authority);
     }

@@ -3,8 +3,3 @@ service {{ include "foxwarm.fullname" . }}:{{ .Values.service.port }}.
 
 The sign-in token of the tenant:
   kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "foxwarm.fullname" . }} -- /app/Foxwarm hosted token
-{{- if not .Values.agents.persistence.enabled }}
-
-Warning: agents.persistence is disabled, so each replica has its own Agent folders and loses
-them when it restarts. Use a ReadWriteMany claim for anything beyond a trial.
-{{- end }}

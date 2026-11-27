@@ -12,7 +12,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 
 | Op | Resources (selector) | Attributes (`with`) | Derived from |
 | --- | --- | --- | --- |
-| `env.read` | Node (`node`), path (`path`) | — | the execution, delivery or source Node; `WorkspaceTools.AuthorizationFacts`, `CopyAuthorizationPaths`, `MemoryTools.AuthorizationFacts`; Agent memory directories (tree legs) for `create_agent` `inheritMemory` and `move_session` `createAgentInheritMemory` |
+| `env.read` | Node (`node`), path (`path`) | — | the execution, delivery or source Node; `WorkspaceTools.AuthorizationFacts`, `CopyAuthorizationPaths`, `MemoryTools.AuthorizationFacts`; Agent memory directories (tree legs) for `create_agent` `inheritMemory` and `move_session` `createAgentInheritMemory`, on master or, over an Agent store, on the endpoint `@agent` with store paths (`memory-node`, [Agent store](./hosted-agent-store.md#d-agent-store-consumers)) |
 | `env.write` | Node, path | — | the same; one op per patch Add, Update or Delete header |
 | `env.exec` | Node, cwd (`path`) | — | execution Node, `exec.cwd` |
 | `env.browser` | Node | — | execution Node of `browser_*` |
@@ -118,7 +118,7 @@ Notation:
 | `node_create_auth_token` / `node_bootstrap_info` | `node.trust(credential)`, `env.write(master, filePath)` | P |
 | `node_pair_list` / `node_pair_approve` | `node.trust(pending)` / `node.trust(approve, node)`: the ID approval assigns | P |
 | `node_remove` | `node.trust(revoke)` per subtree member | P; R one `node_remove` request per member, a clone of the arguments with that `nodeId`, assessed inside the registry mutation scope before any revocation |
-| `read_memory` / other memory writers | `env.read(master)` / `env.write(master)` per file, under the memory directory of the Agent `agentName` names (the caller's when omitted; `MemoryTools.TargetAgent`, shared with the handler) | P. Padded `agentName` is rejected by the handler and its assessment (differential corpus). |
+| `read_memory` / other memory writers | `env.read(master)` / `env.write(master)` per file, under the memory directory of the Agent `agentName` names (the caller's when omitted; `MemoryTools.TargetAgent`, shared with the handler); over an Agent store `env.read(@agent)` / `env.write(@agent)` with the path `<agent>/memory/<file>` | P. Padded `agentName` is rejected by the handler and its assessment (differential corpus). |
 | `send_file` | `env.read(node, filePath)`; `channel.send` or `session.deliver` | P. Subsumed: staging. |
 | `image_write_to_file` | `env.write(node, filePath)` | P |
 | `generate_image` | `image.generate` | P |

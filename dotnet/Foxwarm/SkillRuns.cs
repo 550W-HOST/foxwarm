@@ -89,8 +89,8 @@ internal sealed partial class Skills
     {
         var info = await RunnableAsync(name, agent);
         var run = info.Run!;
-        var path = EntryPath(info.Directory, run.Entry);
-        var (code, hash) = await ReadSourceAsync(path, $"The entry `{run.Entry}` of skill `{info.Name}`", token);
+        var path = EntryPath(info.Directory, run.Entry, info.Source);
+        var (code, hash) = await ReadSourceAsync(info.Source, path, $"The entry `{run.Entry}` of skill `{info.Name}`", token);
         return new SkillEntry(info, run, null, path, code, hash);
     }
 
@@ -109,6 +109,7 @@ internal sealed partial class Skills
         if (resource.IsDirectory)
             throw NotAResource(info.Name, script);
         var (code, hash) = await ReadSourceAsync(
+            info.Source,
             resource.FullPath,
             $"The script `{resource.Path}` of skill `{info.Name}`",
             token
@@ -118,12 +119,13 @@ internal sealed partial class Skills
 
     // Strict UTF-8 without a leading BOM, never empty, with the SHA-256 of the file's bytes.
     private static async Task<(string Code, string Sha256)> ReadSourceAsync(
+        ISkillFiles files,
         string path,
         string label,
         CancellationToken token
     )
     {
-        var bytes = await File.ReadAllBytesAsync(path, token);
+        var bytes = await files.ReadAllBytesAsync(path, token);
         string code;
         try
         {
@@ -155,7 +157,7 @@ internal sealed partial class Skills
 
     // (null, null) without a `run` block; (null, reason) for an invalid one, which leaves the
     // skill loadable but not runnable.
-    private static (SkillRun? Run, string? Error) Run(string content, string directory)
+    private static (SkillRun? Run, string? Error) Run(string content, string directory, ISkillFiles files)
     {
         var match = FrontMatter().Match(content);
         if (!match.Success)
@@ -173,7 +175,7 @@ internal sealed partial class Skills
             return (null, null);
         try
         {
-            return (ParseRun(map["run"], directory), null);
+            return (ParseRun(map["run"], directory, files), null);
         }
         catch (InvalidDataException error)
         {
@@ -181,7 +183,7 @@ internal sealed partial class Skills
         }
     }
 
-    internal static SkillRun ParseRun(object? raw, string directory)
+    internal static SkillRun ParseRun(object? raw, string directory, ISkillFiles? files = null)
     {
         if (raw is not IDictionary run)
             throw new InvalidDataException("`run` must be a mapping.");
@@ -195,7 +197,7 @@ internal sealed partial class Skills
                 "`run.entry` is required: the entry script, relative to the skill directory."
             );
         entry = entry.Trim();
-        _ = EntryPath(directory, entry);
+        _ = EntryPath(directory, entry, files ?? PhysicalSkillFiles.Instance);
         if (run["effect"] is not string effect || effect.Trim().Length == 0)
             throw new InvalidDataException(
                 "`run.effect` is required: one line saying what running the skill does."
@@ -252,13 +254,13 @@ internal sealed partial class Skills
 
     // The entry's full path: relative, no `.`/`..` segments, every component below the skill
     // directory a real directory or regular file, never a reparse point.
-    internal static string EntryPath(string directory, string entry)
+    internal static string EntryPath(string directory, string entry, ISkillFiles files)
     {
         if (!RelativeShape(entry))
             throw new InvalidDataException(
                 $"`run.entry` `{entry}` must be a relative path inside the skill directory."
             );
-        return Contained(directory, entry.Split('/'), directoryLast: false, skipNames: false)
+        return Contained(files, directory, entry.Split('/'), directoryLast: false, skipNames: false)
             ?? throw new InvalidDataException(
                 $"`run.entry` `{entry}` is not a regular file in the skill directory."
             );
@@ -275,6 +277,7 @@ internal sealed partial class Skills
     // directory (the last one a regular file unless directoryLast) and none is a reparse point.
     // With skipNames, no directory component may be a name the resource listing skips.
     private static string? Contained(
+        ISkillFiles files,
         string directory,
         string[] segments,
         bool directoryLast,
@@ -286,10 +289,10 @@ internal sealed partial class Skills
         {
             current = Path.Combine(current, segments[index]);
             var asDirectory = index < segments.Length - 1 || directoryLast;
-            var exists = asDirectory ? Directory.Exists(current) : File.Exists(current);
+            var exists = asDirectory ? files.DirectoryExists(current) : files.FileExists(current);
             if (
                 !exists
-                || (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0
+                || files.IsLink(current)
                 || (skipNames && asDirectory && Skip.Contains(segments[index]))
             )
                 return null;

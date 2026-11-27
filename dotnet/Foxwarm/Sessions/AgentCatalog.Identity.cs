@@ -62,6 +62,8 @@ internal sealed partial class AgentCatalog
 
     private string[] IdentityCleanupDirectories(string name, string? preparationName)
     {
+        if (store is not null)
+            return StoreIdentityCleanup(store, name, preparationName);
         var paths = preparationName is null
             ? new[] { SourceDirectory(name) }
             : new[] { PreparationPath(preparationName), SourceDirectory(name) };
@@ -101,8 +103,14 @@ internal sealed partial class AgentCatalog
         await createGate.WaitAsync();
         try
         {
-            foreach (var path in IdentityCleanupDirectories(name, preparationName))
-                Directory.Delete(path, true);
+            if (store is not null)
+            {
+                if (IdentityCleanupDirectories(name, preparationName).Length > 0)
+                    await store.DeleteAgentAsync(name, CancellationToken.None);
+            }
+            else
+                foreach (var path in IdentityCleanupDirectories(name, preparationName))
+                    Directory.Delete(path, true);
             if (Exists(name) || MetadataSnapshot().ContainsKey(name))
             {
                 var next = MetadataSnapshot();
@@ -145,6 +153,12 @@ internal sealed partial class AgentCatalog
         await createGate.WaitAsync();
         try
         {
+            if (store is not null)
+            {
+                ValidatePreparationName(preparationName);
+                await CompleteStoreIdentityOwnedAsync(store, name, preparationName);
+                return;
+            }
             var prepared = PreparationPath(preparationName);
             if (IdentityEntry(prepared) is not null)
                 throw new AgentIdentityCleanupException([prepared]);
@@ -174,10 +188,19 @@ internal sealed partial class AgentCatalog
     // resolution ordinary file reads and writes use (a symlinked root is its physical target).
     // The copy and its authorization facts (the read and write legs) both use it. The Agent
     // need not exist yet.
-    internal string MemoryCopyRoot(string agent) =>
-        AuthorizationPaths.CanonicalPotential(Path.Combine(SourceDirectory(agent), "memory"));
+    // Over an Agent store it is the store path `<agent>/memory`.
+    internal string MemoryCopyRoot(string agent)
+    {
+        if (store is null)
+            return AuthorizationPaths.CanonicalPotential(Path.Combine(SourceDirectory(agent), "memory"));
+        ValidateName(agent);
+        return agent + "/memory";
+    }
 
-    internal void CopyIdentityMemory(string sourceAgent, string targetAgent)
+    /// <summary>The Node of memory copy legs: master, or the Agent store's endpoint.</summary>
+    internal string MemoryCopyNode => store is null ? "master" : AgentStorePaths.Endpoint;
+
+    private void CopyIdentityMemory(string sourceAgent, string targetAgent)
     {
         var source = MemoryCopyRoot(sourceAgent);
         var target = MemoryCopyRoot(targetAgent);
