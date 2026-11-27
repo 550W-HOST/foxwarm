@@ -23,7 +23,8 @@ internal sealed record HostedBootstrap(
     string? KekFile = null,
     string? KekPreviousFile = null,
     string OperatorRole = HostedBootstrap.DefaultOperatorRole,
-    string Role = Lease.ReplicaRoles.General
+    string Role = Lease.ReplicaRoles.General,
+    string? AgentsVolume = null
 )
 {
     internal const string DefaultTenant = "default";
@@ -35,6 +36,14 @@ internal sealed record HostedBootstrap(
         System.IO.Path.GetFullPath(
             ScratchRoot ?? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "foxwarm-replica")
         );
+
+    internal string OperatorAgentsRoot(int tenantId) =>
+        System.IO.Path.Combine(
+            System.IO.Path.GetFullPath(AgentsVolume ?? throw new HostedBootstrapException(MissingAgentsVolume)),
+            tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        );
+
+    private const string MissingAgentsVolume = "A master-host replica needs FOXWARM_AGENTS_DIR, the persistent volume path for its Agent folders.";
 
     internal static HostedBootstrap FromEnvironment(IDictionary? environment = null)
     {
@@ -50,6 +59,10 @@ internal sealed record HostedBootstrap(
                 throw new HostedBootstrapException("FOXWARM_ADVERTISE_ADDRESS: " + error.Message);
             }
         var replica = Read(environment, "FOXWARM_REPLICA_ID");
+        var role = ReplicaRole(Read(environment, "FOXWARM_ROLE"));
+        var agentsVolume = Path(environment, "FOXWARM_AGENTS_DIR");
+        if (role == Lease.ReplicaRoles.MasterHost && agentsVolume is null)
+            throw new HostedBootstrapException(MissingAgentsVolume);
         return new(
             Secret(environment, "FOXWARM_DATABASE_URL"),
             Secret(environment, "FOXWARM_MIGRATE_DATABASE_URL"),
@@ -62,7 +75,8 @@ internal sealed record HostedBootstrap(
             Path(environment, "FOXWARM_KEK_FILE"),
             Path(environment, "FOXWARM_KEK_PREVIOUS_FILE"),
             Name(environment, "FOXWARM_OPERATOR_ROLE", DefaultOperatorRole),
-            ReplicaRole(Read(environment, "FOXWARM_ROLE"))
+            role,
+            agentsVolume
         );
     }
 
