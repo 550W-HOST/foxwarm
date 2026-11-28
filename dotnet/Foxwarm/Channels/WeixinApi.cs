@@ -48,8 +48,8 @@ internal sealed partial class WeixinApi
 
     internal string? Context(string user) => contextTokens.GetValueOrDefault(user);
 
-    internal Task DelayAsync(int milliseconds) =>
-        delay(TimeSpan.FromMilliseconds(milliseconds), CancellationToken.None);
+    internal Task DelayAsync(int milliseconds, CancellationToken stop = default) =>
+        delay(TimeSpan.FromMilliseconds(milliseconds), stop);
 
     private static Uri Endpoint(string baseUrl, string path) =>
         new(new Uri(baseUrl.TrimEnd('/') + "/"), path);
@@ -61,7 +61,7 @@ internal sealed partial class WeixinApi
         string endpoint,
         JsonObject body,
         int timeoutMs,
-        string label
+        string label, CancellationToken stop = default
     )
     {
         body["base_info"] = new JsonObject { ["channel_version"] = ProductVersion.Value };
@@ -86,9 +86,8 @@ internal sealed partial class WeixinApi
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
         if (!string.IsNullOrWhiteSpace(routeTag))
             request.Headers.TryAddWithoutValidation("SKRouteTag", routeTag.Trim());
-        using var timeout = new CancellationTokenSource(
-            TimeSpan.FromMilliseconds(Math.Max(0, timeoutMs))
-        );
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(0, timeoutMs)));
         using var response = await http.SendAsync(request, timeout.Token);
         var raw = await response.Content.ReadAsStringAsync(timeout.Token);
         if (!response.IsSuccessStatusCode)
@@ -108,7 +107,7 @@ internal sealed partial class WeixinApi
         string? token,
         string? routeTag,
         string cursor,
-        int timeoutMs = 35000
+        int timeoutMs = 35000, CancellationToken stop = default
     )
     {
         try
@@ -121,12 +120,12 @@ internal sealed partial class WeixinApi
                         "ilink/bot/getupdates",
                         new JsonObject { ["get_updates_buf"] = cursor },
                         timeoutMs,
-                        "getUpdates"
+                        "getUpdates", stop
                     )
                 ) as JsonObject
                 ?? throw new InvalidDataException("Invalid Weixin getUpdates response.");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!stop.IsCancellationRequested)
         {
             return new JsonObject
             {

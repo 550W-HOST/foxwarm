@@ -28,6 +28,10 @@ internal sealed class ManagedChannels(
     // The runtime's shared channel clients, one per channel type.
     private readonly ChannelHttpClients http = new(sessions.Capabilities.Egress);
 
+    private readonly ChannelCursors cursors = new(sessions.Storage.Documents);
+
+    internal Task DrainPollsAsync() => cursors.DrainedAsync();
+
     private readonly object weixinGate = new();
     private WeixinApi? weixin;
 
@@ -367,7 +371,7 @@ internal sealed class ManagedChannels(
                 dependencies,
                 health,
                 http.For("telegram"),
-                http.Hold
+                http.Hold, cursors
             ),
             "matrix" => new MatrixChannel(
                 id,
@@ -376,7 +380,7 @@ internal sealed class ManagedChannels(
                 router,
                 dependencies,
                 health,
-                http.For("matrix")
+                http.For("matrix"), cursors
             ),
             "qqbot" => new QQBotChannel(id, config, sessions, router, dependencies, health),
             // Hosted mode never opens a WeWork callback listener, even from a stored document
@@ -393,7 +397,7 @@ internal sealed class ManagedChannels(
                 health,
                 http.For("wework")
             ),
-            "weixin" => new WeixinChannel(id, config, router, Weixin, health),
+            "weixin" => new WeixinChannel(id, config, router, Weixin, health, cursors, sessions.ScheduledProducers),
             _ => throw new ChannelRequestException(
                 "Adapter is not implemented on this server: " + id
             ),
@@ -634,6 +638,7 @@ internal sealed class ManagedChannels(
     public async ValueTask DisposeAsync()
     {
         await StopIngressAsync();
+        await cursors.CloseAsync();
         string[] ids;
         lock (gate)
             ids = running.Keys.ToArray();

@@ -18,7 +18,10 @@ internal sealed partial class MessageRouter
     )
     {
         if (!runtime.Manager.Accepting)
+        {
+            if (source.Polled) throw new OperationCanceledException();
             return;
+        }
         var text = message.Text;
         if (await TryExternalCommandAsync(source, text, whoamiOnly: true))
             return;
@@ -49,6 +52,7 @@ internal sealed partial class MessageRouter
         catch (Exception error)
         {
             await source.Reply(error.Message);
+            if (source.Polled) throw;
             return;
         }
         // Selection (including guest provisioning) is finished. Pin that identity before media
@@ -84,8 +88,7 @@ internal sealed partial class MessageRouter
             ),
             OpenFields: new JsonObject { ["userInput"] = true }
         );
-        // Ordinary channel input uses the existing best-effort queue lane; external identity is not Session authority.
-        await runtime.SubmitChannelAsync(owner, item);
+        await runtime.SubmitChannelAsync(owner, item, source.Polled, source.Receipt);
     }
 
     private async Task<bool> TryExternalCommandAsync(
