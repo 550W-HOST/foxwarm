@@ -34,6 +34,8 @@ public sealed partial class HostedImportTests : IAsyncLifetime
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
+        const string cursor = """{"matrix":{"account":"matrix:homeserver:bot","next_batch":"offline"}}""";
+        await File.WriteAllTextAsync(Path.Combine(fixture.DataRoot,"state","channel-cursors.json"), cursor);
         var before = ImportFixture.TreeHashes(fixture.DataRoot);
 
         var result = await RunAsync(database, fixture.DataRoot, "synthetic", Reports);
@@ -65,6 +67,8 @@ public sealed partial class HostedImportTests : IAsyncLifetime
         Assert.Equal(2, verification["blobs"]!["sameHash"]!.GetValue<long>());
         Assert.Equal(2, (await RowCountsAsync(database, "synthetic"))["blob_objects"]);
         Assert.Contains("Nodes", Texts(verification["documents"], "document"));
+        Assert.Contains("ChannelCursors", Texts(verification["documents"], "document"));
+        Assert.Equal(cursor, await database.ScalarAsync("SELECT text FROM state_documents JOIN tenants USING(tenant_id) WHERE tenants.name='synthetic' AND state_documents.name='channel-cursors'"));
         Assert.Contains("McpOAuth", Texts(verification["documents"], "document"));
 
         // Configuration: comments stay in the tenant document; deployment blocks go to the draft;
@@ -89,6 +93,7 @@ public sealed partial class HostedImportTests : IAsyncLifetime
         var importedFiles = verification["agentFiles"]!.AsArray();
         Assert.NotEmpty(importedFiles);
         Assert.All(importedFiles, file => Assert.True(file!["equal"]!.GetValue<bool>()));
+        Assert.DoesNotContain(result.Report["notImported"]!.AsArray(), item => item?["what"]?.ToString()=="state/channel-cursors.json");
         var exec = result.Report["notImported"]!.AsArray().Single(item => item!["what"]!.ToString().StartsWith("exec registry", StringComparison.Ordinal));
         Assert.Equal(1, exec!["count"]!.GetValue<long>());
     }

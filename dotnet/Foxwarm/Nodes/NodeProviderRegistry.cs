@@ -18,14 +18,17 @@ internal sealed partial class NodeProviderRegistry
         StringComparer.Ordinal
     );
     private readonly PendingWriteRefs pending;
+    private readonly bool grantFiltered;
 
     internal NodeProviderRegistry(
         NodeConnectionHub native,
         JsonObject? configuration = null,
-        PendingWriteRefs? pending = null
+        PendingWriteRefs? pending = null,
+        TenantProviders? tenant = null
     )
     {
         this.native = native;
+        grantFiltered = tenant is not null;
         this.pending = pending ?? new();
         forwardEvent = value => ServiceReceived?.Invoke(value);
         forwardDisconnect = (generation, reason) =>
@@ -35,11 +38,14 @@ internal sealed partial class NodeProviderRegistry
         if (configuration is not null)
             app["nodeProviders"] = configuration.DeepClone();
         AppConfigurationRules.Validate(app);
+        if (tenant is not null)
+            configuration = new JsonObject(configuration?.Where(pair => tenant.Drivers.ContainsKey(pair.Key))
+                .Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.DeepClone())) ?? []);
         foreach (var (id, raw) in configuration ?? new JsonObject())
         {
             if (id is "master" or "authenticated-remote")
                 throw new InvalidDataException("Node provider identity is reserved.");
-            providers.Add(id, new(id, (JsonObject)raw!.DeepClone()));
+            providers.Add(id, tenant?.Drivers[id] ?? new(id, (JsonObject)raw!.DeepClone()));
         }
         native.Registry.ConfigureProviders(configuration);
     }
@@ -90,6 +96,7 @@ internal sealed partial class NodeProviderRegistry
         );
         foreach (var record in native.Registry.ProviderRecords().OfType<JsonObject>())
         {
+            if (grantFiltered && !providers.ContainsKey(SessionWait.Text(record["provider"])!)) continue;
             var id = SessionWait.Text(record["nodeId"])!;
             if (!values.ContainsKey(id) && record["descriptor"] is JsonObject descriptor)
             {

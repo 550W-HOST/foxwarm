@@ -24,10 +24,21 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         .Select(value => value!.GetValue<string>())
         .ToArray();
     private readonly int timeoutSeconds = (int)(SessionWait.Number(config["timeoutSeconds"]) ?? 90);
+    // Reject duplicate fields throughout the envelope before JsonObject lazily indexes them.
+    internal static readonly JsonDocumentOptions ResponseOptions = new() { AllowDuplicateProperties = false };
     private int active;
     private readonly object descriptionGate = new();
     private Task<JsonObject>? description;
     internal string Id => id;
+    internal int? TenantId { get; init; }
+    internal ProviderQuotas? Quotas { get; init; }
+    internal Action<string>? Stderr { get; init; }
+    internal Func<CancellationToken, Task>? ChargeLifecycle { get; init; }
+
+    internal void Identify(JsonObject envelope)
+    {
+        if (TenantId is int id) envelope["tenantId"] = id;
+    }
     internal int TimeoutSeconds => timeoutSeconds;
     internal string? ParentNode => SessionWait.Text(config["parentNode"]);
     private static readonly string[] EnvironmentKeys =
@@ -81,8 +92,11 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 "ensureParameters",
                 "lifecycleDescription",
                 "dataRetention",
+                "tenancy",
             ]
         );
+        if (value.ContainsKey("tenancy") && SessionWait.Text(value["tenancy"]) != "per-tenant")
+            throw new NodeProviderException("NODE_PROVIDER_TENANCY_MISMATCH", $"Provider '{id}' reported tenancy '{value["tenancy"]}'; only per-tenant is supported.");
         Bounded(value["label"], 256);
         Bounded(value["description"], 4096);
         if (
@@ -334,6 +348,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 ["requestId"] = requestId,
                 ["operation"] = operation,
             };
+            Identify(envelope);
             if (request is not null)
                 envelope["request"] = request.DeepClone();
             ValidateJson(envelope, 32, 100_000);
@@ -357,7 +372,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
             JsonObject response;
             try
             {
-                response = Object(JsonNode.Parse(raw));
+                response = Object(JsonNode.Parse(raw, documentOptions: ResponseOptions));
             }
             catch (JsonException)
             {
@@ -381,10 +396,11 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         JsonObject response
     )
     {
-        Keys(
-            response,
-            ["protocol", "providerId", "requestId", "operation", "ok", "result", "error"]
-        );
+        if (envelope.ContainsKey("tenantId") != response.ContainsKey("tenantId")
+            || envelope["tenantId"] is { } expected && (response["tenantId"] is not JsonValue value
+                || !value.TryGetValue<int>(out var actual) || actual != expected.GetValue<int>()))
+            throw new NodeProviderException("NODE_PROVIDER_TENANT_MISMATCH", "Provider response identity does not match the request.");
+        Keys(response, ["protocol", "providerId", "requestId", "operation", "ok", "result", "error", "tenantId"]);
         foreach (var key in new[] { "protocol", "providerId", "requestId", "operation" })
             if (SessionWait.Text(response[key]) != SessionWait.Text(envelope[key]))
                 throw new NodeProviderException(

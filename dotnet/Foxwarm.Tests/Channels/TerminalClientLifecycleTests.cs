@@ -69,7 +69,7 @@ public sealed class TerminalClientLifecycleTests
         Assert.Equal(WebSocketCloseStatus.NormalClosure, close.CloseStatus);
     }
 
-    private static async Task<(WebSocket Browser, WebSocket Host, IDisposable Resources)> PairAsync()
+    internal static async Task<(WebSocket Browser, WebSocket Host, IDisposable Resources)> PairAsync()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();

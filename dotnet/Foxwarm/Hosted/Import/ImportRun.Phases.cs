@@ -146,7 +146,7 @@ internal sealed partial class ImportRun
         {
             "agents.json", "installation.json", "timers.json", "channels.json", "nodes.json", "mcp-oauth.json",
             "secrets.json", "secret-exposures.json", "config.yaml", "models.yaml", "tool-authorization.yaml",
-            "mcp.json", "webui.json", "token", "node_token", "node_event_capability_secret", "running-exec.json",
+            "channel-cursors.json", "mcp.json", "webui.json", "token", "node_token", "node_event_capability_secret", "running-exec.json",
             "migrationVersion.json", "session-id-reservations.jsonl", "main.lock", InstallationLock.FileName,
         };
         foreach (var file in ImportSource.SqliteFiles)
@@ -217,6 +217,7 @@ internal sealed partial class ImportRun
         await StepAsync("configuration documents", ImportConfigurationAsync);
         await StepAsync("node registry and tokens", ImportNodes);
         await StepAsync("channel bindings", () => CopyDocument(StateDocumentName.Channels, "state/channels.json"));
+        await StepAsync("channel cursors", () => CopyDocument(StateDocumentName.ChannelCursors, "state/channel-cursors.json"));
         await StepAsync("blobs and artifacts", ImportBlobsAsync);
     }
 

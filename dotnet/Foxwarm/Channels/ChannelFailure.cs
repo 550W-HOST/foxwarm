@@ -34,6 +34,7 @@ internal sealed class ChannelFailure(string stage, Exception error) : IOExceptio
         error switch
         {
             ChannelFailure failure => failure.Message + ": " + Diagnostic(failure.InnerException!),
+            ChannelInputPaused paused => Diagnostic(paused.InnerException!),
             ChannelProblem problem => problem.Message,
             TelegramApiException telegram => $"Telegram API request failed ({telegram.Code}).",
             QQBotApiException qq =>

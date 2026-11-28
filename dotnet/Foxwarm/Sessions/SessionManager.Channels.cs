@@ -201,7 +201,7 @@ internal sealed partial class SessionManager
         async Task<SessionOwner> Create()
         {
             if (!agents.Exists(agent))
-                throw new InvalidDataException("Guest agent source does not exist: " + agent);
+                throw new GuestPolicyDenied("Guest agent source does not exist: " + agent);
             var (template, node) = GuestPolicy(config!, agent);
             if (SessionWait.Text(config!["mode"]) != "inherited")
                 return await CreateNamedAsync(agent, null, null, null);
@@ -244,11 +244,19 @@ internal sealed partial class SessionManager
             }
             throw new InvalidOperationException("Unable to allocate a guest Agent.");
         }
-        var result = await ResolveChannelAsync(
-            source.Target,
-            Create,
-            new JsonObject { ["dangerouslyAllowAllUsers"] = true }
-        );
+        SessionOwner result;
+        try
+        {
+            result = await ResolveChannelAsync(
+                source.Target, Create, new JsonObject { ["dangerouslyAllowAllUsers"] = true }
+            );
+        }
+        catch (GuestPolicyDenied denial)
+        {
+            // InvalidDataException is sealed. Preserve the provisioning contract while
+            // letting the poller distinguish a policy refusal from a failed storage read.
+            throw new InvalidDataException(denial.Message, denial);
+        }
         return SessionCatalog.Flag(ChannelBinding(source.Target)?["dangerouslyAllowAllUsers"])
             ? result
             : null;
@@ -361,31 +369,33 @@ internal sealed partial class SessionManager
         {
             if (config["isolated"]?.GetValue<bool>() == false)
                 return (null, node);
-            throw new InvalidDataException(
+            throw new GuestPolicyDenied(
                 "Set guestAgent.template to an Agent whose rules apply to guests."
             );
         }
         if (!agents.Exists(template))
-            throw new InvalidDataException("Guest template Agent does not exist: " + template);
+            throw new GuestPolicyDenied("Guest template Agent does not exist: " + template);
         var metadata = agents.MetadataSnapshot();
         if (
             !agents
                 .CreatorChainOf(template)
                 .Any(name => metadata[name]?["rules"] is JsonArray { Count: > 0 })
         )
-            throw new InvalidDataException("Guest template Agent has no rules: " + template);
+            throw new GuestPolicyDenied("Guest template Agent has no rules: " + template);
         if (!inherited)
         {
             var chain = agents.CreatorChainOf(agent);
             if (!chain.Contains(template, StringComparer.Ordinal))
-                throw new InvalidDataException(
+                throw new GuestPolicyDenied(
                     "Guest single-mode Agent is not the template or created by it."
                 );
             if (node is not null && agents.DefaultNode(agent) != node)
-                throw new InvalidDataException(
+                throw new GuestPolicyDenied(
                     "Guest single-mode Agent default Node does not match its configuration."
                 );
         }
         return (template, node);
     }
 }
+
+internal sealed class GuestPolicyDenied(string message) : InvalidOperationException(message);

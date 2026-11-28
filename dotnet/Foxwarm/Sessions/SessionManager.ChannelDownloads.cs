@@ -4,7 +4,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    private sealed class ReceivedFileTooLarge(long? size) : IOException
+    internal sealed class ReceivedFileTooLarge(long? size) : IOException
     {
         internal long? Size { get; } = size;
     }

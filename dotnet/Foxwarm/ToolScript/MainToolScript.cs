@@ -23,6 +23,8 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     private readonly object gate = new();
     internal IToolScriptRunStore Store => store;
 
+    internal bool HasActiveRuns => !active.IsEmpty;
+
     private sealed class ActiveRun : IDisposable
     {
         internal readonly JsonObject Record;

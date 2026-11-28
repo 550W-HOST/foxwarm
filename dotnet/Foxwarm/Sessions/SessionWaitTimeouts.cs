@@ -9,7 +9,7 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
 {
     private readonly ConcurrentDictionary<
         string,
-        (string WaitId, CancellationTokenSource Stop, Task Task)
+        (string WaitId, double Deadline, CancellationTokenSource Stop, Task Task)
     > jobs = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource lifetime = new();
     private readonly object gate = new();
@@ -110,14 +110,14 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
                 },
                 TaskScheduler.Default
             );
-            jobs[sessionId] = (id, stop, task);
+            jobs[sessionId] = (id, started + duration * 1000, stop, task);
             ready.TrySetResult();
         }
     }
 
     internal async Task RetireAsync(string id)
     {
-        (string WaitId, CancellationTokenSource Stop, Task Task)? job = null;
+        (string WaitId, double Deadline, CancellationTokenSource Stop, Task Task)? job = null;
         lock (gate)
         {
             var key = jobs.Keys.FirstOrDefault(key =>
@@ -136,6 +136,8 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
             await actual.Task;
         }
     }
+
+    internal bool DueWithin(long through) => jobs.Values.Any(job => job.Deadline <= through);
 
     internal void Stop()
     {

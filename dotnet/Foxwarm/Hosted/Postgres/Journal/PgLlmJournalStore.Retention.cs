@@ -20,6 +20,12 @@ internal sealed partial class PgLlmJournalStore
     private CancellationTokenSource? retentionStop;
     private Task retention = Task.CompletedTask;
 
+    private DateTimeOffset? nextRetention;
+    internal DateTimeOffset? NextRetention
+    {
+        get { lock (retentionGate) return nextRetention; }
+    }
+
     /// <summary>
     /// Starts the owner's daily retention job: a first pass after <paramref name="firstDelay"/>
     /// (default one minute after start), then one every <paramref name="interval"/> (default
@@ -38,6 +44,7 @@ internal sealed partial class PgLlmJournalStore
         {
             if (retentionStop is not null)
                 throw new InvalidOperationException("Journal retention is already running.");
+            nextRetention = clock.GetUtcNow() + (firstDelay ?? TimeSpan.FromMinutes(1));
             retentionStop = new CancellationTokenSource();
             var stop = retentionStop.Token;
             retention = Task.Run(
@@ -63,7 +70,7 @@ internal sealed partial class PgLlmJournalStore
         }
     }
 
-    private async Task StopRetentionAsync()
+    internal async Task StopRetentionAsync()
     {
         Task running;
         lock (retentionGate)
@@ -96,7 +103,6 @@ internal sealed partial class PgLlmJournalStore
             {
                 return;
             }
-            delay = interval;
             try
             {
                 var result = await PurgeAsync(options.Cutoff(clock.GetUtcNow())!.Value, stop)
@@ -123,6 +129,9 @@ internal sealed partial class PgLlmJournalStore
                     failure: true
                 );
             }
+            delay = interval;
+            lock (retentionGate)
+                nextRetention = clock.GetUtcNow() + interval;
         }
     }
 

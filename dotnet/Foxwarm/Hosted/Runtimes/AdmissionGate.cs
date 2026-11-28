@@ -26,12 +26,20 @@ internal enum AdmissionLatch
 /// reopens. Admission and the idle check run under one lock, so an idle release can't latch
 /// while new work is being admitted, and work can't enter after the latch.
 /// </summary>
-internal sealed class AdmissionGate
+internal sealed class AdmissionGate : Foxwarm.Timers.IProducerAdmission
 {
     private readonly object gate = new();
     private readonly Func<long> clock;
     private readonly Func<bool>? valid;
     private bool open;
+    private readonly CancellationTokenSource startupAbort = new();
+    public CancellationToken StartupAborted => startupAbort.Token;
+
+    public Task AbortStartupAsync()
+    {
+        Latch(AdmissionLatch.Stop);
+        return startupAbort.CancelAsync();
+    }
     private int inFlight;
     private long lastActivity;
     private TaskCompletionSource? drained;
@@ -61,11 +69,15 @@ internal sealed class AdmissionGate
     }
 
     /// <summary>Admits work, or returns null (consuming nothing) when the gate isn't open.</summary>
-    internal Admission? TryEnter()
+    internal Admission? TryEnter() => Enter(requirePublished: true);
+
+    public IDisposable? TryEnterProducer() => Enter(requirePublished: false);
+
+    private Admission? Enter(bool requirePublished)
     {
         lock (gate)
         {
-            if (!open || Latched != AdmissionLatch.None || valid?.Invoke() == false)
+            if ((requirePublished && !open) || Latched != AdmissionLatch.None || valid?.Invoke() == false)
                 return null;
             inFlight++;
             lastActivity = clock();

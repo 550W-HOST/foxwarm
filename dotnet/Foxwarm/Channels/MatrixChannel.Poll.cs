@@ -5,6 +5,8 @@ namespace Foxwarm.Channels;
 
 internal sealed partial class MatrixChannel
 {
+    private readonly PolledMedia mediaAttempts = new();
+
     private async Task PollAsync(bool threadNotifications)
     {
         try
@@ -28,7 +30,10 @@ internal sealed partial class MatrixChannel
             initial["room"] ??= new JsonObject();
             initial["room"]!["timeline"] ??= new JsonObject();
             initial["room"]!["timeline"]!["limit"] = 10;
-            string? cursor = null;
+            var position = cursors is null ? null : await cursors.ReadAsync(id, Account);
+            RestoreEncryption(position);
+            string? cursor = SessionWait.Text(position?["next_batch"]);
+            resumed = cursor is not null;
             var catchingUp = true;
             var reconnecting = false;
             while (!stopping.IsCancellationRequested)
@@ -69,33 +74,57 @@ internal sealed partial class MatrixChannel
                     continue;
                 }
                 health.Recover(SyncPath);
-                cursor = SessionWait.Text(sync["next_batch"]);
-                reconnecting = false;
-                catchingUp = (sync["to_device"]?["events"] as JsonArray)?.Count > 0;
-                foreach (
-                    var (room, raw) in sync["rooms"]?["invite"] as JsonObject ?? new JsonObject()
-                )
-                    ProcessRoomState(room, raw?["invite_state"]?["events"] as JsonArray);
-                foreach (var section in new[] { "join", "leave" })
-                foreach (
-                    var (room, raw) in sync["rooms"]?[section] as JsonObject ?? new JsonObject()
-                )
+                try
                 {
-                    ProcessRoomState(room, raw?["state"]?["events"] as JsonArray);
-                    ProcessRoomState(
-                        room,
-                        raw?["org.matrix.msc4222.state_after"]?["events"] as JsonArray
-                    );
+                    var gate = sessions?.ScheduledProducers;
+                    using var admission = gate?.TryEnterProducer();
+                    if (gate is not null && admission is null) return;
+                    var next = SessionWait.Text(sync["next_batch"]);
+                    reconnecting = false;
+                    catchingUp = (sync["to_device"]?["events"] as JsonArray)?.Count > 0;
                     foreach (
-                        var item in (
-                            raw?["timeline"]?["events"] as JsonArray ?? []
-                        ).OfType<JsonObject>()
+                        var (room, raw) in sync["rooms"]?["invite"] as JsonObject ?? new JsonObject()
+                    )
+                        await ProcessRoomStateAsync(room, raw?["invite_state"]?["events"] as JsonArray);
+                    foreach (var section in new[] { "join", "leave" })
+                    foreach (
+                        var (room, raw) in sync["rooms"]?[section] as JsonObject ?? new JsonObject()
                     )
                     {
-                        ProcessRoomState(room, new JsonArray(item.DeepClone()));
-                        // The SDK event emitter does not join async application timeline handlers.
-                        _ = ObserveAsync(ProcessTimelineAsync(room, item));
+                        await ProcessRoomStateAsync(room, raw?["state"]?["events"] as JsonArray);
+                        await ProcessRoomStateAsync(
+                            room,
+                            raw?["org.matrix.msc4222.state_after"]?["events"] as JsonArray
+                        );
+                        foreach (
+                            var item in (
+                                raw?["timeline"]?["events"] as JsonArray ?? []
+                            ).OfType<JsonObject>()
+                        )
+                        {
+                            await ProcessRoomStateAsync(room, new JsonArray(item.DeepClone()));
+                            var eventKey = SessionWait.Text(item["event_id"])
+                                ?? room + ":" + SessionWait.Text(item["content"]?["url"]);
+                            await mediaAttempts.HandleAsync(eventKey, () => ProcessTimelineAsync(room, item), health);
+                        }
                     }
+                    if (cursors is not null && next is not null)
+                    {
+                        var rooms = EncryptedRoomList();
+                        await cursors.SaveAsync(id, Account, new JsonObject { ["next_batch"] = next, ["encryptedRooms"] = rooms });
+                    }
+                    cursor = next;
+                    if (next is not null) mediaAttempts.Checkpointed();
+                    health.Recover("Matrix input");
+                }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
+                catch (Exception error)
+                {
+                    // Retain since on failed Session admission or checkpoint. Prior messages
+                    // are recognized by their durable receipts if this batch is read again.
+                    if (error is ChannelMediaFetchFailure fetch) health.Log(fetch.InnerException!);
+                    else health.InputPaused("Matrix", error);
+                    await delay(TimeSpan.FromSeconds(2), stopping.Token);
                 }
             }
         }
@@ -169,7 +198,10 @@ internal sealed partial class MatrixChannel
         byte
     > encryptedRooms = new(StringComparer.Ordinal);
 
-    private void ProcessRoomState(string room, JsonArray? events)
+    private JsonArray EncryptedRoomList() => new(encryptedRooms.Keys.Order(StringComparer.Ordinal)
+        .Select(room => (JsonNode?)JsonValue.Create(room)).ToArray());
+
+    private async Task ProcessRoomStateAsync(string room, JsonArray? events)
     {
         foreach (var item in (events ?? []).OfType<JsonObject>())
         {
@@ -177,7 +209,16 @@ internal sealed partial class MatrixChannel
                 SessionWait.Text(item["type"]) == "m.room.encryption"
                 && SessionWait.Text(item["state_key"]) == ""
             )
-                encryptedRooms.TryAdd(room, 0);
+            {
+                if (encryptedRooms.TryAdd(room, 0) && cursors is not null)
+                {
+                    // A later event may fail. Retain encryption knowledge independently of
+                    // advancing that batch's cursor, before callers can send after a restart.
+                    var current = await cursors.ReadAsync(id, Account) ?? new JsonObject();
+                    current["encryptedRooms"] = EncryptedRoomList();
+                    await cursors.SaveAsync(id, Account, current);
+                }
+            }
             if (
                 SessionWait.Text(item["type"]) != "m.room.member"
                 || SessionWait.Text(item["state_key"]) != user
@@ -211,14 +252,16 @@ internal sealed partial class MatrixChannel
             || SessionWait.Text(item["sender"]) == user
         )
             return;
-        if (SessionWait.Number(item["origin_server_ts"]) is { } timestamp && timestamp < startTime)
+        if (!resumed && SessionWait.Number(item["origin_server_ts"]) is { } timestamp && timestamp < startTime)
             return;
         var eventId = SessionWait.Text(item["event_id"]) ?? "";
-        if (!processed.Add(eventId))
-            return;
-        processedOrder.Enqueue(eventId);
-        if (processedOrder.Count > 1000)
-            processed.Remove(processedOrder.Dequeue());
+        if (eventId.Length > 0 && processed.Contains(eventId)) return;
+        void Remember()
+        {
+            if (eventId.Length == 0 || !processed.Add(eventId)) return;
+            processedOrder.Enqueue(eventId);
+            if (processedOrder.Count > 1000) processed.Remove(processedOrder.Dequeue());
+        }
         if (SessionWait.Text(item["sender"]) is not { Length: > 0 } sender)
             return;
         var content = item["content"] as JsonObject ?? new JsonObject();
@@ -229,7 +272,7 @@ internal sealed partial class MatrixChannel
             sender,
             sender,
             text => SendTextAsync(room, text, false, CancellationToken.None)
-        );
+        ) { Polled = true, Receipt = eventId.Length > 0 ? ChannelCursors.Receipt("matrix", id, Account, eventId) : null };
         ExternalChannelMessage message;
         switch (SessionWait.Text(content["msgtype"]))
         {
@@ -238,35 +281,35 @@ internal sealed partial class MatrixChannel
                 break;
             case "m.image" or "m.file":
                 var image = SessionWait.Text(content["msgtype"]) == "m.image";
-                var media =
-                    MediaUri(SessionWait.Text(content["url"]))
-                    ?? throw new InvalidDataException("Invalid Matrix media URI.");
-                // Source fetches eagerly before Router authorization and does not attach the access token.
-                using (var response = await http.GetAsync(media, HttpCompletionOption.ResponseHeadersRead))
+                if (MediaUri(SessionWait.Text(content["url"])) is not { } media)
                 {
-                    var name = !image ? SessionWait.Text(content["filename"]) : null;
-                    if (string.IsNullOrEmpty(name))
-                        name = SessionWait.Text(content["body"]);
-                    if (string.IsNullOrEmpty(name))
-                        name = image ? "matrix-image" : "matrix-file";
-                    var mime = SessionWait.Text(content["info"]?["mimetype"]);
-                    if (string.IsNullOrEmpty(mime))
-                        mime = image ? "image/jpeg" : "application/octet-stream";
-                    message = await sessions.ReceiveRemoteChannelFileAsync(
-                        "matrix",
-                        room,
-                        () => sessions.ReadChannelBodyAsync(response.Content, CancellationToken.None),
-                        name,
-                        mime,
-                        "",
-                        CancellationToken.None,
-                        image
-                    );
+                    health.Log(new InvalidDataException("Invalid Matrix media URI."));
+                    Remember();
+                    return;
                 }
+                // Source fetches eagerly before Router authorization and does not attach the access token.
+                var downloadStop = cursors?.Closing ?? default;
+                async Task<byte[]> Download()
+                {
+                    using var response = await http.GetAsync(media, HttpCompletionOption.ResponseHeadersRead, downloadStop);
+                    response.EnsureSuccessStatusCode();
+                    return await sessions.ReadChannelBodyAsync(response.Content, downloadStop);
+                }
+                var name = !image ? SessionWait.Text(content["filename"]) : null;
+                if (string.IsNullOrEmpty(name)) name = SessionWait.Text(content["body"]);
+                if (string.IsNullOrEmpty(name)) name = image ? "matrix-image" : "matrix-file";
+                var mime = SessionWait.Text(content["info"]?["mimetype"]);
+                if (string.IsNullOrEmpty(mime)) mime = image ? "image/jpeg" : "application/octet-stream";
+                message = await sessions.ReceiveRemoteChannelFileAsync(
+                    "matrix", room, () => PolledMedia.FetchAsync(Download, downloadStop),
+                    name, mime, "", CancellationToken.None, image
+                );
                 break;
             default:
+                Remember();
                 return;
         }
         await router.HandleExternalMessageAsync(context, message);
+        Remember();
     }
 }

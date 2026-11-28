@@ -35,6 +35,9 @@ public sealed class SessionIngress
                 entry.SaveLane.AdmitAsync(admitted, SaveKind.Strict, beforeAdmission)
         );
 
+    internal Task EnqueuePolledInputAsync(string sessionId, QueueItem item, string? receipt, Action beforeAdmission) =>
+        EnqueueCoreAsync(sessionId, item, (entry, admitted) => entry.SaveLane.AdmitPolledInputAsync(admitted, receipt, beforeAdmission));
+
     internal Task EnqueueTimerAsync(string sessionId, QueueItem item) =>
         EnqueueCoreAsync(
             sessionId,

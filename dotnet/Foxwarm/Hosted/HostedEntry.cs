@@ -150,7 +150,8 @@ internal static class HostedEntry
         var configuration = deployment.ForTenant(slug);
         var storage = new PostgresStorageContext(context.Database, tenant.RequireScratchRoot());
         await OpenTenantStorageAsync(storage, configuration, slug, token).ConfigureAwait(false);
-        return await BuildRuntimeAsync(storage, storage, tenant, configuration, null, token, context.Server, grant.Profile)
+        return await BuildRuntimeAsync(storage, storage, tenant, configuration, null, token, context.Server, grant.Profile,
+            new(Foxwarm.Timers.TimerOccurrence.FromJson(context.Activation.Wakeup?.Occurrence), context.Activation.Gate))
             .ConfigureAwait(false);
     }
 
@@ -249,14 +250,15 @@ internal static class HostedEntry
         System.Net.Sockets.Socket? publicListener = null,
         CancellationToken token = default,
         Runtimes.TenantServer? server = null,
-        TenantProfile profile = TenantProfile.Hosted
+        TenantProfile profile = TenantProfile.Hosted,
+        Foxwarm.Timers.RuntimeSchedule? schedule = null
     )
     {
         // The runtime owns the tenant context from here; a build that fails releases it. A
         // release that fails too is reported, so the owner treats the stop as unconfirmed.
         try
         {
-            return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, publicListener, server, profile, token)
+            return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, publicListener, server, profile, schedule, token)
                 .ConfigureAwait(false);
         }
         catch (Exception error)
@@ -284,6 +286,7 @@ internal static class HostedEntry
         System.Net.Sockets.Socket? publicListener,
         Runtimes.TenantServer? server,
         TenantProfile profile,
+        Foxwarm.Timers.RuntimeSchedule? schedule,
         CancellationToken token
     )
     {
@@ -372,7 +375,10 @@ internal static class HostedEntry
                 // Both profiles take the tenant's limits from its row.
                 capabilities: RuntimeCapabilities.For(profile, deployment.Egress) with { Limits = limits },
                 jsonStdoutLog: true,
-                logTenant: bootstrap.Tenant
+                logTenant: bootstrap.Tenant,
+                schedule: schedule,
+                openProviders: diagnostic => new Providers.ProviderGrants(deployment, diagnostic)
+                    .LoadAsync(tenant.Database, bootstrap.Tenant, profile, token, applyGrants: server is not null)
             )
             .ConfigureAwait(false);
         // The owner's daily journal retention; it stops when the host disposes the journal.

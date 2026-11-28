@@ -60,6 +60,11 @@ internal sealed partial class MainTimers
     private JsonObject View(JsonObject row, bool recentRuns = false)
     {
         var view = (JsonObject)row.DeepClone();
+        if (schedulesWakeups)
+        {
+            view.Remove("scheduleGeneration");
+            view.Remove("settledNomination");
+        }
         var runs = RecentRuns(row);
         view.Remove("recentRuns");
         if (recentRuns)
@@ -142,6 +147,11 @@ internal sealed partial class MainTimers
                             throw new InvalidDataException("Timer ID is ambiguous.");
                         index = position;
                     }
+                if (schedulesWakeups)
+                {
+                    updated["scheduleGeneration"] = checked((index < 0 ? 0 : ScheduleGeneration(rows[index]!.AsObject())) + 1);
+                    updated.Remove("settledNomination");
+                }
                 if (index < 0)
                     rows.Add(updated.DeepClone());
                 else

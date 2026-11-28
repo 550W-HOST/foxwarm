@@ -135,8 +135,8 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
             throw Unavailable("Node service channel could not be started: " + error.Code);
         }
         var generation = new Generation(child, new());
-        // Diagnostics are drained and discarded: a long-lived process must not stall on stderr,
-        // and raw provider diagnostics are never returned to callers.
+        // Always drain stderr. A hosted sink tags diagnostics for the operator; they never
+        // become protocol errors returned to the caller.
         _ = Task.Run(() => DrainAsync(child.StandardError.BaseStream));
         var envelope = new JsonObject
         {
@@ -146,6 +146,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
             ["operation"] = "connect",
             ["request"] = new JsonObject { ["nodeId"] = localId },
         };
+        provider.Identify(envelope);
         try
         {
             generation.Reader = new NdjsonLineReader(child.StandardOutput.BaseStream, FrameLimit);
@@ -218,7 +219,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
     {
         try
         {
-            return JsonNode.Parse(frame);
+            return JsonNode.Parse(frame, documentOptions: ExecutableNodeProvider.ResponseOptions);
         }
         catch (JsonException)
         {
@@ -226,12 +227,46 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
         }
     }
 
-    private static async Task DrainAsync(Stream stream)
+    private async Task DrainAsync(Stream stream)
     {
-        var buffer = new byte[8192];
         try
         {
-            while (await stream.ReadAsync(buffer) > 0) { }
+            if (provider.Stderr is not { } log)
+            {
+                await stream.CopyToAsync(Stream.Null);
+                return;
+            }
+            const int limit = 64 * 1024;
+            var buffer = new byte[8192];
+            var line = new byte[limit];
+            int used = 0;
+            bool truncated = false;
+            void Emit(bool cut)
+            {
+                var text = Encoding.UTF8.GetString(line, 0, used).TrimEnd('\r');
+                if (text.Length != 0) log(cut ? text + " [truncated]" : text);
+            }
+            int count;
+            while ((count = await stream.ReadAsync(buffer)) != 0)
+                for (int i = 0; i < count; i++)
+                {
+                    if (buffer[i] == '\n')
+                    {
+                        if (!truncated) Emit(false);
+                        truncated = false;
+                        used = 0;
+                    }
+                    else if (!truncated)
+                    {
+                        if (used < limit) line[used++] = buffer[i];
+                        else
+                        {
+                            Emit(true);
+                            truncated = true; // Drain the rest without making more records.
+                        }
+                    }
+                }
+            if (!truncated && used > 0) Emit(false);
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException) { }
     }
@@ -285,7 +320,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
         JsonObject message;
         try
         {
-            message = ExecutableNodeProvider.Object(JsonNode.Parse(frame));
+            message = ExecutableNodeProvider.Object(JsonNode.Parse(frame, documentOptions: ExecutableNodeProvider.ResponseOptions));
         }
         catch (Exception error) when (error is JsonException or NodeProviderException)
         {

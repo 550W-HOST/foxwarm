@@ -12,6 +12,7 @@ public sealed partial class SessionSaveLane
     private sealed record ReceiptSlot(string Key, int Limit);
 
     private static readonly ReceiptSlot ExternalEventReceipts = new("acceptedExternalEventIds", 32);
+    private static readonly ReceiptSlot ChannelReceipts = new("acceptedChannelEventIds", 256);
     internal const string WebhookReceiptKey = "acceptedWebhookDeliveryIds";
     private static readonly ReceiptSlot WebhookReceipts = new(WebhookReceiptKey, 64);
 
@@ -21,6 +22,7 @@ public sealed partial class SessionSaveLane
     )
     {
         [ExternalEventReceipts.Key] = new(StringComparer.Ordinal),
+        [ChannelReceipts.Key] = new(StringComparer.Ordinal),
         [WebhookReceipts.Key] = new(StringComparer.Ordinal),
     };
 
@@ -60,6 +62,9 @@ public sealed partial class SessionSaveLane
         }
         PublishGoalOnly(staged);
     }
+
+    internal Task<bool> AdmitPolledInputAsync(QueueItem item, string? receipt, Action beforeAdmission) =>
+        AdmitWithReceiptAsync(item, receipt, SaveKind.Strict, beforeAdmission: beforeAdmission, receiptSlot: ChannelReceipts);
 
     // All wait/queue mutations share the existing ordered save lane. Stop retains its immediate state/CTS path.
     internal Task<bool> AdmitAsync(QueueItem item, SaveKind kind, Action? beforeAdmission = null) =>
@@ -162,8 +167,12 @@ public sealed partial class SessionSaveLane
                 // A prior committed-but-unsynced receipt needs strict durability, not a second queue insertion.
                 if (!declined && receipt is not null && uncertainExternalReceipts.Contains(receipt))
                 {
-                    await CommitWaitSnapshotAsync(entry.SnapshotForPersistence());
+                    await CommitWaitSnapshotAsync(entry.SnapshotForPersistence(),
+                        slot == ChannelReceipts ? beforeAdmission : null);
                     uncertainExternalReceipts.Remove(receipt);
+                    // The failed attempt published the input, but never returned to ingress
+                    // to schedule its turn. Confirmed retries owe exactly one trigger check.
+                    if (slot == ChannelReceipts) admitted = true;
                 }
                 return;
             }
@@ -438,7 +447,7 @@ public sealed partial class SessionSaveLane
     private static void PublishMeta(JsonObject target, JsonObject source)
     {
         foreach (
-            var key in new[] { "wait", ExternalEventReceipts.Key, WebhookReceipts.Key, "questions" }
+            var key in new[] { "wait", ExternalEventReceipts.Key, WebhookReceipts.Key, ChannelReceipts.Key, "questions" }
         )
         {
             if (source.TryGetPropertyValue(key, out var value))

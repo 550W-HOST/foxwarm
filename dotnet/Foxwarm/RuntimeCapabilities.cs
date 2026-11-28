@@ -42,6 +42,8 @@ internal sealed record RuntimeCapabilities(
     /// </summary>
     internal Foxwarm.Limits.TenantLimits? Limits { get; init; }
 
+    internal Nodes.TenantProviders? Providers { get; init; }
+
     internal static RuntimeCapabilities File { get; } = new(true, true, true, true, true, true);
 
     /// <summary>Hosted: only the deployment's executable Providers; no Logs view (U16(b)).</summary>

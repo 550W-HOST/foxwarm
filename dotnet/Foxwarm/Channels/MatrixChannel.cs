@@ -29,7 +29,7 @@ internal sealed partial class MatrixChannel : IManagedChannel
     private const string SyncPath = "Matrix sync";
     private const string SendingPath = "Matrix sending";
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
-    private readonly CancellationTokenSource stopping = new();
+    private readonly CancellationTokenSource stopping;
     private readonly long startTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     private readonly HashSet<string> processed = new(StringComparer.Ordinal);
     private readonly Queue<string> processedOrder = new();
@@ -37,6 +37,9 @@ internal sealed partial class MatrixChannel : IManagedChannel
     private Task sendTail = Task.CompletedTask;
     private long transaction;
     private Task? polling;
+    private readonly ChannelCursors? cursors;
+    private string Account => "matrix:" + homeserver + " " + user;
+    private bool resumed;
 
     internal MatrixChannel(
         string id,
@@ -46,10 +49,12 @@ internal sealed partial class MatrixChannel : IManagedChannel
         ChannelTransportDependencies? dependencies,
         ChannelHealth health,
         // The runtime's shared client of this channel type (ManagedChannels).
-        HttpClient? shared = null
+        HttpClient? shared = null, ChannelCursors? cursors = null
     )
     {
         this.id = id;
+        this.cursors = cursors;
+        stopping = CancellationTokenSource.CreateLinkedTokenSource(cursors?.StopPolling ?? default);
         this.sessions = sessions;
         this.router = router;
         this.health = health;
@@ -101,10 +106,19 @@ internal sealed partial class MatrixChannel : IManagedChannel
             )
             || SessionCatalog.Flag(versions?["unstable_features"]?["org.matrix.msc3771"])
                 && SessionCatalog.Flag(versions?["unstable_features"]?["org.matrix.msc3773"]);
-        polling = PollAsync(threadNotifications);
+        if (cursors is not null)
+            RestoreEncryption(await cursors.ReadAsync(id, Account));
+        polling = cursors?.PollAsync(id, () => PollAsync(threadNotifications)) ?? PollAsync(threadNotifications);
         _ = ObserveAsync(
             RequestAsync(HttpMethod.Get, "_matrix/client/v3/capabilities", null, stopping.Token)
         );
+    }
+
+    private void RestoreEncryption(JsonObject? checkpoint)
+    {
+        if (checkpoint?["encryptedRooms"] is JsonArray rooms)
+            foreach (var room in rooms)
+                if (SessionWait.Text(room) is { } key) encryptedRooms.TryAdd(key, 0);
     }
 
     public Task StopAsync()
@@ -159,14 +173,14 @@ internal sealed partial class MatrixChannel : IManagedChannel
         return SendEventAsync(room, content, token);
     }
 
+    private const string EncryptionUnsupported = "This room is configured to use encryption, but your client does not support encryption.";
+
     private Task SendEventAsync(string room, JsonObject content, CancellationToken token)
     {
         // The SDK refuses known encrypted rooms before adding the event to its send scheduler.
         if (encryptedRooms.ContainsKey(room))
             return Task.FromException(
-                new InvalidOperationException(
-                    "This room is configured to use encryption, but your client does not support encryption."
-                )
+                new InvalidOperationException(EncryptionUnsupported)
             );
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -202,6 +216,12 @@ internal sealed partial class MatrixChannel : IManagedChannel
             {
                 try
                 {
+                    // A replacement sender can already be registered while its predecessor
+                    // finishes the sync that recorded this room. Check again at dispatch,
+                    // including sends that waited in the scheduler or are being retried.
+                    if (cursors is not null) RestoreEncryption(await cursors.ReadAsync(id, Account));
+                    if (encryptedRooms.ContainsKey(room))
+                        throw new InvalidOperationException(EncryptionUnsupported);
                     await RequestAsync(
                         HttpMethod.Put,
                         "_matrix/client/v3/rooms/" + Encode(room) + "/send/m.room.message/" + txn,

@@ -230,9 +230,10 @@ public sealed partial class HostedStartupTests
         );
         var sessions = ((MainHostRuntime)replica.Runtimes[0]).Host.Sessions;
         Assert.Equal(
-            RuntimeCapabilities.Operator with { Egress = sessions.Capabilities.Egress },
+            RuntimeCapabilities.Operator with { Egress = sessions.Capabilities.Egress, Providers = sessions.Capabilities.Providers },
             sessions.Capabilities
         );
+        Assert.Empty(sessions.Capabilities.Providers!.Drivers);
         Assert.Equal(Foxwarm.Net.EgressProfile.Operator, sessions.Capabilities.Egress.Profile);
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
@@ -264,7 +265,8 @@ public sealed partial class HostedStartupTests
             "the next hosted runtime serves"
         );
         var nextCapabilities = ((MainHostRuntime)next.Runtimes[0]).Host.Sessions.Capabilities;
-        Assert.Equal(RuntimeCapabilities.Hosted with { Egress = nextCapabilities.Egress }, nextCapabilities);
+        Assert.Equal(RuntimeCapabilities.Hosted with { Egress = nextCapabilities.Egress, Providers = nextCapabilities.Providers }, nextCapabilities);
+        Assert.Empty(nextCapabilities.Providers!.Drivers);
         Assert.Equal(Foxwarm.Net.EgressProfile.Hosted, nextCapabilities.Egress.Profile);
         next.Stop.Cancel();
         Assert.Equal(HostedExit.Stopped, await next.Run.WaitAsync(TimeSpan.FromSeconds(60)));

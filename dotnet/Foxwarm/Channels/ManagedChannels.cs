@@ -28,6 +28,12 @@ internal sealed class ManagedChannels(
     // The runtime's shared channel clients, one per channel type.
     private readonly ChannelHttpClients http = new(sessions.Capabilities.Egress);
 
+    private readonly ChannelCursors cursors = new(sessions.Storage.Documents);
+
+    internal Task DrainPollsAsync() => cursors.DrainedAsync();
+
+    internal Task<bool> SettleHostedPollersAsync() => cursors.SettleHostedAsync();
+
     private readonly object weixinGate = new();
     private WeixinApi? weixin;
 
@@ -76,6 +82,14 @@ internal sealed class ManagedChannels(
     private JsonObject Config(string id) =>
         configuration.CurrentChannels()[id] as JsonObject
         ?? throw new ChannelRequestException("Channel is not configured: " + id);
+
+    internal bool HasLiveTransport
+    {
+        get { lock (gate) return running.Count != 0 || starting.Count != 0 || initialStarts.Count != 0; }
+    }
+
+    internal bool ConfiguredPoller => configuration.CurrentChannels().Any(entry =>
+        entry.Value is JsonObject settings && Eligible(entry.Key, settings) && Type(entry.Key, settings) is "telegram" or "matrix" or "weixin");
 
     internal JsonArray Statuses(bool webUiRunning = false)
     {
@@ -359,7 +373,7 @@ internal sealed class ManagedChannels(
                 dependencies,
                 health,
                 http.For("telegram"),
-                http.Hold
+                http.Hold, cursors
             ),
             "matrix" => new MatrixChannel(
                 id,
@@ -368,7 +382,7 @@ internal sealed class ManagedChannels(
                 router,
                 dependencies,
                 health,
-                http.For("matrix")
+                http.For("matrix"), cursors
             ),
             "qqbot" => new QQBotChannel(id, config, sessions, router, dependencies, health),
             // Hosted mode never opens a WeWork callback listener, even from a stored document
@@ -385,7 +399,7 @@ internal sealed class ManagedChannels(
                 health,
                 http.For("wework")
             ),
-            "weixin" => new WeixinChannel(id, config, router, Weixin, health),
+            "weixin" => new WeixinChannel(id, config, router, Weixin, health, cursors, sessions.ScheduledProducers),
             _ => throw new ChannelRequestException(
                 "Adapter is not implemented on this server: " + id
             ),
@@ -554,10 +568,12 @@ internal sealed class ManagedChannels(
 
     private void FailRuntime(string id, ChannelHealth health, string path, Exception error)
     {
-        var text =
-            error is ChannelFailure
-                ? ChannelFailure.Describe(error)
-                : ChannelFailure.Sentence(path, error);
+        var text = error switch
+        {
+            ChannelFailure => ChannelFailure.Describe(error),
+            ChannelInputPaused => error.Message,
+            _ => ChannelFailure.Sentence(path, error),
+        };
         lock (gate)
         {
             if (!reporting.TryGetValue(id, out var current) || current != health)
@@ -626,6 +642,7 @@ internal sealed class ManagedChannels(
     public async ValueTask DisposeAsync()
     {
         await StopIngressAsync();
+        await cursors.CloseAsync();
         string[] ids;
         lock (gate)
             ids = running.Keys.ToArray();

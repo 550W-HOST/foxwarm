@@ -100,7 +100,9 @@ internal sealed class MainHost : IAsyncDisposable
         // Hosted mode: log lines also go to stdout as JSON lines (MainLog).
         bool jsonStdoutLog = false,
         // Hosted mode: the tenant this runtime's log lines carry.
-        string? logTenant = null
+        string? logTenant = null,
+        Foxwarm.Timers.RuntimeSchedule? schedule = null,
+        Func<Action<string>, Task<Nodes.TenantProviders>>? openProviders = null
     ) =>
         CreateAsync(
             args,
@@ -114,7 +116,9 @@ internal sealed class MainHost : IAsyncDisposable
             storage: storage,
             capabilities: capabilities,
             jsonStdoutLog: jsonStdoutLog,
-            logTenant: logTenant
+            logTenant: logTenant,
+            schedule: schedule,
+            openProviders: openProviders
         );
 
     internal static async Task<MainHost> CreateAsync(
@@ -132,7 +136,9 @@ internal sealed class MainHost : IAsyncDisposable
         // The runtime's features; null is file mode's full profile.
         RuntimeCapabilities? capabilities = null,
         bool jsonStdoutLog = false,
-        string? logTenant = null
+        string? logTenant = null,
+        Foxwarm.Timers.RuntimeSchedule? schedule = null,
+        Func<Action<string>, Task<Nodes.TenantProviders>>? openProviders = null
     )
     {
         capabilities ??= RuntimeCapabilities.File;
@@ -154,6 +160,13 @@ internal sealed class MainHost : IAsyncDisposable
         SessionManager sessions;
         try
         {
+            if (openProviders is not null)
+            {
+                // Driver qualification starts subprocesses. Their first stderr line needs the
+                // same tenant capture and secret matcher as subsequent driver calls.
+                _ = configuration.Secrets.Redactor;
+                capabilities = capabilities with { Providers = await openProviders(log is not null ? log.WriteErrorLine : Console.Error.WriteLine) };
+            }
             sessions = new SessionManager(
                 dataRoot,
                 workspaceRoot,
@@ -187,9 +200,14 @@ internal sealed class MainHost : IAsyncDisposable
         IHost? headless = null;
         try
         {
+            if (schedule is not null)
+                sessions.EnableScheduledProducers(schedule);
             await sessions.LoadMainHostAsync();
             if (capabilities.MainTerminalsAndCode)
+            {
                 terminals = new TerminalRegistry(dataRoot, CancellationToken.None);
+                sessions.LocalTerminals = terminals;
+            }
             var runtime = new SessionRuntime(sessions);
             var router = new MessageRouter(runtime);
             sessions.InitializeChannels(router, configuration, channelDependencies);
@@ -241,6 +259,8 @@ internal sealed class MainHost : IAsyncDisposable
             // Every step runs even when an earlier one fails; a failed step leaves services that
             // may still run, which the caller must know (a hosted owner then releases nothing).
             List<Exception> failures = [];
+            if (schedule is not null)
+                await Step(schedule.Admission.AbortStartupAsync);
             await Step(() =>
             {
                 sessions.BeginShutdown();
@@ -313,6 +333,10 @@ internal sealed class MainHost : IAsyncDisposable
     {
         log?.UseFor();
         var stopping = System.Diagnostics.Stopwatch.StartNew();
+        // The generation gate has closed. Give already admitted polls a bounded chance to
+        // commit both input and cursor before closing the Session mutation fence.
+        if (sessions.ScheduledProducers is not null && sessions.ManagedChannels is { } polling)
+            await polling.SettleHostedPollersAsync();
         sessions.BeginShutdown();
         if (sessions.ManagedChannels is { } channels)
             await channels.StopIngressAsync();
