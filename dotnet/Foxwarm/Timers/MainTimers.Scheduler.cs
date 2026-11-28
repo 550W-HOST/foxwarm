@@ -106,7 +106,13 @@ internal sealed partial class MainTimers
             if (!record.Internal && record.Reason is null)
                 Start(record);
         lock (gate)
-            carried = null; // An edited, missing or paused clock does not inherit the nomination.
+        {
+            // Edits, removal, pause, and an already-settled nomination are reconciled. A
+            // matching record that could not arm is not: preserve its row for recovery.
+            reconciled = !(carried is { } pending && records.TryGetValue(pending.TimerId, out var clock)
+                && !clock.Paused && ScheduleGeneration(clock.Row) == pending.Generation && clock.Clock is null);
+            carried = null;
+        }
         Console.WriteLine(
             $"Timer startup: loaded={items.Length}, scheduled={items.Count(record => !record.Internal && record.Reason is null && !record.Paused)}, paused={items.Count(record => !record.Internal && record.Reason is null && record.Paused)}, inactive={items.Count(record => record.Internal || record.Reason is not null)}."
         );
@@ -133,9 +139,11 @@ internal sealed partial class MainTimers
                 return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             if (record.Cron && carried is { } occurrence && occurrence.TimerId == record.Id
-                && occurrence.Generation == ScheduleGeneration(record.Row))
+                && occurrence.Generation == ScheduleGeneration(record.Row)
+                && Number(record.Row["settledNomination"]) != occurrence.ScheduledAt)
             {
                 first = occurrence.ScheduledAt;
+                record.NominatedAt = first;
                 carried = null;
             }
             else
@@ -188,6 +196,7 @@ internal sealed partial class MainTimers
                     await predecessor.WaitAsync(record.StopSource.Token);
                     continue;
                 }
+                var scheduledAt = next;
                 var exhausted = false;
                 if (cron is not null)
                 {
@@ -240,7 +249,7 @@ internal sealed partial class MainTimers
                     }
                 }
                 if (accepted is not null)
-                    _ = FireAsync(record, captured!, accepted, producer);
+                    _ = FireAsync(record, captured!, accepted, producer, record.NominatedAt == scheduledAt ? scheduledAt : null);
                 else
                 {
                     using (producer)
@@ -267,7 +276,7 @@ internal sealed partial class MainTimers
     private async Task FireAsync(
         TimerRecord record,
         JsonObject captured,
-        TaskCompletionSource accepted, IDisposable? producer
+        TaskCompletionSource accepted, IDisposable? producer, long? nominatedAt
     )
     {
         var firedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -319,6 +328,8 @@ internal sealed partial class MainTimers
                             rows.RemoveAt(index);
                             return null;
                         }
+                        if (nominatedAt is long settled)
+                            row["settledNomination"] = settled;
                         if (delivered || TimerArguments.Script(captured))
                             row["lastTriggeredAt"] = firedAt;
                     }
