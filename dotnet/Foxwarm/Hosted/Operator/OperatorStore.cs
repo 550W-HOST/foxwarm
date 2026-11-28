@@ -127,7 +127,17 @@ internal sealed partial class OperatorStore(PgDatabase database, KeyEncryptionKe
 
     internal Task<JsonObject> UpdateAsync(string slug, JsonObject edits, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
     {
-        var id = (int?)await Scalar(tx, "SELECT tenant_id FROM tenants WHERE name=$1 AND state<>'deleting' FOR UPDATE", ct, slug) ?? throw Missing();
+        int id;
+        await using (var command = tx.Command("SELECT tenant_id,profile,state FROM tenants WHERE name=$1 FOR UPDATE", slug))
+        await using (var row = await command.ExecuteReaderAsync(ct))
+        {
+            if (!await row.ReadAsync(ct)) throw Missing();
+            // Crossing this boundary would open different Agent folders on the next activation.
+            if (edits["profile"] is { } requested && (row.GetString(1) == "operator") != ((string)requested == "operator"))
+                throw new OperatorProblem(409, "A tenant can't move between the operator profile and a hosted profile, because its Agent folders would stay behind.");
+            if (row.GetString(2) == "deleting") throw Missing();
+            id = row.GetInt32(0);
+        }
         foreach (var (field, value) in edits)
         {
             switch (field)

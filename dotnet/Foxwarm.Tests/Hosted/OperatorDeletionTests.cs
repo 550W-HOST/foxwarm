@@ -43,6 +43,49 @@ public sealed class OperatorDeletionTests
         }
     }
 
+    [Theory]
+    [InlineData("importing")]
+    [InlineData("importing-agents")]
+    [InlineData("deleting")]
+    public async Task A_profile_edit_cannot_change_the_Agent_store_of_an_offline_tenant(
+        string state
+    )
+    {
+        await using var f = await Fixture.Create();
+        if (state == "deleting")
+        {
+            await f.Store.SuspendAsync(PostgresServer.Tenant, default);
+            await f.Store.DeleteAsync(PostgresServer.Tenant, default);
+        }
+        else
+        {
+            await f
+                .Db.OpenOwner()
+                .ClusterAsync(
+                    (tx, ct) =>
+                        tx.ExecuteAsync(
+                            "UPDATE tenants SET state=$1 WHERE name=$2",
+                            ct,
+                            state,
+                            PostgresServer.Tenant
+                        ),
+                    default
+                );
+        }
+        var patch = new System.Text.Json.Nodes.JsonObject { ["profile"] = "operator" };
+        var conflict = await Assert.ThrowsAsync<OperatorProblem>(() =>
+            f.Store.UpdateAsync(PostgresServer.Tenant, patch, default)
+        );
+        Assert.Equal(409, conflict.Status);
+        Assert.Equal(
+            "hosted",
+            await f.Db.ScalarAsync(
+                "SELECT profile FROM tenants WHERE name=$1",
+                PostgresServer.Tenant
+            )
+        );
+    }
+
     [Fact]
     public async Task Suspension_stops_serving_renewals_and_fences_an_owner_that_does_not_release()
     {

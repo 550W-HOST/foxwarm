@@ -140,14 +140,24 @@ public sealed class OperatorProcessTests
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Put, "/profiles/hosted/ceiling", ceiling)).Status);
             Assert.Equal((string?)ceiling["ceiling"], (string?)(await Call(HttpMethod.Get, "/profiles/hosted/ceiling")).Json["ceiling"]);
             var edits = new JsonObject { ["primaryHostname"] = "alpha.test", ["ceiling"] = ceiling["ceiling"]!.DeepClone(), ["profile"] = "operator" };
-            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", edits)).Status);
-            Assert.Equal("operator", (string?)(await Call(HttpMethod.Get, "/tenants/alpha")).Json["profile"]);
-            Assert.Equal("master-host", await db.ScalarAsync("SELECT pinned_role FROM tenants WHERE name='alpha'"));
+            var promotion = await Call(HttpMethod.Patch, "/tenants/alpha", edits);
+            Assert.Equal(HttpStatusCode.Conflict, promotion.Status);
+            Assert.Equal("hosted", (string?)(await Call(HttpMethod.Get, "/tenants/alpha")).Json["profile"]);
             edits["profile"] = "hosted";
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", edits)).Status);
-            Assert.True(await db.ScalarAsync("SELECT pinned_role IS NULL FROM tenants WHERE name='alpha'") is true);
+            Assert.Equal((string?)edits["ceiling"], (string?)(await Call(HttpMethod.Get, "/tenants/alpha")).Json["ceiling"]);
             var master = new JsonObject { ["slug"] = "control", ["profile"] = "operator", ["primaryHostname"] = "control.test" };
             Assert.Equal(HttpStatusCode.Created, (await Call(HttpMethod.Post, "/tenants", master)).Status);
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/control/suspend")).Status);
+            var editFile = Path.Combine(root.Path, "edit.json");
+            await File.WriteAllTextAsync(editFile, "{\"profile\":\"hosted\"}");
+            using (var demotion = Launch(db.OperatorConnectionString, "--url", origin, "--token-file", tokenFile, "tenant", "set", "control", editFile))
+            {
+                var error = demotion.StandardError.ReadToEndAsync();
+                await demotion.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(25));
+                Assert.Equal(1, demotion.ExitCode);
+                Assert.Equal((string?)promotion.Json["error"], (string?)JsonNode.Parse(await error)!["error"]);
+            }
             Assert.Equal("master-host", await db.ScalarAsync("SELECT pinned_role FROM tenants WHERE name='control'"));
             var replica = await harness.StartAsync("general", new Dictionary<string,string> { ["FOXWARM_KEK_FILE"] = key });
             var front = $"http://127.0.0.1:{replica.FrontPort}";

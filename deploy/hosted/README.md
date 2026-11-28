@@ -69,6 +69,8 @@ foxwarm operator --url https://control.example.net --token-file operator.token t
 
 Give the returned setup token to the tenant administrator. It expires in 24 hours. The first sign-in on the tenant's own origin shows the access token to save. On a multi-tenant replica, `tenant rotate alpha` invalidates the earlier credential once the owner observes the change (normally by the next five-second renewal) and issues another one-time token. See [the operator API](../../docs/code-index/units/hosted-operator.md) for settings, placement and rotation.
 
+Choose the Agent store at creation: hosted tenants use SQL Agent files, and the operator tenant uses Agent folders on the master host. `tenant set` refuses a profile edit that would switch stores.
+
 ### Suspend, resume and erase a tenant
 
 Use `tenant suspend SLUG` to stop serving a tenant, and `tenant resume SLUG` to bring it back. `tenant delete SLUG` requires a suspended tenant. It returns `deleting` as soon as the deletion is recorded. Check `tenant get SLUG`: the key and tombstone remain until cleanup finishes; afterwards the tenant returns 404. Restarting the operator resumes outstanding deletions automatically. Finish an in-progress import first; an interrupted Agent-only import can also be abandoned with `foxwarm hosted agents import --tenant SLUG --abandon`.
