@@ -355,6 +355,7 @@ internal sealed class TenantReplica
                         counts[generation.Id.Tenant] = new JsonObject
                         {
                             ["epoch"] = generation.Grant.Epoch,
+                            ["providerProblems"] = main.Host.Sessions.Capabilities.Providers?.Problems.DeepClone(),
                             ["hot"] = owners.Length,
                             ["busy"] = owners.Count(owner => owner.Entry.WithState(state => state.Busy)),
                         };

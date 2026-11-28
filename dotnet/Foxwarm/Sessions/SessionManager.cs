@@ -176,7 +176,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         NodeProviders = new(
             Nodes,
             models.ConfigurationOwner?.AppConfiguration["nodeProviders"] as JsonObject,
-            pendingWrites
+            pendingWrites,
+            Capabilities.Providers
         );
         Nodes.Changed += () => TopologyChanged?.Invoke();
         var workspaceRoot = Path.GetFullPath(workspace);
