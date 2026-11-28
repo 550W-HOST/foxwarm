@@ -1,6 +1,6 @@
 # Unit: Hosted timers and autonomous tenant activation
 
-Files: `dotnet/Foxwarm/Hosted/Autonomous/Wakeups.cs`, `dotnet/Foxwarm/Hosted/Autonomous/RuntimeWakeups.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Wakeups.cs`, `dotnet/Foxwarm/Timers/MainTimers.Wakeup.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupScanTests.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupLifecycleTests.Settlement.cs`, `dotnet/Foxwarm.Tests/Hosted/RuntimeWakeupSourcesTests.cs`, `dotnet/Foxwarm.Tests/Hosted/TenantReplicaTests.Wakeups.cs`, `dotnet/Foxwarm.Tests/Timers/TimerWakeupTests.cs`
+Files: `dotnet/Foxwarm/Channels/ChannelCursors.cs`, `dotnet/Foxwarm/Hosted/Autonomous/Wakeups.cs`, `dotnet/Foxwarm/Hosted/Autonomous/RuntimeWakeups.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Wakeups.cs`, `dotnet/Foxwarm/Timers/MainTimers.Wakeup.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupScanTests.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupLifecycleTests.Settlement.cs`, `dotnet/Foxwarm.Tests/Hosted/RuntimeWakeupSourcesTests.cs`, `dotnet/Foxwarm.Tests/Hosted/TenantReplicaTests.Wakeups.cs`, `dotnet/Foxwarm.Tests/Timers/TimerWakeupTests.cs`
 
 ## Scheduled unload and restart
 
@@ -13,3 +13,9 @@ Only a scheduled unload nominates a cron occurrence. Its payload identifies the 
 Every replica scans due wake-ups and expired active grants at startup and every ten seconds. Each query returns at most 64 rows ordered by due time and tenant ID. A released grant without a wake-up stays released. A live grant, a tenant in backoff, and a tenant the querying boot cannot serve by role, profile or reader version are excluded before the limit. The reads neither claim rows nor carry their payloads. The [tenant router](./hosted-forwarding.md) checks local boot eligibility and placement. At most four activations of each class run on one scanner; discovery continues without waiting for construction. The activation coordinator coalesces admitted attempts with requests and mesh activations. Autonomous acquisition rechecks current demand and backoff under the lease lock; a request supplies its own demand.
 
 `WakeupLifecycleTests` runs the production timer store and replica over PostgreSQL, including a cold-builder failure and a crashed grant with an overdue one-shot and no HTTP traffic. `TimerWakeupTests` checks the clean successor and an edit spanning shutdown. `TenantReplicaTests.Wakeups` drives two scans and an HTTP request through the same activation.
+
+## Channel cursors
+
+Telegram, Matrix and Weixin retain one poll checkpoint per configured instance and account in the installation’s `ChannelCursors` document (`state/channel-cursors.json` in file mode; a lease-checked state document in PostgreSQL). Import copies the document along with the channel bindings. QQ Bot and WeWork use their existing push paths. A successor reads the committed position after the old polling task settles; a new account starts with its own initial cursor.
+
+Ordinary polled input and its platform message or event ID enter the receiving Session in one strict authority save. The receiving Session retains its last 256 polled-input receipts separately from webhook and other event receipts. A retry found in that window does not add another queue item. A checkpoint advances only after handling its input; it may safely lag a committed input. [Matrix/Weixin](./dotnet-matrix-weixin.md) and [Telegram](./dotnet-external-channels.md#telegram-wire-contract-and-deliberate-media-order) own the wire-specific resume rules.

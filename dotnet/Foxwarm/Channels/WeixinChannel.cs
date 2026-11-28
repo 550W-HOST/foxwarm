@@ -19,24 +19,34 @@ internal sealed class WeixinChannel : IManagedChannel
     private volatile bool stopped;
     private Task? polling;
     private string cursor = "";
+    private readonly ChannelCursors? cursors;
+    private readonly Foxwarm.Timers.IProducerAdmission? producers;
+    private readonly string account;
+    private static readonly AsyncLocal<WeixinChannel?> handling = new();
 
     internal WeixinChannel(
         string id,
         JsonObject config,
         MessageRouter router,
         WeixinApi api,
-        ChannelHealth health
+        ChannelHealth health, ChannelCursors? cursors = null, Foxwarm.Timers.IProducerAdmission? producers = null
     )
     {
         this.id = id;
         this.router = router;
         this.api = api;
         this.health = health;
+        this.cursors = cursors;
+        this.producers = producers;
         baseUrl = SessionWait.Text(config["baseUrl"])?.Trim() is { Length: > 0 } url
             ? url
             : WeixinApi.DefaultBaseUrl;
         token = SessionWait.Text(config["token"])?.Trim() ?? "";
         routeTag = SessionWait.Text(config["routeTag"])?.Trim();
+        // Manual Weixin configuration has no bot ID. A changed credential must not receive
+        // another account's opaque cursor; the token itself never enters the cursor document.
+        account = "weixin:" + baseUrl + " " + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(token)));
         timeout = (int)(SessionWait.Number(config["longPollTimeoutMs"]) ?? 35000);
     }
 
@@ -66,7 +76,7 @@ internal sealed class WeixinChannel : IManagedChannel
     {
         if (token.Length == 0)
             throw new InvalidDataException("Weixin token is required");
-        polling ??= PollAsync();
+        polling ??= cursors?.PollAsync(id, PollAsync) ?? PollAsync();
         return Task.CompletedTask;
     }
 
@@ -74,7 +84,7 @@ internal sealed class WeixinChannel : IManagedChannel
     {
         stopped = true;
         // Source's outer-loop signal is not passed to fetch or its backoff delay.
-        if (polling is not null)
+        if (polling is not null && !ReferenceEquals(handling.Value, this))
             await polling;
     }
 
@@ -82,13 +92,16 @@ internal sealed class WeixinChannel : IManagedChannel
 
     private async Task PollAsync()
     {
+        if (cursors is not null)
+            cursor = SessionWait.Text((await cursors.ReadAsync(id, account))?["get_updates_buf"]) ?? "";
         var failures = 0;
-        while (!stopped)
+        var shutdown = cursors?.StopPolling ?? default;
+        while (!stopped && !shutdown.IsCancellationRequested)
         {
             var polled = false;
             try
             {
-                var response = await api.UpdatesAsync(baseUrl, token, routeTag, cursor, timeout);
+                var response = await api.UpdatesAsync(baseUrl, token, routeTag, cursor, timeout, shutdown);
                 var ret = SessionWait.Number(response["ret"]) ?? 0;
                 var code = SessionWait.Number(response["errcode"]) ?? 0;
                 if (ret != 0 || code != 0)
@@ -100,14 +113,25 @@ internal sealed class WeixinChannel : IManagedChannel
                 failures = 0;
                 health.Recover(PollingPath);
                 polled = true;
-                if (SessionWait.Text(response["get_updates_buf"]) is { Length: > 0 } next)
+                using var admission = producers?.TryEnterProducer();
+                if (producers is not null && admission is null) return;
+                handling.Value = this;
+                try
+                {
+                    foreach (var message in (response["msgs"] as JsonArray ?? []).OfType<JsonObject>())
+                        await HandleAsync(message);
+                }
+                finally { handling.Value = null; }
+                if (SessionWait.Text(response["get_updates_buf"]) is { Length: > 0 } next && next != cursor)
+                {
+                    if (cursors is not null)
+                        await cursors.SaveAsync(id, account, new JsonObject { ["get_updates_buf"] = next });
                     cursor = next;
-                foreach (var message in (response["msgs"] as JsonArray ?? []).OfType<JsonObject>())
-                    await HandleAsync(message);
+                }
             }
             catch (Exception error)
             {
-                if (stopped)
+                if (stopped || shutdown.IsCancellationRequested)
                     return;
                 failures++;
                 // Only a failed poll is a polling failure; a message the router could not
@@ -122,7 +146,8 @@ internal sealed class WeixinChannel : IManagedChannel
                 // A refused poll endpoint stays refused: polling ends until reconfiguration.
                 if (!polled && ChannelFailure.Refused(error))
                     return;
-                await api.DelayAsync(failures >= 3 ? 30000 : 2000);
+                try { await api.DelayAsync(failures >= 3 ? 30000 : 2000, shutdown); }
+                catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { return; }
             }
         }
     }
@@ -141,7 +166,8 @@ internal sealed class WeixinChannel : IManagedChannel
             user,
             user,
             text => api.SendAsync(baseUrl, token, routeTag, user, text)
-        );
+        ) { Polled = true, Receipt = message["message_id"] is { } identity
+            ? ChannelCursors.Receipt("weixin", id, account, identity.ToString()) : null };
         await router.HandleExternalMessageAsync(source, new(WeixinInbound.Parts(message)));
     }
 }

@@ -138,7 +138,7 @@ internal sealed class SessionRuntime(SessionManager manager)
             await owner.Registry.Ingress.EnqueueCheckedAsync(owner.Id, item, beforeAdmission);
     }
 
-    internal async Task SubmitChannelAsync(SessionOwner owner, QueueItem item)
+    internal async Task SubmitChannelAsync(SessionOwner owner, QueueItem item, bool polled = false, string? receipt = null)
     {
         await manager.WaitForIdentityMutationAsync(owner.Id);
         owner.Entry.RequireIdentityAuthority();
@@ -146,7 +146,13 @@ internal sealed class SessionRuntime(SessionManager manager)
             throw new InvalidOperationException(
                 "Channel input Session owner is no longer current."
             );
-        await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
+        if (polled)
+            await owner.Registry.Ingress.EnqueuePolledInputAsync(owner.Id, item, receipt, () =>
+            {
+                if (!manager.Accepting) throw new OperationCanceledException();
+            });
+        else
+            await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
     }
 
     internal async Task SubmitExternalAsync(

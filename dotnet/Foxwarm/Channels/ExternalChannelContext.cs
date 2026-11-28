@@ -13,6 +13,10 @@ internal sealed record ExternalChannelContext(
     string? SelfName = null
 )
 {
+    // Push transports keep their ordinary queue contract. A poller acknowledges its cursor
+    // after strict admission, with platform IDs deduplicated in the same authority commit.
+    internal bool Polled { get; init; }
+    internal string? Receipt { get; init; }
     internal string Target => Instance + ":" + Conversation;
 }
 

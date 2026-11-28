@@ -33,10 +33,12 @@ internal sealed class TelegramChannel : IManagedChannel
     private readonly ChannelHealth health;
     private const string PollingPath = "Telegram polling";
     private const string SendingPath = "Telegram sending";
-    private readonly CancellationTokenSource stopping = new();
+    private readonly CancellationTokenSource stopping;
     private Task? polling;
     private string username = "";
     private long offset;
+    private readonly ChannelCursors? cursors;
+    private string account = "";
 
     private readonly Func<IDisposable>? holdTransport;
 
@@ -50,10 +52,12 @@ internal sealed class TelegramChannel : IManagedChannel
         // The runtime's shared client of this channel type (ManagedChannels).
         HttpClient? shared = null,
         // Keeps that client valid for the polling loop, its closing offset sync included.
-        Func<IDisposable>? holdTransport = null
+        Func<IDisposable>? holdTransport = null, ChannelCursors? cursors = null
     )
     {
         this.holdTransport = holdTransport;
+        this.cursors = cursors;
+        stopping = CancellationTokenSource.CreateLinkedTokenSource(cursors?.StopPolling ?? default);
         this.id = id;
         this.sessions = sessions;
         this.router = router;
@@ -96,14 +100,13 @@ internal sealed class TelegramChannel : IManagedChannel
                 stopping.Token
             );
             stage = "Telegram identity lookup";
-            username =
-                SessionWait.Text(
-                    (await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]
-                ) ?? "";
+            var me = await ApiAsync("getMe", new JsonObject(), stopping.Token);
+            username = SessionWait.Text(me?["username"]) ?? "";
+            account = "telegram:" + (me?["id"]?.ToString() ?? username);
             // Launch completion is transport initialization, not a completed first poll.
             stage = "Telegram webhook removal";
             await ApiAsync("deleteWebhook", new JsonObject(), stopping.Token);
-            polling = PollAsync();
+            polling = cursors?.PollAsync(id, PollAsync) ?? PollAsync();
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -135,6 +138,8 @@ internal sealed class TelegramChannel : IManagedChannel
         var skipSync = false;
         try
         {
+            if (cursors is not null)
+                offset = (await cursors.ReadAsync(id, account))?["offset"]?.GetValue<long>() ?? 0;
             while (!stopping.IsCancellationRequested)
             {
                 JsonArray updates;
@@ -186,12 +191,28 @@ internal sealed class TelegramChannel : IManagedChannel
                     throw;
                 }
                 health.Recover(PollingPath);
-                if (
-                    updates.LastOrDefault() is JsonObject last
-                    && SessionWait.Number(last["update_id"]) is { } updateId
-                )
-                    offset = checked((long)updateId + 1);
-                await Task.WhenAll(updates.OfType<JsonObject>().Select(HandleUpdateSafeAsync));
+                foreach (var update in updates.OfType<JsonObject>())
+                {
+                    var next = SessionWait.Number(update["update_id"]) is { } updateId ? checked((long)updateId + 1) : offset;
+                    if (next < offset) continue; // A repeated response must not rewind the Bot API offset.
+                    var gate = sessions?.ScheduledProducers;
+                    using var admission = gate?.TryEnterProducer();
+                    if (gate is not null && admission is null) return;
+                    try
+                    {
+                        await HandleUpdateAsync(update);
+                        if (next != offset && cursors is not null)
+                            await cursors.SaveAsync(id, account, new JsonObject { ["offset"] = next });
+                        offset = next;
+                    }
+                    catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
+                    catch (Exception error)
+                    {
+                        health.Log(error);
+                        await delay(TimeSpan.FromSeconds(2), stopping.Token);
+                        break; // Retry from the last durably handled update.
+                    }
+                }
             }
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
@@ -218,20 +239,6 @@ internal sealed class TelegramChannel : IManagedChannel
         }
     }
 
-    private async Task HandleUpdateSafeAsync(JsonObject update)
-    {
-        try
-        {
-            await HandleUpdateAsync(update);
-        }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
-        catch (Exception error)
-        {
-            // One update that could not be handled is not a channel failure.
-            health.Log(error);
-        }
-    }
-
     private async Task HandleUpdateAsync(JsonObject update)
     {
         if (
@@ -254,7 +261,8 @@ internal sealed class TelegramChannel : IManagedChannel
                 _ = ObserveAsync(SendAsync(chat, text, CancellationToken.None));
                 return Task.CompletedTask;
             }
-        );
+        ) { Polled = true, Receipt = update["update_id"] is { } identity
+            ? ChannelCursors.Receipt("telegram", id, account, identity.ToString()) : null };
         var bot = SessionCatalog.Flag(from?["is_bot"]);
         if (SessionWait.Text(message["text"]) is { } text)
         {
@@ -277,12 +285,7 @@ internal sealed class TelegramChannel : IManagedChannel
                 )
                     return;
             }
-            _ = ObserveAsync(
-                router.HandleExternalMessageAsync(
-                    context,
-                    new([new JsonObject { ["text"] = text }])
-                )
-            );
+            await router.HandleExternalMessageAsync(context, new([new JsonObject { ["text"] = text }]));
             return;
         }
         var photo = (message["photo"] as JsonArray)?.LastOrDefault() as JsonObject;
@@ -293,19 +296,20 @@ internal sealed class TelegramChannel : IManagedChannel
         var fileId =
             SessionWait.Text(media["file_id"])
             ?? throw new InvalidDataException("Telegram media has no file_id.");
+        var deliveryToken = sessions.ScheduledProducers is null ? stopping.Token : cursors?.Closing ?? default;
         var file = await ApiAsync(
             "getFile",
             new JsonObject { ["file_id"] = fileId },
-            stopping.Token
+            deliveryToken
         );
         var filePath =
             SessionWait.Text(file?["file_path"])
             ?? throw new InvalidDataException("Telegram file has no download path.");
         async Task<byte[]> Download()
         {
-            using var response = await http.GetAsync(new Uri(files, filePath), HttpCompletionOption.ResponseHeadersRead, stopping.Token);
+            using var response = await http.GetAsync(new Uri(files, filePath), HttpCompletionOption.ResponseHeadersRead, deliveryToken);
             response.EnsureSuccessStatusCode();
-            return await sessions.ReadChannelBodyAsync(response.Content, stopping.Token);
+            return await sessions.ReadChannelBodyAsync(response.Content, deliveryToken);
         }
         var unique = SessionWait.Text(media["file_unique_id"]) ?? fileId;
         var name = photo is not null
@@ -321,9 +325,9 @@ internal sealed class TelegramChannel : IManagedChannel
             name,
             mime,
             SessionWait.Text(message["caption"]) ?? "",
-            stopping.Token
+            deliveryToken
         );
-        _ = ObserveAsync(router.HandleExternalMessageAsync(context, incoming));
+        await router.HandleExternalMessageAsync(context, incoming);
     }
 
     private async Task ObserveAsync(Task task)

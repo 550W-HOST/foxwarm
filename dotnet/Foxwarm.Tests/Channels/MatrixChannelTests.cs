@@ -400,7 +400,9 @@ public sealed class MatrixChannelTests
             await adapter.ProcessTimelineAsync("!room:fixture", unsupported);
         }
         await adapter.ProcessTimelineAsync("!room:fixture", live);
-        Assert.Equal(2, f.Owner.Entry.Snapshot().Queue.Count);
+        // The transient adapter window evicted the event, but its durable admission
+        // receipt still suppresses re-delivery: ignored events never evict strict receipts.
+        Assert.Single(f.Owner.Entry.Snapshot().Queue);
         Assert.Null(adapter.MediaUri("https://untrusted.invalid/media"));
         Assert.Null(adapter.MediaUri("mxc://fixture/a/b"));
         Assert.Null(adapter.MediaUri("mxc://fixture/../id"));
