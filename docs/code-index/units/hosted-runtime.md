@@ -155,8 +155,8 @@ A runtime owns what its build started, so a retired or failed runtime releases i
 
   Work refused by the latched gate becomes demand (`AdmitAsync`). Demand that arrives before the transaction aborts the release: the grant stays, and the waiting activation builds the next generation over it at the same epoch. Steps 2–5 get the drain bound: a release that overruns it loses its grant unreleased (`IdleReleaseOutcome.Overrun`), the supervised fence cancels the steps and joins them, and the process ends if they don't confirm. A tenant is never latched and unavailable while its grant renews.
 - **Shutdown** (`ShutdownAsync`, one absolute bound, `ShutdownBound`): every generation is latched and every retirement starts at once, off the caller's thread. Each tenant's grant is released as soon as its own stop is confirmed, without waiting for the others. At the bound, every tenant whose stop isn't confirmed loses its grant unreleased, and the result is false.
-- **Wake-up carry-through.** The activation reads the tenant's wake-up row and passes it to the runtime (`ActivationContext.Wakeup`), so the due occurrence fires even when it is already past. The row stays until the runtime replaces or clears it.
-- **Not yet.** The runtimes host comes next: it wires the production `MainHost`, the front and the producers into the gate, and the renewer and supervisor into the replica. The wake-up and recovery scans belong to the timers work.
+- **Wake-up carry-through.** The activation reads the tenant's wake-up row and passes it to the runtime (`ActivationContext.Wakeup`), so the due occurrence fires even when it is already past. A reconciled runtime acknowledges the row after publication; an unarmed or stale build preserves it.
+- **Production composition.** The [runtimes host](./hosted-runtimes-host.md) wires the front, producers, renewer and supervisor. [Scheduled unload and restart](./hosted-channels-timers.md) describes the sources and retry of the hand-back.
 
 ## D-hosted-tenant-server
 
