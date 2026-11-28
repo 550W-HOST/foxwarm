@@ -128,9 +128,9 @@ public sealed class HostedRuntimesInProcessTests(ITestOutputHelper output)
             var alive = await StillReachableAsync(retired);
             Assert.True(alive.Length == 0, "still reachable after disposal: " + string.Join(", ", alive));
             var (threadsAfter, descriptorsAfter) = await SettledResourcesAsync(harness);
-            output.WriteLine($"cycle {cycle}: threads {threads} → {threadsAfter}; descriptors {descriptors} → {descriptorsAfter}");
+            output.WriteLine($"cycle {cycle}: threads {threads} → {threadsAfter}; descriptors {descriptors.Length} → {descriptorsAfter.Length}");
             Assert.InRange(threadsAfter, 0, threads + 2);
-            Assert.InRange(descriptorsAfter, 0, descriptors + 2);
+            AssertDescriptorsReleased(descriptors, descriptorsAfter);
         }
         await HostedRuntimeHarness.TurnsAsync(survivor.Client, "s1", 1);
     }
@@ -148,7 +148,7 @@ public sealed class HostedRuntimesInProcessTests(ITestOutputHelper output)
         Assert.Empty(await StillReachableAsync([("context", context)]));
         var (threadsAfter, descriptorsAfter) = await SettledResourcesAsync(harness);
         Assert.InRange(threadsAfter, 0, threads + 2);
-        Assert.InRange(descriptorsAfter, 0, descriptors + 2);
+        AssertDescriptorsReleased(descriptors, descriptorsAfter);
     }
 
     private static async Task<(WeakReference, Foxwarm.Hosted.Postgres.PgJournalWriter)> FailedBuildAsync(
@@ -198,22 +198,38 @@ public sealed class HostedRuntimesInProcessTests(ITestOutputHelper output)
         }
     }
 
-    private static async Task<(int Threads, int Descriptors)> SettledResourcesAsync(HostedRuntimeHarness harness)
+    private static async Task<(int Threads, string[] Descriptors)> SettledResourcesAsync(HostedRuntimeHarness harness)
     {
         // Thread-pool threads retire after an idle period; sample until two readings agree.
         // The shared pool's idle connections are closed first, so its size doesn't count.
         var previous = (-1, -1);
-        for (var attempt = 0; attempt < 40; attempt++)
+        for (var attempt = 1; ; attempt++)
         {
             harness.ClearSharedPool();
             HostedRuntimeHarness.LiveBytes();
-            var current = (Threads(), Directory.GetFiles("/proc/self/fd").Length);
-            if (current == previous)
-                return current;
+            var threads = Threads();
+            // A descriptor may close between listing and readlink (including the listing itself).
+            var targets = Directory.GetFiles("/proc/self/fd")
+                .Select(path => new FileInfo(path).LinkTarget).OfType<string>().ToArray();
+            var current = (threads, targets.Length);
+            if (current == previous || attempt == 40)
+                return (threads, targets);
             previous = current;
             await Task.Delay(250);
         }
-        return previous;
+    }
+
+    private static void AssertDescriptorsReleased(string[] before, string[] after)
+    {
+        if (after.Length <= before.Length + 2)
+            return;
+        var baseline = before.CountBy(target => target).ToDictionary();
+        var added = after.CountBy(target => target)
+            .Select(pair => (Target: pair.Key, Extra: pair.Value - baseline.GetValueOrDefault(pair.Key)))
+            .Where(pair => pair.Extra > 0)
+            .OrderBy(pair => pair.Target, StringComparer.Ordinal)
+            .Select(pair => $"  +{pair.Extra} {pair.Target}");
+        Assert.Fail($"Descriptors {before.Length} → {after.Length} (allowed +2). Added targets:\n" + string.Join("\n", added));
     }
 
     private static int Threads() =>

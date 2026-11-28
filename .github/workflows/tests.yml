@@ -278,7 +278,15 @@ jobs:
       - name: Run hosted-backend managed tests
         env:
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:managed -- '--filter=Backend=postgres|Backend=s3|Backend=neutral'
+        run: npm run test:managed -- '--filter=(Backend=postgres|Backend=s3|Backend=neutral)&FullyQualifiedName!~Foxwarm.Tests.Hosted.HostedRuntimesInProcessTests.'
+      # These tests sample the whole process across retirements; give them a fresh testhost.
+      - name: Measure in-process hosted runtime lifetimes
+        env:
+          FOXWARM_REPO_ROOT: ${{ github.workspace }}
+        run: >-
+          dotnet test dotnet/Foxwarm.Tests/Foxwarm.Tests.csproj --no-build
+          --filter 'FullyQualifiedName~Foxwarm.Tests.Hosted.HostedRuntimesInProcessTests.'
+          -- RunConfiguration.TreatNoTestsAsError=true
       - name: Upload failure diagnostics
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
