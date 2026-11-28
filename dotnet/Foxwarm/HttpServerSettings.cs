@@ -160,7 +160,7 @@ internal sealed record HttpServerSettings(
             port,
             token,
             "127.0.0.1",
-            new PublicWebAddress($"http://127.0.0.1:{port}", PathString.Empty, "/", false),
+            PublicWebAddress.Capture(port, bindAddress: "127.0.0.1"),
             true,
             true
         );
@@ -202,6 +202,7 @@ internal sealed record PublicWebAddress(
 {
     public string Origin { get; internal set; } = Origin;
     internal string BaseUrl => Origin + CookiePath;
+    internal bool HasConfiguredOrigin { get; init; } = true;
 
     internal static PublicWebAddress Capture(
         int port,
@@ -216,7 +217,7 @@ internal sealed record PublicWebAddress(
                 PathString.Empty,
                 "/",
                 false
-            );
+            ) { HasConfiguredOrigin = false };
         if (
             input != input.Trim()
             || !Uri.TryCreate(input, UriKind.Absolute, out var uri)

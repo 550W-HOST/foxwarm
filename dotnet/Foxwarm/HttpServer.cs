@@ -52,6 +52,18 @@ internal sealed class HttpServer
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
+        var hosted = sessions.Models.ConfigurationOwner?.Hosted == true;
+        Uri? cookieOrigin = hosted || address.HasConfiguredOrigin ? new Uri(address.Origin) : null;
+        Func<string, CancellationToken, Task<bool>>? ownsHostname = null;
+#if FOXWARM_HOSTED
+        if (server is Hosted.Runtimes.TenantServer tenantServer)
+        {
+            hosted = true;
+            ownsHostname = tenantServer.OwnsHostname;
+            if (SessionWait.Text(sessions.Models.ConfigurationOwner?.AppConfiguration["url"]) is null)
+                cookieOrigin = tenantServer.PublicUrl;
+        }
+#endif
         string signingKey = apiToken;
         Func<string, bool> matches = candidate => apiToken.Length > 0 && Equal(candidate, apiToken);
         bool versioned = false;
@@ -267,7 +279,7 @@ internal sealed class HttpServer
                     await next();
                     return;
                 }
-                var admin = Authorized(context.Request, matches, browserCookie);
+                var admin = Authorized(context.Request, matches, browserCookie, out var adminCookie);
 #if FOXWARM_HOSTED
                 if (admin && sessions.Storage.Credentials is Hosted.Postgres.PgInstanceCredentials adminCredential)
                 {
@@ -288,6 +300,14 @@ internal sealed class HttpServer
                 }
 #endif
                 var scoped = !admin && WebUiEnabled ? access.Authenticate(context) : null;
+                if ((adminCookie || scoped?.FromCookie == true)
+                    && (context.WebSockets.IsWebSocketRequest || context.Request.Method is "POST" or "PUT" or "PATCH" or "DELETE")
+                    && !await CookieOriginAllowedAsync(context, cookieOrigin, hosted, ownsHostname))
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    await context.Response.WriteAsync("Cross-origin request refused.");
+                    return;
+                }
                 var valid = admin || scoped is not null;
                 var staticEntry =
                     WebUiEnabled
@@ -458,7 +478,7 @@ internal sealed class HttpServer
             app,
             sessions,
             accessConfiguration,
-            request => Authorized(request, matches, browserCookie),
+            request => Authorized(request, matches, browserCookie, out _),
             context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.NodeProviders)
         );
         app.MapGet("/health", () => Results.Ok(new JsonObject { ["status"] = "ready" }));
@@ -498,8 +518,45 @@ internal sealed class HttpServer
         App = app;
     }
 
-    private static bool Authorized(HttpRequest request, Func<string, bool> matches, string? derived)
+    private static async Task<bool> CookieOriginAllowedAsync(HttpContext context, Uri? configured, bool hosted,
+        Func<string, CancellationToken, Task<bool>>? ownsHostname)
     {
+        var request = context.Request;
+        var upgrade = context.WebSockets.IsWebSocketRequest;
+        if (!hosted && !upgrade && request.Headers["Sec-Fetch-Site"] is { Count: 1 } site && site[0] == "same-origin") return true;
+        if (!request.Headers.TryGetValue("Origin", out var values)) return true;
+        var text = values.Count == 1 ? values[0] : null;
+        bool Mismatch()
+        {
+            if (hosted || !upgrade || configured is not null) return false;
+            if (Interlocked.Exchange(ref warnedUnconfiguredSocketOrigin, 1) == 0)
+                Console.Error.WriteLine("WebSocket origin checks need the public URL; set `url` to enable them.");
+            return true;
+        }
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var origin) || origin.Scheme is not ("http" or "https")) return Mismatch();
+        var authority = origin.GetLeftPart(UriPartial.Authority);
+        if (origin.UserInfo.Length != 0 || !(string.Equals(text, authority, StringComparison.OrdinalIgnoreCase)
+            || origin.IsDefaultPort && string.Equals(text, authority + ":" + origin.Port, StringComparison.OrdinalIgnoreCase))) return Mismatch();
+        if (configured is not null && origin.Scheme == configured.Scheme && origin.Port == configured.Port)
+        {
+            if (ownsHostname is not null)
+                return await ownsHostname(origin.IdnHost, context.RequestAborted).ConfigureAwait(false);
+            if (origin.IdnHost == configured.IdnHost) return true;
+        }
+        if (hosted) return false;
+        if (Uri.TryCreate(request.Scheme + "://" + request.Host.ToUriComponent(), UriKind.Absolute, out var direct)
+            && direct.Scheme == origin.Scheme && direct.IdnHost == origin.IdnHost && direct.Port == origin.Port) return true;
+        // A reverse proxy may preserve the public Host separately while terminating TLS.
+        var forwarded = request.Headers["X-Forwarded-Host"];
+        if (forwarded.Count == 1 && string.Equals(forwarded[0], origin.Authority, StringComparison.OrdinalIgnoreCase)) return true;
+        return Mismatch();
+    }
+
+    private static int warnedUnconfiguredSocketOrigin;
+
+    private static bool Authorized(HttpRequest request, Func<string, bool> matches, string? derived, out bool cookie)
+    {
+        cookie = false;
         if (
             request.Headers.Authorization.Count == 1
             && request.Headers.Authorization.ToString() is { } authorization
@@ -522,7 +579,10 @@ internal sealed class HttpServer
                 continue;
             }
             if (matches(candidate) || derived is not null && Equal(candidate, derived))
+            {
+                cookie = true;
                 return true;
+            }
         }
         return false;
     }

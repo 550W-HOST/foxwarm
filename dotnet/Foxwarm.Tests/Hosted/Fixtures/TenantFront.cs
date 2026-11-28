@@ -64,9 +64,9 @@ internal sealed class TenantFront : IAsyncDisposable
         return front;
     }
 
-    internal TenantServer Server(string host)
+    internal TenantServer Server(string host, TenantServer? server = null)
     {
-        var server = new TenantServer(BaseUri.ToString().TrimEnd('/'));
+        server ??= new TenantServer(BaseUri.ToString().TrimEnd('/'));
         lock (tenants)
             tenants[host] = server;
         return server;

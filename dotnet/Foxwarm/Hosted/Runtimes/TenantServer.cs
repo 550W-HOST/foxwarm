@@ -55,10 +55,19 @@ internal sealed class TenantServer : IServer
     /// <param name="publicUrl">The address the tenant's own URLs are built from: the front's.</param>
     internal TenantServer(string publicUrl)
     {
+        PublicUrl = new Uri(publicUrl);
         var addresses = new ServerAddressesFeature();
         addresses.Addresses.Add(publicUrl);
         Features.Set<IServerAddressesFeature>(addresses);
     }
+
+    internal TenantServer(string publicUrl, HostnameDirectory directory, string tenant) : this(publicUrl)
+    {
+        OwnsHostname = async (host, token) => await directory.ResolveAsync(host, token).ConfigureAwait(false) == tenant;
+    }
+
+    internal Func<string, CancellationToken, Task<bool>>? OwnsHostname { get; }
+    internal Uri PublicUrl { get; }
 
     internal MainLog? Log { private get; set; }
 

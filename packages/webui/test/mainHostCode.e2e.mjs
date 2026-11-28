@@ -87,6 +87,20 @@ const rootCommit = git('rev-parse', 'HEAD')
 git('mv', 'old.txt', 'notes.txt'); await writeFile(join(owned.work, 'binary.bin'), Buffer.from([0, 17, 255])); git('add', '.'); git('commit', '-qm', 'rename and binary fixture')
 const commit = git('rev-parse', 'HEAD'), requests = [], failures = [], browserErrors = [], codeResponses = []
 await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n')
+function forwardUpgrades(proxy, prefix, observe = () => {}) {
+  proxy.on('upgrade', (request, socket, head) => {
+    if (!request.url.startsWith(prefix)) { socket.destroy(); return }
+    proxyUpgrades++
+    observe(request)
+    const upstream = httpRequest(owned.origin + '/' + request.url.slice(prefix.length), { headers: { ...request.headers, host: new URL(owned.origin).host } })
+    upstream.on('upgrade', (response, peer, initial) => {
+      socket.write('HTTP/1.1 101 Switching Protocols\r\n' + Object.entries(response.headers).map(([key, value]) => key + ': ' + value).join('\r\n') + '\r\n\r\n')
+      if (head.length) peer.write(head); if (initial.length) socket.write(initial); socket.pipe(peer); peer.pipe(socket)
+      socket.on('error', () => peer.destroy()); peer.on('error', () => socket.destroy()); socket.on('close', () => peer.destroy()); peer.on('close', () => socket.destroy())
+    })
+    upstream.on('response', response => { socket.end('HTTP/1.1 ' + response.statusCode + ' Rejected\r\nContent-Length: 0\r\n\r\n') }); upstream.on('error', () => socket.destroy()); upstream.end()
+  })
+}
 let appPage, extraPage, prefixProxy, declaredProxy, prefixNavigation, browserVersion; const declaredMode = process.env.FOXWARM_CODE_DECLARED_PROXY; let proxyUpgrades = 0
 if (declaredMode) {
   const prefix = '/published/main/'
@@ -96,17 +110,7 @@ if (declaredMode) {
     upstream.on('error', error => response.destroy(error)); request.pipe(upstream)
   }
   declaredProxy = declaredMode === 'https' ? createTlsServer({ key: await readFile(process.env.FOXWARM_CODE_TLS_KEY), cert: await readFile(process.env.FOXWARM_CODE_TLS_CERT) }, forward) : createServer(forward)
-  declaredProxy.on('upgrade', (request, socket, head) => {
-    if (!request.url.startsWith(prefix)) { socket.destroy(); return }
-    proxyUpgrades++
-    const upstream = httpRequest(owned.origin + '/' + request.url.slice(prefix.length), { headers: { ...request.headers, host: new URL(owned.origin).host } })
-    upstream.on('upgrade', (response, peer, initial) => {
-      socket.write('HTTP/1.1 101 Switching Protocols\r\n' + Object.entries(response.headers).map(([key, value]) => key + ': ' + value).join('\r\n') + '\r\n\r\n')
-      if (head.length) peer.write(head); if (initial.length) socket.write(initial); socket.pipe(peer); peer.pipe(socket)
-      socket.on('error', () => peer.destroy()); peer.on('error', () => socket.destroy()); socket.on('close', () => peer.destroy()); peer.on('close', () => socket.destroy())
-    })
-    upstream.on('response', response => { socket.end('HTTP/1.1 ' + response.statusCode + ' Rejected\r\nContent-Length: 0\r\n\r\n') }); upstream.on('error', () => socket.destroy()); upstream.end()
-  })
+  forwardUpgrades(declaredProxy, prefix)
   declaredProxy.listen(0, '127.0.0.1'); await once(declaredProxy, 'listening')
   options.publicRoot = declaredMode + '://127.0.0.1:' + declaredProxy.address().port + prefix
   if (declaredMode === 'https') options.chromeArgs = ['--ignore-certificate-errors']
@@ -446,21 +450,38 @@ try {
   if (!declaredMode) {
   // Bootstrap preserves a public prefix without trusting forwarded headers.
   // A stripping proxy keeps relative assets and authenticated writes on its prefix.
-  // Ordinary Origin headers do not replace the token/cookie boundary.
+  // The browser can identify a same-origin write even when the proxy rewrites Host.
   stage('prefixed workbench and authenticated file writes')
   prefixProxy = createServer((request, response) => {
     if (!request.url.startsWith('/fixture/')) { response.writeHead(404); response.end(); return }
     const headers = { ...request.headers, host: new URL(owned.origin).host }; delete headers['x-forwarded-host']; delete headers['x-forwarded-proto']
     const upstream = httpRequest(owned.origin + request.url.slice('/fixture'.length), { method: request.method, headers }, result => { response.writeHead(result.statusCode, result.headers); result.pipe(response) })
     upstream.on('error', error => response.destroy(error)); request.pipe(upstream)
-  }); prefixProxy.listen(0, '127.0.0.1'); await once(prefixProxy, 'listening')
+  });
+  const upgradeSites = [];
+  forwardUpgrades(prefixProxy, '/fixture/', request => upgradeSites.push(request.headers['sec-fetch-site'] ?? null));
+  prefixProxy.listen(0, '127.0.0.1'); await once(prefixProxy, 'listening')
   const prefixed = await page.browser().newPage(); extraPage = prefixed; observeNativeDialogs(prefixed, 'prefixed-code'); prefixed.on('pageerror', error => browserErrors.push(error.message)); prefixNavigation = observePrefixNavigation(prefixed); const prefixResponses = []; prefixed.on('response', response => prefixResponses.push({ url: response.url(), status: response.status() })); const prefixUrl = new URL('http://127.0.0.1:' + prefixProxy.address().port + '/fixture/vscode-web/')
   prefixUrl.searchParams.set('embedded', 'true'); prefixUrl.searchParams.set('nodeId', 'master'); prefixUrl.searchParams.set('initialFolderUri', 'foxwarm://node+master' + owned.work); prefixUrl.searchParams.set('openFilePath', join(owned.work, 'notes.txt'))
   assert.equal((await prefixed.goto(prefixUrl.toString(), { waitUntil: 'domcontentloaded' })).status(), 200)
   await prefixed.waitForSelector('.monaco-workbench', { timeout: 30000 })
   assert(prefixResponses.some(row => row.url.includes('/fixture/vscode-web/static/') && row.status === 200), 'Relative Code assets must retain the prefix.')
   const prefixWrite = join(owned.work, 'prefix-write.txt')
-  assert.equal(await prefixed.evaluate(async file => (await fetch('/fixture/api/vscode-web/fs/write-file?path=' + encodeURIComponent(file) + '&create=1&overwrite=1', { method: 'PUT', body: 'authenticated prefix write' })).status, prefixWrite), 200)
+  const writeFromBrowser = () => prefixed.evaluate(async file => (await fetch('/fixture/api/vscode-web/fs/write-file?path=' + encodeURIComponent(file) + '&create=1&overwrite=1', { method: 'PUT', body: 'authenticated prefix write' })).status, prefixWrite)
+  assert.equal(await writeFromBrowser(), 200)
+  const openPrefixedSocket = () => prefixed.evaluate(() => new Promise((resolve, reject) => {
+    const socket = new WebSocket('ws://' + location.host + '/fixture/api/webui/stream');
+    socket.onopen = () => { socket.close(); resolve() };
+    socket.onerror = () => reject(new Error('The prefixed WebUI socket did not open'));
+  }));
+  await openPrefixedSocket(); await openPrefixedSocket();
+  assert(upgradeSites.length >= 2);
+  assert.equal(owned.output.match(/WebSocket origin checks need the public URL;/g)?.length, 1);
+  console.log(JSON.stringify({fixture: 'mainHostCode', prefixedWebSocketFetchSite: upgradeSites.at(-1)}));
+  const sibling = await fetch(prefixUrl.origin + '/fixture/api/vscode-web/fs/write-file?path=' + encodeURIComponent(prefixWrite), {
+    method: 'PUT', headers: { Cookie: 'foxwarm_token=' + owned.token, Origin: 'https://sibling.example', 'Sec-Fetch-Site': 'same-site' }, body: 'denied',
+  })
+  assert.equal(sibling.status, 403)
   assert.equal(await readFile(prefixWrite, 'utf8'), 'authenticated prefix write')
   assert.equal(await prefixed.evaluate(async file => (await fetch('/fixture/api/vscode-web/fs/write-file?path=' + encodeURIComponent(file) + '&create=1&overwrite=1', { method: 'PUT', credentials: 'omit', body: 'unauthenticated overwrite' })).status, prefixWrite), 401)
   assert.equal(await readFile(prefixWrite, 'utf8'), 'authenticated prefix write')

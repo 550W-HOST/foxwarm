@@ -7,6 +7,14 @@ Secondary files: packages/webui/vite.config.ts, packages/webui/src/components/fo
 
 Responsive, independent token entry before the authenticated application. The existing public file and POST authentication endpoint remain the backend integration surface. Login does not mount the application, request protected assets or enumerate Sessions. Legacy-cookie recovery uses the authenticated session endpoint to confirm a valid role before re-entry.
 
+## Cookie origins
+
+For cookie-authenticated administrator and scoped requests, the server checks browser origins on WebSocket upgrades and POST, PUT, PATCH and DELETE. Requests without `Origin` are allowed; a refused origin receives HTTP 403 before dispatch. Bearer clients, token sign-in, Node pairing and independent webhook and MCP authentication keep their own credential paths.
+
+- On a multi-tenant replica the origin must have the public scheme and port, and the same hostname directory that routes traffic must assign its hostname to this tenant. Mapped aliases work even through an internal HTTP listener. Legacy single-tenant hosting checks its public origin. Hosted checks apply to both HTTP and WebSockets, regardless of Fetch Metadata.
+- In file mode a browser HTTP request may establish its origin with `Sec-Fetch-Site: same-origin`, the configured public URL, the request’s own origin or `X-Forwarded-Host`. Browser JavaScript cannot set Fetch Metadata; setting `X-Forwarded-Host` on a cross-origin fetch requires a preflight the application does not grant. A WebSocket client in a page cannot set custom headers.
+- File-mode WebSockets enforce the configured public URL, request origin or forwarded public host when `url` is set. Without a public URL the server permits upgrades for compatibility with reverse proxies that rewrite Host; browsers can omit Fetch Metadata from the handshake. The first otherwise-mismatched cookie upgrade logs the configuration hint once per process.
+
 ## Symbols and generated output
 
 - `renderLoginHtml` bundles `login.ts`, the real theme runtime/validator and built-in registry into the standalone document. It inlines canonical fox paths/loader CSS and view-specific CSS; no network-loaded script, stylesheet or font is required.
