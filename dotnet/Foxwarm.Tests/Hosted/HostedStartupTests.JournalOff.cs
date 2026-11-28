@@ -51,22 +51,19 @@ public sealed partial class HostedStartupTests
             }
         );
         IStorageContext? storage = null;
-        var replica = StartHosted(
-            database.OpenApp(),
+        var replica = await StartHostedAsync(
+            database,
             files,
             built => storage = built,
             deploymentExtra: "egress: {allow: {hosted: [127.0.0.1]}}\n"
         );
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
             Timeout = TimeSpan.FromSeconds(20),
         };
+        client.DefaultRequestHeaders.Host = PostgresServer.Tenant + ".test";
         client.DefaultRequestHeaders.Authorization = new(
             "Bearer",
             storage!.Credentials.Read(InstanceCredentialName.HttpToken)

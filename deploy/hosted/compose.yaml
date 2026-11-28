@@ -1,12 +1,12 @@
 # Foxwarm hosted mode on Docker Compose: PostgreSQL, VersityGW as the S3 blob store, a one-shot
-# schema migration, two replicas of one tenant, and a round-robin TCP proxy in front of them.
-# Either replica can take a connection: the standby forwards it to the owner. See README.md in
+# schema migration, two multi-tenant replicas, and a round-robin TCP proxy in front of them.
+# Each front routes the request by hostname to its tenant owner. See README.md in
 # this directory.
 #
 #   docker build --target hosted -t foxwarm-hosted:local .     # from the repository root
 #   deploy/hosted/generate-secrets.sh deploy/hosted/secrets
-#   docker compose -f deploy/hosted/compose.yaml up -d
-#   docker compose -f deploy/hosted/compose.yaml exec foxwarm-1 /app/Foxwarm hosted token
+#   docker compose -f deploy/hosted/compose.yaml --profile operator up -d
+#   See README.md for operator credentials and first-tenant provisioning.
 name: foxwarm-hosted
 
 x-replica: &replica
@@ -19,7 +19,7 @@ x-replica: &replica
       condition: service_completed_successfully
     versitygw:
       condition: service_started
-  secrets: [database-url, kek, s3-access-key-id, s3-secret-access-key]
+  secrets: [database-url, kek, s3-access-key-id, s3-secret-access-key, mesh-secret]
   volumes:
     - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
   # The replica's scratch directory: logs, upload staging and temporary files, never tenant state.
@@ -30,6 +30,7 @@ x-replica: &replica
   stop_grace_period: 45s
 
 x-replica-environment: &replica-environment
+  FOXWARM_MESH_SECRET_FILE: /run/secrets/mesh-secret
   FOXWARM_DATABASE_URL_FILE: /run/secrets/database-url
   FOXWARM_KEK_FILE: /run/secrets/kek
   # During a key-encryption key rotation, mount the previous key as well:
@@ -151,12 +152,10 @@ services:
     environment:
       <<: *replica-environment
       FOXWARM_ROLE: master-host
-      FOXWARM_HOSTED_TOPOLOGY: tenants
       FOXWARM_REPLICA_ID: foxwarm-master
       FOXWARM_ADVERTISE_ADDRESS: foxwarm-master:3004
       FOXWARM_AGENTS_DIR: /master
       FOXWARM_SCRATCH_DIR: /master/scratch
-      FOXWARM_MESH_SECRET_FILE: /run/secrets/mesh-secret
     secrets: [database-url, kek, s3-access-key-id, s3-secret-access-key, mesh-secret]
     volumes:
       - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
@@ -173,14 +172,14 @@ services:
     environment:
       <<: *replica-environment
       FOXWARM_REPLICA_ID: foxwarm-1
-      FOXWARM_ADVERTISE_ADDRESS: foxwarm-1:3001
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-1:3004
 
   foxwarm-2:
     <<: *replica
     environment:
       <<: *replica-environment
       FOXWARM_REPLICA_ID: foxwarm-2
-      FOXWARM_ADVERTISE_ADDRESS: foxwarm-2:3001
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-2:3004
 
   proxy:
     image: haproxy:3.2.10-alpine

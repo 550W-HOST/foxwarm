@@ -59,14 +59,7 @@ internal sealed record HostedBootstrap(
         environment ??= Environment.GetEnvironmentVariables();
         var advertise = Read(environment, "FOXWARM_ADVERTISE_ADDRESS");
         if (!string.IsNullOrEmpty(advertise))
-            try
-            {
-                StandbyForwarder.ParseAddress(advertise);
-            }
-            catch (FormatException error)
-            {
-                throw new HostedBootstrapException("FOXWARM_ADVERTISE_ADDRESS: " + error.Message);
-            }
+            _ = Forwarding.MeshSettings.ParseAddress(advertise);
         var replica = Read(environment, "FOXWARM_REPLICA_ID");
         var role = ReplicaRole(Read(environment, "FOXWARM_ROLE"));
         var agentsVolume = Path(environment, "FOXWARM_AGENTS_DIR");

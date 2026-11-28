@@ -42,22 +42,17 @@ public sealed class SchemaMigratorTests
         SchemaMigrator.Parse([($"{version:D4}_extra.sql", $"-- reader-floor: {floor}\n{sql}")])[0];
 
     [Fact]
-    public async Task MigrateCreatesTheSchemaOnceAndTheTenant()
+    public async Task MigrateCreatesTheSchemaOnceWithoutProvisioningTenants()
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync(migrated: false);
         var owner = database.OpenOwner();
-        var first = await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole, "alpha");
+        var first = await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole);
         Assert.Equal(SchemaMigrator.Embedded.Select(item => item.Version), first.Select(item => item.Version));
-        var again = await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole, "alpha");
+        var again = await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole);
         Assert.Empty(again);
-        Assert.Equal(1L, await database.ScalarAsync("SELECT count(*) FROM tenants WHERE name = 'alpha'"));
-        Assert.Equal(
-            "released",
-            await database.ScalarAsync(
-                "SELECT tenant_leases.state FROM tenant_leases JOIN tenants USING (tenant_id) WHERE name = 'alpha'"
-            )
-        );
+        Assert.Equal(0L, await database.ScalarAsync("SELECT count(*) FROM tenants"));
+        Assert.Equal(0L, await database.ScalarAsync("SELECT count(*) FROM tenant_leases"));
         var status = await SchemaMigrator.StatusAsync(database.OpenApp());
         Assert.Null(status.Refusal());
         Assert.Empty(status.Pending);
@@ -71,7 +66,7 @@ public sealed class SchemaMigratorTests
         var results = await Task.WhenAll(
             Enumerable
                 .Range(0, 3)
-                .Select(_ => SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.OperatorRole, "default"))
+                .Select(_ => SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.OperatorRole))
         );
         Assert.Equal(SchemaMigrator.Embedded.Count, results.Sum(applied => applied.Count));
         Assert.Equal(
@@ -95,7 +90,6 @@ public sealed class SchemaMigratorTests
             owner,
             PostgresServer.AppRole,
             PostgresServer.OperatorRole,
-            null,
             [.. SchemaMigrator.Embedded, compatibleExpansion]
         );
         // A newer, expand-only migration leaves older binaries able to run.
@@ -106,7 +100,6 @@ public sealed class SchemaMigratorTests
             owner,
             PostgresServer.AppRole,
             PostgresServer.OperatorRole,
-            null,
             [.. SchemaMigrator.Embedded, compatibleExpansion, contract]
         );
         var error = await Assert.ThrowsAsync<SchemaIncompatibleException>(() =>
@@ -118,7 +111,7 @@ public sealed class SchemaMigratorTests
         var changed = await SchemaMigrator.StatusAsync(database.OpenApp());
         Assert.Contains("differ", changed.Refusal());
         await Assert.ThrowsAsync<SchemaIncompatibleException>(() =>
-            SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole, null)
+            SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole)
         );
     }
 
@@ -128,11 +121,11 @@ public sealed class SchemaMigratorTests
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
         var error = await Assert.ThrowsAsync<SchemaIncompatibleException>(() =>
-            SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.OwnerRole, PostgresServer.OperatorRole, null)
+            SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.OwnerRole, PostgresServer.OperatorRole)
         );
         Assert.Contains(PostgresServer.AppRole, error.Message);
         var missing = await Assert.ThrowsAsync<SchemaIncompatibleException>(() =>
-            SchemaMigrator.MigrateAsync(database.OpenOwner(), "foxwarm_no_such_role", PostgresServer.OperatorRole, null)
+            SchemaMigrator.MigrateAsync(database.OpenOwner(), "foxwarm_no_such_role", PostgresServer.OperatorRole)
         );
         Assert.Contains("doesn't exist", missing.Message);
     }

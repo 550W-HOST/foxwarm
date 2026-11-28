@@ -10,8 +10,7 @@ using Xunit;
 namespace Foxwarm.Tests.Hosted;
 
 /// <summary>
-/// Multi-tenant replicas as real processes (<c>dotnet Foxwarm.dll</c> in hosted mode with
-/// <c>FOXWARM_HOSTED_TOPOLOGY=tenants</c>) over one migrated test database. Each replica reaches
+/// Multi-tenant replicas as real processes (<c>dotnet Foxwarm.dll</c> in hosted mode) over one migrated test database. Each replica reaches
 /// the database through its own <see cref="PgTcpProxy"/>, so a test can partition one replica
 /// alone, and has its own front, health port, scratch and Agents directories and heap limit.
 /// The processes exit for real: <see cref="Replica.Kill"/> is SIGKILL, <see cref="Replica.Terminate"/>
@@ -144,7 +143,6 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
         foreach (var key in info.Environment.Keys.Where(key => key.StartsWith("FOXWARM_", StringComparison.Ordinal)).ToArray())
             info.Environment.Remove(key);
         info.Environment["FOXWARM_MODE"] = "hosted";
-        info.Environment["FOXWARM_HOSTED_TOPOLOGY"] = "tenants";
         info.Environment["FOXWARM_DATABASE_URL"] = proxy.Route(Database.AppConnectionString);
         info.Environment["FOXWARM_APP_ROLE"] = PostgresServer.AppRole;
         info.Environment["FOXWARM_OPERATOR_ROLE"] = PostgresServer.OperatorRole;

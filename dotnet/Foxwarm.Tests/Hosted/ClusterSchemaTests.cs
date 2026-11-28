@@ -187,16 +187,16 @@ public sealed class ClusterSchemaTests
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
         var same = await Assert.ThrowsAsync<SchemaIncompatibleException>(() =>
-            SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.AppRole, null)
+            SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.AppRole)
         );
         Assert.Contains("different", same.Message);
         var other = await Assert.ThrowsAsync<SchemaIncompatibleException>(() =>
-            SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.OwnerRole, null)
+            SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.OwnerRole)
         );
         Assert.Contains(PostgresServer.OperatorRole, other.Message);
         // A database from before the operator role records it at its next migration.
         await database.ExecuteOwnerAsync("UPDATE schema_info SET operator_role = NULL");
-        await SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.OperatorRole, null);
+        await SchemaMigrator.MigrateAsync(database.OpenOwner(), PostgresServer.AppRole, PostgresServer.OperatorRole);
         Assert.Equal(PostgresServer.OperatorRole, await database.ScalarAsync("SELECT operator_role FROM schema_info"));
     }
 }

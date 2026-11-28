@@ -29,7 +29,6 @@ spec:
           args: [operator, serve]
           env:
             - {name: FOXWARM_ROLE, value: operator}
-            - {name: FOXWARM_TENANT, value: {{ .Values.tenant | quote }}}
             - {name: FOXWARM_DATABASE_URL_FILE, value: /run/secrets/operator/database-url}
             - {name: FOXWARM_KEK_FILE, value: /run/secrets/operator/kek.json}
           ports:

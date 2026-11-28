@@ -1,3 +1,4 @@
+using Foxwarm.Hosted.Runtimes;
 using Foxwarm.Hosted.Lease;
 using System.Net;
 using System.Net.Http.Json;
@@ -36,8 +37,8 @@ public sealed partial class HostedStartupTests
             new(null, null, PostgresServer.Tenant, PostgresServer.AppRole, ScratchRoot: Scratch, KekFile: Kek);
     }
 
-    private static Replica StartHosted(
-        PgDatabase database,
+    private static async Task<Replica> StartHostedAsync(
+        HostedTestDatabase database,
         HostedFiles files,
         Action<IStorageContext>? built = null,
         string? fileStores = null,
@@ -45,36 +46,36 @@ public sealed partial class HostedStartupTests
         string role = ReplicaRoles.General
     )
     {
-        Replica? replica = null;
-        replica = Start(
-            files.Scratch,
-            database,
-            "hosted",
+        const string slug = PostgresServer.Tenant;
+        await database.ExecuteOwnerAsync($"INSERT INTO tenant_hostnames(tenant_id,hostname,kind) SELECT tenant_id,'{slug}.test','primary' FROM tenants WHERE name='{slug}' ON CONFLICT DO NOTHING");
+        var local = new IPEndPoint(IPAddress.Loopback, 0);
+        var deployment = DeploymentConfiguration.Parse("health: {port: 3081}\nblobs: {backend: postgres}\n" + deploymentExtra);
+        var runtimes = new List<IHostedRuntime>();
+        var replica = new TenantReplica(
+            new TenantReplicaOptions("hosted", null, local, local, _ => $"http://{slug}.test", LeaseTimings.Default,
+                TimeSpan.FromSeconds(8), Foxwarm.Sessions.AgentCatalog.ReaderVersion)
+            {
+                Role = role,
+                Mesh = new(local, "127.0.0.1", System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)),
+            }, database.OpenApp(), database.AppConnectionString,
             async (context, token) =>
             {
-                while (replica is null)
-                    await Task.Delay(10, token);
-                var deployment = DeploymentConfiguration.Parse(
-                    $"bot: {{httpHost: 127.0.0.1, httpPort: {replica.PublicPort}}}\nhealth: {{port: 3081}}\nblobs: {{backend: postgres}}\n"
-                        + deploymentExtra
-                );
                 var tenant = new PostgresStorageContext(context.Database, files.Scratch);
                 var storage = HostedTestBackend.Compose(tenant, fileStores ?? files.Scratch);
                 built?.Invoke(storage);
-                var runtime = await HostedEntry.BuildRuntimeAsync(
-                    tenant,
-                    storage,
-                    files.Bootstrap with { Role = role, AgentsVolume = role == ReplicaRoles.MasterHost ? Directory.CreateDirectory(files.Agents).FullName : null },
-                    deployment,
-                    context.PublicListener,
-                    profile: context.Grant.Profile
-                );
-                replica.Runtimes.Add(runtime);
+                var runtime = await HostedEntry.BuildRuntimeAsync(tenant, storage, files.Bootstrap with
+                {
+                    Role = role,
+                    AgentsVolume = role == ReplicaRoles.MasterHost ? Directory.CreateDirectory(files.Agents).FullName : null,
+                }, deployment.ForTenant(slug), token, context.Server, context.Activation.Grant.Profile);
+                runtimes.Add(runtime);
                 return runtime;
-            },
-            role: role
-        );
-        return replica;
+            }, _ => { }, code => throw new InvalidOperationException($"Unexpected escalation {code}"),
+            operatorDocumentsChanged: runtime => ((MainHostRuntime)runtime).OperatorDocumentsChanged());
+        var stop = new CancellationTokenSource();
+        var run = replica.RunAsync(stop.Token);
+        await replica.Serving.WaitAsync(TimeSpan.FromSeconds(30));
+        return new(replica, run, stop, replica.Activations!.ActivateAsync(slug), runtimes);
     }
 
     [Fact]
@@ -85,18 +86,15 @@ public sealed partial class HostedStartupTests
         using var temp = new TempDirectory();
         var files = HostedFiles.Create(temp.Path);
         IStorageContext? storage = null;
-        var replica = StartHosted(database.OpenApp(), files, built => storage = built);
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        var replica = await StartHostedAsync(database, files, built => storage = built);
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
             Timeout = TimeSpan.FromSeconds(20),
         };
         // The HTTP token is an instance credential of the tenant, encrypted under its data key.
+        client.DefaultRequestHeaders.Host = PostgresServer.Tenant + ".test";
         client.DefaultRequestHeaders.Authorization = new(
             "Bearer",
             storage!.Credentials.Read(InstanceCredentialName.HttpToken)
@@ -127,29 +125,26 @@ public sealed partial class HostedStartupTests
     }
 
     [Fact]
-    public async Task AStalledRequestHoldsAGracefulStopOnlyForTheHttpShutdownTimeout()
+    public async Task AnIncompleteRequestAtTheFrontDoesNotDelayTenantHandBack()
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
         using var temp = new TempDirectory();
-        var replica = StartHosted(database.OpenApp(), HostedFiles.Create(temp.Path));
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        var replica = await StartHostedAsync(database, HostedFiles.Create(temp.Path));
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         // A client that sent part of a request and stalls: the host counts it as in progress.
         using var stalled = new System.Net.Sockets.TcpClient();
         await stalled.ConnectAsync(IPAddress.Loopback, replica.PublicPort);
         await stalled.GetStream().WriteAsync(System.Text.Encoding.ASCII.GetBytes("GET /api/sessions HTTP/1.1\r\nHost: x\r\n"));
         await Task.Delay(300);
 
-        var stopping = System.Diagnostics.Stopwatch.StartNew();
         replica.Stop.Cancel();
-        Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
-        // Not the host default of 30 s, a whole lease TTL in production.
-        Assert.InRange(stopping.Elapsed, TimeSpan.Zero, HostedEntry.HttpShutdownTimeout + TimeSpan.FromSeconds(4));
-        Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));
+        // The front can still be finishing connections while the tenant's lease is free.
+        // Incomplete headers were never admitted and must not hold up a successor.
+        await WaitUntilAsync(() => database.ScalarAsync("SELECT state FROM tenant_leases").GetAwaiter().GetResult() as string == "released",
+            TimeSpan.FromSeconds(6), "the tenant hands back while the front still has the stalled connection");
+        stalled.Dispose();
+        Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]
@@ -168,8 +163,10 @@ public sealed partial class HostedStartupTests
         await database.ScalarAsync(
             "UPDATE tenant_leases SET state = 'released', expires_at = now() RETURNING 1"
         );
-        var replica = StartHosted(database.OpenApp(), files);
-        Assert.Equal(HostedExit.Configuration, await replica.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+        var replica = await StartHostedAsync(database, files);
+        await Assert.ThrowsAsync<HostedStartupException>(() => replica.Activation);
+        replica.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await replica.Run.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.Equal(0L, await database.ScalarAsync("SELECT count(*) FROM tenant_keys"));
         Assert.Equal("released", await database.ScalarAsync("SELECT state FROM tenant_leases"));
     }

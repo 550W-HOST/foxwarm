@@ -32,12 +32,8 @@ public sealed partial class HostedStartupTests
         Assert.True(imported.Exit == 0, imported.Report.ToJsonString());
         IStorageContext? storage = null;
         // The Agent folders reach the tenant's Agent store before the runtime starts.
-        var replica = StartHosted(database.OpenApp(), files, built => storage = built);
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the replica serves the imported tenant"
-        );
+        var replica = await StartHostedAsync(database, files, built => storage = built);
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
@@ -46,6 +42,7 @@ public sealed partial class HostedStartupTests
         // The source's HTTP token was imported as the tenant's credential.
         var token = await File.ReadAllTextAsync(Path.Combine(fixture.DataRoot, "state", "token"));
         Assert.Equal(token.Trim(), storage!.Credentials.Read(InstanceCredentialName.HttpToken)!.Trim());
+        client.DefaultRequestHeaders.Host = PostgresServer.Tenant + ".test";
         client.DefaultRequestHeaders.Authorization = new("Bearer", token.Trim());
 
         var listed = (await client.GetFromJsonAsync<JsonObject>("api/sessions"))!.ToJsonString();

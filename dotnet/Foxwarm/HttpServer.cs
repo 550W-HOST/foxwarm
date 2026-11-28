@@ -44,7 +44,6 @@ internal sealed class HttpServer
         bool? webUiEnabled = null,
         string bindAddress = "127.0.0.1",
         bool desktop = false,
-        Socket? listenSocket = null,
         TimeSpan? shutdownTimeout = null,
         Microsoft.AspNetCore.Hosting.Server.IServer? server = null,
         bool shutdownAvailable = true,
@@ -110,20 +109,6 @@ internal sealed class HttpServer
                     }
                 }
             );
-        else if (listenSocket is not null)
-        {
-            var adopted = listenSocket;
-            builder.WebHost.UseSockets(options =>
-                options.CreateBoundListenSocket = endpoint =>
-                    endpoint is IPEndPoint requested
-                    && adopted?.LocalEndPoint is IPEndPoint bound
-                    && requested.Port == bound.Port
-                        // Adopted once; Kestrel calls Listen on it again, which keeps its queue.
-                        ? Interlocked.Exchange(ref adopted, null)
-                            ?? SocketTransportOptions.CreateDefaultBoundListenSocket(endpoint)
-                        : SocketTransportOptions.CreateDefaultBoundListenSocket(endpoint)
-            );
-        }
         builder.Logging.ClearProviders();
         if (server is not null)
         {

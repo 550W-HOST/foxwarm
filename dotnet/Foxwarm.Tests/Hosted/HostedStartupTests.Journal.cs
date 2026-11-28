@@ -14,12 +14,8 @@ public sealed partial class HostedStartupTests
         await using var database = await server.CreateDatabaseAsync();
         using var temp = new TempDirectory();
         var files = HostedFiles.Create(temp.Path);
-        var replica = StartHosted(database.OpenApp(), files);
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        var replica = await StartHostedAsync(database, files);
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         var sessions = ((MainHostRuntime)replica.Runtimes.Single()).Host.Sessions;
         Assert.IsType<PgLlmJournalStore>(sessions.Journal);
         // A known value reaches the tenant's encrypted cache, not a file on the replica.
@@ -50,13 +46,9 @@ public sealed partial class HostedStartupTests
         );
         using var temp = new TempDirectory();
         var files = HostedFiles.Create(temp.Path);
-        var replica = StartHosted(database.OpenApp(), files,
+        var replica = await StartHostedAsync(database, files,
             role: profile == "operator" ? ReplicaRoles.MasterHost : ReplicaRoles.General);
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         var sessions = ((MainHostRuntime)replica.Runtimes.Single()).Host.Sessions;
         Assert.Equal(Foxwarm.Limits.TenantLimits.Defaults with { BusyTurns = 2 }, sessions.Capabilities.Limits);
         Assert.Equal(2, sessions.Admission!.Turns.Capacity);

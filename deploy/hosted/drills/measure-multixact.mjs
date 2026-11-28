@@ -8,7 +8,7 @@
 //   node deploy/hosted/drills/measure-multixact.mjs [--levels 1,4,16] [--seconds 45] [--report <file>]
 import { writeFileSync } from 'node:fs'
 import { processEnvironment } from './env-process.mjs'
-import { waitOwner, login, installModels, history, texts } from './drills.mjs'
+import { startTenantPool, login, installModels, history, texts } from './drills.mjs'
 import { log, sleep, until } from './util.mjs'
 
 const args = process.argv.slice(2)
@@ -33,9 +33,7 @@ async function counters() {
 
 try {
   await env.setup()
-  await env.start('r1')
-  await env.start('r2')
-  await waitOwner(env)
+  await startTenantPool(env)
   const { api } = await login(env)
   await installModels(api, env.modelBaseUrl)
   for (const level of levels) {

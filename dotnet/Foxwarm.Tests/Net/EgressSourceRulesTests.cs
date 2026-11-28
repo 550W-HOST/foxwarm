@@ -21,8 +21,6 @@ public sealed class EgressSourceRulesTests
     {
         ["Foxwarm.Net.EgressHttp"] = "the factory",
         ["Foxwarm.Net.EgressPolicy"] = "the guarded connector's socket to a checked address",
-        ["Foxwarm.Hosted.StandbyForwarder"] =
-            "replica infrastructure: a standby forwards the public listener to the owner replica",
     };
 
     // Single constructs a type may use, with why.

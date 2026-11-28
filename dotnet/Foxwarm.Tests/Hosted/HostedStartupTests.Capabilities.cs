@@ -128,23 +128,20 @@ public sealed partial class HostedStartupTests
         );
         IStorageContext? storage = null;
         // The scripted model listens on loopback: the deployment allows it as an egress exception.
-        var replica = StartHosted(
-            database.OpenApp(),
+        var replica = await StartHostedAsync(
+            database,
             files,
             built => storage = built,
             fileStores,
             "egress: {allow: {hosted: [127.0.0.1]}}\n"
         );
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
             Timeout = TimeSpan.FromSeconds(20),
         };
+        client.DefaultRequestHeaders.Host = PostgresServer.Tenant + ".test";
         client.DefaultRequestHeaders.Authorization = new(
             "Bearer",
             storage!.Credentials.Read(InstanceCredentialName.HttpToken)
@@ -218,16 +215,14 @@ public sealed partial class HostedStartupTests
         var files = HostedFiles.Create(temp.Path);
         // A general replica may not take an operator-profile tenant: its one tenant can't be
         // served, a configuration exit, and no runtime is built.
-        var general = StartHosted(database.OpenApp(), files);
-        Assert.Equal(HostedExit.Configuration, await general.Run.WaitAsync(TimeSpan.FromSeconds(60)));
+        var general = await StartHostedAsync(database, files);
+        await Assert.ThrowsAsync<TenantNotEligibleException>(() => general.Activation);
+        general.Stop.Cancel();
+        Assert.Equal(HostedExit.Stopped, await general.Run.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.Empty(general.Runtimes);
         IStorageContext? storage = null;
-        var replica = StartHosted(database.OpenApp(), files, built => storage = built, role: ReplicaRoles.MasterHost);
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        var replica = await StartHostedAsync(database, files, built => storage = built, role: ReplicaRoles.MasterHost);
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         var sessions = ((MainHostRuntime)replica.Runtimes[0]).Host.Sessions;
         Assert.Equal(
             RuntimeCapabilities.Operator with { Egress = sessions.Capabilities.Egress, Providers = sessions.Capabilities.Providers },
@@ -240,6 +235,7 @@ public sealed partial class HostedStartupTests
             BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
             Timeout = TimeSpan.FromSeconds(20),
         };
+        client.DefaultRequestHeaders.Host = PostgresServer.Tenant + ".test";
         client.DefaultRequestHeaders.Authorization = new(
             "Bearer",
             storage!.Credentials.Read(InstanceCredentialName.HttpToken)
@@ -258,12 +254,8 @@ public sealed partial class HostedStartupTests
 
         // The next runtime of the tenant is built with the profile its grant read: on a general
         // replica, since the master host takes only operator-profile tenants.
-        var next = StartHosted(database.OpenApp(), files);
-        await WaitUntilAsync(
-            () => next.Inner.Health.Role == ReplicaRole.Owner && next.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the next hosted runtime serves"
-        );
+        var next = await StartHostedAsync(database, files);
+        await next.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         var nextCapabilities = ((MainHostRuntime)next.Runtimes[0]).Host.Sessions.Capabilities;
         Assert.Equal(RuntimeCapabilities.Hosted with { Egress = nextCapabilities.Egress, Providers = nextCapabilities.Providers }, nextCapabilities);
         Assert.Empty(nextCapabilities.Providers!.Drivers);
@@ -294,12 +286,8 @@ public sealed partial class HostedStartupTests
             "version: 1\nrules:\n  - id: first\n    tool: {source: node, name: exec}\n    action: deny\n"
         );
         using var temp = new TempDirectory();
-        var replica = StartHosted(database.OpenApp(), HostedFiles.Create(temp.Path));
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        var replica = await StartHostedAsync(database, HostedFiles.Create(temp.Path));
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         var runtime = (MainHostRuntime)replica.Runtimes[0];
         var authorization = runtime.Host.Sessions.Authorization;
         string? RuleId() => authorization.LoadCeiling()?.Value["rules"]?[0]?["id"]?.GetValue<string>();

@@ -183,22 +183,6 @@ internal sealed class TenantLease
             ? Math.Max(1, (long)timeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms"
             : null;
 
-    /// <summary>The tenant's ID; throws when the tenant doesn't exist.</summary>
-    internal async Task<int> TenantIdAsync(CancellationToken token)
-    {
-        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
-        await using var command = new NpgsqlCommand(
-            "SELECT tenant_id FROM tenants WHERE name = $1",
-            connection
-        );
-        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
-        return await command.ExecuteScalarAsync(token).ConfigureAwait(false) is int id
-            ? id
-            : throw new LeaseRefusedException(
-                $"Tenant {Tenant} doesn't exist; `foxwarm db migrate --tenant {Tenant}` creates it."
-            );
-    }
-
     /// <summary>
     /// Takes the lease when it is released, expired or already this replica's, raising the
     /// epoch. Returns null while another replica holds it. Waits for in-flight writers of the
@@ -328,7 +312,7 @@ internal sealed class TenantLease
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false))
             throw new LeaseRefusedException(
-                $"Tenant {Tenant} doesn't exist; `foxwarm db migrate --tenant {Tenant}` creates it."
+                $"Tenant {Tenant} doesn't exist; create it with the operator first."
             );
         var state = reader.GetString(0);
         var required = reader.GetInt32(1);
@@ -923,55 +907,4 @@ internal sealed class TenantLease
             NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Jsonb,
             Value = value is null ? DBNull.Value : value.ToJsonString(),
         };
-
-    /// <summary>
-    /// Waits as a standby until this replica holds the lease: tries every
-    /// <paramref name="poll"/> and immediately when an owner releases it.
-    /// </summary>
-    internal async Task<LeaseGrant> AcquireAsync(
-        string replica,
-        LeaseTimings timings,
-        Action<Exception>? onError,
-        CancellationToken token
-    )
-    {
-        NpgsqlConnection? listener = null;
-        try
-        {
-            while (true)
-            {
-                token.ThrowIfCancellationRequested();
-                try
-                {
-                    if (listener is null)
-                    {
-                        listener = await database.OpenAsync(token).ConfigureAwait(false);
-                        await using var listen = new NpgsqlCommand("LISTEN " + Channel, listener);
-                        await listen.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-                    }
-                    if (
-                        await TryAcquireAsync(replica, timings.Ttl, timings.RenewInterval, token)
-                            .ConfigureAwait(false)
-                        is { } grant
-                    )
-                        return grant;
-                    await listener.WaitAsync(timings.RenewInterval, token).ConfigureAwait(false);
-                }
-                catch (Exception error)
-                    when (error is not (OperationCanceledException or LeaseRefusedException or TenantNotEligibleException))
-                {
-                    onError?.Invoke(error);
-                    if (listener is not null)
-                        await listener.DisposeAsync().ConfigureAwait(false);
-                    listener = null;
-                    await Task.Delay(timings.RenewInterval, token).ConfigureAwait(false);
-                }
-            }
-        }
-        finally
-        {
-            if (listener is not null)
-                await listener.DisposeAsync().ConfigureAwait(false);
-        }
-    }
 }

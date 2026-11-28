@@ -238,7 +238,6 @@ internal sealed class MainHost : IAsyncDisposable
                 http.WebUiEnabled,
                 http.BindAddress,
                 http.Desktop,
-                http.ListenSocket,
                 http.ShutdownTimeout,
                 http.Server,
                 http.ShutdownAvailable,

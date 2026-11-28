@@ -46,13 +46,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            - name: FOXWARM_TENANT
-              value: {{ .Values.tenant | quote }}
             - name: FOXWARM_REPLICA_ID
               value: $(POD_NAME)
-            # Where a standby's forwarder reaches this replica when it owns the tenant.
             - name: FOXWARM_ADVERTISE_ADDRESS
-              value: $(POD_IP):{{ .Values.ports.http }}
+              value: $(POD_IP):{{ .Values.mesh.port }}
+            - {name: FOXWARM_MESH_SECRET_FILE, value: /run/secrets/mesh/mesh-secret}
             - name: FOXWARM_DATABASE_URL_FILE
               value: /run/secrets/foxwarm/database-url
             - name: FOXWARM_KEK_FILE
@@ -65,10 +63,11 @@ spec:
             - name: http
               containerPort: {{ .Values.ports.http }}
               protocol: TCP
+            - {name: mesh, containerPort: {{ .Values.mesh.port }}}
             - name: health
               containerPort: {{ .Values.ports.health }}
               protocol: TCP
-          # /readyz: a standby, or an owner whose runtime has started. /livez: not fencing.
+          # Readiness follows the front; a replica is ready before its first tenant starts.
           readinessProbe:
             httpGet:
               path: /readyz
@@ -89,6 +88,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
+            - {name: mesh, mountPath: /run/secrets/mesh, readOnly: true}
             - name: deployment-config
               mountPath: /etc/foxwarm
               readOnly: true
@@ -98,6 +98,11 @@ spec:
             - name: scratch
               mountPath: /scratch
       volumes:
+        - name: mesh
+          secret:
+            secretName: {{ required "mesh.secretName is required" .Values.mesh.secretName }}
+            defaultMode: 0440
+            items: [{key: mesh-secret, path: mesh-secret}]
         - name: deployment-config
           configMap:
             name: {{ include "foxwarm.fullname" . }}-deployment

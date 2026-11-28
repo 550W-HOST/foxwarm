@@ -69,8 +69,7 @@ internal delegate Task<IHostedRuntime> TenantRuntimeFactory(TenantRuntimeContext
 /// the schema, registers its boot, renews every grant it holds, activates a tenant on its first
 /// request and dispatches requests by <c>Host</c> to the tenant's published generation. Fences
 /// and escalation are the supervisor's; a graceful stop shuts every tenant down at once under
-/// one bound. Selected by <c>FOXWARM_HOSTED_TOPOLOGY=tenants</c> until forwarding replaces the
-/// single-tenant replica.
+/// one bound.
 /// </summary>
 internal sealed class TenantReplica
 {
@@ -152,8 +151,7 @@ internal sealed class TenantReplica
         }
         catch (Npgsql.NpgsqlException error) when (!stop.IsCancellationRequested)
         {
-            log("[hosted] The database is unreachable: " + error.Message);
-            return HostedExit.Failed;
+            return DatabaseFailure(error);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
@@ -231,8 +229,7 @@ internal sealed class TenantReplica
         }
         catch (Npgsql.NpgsqlException error) when (!registered)
         {
-            log("[hosted] The database is unreachable: " + error.Message);
-            return HostedExit.Failed;
+            return DatabaseFailure(error);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested && !registered)
         {
@@ -253,6 +250,14 @@ internal sealed class TenantReplica
                 catch (Exception) { }
         }
         return confirmed ? HostedExit.Stopped : HostedExit.Fenced;
+    }
+
+    private int DatabaseFailure(Npgsql.NpgsqlException error)
+    {
+        var sqlState = (error as Npgsql.PostgresException)?.SqlState;
+        var refused = sqlState is not null && (sqlState.StartsWith("28", StringComparison.Ordinal) || sqlState == "3D000");
+        log("[hosted] Database " + (refused ? "refused the connection: " : "unavailable: ") + error.Message);
+        return refused ? HostedExit.Configuration : HostedExit.Failed;
     }
 
     // One tenant runtime: its database under the generation's fence, its server behind the

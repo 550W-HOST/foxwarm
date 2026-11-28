@@ -37,16 +37,14 @@ let monitor
 try {
   const migrate = await env.setup()
   log('setup: migrated', migrate.stdout.trim().split('\n').at(-1))
-  await env.start(env.slots[0])
-  await env.start(env.slots[1])
-  const owner = await drills.waitOwner(env)
-  log(`setup: ${owner.replica} owns tenant ${env.tenant} at epoch ${owner.epoch}; the other replica stands by`)
+  const owner = await drills.startTenantPool(env)
+  log(`setup: ${owner.replica} owns tenant ${env.tenant} at epoch ${owner.epoch}`)
   const context = await drills.login(env)
   await drills.installModels(context.api, env.modelBaseUrl)
   log('setup: logged in with `foxwarm hosted token`; models installed through Setup')
   if (env.containerChecks) {
     results.container = await env.containerChecks()
-    log('container: owner and standby healthy (HEALTHCHECK /livez), uid 1000, read-only root, writable scratch', JSON.stringify(results.container))
+    log('container: replicas healthy (HEALTHCHECK /livez), uid 1000, read-only root, writable scratch', JSON.stringify(results.container))
   }
   monitor = drills.ownershipMonitor(env)
   for (const [name, drill] of order) {
@@ -59,7 +57,7 @@ try {
   await monitor.stop()
   results.ownership = { samples: monitor.samples, violations: monitor.violations }
   assert(monitor.violations.length === 0, 'one owner at a time: ' + JSON.stringify(monitor.violations))
-  log(`ownership: ${monitor.samples} samples: no replica reported owner after its lease was superseded, epochs never went down`)
+  log(`ownership: ${monitor.samples} samples: active epochs never went backwards or switched boots without an increment`)
   if (env.containerDiff) {
     results.containerDiff = await env.containerDiff()
     assert(Object.values(results.containerDiff).every(list => list.length === 0), 'replica containers changed nothing outside their mounts: ' + JSON.stringify(results.containerDiff))

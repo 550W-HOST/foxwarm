@@ -1,5 +1,8 @@
-Foxwarm (hosted mode) for tenant {{ .Values.tenant }}: {{ .Values.replicaCount }} replicas behind the
-service {{ include "foxwarm.fullname" . }}:{{ .Values.service.port }}.
+Foxwarm: {{ .Values.replicaCount }} general replicas behind {{ include "foxwarm.fullname" . }}:{{ .Values.service.port }}.
 
-The sign-in token of the tenant:
-  kubectl exec -n {{ .Release.Namespace }} statefulset/{{ include "foxwarm.fullname" . }} -- /app/Foxwarm hosted token
+{{- if .Values.operator.enabled }}
+Provision the first tenant through the operator:
+  foxwarm operator --url {{ .Values.operator.url }} --token-file operator.token tenant create {{ .Values.tenant }} hosted {{ (first (splitList ":" (urlParse (replace "{slug}" .Values.tenant .Values.deployment.url)).host)) }}
+{{- else }}
+Configure the operator service to provision tenants and their primary hostnames.
+{{- end }}

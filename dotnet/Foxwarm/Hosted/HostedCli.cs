@@ -66,7 +66,7 @@ internal static class HostedCli
     }
 
     internal const string Usage =
-        "Usage: foxwarm db migrate [--app-role <role>] [--operator-role <role>] [--tenant <name>] | foxwarm db status\n"
+        "Usage: foxwarm db migrate [--app-role <role>] [--operator-role <role>] | foxwarm db status\n"
         + "       foxwarm hosted import --data-root <dir> [--agents-dir <path>] [--profile hosted|operator] [--tenant <name>] [--journal] [--dry-run]\n"
         + "                              [--report <file>] [--deployment-config <file>]\n"
         + "       foxwarm hosted import --profile operator --tenant <name> --abandon [--report <file>]\n"
@@ -105,7 +105,7 @@ internal static class HostedCli
         var tenantId = new TenantDb(database, 0, 0).Read(tx =>
             tx.Scalar("SELECT tenant_id FROM tenants WHERE name = $1", tenant) as int?
         ) ?? throw new HostedBootstrapException(
-            $"Tenant {tenant} doesn't exist; `foxwarm db migrate --tenant {tenant}` creates it."
+            $"Tenant {tenant} doesn't exist; create it with the operator first."
         );
         var tenantDb = new TenantDb(database, tenantId, 0);
         string? token;
@@ -267,7 +267,6 @@ internal static class HostedCli
     {
         var appRole = bootstrap.AppRole;
         var operatorRole = bootstrap.OperatorRole;
-        var tenant = bootstrap.Tenant;
         for (var index = 0; index < options.Length; index++)
             switch (options[index])
             {
@@ -277,9 +276,6 @@ internal static class HostedCli
                 case "--operator-role" when index + 1 < options.Length:
                     operatorRole = options[++index];
                     break;
-                case "--tenant" when index + 1 < options.Length:
-                    tenant = options[++index];
-                    break;
                 default:
                     throw new HostedBootstrapException("Unknown db migrate option: " + options[index]);
             }
@@ -287,13 +283,13 @@ internal static class HostedCli
             bootstrap.RequireMigrateDatabaseUrl(),
             "foxwarm-migrate"
         );
-        var applied = await SchemaMigrator.MigrateAsync(database, appRole, operatorRole, tenant);
+        var applied = await SchemaMigrator.MigrateAsync(database, appRole, operatorRole);
         foreach (var migration in applied)
             await output.WriteLineAsync(
                 "Applied " + SchemaStatus.Label(migration.Version, migration.Name)
             );
         await output.WriteLineAsync(
-            $"Schema is at level {SchemaMigrator.BinaryLevel}; tenant {tenant} is present."
+            $"Schema is at level {SchemaMigrator.BinaryLevel}."
         );
         return 0;
     }

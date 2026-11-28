@@ -74,19 +74,16 @@ for values in "$chart"/ci/*-values.yaml; do
   test -s "$work/$name.deployment.yaml"
   parse "$work/$name.deployment.yaml"
   if grep -q '  operator.yaml: |' "$work/$name.yaml"; then
-    ! grep -F '{slug}' "$work/$name.deployment.yaml" || exit 1
-    grep -q 'url: https://default.example.test' "$work/$name.deployment.yaml"
+    grep -Fq '{slug}' "$work/$name.deployment.yaml"
     awk '/^  operator.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/operator-config.yaml"
     grep -Fq '{slug}' "$work/operator-config.yaml"
     parse "$work/operator-config.yaml"
   fi
-  if grep -q '^  master.yaml: |' "$work/$name.yaml"; then
+  if grep -q '^  name: foxwarm-master$' "$work/$name.yaml"; then
     helm template foxwarm "$chart" -f "$values" --show-only templates/master.yaml > "$work/master.yaml"
     grep -qx 'kind: StatefulSet' "$work/master.yaml"
     grep -qx '  replicas: 1' "$work/master.yaml"
     grep -Fq 'accessModes: [ReadWriteOnce]' "$work/master.yaml"
-    awk '/^  master.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/master-config.yaml"
-    parse "$work/master-config.yaml"
   else
     ! grep -q '^  name: foxwarm-master$' "$work/$name.yaml" || exit 1
   fi

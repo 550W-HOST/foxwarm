@@ -1,6 +1,6 @@
 # Foxwarm hosted mode
 
-Hosted mode runs Foxwarm as stateless replicas over PostgreSQL and S3-compatible object storage. In this release a deployment serves one tenant: one replica owns it and serves it, and the others stand by, forwarding connections to the owner and taking over when it stops or fails. File mode remains the default way to run Foxwarm and is unaffected.
+Hosted replicas serve tenants from a shared PostgreSQL database and blob store. A request's hostname identifies the tenant. Any ready replica can receive it; the tenant's current owner runs the request, locally or through the private replica mesh. File mode remains the default.
 
 This directory has the container image instructions, a Docker Compose stack, a Helm chart and the failover drills.
 
@@ -33,8 +33,9 @@ The container's arguments are Foxwarm's: no arguments run a replica, and the ope
 | `FOXWARM_KEK_FILE` | the key-encryption key file (`{"version":1,"keyId":"…","key":"…"}`) |
 | `FOXWARM_KEK_PREVIOUS_FILE` | the previous key-encryption key, during a rotation |
 | `FOXWARM_REPLICA_ID` | this replica's name |
-| `FOXWARM_ADVERTISE_ADDRESS` | `host:port` where other replicas reach this one's public listener |
-| `FOXWARM_TENANT` | the tenant name (default `default`) |
+| `FOXWARM_ADVERTISE_ADDRESS` | `host:port` where other replicas reach this boot’s private HTTP/2 mesh listener |
+| `FOXWARM_MESH_SECRET_FILE` | mounted file containing a base64-encoded 32-byte key shared by all replica mesh listeners |
+| `FOXWARM_TENANT` | default tenant name for tenant-specific CLI commands |
 
 `FOXWARM_MODE`, `FOXWARM_SCRATCH_DIR` and `FOXWARM_DEPLOYMENT_CONFIG` are set by the image. Each `…_FILE` variable also has a plain form holding the value itself.
 
@@ -44,7 +45,7 @@ Keep the key-encryption key safe and backed up. The tenant's secrets are encrypt
 
 | Command | Use |
 | --- | --- |
-| `db migrate [--app-role <role>] [--operator-role <role>] [--tenant <name>]` | applies schema migrations and creates the tenant; needs the migration URL |
+| `db migrate [--app-role <role>] [--operator-role <role>]` | applies schema migrations without creating any tenant; needs the migration URL |
 | `db status` | lists applied and pending migrations and which key-encryption key wraps each tenant's data key |
 | `hosted token [--tenant <name>]` | prints the tenant's sign-in token; needs the database URL and the key-encryption key |
 | `hosted import --data-root <dir> …` | copies a stopped file-mode installation into a new tenant |
@@ -52,13 +53,13 @@ Keep the key-encryption key safe and backed up. The tenant's secrets are encrypt
 
 Create three database roles before the first migration: the schema owner, which `db migrate` connects as; the runtime role the replicas use (`foxwarm_app` by default, `NOSUPERUSER NOBYPASSRLS`); and the operator role that owns tenant administration (`foxwarm_operator` by default, also `NOBYPASSRLS`, without a login until the operator surface connects as it). `FOXWARM_APP_ROLE` and `FOXWARM_OPERATOR_ROLE` name other roles. A database keeps the roles it was first migrated with.
 
-A replica exits with 0 when stopped, 75 when it lost the tenant (restart it; it comes back as a standby), 78 for a configuration, key or schema refusal that a restart won't fix, and 1 for other failures such as an unreachable database.
+A replica exits with 0 after a confirmed shutdown, 75 if it cannot confirm a stop or hand-back, 78 for an incompatible schema or invalid bootstrap settings, and 1 for other startup failures. A tenant that cannot start does not take down other tenants on the same boot.
 
 ### Multi-tenant operator service
 
 `foxwarm operator serve` runs the control plane on its own database login and HTTP listener. It takes `FOXWARM_DATABASE_URL_FILE` for the operator role and `FOXWARM_KEK_FILE`, never the migration URL. In the deployment YAML, set `url: "https://{slug}.example.com"` and `operator: {url: "https://control.example.net", port: 3003}`. Route the operator host to this service and the wildcard tenant domain to the replicas. Preserve the public Host header, including any non-default port. Terminate TLS at ingress; keep the control plane internal where possible.
 
-The Compose `operator` profile adds this service with the local example in `deployment.operator.yaml`. The Helm equivalent is `operator.enabled`, `operator.url` and `operator.existingSecret` (keys `database-url`, `kek.json`, and, for S3, the operator’s own `s3-access-key-id` and `s3-secret-access-key`). For Compose, run `./generate-secrets.sh --operator secrets` once in the stack directory. The default PostgreSQL service uses the original secrets and leaves the operator role `NOLOGIN`. Enabling the profile runs a one-shot job that sets the separate login password, including on an existing volume. For Helm, provision the login in the external database. The default packaged replicas still use the single-tenant topology pending the multi-tenant forwarding cutover. On these single-tenant (P1) replicas, settings apply on the next start. On P1, a rotation takes effect only after a replica restart.
+The Compose `operator` profile adds this service with the local example in `deployment.operator.yaml`. The Helm equivalent is `operator.enabled`, `operator.url` and `operator.existingSecret` (keys `database-url`, `kek.json`, and, for S3, the operator’s own `s3-access-key-id` and `s3-secret-access-key`). For Compose, run `./generate-secrets.sh --operator secrets` once in the stack directory. The default PostgreSQL service uses the original secrets and leaves the operator role `NOLOGIN`. Enabling the profile runs a one-shot job that sets the separate login password, including on an existing volume. For Helm, provision the login in the external database.
 
 Create an operator bearer with the migration environment and store it in a private file:
 
@@ -71,7 +72,7 @@ Give the returned setup token to the tenant administrator. It expires in 24 hour
 
 Open the operator origin in a browser and sign in with the operator bearer to see tenants, their current owners and the registered replicas. Select a tenant to edit limits or journal recording and retention, or suspend and resume it. The console keeps the bearer in memory until sign-out or reload.
 
-Use `grants set SLUG PROVIDER QUOTAS-FILE` to give a tenant access to a configured Provider, `grants list SLUG` to see its explicit grants, and `grants remove SLUG PROVIDER` to remove one. For example, `{"nodes":5,"execs":2}` overrides the first two quotas and keeps the default 60 lifecycle actions per hour. A grant change refreshes that tenant's running generation on a multi-tenant (P2) replica. Single-tenant (P1) hosted replicas ignore grants and log `Provider grants aren't applied in single-tenant hosted mode.` A hosted tenant needs an explicit grant to a Provider declared `tenancy: per-tenant`. An operator-profile tenant can also use legacy Providers; removing an explicit grant for that profile restores access without grant quotas. Placement reports Provider description or tenancy problems from the current owner.
+Use `grants set SLUG PROVIDER QUOTAS-FILE` to give a tenant access to a configured Provider, `grants list SLUG` to see its explicit grants, and `grants remove SLUG PROVIDER` to remove one. For example, `{"nodes":5,"execs":2}` overrides the first two quotas and keeps the default 60 lifecycle actions per hour. A grant change refreshes that tenant’s running generation. A hosted tenant needs an explicit grant to a Provider declared `tenancy: per-tenant`. An operator-profile tenant can also use legacy Providers; removing an explicit grant for that profile restores access without grant quotas. Placement reports Provider description or tenancy problems from the current owner.
 
 Choose the Agent store at creation: hosted tenants use SQL Agent files, and the operator tenant uses Agent folders on the master host. `tenant set` refuses a profile edit that would switch stores.
 
@@ -93,7 +94,7 @@ A 404 for the tenant does not certify permanent erasure: a PUT accepted earlier 
 
 ## Deployment configuration
 
-The mounted YAML holds only deployment settings: `url`, `bot.httpHost`, `bot.httpPort`, `bot.enableWebUI`, `health.port` (required), `blobs` (required: `backend: s3` with its connection, or `backend: postgres`), `asrService`, `nodeProviders`, `journal.retentionDays` and `egress`. Everything else is a tenant setting, stored in the database and edited through Setup in the WebUI. A replica refuses a tenant setting in this file, naming it. The file is read at start, so a change takes effect through a rolling restart. The keys and the split are described in [hosted configuration](../../docs/code-index/units/hosted-config.md).
+The mounted YAML holds only deployment settings: `url`, `bot.httpHost`, `bot.httpPort`, `bot.enableWebUI`, `health.port`, `mesh.port`, `blobs` (required: `backend: s3` with its connection, or `backend: postgres`), `asrService`, `nodeProviders`, `journal.retentionDays` and `egress`. Everything else is a tenant setting, stored in the database and edited through Setup in the WebUI. A replica refuses a tenant setting in this file, naming it. The file is read at start, so a change takes effect through a rolling restart. The keys and the split are described in [hosted configuration](../../docs/code-index/units/hosted-config.md).
 
 ### Outbound connections
 
@@ -116,12 +117,15 @@ Addresses in the local-use NAT64 range `64:ff9b:1::/48` are refused for every te
 
 ```sh
 docker build --target hosted -t foxwarm-hosted:local .
-deploy/hosted/generate-secrets.sh deploy/hosted/secrets
-docker compose -f deploy/hosted/compose.yaml up -d
-docker compose -f deploy/hosted/compose.yaml exec foxwarm-1 /app/Foxwarm hosted token
+cd deploy/hosted
+./generate-secrets.sh secrets
+./generate-secrets.sh --operator secrets
+docker compose --profile operator up -d
+(umask 077; docker compose run --rm --no-deps migrate operator token create > operator.token)
+foxwarm operator --url http://operator.localhost:3003 --token-file operator.token tenant create default hosted default.localhost
 ```
 
-Open `http://localhost:3001` and sign in with the token. On first sign-in, Setup asks for a model provider as in file mode.
+Run the last command with the Foxwarm CLI on the host. Open `http://default.localhost:3001` and sign in with the returned setup token. A fresh database has no tenants until you provision one. Unknown hostnames return 404; preserve the browser’s Host header at the proxy.
 
 - `generate-secrets.sh` writes the database passwords, the URLs that carry them, a new key-encryption key and the S3 credentials into a new 0700 directory. Back up `kek.json`.
 - `deployment.yaml` is the mounted deployment configuration. To use another S3 service or PostgreSQL, change the `blobs` block and the URL secrets.
@@ -129,22 +133,32 @@ Open `http://localhost:3001` and sign in with the token. On first sign-in, Setup
 
 ## Helm
 
-`helm/foxwarm` deploys the replicas of one tenant; PostgreSQL and the object store are external.
+`helm/foxwarm` deploys a pool of multi-tenant replicas; PostgreSQL and the object store are external.
 
 ```sh
 helm install foxwarm deploy/hosted/helm/foxwarm \
   --set image.repository=registry.example.com/foxwarm --set image.tag=<tag> \
   -f my-values.yaml
-kubectl exec statefulset/foxwarm -- /app/Foxwarm hosted token
+# After the operator is available, use its origin and the tenant subdomain from your values:
+foxwarm operator --url https://control.example.net --token-file operator.token tenant create default hosted default.example.com
 ```
 
-- **Values.** `deployment` holds the deployment configuration keys; the chart adds the listener, `health.port` and the S3 credential paths from `ports` and the mounted Secret. `secrets` supplies the runtime URL, the key-encryption key and the S3 credentials, or `secrets.existingSecret` names a Secret with the keys `database-url`, `kek.json`, `s3-access-key-id` and `s3-secret-access-key`. The chart never generates a key-encryption key.
+- **Values.** Provide `mesh.secretName` naming an existing Secret with a `mesh-secret` key, shared by general and master-host pods. Generate the value once with `openssl rand -base64 32`; mount that text as a file. Enable `operator.enabled`, configure the operator login/Secret and origin, and set `deployment.url` to the tenant URL template (`https://{slug}.example.com` in this example). `deployment` holds the deployment configuration keys; the chart adds the listener, `health.port` and the S3 credential paths from `ports` and the mounted Secret. `secrets` supplies the runtime URL, the key-encryption key and the S3 credentials, or `secrets.existingSecret` names a Secret with the keys `database-url`, `kek.json`, `s3-access-key-id` and `s3-secret-access-key`. The chart never generates a key-encryption key.
 - **Migrations.** A `pre-install`/`pre-upgrade` hook Job runs `db migrate` with `migrate.databaseUrl` (or `migrate.existingSecret`, key `migrate-database-url`).
 - **Rollout.** Two general replicas in a StatefulSet with stable ordinal pod names, rolling replacement, `/readyz` and `/livez` probes on the health port, a 45 s termination grace period and a PodDisruptionBudget with `minAvailable: 1`.
 
 ## Upgrades
 
-Migrate first, then finish rolling all replicas before creating tenants or rotating credentials. The schema floor is checked at startup: a running older owner can continue to renew after migration. The operator rejects creation and rotation while any unexpired active grant belongs to an unknown or pre-1200 boot, even when its heartbeat is stale. New-style tenants can only be acquired by a registered boot at level 1200 or later. A replica refuses to start (exit 78) against a schema with a migration it doesn't know whose reader level is above its own, or a tenant that a newer version has marked; downgrade by restoring the database, not by starting an older image. On a graceful stop the owner drains and releases the tenant, and a standby takes over within a few seconds. New requests in that window wait at the standbys and reach the new owner; WebUI and Node connections to the old owner reconnect.
+**From the single-tenant TCP-forwarding generation:** schedule downtime. Stop all old replicas and confirm their leases are released or expired. Apply `db migrate` with the schema owner, configure the shared mesh key and private listener on all new replicas, and start the operator with the tenant URL template. Give each existing tenant a primary hostname through the operator; this preserves its ID, keys, Sessions and storage. For example:
+
+```sh
+printf '%s\n' '{"primaryHostname":"default.example.com"}' > hostname.json
+foxwarm operator --url https://control.example.net --token-file operator.token tenant set default hostname.json
+```
+
+Start the new replica pool, verify `/readyz` and an authenticated request at each configured tenant hostname, then restore ingress. Do not mix the old public TCP-forwarding replicas with the private-mesh replicas. Keep the mesh listener off the public ingress. To downgrade the data format, restore a compatible database backup.
+
+**Subsequent compatible upgrades:** migrate first, then roll replica ordinals normally. A process refuses an incompatible cluster schema; a tenant with a higher reader floor stays on an eligible reader. During a confirmed move, requests through a surviving edge can wait for the new owner; interrupted streams reconnect. After a crash, recovery waits for lease expiry.
 
 To rotate the key-encryption key, mount the new key as `FOXWARM_KEK_FILE` and the old one as `FOXWARM_KEK_PREVIOUS_FILE`, roll the operator service together with all replicas, check with `db status` that every tenant names the new key, then remove the old one.
 
@@ -162,8 +176,8 @@ For an existing hosted tenant that used a separate Agents volume, stop its repli
 
 ## Limitations of this release
 
-- One tenant per deployment, served by one replica at a time. Standbys add availability, not capacity.
-- Failover is a restart: after a crash, a standby takes over when the lease expires (up to 30 seconds) and resumes interrupted turns as a restarted file-mode Main does. Model streams and tool calls in flight are not continued.
+- A tenant has one owner at a time. General replicas share the work of hosting different tenants.
+- Failover is a restart: after a crash, an eligible replica takes over when the lease expires (up to 30 seconds) and resumes interrupted turns as a restarted file-mode Main does. Model streams and tool calls in flight are not continued.
 - There is no `master` Node: no commands, terminals, Code or browser on the replica. Connect Nodes for Agents to work on. Stdio MCP servers, Claude Code Sessions and Vector search aren't available.
 - Agent folders live in the tenant’s Agent store. Replicas need no Agents volume.
 - The hosted image isn't published; build it from this repository.
@@ -186,7 +200,7 @@ docker compose -f deploy/hosted/compose.yaml --profile master up -d
 
 Set `FOXWARM_MASTER_IMAGE` for a different image reference. The mount root `/master` is `FOXWARM_AGENTS_DIR`; it holds numeric tenant folders and `/master/scratch`. The master uses the full Linux runtime image (including git, Python, Node.js and Chromium), the normal browser sandbox and a persistent `master` volume. The ordinary `hosted` image has no Agent tools and no master volume. Compose generates its mesh secret with the base stack secrets; for an older secrets directory, provision `secrets/mesh-secret` with a base64-encoded 32-byte random value matching the other mesh participants. For direct testing use the master replica's listener and the tenant's registered hostname. The default `<slug>.localhost` assignment serves local use only. Remote Nodes need a reachable tenant hostname, or a configured `url` that those Nodes can reach. Without a configured URL, bootstrap scripts use the validated request origin and refuse loopback names. Routing from general replicas is handled by the shared forwarding layer.
 
-In Helm, set `masterHost.enabled=true`, `masterHost.image` to the full image reference and `mesh.secretName` to an existing Secret containing the `mesh-secret` file. Set `masterHost.storage` and optionally `masterHost.storageClassName`. Install `docker/seccomp-chromium.json` on eligible Kubernetes nodes under the kubelet's seccomp directory at `masterHost.chromiumSeccompProfile`. The chart creates one `foxwarm-master` StatefulSet pod with a ReadWriteOnce claim. Upgrades replace ordinal zero without surge. A stopped pod or a volume reattachment is operator downtime; general tenants keep their existing owners. Back up the claim: live terminal processes don't survive restart, but Agent files, Code workspace and exec logs do.
+In Helm, set `masterHost.enabled=true` and `masterHost.image` to the full image reference. The master uses the same mesh Secret as the general replicas. Set `masterHost.storage` and optionally `masterHost.storageClassName`. Install `docker/seccomp-chromium.json` on eligible Kubernetes nodes under the kubelet's seccomp directory at `masterHost.chromiumSeccompProfile`. The chart creates one `foxwarm-master` StatefulSet pod with a ReadWriteOnce claim. Upgrades replace ordinal zero without surge. A stopped pod or a volume reattachment is operator downtime; general tenants keep their existing owners. Back up the claim: live terminal processes don't survive restart, but Agent files, Code workspace and exec logs do.
 
 **Forced replacement:** the StatefulSet can guarantee one writer only while Kubernetes waits for the old master to stop. If its node is unreachable, fence the node (for example, confirm it is powered off) or revoke its access to the volume before allowing a replacement. Never force-delete the master pod or its node without that fencing. A new PostgreSQL lease cannot revoke file handles that the old master already has open.
 

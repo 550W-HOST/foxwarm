@@ -109,7 +109,7 @@ export async function processEnvironment(options = {}) {
     deployment(slot, master = false) {
       const path = join(root, `deployment-${master ? 'master' : slot}.yaml`)
       writeFileSync(path, [
-        ...(master ? [`mesh: {port: ${meshPort}}`] : [`url: http://127.0.0.1:${front.port}`]),
+        `mesh: {port: ${meshPort}}`,
         'bot:',
         `  httpHost: ${master ? '127.0.0.31' : address(slot)}`,
         `  httpPort: ${publicPort}`,
@@ -148,7 +148,8 @@ export async function processEnvironment(options = {}) {
         FOXWARM_SCRATCH_DIR: scratch,
         FOXWARM_DEPLOYMENT_CONFIG: environment.deployment(slot),
         FOXWARM_REPLICA_ID: slot,
-        FOXWARM_ADVERTISE_ADDRESS: `${address(slot)}:${publicPort}`,
+        FOXWARM_MESH_SECRET_FILE: join(root, 'mesh-secret'),
+        FOXWARM_ADVERTISE_ADDRESS: `${address(slot)}:${meshPort}`,
         TMPDIR: join(scratch, '.temp'),
       }
     },
@@ -202,36 +203,12 @@ export async function processEnvironment(options = {}) {
       return { ...result, reportPath: join(root, `import-${tenant}.json`) }
     },
 
-    /** One replica of another tenant, outside the round-robin entry, over the imported Agent store. */
-    async startTenantReplica(tenant) {
-      const env = { ...environment.replicaEnv('r1'), FOXWARM_TENANT: tenant, FOXWARM_REPLICA_ID: 'tenant-' + tenant }
-      const host = '127.0.0.30'
-      env.FOXWARM_DEPLOYMENT_CONFIG = environment.deployment('r1').replace('deployment-r1', 'deployment-' + tenant)
-      writeFileSync(env.FOXWARM_DEPLOYMENT_CONFIG, readFileSync(environment.deployment('r1'), 'utf8').replace(address('r1'), host))
-      env.FOXWARM_ADVERTISE_ADDRESS = `${host}:${publicPort}`
-      const child = background('tenant-' + tenant, binary, [], env)
-      const exited = new Promise(resolve => child.on('exit', code => resolve(code)))
-      return {
-        url: `http://${host}:${publicPort}`,
-        statusUrl: `http://${host}:${healthPort}/status`,
-        async stop() {
-          child.kill('SIGTERM')
-          return await exited
-        },
-      }
-    },
-
-    async tryGeneralForOperator(tenant) {
-      // A third IP on this process test's loopback network leaves the serving ports alone.
-      return environment.cli([], {...environment.replicaEnv('r3'), FOXWARM_TENANT: tenant})
-    },
-
     async startMaster() {
       const host = '127.0.0.31'
       const deployment = environment.deployment('r1', true)
       mkdirSync(environment.masterAgents, { recursive: true })
       const child = background('master-host', binary, [], {
-        ...environment.replicaEnv('r1'), FOXWARM_HOSTED_TOPOLOGY: 'tenants', FOXWARM_ROLE: 'master-host',
+        ...environment.replicaEnv('r1'), FOXWARM_ROLE: 'master-host',
         FOXWARM_REPLICA_ID: 'foxwarm-master', FOXWARM_ADVERTISE_ADDRESS: `${host}:${meshPort}`,
         FOXWARM_MESH_SECRET_FILE: join(root, 'mesh-secret'),
         FOXWARM_AGENTS_DIR: environment.masterAgents, FOXWARM_SCRATCH_DIR: join(root, 'master', 'scratch'),
@@ -244,12 +221,11 @@ export async function processEnvironment(options = {}) {
       } }
     },
 
-    async start(slot, { version = 'N', tenant } = {}) {
+    async start(slot, { version = 'N' } = {}) {
       if (replicas.get(slot)?.running) throw new Error(slot + ' is running')
       let route = routes.get(slot)
       if (!route) routes.set(slot, (route = await partitionableProxy({ host: '127.0.0.1', port: pgPort })))
       const env = environment.replicaEnv(slot, route.port)
-      if (tenant) env.FOXWARM_TENANT = tenant
       const child = background(slot, binary, [], env)
       const entry = { child, running: true, version, exit: null, started: Date.now() }
       entry.exited = new Promise(resolve =>

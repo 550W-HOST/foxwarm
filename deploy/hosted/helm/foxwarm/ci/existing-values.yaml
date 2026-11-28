@@ -9,3 +9,6 @@ secrets:
   existingSecret: foxwarm-runtime
 migrate:
   existingSecret: foxwarm-migrate
+
+mesh:
+  secretName: foxwarm-mesh

@@ -141,7 +141,8 @@ internal sealed class PostgresServer
         await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS {template} WITH (FORCE)");
         await ExecuteAsync(admin, $"CREATE DATABASE {template} OWNER {OwnerRole}");
         await using (var owner = new PgDatabase(server.Owner(template), "foxwarm-test-migrate"))
-            await SchemaMigrator.MigrateAsync(owner, AppRole, OperatorRole, Tenant);
+            await SchemaMigrator.MigrateAsync(owner, AppRole, OperatorRole);
+        await ExecuteAsync(server.Owner(template), $"WITH t AS (INSERT INTO tenants(name) VALUES ('{Tenant}') RETURNING tenant_id) INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM t");
         if (socketDirectory is null)
             AppDomain.CurrentDomain.ProcessExit += (_, _) => DropDatabasesBestEffort(admin);
         return server;

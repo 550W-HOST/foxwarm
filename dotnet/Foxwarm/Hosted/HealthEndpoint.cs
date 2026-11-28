@@ -5,28 +5,8 @@ using System.Text.Json.Nodes;
 
 namespace Foxwarm.Hosted;
 
-/// <summary>Role of a hosted replica, as its health endpoint reports it.</summary>
-internal enum ReplicaRole
-{
-    Starting,
-    Standby,
-    Owner,
-    Fencing,
-    Stopping,
-}
 
-/// <summary>
-/// The orchestrator-facing health listener of a hosted replica, on its own port and separate
-/// from the public listener. It is unauthenticated and reports no tenant data:
-/// <list type="bullet">
-/// <item><c>/livez</c>: 200 unless the replica is fencing itself.</item>
-/// <item><c>/readyz</c>: 200 for an owner whose runtime has started and for a healthy standby
-/// (a standby forwards the public port to the owner).</item>
-/// <item><c>/status</c>: role, tenant, epoch and the time since the last lease renewal, as JSON.</item>
-/// </list>
-/// A minimal HTTP/1.1 responder keeps it independent of the Main host, which a standby never
-/// builds.
-/// </summary>
+/// <summary>The boot's separate health listener; it serves probes even before any tenant starts.</summary>
 internal sealed class HealthEndpoint : IAsyncDisposable
 {
     private readonly TcpListener listener;
@@ -140,31 +120,4 @@ internal interface IHealthReport
 
     /// <summary>The <c>/status</c> body; no tenant data beyond what the role needs.</summary>
     string ToJson();
-}
-
-/// <summary>A snapshot of what the health endpoint reports.</summary>
-internal sealed record HealthState(
-    ReplicaRole Role,
-    string Replica,
-    string Tenant,
-    long? Epoch = null,
-    TimeSpan? SinceRenewal = null,
-    bool RuntimeStarted = false
-) : IHealthReport
-{
-    public bool Live => Role != ReplicaRole.Fencing;
-
-    public bool Ready =>
-        Role == ReplicaRole.Standby || (Role == ReplicaRole.Owner && RuntimeStarted);
-
-    public string ToJson() =>
-        new JsonObject
-        {
-            ["role"] = Role.ToString().ToLowerInvariant(),
-            ["replica"] = Replica,
-            ["tenant"] = Tenant,
-            ["epoch"] = Epoch,
-            ["leaseRenewedSecondsAgo"] = SinceRenewal is { } since ? Math.Round(since.TotalSeconds, 1) : null,
-            ["ready"] = Ready,
-        }.ToJsonString();
 }

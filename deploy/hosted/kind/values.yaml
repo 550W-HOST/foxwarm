@@ -11,3 +11,6 @@ deployment:
       region: us-east-1
       bucket: foxwarm
       pathStyle: true
+
+mesh:
+  secretName: foxwarm-mesh

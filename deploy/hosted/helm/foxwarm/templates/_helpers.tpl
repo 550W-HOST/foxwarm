@@ -49,6 +49,7 @@ app.kubernetes.io/component: replica
 {{- $_ := set $bot "httpHost" "0.0.0.0" -}}
 {{- $_ := set $bot "httpPort" (int .Values.ports.http) -}}
 {{- $_ := set $config "bot" $bot -}}
+{{- $_ := set $config "mesh" (dict "port" (int .Values.mesh.port)) -}}
 {{- $_ := set $config "health" (dict "port" (int .Values.ports.health)) -}}
 {{- if eq (include "foxwarm.s3" .) "true" -}}
 {{- $s3 := dig "blobs" "s3" dict $config -}}

@@ -153,7 +153,7 @@ internal static partial class SchemaMigrator
     /// <summary>
     /// Applies every missing migration as the schema owner, granting runtime privileges to
     /// <paramref name="appRole"/> and operator privileges to <paramref name="operatorRole"/>,
-    /// then makes sure <paramref name="tenant"/> exists with its lease row. Both roles must
+    /// without provisioning any tenant. Both roles must
     /// exist and differ; a database keeps the roles it was first migrated with. Returns the
     /// migrations applied by this call.
     /// </summary>
@@ -161,7 +161,6 @@ internal static partial class SchemaMigrator
         PgDatabase owner,
         string appRole,
         string operatorRole,
-        string? tenant,
         IReadOnlyList<SchemaMigration>? migrations = null,
         CancellationToken token = default
     )
@@ -276,8 +275,6 @@ internal static partial class SchemaMigrator
             if (ran)
                 applied.Add(migration);
         }
-        if (tenant is not null)
-            await EnsureTenantAsync(connection, tenant, token).ConfigureAwait(false);
         return applied;
     }
 
@@ -321,25 +318,6 @@ internal static partial class SchemaMigrator
         var status = await StatusAsync(database, migrations, token).ConfigureAwait(false);
         if (status.Refusal() is { } refusal)
             throw new SchemaIncompatibleException(refusal);
-    }
-
-    private static async Task EnsureTenantAsync(
-        NpgsqlConnection connection,
-        string tenant,
-        CancellationToken token
-    )
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(tenant);
-        await using var command = new NpgsqlCommand(
-            "WITH created AS (INSERT INTO tenants (name) VALUES ($1) ON CONFLICT (name) DO NOTHING"
-                + " RETURNING tenant_id)"
-                + " INSERT INTO tenant_leases (tenant_id)"
-                + " SELECT tenant_id FROM created UNION SELECT tenant_id FROM tenants WHERE name = $1"
-                + " ON CONFLICT (tenant_id) DO NOTHING",
-            connection
-        );
-        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = tenant });
-        await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
 
     private static async Task<IReadOnlyList<AppliedMigration>> ReadAppliedAsync(

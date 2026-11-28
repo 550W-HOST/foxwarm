@@ -37,7 +37,7 @@ public sealed class TenantLeaseTests
         lease.TryAcquireAsync(replica, timings.Ttl, TimeSpan.FromSeconds(5), CancellationToken.None);
 
     [Fact]
-    public async Task OneReplicaHoldsTheLeaseAndAReleaseWakesAStandby()
+    public async Task AReleaseLetsAnotherBootAcquireWithoutLettingTheOldGrantRenew()
     {
         await using var database = await PrepareAsync();
         var lease = Lease(database.OpenApp());
@@ -46,15 +46,8 @@ public sealed class TenantLeaseTests
         Assert.Equal(await database.TenantIdAsync(), first.TenantId);
         Assert.Null(await TryAcquire(lease, "b", Slow));
 
-        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var standby = lease.AcquireAsync("b", Slow, null, cancel.Token);
-        await Task.Delay(500);
-        Assert.False(standby.IsCompleted);
-        var released = Stopwatch.StartNew();
         await lease.ReleaseAsync(first, CancellationToken.None);
-        var second = await standby;
-        // Woken by the notification, well before the 20 s poll.
-        Assert.InRange(released.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+        var second = Assert.IsType<LeaseGrant>(await TryAcquire(lease, "b", Slow));
         Assert.Equal("b", second.Replica);
         Assert.Equal(first.Epoch + 1, second.Epoch);
         // Releasing an old grant changes nothing.
@@ -62,29 +55,6 @@ public sealed class TenantLeaseTests
         Assert.Null(await TryAcquire(lease, "c", Slow));
         Assert.False(await lease.RenewAsync(first, Slow.Ttl, CancellationToken.None));
         Assert.True(await lease.RenewAsync(second, Slow.Ttl, CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task TheRegistryResolvesTheCurrentOwnersAddressOnly()
-    {
-        await using var database = await PrepareAsync(register:false);
-        var app = database.OpenApp();
-        var registry = new ReplicaRegistry(app);
-        var a = ReplicaRegistry.NewReplicaId("pod-a");
-        var b = ReplicaRegistry.NewReplicaId("pod-a");
-        Assert.StartsWith("pod-a/", a);
-        Assert.NotEqual(a, b);
-        await registry.RegisterAsync(a, "10.0.0.1:3001", Foxwarm.Hosted.Schema.SchemaMigrator.BinaryLevel, 2, CancellationToken.None);
-        await registry.RegisterAsync(b, null, Foxwarm.Hosted.Schema.SchemaMigrator.BinaryLevel, 2, CancellationToken.None);
-        await registry.HeartbeatAsync(a, CancellationToken.None);
-        Assert.Null(await registry.OwnerAddressAsync(PostgresServer.Tenant, CancellationToken.None));
-        var lease = Lease(app);
-        var grant = (await TryAcquire(lease, a, Slow))!;
-        Assert.Equal("10.0.0.1:3001", await registry.OwnerAddressAsync(PostgresServer.Tenant, CancellationToken.None));
-        await lease.ReleaseAsync(grant, CancellationToken.None);
-        Assert.Null(await registry.OwnerAddressAsync(PostgresServer.Tenant, CancellationToken.None));
-        await registry.RemoveAsync(a, CancellationToken.None);
-        Assert.Equal(1L, await database.ScalarAsync("SELECT count(*) FROM replicas"));
     }
 
     [Fact]
@@ -110,9 +80,6 @@ public sealed class TenantLeaseTests
         );
         Assert.Contains("installation level 3", error.Message);
         Assert.NotNull(await TryAcquire(Lease(database.OpenApp(), readerVersion: 3), "a", Slow));
-        await Assert.ThrowsAsync<LeaseRefusedException>(() =>
-            new TenantLease(database.OpenApp(), "missing", 2).TenantIdAsync(CancellationToken.None)
-        );
     }
 
     [Fact]

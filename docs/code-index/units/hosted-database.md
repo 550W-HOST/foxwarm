@@ -100,7 +100,7 @@ Migrations create these by calling `foxwarm_tenant_table(table, privileges)` rig
 - **Applying.** The migrator applies missing versions in version order, each in its own transaction under `pg_advisory_xact_lock`. Version numbers are reserved per track and may merge out of order.
   - Each applied migration is recorded with its SHA-256 and reader floor.
   - A changed applied migration is refused.
-  - Migrating also creates the named tenant and its released lease row when missing.
+  - Migration changes the schema only. The operator creates new tenants, their primary hostnames and their initial lease rows; assigning a primary hostname to an existing tenant preserves its database identity.
 - **Replicas refuse to run** (`SchemaMigrator.RequireCompatibleAsync`, exit 78 at the entry; [replica lifecycle](./hosted-runtime.md#d-hosted-replica-lifecycle)) when any of these holds:
   - a migration of this build is missing;
   - an applied migration differs from this build's;

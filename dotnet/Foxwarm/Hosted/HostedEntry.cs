@@ -11,13 +11,12 @@ namespace Foxwarm.Hosted;
 /// <summary>
 /// The process entry of hosted mode (<c>FOXWARM_MODE=hosted</c>). It replaces the file-mode
 /// entry's data directory and installation lock with the bootstrap settings and the tenant
-/// lease, and runs one <see cref="HostedReplica"/> until a stop signal or a fence.
+/// lease, and runs the multi-tenant replica until shutdown.
 /// </summary>
 internal static class HostedEntry
 {
     internal static async Task<int> RunAsync()
     {
-        bool multiTenant = Environment.GetEnvironmentVariable("FOXWARM_HOSTED_TOPOLOGY") == "tenants";
         HostedBootstrap bootstrap;
         DeploymentConfiguration deployment;
         try
@@ -25,9 +24,6 @@ internal static class HostedEntry
             bootstrap = HostedBootstrap.FromEnvironment();
             bootstrap.RequireDatabaseUrl();
             deployment = bootstrap.RequireDeployment();
-            if (!multiTenant && deployment.Root.ContainsKey("operator"))
-                Operator.OperatorListener.ReadSettings(deployment).CheckSingleTenant(bootstrap.Tenant);
-            // Checked before standing by, so a missing key or S3 credential file fails at once.
             _ = bootstrap.RequireKeks();
             _ = deployment.Blobs.S3?.ReadCredentials();
         }
@@ -40,36 +36,7 @@ internal static class HostedEntry
         using var terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Cancel);
         using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, Cancel);
         await using var database = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm");
-        // Transitional: the multi-tenant runtimes host, until forwarding replaces the
-        // single-tenant replica and this selection is removed.
-        if (multiTenant)
-            return await RunTenantsAsync(bootstrap, deployment, database, stop.Token).ConfigureAwait(false);
-        var replica = new HostedReplica(
-            new HostedReplicaOptions(
-                bootstrap.Tenant,
-                bootstrap.ReplicaName ?? Environment.MachineName,
-                bootstrap.AdvertiseAddress,
-                deployment.HealthEndpoint,
-                // A standby forwards the public listener the owner's host binds.
-                deployment.PublicEndpoint,
-                LeaseTimings.Default,
-                DrainBound: TimeSpan.FromSeconds(8),
-                AgentCatalog.ReaderVersion,
-                bootstrap.Role
-            ),
-            database,
-            (context, token) => CreateRuntimeAsync(context, bootstrap, deployment, token),
-            line => Console.Error.WriteLine(line),
-            // A runtime that doesn't stop by its fence's deadline ends the process there.
-            exit: Environment.Exit
-        );
-        var code = await replica.RunAsync(stop.Token).ConfigureAwait(false);
-        Console.Error.WriteLine($"[hosted] Replica {replica.Replica} exits with code {code}.");
-        // A fenced runtime may still have work that ignored cancellation; the process ends
-        // now, within the lease's slack, whatever is left.
-        if (code == HostedExit.Fenced)
-            Environment.Exit(code);
-        return code;
+        return await RunTenantsAsync(bootstrap, deployment, database, stop.Token).ConfigureAwait(false);
 
         void Cancel(PosixSignalContext context)
         {
@@ -150,7 +117,7 @@ internal static class HostedEntry
         var configuration = deployment.ForTenant(slug);
         var storage = new PostgresStorageContext(context.Database, tenant.RequireScratchRoot());
         await OpenTenantStorageAsync(storage, configuration, slug, token).ConfigureAwait(false);
-        return await BuildRuntimeAsync(storage, storage, tenant, configuration, null, token, context.Server, grant.Profile,
+        return await BuildRuntimeAsync(storage, storage, tenant, configuration, token, context.Server, grant.Profile,
             new(Foxwarm.Timers.TimerOccurrence.FromJson(context.Activation.Wakeup?.Occurrence), context.Activation.Gate))
             .ConfigureAwait(false);
     }
@@ -202,44 +169,12 @@ internal static class HostedEntry
         }
     }
 
-    /// <summary>
-    /// Builds the tenant runtime. It refuses while this build lacks a PostgreSQL store, so a
-    /// hosted replica never runs over files, then puts the blobs on the deployment's backend.
-    /// </summary>
-    /// <summary>
-    /// How long a stopping owner's host waits for requests still in progress. The host stops
-    /// after the Sessions have drained, and the lease is released only after it: a client that
-    /// sent part of a request and stalls would otherwise hold the takeover for the host default
-    /// of 30 s, a whole lease TTL. A request cut off here is retried on the new owner.
-    /// </summary>
     internal static readonly TimeSpan HttpShutdownTimeout = TimeSpan.FromSeconds(2);
-
-    internal static async Task<IHostedRuntime> CreateRuntimeAsync(
-        HostedRuntimeContext context,
-        HostedBootstrap bootstrap,
-        DeploymentConfiguration deployment,
-        CancellationToken token = default
-    )
-    {
-        var storage = new PostgresStorageContext(context.Database, bootstrap.RequireScratchRoot());
-        deployment = deployment.ForTenant(bootstrap.Tenant);
-        await OpenTenantStorageAsync(storage, deployment, bootstrap.Tenant, token).ConfigureAwait(false);
-        return await BuildRuntimeAsync(
-                storage,
-                storage,
-                bootstrap,
-                deployment,
-                context.PublicListener,
-                token,
-                profile: context.Grant.Profile
-            )
-            .ConfigureAwait(false);
-    }
 
     /// <summary>
     /// <see cref="MainHost"/> over the tenant: the key ring is opened first (a locked tenant
     /// refuses), then the configuration owner reads the tenant documents with the deployment
-    /// configuration, and the host starts on the deployment's listener. Production passes the
+    /// configuration, and the host serves behind its tenant server. Production passes the
     /// complete context as <paramref name="storage"/>; tests may compose it.
     /// </summary>
     internal static async Task<IHostedRuntime> BuildRuntimeAsync(
@@ -247,7 +182,6 @@ internal static class HostedEntry
         IStorageContext storage,
         HostedBootstrap bootstrap,
         DeploymentConfiguration deployment,
-        System.Net.Sockets.Socket? publicListener = null,
         CancellationToken token = default,
         Runtimes.TenantServer? server = null,
         TenantProfile profile = TenantProfile.Hosted,
@@ -258,7 +192,7 @@ internal static class HostedEntry
         // release that fails too is reported, so the owner treats the stop as unconfirmed.
         try
         {
-            return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, publicListener, server, profile, schedule, token)
+            return await BuildRuntimeCoreAsync(tenant, storage, bootstrap, deployment, server, profile, schedule, token)
                 .ConfigureAwait(false);
         }
         catch (Exception error)
@@ -283,7 +217,6 @@ internal static class HostedEntry
         IStorageContext storage,
         HostedBootstrap bootstrap,
         DeploymentConfiguration deployment,
-        System.Net.Sockets.Socket? publicListener,
         Runtimes.TenantServer? server,
         TenantProfile profile,
         Foxwarm.Timers.RuntimeSchedule? schedule,
@@ -350,8 +283,6 @@ internal static class HostedEntry
                 .ConfigureAwait(false)
         ) with
         {
-            // The standby's public port, kept open through the takeover.
-            ListenSocket = publicListener,
             ShutdownTimeout = HttpShutdownTimeout,
             // A tenant of a multi-tenant replica: requests come from the replica's front, and
             // the tenant can't stop the replica's process.
@@ -359,9 +290,6 @@ internal static class HostedEntry
             ReservedOperatorHost = deployment.Root.ContainsKey("operator") ? Operator.OperatorListener.ReadSettings(deployment).Host : null,
             ShutdownAvailable = server is null,
         };
-        // Without HTTP no host adopts it, so connections queued on it are refused now.
-        if (!http.HttpEnabled)
-            publicListener?.Dispose();
         token.ThrowIfCancellationRequested();
         var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
         var host = await MainHost
@@ -378,7 +306,7 @@ internal static class HostedEntry
                 logTenant: bootstrap.Tenant,
                 schedule: schedule,
                 openProviders: diagnostic => new Providers.ProviderGrants(deployment, diagnostic)
-                    .LoadAsync(tenant.Database, bootstrap.Tenant, profile, token, applyGrants: server is not null)
+                    .LoadAsync(tenant.Database, bootstrap.Tenant, profile, token)
             )
             .ConfigureAwait(false);
         // The owner's daily journal retention; it stops when the host disposes the journal.

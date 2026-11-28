@@ -38,7 +38,6 @@ spec:
             - name: POD_IP
               valueFrom: {fieldRef: {fieldPath: status.podIP}}
             - {name: FOXWARM_ROLE, value: master-host}
-            - {name: FOXWARM_HOSTED_TOPOLOGY, value: tenants}
             - {name: FOXWARM_AGENTS_DIR, value: /master}
             - {name: FOXWARM_SCRATCH_DIR, value: /master/scratch}
             - {name: FOXWARM_REPLICA_ID, value: "$(POD_NAME)"}
@@ -71,7 +70,7 @@ spec:
         - name: deployment-config
           configMap:
             name: {{ include "foxwarm.fullname" . }}-deployment
-            items: [{key: master.yaml, path: deployment.yaml}]
+            items: [{key: deployment.yaml, path: deployment.yaml}]
         - name: secrets
           secret:
             secretName: {{ include "foxwarm.runtimeSecret" . }}

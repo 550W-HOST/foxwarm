@@ -1,5 +1,4 @@
-# Every Ready replica takes connections: the owner serves them, a standby forwards them to the
-# owner unchanged.
+# Every Ready public front serves or forwards requests by tenant hostname.
 apiVersion: v1
 kind: Service
 metadata:
@@ -27,6 +26,6 @@ spec:
   selector:
     {{- include "foxwarm.selectorLabels" . | nindent 4 }}
   ports:
-    - name: http
-      port: {{ .Values.ports.http }}
-      targetPort: http
+    - name: mesh
+      port: {{ .Values.mesh.port }}
+      targetPort: mesh

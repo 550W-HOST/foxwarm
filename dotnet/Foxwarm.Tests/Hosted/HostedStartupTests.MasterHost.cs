@@ -28,10 +28,10 @@ public sealed partial class HostedStartupTests
         await File.WriteAllTextAsync(Path.Combine(folder.FullName, "MEMORY.md"), "volume memory");
         for (var boot = 0; boot < 2; boot++)
         {
-            var replica = StartHosted(database.OpenApp(), files, role: ReplicaRoles.MasterHost);
+            var replica = await StartHostedAsync(database, files, role: ReplicaRoles.MasterHost);
             try
             {
-                await WaitUntilAsync(() => replica.Inner.Health.RuntimeStarted, TimeSpan.FromSeconds(60), "operator runtime starts");
+                await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
                 var sessions = ((MainHostRuntime)Assert.Single(replica.Runtimes)).Host.Sessions;
                 Assert.Contains("ops", sessions.Agents());
                 Assert.DoesNotContain("other", sessions.Agents());

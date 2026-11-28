@@ -1,7 +1,7 @@
 // The hosted failover drills. Each drill runs against an environment (env-process.mjs or
 // env-compose.mjs) that provides the same operations on local processes or on the Compose
 // stack's containers, and states the existing contract it checks.
-import { until, sleep, getJson, apiClient, probe, log, assert } from './util.mjs'
+import { until, sleep, getJson, apiClient, probe, log, assert, tenantRequest } from './util.mjs'
 
 const TTL_MS = 30000 // U17: lease TTL 30 s, renew every 5 s, self-fence 20 s after the last renewal start
 
@@ -15,6 +15,19 @@ export function mock(env) {
     release: key => post('/__drill/release', { key }),
     requests: async key => (await getJson(env.mockUrl + '/__drill/requests')).filter(row => row.turn && row.key === key),
   }
+}
+
+export async function startTenantPool(env) {
+  // Fixture tenant: the front matches the host of the owned proxy, just as the deployment
+  // matches a hostname provisioned by the operator.
+  await env.sql(`WITH t AS (INSERT INTO tenants(name) VALUES ('${env.tenant}') RETURNING tenant_id)
+    INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM t;
+    INSERT INTO tenant_hostnames(tenant_id,hostname,kind) SELECT tenant_id,'127.0.0.1','primary' FROM tenants WHERE name='${env.tenant}'`)
+  await env.start(env.slots[0])
+  await env.start(env.slots[1])
+  await waitEntry(env)
+  await until(async () => (await fetch(env.publicUrl + '/api/sessions')).status === 401, 'initial demand activates the tenant')
+  return await waitOwner(env)
 }
 
 /** Health status of every running replica slot (null entries dropped). */
@@ -40,8 +53,10 @@ export async function lease(env, tenant = env.tenant) {
 export async function waitOwner(env, { minEpoch = 0, timeout = 120000, slots = env.slots } = {}) {
   return await until(
     async () => {
-      const owners = (await statuses(env, slots)).filter(status => status.role === 'owner')
-      return owners.length === 1 && owners[0].ready && owners[0].epoch > minEpoch ? owners[0] : null
+      const current = await lease(env)
+      if (current.state !== 'active' || current.epoch <= minEpoch || current.expiresAt <= Date.now()) return null
+      const owner = (await statuses(env, slots)).find(row => row.replica === current.owner && row.ready && row.tenants > 0)
+      return owner && { ...owner, epoch: current.epoch }
     },
     `one ready owner above epoch ${minEpoch}`,
     timeout,
@@ -57,24 +72,16 @@ export function ownershipMonitor(env) {
   const violations = []
   let stopped = false
   let samples = 0
-  let lastEpoch = 0
-  // The replicas are read one after another, so two owners in one sample can be a handover
-  // between two reads. The lease is read first: a replica that still reports owner at an older
-  // epoch was read after its lease was superseded, and two owners of one epoch can't both hold it.
+  let previous = null
   const loop = (async () => {
     while (!stopped) {
-      let current = null
-      try {
-        current = await lease(env)
-        if (current.epoch < lastEpoch) violations.push({ at: Date.now(), epochWentDown: [lastEpoch, current.epoch] })
-        lastEpoch = Math.max(lastEpoch, current.epoch)
-      } catch {}
-      const owners = (await statuses(env)).filter(status => status.role === 'owner')
-      samples++
-      const stale = current ? owners.filter(owner => owner.epoch < current.epoch) : []
-      if (stale.length) violations.push({ at: Date.now(), leaseEpoch: current.epoch, staleOwners: stale })
-      const epochs = owners.map(owner => owner.epoch)
-      if (new Set(epochs).size < epochs.length) violations.push({ at: Date.now(), sameEpochOwners: owners })
+      const current = await lease(env).catch(() => null)
+      if (current) {
+        if (previous && (current.epoch < previous.epoch || (current.state === 'active' && previous.state === 'active' &&
+            current.epoch === previous.epoch && current.owner !== previous.owner))) violations.push({ previous, current })
+        previous = current
+        samples++
+      }
       await sleep(200)
     }
   })()
@@ -298,16 +305,20 @@ export async function partition(env, context) {
   assert(before.owner === owner.replica, 'the cut-off replica holds the lease')
   // The model answers the cut-off owner, which now tries to commit that answer.
   await model.release('partition')
-  const exit = await env.waitExit(owner.slot, TTL_MS + 15000)
-  log(`partition: ${owner.replica} cut off at epoch ${before.epoch}; exited ${exit.code} after ${exit.at - cutAt} ms, ${before.expiresAt - exit.at} ms before its lease expiry`)
-  assert(exit.code === 75, `the partitioned owner exits 75 (fenced), not ${exit.code}`)
-  assert(exit.at < before.expiresAt, 'the old owner fenced itself and exited before its lease expired')
+  let exited = false
+  await until(async () => {
+    const status = await env.status(owner.slot)
+    if (status) return status.tenants === 0
+    try { const result = await env.waitExit(owner.slot, 500); exited = result.code === 75; return exited } catch { return false }
+  }, 'the isolated generation is retired before expiry',TTL_MS,100)
+  const retiredAt = Date.now()
+  assert(retiredAt < before.expiresAt, 'the partitioned boot stopped serving the tenant before expiry')
   const next = await waitOwner(env, { minEpoch: before.epoch, timeout: TTL_MS + 90000 })
   const after = await lease(env)
   assert(after.acquiredAt >= before.expiresAt - 50, 'the standby took over only after the expiry')
-  log(`partition: ${next.replica} took over at epoch ${after.epoch}, ${after.acquiredAt - exit.at} ms after the old owner's exit`)
+  log(`partition: ${next.replica} took over at epoch ${after.epoch}, ${after.acquiredAt - retiredAt} ms after the old generation retired`)
   await env.heal(owner.slot)
-  await env.start(owner.slot)
+  if (exited) await env.start(owner.slot)
   const { state } = await checkRestartRecovery(env, api, id, 'partition')
   assert(!JSON.stringify(state).includes(stale), "the fenced owner's answer isn't in the Session")
   // bytea columns (Session segments, Archive bodies) dump as hex, text columns as text.
@@ -317,7 +328,7 @@ export async function partition(env, context) {
   assert(holds('FINAL:partition:'), "the data dump holds the new owner's answer")
   assert(!holds(stale), "no row anywhere holds the fenced owner's answer")
   log('partition: no write of the fenced owner landed; the Session resumed on the new owner')
-  return { exitCode: exit.code, exitAfterCutMs: exit.at - cutAt, exitBeforeExpiryMs: before.expiresAt - exit.at, takeoverAfterExitMs: after.acquiredAt - exit.at }
+  return { processExited: exited, retirementAfterCutMs: retiredAt - cutAt, retirementBeforeExpiryMs: before.expiresAt - retiredAt, takeoverAfterRetirementMs: after.acquiredAt - retiredAt }
 }
 
 /**
@@ -342,38 +353,22 @@ export async function rolling(env, context, { next = 'N+1' } = {}) {
     // health check takes the Ready replica into rotation (Kubernetes adds Ready pods itself).
     if (env.entrySettleMs) await sleep(env.entrySettleMs)
     assert(env.slots.filter(item => env.running(item)).length <= 3, 'at most one replica above the desired two')
-    const wasOwner = (await env.status(slot))?.role === 'owner'
     const held = await lease(env)
+    const wasOwner = (await env.status(slot))?.replica === held.owner
     const probes = wasOwner ? burst(api) : null
     const stoppedAt = Date.now()
     await env.terminate(slot)
     if (wasOwner) {
-      // The last poll, by its start, that found no ready owner above the old epoch: up to then
-      // the new owner's runtime wasn't serving.
-      let notReadyAt = stoppedAt
-      const owner = await until(
-        async () => {
-          const polled = Date.now()
-          const owners = (await statuses(env)).filter(status => status.role === 'owner' && status.ready && status.epoch > held.epoch)
-          if (owners.length === 1) return owners[0]
-          notReadyAt = polled
-          return null
-        },
-        `one ready owner above epoch ${held.epoch}`,
-        60000,
-        50
-      )
+      const owner = await waitOwner(env, { minEpoch: held.epoch, timeout: 60000 })
       const after = await lease(env)
       const samples = await probes.stop()
-      // Requests that started after the old owner released the lease (its host had stopped)
-      // and before the new owner served: each waited at a standby or in the new owner's queue.
-      const inWindow = samples.filter(sample => sample.at >= after.acquiredAt && sample.at <= notReadyAt)
+      const inWindow = samples.filter(sample => sample.at >= stoppedAt && sample.at < after.acquiredAt)
       const handover = {
         from: slot,
         to: owner.slot,
         stopToAcquiredMs: after.acquiredAt - stoppedAt,
         epoch: after.epoch,
-        windowMs: notReadyAt - after.acquiredAt,
+        windowMs: after.acquiredAt - stoppedAt,
         requests: samples.length,
         failed: samples.filter(sample => !sample.ok).length,
         heldRequests: inWindow.length,
@@ -433,16 +428,12 @@ export async function upgradeFence(env, context) {
   } finally {
     await env.sql(`DELETE FROM schema_migrations WHERE version = ${future} RETURNING version`)
   }
-  await env.sql(`UPDATE tenants SET min_reader_version = ${Number(reader) + 1} WHERE name = '${env.tenant}' RETURNING 1`)
-  try {
-    await env.start(slot)
-    const exit = await env.waitExit(slot, 60000)
-    assert(exit.code === 78, `a replica refuses a tenant marked for a newer reader with 78, not ${exit.code}`)
-    assert(/requires a Foxwarm Main that reads installation level/.test(env.logs(slot)), 'the refusal names the reader level')
-    log(`upgrade fence: tenant min_reader_version ${Number(reader) + 1} > reader ${reader}: replica exits 78`)
-  } finally {
-    await env.sql(`UPDATE tenants SET min_reader_version = ${Number(marked)} WHERE name = '${env.tenant}' RETURNING 1`)
-  }
+  // Isolate the reader-floor refusal to a cold tenant. Other tenants and the process keep serving.
+  await env.sql(`WITH t AS (INSERT INTO tenants(name,min_reader_version) VALUES ('future-reader',${Number(reader)+1}) RETURNING tenant_id)
+    INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM t;
+    INSERT INTO tenant_hostnames(tenant_id,hostname,kind) SELECT tenant_id,'future.test','primary' FROM tenants WHERE name='future-reader'`)
+  const futureTenant = await tenantRequest(env.publicUrl,null,'future.test')('GET','/api/sessions')
+  assert(futureTenant.status === 503 && (await lease(env,'future-reader')).epoch === 0, 'no older reader acquires the incompatible tenant')
   const ok = await api.get('/api/sessions')
   assert(ok.status === 200, 'the running replicas kept serving')
   return { schemaLevel: Number(level), readerVersion: Number(reader) }
@@ -465,17 +456,11 @@ export async function importSeed(env) {
   await source.stop()
   const imported = await env.importSource(source, 'imported')
   assert(imported.code === 0, 'hosted import exits 0: ' + imported.stderr + imported.stdout)
-  const replica = await env.startTenantReplica('imported')
-  await until(async () => {
-    const status = await getJson(replica.statusUrl, 1500).catch(() => null)
-    return status?.role === 'owner' && status.ready
-  }, 'the imported tenant is served', 120000)
-  const hosted = apiClient(replica.url, source.token)
-  const state = await history(hosted, 'drill-imported')
-  assert(state && texts(state).includes('FINAL:imported:0'), 'the imported Session reads back with the file-mode token')
+  await env.sql("INSERT INTO tenant_hostnames(tenant_id,hostname,kind) SELECT tenant_id,'imported.test','primary' FROM tenants WHERE name='imported'")
+  const response = await tenantRequest(env.publicUrl, source.token, 'imported.test')('GET', '/api/sessions/drill-imported/history')
+  assert(response.status === 200 && texts(JSON.parse(response.text)).includes('FINAL:imported:0'), 'the imported Session reads back with the file-mode token')
   const token = await env.token({ tenant: 'imported' })
   assert(token.stdout.trim() === source.token, '`hosted token --tenant imported` prints the imported token')
-  await replica.stop()
   log('import: file-mode installation imported; its token and Session work on a hosted replica')
   return { import: imported.stdout.trim().split('\n').slice(-3) }
 }

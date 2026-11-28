@@ -44,11 +44,6 @@ internal sealed record OperatorListener(Uri Origin, IPEndPoint Endpoint, Deploym
         && value.UserInfo.Length == 0 && value.Scheme == Origin.Scheme && value.Port == Origin.Port
         && CanonicalHost(value.IdnHost) == Host;
 
-    internal void CheckSingleTenant(string slug)
-    {
-        if (CanonicalHost(new Uri(Deployment.TenantOrigin(slug)).IdnHost) == Host)
-            throw new HostedBootstrapException("The operator hostname is already assigned to a tenant.");
-    }
 
     internal string CheckHostname(string slug, string hostname)
     {
@@ -67,8 +62,6 @@ internal static class OperatorServer
     internal static async Task ServeAsync(HostedBootstrap bootstrap, CancellationToken token)
     {
         var listener = OperatorListener.From(bootstrap.RequireDeployment());
-        if (Environment.GetEnvironmentVariable("FOXWARM_HOSTED_TOPOLOGY") != "tenants")
-            listener.CheckSingleTenant(bootstrap.Tenant);
         await using var database = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm-operator");
         await SchemaMigrator.RequireCompatibleAsync(database, token: token);
         var store = new OperatorStore(database, bootstrap.RequireKeks().Current, listener.Deployment.Blobs.S3);

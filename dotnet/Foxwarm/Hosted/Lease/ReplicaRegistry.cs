@@ -119,18 +119,4 @@ internal sealed class ReplicaRegistry
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
-
-    /// <summary>The advertised address of the tenant's current owner, or null when there is none.</summary>
-    internal async Task<string?> OwnerAddressAsync(string tenant, CancellationToken token)
-    {
-        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
-        await using var command = new NpgsqlCommand(
-            "SELECT r.advertise_address FROM tenant_leases l"
-                + " JOIN tenants t USING (tenant_id) JOIN replicas r ON r.replica_id = l.owner_replica"
-                + " WHERE t.name = $1 AND l.state = 'active' AND l.expires_at > now()",
-            connection
-        );
-        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = tenant });
-        return await command.ExecuteScalarAsync(token).ConfigureAwait(false) as string;
-    }
 }

@@ -250,9 +250,9 @@ public sealed class OperatorBoundaryTests
             owner,
             PostgresServer.AppRole,
             PostgresServer.OperatorRole,
-            PostgresServer.Tenant,
             preOperator
         );
+        await db.ExecuteOwnerAsync($"WITH t AS (INSERT INTO tenants(name) VALUES ('{PostgresServer.Tenant}') RETURNING tenant_id) INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM t");
         var registry = new ReplicaRegistry(db.OpenApp());
         await registry.RegisterAsync("old/boot", null, 1100, 1, default);
         var id = await db.TenantIdAsync();
@@ -260,8 +260,7 @@ public sealed class OperatorBoundaryTests
         await Foxwarm.Hosted.Schema.SchemaMigrator.MigrateAsync(
             owner,
             PostgresServer.AppRole,
-            PostgresServer.OperatorRole,
-            null
+            PostgresServer.OperatorRole
         );
         await registry.HeartbeatAsync("old/boot", default);
         Assert.True(
@@ -301,7 +300,7 @@ public sealed class OperatorBoundaryTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task TheOperatorReservesCanonicalHostnamesIncludingTheP1Tenant(bool collision)
+    public async Task TheOperatorReservesItsCanonicalHostnameAgainstProvisionedTenants(bool collision)
     {
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
@@ -316,7 +315,7 @@ public sealed class OperatorBoundaryTests
         );
         if (collision)
         {
-            Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM tenant_hostnames"));
+            await db.ExecuteOwnerAsync("INSERT INTO tenant_hostnames(tenant_id,hostname,kind) SELECT tenant_id,'default.test','primary' FROM tenants");
             var bootstrap = new HostedBootstrap(
                 db.OperatorConnectionString,
                 null,

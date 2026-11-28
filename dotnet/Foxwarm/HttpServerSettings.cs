@@ -18,11 +18,6 @@ internal sealed record HttpServerSettings(
     bool HttpEnabled = true
 )
 {
-    /// <summary>
-    /// A bound, listening socket the host adopts for its listener on the same port instead of
-    /// binding one: a hosted standby's public port at takeover, so connections queue through it.
-    /// </summary>
-    internal System.Net.Sockets.Socket? ListenSocket { get; init; }
 
     /// <summary>
     /// How long stopping the host waits for requests still in progress before it aborts them;

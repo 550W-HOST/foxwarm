@@ -1,4 +1,4 @@
-import { get as httpGet } from 'node:http'
+import { get as httpGet, request } from 'node:http'
 // Small helpers shared by the drill environments and the drills.
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -90,4 +90,20 @@ export function log(...parts) {
 
 export function assert(condition, message) {
   if (!condition) throw new Error('Drill check failed: ' + message)
+}
+
+export function tenantRequest(base, token, authority) {
+  return (method, path, body, extraHeaders = {}) => new Promise((resolve, reject) => {
+    const headers = { ...extraHeaders, host: authority }
+    if (token) headers.authorization = 'Bearer ' + token
+    if (body) headers['content-type'] = 'application/json'
+    const req = request(new URL(path, base), { method, headers, signal: AbortSignal.timeout(45000) }, res => {
+      res.setEncoding('utf8')
+      let text = ''
+      res.on('data', data => { text += data })
+      res.on('end', () => resolve({ status: res.statusCode, text }))
+    })
+    req.once('error', reject)
+    req.end(body && JSON.stringify(body))
+  })
 }

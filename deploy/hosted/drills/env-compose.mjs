@@ -100,10 +100,6 @@ export async function composeEnvironment() {
       return await compose(['exec', '-T', service(slot), '/app/Foxwarm', 'hosted', 'token', ...(tenant ? ['--tenant', tenant] : [])])
     },
 
-    tryGeneralForOperator(tenant) {
-      return compose(['run', '--rm', '--no-deps', '-e', `FOXWARM_TENANT=${tenant}`, 'foxwarm-3'])
-    },
-
     async startMaster() {
       await must(['up', '-d', '--no-deps', 'foxwarm-master'])
       return { url: `http://${await address('foxwarm-master')}:3001`, stop: async () => {
@@ -198,18 +194,6 @@ export async function composeEnvironment() {
       return await compose(['run', '--rm', '--no-deps', 'importer'])
     },
 
-    async startTenantReplica() {
-      await must(['up', '-d', '--no-deps', 'foxwarm-imported'])
-      const host = await address('foxwarm-imported')
-      return {
-        url: `http://${host}:3001`,
-        statusUrl: `http://${host}:3002/status`,
-        async stop() {
-          await must(['stop', '-t', '30', 'foxwarm-imported'])
-        },
-      }
-    },
-
     /**
      * The image's container contract, on the running stack: both replicas (owner and standby)
      * reach Docker health `healthy` through the image's HEALTHCHECK, run as uid 1000, can't
@@ -247,7 +231,7 @@ export async function composeEnvironment() {
       console.log((await compose(['ps', '-a'])).stdout)
       if (keep) {
         // A failed run: the other services' logs, for the CI log.
-        for (const name of ['postgres', 'versitygw', 'proxy', 'mock-llm', 'file-source', 'foxwarm-imported', 'foxwarm-master'])
+        for (const name of ['postgres', 'versitygw', 'proxy', 'mock-llm', 'file-source', 'foxwarm-master'])
           console.log(`--- logs of ${name}\n` + (await compose(['logs', '--no-color', '--tail', '60', name])).stdout)
       }
       if (!keep) {

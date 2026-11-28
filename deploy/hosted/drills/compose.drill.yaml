@@ -1,7 +1,7 @@
 # Drill overrides of the Compose stack (deploy/hosted/drills/run.mjs --env compose). The drill
 # runner acts as the orchestrator: replicas don't restart on their own, a third replica slot
 # exists for the rolling update's surge, and the mock model, a file-mode source installation, an
-# importer and a replica of the imported tenant are added. Paths are relative to deploy/hosted.
+# importer are added. Paths are relative to deploy/hosted.
 services:
   foxwarm-master:
     profiles: [drill]
@@ -30,7 +30,7 @@ services:
       - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
     environment:
       FOXWARM_REPLICA_ID: foxwarm-3
-      FOXWARM_ADVERTISE_ADDRESS: foxwarm-3:3001
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-3:3004
     profiles: [drill]
 
   proxy:
@@ -83,20 +83,6 @@ services:
     networks: [backend]
     healthcheck:
       disable: true
-    profiles: [drill]
-
-  # One replica of the imported tenant, including its stored Agent folders.
-  foxwarm-imported:
-    extends:
-      file: compose.yaml
-      service: foxwarm-1
-    restart: "no"
-    environment:
-      FOXWARM_TENANT: imported
-      FOXWARM_REPLICA_ID: foxwarm-imported
-      FOXWARM_ADVERTISE_ADDRESS: foxwarm-imported:3001
-    volumes: !override
-      - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
     profiles: [drill]
 
 volumes:

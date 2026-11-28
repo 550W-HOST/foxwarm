@@ -21,18 +21,15 @@ public sealed partial class HostedStartupTests
         var files = HostedFiles.Create(temp.Path);
         await using var peer = await EgressFixture.StartAsync();
         IStorageContext? storage = null;
-        var replica = StartHosted(database.OpenApp(), files, built => storage = built);
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        var replica = await StartHostedAsync(database, files, built => storage = built);
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         // The test's own client reaches the replica on loopback; only the replica is guarded.
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
             Timeout = TimeSpan.FromSeconds(30),
         };
+        client.DefaultRequestHeaders.Host = PostgresServer.Tenant + ".test";
         client.DefaultRequestHeaders.Authorization = new(
             "Bearer",
             storage!.Credentials.Read(InstanceCredentialName.HttpToken)
@@ -87,17 +84,14 @@ public sealed partial class HostedStartupTests
         var files = HostedFiles.Create(temp.Path);
         await using var peer = await EgressFixture.StartAsync();
         IStorageContext? storage = null;
-        var replica = StartHosted(database.OpenApp(), files, built => storage = built);
-        await WaitUntilAsync(
-            () => replica.Inner.Health.Role == ReplicaRole.Owner && replica.Inner.Health.RuntimeStarted,
-            TimeSpan.FromSeconds(60),
-            "the hosted runtime serves"
-        );
+        var replica = await StartHostedAsync(database, files, built => storage = built);
+        await replica.Activation.WaitAsync(TimeSpan.FromSeconds(60));
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             BaseAddress = new Uri($"http://127.0.0.1:{replica.PublicPort}"),
             Timeout = TimeSpan.FromSeconds(30),
         };
+        client.DefaultRequestHeaders.Host = PostgresServer.Tenant + ".test";
         client.DefaultRequestHeaders.Authorization = new(
             "Bearer",
             storage!.Credentials.Read(InstanceCredentialName.HttpToken)

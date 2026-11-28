@@ -1,4 +1,4 @@
-# Foxwarm hosted mode. The chart runs the replicas of one tenant; PostgreSQL and the S3 object
+# Foxwarm hosted mode. The chart runs multi-tenant replicas; PostgreSQL and the S3 object
 # store are external. See deploy/hosted/README.md.
 
 image:
@@ -8,8 +8,7 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# Two replicas: one owns the tenant, the other stands by and forwards to the owner. A rolling
-# update starts one new replica (a standby, which is Ready) before stopping an old one.
+# General replicas serve and forward tenant requests. Stable ordinals are placement names.
 replicaCount: 2
 
 # Separate control plane; enable with a multi-tenant deployment.url and an operator-only
@@ -22,6 +21,7 @@ operator:
   port: 3003
   replicas: 1
 
+# Suggested slug for the first operator provisioning command printed after installation.
 tenant: default
 
 # The optional pinned operator tenant. Only this pod mounts the master volume.
@@ -47,7 +47,7 @@ ports:
 # blobs (backend and S3 connection). Tenant settings don't belong here; they live in the
 # database and are edited through Setup.
 deployment:
-  # url: https://foxwarm.example.com
+  # url: https://{slug}.example.com
   blobs:
     backend: s3
     s3:
@@ -84,9 +84,7 @@ migrate:
 scratch:
   sizeLimit: 2Gi
 
-# Above the replica's 8 s fencing drain bound and a stopping owner's graceful stop (its Sessions
-# drain, then at most 2 s for HTTP requests, then the lease is released). A SIGKILL before the
-# release would leave the standby waiting for the lease to expire, a whole TTL (30 s).
+# Allow the shared 20 s move grace and the per-process stop/hand-back budget before SIGKILL.
 terminationGracePeriodSeconds: 45
 
 podDisruptionBudget:
