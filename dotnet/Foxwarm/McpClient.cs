@@ -12,6 +12,7 @@ namespace Foxwarm;
 internal sealed partial class McpClient : IAsyncDisposable
 {
     private readonly McpConfiguration configuration;
+    internal int MaxResponseBytes { get; set; } = 64 * 1024 * 1024;
     internal McpOAuthService OAuth { get; }
     private readonly object lifecycle = new();
     private readonly Dictionary<long, Task> operations = [];
@@ -336,6 +337,10 @@ internal sealed partial class McpClient : IAsyncDisposable
                         {
                             var tools = new List<JsonObject>();
                             string? cursor = null;
+                            int pages = 0;
+                            long bytes = 0;
+                            var cursors = new HashSet<string>(StringComparer.Ordinal);
+                            InvalidDataException DiscoveryLimit() => new($"The response from {server} was too large to process.");
                             do
                             {
                                 using var budget = CancellationTokenSource.CreateLinkedTokenSource(
@@ -357,14 +362,21 @@ internal sealed partial class McpClient : IAsyncDisposable
                                 {
                                     throw new TimeoutException("MCP tool discovery timed out.");
                                 }
-                                tools.AddRange(
-                                    page.Tools.Select(tool =>
-                                        JsonSerializer
-                                            .SerializeToNode(tool, McpJsonUtilities.DefaultOptions)!
-                                            .AsObject()
-                                    )
-                                );
+                                if (page.Tools.Count > 8192 - tools.Count) throw DiscoveryLimit();
+                                foreach (var tool in page.Tools)
+                                {
+                                    var encoded = JsonSerializer.SerializeToUtf8Bytes(tool, McpJsonUtilities.DefaultOptions);
+                                    bytes += encoded.Length;
+                                    if (bytes > 32 * 1024 * 1024) throw DiscoveryLimit();
+                                    tools.Add(JsonNode.Parse(encoded)!.AsObject());
+                                }
                                 cursor = page.NextCursor;
+                                ++pages;
+                                if (cursor is not null)
+                                {
+                                    bytes += System.Text.Encoding.UTF8.GetByteCount(cursor);
+                                    if (pages >= 128 || bytes > 32 * 1024 * 1024 || !cursors.Add(cursor)) throw DiscoveryLimit();
+                                }
                             } while (cursor is not null);
                             return (IReadOnlyList<JsonObject>)tools;
                         },

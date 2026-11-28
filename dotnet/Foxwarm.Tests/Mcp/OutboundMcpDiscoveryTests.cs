@@ -5,6 +5,33 @@ namespace Foxwarm.Tests;
 
 public sealed class OutboundMcpDiscoveryTests
 {
+    [Theory]
+    [InlineData("streamable-http", "/mcp")]
+    [InlineData("sse", "/sse")]
+    public async Task BothSdkTransportsRefuseAnOversizedToolResponse(string transport, string path)
+    {
+        using var temp = new TempDirectory();
+        await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
+        await using var fixture = await OutboundMcpFixture.CreateAsync();
+        fixture.Mcp.MaxResponseBytes = 8192;
+        await fixture.ConfigureAsync(peer.Url + path, transport);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var result = await fixture.CallAsync(fixture.First, "result", new() { ["kind"] = "large", ["length"] = 8192 }, deadline.Token);
+        Assert.Contains("The response from peer was too large to process.", result!.ToJsonString());
+        Assert.Single((await peer.EventsAsync()).Where(item => (string?)item["kind"] == "effect"));
+    }
+
+    [Fact]
+    public async Task DiscoveryStopsAtARepeatedCursor()
+    {
+        using var temp = new TempDirectory();
+        await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
+        await using var fixture = await OutboundMcpFixture.CreateAsync();
+        await fixture.ConfigureAsync(peer.Url + "/mcp?repeatCursor=true");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Mcp.ListToolsAsync("peer", default, fixture.First, fixture.First.McpGeneration));
+        Assert.Equal(2, (await peer.EventsAsync()).Count(item => item["kind"]?.ToString() == "list"));
+    }
+
     [Fact]
     public async Task Discovery_retains_Source_SDK_deadline_independent_of_tool_call_override()
     {

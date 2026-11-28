@@ -48,12 +48,12 @@ internal static class ConfigurationYaml
         private readonly Stack<(bool Map, bool Key)> frames = new();
         private readonly HashSet<AnchorName> scalarAnchors = [];
         private int events;
-        public ParsingEvent? Current => source.Current;
+        public ParsingEvent? Current { get; private set; }
 
         public bool MoveNext()
         {
             if (!source.MoveNext()) return false;
-            var item = source.Current!;
+            var item = Current = source.Current!;
             if (++events > 100_000) throw TooLarge(); // old MergingParser source-event ceiling
             if (item is MappingEnd or SequenceEnd) frames.Pop();
             if (item is not (NodeEvent or AnchorAlias)) return true;
@@ -62,6 +62,11 @@ internal static class ConfigurationYaml
                 if (parent.Map && parent.Key && item is not YamlDotNet.Core.Events.Scalar
                     && !(item is AnchorAlias a && scalarAnchors.Contains(a.Value)))
                     throw new InvalidDataException("Configuration mapping keys must be scalar values.");
+                // YamlStream hashes scalar keys by tag and value. Merge directives
+                // have no key in the final mapping; distinguish each until conversion.
+                if (parent.Map && parent.Key && item is YamlDotNet.Core.Events.Scalar { Value: "<<" } merge)
+                    Current = new YamlDotNet.Core.Events.Scalar(merge.Anchor, new TagName("!merge-" + events),
+                        merge.Value, merge.Style, merge.IsPlainImplicit, merge.IsQuotedImplicit, merge.Start, merge.End);
                 frames.Push((parent.Map, !parent.Key));
             }
             if (item is NodeEvent node && !node.Anchor.IsEmpty)

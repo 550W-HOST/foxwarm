@@ -5,6 +5,16 @@ namespace Foxwarm.Tests;
 public sealed class ConfigurationExpansionTests
 {
     [Fact]
+    public void RepeatedDisjointMergeDirectivesSurviveDictionaryConstruction()
+    {
+        const string yaml = "a: &a {first: 1}\nb: &b {second: 2}\nresult: {<<: *a, <<: *b}";
+        var result = ConfigurationYaml.Parse(yaml, "config")["result"]!;
+        Assert.Equal(1, (double)result["first"]!);
+        Assert.Equal(2, (double)result["second"]!);
+        Assert.Throws<InvalidDataException>(() => ConfigurationYaml.Parse(yaml, "config", mergeWork: 2));
+    }
+
+    [Fact]
     public void EveryAliasOccurrenceCountsTowardExpandedNodesAndUtf8Bytes()
     {
         const string yaml = "x: &x [猫, hi]\ny: *x\n";

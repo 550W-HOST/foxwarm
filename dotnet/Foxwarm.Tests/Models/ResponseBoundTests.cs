@@ -5,6 +5,18 @@ namespace Foxwarm.Tests;
 
 public sealed class ResponseBoundTests
 {
+    [Theory]
+    [InlineData(4097, 0)]
+    [InlineData(0, 4097)]
+    public void SparsePositionsCannotPadArraysBeyondTheResponseBudget(int content, int annotation)
+    {
+        var accumulator = new ResponsesEventAccumulator();
+        var value = new System.Text.Json.Nodes.JsonObject { ["type"] = "response.output_text.annotation.added",
+            ["output_index"] = 0, ["content_index"] = content, ["annotation_index"] = annotation,
+            ["annotation"] = new System.Text.Json.Nodes.JsonObject() };
+        Assert.Throws<InvalidDataException>(() => accumulator.Consume(value));
+    }
+
     [Fact]
     public async Task CompressedUnknownLengthContentIsLimitedAfterDecoding()
     {
