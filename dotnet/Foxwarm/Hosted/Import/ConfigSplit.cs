@@ -37,7 +37,7 @@ internal static class ConfigSplit
     private const string Bot = "bot";
     private const string Journal = "journal";
 
-    internal static ConfigSplitResult Split(string text, string sourceName = "config.yaml", string? blobsBlock = null)
+    internal static ConfigSplitResult Split(string text, string sourceName = "config.yaml", string? blobsBlock = null, TenantProfile profile = TenantProfile.Hosted)
     {
         var bom = text.StartsWith('\uFEFF') ? "\uFEFF" : "";
         var body = text[bom.Length..];
@@ -63,10 +63,10 @@ internal static class ConfigSplit
         {
             var entries = root.Children.Select(pair => (Name: Scalar(pair.Key), Key: pair.Key, Value: pair.Value)).ToList();
             var needsCut = entries.Any(entry =>
-                Classify(new(entry.Name)) is not "tenant"
+                Classify(new(entry.Name), profile) is not "tenant"
                 || AppConfigurationSplit.Sectioned(entry.Name)
                     && entry.Value is YamlMappingNode section
-                    && section.Children.Any(child => Classify(new(entry.Name, Scalar(child.Key))) is not "tenant")
+                    && section.Children.Any(child => Classify(new(entry.Name, Scalar(child.Key)), profile) is not "tenant")
             );
             if (needsCut && root.Style == MappingStyle.Flow)
                 throw new ImportRefusedException(
@@ -80,7 +80,7 @@ internal static class ConfigSplit
             {
                 var (name, _, value) = entries[index];
                 var (start, end) = ranges[index];
-                var part = Classify(new(name));
+                var part = Classify(new(name), profile);
                 if (part is not "tenant")
                 {
                     cut.Add((new ConfigBlock(name, start + 1, end + 1, part), new(name), start, end));
@@ -93,7 +93,7 @@ internal static class ConfigSplit
                 if (!AppConfigurationSplit.Sectioned(name) || value is not YamlMappingNode botMap || botMap.Children.Count == 0)
                     continue;
                 var children = botMap.Children.Select(pair => (Path: new ConfigPath(name, Scalar(pair.Key)), Key: pair.Key)).ToList();
-                if (children.All(child => Classify(child.Path) is "tenant"))
+                if (children.All(child => Classify(child.Path, profile) is "tenant"))
                     continue;
                 if (botMap.Style == MappingStyle.Flow)
                     throw new ImportRefusedException(
@@ -105,7 +105,7 @@ internal static class ConfigSplit
                 for (var child = 0; child < children.Count; child++)
                 {
                     var childPath = children[child].Path;
-                    var childPart = Classify(childPath);
+                    var childPart = Classify(childPath, profile);
                     var (childStart, childEnd) = childRanges[child];
                     if (childPart is "tenant")
                     {
@@ -168,7 +168,7 @@ internal static class ConfigSplit
         }
         try
         {
-            AppConfigurationSplit.RequireTenantDocument(tenant);
+            AppConfigurationSplit.RequireTenantDocument(tenant, profile);
             AppConfigurationSplit.RequireDeploymentDocument(deployment);
         }
         catch (InvalidDataException error)
@@ -190,16 +190,14 @@ internal static class ConfigSplit
     /// <c>journal</c>. Those two mappings themselves are split by child; a <c>journal</c> that
     /// isn't a mapping is a deployment setting.
     /// </summary>
-    internal static string Classify(ConfigPath path)
+    internal static string Classify(ConfigPath path, TenantProfile profile = TenantProfile.Hosted)
     {
-        if (AppConfigurationSplit.Contains(AppConfigurationSplit.UnavailablePaths, path))
-            return "dropped";
         if (path == new ConfigPath(Bot) || path == new ConfigPath(Journal))
             return "tenant";
         if (AppConfigurationSplit.Contains(AppConfigurationSplit.DeploymentPaths, path))
             return "deployment";
         // What a hosted tenant's document may hold; anything else is reported, not kept.
-        return AppConfigurationSplit.Contains(AppConfigurationSplit.TenantPaths(TenantProfile.Hosted), path)
+        return AppConfigurationSplit.Contains(AppConfigurationSplit.TenantPaths(profile), path)
             ? "tenant"
             : "dropped";
     }

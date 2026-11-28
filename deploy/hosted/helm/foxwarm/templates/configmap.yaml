@@ -10,6 +10,12 @@ data:
     {{- $replica := include "foxwarm.deploymentConfig" . | fromYaml -}}
     {{- if $replica.url -}}{{- $_ := set $replica "url" (replace "{slug}" .Values.tenant $replica.url) -}}{{- end -}}
     {{- toYaml $replica | nindent 4 }}
+  {{- if .Values.masterHost.enabled }}
+  master.yaml: |
+    {{- $master := include "foxwarm.deploymentConfig" . | fromYaml -}}
+    {{- $_ := set $master "mesh" (dict "port" (int .Values.mesh.port)) -}}
+    {{- toYaml $master | nindent 4 }}
+  {{- end }}
   {{- if .Values.operator.enabled }}
   operator.yaml: |
     {{- $operator := include "foxwarm.deploymentConfig" . | fromYaml -}}

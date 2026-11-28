@@ -220,10 +220,15 @@ public sealed class HostedBootstrapTests
     [Fact]
     public void TheReplicaRoleIsGeneralUnlessTheDeploymentSetsOne()
     {
-        static string Role(string? value) =>
-            Foxwarm.Hosted.HostedBootstrap.FromEnvironment(
-                value is null ? new System.Collections.Hashtable() : new System.Collections.Hashtable { ["FOXWARM_ROLE"] = value }
-            ).Role;
+        static string Role(string? value)
+        {
+            var environment = new System.Collections.Hashtable();
+            if (value is not null)
+                environment["FOXWARM_ROLE"] = value;
+            if (value == "master-host")
+                environment["FOXWARM_AGENTS_DIR"] = Path.GetTempPath();
+            return Foxwarm.Hosted.HostedBootstrap.FromEnvironment(environment).Role;
+        }
         Assert.Equal("general", Role(null));
         Assert.Equal("general", Role(""));
         Assert.Equal("master-host", Role("master-host"));

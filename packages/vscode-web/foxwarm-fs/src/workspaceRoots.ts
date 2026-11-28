@@ -74,11 +74,12 @@ export function normalizeWorkspaceRootsResponse(value: unknown): Record<FoxwarmW
   };
 }
 
-export function normalizeConfigFilesResponse(value: unknown): Record<FoxwarmConfigFileKind, FoxwarmConfigFile> {
+export function normalizeConfigFilesResponse(value: unknown): Record<FoxwarmConfigFileKind, FoxwarmConfigFile> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Invalid Foxwarm workspace roots response.');
   }
   const response = value as Record<string, unknown>;
+  if (response.version === 1 && response.configFiles === null) return null;
   if (response.version !== 1 || !response.configFiles || typeof response.configFiles !== 'object' || Array.isArray(response.configFiles)) {
     throw new Error('Unsupported Foxwarm config files response.');
   }

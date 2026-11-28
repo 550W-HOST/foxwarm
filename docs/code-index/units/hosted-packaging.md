@@ -9,13 +9,15 @@ The `hosted` stage of the `Dockerfile` belongs here; the file itself belongs to 
 
 How a [hosted](./hosted-runtime.md) tenant is packaged and run: the container image, the Compose stack and the Helm chart, the operator commands they rely on, and the drills that check the failover contracts with real processes and containers. The runtime contracts themselves (lease, fence, standby, exit codes) are in [hosted runtime](./hosted-runtime.md); the deployment configuration keys in [hosted configuration](./hosted-config.md#d-hosted-config-split).
 
+For the optional full image and single-pod deployment of the operator tenant, see [master host](./hosted-master-host.md#deployment). The claims, image and role described there belong only to that tenant.
+
 ## D-hosted-image
 
 **Approved plan §9 (2026-11-26).**
 
 - **Target.** `docker build --target hosted` builds `debian:trixie-slim` with the `build` stage's `/out` payload in `/app`, the same NativeAOT build as the existing image. The existing `runtime` target stays the default and unchanged; `release.yml` doesn't build or publish the hosted image in P1.
 - **Packages.** CA certificates, tzdata and tini, plus `libicu76` and `libssl3t64`, which native Main loads at run time (approved 2026-11-26: runtime libraries, not tools; ICU rather than invariant globalization). No Chromium, git, Python, Node or curl.
-- **Process.** uid and gid 1000, `FOXWARM_MODE=hosted`, `FOXWARM_SCRATCH_DIR=/scratch`, `FOXWARM_AGENTS_DIR=/agents`, `FOXWARM_DEPLOYMENT_CONFIG=/etc/foxwarm/deployment.yaml`, `TMPDIR=/scratch/.temp`. `tini` is PID 1, in the image rather than through the orchestrator (Kubernetes adds no init): it forwards signals, passes on Foxwarm's exit code and reaps orphaned descendants of the processes a replica starts, such as ToolScript workers and Node providers. The entrypoint creates the temporary directory in the scratch mount and runs `/app/Foxwarm` with the container's arguments, so `db migrate`, `hosted token` and `hosted import` run in the same image.
+- **Process.** uid and gid 1000, `FOXWARM_MODE=hosted`, `FOXWARM_SCRATCH_DIR=/scratch`, `FOXWARM_DEPLOYMENT_CONFIG=/etc/foxwarm/deployment.yaml`, `TMPDIR=/scratch/.temp`. `tini` is PID 1, in the image rather than through the orchestrator (Kubernetes adds no init): it forwards signals, passes on Foxwarm's exit code and reaps orphaned descendants of the processes a replica starts, such as ToolScript workers and Node providers. The entrypoint creates the temporary directory in the scratch mount and runs `/app/Foxwarm` with the container's arguments, so `db migrate`, `hosted token` and `hosted import` run in the same image.
 - **Writes.** The root filesystem can be read-only: a replica writes only to the scratch mount (ephemeral); Agent files are in the tenant's [Agent store](./hosted-agent-store.md), so a replica mounts no shared volume. `/scratch/.temp` is inside the [scratch allowlist](./hosted-capabilities.md#d-capability-scratch-guard).
 - **Health check.** `HEALTHCHECK` runs `/app/Foxwarm hosted health`, which probes `/livez` (approved 2026-11-26): a waiting standby is a working container, and orchestrators route on `/readyz` themselves. The probe reads `health.port` from the same deployment configuration the replica reads, so the port has one source.
 

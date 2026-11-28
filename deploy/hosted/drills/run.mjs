@@ -3,7 +3,7 @@
 // Compose stack (`--env compose`, see compose.drill.yaml).
 //
 //   node deploy/hosted/drills/run.mjs [--env process|compose]
-//        [--drills smoke,partition,rolling,fence,import] [--report <file>] [--keep]
+//        [--drills smoke,partition,rolling,fence,import,master] [--report <file>] [--keep]
 //
 // Process environment: FOXWARM_TEST_PG_PREFIX, FOXWARM_TEST_VERSITYGW and a Foxwarm build
 // (FOXWARM_DRILL_BINARY, default the managed Debug build). Compose environment: a Docker
@@ -12,6 +12,7 @@ import { writeFileSync } from 'node:fs'
 import { processEnvironment } from './env-process.mjs'
 import { composeEnvironment } from './env-compose.mjs'
 import * as drills from './drills.mjs'
+import {masterHost} from './master.mjs'
 import { log, assert } from './util.mjs'
 
 const args = process.argv.slice(2)
@@ -29,6 +30,7 @@ const order = [
   ['fence', drills.upgradeFence],
   ['rolling', drills.rolling],
   ['import', drills.importSeed],
+  ['master', masterHost],
 ]
 let failed = false
 let monitor

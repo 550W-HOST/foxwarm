@@ -246,6 +246,7 @@ function normalizeConfigFilesResponse(value) {
     throw new Error("Invalid Foxwarm workspace roots response.");
   }
   const response = value;
+  if (response.version === 1 && response.configFiles === null) return null;
   if (response.version !== 1 || !response.configFiles || typeof response.configFiles !== "object" || Array.isArray(response.configFiles)) {
     throw new Error("Unsupported Foxwarm config files response.");
   }
@@ -1434,7 +1435,7 @@ function activate(context) {
     vscode3.commands.registerCommand("foxwarm-fs.addFolderToWorkspace", addExplorerFolderToWorkspace),
     vscode3.commands.registerCommand("foxwarm-fs.handleOpenRequest", (request) => handleOpenRequest(request, provider))
   );
-  void provider.getConfigFiles().then((files) => registerFoxwarmConfigSchemas(files)).catch((error) => console.warn(`Foxwarm config schema support could not start: ${error instanceof Error ? error.message : String(error)}`));
+  void provider.getConfigFiles().then((files) => files && registerFoxwarmConfigSchemas(files)).catch((error) => console.warn(`Foxwarm config schema support could not start: ${error instanceof Error ? error.message : String(error)}`));
   console.log("Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.");
 }
 function deactivate() {

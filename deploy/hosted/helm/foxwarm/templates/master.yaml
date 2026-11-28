@@ -1,0 +1,114 @@
+{{- if .Values.masterHost.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "foxwarm.fullname" . }}-master
+  labels:
+    {{- include "foxwarm.labels" . | nindent 4 }}
+spec:
+  # A StatefulSet replaces ordinal zero in place. A Deployment with surge would compete for
+  # the same RWO disk. The claim remains when the StatefulSet or its pod is deleted.
+  serviceName: {{ include "foxwarm.fullname" . }}-master
+  replicas: 1
+  updateStrategy: {type: RollingUpdate}
+  selector:
+    matchLabels: &selector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: master-host
+  template:
+    metadata:
+      labels: *selector
+      annotations:
+        checksum/deployment-config: {{ include "foxwarm.deploymentConfig" . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "foxwarm.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: foxwarm
+          image: {{ required "masterHost.image is required" .Values.masterHost.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - {name: FOXWARM_ROLE, value: master-host}
+            - {name: FOXWARM_HOSTED_TOPOLOGY, value: tenants}
+            - {name: FOXWARM_AGENTS_DIR, value: /master}
+            - {name: FOXWARM_SCRATCH_DIR, value: /master/scratch}
+            - {name: FOXWARM_REPLICA_ID, value: "$(POD_NAME)"}
+            - {name: FOXWARM_ADVERTISE_ADDRESS, value: "$(POD_IP):{{ .Values.mesh.port }}"}
+            - {name: FOXWARM_DATABASE_URL_FILE, value: /run/secrets/foxwarm/database-url}
+            - {name: FOXWARM_KEK_FILE, value: /run/secrets/foxwarm/kek.json}
+            {{- if .Values.secrets.kekPrevious }}
+            - {name: FOXWARM_KEK_PREVIOUS_FILE, value: /run/secrets/foxwarm/kek-previous.json}
+            {{- end }}
+            - {name: FOXWARM_MESH_SECRET_FILE, value: /run/secrets/mesh/mesh-secret}
+          ports:
+            - {name: http, containerPort: {{ .Values.ports.http }}}
+            - {name: health, containerPort: {{ .Values.ports.health }}}
+            - {name: mesh, containerPort: {{ .Values.mesh.port }}}
+          readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /livez, port: health}, initialDelaySeconds: 10, periodSeconds: 10}
+          securityContext:
+            {{- include "foxwarm.containerSecurityContext" . | nindent 12 }}
+            seccompProfile:
+              type: Localhost
+              localhostProfile: {{ .Values.masterHost.chromiumSeccompProfile | quote }}
+          volumeMounts:
+            - {name: master, mountPath: /master}
+            - {name: tmp, mountPath: /tmp}
+            - {name: shm, mountPath: /dev/shm}
+            - {name: deployment-config, mountPath: /etc/foxwarm, readOnly: true}
+            - {name: secrets, mountPath: /run/secrets/foxwarm, readOnly: true}
+            - {name: mesh, mountPath: /run/secrets/mesh, readOnly: true}
+      volumes:
+        - name: deployment-config
+          configMap:
+            name: {{ include "foxwarm.fullname" . }}-deployment
+            items: [{key: master.yaml, path: deployment.yaml}]
+        - name: secrets
+          secret:
+            secretName: {{ include "foxwarm.runtimeSecret" . }}
+            defaultMode: 0440
+        - name: mesh
+          secret:
+            secretName: {{ required "mesh.secretName is required for the master host" .Values.mesh.secretName }}
+            defaultMode: 0440
+            items: [{key: mesh-secret, path: mesh-secret}]
+        - {name: tmp, emptyDir: {}}
+        - {name: shm, emptyDir: {medium: Memory, sizeLimit: 1Gi}}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata: {name: master}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.masterHost.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests: {storage: {{ .Values.masterHost.storage | quote }}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "foxwarm.fullname" . }}-master
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: master-host
+  ports:
+    - {name: http, port: {{ .Values.ports.http }}, targetPort: http}
+    - {name: mesh, port: {{ .Values.mesh.port }}, targetPort: mesh}
+{{- end }}
