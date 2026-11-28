@@ -3,6 +3,8 @@ using Foxwarm.Hosted.Lease;
 using Foxwarm.Hosted.Postgres;
 using Foxwarm.Hosted.Runtimes;
 using Foxwarm.Sessions;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Foxwarm.Tests.Hosted;
@@ -111,6 +113,25 @@ public sealed partial class TenantRuntimeConstructionTests
         var sessions = ((MainHostRuntime)runtime).Host.Sessions;
         Assert.Equal(new AgentStoreLimits(8000000, 200, 300000), sessions.Storage.AgentFiles!.Limits);
         Assert.Equal(400000, sessions.Capabilities.Limits!.UploadBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PhysicalFileRoutesFollowTheMasterGrant(bool master)
+    {
+        await using var harness = await CreateAsync();
+        var lease = await harness.AddTenantAsync("alpha");
+        await using var runtime = await harness.BuildAsync("alpha", lease, Deployment(null),
+            master ? TenantProfile.Operator : TenantProfile.Hosted);
+        await runtime.StartAsync();
+        var host = ((MainHostRuntime)runtime).Host;
+        Assert.Equal(master, host.Sessions.Capabilities.MasterNode);
+        var routes = host.App.Services.GetRequiredService<EndpointDataSource>().Endpoints
+            .OfType<RouteEndpoint>().Select(endpoint => endpoint.RoutePattern.RawText).ToHashSet();
+        Assert.Contains("/api/sessions", routes);
+        Assert.Equal(master, routes.Contains("/api/download/sign"));
+        Assert.Equal(master, routes.Contains("/download"));
     }
 
     // Review 4b #8: directories are named by the numeric tenant ID, never by the stored name.

@@ -256,7 +256,8 @@ internal sealed partial class WebUIChannel(
         RegisterRedactionRoutes(app);
         RegisterActivityRoutes(app);
         RegisterUploadAndImageRoutes(app);
-        RegisterFileRoutes(app);
+        if (sessions.Capabilities.MasterNode)
+            RegisterFileRoutes(app);
         RegisterArtifactRoutes(app);
         RegisterQuestionRoutes(app);
         RegisterApprovalRoutes(app);
