@@ -96,6 +96,19 @@ public sealed class TenantLimitHttpTests
     }
 
     [Fact]
+    public async Task ManualForkReturnsItsCommittedIdWhenTheParentOccupiesTheBudget()
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { HotOwnerBytes = HotOwnerBudget.Estimate(0) });
+        using var response = await f.Client.PostAsJsonAsync("api/sessions/uploads/fork", new { suffix = "small" });
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.True((bool)result!["success"]!);
+        Assert.Equal("uploads_small", (string?)result["newSessionId"]);
+        Assert.NotNull(f.Manager.Catalog.Get("uploads_small"));
+        Assert.Null(f.Manager.Find("uploads_small"));
+    }
+
+    [Fact]
     public async Task SessionSseAndWebSocketsShareTheLifetimeLimit()
     {
         await using var f = await Fixture.Create(TenantLimits.Defaults with { WebSockets = 1 });

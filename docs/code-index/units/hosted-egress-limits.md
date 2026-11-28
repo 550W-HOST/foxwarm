@@ -95,3 +95,5 @@ Node and Provider outbound traffic is out of scope (`D-node-isolation-boundary`)
 - [2026-11-27] The hot-owner estimate (ten times the history JSON) comes from the sizing probe; a measurement of resident owners' managed memory against the estimate under NativeAOT belongs to packaging qualification.
 
 - Whether the NativeAOT image links the runtime's certificate downloader: its `X509ResourceClient` reaches `SocketsHttpHandler` and `HttpClient` through reflection kept by `DynamicDependency`, so it is expected to; guarded TLS disables downloads either way. The image-level check belongs to packaging qualification.
+
+A WebUI create or manual fork that has committed and only timed out waiting for hot-owner capacity returns its normal success response with the durable ID. Other committed-publication errors retain their existing error contract.
