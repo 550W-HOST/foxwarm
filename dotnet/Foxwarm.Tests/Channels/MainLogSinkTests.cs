@@ -44,11 +44,11 @@ public sealed class MainLogSinkTests
                     Console.WriteLine("from alpha {\"quoted\": 1}");
                 })
                 .Wait();
-            // A line of no known flow goes to the oldest open log.
+            // A line of no known flow goes only to the process.
             Task.Run(() => Console.WriteLine("unscoped")).Wait();
 
             beta.Dispose();
-            // The capture stays while a log is open; the beta flow's lines now go to alpha.
+            // The capture stays while a log is open; a closed sink no longer receives records.
             Assert.Same(captured, Console.Out);
             Task.Run(() =>
                 {
@@ -67,17 +67,17 @@ public sealed class MainLogSinkTests
                 [
                     ("beta", "from beta"),
                     ("alpha", "from alpha {\"quoted\": 1}"),
-                    ("alpha", "unscoped"),
-                    ("alpha", "after beta closed"),
+                    ((string?)null, "unscoped"),
+                    (null, "after beta closed"),
                 ],
-                lines.Select(line => (line["tenant"]!.ToString(), line["msg"]!.ToString()))
+                lines.Select(line => (line["tenant"]?.ToString(), line["msg"]!.ToString()))
             );
             Assert.Equal(
                 ["level", "time", "pid", "hostname", "tenant", "msg"],
                 lines[0].Select(property => property.Key)
             );
             Assert.Equal(
-                ["from alpha {\"quoted\": 1}", "unscoped", "after beta closed"],
+                ["from alpha {\"quoted\": 1}"],
                 File.ReadLines(first).Select(line => line[(line.IndexOf("INFO: ", StringComparison.Ordinal) + 6)..])
             );
             Assert.Equal(

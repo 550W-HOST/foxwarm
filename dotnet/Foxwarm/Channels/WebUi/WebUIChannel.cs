@@ -20,7 +20,7 @@ internal sealed partial class WebUIChannel(
     // Null without the Logs view (RuntimeCapabilities.LogsView): a hosted replica's log mixes
     // its tenants, so neither the history route nor the realtime topic exists there.
     private readonly WebUiLogFile? logs = sessions.Capabilities.LogsView
-        ? new(MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot))
+        ? new(MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot, hosted: sessions.Capabilities.Limits is not null))
         : null;
     private WebUiRealtime realtime = null!;
     private readonly Foxwarm.Terminal.TerminalRouter? terminalRouter = terminals is null

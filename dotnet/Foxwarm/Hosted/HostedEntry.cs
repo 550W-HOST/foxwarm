@@ -75,6 +75,7 @@ internal static class HostedEntry
             )
             {
                 Role = bootstrap.Role,
+                ScratchRoot = bootstrap.RequireScratchRoot(),
                 MountedOperatorPath = deployment.MountedOperatorPath(),
                 OperatorHostname = deployment.Root.ContainsKey("operator") ? Operator.OperatorListener.ReadSettings(deployment).Host : null,
                 Mesh = mesh,
@@ -309,6 +310,8 @@ internal static class HostedEntry
                     .LoadAsync(tenant.Database, bootstrap.Tenant, profile, token)
             )
             .ConfigureAwait(false);
+        if (server is not null)
+            server.Log = host.Log;
         // The owner's daily journal retention; it stops when the host disposes the journal.
         tenant.StartJournalRetention(settings.Retention(retention));
         return new MainHostRuntime(host, tenant);

@@ -221,7 +221,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
             if (uploads.TryRemove(path, out _))
                 try
                 {
-                    File.Delete(path);
+                    new WebUiUploadedFiles(runtime.Manager).DeleteStaged(path);
                 }
                 catch (Exception error)
                 {
@@ -241,7 +241,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
         if (!request.Current)
         {
             uploads.TryRemove(path, out _);
-            File.Delete(path);
+            new WebUiUploadedFiles(runtime.Manager).DeleteStaged(path);
             throw new WebUiAccessException();
         }
     }

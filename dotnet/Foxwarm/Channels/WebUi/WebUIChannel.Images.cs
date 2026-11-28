@@ -24,6 +24,7 @@ internal sealed partial class WebUIChannel
             {
                 var uploads = new WebUiUploadedFiles(sessions);
                 var uploadLimit = uploads.UploadLimit;
+                var bodyLimit = Math.Min(uploadLimit, long.MaxValue - UploadOverheadBytes) + UploadOverheadBytes;
                 if (
                     context.Features.Get<IHttpMaxRequestBodySizeFeature>() is
                     { IsReadOnly: false } limit
@@ -33,10 +34,10 @@ internal sealed partial class WebUIChannel
                     // overhead, whatever length it declares.
                     limit.MaxRequestBodySize = sessions.Capabilities.Limits is null
                         ? null
-                        : uploadLimit + UploadOverheadBytes;
+                        : bodyLimit;
                 // The declared length includes the multipart framing; the file itself is held to
                 // the exact limit below.
-                if (context.Request.ContentLength > uploadLimit + UploadOverheadBytes)
+                if (context.Request.ContentLength > bodyLimit)
                     return Results.Json(
                         new JsonObject
                         {
@@ -65,6 +66,13 @@ internal sealed partial class WebUIChannel
                     return Results.BadRequest(
                         new JsonObject { ["error"] = "A multipart file is required." }
                     );
+                static IResult Full() => Results.Json(new JsonObject
+                {
+                    ["error"] = "Too many files are waiting to be sent. Send or remove some attachments, then try again.",
+                }, statusCode: 429);
+                var staging = sessions.UploadStaging;
+                if (staging is not null && !staging.ReserveMultipart(context.Response))
+                    return Full();
                 try
                 {
                     var form = await context.Request.ReadFormAsync(
@@ -93,6 +101,8 @@ internal sealed partial class WebUIChannel
                         uploads.Root,
                         Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)) + extension
                     );
+                    if (staging is not null && !staging.Reserve(path, file.Length))
+                        return Full();
                     try
                     {
                         await using (
@@ -111,10 +121,11 @@ internal sealed partial class WebUIChannel
                         }
                         scoped?.Require(uploadSession);
                         scoped?.RegisterUpload(uploadSession, path);
+                        staging?.Published(path, scoped is null ? null : scoped.ConsumeUpload);
                     }
                     catch
                     {
-                        File.Delete(path);
+                        uploads.DeleteStaged(path);
                         throw;
                     }
                     return Results.Ok(
