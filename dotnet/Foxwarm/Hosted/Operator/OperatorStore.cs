@@ -199,7 +199,8 @@ internal sealed partial class OperatorStore(PgDatabase database, KeyEncryptionKe
 
     internal Task<JsonNode> PlacementAsync(CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
         JsonNode.Parse((string)(await Scalar(tx, """
-            SELECT jsonb_build_object('tenants', (SELECT coalesce(jsonb_agg(jsonb_build_object('slug',t.name,'epoch',l.epoch,
+            SELECT jsonb_build_object('tenants', (SELECT coalesce(jsonb_agg(jsonb_build_object('slug',t.name,'tenantId',t.tenant_id,'epoch',l.epoch,
+                'requestedAction',l.requested_action,'drainingSince',l.draining_since,
                 'owner',CASE WHEN live THEN l.owner_replica END,'leaseAgeSeconds',CASE WHEN live THEN extract(epoch FROM now()-l.acquired_at) END,
                 'hot',sample->'hot',
                 'busy',sample->'busy',
@@ -210,6 +211,7 @@ internal sealed partial class OperatorStore(PgDatabase database, KeyEncryptionKe
                     AND heartbeat->'tenantId'=to_jsonb(t.tenant_id) AND heartbeat->'epoch'=to_jsonb(l.epoch)
                     THEN heartbeat END AS sample) observation),
                 'replicas',(SELECT coalesce(jsonb_agg(jsonb_build_object('id',replica_id,'name',name,'role',role,'version',capacity->>'version','binaryLevel',binary_level,
-                    'readerVersion',reader_version,'capacity',capacity-'tenants','draining',draining,'heartbeatAt',heartbeat_at) ORDER BY replica_id),'[]') FROM replicas))::text
+                    'readerVersion',reader_version,'capacity',capacity-'tenants','draining',draining,'heartbeatAt',heartbeat_at,
+                    'heldGrants',(SELECT count(*) FROM tenant_leases held WHERE held.owner_replica=replicas.replica_id AND held.state='active' AND held.expires_at>now())) ORDER BY replica_id),'[]') FROM replicas))::text
             """, ct, Lease.LeaseTimings.Default.Ttl.TotalSeconds))!)!, token);
 }

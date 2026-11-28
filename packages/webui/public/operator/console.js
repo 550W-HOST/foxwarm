@@ -57,6 +57,7 @@ function signOut() {
   $('name').textContent = ''
   $('identity').textContent = ''
   $('providerStatus').textContent = ''
+  $('leaseStatus').textContent = ''
   placementBySlug.clear()
   $('detail').hidden = $('workspace').hidden = $('signout').hidden = true
   $('signin').hidden = false
@@ -107,6 +108,33 @@ function showTenant(tenant) {
   if (!tenant) return
   $('name').textContent = tenant.slug
   $('identity').textContent = [tenant.primaryHostname, tenant.profile, tenant.state].filter(Boolean).join(' · ')
+  const sample = placementBySlug.get(tenant.slug)
+  const active = tenant.state === 'active'
+  $('placementActions').hidden = !active
+  const pendingAction =
+    sample?.requestedAction === 'move'
+      ? 'Move requested.'
+      : sample?.requestedAction === 'release'
+        ? 'Release requested.'
+        : ''
+  const owner = sample?.owner ? `Owner: ${sample.owner}` : 'No current owner.'
+  $('leaseStatus').textContent = [
+    owner,
+    pendingAction,
+    sample?.drainingSince && sample.owner ? 'The current lease is draining.' : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+  const epoch = sample?.epoch
+  const exactEpoch = Number.isSafeInteger(epoch) || (typeof epoch === 'string' && /^[1-9][0-9]*$/.test(epoch))
+  const canRequest =
+    active &&
+    !!sample?.owner &&
+    sample.tenantId > 0 &&
+    exactEpoch &&
+    !sample.requestedAction &&
+    !sample.drainingSince
+  $('moveTenant').disabled = $('releaseTenant').disabled = !canRequest
   const problems = placementBySlug.get(tenant.slug)?.providerProblems
   const status = $('providerStatus')
   status.replaceChildren()
@@ -157,12 +185,24 @@ async function refresh() {
   }
   for (const replica of placement.replicas) {
     const row = $('replicaRows').insertRow()
+    const drain = document.createElement('button')
+    drain.textContent = 'Drain replica'
+    drain.disabled = replica.draining
+    drain.onclick = () =>
+      perform(async () => {
+        if (!confirm(`Drain ${replica.id}? Its tenants move to other replicas when one is available. It keeps serving any tenant that has nowhere else to go.`)) return
+        await api('replicas/drain', 'POST', JSON.stringify({ boot: replica.id }))
+        await refresh()
+        notice('Replica drain requested.')
+      })
     for (const value of [
-      replica.name ?? replica.id,
+      replica.id,
       replica.role,
       replica.version,
       replica.draining ? 'Yes' : 'No',
       new Date(replica.heartbeatAt).toLocaleString(),
+      replica.heldGrants,
+      drain,
     ])
       cell(row, value)
   }
@@ -172,7 +212,7 @@ async function refresh() {
   ])
     if (!$(tbody).rows.length) {
       const td = $(tbody).insertRow().insertCell()
-      td.colSpan = 5
+      td.colSpan = tbody === 'replicaRows' ? 7 : 5
       td.textContent = label
     }
   showTenant(tenants.find((t) => t.slug === selected?.slug))
@@ -222,6 +262,27 @@ $('stateAction').onclick = () =>
     await refresh()
     notice(suspend ? 'Tenant suspended.' : 'Tenant resumed.')
   })
+for (const [button, action] of [
+  ['moveTenant', 'move'],
+  ['releaseTenant', 'release'],
+]) {
+  $(button).onclick = () =>
+    perform(async () => {
+      const tenant = selected,
+        sample = placementBySlug.get(tenant.slug)
+      const question =
+        action === 'move'
+          ? `Move ${tenant.slug} to another eligible replica?`
+          : `Release ${tenant.slug} from ${sample.owner}? It can start again on demand.`
+      if (!confirm(question)) return
+      // The parsed epoch may exceed a JavaScript safe integer. Its checked decimal
+      // spelling is used as a JSON number so the API compares the exact shown grant.
+      const body = `{"tenantId":${sample.tenantId},"owner":${JSON.stringify(sample.owner)},"epoch":${sample.epoch}}`
+      await api(`tenants/${encodeURIComponent(tenant.slug)}/${action}`, 'POST', body)
+      await refresh()
+      notice(action === 'move' ? 'Tenant move requested.' : 'Lease release requested.')
+    })
+}
 $('settings').onsubmit = (event) => {
   event.preventDefault()
   perform(async () => {

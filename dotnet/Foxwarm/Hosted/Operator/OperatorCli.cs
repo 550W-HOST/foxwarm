@@ -18,6 +18,7 @@ internal static class OperatorCli
           tenants | placement | deletions
           tenant create SLUG PROFILE HOSTNAME | tenant get SLUG | tenant rotate SLUG | tenant set SLUG JSON-FILE
           tenant suspend SLUG | tenant resume SLUG | tenant delete SLUG
+          replica drain BOOT | tenant move SLUG TENANT-ID BOOT EPOCH | tenant release SLUG TENANT-ID BOOT EPOCH
           grants list SLUG | grants set SLUG PROVIDER QUOTAS-FILE | grants remove SLUG PROVIDER
           ceiling get PROFILE | ceiling set PROFILE JSON-FILE
         """;
@@ -75,6 +76,12 @@ internal static class OperatorCli
             ["tenant", "suspend", var slug] => (HttpMethod.Post, Tenant(slug) + "/suspend", null),
             ["tenant", "resume", var slug] => (HttpMethod.Post, Tenant(slug) + "/resume", null),
             ["tenant", "delete", var slug] => (HttpMethod.Delete, Tenant(slug), null),
+            ["replica", "drain", var boot] => (HttpMethod.Post, "/replicas/drain", new JsonObject { ["boot"] = boot }.ToJsonString()),
+            ["tenant", "move" or "release", var slug, var idText, var boot, var epochText] =>
+                int.TryParse(idText, System.Globalization.NumberStyles.None, null, out var id) && id > 0
+                && long.TryParse(epochText, System.Globalization.NumberStyles.None, null, out var epoch) && epoch > 0
+                    ? (HttpMethod.Post, Tenant(slug) + "/" + args[1], new JsonObject { ["tenantId"] = id, ["owner"] = boot, ["epoch"] = epoch }.ToJsonString())
+                    : throw new ArgumentException("The tenant ID and epoch must be positive whole numbers."),
             ["deletions"] => (HttpMethod.Get, "/deletions", null),
             ["grants", "list", var slug] => (HttpMethod.Get, Tenant(slug) + "/provider-grants", null),
             ["grants", "set", var slug, var id, var file] => (HttpMethod.Put, Tenant(slug) + "/provider-grants?providerId=" + Uri.EscapeDataString(id), await File.ReadAllTextAsync(file, token)),

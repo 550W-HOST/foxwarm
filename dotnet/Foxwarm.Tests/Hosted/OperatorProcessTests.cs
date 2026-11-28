@@ -323,6 +323,28 @@ public sealed class OperatorProcessTests
             Assert.Equal(HttpStatusCode.Accepted, (await Call(HttpMethod.Delete, "/tenants/alpha")).Status);
             await Until(async () => (await Call(HttpMethod.Get, "/tenants/alpha")).Status == HttpStatusCode.NotFound);
             Assert.Equal(HttpStatusCode.NotFound, (await AsAdmin(reusable, "/health")).Status);
+            // Exercise CLI serialization and the durable seam without racing its asynchronous
+            // consumer. The owned registration has no replica process to finish the request.
+            const string heldBy = "placement-test/boot";
+            await db.RegisterBootsAsync(heldBy);
+            async Task<JsonNode> Request(string verb, string slug)
+            {
+                await Cli("--url", origin, "--token-file", tokenFile, "tenant", "create", slug, "hosted", slug + ".test");
+                var id = await db.TenantIdAsync(slug);
+                var leaseEpoch = await db.TakeLeaseAsync(id, heldBy);
+                return JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "tenant", verb, slug,
+                    id.ToString(), heldBy, leaseEpoch.ToString()))!;
+            }
+            Assert.Equal("move", (string?)(await Request("move", "moving"))["requestedAction"]);
+            Assert.Equal("release", (string?)(await Request("release", "sleeping"))["requestedAction"]);
+            await db.ExecuteOwnerAsync("UPDATE replicas SET heartbeat_at=now() WHERE replica_id='placement-test/boot'");
+            var drain = JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "replica", "drain", heldBy))!;
+            Assert.Equal(heldBy, (string?)drain["id"]);
+            Assert.True((bool)drain["draining"]!);
+            var after = JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "placement"))!;
+            var draining = after["replicas"]!.AsArray().Single(row => (string?)row!["id"] == heldBy)!;
+            Assert.Equal(2, (int)draining["heldGrants"]!);
+            Assert.True((bool)draining["draining"]!);
         }
         finally
         {
