@@ -67,6 +67,9 @@ internal interface IGenerationRuntime : IAsyncDisposable
     /// nothing is due.
     /// </summary>
     Task<WakeupDue?> NextDueAsync(CancellationToken token);
+
+    /// <summary>The stopped clock's nomination, even if the final canonical wait read failed.</summary>
+    System.Text.Json.Nodes.JsonObject? RecoveryOccurrence => null;
 }
 
 /// <summary>Builds a generation's runtime; it isn't started yet.</summary>

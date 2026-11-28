@@ -731,6 +731,19 @@ internal sealed class TenantLease
             token
         );
 
+    // An unknown final schedule needs a prompt retry, even when an old row was far in the
+    // future. Keep the stopped clock's nomination, or the still-unarmed row's occurrence.
+    internal Task<bool> ReleaseForRecoveryAsync(LeaseGrant grant, System.Text.Json.Nodes.JsonObject? occurrence,
+        TimeSpan backoff, CancellationToken token) => ReleaseUnderLeaseAsync(grant, (
+            """
+            WITH nominated AS MATERIALIZED (
+                SELECT foxwarm_set_wakeup(now(), coalesce($1, (SELECT occurrence FROM tenant_wakeups WHERE tenant_id=$2)))
+            )
+            SELECT foxwarm_wakeup_backoff(now() + make_interval(secs => $3), true) FROM nominated
+            """,
+            [Json(occurrence), new NpgsqlParameter<int> { TypedValue = grant.TenantId },
+                new NpgsqlParameter<double> { TypedValue = backoff.TotalSeconds }]), token);
+
     private async Task<bool> ReleaseUnderLeaseAsync(
         LeaseGrant grant,
         (string Sql, NpgsqlParameter[] Parameters) wakeup,
