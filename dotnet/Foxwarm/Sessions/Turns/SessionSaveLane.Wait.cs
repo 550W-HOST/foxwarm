@@ -167,8 +167,12 @@ public sealed partial class SessionSaveLane
                 // A prior committed-but-unsynced receipt needs strict durability, not a second queue insertion.
                 if (!declined && receipt is not null && uncertainExternalReceipts.Contains(receipt))
                 {
-                    await CommitWaitSnapshotAsync(entry.SnapshotForPersistence());
+                    await CommitWaitSnapshotAsync(entry.SnapshotForPersistence(),
+                        slot == ChannelReceipts ? beforeAdmission : null);
                     uncertainExternalReceipts.Remove(receipt);
+                    // The failed attempt published the input, but never returned to ingress
+                    // to schedule its turn. Confirmed retries owe exactly one trigger check.
+                    if (slot == ChannelReceipts) admitted = true;
                 }
                 return;
             }

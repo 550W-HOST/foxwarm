@@ -84,8 +84,12 @@ public sealed class ChannelHandoffTests
         await using (var block = new NpgsqlCommand("LOCK TABLE session_catalog IN SHARE MODE", barrier, holding))
             await block.ExecuteNonQueryAsync(ct);
         var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        JsonObject TelegramEvent(int number, string text) => new() { ["update_id"]=number,
-            ["message"]=TelegramPeer.Text("-100","11",text) };
+        JsonObject TelegramEvent(int number, string text)
+        {
+            var message = TelegramPeer.Text("-100", "11", text);
+            message["message_id"] = number;
+            return new JsonObject { ["update_id"] = number, ["message"] = message };
+        }
         // Unlike the FIFO helper, a Bot API peer retains an update until a later request
         // acknowledges it with a greater offset. A retry after a bounded stop has the same ID.
         if (telegram)

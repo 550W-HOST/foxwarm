@@ -274,12 +274,17 @@ internal sealed partial class MatrixChannel
                 break;
             case "m.image" or "m.file":
                 var image = SessionWait.Text(content["msgtype"]) == "m.image";
-                var media =
-                    MediaUri(SessionWait.Text(content["url"]))
-                    ?? throw new InvalidDataException("Invalid Matrix media URI.");
-                // Source fetches eagerly before Router authorization and does not attach the access token.
-                using (var response = await http.GetAsync(media, HttpCompletionOption.ResponseHeadersRead, cursors?.Closing ?? default))
+                if (MediaUri(SessionWait.Text(content["url"])) is not { } media)
                 {
+                    health.Log(new InvalidDataException("Invalid Matrix media URI."));
+                    Remember();
+                    return;
+                }
+                // Source fetches eagerly before Router authorization and does not attach the access token.
+                try
+                {
+                    using var response = await http.GetAsync(media, HttpCompletionOption.ResponseHeadersRead, cursors?.Closing ?? default);
+                    response.EnsureSuccessStatusCode();
                     var name = !image ? SessionWait.Text(content["filename"]) : null;
                     if (string.IsNullOrEmpty(name))
                         name = SessionWait.Text(content["body"]);
@@ -298,6 +303,12 @@ internal sealed partial class MatrixChannel
                         CancellationToken.None,
                         image
                     );
+                }
+                catch (Exception error) when (ChannelFailure.RejectedMedia(error))
+                {
+                    health.Log(error);
+                    Remember();
+                    return;
                 }
                 break;
             default:

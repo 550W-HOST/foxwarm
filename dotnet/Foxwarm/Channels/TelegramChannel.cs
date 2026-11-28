@@ -194,7 +194,7 @@ internal sealed class TelegramChannel : IManagedChannel
                 foreach (var update in updates.OfType<JsonObject>())
                 {
                     var next = SessionWait.Number(update["update_id"]) is { } updateId ? checked((long)updateId + 1) : offset;
-                    if (next < offset) continue; // A repeated response must not rewind the Bot API offset.
+                    // After a quiet week the server may start a new, lower update-ID sequence.
                     var gate = sessions?.ScheduledProducers;
                     using var admission = gate?.TryEnterProducer();
                     if (gate is not null && admission is null) return;
@@ -261,8 +261,8 @@ internal sealed class TelegramChannel : IManagedChannel
                 _ = ObserveAsync(SendAsync(chat, text, CancellationToken.None));
                 return Task.CompletedTask;
             }
-        ) { Polled = true, Receipt = update["update_id"] is { } identity
-            ? ChannelCursors.Receipt("telegram", id, account, identity.ToString()) : null };
+        ) { Polled = true, Receipt = message["message_id"] is JsonValue identity
+            ? ChannelCursors.Receipt("telegram", id, account, chat + ":" + Identity(identity)) : null };
         var bot = SessionCatalog.Flag(from?["is_bot"]);
         if (SessionWait.Text(message["text"]) is { } text)
         {
@@ -293,18 +293,24 @@ internal sealed class TelegramChannel : IManagedChannel
         if (photo is null && document is null || photo is not null && bot)
             return;
         var media = photo ?? document!;
-        var fileId =
-            SessionWait.Text(media["file_id"])
-            ?? throw new InvalidDataException("Telegram media has no file_id.");
+        if (SessionWait.Text(media["file_id"]) is not { Length: > 0 } fileId)
+        {
+            health.Log(new InvalidDataException("Telegram media has no file_id."));
+            return;
+        }
         var deliveryToken = sessions.ScheduledProducers is null ? stopping.Token : cursors?.Closing ?? default;
-        var file = await ApiAsync(
-            "getFile",
-            new JsonObject { ["file_id"] = fileId },
-            deliveryToken
-        );
-        var filePath =
-            SessionWait.Text(file?["file_path"])
-            ?? throw new InvalidDataException("Telegram file has no download path.");
+        JsonNode? file;
+        try { file = await ApiAsync("getFile", new JsonObject { ["file_id"] = fileId }, deliveryToken); }
+        catch (TelegramApiException error) when (error.Code is 400 or 403 or 404 or 410 or 413)
+        {
+            health.Log(error);
+            return;
+        }
+        if (SessionWait.Text(file?["file_path"]) is not { Length: > 0 } filePath)
+        {
+            health.Log(new InvalidDataException("Telegram file has no download path."));
+            return;
+        }
         async Task<byte[]> Download()
         {
             using var response = await http.GetAsync(new Uri(files, filePath), HttpCompletionOption.ResponseHeadersRead, deliveryToken);
@@ -318,15 +324,24 @@ internal sealed class TelegramChannel : IManagedChannel
         var mime = photo is not null
             ? "image/jpeg"
             : SessionWait.Text(media["mime_type"]) ?? "application/octet-stream";
-        var incoming = await sessions.ReceiveRemoteChannelFileAsync(
-            "telegram",
-            chat,
-            Download,
-            name,
-            mime,
-            SessionWait.Text(message["caption"]) ?? "",
-            deliveryToken
-        );
+        ExternalChannelMessage incoming;
+        try
+        {
+            incoming = await sessions.ReceiveRemoteChannelFileAsync(
+                "telegram",
+                chat,
+                Download,
+                name,
+                mime,
+                SessionWait.Text(message["caption"]) ?? "",
+                deliveryToken
+            );
+        }
+        catch (Exception error) when (ChannelFailure.RejectedMedia(error))
+        {
+            health.Log(error);
+            return;
+        }
         await router.HandleExternalMessageAsync(context, incoming);
     }
 

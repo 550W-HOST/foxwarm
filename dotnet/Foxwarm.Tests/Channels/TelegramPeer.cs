@@ -71,15 +71,13 @@ internal sealed class TelegramPeer : IAsyncDisposable
     private Channel<JsonObject> Queue(string bot) =>
         updates.GetOrAdd(bot, _ => Channel.CreateUnbounded<JsonObject>());
 
-    internal void Push(string bot, JsonObject message) =>
-        Queue(bot)
-            .Writer.TryWrite(
-                new JsonObject
-                {
-                    ["update_id"] = Interlocked.Increment(ref update),
-                    ["message"] = message.DeepClone(),
-                }
-            );
+    internal void Push(string bot, JsonObject message)
+    {
+        var id = Interlocked.Increment(ref update);
+        var copy = (JsonObject)message.DeepClone();
+        copy["message_id"] ??= id;
+        Queue(bot).Writer.TryWrite(new JsonObject { ["update_id"] = id, ["message"] = copy });
+    }
 
     internal static JsonObject Text(string chat, string sender, string text, bool bot = false) =>
         new()

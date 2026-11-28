@@ -26,6 +26,10 @@ internal sealed class ChannelFailure(string stage, Exception error) : IOExceptio
     internal static bool Refused(Exception error) =>
         Foxwarm.Net.EgressDeniedException.Find(error) is not null;
 
+    internal static bool RejectedMedia(Exception error) =>
+        Refused(error) || error is HttpRequestException { StatusCode: { } status }
+            && (int)status is 400 or 403 or 404 or 410 or 413 or 415 or 422;
+
     internal static string Sentence(string subject, Exception error) =>
         subject + " failed: " + Cause(error) + ".";
 
